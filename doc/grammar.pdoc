@@ -1,0 +1,661 @@
+#doc.lang: en
+
+#//: Zerolang Grammar
+
+#doc.title: Zerolang Grammar
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css 
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2021-01-20 
+#doc.version: v0.1
+
+#//: #doc.script src=style/prism-zerolang.js
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zerolang Grammar
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+#--: Notation
+
+Where #~"t" is one or more literal characters and #~"x" is a production or token
+name:
+
+#ul:
+  #*: #~"\"t\"" represents a token made of the literal character(s) #~"t"
+  #*: #~"x" represents exactly 1 #~"x"
+  #*: #~"[x]" represents 0 or 1 #~"x" 
+  #*: #~"{x}" represents 0 or more #~"x"
+  #*: #~"x | y" represents #~"x" or #~"y"
+  #*: #~"? description ?" represents a special class described by the string #~"description"
+
+#--: Productions
+
+#---: unitfile_definition
+
+A single source file: a unit. A list of zero or more definitions. [#> to=eol
+"EOL"]'s are ignored by the grammar at the unit level (treated as whitespace for
+token separation only).
+
+Each definition defines a type.
+
+Includes user-defined compound type definitions (#>"item-definition"), simple
+numeric constants, generic fields and #>"function-definition"'s.
+
+Top level #>"constant-expression" #**"must" be a constant type and may refer to
+a generic type. If it is a #>"block", then all statements within the block must
+be constant.
+
+#code:
+  : { 
+      ( #>"label" #>"constant-expression" )
+      | #>"label-value"
+  } #>"eof"
+
+
+#---: label
+
+Definition identifier. No intervening whitespace is allowed before the colon.
+
+#code:
+  : #>"id" ":"
+
+#---: label_value
+
+A definition identifier that is set to the value of the item from the current
+environment that has the same #>"id". #~"x" is #_*"almost" equivalent to #~"x: x", 
+except the definition will not bind to itself.
+
+No intervening whitespace is allowed after the colon.
+
+#code:
+  : ":" #>"id"
+
+
+#---: id
+
+Identifier. Some otherwise valid identifiers are marked as keywords. Numeric
+literals themselves are also identifiers.
+
+#code:
+  : #>"id-float"
+  | ( #>"id-char" { #>"id-char" } )
+
+#---: id_float
+
+#~"dot" (".") has special limitations. It may only be used once and only in
+floating point style numeric literals.
+
+Floats optionally start with a sign, then a numeric digit must follow. After
+the dot a numeric digit is also required.
+
+In the rare case where a numeric method name is called on a numeric identifier,
+parentheses can be used to force the call (and prevent the compiler from
+interpreting as a single float identifier): #~"(123).456"
+
+#code:
+  : \[ "+" | "-" \] ( "0" . "9" ) { #>"id-char" } "." ( "0" . "9" ) { #>"id-char" }
+
+#---: id_char
+
+Allowable characters in all locations in an identifier.
+
+#code:
+  : "a" . "z" | "A" . "Z" | "0" . "9"
+  | "!" | "$" | "%" | "&" | "'" | "*" | "+" | "-" | "/" | "<" 
+  | "=" | ">" | "?" | "@" | "\\" | "^" | "_" | "|" | "~"
+
+#---: constant_expression
+
+A simple expression - bare labels are NOT allowed (cf. #>"expression"). Used
+for top level definitions in units and items.
+
+#ul:
+  [#*: an [#> to=if-expression "if"] or [#> to=switch-expression "switch"] expression.]
+  [#*: 
+    a #>"function-definition" (function value). Definition is uplifted to unit
+    level and the result of this definition will be a function reference. The
+    definition #_*"must" only have static references and parameter references
+    within it (ie. it is not a closure (yet?)).]
+  [#*: a [#> to=unit-definition: unit], an inline subunit.]
+  [#*: an #>"item-definition". Definition is uplifted to unit level and
+    the result of this definition will be a #_*"constant type" reference (exists
+    at compile-time only). The definition #_*"must" only have static references
+    within it.]
+  [#*: #>"data-definition" (a data value). Returns a read-only block of data.
+    Usually done at the unit level. If done within code, the data is uplifted to
+    the unit level and a reference to that data is returned.]
+  [#*: a #>"primary-expression" - must be a constant.]
+
+#code:
+  : #>"if-expression"
+  | #>"switch-expression"
+  | #>"function-definition"
+  | #>"unit-definition"
+  | #>"item-definition"
+  | #>"data-definition"
+  | #>"primary-expression"
+
+#---: if_expression
+
+Conditional. 
+
+Arguments named #~"when" are boolean conditions. #~"when" is the default argument:
+the argument name can be omitted for first condition. Multiple #~"when"
+arguments can be provided before a #~"then" clause. At least one #~"when" #_*"must" be
+provided before #~"then".
+
+All #~"when" conditions must be true for the following #~"then" clause to execute.
+Order matters, #~"when" conditions will short-circuit when false. 
+
+There must be at least one #~"when" + #~"then" before an #~"else" (why?, if/else
+should be allowed? Similar to 'unless' in perl?)
+
+#~"if" can be used as an expression. The result will be the value of the
+#~"then"/#~"else" statement. All #~"then"/#~"else" statements must return a value of
+the same type (or will be an anonymous union/variant type?). #~"else" #_*"must" be
+given to ensure the expression is exhaustive. If there is no #~"then" clause
+supplied (ie. #~"if operation else return it") then the value of the expression
+if true, is the unwrapped result of #~"operation" and the unwrapped false value
+is available as #~"it" in the #~"else" clause. 
+
+For top level #~"if", test and result #_*"must" be constants. #~"then" and #~"else"
+blocks may return different types.
+
+If a variable needs to be created for the #~"if", a #>"with-expression"
+statement can be used immediately before the #~"if".
+
+#code:
+  : "if"
+  \[ #>"operation" \]
+  {
+    { "when" #>"operation" }
+    "then" #>"primary-expression"
+  } 
+  "else" #>"primary-expression"
+
+#---: switch_expression
+
+#~"switch" is used to dissect a union, variant or generic field type into its
+child types. The initial operation (the target) must return one of these types.
+
+Types are narrowed within the #~"then" clauses. Unless the #~"switch" is dissecting
+on the descriminator only (eg. an 'enum'), it is most useful if the target is a
+simple id or path ('addressable'). The target path/id can then be used by name
+in the #~"then" clause and will have the narrowed type. For this reason, it is
+not useful to 'take' in the target clause.
+
+If a variable needs to be created before being dissected, a
+#>"with-expression" statement can be used immediately before the #~"switch".
+
+If the #~"then" clause never completes (has a #~"return", #~"continue",
+#~"break") and the target is 'addressable', then the target is narrowed to
+exclude that type #_*"after" the #~"switch" completes until the end of scope.
+
+The target's ownership and existance must be consistent after the #~"switch".
+If the narrowed type is 'taken' within any #~"then" clause, then the compiler
+will enforce a 'take' after all #~"then" clauses. The parent variable will not
+exist after the #~"switch" regardless of which path was actually taken.
+
+Must be at lease one #~"when" before each #~"then". Must be at lease one
+#~"when"/#~"then" before an #~"else".
+
+The #~"switch" #_*"must" be exhaustive. 
+
+In a top level #~"switch", the target and the #~"then" and #~"else" parts
+#_*"must" be constants. #>"block" is allowed, but each line within it must be a
+constant or an intermediate value (definition) to a constant.
+
+#code:
+  : "switch" \[ "on" \] #>"operation"
+  {
+    "case" #>"id"
+    "then" #>"primary-expression"
+  } 
+  \[ "else" #>"primary-expression" \]
+
+#---: function_definition
+
+Function definition.
+
+Can take maximum one each of the arguments in any order.
+ 
+- #~"in" is the default argument and may be specified first without name. It is
+  the block of function/generator parameters
+- #~"out" specifies the return type for the function or for each generated type
+- #~"is" specifies the function body
+
+All arguments are optional:
+
+- if #~"in" is not supplied, the function takes no arguments
+- if #~"out" is not supplied, this is a procedure
+- if #~"is" is not supplied, this is a function 'spec'
+- if all arguments missing, it is a 'spec' for a procedure with no arguments.
+
+The function body may contain #~"yield" expression. If so, it must return an
+#~"iterator" type. The compiler will then convert the function into a class to
+manage the iterator state between calls.
+
+#~"in" and #~"out" #>"operation"'s #_*"must" result in a constant/compile-time type.
+
+Parameter (#~"in" parameter):
+
+- can be a generic field type
+- can #~"take" ownership
+- can borrow. The is the *default*.
+- can take a #~"lock". The lock will remain in place after the call returns and
+  will be bound to the return value of the function.
+- can be #~"generic"
+- can be a constant (numeric constant, function constant, or a numeric
+  expression that results in a constant) - this will be the default value of
+  the parameter
+
+Return (#~"out" parameter):
+
+- can #~"take" (return an owned object). This is the *default*.
+- can #~"borrow". The caller will not have ownership but can call methods. One or
+  more parameters must use #~"lock" - including the object that houses the
+  borrowed return object.
+- can NOT be #~"generic" (but can take generic fields as part of its type
+  definition)
+- technically can be a constant (numeric constant, function constant, or a
+  numeric expression that results in a constant) - but that is not useful, the
+  body must return that constant value...
+
+#code:
+  : "function" {
+    ( \[ "in" \] "{" { 
+      ( #>"label" #>"operation" ) 
+      | #>"label-value" 
+    } "}" )
+    | ( "out" #>"operation" )
+    | ( "is" #>"primary-expression" )
+  }
+
+#---: unit_definition
+
+An inline unit (subunit).
+
+Note that #~"unit" only has an #~"as" clause. There is no #~"is" because there is no
+instances of a #~"unit", only specialisations (if generic).
+
+All unit components must be static / constant.
+
+#code:
+  : "unit" \[ "as" \] "{" {
+    ( #>"label" #>"constant-expression" ) 
+    | #>"label-value" 
+  } "}"
+
+
+#---: item_definition
+
+Definition of an "item". A record, class, variant, union, facet or protocol.
+
+Can take maximum one each of the arguments in any order.
+
+- #~"is" is the default argument and may be specified first without name. It is
+  the contents of the instance including generic members that are required
+  during object construction.
+- #~"as" (optional) is the shared static members ('classmembers') for the object.
+  Function definitions are usually here. Interfaces implemented are listed
+  here.
+
+When #~"is" is an #>"operation", the definition is a typedef. The #>"operation"
+must be a reference to an existing named #~"item" definition of the same item
+type. If the underlying type is generic, the generic args need to be specified
+or redeclared inline, referencing generic definitions within the #~"as" clause.
+
+All subcomponents of an item *_must_* be static / constant.
+
+#code:
+  : ( 
+      "record" | "class" | 
+      "variant" | "union" | 
+      "facet" | "protocol"
+  ) 
+  \[ "is" \] (
+      ( "{" { ( #>"label" #>"constant-expression" ) | #>"label-value" } "}" ) 
+      | #>"operation" 
+  ) 
+  \[ "as" "{" { ( #>"label" #>"constant-expression" ) | #>"label-value" } "}" \] 
+
+#---: data_definition
+
+Create a constant array of data. A reftype. A homogenous block of numeric items
+(only, no records). Value and length is known at compile time. Length is stored
+within data by the compiler.
+
+When refering to #~"data" the compiler can convert element access, length and
+other calls to a compile time constant operation. When used at runtime, the
+methods are runtime operations similar to an immutable #~"list". 
+
+String literals essentially have an underlying 'data as u8' type.
+
+Data may be sparsely defined (with numeric keyed components). Data may have a
+text label. Elements keyed with a text label or no key, will be assigned an
+index one higher than the previous key or 0 if the first element. Unspecified
+indexes/values within the range will be set to zero. The full (non-sparse) data
+list will be recorded in the compiled result.
+
+#>"term" must be a constant (compile time) value. Must be a term (rather than
+simply an operation) because the labels are optional so the values must be
+atomic to separate them from each other.
+
+Optional #>"label" can be an integer label only.
+
+#code:
+  : "data" "{" 
+      { ( \[ #>"label" \] #>"term" ) | #>"label-value" } 
+  "}"
+
+
+#---: primary_expression
+
+A low level 'atomic' expression (includes #>"operation") that can be used bare
+(without containing parens or curly braces) ie. bare labels are *NOT* allowed
+here. Particularly, no #>"if-expression" and no #>"switch-expression" to
+prevent ambiguity in those productions.
+
+#~"block": Returns the result (last expression) in a block.
+
+When used within a #>"constant-expression" (eg. at the unit level), each part
+of this expression must be a constant.
+
+#code:
+  : #>"block"
+  | #>"operation"
+
+#---: block
+
+A series of #>"blockline"s in braces. Can be used anywhere a
+#>"primary-expression" is allowed. The value of a block is the value of the
+final expression in it. Usually creates a new scope.
+
+When directly within braces, [#> to=eol "EOL"]s are an expression separator
+and must be specifically handled in the grammar.
+
+#code:
+  : "{" 
+      \[ #>"blockline" \] 
+      { ( #>"eol" | ";" ) \[ #>"blockline" \] } 
+  "}"
+
+#---: blockline
+
+An assignment or a bare expression.
+
+#code:
+  : ( \[ #>"label" { #>"eol" } \] #>"expression" )
+  | #>"label-value"
+
+#---: eol
+
+End of line. This *may* be filtered depending on context. At unit level, it is
+ignored/filtered (token separator only); within a block, it is an expression
+separator; and within a string, it is a literal eol.
+
+#code: 
+  : "\\n"
+
+#---: operation
+
+Operation and binop are greedy. #_*"Must" use every #>"term" (which includes
+#>"id").
+
+One of:
+
+- A binary op - can be chained; can be a single term
+- a call with an argument that is a binop
+
+For binary op:
+
+- #>"id" is the operation name that must be a method on the LHS item.
+- RHS #>"term" is the argument to this method.
+
+Note that operations do not have any labels or keywords that are bare (ie. not
+in within parens). That enables them to be unambiguously used directly within a
+call or control flow production, for example.
+
+#code:
+  : #>"binop"
+  | ( #>"term" #>"binop" )
+
+#---: binop
+
+Binary operation. Can be chained.
+
+binop MUST be greedy (use every term/id up to
+label/eol/closingparen/closingbrace) or fail and consume nothing. (Because it
+may otherwise be a call with a binop argument)
+
+#code:
+  : #>"term" { #>"id" #>"term" }
+
+#---: for_expression
+
+Iteration.
+
+#~"while" operations (conditions) must evaluate to a boolean. They can be pre- or
+post- conditions.
+
+#~"while" is the default argument, the argument name can be omitted if it is the
+first argument.
+
+#~"label" operations are called before each iteration. The operation must result
+in an optional item. If the optional item is #~"null" the for expression is
+ended. They can be pre- conditions only.
+
+For #~"label" operations, the operations must (checked in order):
+
+- be an object with an #~"iterate" method which will be called once before the
+  first iteration, then that returned iterator will be call each iteration to
+  retrieve and assign the value
+- be a function or method to be called each iteration
+- be an object with a #~"call" method to be called each iteration
+
+#~"loop" is optional and can be omitted if all work is done in the conditions
+(operations).
+
+#~"for" returns a list when used as an expression. The type of each element is
+the type of the #~"loop" sequence.
+
+If a variable needs to be created for the #~"for", a #>"with-expression"
+statement can be used immediately before the #~"for".
+
+#code:
+  : "for" 
+  { 
+      ( \[ "while" \] #>"operation" ) \# precondition(s)
+      | ( #>"label" #>"operation" )  \# binding to iterable/operation
+  } 
+  \[ "loop" #>"primary-expression" \]
+  { "while" #>"operation" }           \# postcondition(s)
+
+#---: with_expression
+
+An expression executed in a new scope with a single new declaration.
+
+A single new definition must be specified. Then a #~"do" expression. 
+
+The definition will be scoped to the #~"with" as they would be as if they were
+specified within the #~"do" expression. The definition no longer exists after the
+#~"with" has completed. The definition can *NOT* itself be a generic type but can
+be a field/parameter/local-var that is defined as generic in the enclosing
+scope.
+
+#~"with" can be used as an expression. The result will be the value of the
+#~"do" expression.
+
+Note that #~"with" uses a bare expression for the #~"do" argument (eg. #~"for",
+#~"call"). This also means #~"with" can be chained within another #~"with".
+
+#~"with" is useful to inline a definition in a new scope before being used in a
+flow control expression (#~"if", #~"for").
+
+#code:
+: "with" #>"label" #>"operation" "do" #>"expression"
+
+#---: expression
+
+An expression - bare labels are allowed.
+
+Note that #>"call" and #>"operation" may not be able to be discerned
+with a single lookahead (two #>"term"s in a row can be a call with an
+unlabelled argument or the first 2 parts of a binary expression).
+
+These return #~"never": break, continue, yield (?), return , for (sometimes).
+
+These return #~"null": reassignment.
+
+#~"null" and #~"never" cannot be created, passed or returned at runtime so while
+some expressions may be syntactically valid (eg #~"return return 1"), they will
+not pass the typechecker.
+
+LHS of reassignment and both sides of swap must be to an addressable location.
+
+#code:
+  : #>"for-expression"
+  | #>"with-expression"
+  | #>"if-expression"
+  | #>"switch-expression"
+  | #>"function-definition"
+  | #>"unit-definition"
+  | #>"item-definition"
+  | #>"data-definition"
+  | #>"block"
+  | ( #>"term" "=" #>"expression" )
+  | ( #>"term" "swap" #>"term" )
+  | #>"call"
+  | #>"binop"
+
+
+#---: call
+
+A term or a function call. The first (default) argument of a call can be
+optionally unnamed.
+
+The first argument (if supplied) is an unlabelled binop argument (note: binop,
+not operation for unlabelled argument).
+
+Must be greedy. #_*"Must" use every #>"term" (which includes #>"id").
+
+#code:
+  : #>"term" \[ #>"binop" \] { 
+      ( #>"label" #>"operation" ) 
+      | #>"label-value" 
+  }
+
+#---: term
+
+A single, self-contained item. 
+
+The grammar ignores [#> to=eol: "EOL"]s when immediately within parentheses (treated
+as whitespace / token separator only). The expression can be free form and
+cannot be line delimitered (ie. all sub-calls must also have parens).
+
+#>"id" includes numeric literals.
+
+#code:
+  : "(" #>"expression" ")"
+  | #>"id"
+  | #>"string"
+  | #>"stringraw"
+  | ( #>"term" { "." #>"id" } )
+
+#---: string
+
+Interpolated string. Delimitered by double quotes.
+
+For top level strings, all parts of the string #_*"must" be constant.
+#>"stringexpr" is allowed, but each component part must also be constant.
+
+#code:
+  : "\\\"" { #>"stringmid" | #>"eol" | #>"stringescape" | #>"stringexpr" } "\\\""
+
+
+#---: stringmid
+
+Any literal chunk of a string excluding eol.
+
+In a #>"string" this will not include escaped sequences and escaped code
+blocks as these are handled with separate syntax. In a #>"stringraw", *_all_*
+text that is not a EOL will be included in #>"stringmid".
+
+#---: stringescape
+
+Escaped string value that is inserted in a string.
+
+#code:
+  : "\\n"
+  | "\\t"
+  | "\\b"
+  | "\\\\"
+  | "\\\""
+  | "\\x" #>"hexdigit" #>"hexdigit"
+  | "\\u" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit" #>"hexdigit"
+
+
+#---: stringexpr
+
+An embedded string executable block eg. "\\{<block>}"
+
+#code:
+  : #>"stringexprbeg" #>"block"
+
+#---: stringraw
+
+Raw string. Delimitered by 3 or more double quotes. Number of ending and
+starting quotes must be the same.
+
+#code:
+  : "\"\"\"" { "\"" } { #>"stringmid" | #>"eol" } "\"\"\"" { "\"" } 
+
+#---: whitespace
+
+Always filtered. Separator only - not listed as part of grammar rules.
+
+#code:
+  : { " " | "\\t" | "\\r" }
+
+
+#---: comment
+
+Always filtered. Separator only - not listed as part of grammar rules.
+
+#code:
+  : "#" { ? any UTF8 character except NUL, "\\n" or #>"eof" ? }
+
+#---: stringexprbeg
+
+A backslash. Only within a string literal to mark the beginning of a string
+expression (must be followed by a open curly brace).
+
+#code:
+  : "\\"
+
+#---: hexdigit
+
+Not a token, this definition is used within other tokens.
+
+#code:
+  : "0" . "9" | "a" . "f" | "A" . "F"
+
+#---: eof
+
+End-of-file marker. A synthetic token created by the parser as the final token
+of a file.
+
+#footer:
+  #p: Version 0.1 2026-02-27
+  #p: Last updated:

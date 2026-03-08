@@ -1,0 +1,3319 @@
+#doc.lang: en
+
+#//: Zerolang Description (Spec)
+
+#doc.title: Zero Language Description
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css 
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2013-01-17
+#doc.version: v0.1
+
+#//: #doc.script src=style/prism-zerolang.js
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zero Language Description
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+#--: Introduction
+
+This is a description of the Zero programming language.
+
+#--: Lexical structure
+
+Program source code is parsed from file-like objects containing the program
+text.
+
+Program text is comprised of <<Character set,characters>> that are combined to
+form tokens.
+
+Each token is one of: <<_whitespace_and_newlines,whitespace>>,
+<<_whitespace_and_newlines,newline>>, <<_end_of_file,eof>>,
+<<_comments,comment>>, <<_delimiters,delimiter>>, <<_separator,separator>>,
+<<_identifiers,identifier>>, <<_labels,label>>, <<_keywords,keyword>>,
+<<_reserved_words,reserved word>>, or <<_string_literals,string literal>>. 
+
+#---: Character set
+
+Source code is UTF8 encoded unicode text. Arbitrary non-null unicode
+characters are allowed in <<_comments,comments>> and <<_string literals,string
+literals>>. The remaining elements of the language
+(<<_identifiers,identifiers>>, <<_keywords,keywords>>,
+<<_delimeters,delimiters>> etc.) are limited to a subset of ASCII. 
+
+Some ASCII characters are reserved and are a syntax error outside of comments
+or string literals. 
+
+All non-printable characters (ie. that have a character code less than #~"Space"
+(32)) are reserved **__EXCEPT__**:
+
+- #~"Horizontal tab" (9)
+- #~"Line feed" (10)
+- #~"Carriage return" (13)
+
+All characters with a code of #~"Delete" (127) or greater are reserved.
+
+Other reserved characters:
+
+- comma #~"," (44) 
+- square brackets #~"[" (91) #~"]" (93) 
+- backtick #~""" (96)
+
+#---: Whitespace and Newlines
+
+Outside of string literals, the only valid whitespace characters are space,
+tab, linefeed and carriage return. Linefeed only denotes a new line.
+
+When directly within a primary expression block, linefeeds are statement line
+separators and are explicitly part of the grammar. In all other locations,
+linefeeds are treated as whitespace only.
+
+Whitespace can serve as a delimiter between identifiers that would otherwise
+be considered a single token.
+
+#---: Comments
+
+Comments begin with a hash #~"#" (35) and extend up to (but not including) the
+following linefeed or else to the end of the file. They may contain any UTF8
+text other than NUL (0).
+
+#---: End of file
+
+A token marking the end of the file. All top level units are contained within a
+file-like object that ends when the parser returns an end of file token.
+
+#---: Delimiters
+
+The following are the delimiter characters:
+
+[width="65%",cols="1,2",grid="rows"]
+|===
+|Tokens       |Description
+
+|#~"(" #~")"  |Precedence delimiters
+|#~"{" #~"}"  |Block delimiters
+|#~"""        |String delimiter
+|#~"\"\"\""   |Raw String delimiter (3 or more double quotes)
+|#~"."        |Dot delimiter (dot 'operator')
+|===
+
+Parentheses are used for enforcing or clarifying precedence. They surround a
+single expression or type reference. They are **__not__** required for function
+calls. Linefeeds are ignored (considered whitespace only) when immediately
+within parentheses. 
+
+#---: Separators
+
+The semicolon (#~";") is a statement separator along with newline -- when in
+primary expression blocks.
+
+#---: Identifiers
+
+Identifiers are used to name constants, variables, functions/methods (including
+operators) types and numeric literals.
+
+Identifiers consist of one or more letters, digits, special-characters and
+optionally a single dot in the case of numeric identifiers. 
+
+The special-characters are:
+
+#code language=zerolang:
+  ! $ % & ' * + - / < = > ? @ \\ ^ _ | ~
+
+Numeric identifiers optionally start with #~"pass:[+]" or #~"-" then a decimal
+digit. The #~"pass:[+]" or #~"-" is part of the literal and must immediately
+precede the remainder of the literal without intervening whitespace. 
+
+Numeric identifiers may contain a single decimal point (#~".") which must be
+followed by a decimal digit in all cases. They then continue up to the word
+boundary (whitespace, newline, delimiter, separator). Numeric identifiers may
+not have leading or trailing decimal points. Always use leading or trailing
+#~""0#~""s if required to prevent this.
+
+Numeric identifiers may include underscore characters for readability purposes
+in all but the first character and immediately after the decimal point. The
+underscores are ignored.
+
+Identifiers are case sensitive.
+
+Identifiers must be separated from surrounding tokens with whitespace or the
+<<Delimiters,delimiters>> or <<Separators,separators>>. Specifically note that
+mathematical operators are standard identifiers and so must also be surrounded
+by whitespace.
+
+Exceptions and special cases:
+
+- some identifiers are <<Predefined Identifiers,predefined>>
+- some otherwise valid identifiers have been designated <<Keywords,keywords>>
+- some otherwise valid identifiers have been designated <<Reserved Words,reserved words>>
+
+
+#----: Predefined Identifiers
+
+Predefined identifiers have a value established by the compiler but are not
+keywords. They can be redefined locally. 
+
+All numeric identifiers (<<Integer Identifiers,integer>> or <<Floating Point
+Identifiers,floating point>>) are predefined. All numeric identifiers start
+with a decimal digit after an optional sign.
+
+Other predefined identifiers:
+
+#code language=zerolang: """
+  null never any _ typedef tag
+
+  u8 u16 u32 u64 u128
+  i8 i16 i32 i64 i128
+  f8 f16 f32 f64 f128
+  c8     c32
+  string
+
+  true false
+
+  public private
+
+  take borrow lock generic 
+
+  this
+  meta
+
+  error
+
+  iterator
+  """
+
+#----: Integer Identifiers
+
+Integer literals follow the rules above for numeric identifiers.
+
+Decimal integer literals default to 64 bits wide and signed. Non-decimal
+default to 64 bits wide, unsigned.
+
+If an optional sign is provided (#~"pass:[+]" or #~"-") or there is no base prefix
+specified, the numeric identifier is decimal. If a sign is not provided, a
+**__lower case__** numeric base prefix can be specified.
+
+Leading zeros are not significant. Specifically, they do **__NOT__** denote
+octal notation.
+
+Character literals are also an integer type. Their underlying storage is
+equivalent to u8 (for c8; ASCII) or u32 (for c32; Unicode). 
+
+Valid numeric prefixes are:
+
+[width="90%",cols="3,>1,4,3,8",grid="rows"]
+|===
+|Prefix                              | Base|Numeral System |Default Type |Allowed digits
+
+|0b                                  |   2 |binary         |u64          |#~"0 1"
+|0o                                  |   8 |octal          |u64          |#~"0 1 2 3 4 5 6 7"
+|#~"pass:[]"&nbsp;or #~"pass:[+]" or #~"-" |  10 |decimal        |i64          |#~"0 1 2 3 4 5 6 7 8 9"
+|0x                                  |  16 |hexadecimal    |u64          |#~"0 1 2 3 4 5 6 7 8 9 a b c d e f A B C D E F"
+|0c                                  |     |char literal   |c32          |a char literal or escape sequence
+|===
+
+Character literals can be formed with the #~"0c" prefix. Provided the character
+to be specified is a valid identifier character and is not backslash itself
+(#~"\\"), it can simply be appended to the prefix. String literal escape
+sequences (as described in <<String Literals>> below) can also be used;
+**__except__** for the interpolated block syntax #~"\\{ ... }" and the escaped
+double quote #~"\\\"". Both of these require characters that are not valid
+identifier characters.
+
+Method call syntax may be used with numeric literals. An integer followed by a
+dot followed by a valid non-decimal identifier initial character will indicate
+method syntax on that integer. For floating point receivers and for method
+names that do not start with a non-decimal, brackets can be used to enforce the
+correct interpretation.
+
+#code language=zerolang:
+  0.size      # 'size' method on the integer literal '0'
+  (0.1).size  # size method on a floating point literal
+  (0).0method # calling a hypothetical '0method' method on an int
+
+Integer identifiers have the following methods, provided they can losslessly be
+stored in the resulting format:
+
+[width="65%",cols="1,2,>1",grid="rows"]
+|===
+|Method | Result Type                  | Bit size
+
+|i8     | Signed Integer               |        8
+|i16    | Signed Integer               |       16
+|i32    | Signed Integer               |       32
+|i64    | Signed Integer               |       64
+|i128   | Signed Integer               |      128
+|u8     | Unsigned Integer             |        8
+|u16    | Unsigned Integer             |       16
+|u32    | Unsigned Integer             |       32
+|u64    | Unsigned Integer             |       64
+|u128   | Unsigned Integer             |      128
+|c8     | Character (equivalent to u8) |        8
+|c32    | Character (equivalent to u32)|       32
+|===
+
+Examples:
+
+#code language=zerolang: """
+  # 64 bit decimal signed integers:
+  0
+  100
+  -200
+
+  # 64 bit non-decimal unsigned integers:
+  0b010101
+  0xffffffff
+
+  # other examples:
+  0              # unsigned 64 bit integer
+  0.u32          # unsigned 32 bit integer
+  0ca.c8         # ascii byte 'a'
+  0ca.c32        # unicode codepoint 'a'. c32 can be specified but is the default
+  0caa           # ERROR: single character only is permitted
+  0c\n           # c32 unicode codepoint LF, can use escaped chars as in strings
+  0c\\           # c32 unicode codepoint backslash, must be doubled/escaped
+  0c\x00         # can use \x and \u escape sequences too but...
+  0.c32          # ... a normal int literal with a suffix is simpler 
+  0x00.c32
+  """
+
+
+#----: Floating Point Identifiers
+
+Floating point literals require an embedded decimal point or #~"e" and/or one of
+the floating point type specifiers. A number following the #~"e" specifies the
+floating point exponent.
+
+Floating point identifiers are always specified in decimal.
+
+The default type of a floating point identifier is #~"f64".
+
+Floating point identifiers have the following methods, provided they can
+losslessly be stored in the resulting format:
+
+[width="65%",cols="1,2,>1",grid="rows"]
+|===
+|Method | Resulting Type               | Bit size
+
+|f32    | Floating Point               |       32
+|f64    | Floating Point               |       64
+|f128   | Floating Point               |      128
+|===
+
+
+Examples:
+
+#code language=zerolang:
+  0.0          # 64 bit floating point
+  (1.0).f128
+  (1.0e15).f128
+  (1e15).f128
+
+
+#---: Labels
+
+Labels are used when assigning names to definitions. They are
+<<_identifiers,identifiers>> followed by a colon (#~":"). The name assigned is
+the identifier only, without the colon.
+
+Labels are case sensitive.
+
+A shortened syntax is available where the definition refers to an item in scope
+that has the same name -- a single colon **__precedes__** the identifier. For
+example: #~":id" is (somewhat) equivalent to #~"id: id". The lookup of the value
+specifically excludes mapping to itself but otherwise searches the current
+environment hierachically as usual.
+
+The colon must immediately precede the identifier without intervening
+whitespace.
+
+#---: Keywords
+
+Keyword usage is explained throughout this document. The following are
+keywords:
+
+#code language=zerolang:
+  unit            function        else            case
+  record          in              for             break
+  class           out             while           continue
+  variant         is              loop            yield
+  union           as              with            return              
+  facet           if              do              = 
+  protocol        when            switch          swap              
+  data            then            on
+
+#---: Reserved Words
+
+Reserved words are syntax errors. The following are reserved:
+
+#code language=zerolang:
+  macro           flag            view
+  goto            cell            unsafe
+  repeat          pragma
+  until           enum
+
+#---: String Literals
+
+A string literal can be raw or interpreted. Both may have embedded newlines and
+have the same rules for handling the first and last newline and for stripping
+leading whitespace as detailed <<String Newline and Whitespace Handling,below>>.
+
+#----: Interpreted String Literals
+
+An interpreted string literal is enclosed by double quotes (#~"""). Within the
+quotes are zero or more literal UTF8 characters or escape sequences. A string
+may not include NUL (0) characters.
+
+Valid escape sequences are:
+
+[width="65%",cols="3m,2m,4",grid="rows"]
+|===
+|Escape Sequence |Alternative |Note
+
+|\n              |\x0a        |line feed (newline)
+|\t              |\x09        |horizontal tab
+|\b              |\x08        |backspace
+|\\              |\x5c        |backslash
+|\"              |\x22        |double quote
+|\xhh            |            |unicode value; 8 bit hexadecimal
+|\uhhhhhh        |            |unicode value; 24 bit hexadecimal
+|\{ blocklines } |            |interpolated block
+|===
+
+Where each #~"h" is a single hexadecimal digit which must be specified. The
+#~"expr" expression will be evaluated and the result embedded in the string
+literal.
+
+Backslashes may only appear as part of a valid escape sequence.
+
+#code language=zerolang: """
+  "an interpreted string with a \n newline"
+
+  "an interpreted string with a literal
+  newline"
+
+  "an interpolated string showing the value of variable myvar: \{myvar} more string"
+
+  "an interpolated string showing the value of variable myvar: \{dosomething "hello"}\n"
+
+  "an interpolated string showing the value of variable myvar: \{
+      dosomething "hello"        # even with comments
+  }\nmore string\n"
+
+  "an interpolated string showing the value of variable myvar.member: \{myvar.member}\n"
+
+  "an invalid string \a"      # syntax error, invalid escaped character
+  """
+
+#----: Raw String Literals
+
+A raw string literal is free form text included without interpretation, except
+for special handling of the first and last line and leading whitespace.
+
+A raw string starts with three or more double quotes and ends with the same
+number of double quotes. Within the quotes are one or more literal UTF8
+characters. A string may not include NUL (0) characters.
+
+An empty string cannot be specified with a raw string literal because the
+number of double quotes cannot be determined. Use #~"""" to represent an empty
+string. Likewise, a single line raw string cannot start with a double quote.
+
+#code language=zerolang: """""
+  """single line raw string"""
+
+  """a raw string may contain backslashes \ and 
+  newlines"""
+
+  """"
+  Using 4 (or more) double quotes allows us to have this in the string: """
+  """"
+  """""
+
+#----: String Newline and Whitespace Handling
+
+Both string types (interpreted and raw) have similar handling of newlines and
+leading whitespace.
+
+Literal newlines can be included, they are always encoded as LF (#~"\x0a")
+regardless of the line ending used in the program source.
+
+If the first line is blank after the opening delimiter (whitespace only), then
+that text including the first newline is excluded from the string literal.
+
+If the last line is blank up to the closing delimiter (whitespace only), then
+that final newline and the text up to the closing delimiter is excluded from
+the string literal.
+
+Also, any whitespace on a newline to the left of the closing delimiter, will be
+stripped from every line in this string literal where possible. The whitespace
+must match exactly (number and combination of tabs and spaces) to be stripped.
+
+#code language=zerolang: """"
+  "
+  the leading newline is not included 
+  in this string"
+
+  """
+  the leading and trailing newline is not included 
+  in this string
+  """
+
+  "
+  add an extra blank line if a trailing newline is required
+
+  "
+
+  """
+        leading whitespace
+        is removed from each line
+        equivalent to the whitespace
+        before the closing delimiter
+            this line will still be indented
+        """
+
+  "
+        leading whitespace
+        is NOT removed from each line
+        in this case (closing delimiter is hard left)
+  "
+  """"
+
+
+#--: Definitions
+
+A program is comprised of one or more <<_unit_types,units>>. Units are made up
+of zero of more definitions.
+
+The entry point for a standalone program is the function called #~"main" in the
+initial unit. The name of initial unit is provided to the compiler as the
+compilation target and all referenced units are determined by tracing out
+references used in that initial unit.
+
+Definitions are one of:
+
+- <<_function,function>>
+- objects: <<_unit,unit>>, <<_record,record>>, <<_class,class>>,
+  <<_variant,variant>>, <<_union,union>>, <<_facet,facet>>,
+  <<_protocol,protocol>>
+- constant <<_if_definition,if>> definition
+- <<_data,data>>
+- typeref (aliases?)
+
+The descriptions of the syntax for each of these are described in their
+respective sections, but at a high level, they are built from
+<<_keywords,keywords>> and <<_blocks,blocks>>.
+
+#---: Blocks
+
+The larger components of the language syntax are built from blocks.
+
+Blocks are used wherever a series of optionally named items is required, eg.
+declarations, function arguments, function body, function calls,
+record/class/list/union members etc.
+
+Blocks are delimitered by the beginning and end of file for a #~"unit" file and by
+matched braces #~"{}" in all other cases.
+
+The general format of a block body is a list of items each being: a 'key' (an
+identifier with a colon **__or__** a keyword) then a 'value'. In some contexts, the
+key or the value may be omitted. 
+
+A shortened form of key and value is permitted when a variable of the same name
+as the required key holds the value. In this case, the identifier with a
+leading colon can be used to represent both the key and the value. 
+
+#code language=zerolang: """
+  # Given:
+  arg: 0
+
+  # then:
+  myfunc :arg
+
+  # is equivalent to:
+  myfunc arg: arg
+  """
+
+Each item in the block body ends with the beginning of the next item (the next
+key) or by a delimiter or a newline or EOF.
+
+Blocks of code also define a unit of scope.
+
+The 'value' depends on context but is one of:
+
+- type declaration or type reference (<<Declarations and References>>)
+- an <<Expressions,expression>>
+- for statement lines in function bodies, can be expression, assignment, swap,
+  'continue', 'break', 'return'
+
+Summary of uses:
+
+[width="90%",cols="3,1,3",grid="rows"]
+|===
+|Context              |Key                 |Value
+
+|Unit body            |Required            |Constant definition
+|Function Parameters  |Required            |Type (includes default values)
+|Function Body        |Optional            |Expression + assignment/swap/control flow
+|Call Arguments       |Optional (see below)|Expression
+|Record/Class member  |Required            |Type
+|Union/Variant member |Required            |Type (may be missing: #~"null")
+|Protocol/Facet member|Required            |Function signature (spec), function
+|Data Literal         |Optional integer    |A constant expression
+|===
+
+Special cases:
+
+For calls and call-like syntax (ie. type references with generic parameters)
+the key for the first argument is optional (see <<Call Arguments>> and
+<<Declarations and References>>). All other arguments must be supplied by name.
+
+For data literals, the optional key can be an integer. The expression specified
+will be the value at that index.
+
+
+#---: if definition
+
+An #~"if" may be used as a definition at the <<_unit_type,unit>> level. The
+syntax is similar to an <<_if,if>> expression, but there are different
+contraints. Each clause of an #~"if" definition must evaluate to a constant. Each
+#~"then" arm of an #~"if" definition is permitted to produce a constant item of a
+completely different type and the result of the definition will be the exact
+type of the first arm whose predicate evaluates to true.
+
+#--: Expressions
+
+Expressions are parts (typically a line) of executable code.
+<<_flow_control_expressions,Flow control items>> are also expressions as they
+can be used to generate values. Some expressions do not return useful runtime
+values, so may not be able to be used in all locations eg. assignment,
+reassignment and swap all return #~"null": these cannot be used where a value is
+expected at runtime (right hand side of assignments, #~"if" conditions etc.)
+
+- <<_if,if>>
+- <<_for,for>>
+- <<_with>>
+- <<_case>>
+- <<_address>>
+- <<_break>>
+- <<_continue>>
+- <<_yield>>
+- <<_return>>
+- <<_swap>>
+- <<_assignment>>
+- <<_reassignment>>
+- <<_calls,call>>   # labelled
+- <<_operations,operation>>
+
+#---: assignment
+ 
+#---: reassignment
+
+#---: swap
+
+
+
+#---: Calls
+
+A call executes a function by passing zero or more arguments and usually
+returning a value or owned reference.
+
+They are one of the following forms:
+
+- the function name followed by its arguments (**__function call syntax__**) the
+- receiver object followed by a dot then the function name followed by its
+  arguments (**__method call syntax__**)
+- the receiver object followed by the method name followed by it's single
+  unnamed argument (**__operator syntax__**).
+
+Calls may only be used in function bodies. Type specifiers may only be used
+where types are required - argument definitions, components of classes,
+records, units etc.
+
+Note that parentheses are not used for function calls but as the call itself is
+an expression, the entire call may be surrounded by parentheses for grouping or
+precedence purposes.
+
+A function call without arguments is still a function call (not a function
+pointer). Use an <<_address>> expression to retrieve a function reference.
+
+#----: Call Arguments
+
+TODO: generic argument are 'unevaluated'
+
+Named arguments can be specified in any order. Arguments are evaluated left to
+right as specified in the call.
+
+Function parameters that have default values may be omitted in the call and
+will use those defaults in the body of the call. If the caller does specify
+that argument, it must be of the same type as the default value.
+
+Generic arguments must be specified in a call **__or__** must be able to be derived
+from another argument declared to be of that generic type. They must be a
+member of the union or implement the protocol specified as the 'type' in the
+parameter definition. 
+
+Retained parameters are decorated with a leading #~"@" and take ownership of the
+supplied reftype argument in the function body. The variable supplied to a
+retained argument is not valid after the call returns. 
+
+In a call, the 'primary' parameter is the first parameter listed in the #~"in"
+parameter list of the <<_function>> definition. In a type specifier, the
+'primary' is the first generic argument. If that is also the first argument
+supplied in a call or type specifier, then the parameter name **__may__** be
+omitted in some cases. When either:
+
+- it is a normal argument (non-retained and non-generic)
+- it is a retained parameter **__and__** the supplied argument is anonymous
+  (i.e. the result of a function call)
+- it is a generic parameter **__but__** a concrete arg is being provided (i.e.
+  not a generic arg)
+
+In all other cases, the parameter name **__must__** be supplied in the call or
+type specifier argument. e.g:
+
+- all arguments after the first argument, of any type
+- all retained (#~"@") arguments taking its value from a named variable
+
+The argument name rules above are designed to:
+
+- unambigiously document the arguments to a call or type specifier
+- allow arguments in any order at the call site
+- clearly show when local variable ownership is being given away to a call (by
+  requiring the #~"@" name to be specified)
+- not overburden calls with names for the 'primary' (or only) argument. The
+  'primary' argument is often redundant following the name of the function/type
+
+Argument evaluations are also subject to ownership locking. See <<Ownership>>.
+
+The expression for an argument value is first evaluated in the current scope.
+If the value is a single identifier (undotted) and it does not resolve up to
+the current module level, it is assumed to be within the scope of the argument
+type. This allows enum arguments to be specified without qualifier (as long as
+there is no local definition of that same identifier).
+
+#----: Call Examples
+
+Basic function call (no argument):
+
+#code language=zerolang:
+  result: f
+
+Basic function call (single unnamed argument):
+
+#code language=zerolang:
+  result: f arg1
+
+Using named parameters:
+
+#code language=zerolang:
+  result: f a: arg1 b: arg2
+
+Via a parent (unit, record, class) namespace. #~"parenttype" is the parent type,
+#~"parent" is an instance of #~"parenttype" (**__function call syntax__**):
+
+#code language=zerolang:
+  result: parenttype.f this: parent a: arg1 b: arg2
+
+Or, **__method call syntax__** (#~"parent" will be passed as the first #~"this"
+argument):
+
+#code language=zerolang:
+  result: parent.f a: arg1 b: arg2
+
+Operator syntax. Names cannot be specified. Must always be a binary operation
+(the receiver and one argument). The methodname would tend to usually be one of
+the operator names.
+
+#code language=zerolang:
+  result: f methodname arg1
+
+An error; cannot mix functional style and method style syntax:
+
+#code language=zerolang:
+  #result: parent.f s: parent a: arg1 b: arg2  # ERROR
+
+Resolving as a child of the argument type:
+
+#code language=zerolang: """
+  # ----- in unit file "io"
+
+  mode: variant { :READ :WRITE }  # an enumeration
+  open: function {name: string mode: mode} out filehandle is { 
+      # ... 
+  }
+
+  # ----- in client unit file
+
+  open: io.open
+
+  # fmode subtypes can be specified directly (as long as READ is not 
+  # defined locally)
+  fh: open "myfile.txt" mode: READ
+
+  # same as line above...
+  mode: io.mode
+  fh: open "myfile.txt" mode: mode.READ
+  # or, fully qualified
+  fh: open "myfile.txt" mode: io.mode.READ
+  """
+
+Always need parameter name even when calling with a single **__retained__**
+argument from a named variable:
+
+#code language=zerolang:
+  result: parent.f from: myreftype
+
+TODO: call with default arguments
+
+TODO: generic function call (with and without generic parameter derivation)
+
+TODO: generic type specifier. With and without arguments passed down
+
+
+#---: Operations
+
+
+#---: Flow Control Expressions
+
+There are four flow control related constructs/expressions: <<_with>> for a
+sequence within a new scope, <<_if>> for conditional executtion, <<_case>> for
+conditional dissection of variables and <<_for>> for iteration.
+
+#----: with
+
+TODO: fix this. Only 1 var now and #~"do" is an expression only.
+
+Execute a single expression in a new scope with a single new definition.
+
+#~"with" can be used as an expression. The result will be the value of the #~"do"
+expression.
+
+Arguments:
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|[var]:    |No      |1x Initialisation expression bound to 'var'
+|do        |No      |Single expression that will be executed once
+|===
+
+#----: do
+
+Execute a sequence of expressions in a new scope.
+
+#~"do" can be used as an expression. The result will be the value of the
+clause (the result of the last expression in the clause).
+
+#~"break" can be used for early exit of the #~"do" block which will make the type
+of the #~"do" expression optional. TODO: allow an argument to break?
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|is        |Yes     |Block of expressions
+|===
+
+#----: if
+
+#~"if" expressions allow conditional execution. Arguments:
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument       |Default |Description
+
+|when           |Yes     |Condition expression that results in a boolean
+|[var]:         |No      |Initialisation expression bound to 'var'
+|then           |No      |Block of code
+|else           |No      |Block of code
+|===
+
+An #~"if" expression has one or more clauses. Each clause is made up of one or
+more conditions (#~"when") followed by a #~"then" block that will be executed if
+all prior conditions succeed.
+
+Each #~"when" condition must be an operation that results in a boolean. #~"when" is
+the default argument and the #~"when" keyword may be omitted for the first
+condition specified immediately after the #~"if".
+
+The optional initialisation expression results in a variable binding that
+remains in scope for all conditions and clauses that follow it.
+
+The conditions are evaluated in turn. If all conditions before a given #~"then"
+block return true, the #~"then" block will execute. If any fail, the tests for
+the remainder of the block stop (short-circuit) and the process continues after
+that related #~"then" block. 
+
+If no blocks of conditions completely succeed, the #~"else" block will execute,
+if present. 
+
+A successful clause will exit the #~"if" expression -- at most, one #~"then" or
+#~"else" clause will execute.
+
+When #~"if" is used as an expression, the #~"if" must be exhaustive and each arm must
+evaluate to the same type or must not complete (#~"return", #~"break" or
+#~"continue"). The result of the block is the result of the last expression of
+that block.
+
+#~"if" may only have one #~"else" argument and it must be the last argument.
+
+#code language=zerolang: """
+  if x == 1 then {
+      # will match if 'true'
+  }
+
+  # with initialisation expression
+  if x: func_that_returns_result when x != -1 then {
+      # ...
+  } else {
+      write "Got error \{x}"
+  }
+  # x is now out of scope
+
+  # an if expression
+  result = if x < 0 then {
+      0
+  } else {
+      1
+  }
+
+  # can be a single line
+  result = if x < 0 then 0 else 1
+  """
+
+#----: case
+
+A #~"case" is used to dissect a union, variant, enum or generic parameter type
+into its child types. See also <<_type_narrowing,type narrowing>>.
+
+Parameters:
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument |Default |Value/Description
+
+|from     |Yes     |Target variable to be dissected: union/variant/enum/generic
+|when     |No      |Existence test. Value must be subcomponent id of the target variable
+|then     |No      |Statement or block of code (executed after successful match)
+|else     |No      |Statement or block of code (executed if no previous matches)
+|===
+
+The #~"when" argument specifies the specific child type being tested. #~"when" is
+the default argument and the argument name can be omitted if it is the first
+argument. 
+
+An assignment expression may be specified. This will then become the target
+variable and all #~"when" clauses will specify subitems (ids) relative to this
+variable. The expression must evaluate to a union/variant/enum instance
+**__or__** must refer to a generic parameter. If the expression (RHS) is a
+named variable, that name will be unavailable in the #~"case" body to prevent
+aliasing or locking issues. The prepended colon #~":" syntax may be used to
+nominate an existing variable name as a target within the #~"case". The label in
+the assignment expression is within scope only within the #~"case" expression. If
+a labelled expression is provided, it must be the first argument to #~"case".
+There can only be at most one labelled expression in a #~"case".
+
+The assignment expression binding may take ownership of the RHS by specifying
+the #~"take" keyword.  The matching #~"then" or #~"else" clause will have full
+control of the target variable. After the #~"case" the RHS of the assignment
+expression will be inaccessable, ie. if it was a named variable, it can no
+longer be referenced.
+
+If an assignment expression is specified, the #~"case" **__must__** be
+exhaustive. 
+
+If an assignment expression is not specified, all #~"when" clauses must specify
+the target variable and the subitem id as a single dottedid. All #~"when" clauses
+must specify the same target variable.
+
+Multiple #~"when" clauses may be specified before a related #~"then".  (???)
+
+A #~"then" clause must be specified after each group of #~"when" clauses. This
+clause will execute if the preceding #~"when" clauses match the subtype of the
+target variable. Within the #~"then" clause, the type of the target variable will
+be narrowed to the type(s) matched in the related #~"of". If the matched type is
+a union/variant that has no type associated with it (<<_null>>) then the
+narrowed type is 'null' and it is forbidded to use the target variable.
+
+A #~"then" clause that terminates (with a #~"return", #~"break", #~"continue") will
+narrow the target variable type (if a named variable) for the **__remainder__**
+of the scope **__after__** the #~"case" completes ie. that terminated subtype is
+excluded from the type definition of that variable going forward.
+
+An #~"else" clause can be specified and will be executed if no previous #~"when"
+clause matches. It must be the final clause if present.
+
+Only one successful #~"then" or #~"else" clause will execute. 
+
+An exaustive #~"case" can be used as an expression. The #~"case" is exhaustive if
+an assignment expression is specified or if the compiler can guarantee all
+subtypes have been specified in #~"when" clauses. When used as an expression, all
+#~"then" and #~"else" results must then be of the same type. 
+
+If the target variable is a generic type #~"~", then the #~"case" becomes a
+constant expression that is evaluated at compile time for each specialisation
+during code generation.
+
+
+#code language=zerolang:
+  case optionalthing1 when some then {
+      # optionalthing1 is narrowed to the 'some' side
+      # if this is a reftype, it is borrowed
+  } when none then {
+      # optionalthing1 is narrowed to null
+  }
+
+  # 'from' arg name is optional
+  case from optionalthing1 when some then {
+      # ..
+  } when none then {
+      # ..
+  }
+
+
+  case take optionalthing2 when some then {
+      # optionalthing2 is narrowed to the 'some' side
+      # optionalthing2 is owned within this block and can be used in any way
+      # ...
+  } when none then {
+      # optionalthing2 is narrowed to null
+      # ...
+  }
+  # .. optionalthing2 has been destroyed...
+
+
+  # formatting using parens for condition statement alignment... nicer?
+  case (
+      thing1
+  ) when some then {
+      # x is narrowed to the 'some' side
+      # if this is a reftype, it is borrowed
+      # ...
+  } when none then {
+      # ...
+  }
+
+
+  # matching on an enum
+  # x is an int
+  # filetype is the target but we don't reference it in the bodies
+  x: (case filetype
+      when WRITE then 0
+      when READ then 1
+      when READWRITE then 2
+      else 3
+  )
+
+
+  case f: (open filename) when ok then {
+      # f is ok (filehandle)
+      f.write data
+  } else {
+      # f is err
+      print "Could not open. Error: \{f}"
+  }   # 'f' is closed (destroyed) here (or was never opened)
+
+
+  case thing.err then return
+  # type of 'thing' has been narrowed to exclude 'err'
+  """
+
+#----: for
+
+#~"for" expressions allow iteration or repeated execution. It can be used to
+handle all looping variations:
+
+- for/while/loop - boolean pre-condition
+- for/loop/while - boolean post-condition
+- for loop - loop forever
+- 'for'/'in' style loop against iterators and function calls
+
+Arguments:
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|while     |Yes     |Boolean expression. Pre or post loop condition
+|[var]:    |No      |'var' is bound to a value of an operation, or result of an iterator
+|loop      |No      |Block of code that may be executed 0 or more times
+|===
+
+Pre-conditions can be boolean expressions specified by the #~"while" keyword.
+This is the default argument and the argument name can be omitted if it is the
+first argument.
+
+A single binding ([var]: call) can be specified before the loop. The 'call' is
+to an iterator (specified with #~"in") or a standard function.  
+
+A binding to an iterator (#~"in" operation) is set up once on first loop, then
+each yielded value will be assigned (a borrow) to 'var'. The binding will fail
+(loop terminates) when the iterator calls #~"return" or comes to the end of the
+iterator function.
+
+A binding to a standard function will call that function before each loop and
+assign it to 'var'. If the result is an optional and is null, the #~"for" will
+terminate. 'var' will be owned in the loop body as with a normal function call
+(TODO: unless function returns a #~"borrow").
+
+A single #~"loop" clause may then follow. The body of this clause will be
+executed if all conditions succeed. The #~"loop" may contain a #~"continue" (early
+skip to next iteration) or #~"break" (terminate #~"for" clause). Or a #~"return".
+
+Postconditions can be boolean expressions specified by the #~"while" keyword
+after the #~"loop". They must succeed for the #~"for" to continue on a new loop.
+
+Any combination of pre and post conditions and bindings may be specified on a
+single #~"for".
+
+Order matters, conditions/bindings can short-circuit on failure and will stop
+processing subsequent tests.
+
+#~"for" requires at least one argument (condition or #~"loop"). #~"for <condition>"
+will loop until condition is false; #~"for x: operation" will loop until
+operation is or returns null (discarding x each loop); #~"for loop { ... }" will
+loop unconditionally and indefinitely.
+
+#~"for" can be used as an expression. The result will be a list of the final
+values of the #~"loop" statement.
+
+
+#code language=zerolang: """
+  # normal while 
+  # (precondition)
+  for x == y loop {
+      # ...
+  }
+
+  # normal for..while 
+  # (post condition; at least one iteration guaranteed)
+  for loop {
+      # ...
+  } while x == y
+
+  # 'foreach' style, myiterable is an iterator function
+  for x: in myiterable loop {    
+      # x is available as a borrowed reference here
+      # the myiterable object is unavailable (locked until 'for' completes)
+  }
+
+  # 'foreach' style combined with boolean condition
+  # only loops for x = 0, 1, 2, 3, 4
+  # TODO: skip 'range'? Make integers iterable?
+  for x: each 10 while x < 5 loop {
+      # ...
+  }
+
+  cont: true
+  for x: in iterator while cont loop {
+      # can specify multiple conditions
+      # they all must be true
+      # will short-circuit at first false condition
+      cont = false
+  }
+  """
+
+#---: address
+
+TODO: remove this... use #~"take" or #~"borrow" now
+
+Return the function address rather than calling a function. Since all usual
+references to a function definition result in a call, the address expression is
+required when the function value itself is required. The result of an #~"address"
+expression can be assigned to <<Function References,function references>>.
+
+#~"address" in this way can only be used in code blocks (in function bodies) and
+in function parameters.
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|is        |Yes     |Constant Path to a function or method
+|===
+
+Note that the #~"is" argument will not be evaluated (called).
+
+
+
+#--: Type System
+
+#---: Overview
+
+A type (or data type) is a group of values and the operations that can be
+performed on those values.
+
+All function parameter definitions and object fields must have a type
+specified. Variables and top level definitions have types inferred from their
+specified values.
+
+All object types may have methods defined on them.
+
+There are two broad categories of types: value types and reference types.
+
+#----: Value Types (valtype)
+
+- pass-by-value
+- includes all fixed numeric types; and arrays
+- 'record' is the user defined value product type
+- 'variant' is the user defined value sum type
+- 'facet' is the user defined value interface type
+- records and variants can only contain other value types
+- records have constructors
+- no destructor (why?) (default destructor only)
+- no other resources that need freeing (eg. can't have a file, db handle or any
+  reftype as a member)
+- single, contiguous block of memory of a fixed size (for all instances of this
+  type)
+- variant is size of tag + size of largest possible member
+- mutable (but private members may be protected with accessor methods)
+
+#----: Reference Types (reftype)
+
+- pass-by-reference
+- eg String, File, List, Dict, protocol, union, (others?)
+- 'class' is the user defined reference product type
+- 'union' is the user defined reference sum type
+- 'protocol' is the user defined reference interface type
+- can contain value types -- the value types will be embedded
+- can contain other reftypes (reftypes will not be embedded - store reference
+  to them only). But must have ownership.
+- classes have constructors
+- can have destructor (but it doesn't destroy memory, compiler handles that)
+- single, contiguous block of memory of a fixed size (for all instances ?? what
+  about List?) but may have references to other reftypes
+- mutable (but private members may be protected with accessor methods)
+- a reftype variable must always contain a valid reference. The swap operator
+  can be used to take a new reference and return the old one. The destructor
+  can be called but then the variable is no longer valid (unless reassigned).
+
+#----: Product types
+
+Product types are a compound type that contain one or more fields of specified
+types. <<_record>> is the value product type. <<_class>> is the reference
+product type.
+
+#----: Sum types
+
+Sum types hold a single value that can be one of a fixed list of types.
+<<_variant>> is the value sum type. <<_union>> is the reference sum type.
+
+Sum types are available at run time but can also be used to specify
+<<_generic_types,generic parameter>> constraints.
+
+#-----: Type Narrowing
+
+The compiler keeps track of the type of every expression at every point in the
+program source.
+
+<<_sum_types,Sum types>> can be 'narrowed' back to their specific child types
+by using <<_case>> expressions.
+
+Within a successful #~"then" clause of a #~"case", the target variable will be
+narrowed to the type(s) listed in the related #~"of" clause(s).
+
+Also, a #~"case" clause that exits the current scope (using a #~"return", #~"break"
+or #~"continue") will also 'narrow' a named target for the remainder of that
+scope -- ie. the type of that named target will exclude the subtypes where a
+matching #~"of" clause has resulted in exiting the current scope.
+
+#----: Interface types
+
+Interface types specify a list of methods names and signatures. Items may
+implement an interface by supplying implementations of each those methods
+listed in an interface and explicitly listing the interface in an #~"as" member.
+
+<<_facet>> is the value interface type. <<_protocol>> is the reference
+interface type.
+
+Interface types are used for polymorphism at runtime but can also be used to
+specify <<_generic_types,generic parameter>> constraints or can be used to
+specify <<_limited_types,parameter limit>> constraints.
+
+#----: Generic types
+
+<<_class,Classes>>, <<_record,records>>, <<_union,unions>>,
+<<_variant,variants>>, <<_protocol,protocols>>, <<_facet,facets>>,
+<<Unit,units>> and <<_function,functions>> can be generic types.
+
+Generic types have one or more generic parameters or fields. These are created
+by using the <<_generic,generic>> built-in type.
+
+Generic types do not exist at runtime. Top level code must define concrete
+types for all generic parameters (explicitly or implicitly). At that point, a
+specialised implementation is created, using the generic type as a template.
+This specialisation will be shared by other client locations that use this
+definition with the same type parameters.
+
+Integer generic parameters are parameterised by the integer **__value__**. The
+top level code must provide a constant submember to make the generic type
+concrete. Unlike the other generic types which are parameterised by a
+**__type__**. Note that when passing a generic argument, the type itself is
+passed to the generic parameter - an instance is not created; #~"create" is not
+automatically called is would be done for non-generic arguments.
+
+A generic parameter may have a default type. The call site may override this
+default type. In all other cases, the call site **__must__** specify the types
+of all generic parameters being used in that type by either:
+
+- explicitly providing the generic argument with a concrete type that is a
+  member of the declared union, interface etc.
+- explicitly providing the generic argument with a generic type reference at
+  the call (when used in a caller which is itself generic)
+- implicitly, by providing a concrete value to another argument/field that has
+  been defined to be an instance of this generic parameter/field. The compiler
+  can then infer the type of the generic parameter from that value.
+
+Note that attempting to store a reference type into a value type via a generic
+type will fail to compile.
+
+The #~"any" type is a compiler defined union of all possible types declared in
+the current program that can **__ONLY__** be used for generic definitions.
+
+Examples:
+
+#code language=zerolang: """
+  # an option type
+  option: union {
+      t: generic any
+      some: t
+      none: null
+  }
+
+  # usage:
+
+  # an option.some instance with a value. Note that the generic field type (t)
+  # is inferred from the concrete value supplied
+  x0: option.some 100     
+  # same as:
+  x1: option.some t: i64 from: 100    # TODO: can't be 'from' that is a keyword
+
+  # an option.none type. Note that the generic parameter cannot be inferred 
+  # because 'none' does not take a concrete argument with a specific type,
+  # so must be specified
+  # none takes only a single generic argument so the argument name can be 
+  # omitted
+  x3: option.none i32
+  """
+
+Embedding a generic type in another type:
+
+#code language=zerolang: """
+  # Given:
+
+  generic_rec: record {
+      a: generic any
+      b: generic any
+  }
+
+  # Embed: 
+
+  generic_rec2: record {
+      aa: generic any
+
+      # when creating a type reference for generic_rec, the generic parameter
+      # types must be specified
+      bb: (generic_rec a: aa b: aa)       # generic types 'passed down'
+      cc: (generic_rec a: u32 b: String)    # they can also be concrete types
+      dd: (generic_rec a: aa b: String)    # ..or could be a combination
+                                              
+  }
+  """
+
+Example generic protocol:
+
+#code language=zerolang: """
+  generic_factory: protocol {
+      t: generic any
+      next: function { :this } out t
+  }
+  """
+
+Example generic record based on an enum generic parameter:
+
+#code language=zerolang: """
+  myenum: variant {:A :B}
+
+  myrec: record {
+      t: generic myenum
+
+      x: t   # always A or B
+
+      mymethod: function {:this p: t } out int is {
+          # generic field... test is done at compile time...
+          if this.x.A {
+              # ...
+          } if this.x.B {
+              # ...
+          }
+
+          # generic parameter... test is done at compile time...
+          if p.A {
+              # ...
+          } if p.B {
+              # ...
+          }
+      }
+  }
+  """
+
+Example generic function accepting an instance that implements a protocol:
+
+#code language=zerolang: """
+  myfunc: function {t: generic myprotocol arg: t} is: {
+    # ...
+  }
+
+  somecode: {
+      myref: #... # myref type implements myprotocol
+
+      # NO conversion to myref is performed
+      # compiler generates a specialised function for the type of myref
+      myfunc myref
+  }
+  """
+
+////
+#----: Limited types
+
+Variables and function/method parameters can be limited to the use of a
+specified interface of an instance. This is achieved by using the built-in
+#~"limit" type with an argument specifying a type with a specific sub-interface.
+
+The compiler statically enforces that any use of a limited instance uses only
+members of the specified interface. There is no run-time cost of creating a
+limited type beyond the creation of the underlying instance itself.
+
+#~"limit" arguments:
+
+TODO: 'from' is a keyword... can't be used
+
+[width="90%",cols="2,2,2,4",grid="rows"]
+|===
+|Argument  |Type     |Default |Value/Description
+
+|from      |any      |Yes     |'type'.'protocol' limit
+|===
+
+
+#----: Nominal vs Structural types
+
+The language prefers nominal types over structural types in most cases.
+
+All types created must be named. Implementing interfaces must be done
+explicitly by name.
+
+There are some types that are considered equivalent based on structure:
+
+- functions/methods are considered to implement a spec when all arguments are
+  provided with the same names and parameter types
+- others?
+////
+
+#----: Visibility
+
+Definitions within blocks defining: <<_facet,Facets>>, <<_protocol,Protocols>>,
+<<_variant,variants>>, <<_union,unions>>, <<_record,records>>,
+<<_class,classes>> and <<_unit,units>>; may each belong to 0 or more interfaces
+(protocols/facets). 
+
+There are predeclared units called 'public' and 'private' for each but new
+definitions of interfaces by any other name can be created.
+
+The default definitions for both 'public' and 'private' include all members .
+But the 'public' name can be redefined within the block body to create a unit
+that include a different subset of methods and fields. It is not possible to
+redefine 'private'.
+
+The methods/fields accessible from outside the 'item' or 'unit' (static)
+namespace are those included in 'public'. By default, 'public' will also list
+the methods/fields that are available on item instances. But instances can be
+modified to present a different public interface by specifying
+'this.myinterface' as the return type in **__all__** constructors of the
+instance. 'myinterface' will then be the public protocol/facet available on
+instances. Note that 'units' do not have instances so their public interface is
+always 'public'; it would not be useful to define an interface with a different
+name on a 'unit' (other than for inclusion in 'public').
+
+'private' is the interface presented on 'this' when inside the definition of an
+'item' or 'unit'.
+
+The 'private' interface can also be explicitly referred to in 'friend'
+functions/'items'. A function/method accepting 'myitem.private' will be able to
+access the private interface of a 'myitem' instance passed into it. But note
+that **__only__** a method defined in 'myitem' itself **__or__** another friend
+of 'myitem' can pass the private interface of 'myitem' to this friend
+function/method.
+
+Types must be public to the caller to be directly instantiated. But if an
+object is acquired (eg. via another public function in that unit), the public
+fields and methods of that instance are accessible.
+
+
+#----: Ownership
+
+Ownership is determined by how the variable is created/declared or received.
+
+TODO: #~"take" on type definition vs #~"take" on a variable **__name__** (not
+instance)
+
+Ownership types:
+
+- Owned - the result of a #~"take" expression. #~"take" is implied on the result of
+  a function call if #~"borrow" is not specified on the return type.
+- Borrowed - the result of a #~"borrow" expression. #~"borrow" is implied on
+  standard function parameters if #~"take" is not specified on the parameter
+  definition.
+- Shared Mutable - defined as a field of a class
+- Shared Immutable - unit level definitions (#~"data", function references, type
+  definitions)
+- #~"this" - the parent object within a class method. Parent of all Shared items
+  at current level. (But, This could also be a valtype...)
+
+Aliasing is never permitted for reftypes (except for 'data'). The variable
+itself cannot be copied, only moved and loaned. This also means that any
+reftype can only appear once as an argument or as a receiver in any single
+function call (to prevent the same object being referenced by two different
+names in the function body).
+
+Note that the only time ownership can change is through function calls (#~"take"
+parameters and return values) and the result of a #~"take" modifier on a
+call/binary-operation. Normal arguments convert to borrowed within the called
+function. In #~"case" and #~"cast" statements, the source variable is hidden and
+the child is borrowed in the body by default. #~"take" arguments pass the
+ownership into the called function: the caller must #~"take" a local variable
+that cannot be accessed on return from that function call **__or__** provide an
+anonymous value (eg a returned value)
+
+Reference Types:
+
+[width="90%",cols="5,1,1,1,1",grid="rows"]
+|===
+|Property                                                |Owned     |Borrowed  |Shared    |This
+
+|Can be returned from a function?                        |Yes       |No        |No        |No
+|Can be given away via a #~"take" parameter?               |Yes       |No        |No        |No
+|Can be replaced/overwritten?                            |Yes       |No        |Yes       |No
+|Can pass as an argument to Owned.method?                |Yes       |Yes       |Yes x     |Yes xx 
+|Can pass as an argument to Borrowed.method?             |Yes       |Yes       |Yes x     |Yes xx 
+|Can pass as an argument to Shared.method?               |Yes       |Yes       |Yes x     |No
+|Can be passed as an arg to a This.method?               |Yes       |Yes       |No        |No
+|===
+
+- x: But not with 'This' as any other argument
+- xx: But not with a Shared item as an other argument
+
+Value Types:
+
+[width="90%",cols="5,1,1,1,1",grid="rows"]
+|===
+|Property                                                |Owned     |Borrowed  |Shared    |This
+
+|Can be returned from a function?                        |Yes       |Yes       |Yes       |Yes
+|Can be given away via a #~"take" parameter?               |Yes       |Yes       |Yes       |Yes
+|Can be replaced/overwritten?                            |Yes       |No(?)     |Yes       |Yes
+|Can pass as an argument to Owned.method?                |Yes       |Yes       |Yes       |Yes
+|Can pass as an argument to Borrowed.method?             |Yes       |Yes       |Yes       |Yes
+|Can pass as an argument to Shared.method?               |Yes       |Yes       |Yes       |Yes
+|Can be passed as an arg to a This.method?               |Yes       |Yes       |Yes       |Yes
+|===
+
+
+Summary of restrictions:
+
+[width="90%",cols="1,8",grid="rows"]
+|===
+|Type     |Restrictions
+
+|Value    |Minimal restrictions - copy by value, never shared
+|Owned    |No aliasing.
+|Borrowed |No Aliasing. Cannot be given away/returned.
+|Shared   |No Aliasing. Cannot be given away/returned. Cannot pass to method/receiver with 'This'
+|This     |No Aliasing. Cannot be given away/returned. Cannot pass to method/receiver with Shared
+|===
+
+TODO: implement the restrictions on a call with locking:
+- arguments are processed first in order, then the callable
+- x is accessed, then x is exclusive lock
+- child of x is accessed, then x is readonly, child is exclusive lock
+- cannot take an exclusive lock on an item that already has a readonly or
+  exclusive lock
+- cannot call a method on an item with a readonly or exclusive lock
+- an argument that is a complete call has no locks and the returned item is
+  owned by that param
+
+
+#----: Declarations and References
+
+New user defined types are declared using the <<_class,class>>,
+<<_record,record>>, <<_protocol,protocol>>, <<_union,union>>,
+<<_variant,variant>>, <<_function,function>> (for specs) keywords. Each user
+definition must be bound to a name (no anonymous or inline use). All must be
+defined directly within a unit.
+
+Every local-variable, constant and each subcomponent of the above user defined
+types (ie. fields, methods, parameters etc) are declared using a name binding
+to a type reference (of the form #~"name: typereference").
+
+The declaration name must be a valid <<Identifiers,identifier>>. 
+
+The declaration typereference follows the name. It is:
+
+- the name of the type for standard fields and parameters (non-generic,
+  non-default, non-taken types)
+- a constant numeric expression (for fields and parameters with default values)
+- the name of the type followed by each generic argument using syntax similar
+  to function calls (to specify a generic type). As with function calls, the
+  name of the first generic argument may be omitted
+- the #~"generic" keyword can be used to create a generic type field in units,
+  functions, classes, records, protocols, unions and variants.
+- the #~"take" keyword can be used in function parameter definitions to take
+  ownership from the caller. See <<Ownership,ownership>>.
+
+
+#---: Unit Types
+
+Programs are constructed from one or more units.
+
+A unit is used to hold logically related constant definitions. A unit must have
+a name and creates a new namespace. 
+
+Each definition within a unit may or may not be #~"public". See <<Visibility>>.
+
+A source file is a single unit. The name of that unit is the name of the file
+excluding the file extension. Unit names have additional restrictions over
+standard identifiers so that they can be represented as filenames across
+filesystems of differing capabilities. They must:
+
+- consist only of lowercase ASCII letters and digits
+
+A file unit can have 'implementation subunits' by placing file units within a
+directory of the same name of the current unit. The name of that subunit is its
+filename excluding the file extension. To be loaded, the subunits must be
+explicitly referenced by name in the 'parent' unit. They are always private to
+the parent unit.
+
+TODO: note about forward references being allowed?
+
+#----: unit
+
+Named sub-units can be defined inline within a unit file by using the #~"unit"
+keyword after an identifier definition. 
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default    |Description
+
+|is        |Yes        |Block of definitions, generic parameters
+|===
+
+#code language=zerolang: """
+  # may be private, note '_'
+  _myunit: unit {
+      ZERO: 0
+      ONE: 1
+      myfunc: function is {
+          io.write "hello"
+      }
+  }
+
+  # expose a definition from a private subunit
+  ZERO: _myunit.ZERO
+  """
+
+Sub units can also refer to definitions in their parent unit or to
+implementation subunits.
+
+#---: Predefined Types and Definitions
+
+Several types or type aliases are predefined.
+
+#----: null
+
+#~"null" is used to represent the nil type and nil value. It is a value type (?).
+
+It can be used in some locations to indicate that an item is intentionally
+omitted or undefined eg. for a subitem in a <<_union>> or <<_variant>> that has
+no associated data.
+
+It is also useful for undefining methods that would otherwise be available.
+Such as the default #~"create" constructor or for hiding methods in a
+<<_typedefs,typedef>> that would be exposed from the underlying type.
+
+#code language=zerolang: """
+  myclass: class {
+      # 'undefine' the default create constructor
+      create: null
+  }
+  """
+
+#----: never
+
+The #~"never" type is a type that is used to represent an expression that never
+returns. The return value of the expressions: <<_break>>, <<_continue>> and
+<<_return>> are of type #~"never" within the block where they are called.
+
+There is no #~"never" value and so the type does not exist at runtime.
+
+The #~"never" type plays a part in <<_type_narrowing,type narrowing>>. If a
+#~"never" expression is executed in a #~"then" clause of a <<_case>> expression,
+the value of the subtype of the target variable is then #~"never" from that
+point.  The type of the target is essentially narrowed after that #~"case" to
+exclude the current specific type.
+
+A #~"never" type is permitted in #~"if" or #~"case" that are used as expression
+values. The #~"never" type is ignored when determining the type of the entire
+expression.
+
+Any statements following a #~"never" typed expression in the same scope is dead
+code and is raised as a compiler error during the type checking phase.
+
+TODO: #~"for loop {}" is of type #~"never" (as is any loop where the conditions can
+be determined to always be true at compile time). Provided there is no #~"break"???
+
+TODO: can a function return type be specified as #~"never"???? (for infinite
+loops etc). Yes.
+
+
+#code language=zerolang: """
+  x: makesomething
+  case x when err then return  # return is of type 'never'
+  # the type of x is narrowed from this point to exclude the possibility of 'err'
+
+
+  y: getvalue     # y is an int
+
+  # the type of z is int (the break/never type is not considered 
+  # when determining the resulting type)
+  z: if y == 0 then break else y  
+  """
+
+#----: any
+
+Compiler created union type that contains all types except itself. Can
+**__only__** be used as a generic field type.
+
+
+TODO: Have an #~"anyref" for any reftype? Could then have a field/var for that.
+Would need a large tag descriminator though... is this worth it? To access an
+'any' child, a named type (single id) must be created/used - rather than
+selecting the existing subname. The subnames are automatically generated by the
+compiler and are not able to be be determined.
+
+#----: type
+
+#~"type" is a predefined identifier within an object definition (record, class
+etc) that refers to the type of the current parent object.
+
+Objects of type #~"type" can access the public API of the current object. Only
+<<_this>> can access the full API (public and private).
+
+#~"type" can be used in type definitions within the current object's methods and
+data members (for self referential data types) without having to refer to the
+current object by name.
+
+#----: Underscore
+
+A single underscore (#~"pass:[_]") can be used within a call argument as a shorthand to
+refer to the type of the parameter being specified. 
+
+It can be used to:
+
+- create instances of that argument's type (#~"_.create ...") 
+- specifying enum argument values
+
+#----: generic
+
+For creating generic fields/parameters. #~"generic" is itself generic and can
+take any union/variant/protocol/numerictype/enum as an argument. See also
+<<_generic_types,generic types>>.
+
+#~"generic" arguments:
+
+[width="90%",cols="2,2,2,4",grid="rows"]
+|===
+|Argument  |Type         |Default |Value/Description
+
+|from      |generic any  |Yes     |Generic field constraint
+|default   |generic any  |No      |Default subtype (must be member of 'from')
+|===
+
+The #~"from" argument itself is a generic argument and takes a named type of a
+union, variant, protocol, facet or integer type. The generic parameter created
+is then a type variable that constrains use to members of that union, variant,
+protocol, facet or integer. 
+
+Note that the sum type or interface type argument to #~"generic" is used as a
+constraint only - there is no run-time creation of an object of this type.
+
+The #~"default" argument specifies a member type of the #~"from" argument that will
+be used as a default. This allows the call site to omit specifying a type for
+this generic field -- the default type will be used. The #~"default" argument is
+optional and if unspecified, will require the created generic field to be
+initialised at the call site either explicitly or implicitly via an associated
+argument.
+
+
+#----: take
+
+#~"take" - to convert an owned expression to a 'free' value (or request a 'free'
+value as a parameter).
+
+#----: borrow
+
+#~"borrow" - to convert an ??? expression to a 'borrowed' value
+
+#----: lock
+
+#----: typedef
+
+TODO: remove this...
+
+A typedef wraps an underlying type to provide a new type. The new type has no
+run-time overhead beyond the underlying type, it is simply a compile time
+construct.
+
+To define a new typedef, define a class or record with a single concrete field
+of type #~"typedef" with a subtype (argument) of the underlying type. The typedef
+may also have generic parameters and functions/methods that operate on the new
+type. It may satisfy protocols (with #~"as") using a combination of methods
+defined on the new type and on the underlying type.
+
+#~"typedef" is a predefined type that takes a single generic argument of type
+#~"any".
+
+A typedef must not have any constructor methods and all typedef methods can not
+call the one true constructor. Wrapping is handled by the compiler and type
+system and there is no way to intervene. 
+
+All generic parameters in the typedef **__MUST__** be used in the #~"this"
+definition line. That is, only generic parts of the underlying type may be
+referenced. Any generic parameters must be able to be automatically derived
+from the source item.
+
+Any methods defined will override methods of the same name on the underlying
+type. All unshadowed methods of the underlying type will be exposed on the
+typedef.
+
+The typedef may only use public methods and fields of the underlying type.
+
+To create a reftype typedef use a class or a union. The underlying type
+**__must__** be a reftype. 
+
+Create a valtype typedef using a record or a variant. The underlying type
+**__must__** be a valtype.
+
+The typedef has a compiler generated constructor called #~"create" that will
+return a borrowed instance of the typedef.
+
+The typedef retains the underlying type and so can continue to be passed to
+functions that expect the underlying type as is. But the opposite is not true -
+a function expecting the new typedef must explicitly be given the wrapped type.
+
+TODO: how to create an owned typdef instance?
+
+
+#code language=zerolang: """
+  mytype: record {
+      target: typedef i32
+
+      add: function {:this x: i32} out type is {
+          return this.target + x
+      }
+  }
+
+  # wrapped dictionary type
+  mydict: class {
+      k: any.generic
+      v: any.generic
+      target: typedef (dict :k :v)
+
+      # generic parameters can be used in new methods
+      access: function {:this :k} out v {
+          # ...
+      }
+  }
+
+  # TODO: show usage as orig type and as new type
+  """
+
+Reassigning and swapping to a typedef is permitted. For a valtype, the same
+(typedef'ed) or the underlying type may be assigned the the typdef'ed valtype.
+For a reftype, #~"swap" may be used to swap the current typedef'ed reftype with
+another variable of the same or underlying type. Both variables retain their
+type after the swap (?).  The underlying variable must be owned to be used in a
+swap, as usual.
+
+#----: tag
+
+A predefined generic type for specifying the descriminator in <<_union,unions>>
+and <<_variant,variants>>.
+
+[width="90%",cols="2,2,2,4",grid="rows"]
+|===
+|Argument  |Type     |Default |Value/Description
+
+|of        |any      |Yes     |tag discriminator type
+|===
+
+#~"tag" can be specified as a field type within a #~"variant" or #~"union" definition
+only. At most, only one field can be of type #~"tag". If not specified, the tag
+is #~"u8".
+
+The tag type argument may be:
+
+- any numeric type (including the character types)
+- an enumeration
+- null
+
+If an 'enum' (variant/union) tag type is specified, the containing sum-type
+must have a matching type for each member of the enum.
+
+#~"tag" may be #~"null" only if all of these criteria apply:
+
+- in a union (not a variant)
+- there are only two subitems
+- one of the subitems **__must not__** have data associated with it (#~"null" member),
+  the other **__must__** have data associated with it
+
+In that case, no underlying descriminator is needed.
+
+For unions/variants with only distinct numeric values that fit within the #~"tag"
+type then the value is stored directly within the tag. These are effectively
+'enumeration' types.
+
+The named tag may be accessed from the containing variant or union as a
+readonly field shared by all sub-instance types.
+
+#code language=zerolang:
+  myunion: union {
+      mytag: tag u32
+      # ... other fields
+  }
+
+#----: break
+
+The builtin break function. Breaks out of the innermost <<_for>> loop or block
+expression. Syntax error if not within a #~"for" or block expression. (TODO: only
+defined (on the call stack) within a for or in a block expression?)
+
+The type of the expression is <<_never>> for the current block, and defaults to
+<<_null>> for the caller, or returns the value of the specified argument.
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|t         |Yes/Gen |Generic type descriptor.
+|result    |Yes     |Return operation, optional, returns null if missing
+|===
+
+#code language=zerolang:
+  # effective signature
+  break: function {t: any result: t} out never
+
+
+#code language=zerolang: """
+  for loop {
+      # ...
+      if sometest then break
+  }
+
+
+  # a block:
+  {
+      step1
+      step2
+      if sometest then break
+      step3
+  }
+  """
+
+#----: continue
+
+The builtin continue function. Abandons the current loop execution and resets
+back to the top of the innermost <<_for>> loop. It is a syntax error if not
+within a #~"for" loop. 
+(TODO: only defined (on the call stack) within a for?)
+
+The type of the expression is <<_never>> for the current block, and defaults to
+<<_null>> for the current iteration, or returns the value of the specified
+argument for the current iteration.
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|t         |Yes/Gen |Generic type descriptor.
+|result    |Yes     |Return operation, optional, returns null if missing
+|===
+
+#code language=zerolang:
+  # effective signature
+  continue: function {t: any result: t} out never
+
+#code language=zerolang:
+  for x: iterator {
+      if x == 0 then continue
+      #...
+  }
+
+#----: yield
+
+The builtin yield function.
+
+#code language=zerolang:
+  # effective signature
+  yield: function {t_out: any t_in: any result: t_out} out t_in
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|t_out     |Yes/Gen |Generic type for value being passed out to caller
+|t_in      |No      |Generic type for value being passed in from caller
+|result    |Yes     |Return operation, optional, returns null if missing
+|===
+
+
+#----: return
+
+The return builtin function. Exits the current function returning the value of
+the #~"is" expression, if provided.  The return value must match the return type
+specified in the function signature.
+
+The type of the expression is <<_never>> for the current block, and the type of
+the return expression for the caller.
+
+(TODO: only defined (on the call stack) within a function?)
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|t         |Yes/Gen |Generic type descriptor.
+|result    |Yes     |Return operation, optional, returns null if missing
+|===
+
+#code language=zerolang:
+  # effective signature
+  return: function {t: any result: t} out never
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Value/Description
+
+|is        |Yes     |Return expression
+|===
+
+#code language=zerolang:
+  return 0
+
+
+#----: public
+
+Defaults to all contents of the current item. 
+
+
+#----: private
+
+#----: Numeric Types
+
+Predefined numeric type identifiers:
+
+#code language=zerolang:
+  u8 u16 u32 u64 u128
+  i8 i16 i32 i64 i128
+  f8 f16 f32 f64 f128
+  c8     c32
+
+Characters are also a numeric type and represent a single unicode code point
+and are stored as an unsigned 32 bit integer (equivalent to u32) or an ASCII
+character, equivalent to a u8.
+
+#----: Boolean Identifiers
+
+The predeclared identifiers #~"true" and #~"false" are the boolean literals.
+
+#----: this
+
+#~"this" is a predefined identifier within an object definition (record, class
+etc) that can be used as a type in method signatures on that object.
+
+#~"this" allows access to all members of the parent object both private and
+public. #~"this" is a narrower type than <<_type>>. #~"this" is of type #~"type", but
+it can only be used to refer to the current exact instance that is running the
+method. #~"type" can be used to refer to any instance of the current definition
+(ie. other objects of the same type).
+
+#~"this" must be the return type for a user defined constructor.
+
+#~"this" must be the first argument type (the receiver) in an object instance
+method. It may optionally be declared with a new name for documentation
+purposes or ease of use. 
+
+The name of the #~"this" parameter is not considered as part of the method
+signature for satisfying protocols. #~"this" can also be specified using the
+shortened prepended colon syntax.
+
+#code language=zerolang: """
+  # define a method of the 'parent' object
+  parent: class {
+      method: function {t: this arg: i32} out i32 is {
+          # ...
+      }
+  }
+
+  # :this syntax is allowed here
+  parent: class {
+      method: function {:this arg: i32} out i32 is {
+          # ...
+      }
+  }
+  """
+
+#----: meta
+
+#~"meta" is a predefined identifier that houses a namespace containing compiler
+metadata. The namespace holds references to compiler defined functions, details
+about object definitions and is context-aware (ie. can provide data about the
+current source location (filename, line number etc), current object etc.)
+
+This includes #~"meta.create" which is the compiler defined constructor (the one
+true constuctor) for the current object.
+
+#code language=zerolang: """
+  # define a constructor for a class that calls the true constructor on 'meta'
+
+  myobject: class {
+      myconstructor: function {arg: i32 arg2: i32} out this is {
+          # ...
+          meta.create arg: arg arg2: arg2
+      }
+  }
+  """
+
+Also available is the fully qualified name for the parent object.
+
+#code language=zerolang:
+  myobject: class {
+      printname: function is {
+          # assuming this code is in unit 'myunit', prints 'myunit.myobject' 
+          io.print meta.name
+      }
+  }
+
+#---: Predefined Methods on Types
+
+#----: take (method)
+
+#~"take" is predefined on all variable **__names__** (not the variable) that
+refer to a reftype.
+
+It explicitly takes the variable value (converting it to an anonymous taken
+value) and renders the variable name as uninitialised from this point forward.
+
+The #~"take" method is zero overhead -- it is a manipulation of the compile time
+type system only. Use of the #~"take" method is optional when passing to
+#~"take"-en fields and function parameters, the compiler will implicitly #~"take"
+if required.
+
+#~"take" takes no arguments.
+
+The #~"take" method can be used for defining local variables -- the new variable
+will take the value and the old name will be undefined.
+
+See also the <<_ownership,ownership>>.
+
+#----: borrow (method)
+
+#~"borrow" is predefined on all variable **__names__** (not the variable) that
+refer to a reftype.
+
+It explicitly borrows the variable value locking the source variable name until
+the end of the scope of this #~"borrow".
+
+The #~"borrow" method is zero overhead -- it is a manipulation of the compile
+time type system only. Use of the #~"borrow" method is optional when passing to
+#~"borrow"-ed fields and function parameters. The #~"borrow" method is required
+when returning a borrowed type from a function call.
+
+#~"borrow" takes no arguments.
+
+The #~"borrow" method can be used for defining local variables -- the new
+variable will borrow the value and the source name will be locked while the new
+name is in scope.
+
+See also the <<_ownership,ownership>>.
+
+#----: lock (method)
+
+#~"lock" is predefined on all variable **__names__** (not the variable) that
+refer to a reftype.
+
+It explicitly locks this variable name and binds it to a borrowed return value
+of a method/function.
+
+The lock applies until the the end of the scope of this #~"borrow".
+
+The #~"borrow" method is zero overhead -- it is a manipulation of the compile
+time type system only. Use of the #~"borrow" method is optional when passing to
+#~"borrow"-ed fields and function parameters. The #~"borrow" method is required
+when returning a borrowed type from a function call.
+
+#~"borrow" takes no arguments.
+
+The #~"borrow" method can be used for defining local variables -- the new
+variable will borrow the value and the source name will be locked while the new
+name is in scope.
+
+See also the <<_ownership,ownership>>.
+
+
+#----: generic (method)
+
+#~"generic" is a 'class method' predefined on all union, variant, protocol, facet
+and numeric types. It explicitly converts the receiver type to a generic
+argument. This makes it obvious at the call site that a generic argument is
+being passed and that a #~"create" method is **__not__** being called on the type. The
+#~"generic" method is zero overhead -- it is a manipulation of the compile time
+type system only. Use of the #~"generic" method is optional, the compiler will
+always pass a type to a generic receiver.
+
+#~"generic" takes no arguments.
+
+The #~"generic" method cannot be used for defining local variables, only on
+arguments.
+
+See also the built-in <<_generic,generic type>> or a description of
+<<_generic_types,generic types>> in general.
+
+#----: tag (method)
+
+TODO:
+
+#----: typedef (method)
+
+TODO:
+
+#---: data
+
+Creates a constant list of embedded data. It is a reftype. All components must
+be numeric valtypes.
+
+The definition may use a sparse representation, ie. it may have integer labels
+to define data at a specific offset. Items may have text labels (these are
+required for #~"data" that is destined to be used as a #~"tag").
+
+For items with a text label or no label, the index (or key) is calculated as 1
+higher than the previous index, starting with 0. Unspecified elements within
+the data range will have a zero value. The indexes always range from 0 to the
+largest index specified/calculated. 
+
+Named #~"data" elements can be reference directly elsewhere in the source and
+this is similar to refrencing a constant.
+
+The type of each element is determined from the type of the first element in
+the body. All remaining elements must be able to be coerced into this type.
+
+String literal fragments are built on top of a u8 data sequence.
+
+The data when used at runtime has exactly the same API as #~"collections.list"
+except that it is readonly.
+
+#code language=zerolang: """
+  # array of i64
+  mydata_i64: data { 1 2 0x07 }
+
+  # array of u8
+  mydata_u8: data { 1_u8 2 0x07 }
+
+  # a sparsely defined array of length 5 (1, 2, 0, 3, 4)
+  mydata_sparse: data { 1 2 4: 4 }
+
+  # an array with text keys
+  mydata_key: data { FIRST: 1 SECOND: 2 THIRD: 3 }
+  # which can be used as a tag in a sum-type, using these values for 
+  #  the descriminator
+  myvariant: variant { 
+      FIRST: none SECOND: none THIRD: none
+  } as {
+      tag: mydata_key.tag
+  }
+
+  # can also use elements as constants in top level or in code:
+  One: mydata_key.FIRST   # same as.. 
+  One: 1
+  """
+
+
+#---: string
+
+TODO: 
+A string is an immutable refcounted reference type. (???) NOPE
+
+
+#---: function
+
+The function keyword defines a:
+
+- standard function: a signature with a body defined at unit level or within an
+  object
+- a method: defined within an object and has a #~"this" receiver as the first
+  argument
+- iterator function: using #~"yield"
+- 'spec': a signature only; no body (only at unit level)
+
+It may also be generic by having generic parameters.
+
+Functions are structurally equivalent. Two function types are considered
+equivalent when, in both definitions:
+
+- the names and types of all non-receiver parameters are the same
+- the return types are the same
+- if there is a receiver (#~"this"), it must refer to the same object. The name
+  of the receiver parameter is ignored for the comparison
+
+Function definitions must be equivalent when (re)assigning 
+<<Function References>>.
+
+See also <<Specs>>.
+
+#----: Function Definition Arguments
+
+Arguments to #~"function":
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Description
+
+|in        |Yes     |Block of standard and generic parameters
+|out       |No      |The return type of the function
+|over/each?|No      |The return type of each item being yielded
+|as        |No      |Facet of parent object after method call
+|is        |No      |Function body expression/block
+|===
+
+- #~"in" is optional; omitted when no parameters are required
+- #~"out" is optional; omitted for procedures and iterators
+- #~"over/each??" is optional; required for iterators, omitted for standard functions
+- #~"as" is optional; only permitted on methods and only those providing typestate
+- #~"is" is optional; omitted when defining a <<Specs,spec>>.
+
+A #~"function" defined with no arguments is a spec that takes no arguments and
+returns no value. It only has side-effects.
+
+The #~"in"  argument takes a brace delimitered block of parameter definitions
+of the form #~"name: typereference". See <<Declarations and References>> for
+details. A parameter **__must not__** be private (#~"_") but may be
+<<Ownership,retained>> (#~"@") or <<Generic types,generic>> (#~"~") or it may have
+a default constant numeric value or a default function reference value.
+
+The order of the parameters is significant. The first non-generic parameter may
+be the 'primary' argument that can be used without specifying the parameter
+name in a call. See <<Calls>> for details. The first generic parameter may also
+be specified without name in type specifiers.
+
+A function usually will return a value. The type of the returned item is
+specified by the argument named #~"return". Ownership of a returned reftype value
+after the call implicitly lies with the caller (#~"@" **__must not__** be
+specified on #~"return").
+
+The #~"is" parameter to #~"function" specifies the body. It may be a single
+expression or a block of code. Each line of code is a local variable definition
+or a statement. All arguments supplied can be referenced by name but are
+read-only and cannot be reassigned. The function result can be the value of the
+last expression in the body or the #~"return" statement can also be called in the
+body for early return of a value. Iterator results are specified by using the
+#~"yield" statement.
+
+#code language=zerolang: """
+  # function takes an int and has no return value
+  myfunc0: function {a: u32} is {
+      print a  # return value of call is ignored
+  }
+
+  # function takes an int and returns an int
+  myfunc1: function {a: u32} out u32 is {
+      a
+  }
+
+  # function with no parameters that returns an int
+  zerofunc: function out u32 is {
+      0_u32
+  }
+
+  # function with no parameters as no return value
+  sayhello: function is {
+      print "hello"
+  }
+  """
+
+A function may also retain ownership of arguments. To do so, the parameter name
+must use the 'take' "call" and the type must be a reftype or generic type that
+may include a reftype.
+
+The caller provides the object to be retained by using these arguments at the
+function call site. The caller must own these variables before the call. The
+function body is free to use the retained argument as if it created it itself
+(i.e. can be stored, returned, destroyed). 
+
+Passing a value type via a retained-argument of a generic type passes a copy as
+usual. This allows the same notation to be used for generic container types
+regardless of the type of subcomponents being stored (eg. for Lists). In all
+other cases, it is an error to pass valtypes in via retained-arguments.
+
+Retained arguments that take ownership from a named variable cannot be
+specified without the parameter name at the call site even if they are the
+first argument. This is to make it obvious that ownership is given up at the
+call site. Retained arguments from an anonymous value (eg. from the result of a
+direct function call) can be specified without the parameter name since the
+value would be inaccessible/destroyed after the call in any case.
+
+#code language=zerolang: """
+  taker: function {arg: take reftyp} is {
+      # ...
+  }
+
+  # call site:
+  taker arg: take myreftype
+  # myreftype is unavailable in the current scope from this point
+  """
+
+
+TODO: generic example:
+
+#code language=zerolang:
+  myfunc: function t {
+      t: generic any
+      x: int
+      y: t
+  } out t is {
+      t * x
+  }
+
+#----: Function Parameter Types
+
+In the #~"from" block, the function argument types specified (after the
+function argument label), can be:
+
+- a builtin type (eg. u8, i32, f64, c8)
+- a numeric compile time constant (this is also a type). Parameter will default
+  to this value if not specified in the call
+- a named user defined type (result of #~"record", #~"class", #~"union", #~"enum",
+  #~"protocol" definition etc.)
+- a spec (a function definition without an #~"is" body). A function reference of
+  the same type must be passed at the call
+- #~"address" followed by a function or method name. This will then be a #~"spec"
+  parameter with a default value equal to the function name specified.
+- #~"generic" followed by a named generic restraint type (#~"union", #~"protocol",
+  #~"enum", #~"u8" etc.)
+- #~"take" followed by a named reftype. Function body will have ownership of this
+  parameter
+- a restrained type: a named type followed by a dot then a child named protocol
+  or named method of that type. The call must pass an instance of the named
+  type and the function declares that it will only use methods in the named
+  protocol or the method named (compiler enforces this constraint)
+
+Function argument types can NOT be:
+
+- a bare function name (MUST have the #~"address" keyword before a function to
+  make a #~"spec" argument with a default value)
+
+
+#----: Specs
+
+A 'spec' is the type of a function. When defining a complete function (with an
+#~"is" argument), both a spec and a function value are being defined.
+
+If the function definition has no body (#~"is" argument) then only the spec
+(function type) is being defined.
+
+A spec (without body) **__must__** be defined at the unit level or within a protocol;
+they cannot be defined in code or directly in field definitions. Whereas
+complete functions can be defined at the unit level **__or__** as member functions in
+a record/class/variant/union/enum.
+
+It is not possible to specify a method spec without a function value.
+
+#----: Iterators
+
+An 'iterator' defines a function that can yield a series of values. This is a
+function with a #~"yield" argument specifying the type of each value. It must not
+have an #~"to" argument.
+
+Creates an object definition that can iterate over a set of values. Instances
+can not be created directly, rather they are created by using the generator in
+a #~"for" loop. The yielded object is borrowed only for the body of the #~"for"
+loop.
+
+The #~"is" block should contain one or more #~"yield" statements to return
+intermediate values. Any #~"return" statement or the end of the definition will
+end the iteration and the calling do loop. A #~"return" statement in an interator
+must not have a return value.
+
+The generator is implemented by creating a state machine to track variable
+state including the progress through the generator between subsequent calls.
+The created object has a single #~"next" method that returns an optional instance
+of the type specified in the generator's #~"yield" argument.
+
+TODO: can have a generator spec?
+
+#----: Methods
+
+Methods are a specialised form of function. They are defined similar to a
+normal, named function call but they must be defined in the namespace of the
+receiver definition and the first argument must be of type #~"this".
+
+This function will then be considered a method of that object. The caller may
+call that method using method syntax (#~"myinstance.mymethod args..."). Calling
+with normal function call syntax is also still permitted 
+(#~"myobject.mymethod myinstance args...").
+
+The argument designated as #~"this" is unusual in that it is the receiver
+instance itself (i.e. directly addresses the instance, even value types - not
+pass by value as is usually the case).
+
+Methods can change subcomponents of the receiver. Methods can directly change
+entire value objects (by assigning to #~"this", but has to be same type).
+
+Methods can be attached to user defined types, usually in the same module as
+the type definition. But they can also be attached to system types, type
+aliases and user defined types defined in external modules. In these cases, the
+method is only available to the local module as an extension method over the
+type. They do not change the type itself. They must also not collide with
+existing methods on the type. This may cause a maintenance burden (changes to
+the external type may cause code that previously compiled correctly to now
+fail) so should be used with caution.
+
+#----: Constructor
+
+There is only one true low-level constructor for an object and it is defined
+automatically by the compiler at #~"meta.create". It will provide the memory for
+the object and set any members directly from parameters supplied or from any
+default field values. #~"meta.create" is only available directly within the
+object definition but if no user defined constructor is defined with the name
+#~"create", then the #~"meta.create" will be exposed as object.create.
+
+User defined constructors can be defined on an object. These constructors
+return type #~"this" and create instances by calling #~"meta.create" directly, or
+by calling other user defined constructors which eventually call #~"meta.create".
+
+Constructors **__must__** expose (as parameters) any generic fields in the
+object. It must be able to be determined at the call site the actual type of
+the item being created (although this can be explicitly passed to a higher
+level by passing a generic variable at the call site into the constructor.
+
+
+#code language=zerolang: """
+  myobj: record {
+      a: u32
+      b: string
+
+      create: function {a: 0_u32 b: string} out this is {
+          return meta.create :a :b      # no stuttering... can use default args
+      }
+  }
+  """
+
+Note that constructors are not executed for value types that are copied as
+those values are a clone of the original. Contructors for value types are only
+run when the value type is created explicitly.
+
+
+#code language=zerolang: """
+  # constructor will not be run on copy-by-value creation
+
+  myobj: class {
+      _privatemethod: function {s: this a: "string" b: 1} is { 
+          # no return, returns nothing
+          # s is of type myobj. 
+          s.c = b
+      }
+  }
+
+  # classes are not copy by value. Constructor is always run before object is 
+  # returned
+  # embedded records are inlined(??). There cannot be any name conflicts
+  myreftype: class {
+      aa: 1
+      bb: 2
+      _cc: 3
+      st: myobj
+      s: string   # string, reference type. 
+  }
+  """
+
+A 'copy constructor' style method can be created in two different ways:
+
+#code language=zerolang: """
+  # a 'class method' (function) can be defined on the base type that takes 
+  # an instance of the same type and returns 'this' like a normal 
+  # constructor
+
+  myobject: class {
+      mycopyconstructor: function {other: type} out this is {
+          # ...
+      }
+  }
+
+
+  # alternatively, a method can be defined (on #~"this") that returns an instance
+  # with the same type (ie. 'type')
+
+  myobject: class {
+      mycopyconstructor: function {this: this} out type is {
+          # ...
+      }
+  }
+  """
+
+#----: Finalizer
+
+TODO: change this section. No Destructors, only finalizers. Only reftypes can
+have finalizers (valtypes are copy by value so don't want finalizer to run on
+every instance???? Maybe have finalizers on all objects anyway but warn about
+finalize on copies and possible performance implications in documentation?)
+
+TODO: finalizer must be called #~"finalize", must be a method and must take no
+arguments. Objects can call this themselves... but not good style? #~"finalize"
+can be private (good style to make finalize private) but compiler will still
+call it when the object goes out of scope.
+
+Destructors are methods, placed within the object definition namespace. The
+name of the destructor can be user defined but each object can only have one
+destructor (why?).
+
+Destructors are the only methods that retain type #~"this". They may take any
+other arguments as necessary. They may also return any type (except #~"this"),
+including subcomponents of #~"this" because it has taken ownership of it. They
+are called implicitly when the holding variable falls out of scope. They can
+only be called explicitly from the namespace of the parent (not an existing
+object). They can only be explicitly called by the owner. The compiler will
+destroy the memory of any subcomponent remaining (and not returned) and the
+parent object after the destructor returns. 
+
+The identifier holding this item in the caller will no longer be available for
+use after the destructor returns (as occurs with any call that retains a passed
+argument).
+
+The #~"this" argument that is passed in may be in an inconsistent state within
+the destructor so it **__cannot__** be passed to any method and no methods
+defined on it can be called within the destructor. Only the subcomponents of
+#~"this" can be written to / removed.
+
+TODO: how to prove that you do not leave the object in a broken state part way
+through destruction? Can no methods be called during destruction?
+Is there any point in having destructors?
+
+#code language=zerolang: """
+  myreftype: class {
+      destroy: function {@s: this} out subreftype is {
+          s.subreftype   # return a sub ref type. Can only do this in destructor
+      }
+  }
+
+  # destroys it? Must be called on parent namespace (like a constructor)?
+  # returns the subcomponent which the caller now owns
+  # myreftypeinstance is invalid after this call
+  mysubtype: myreftype.destroy @s: myreftypeinstance
+  """
+
+#----: Function References
+
+A function reference is a variable that stores the address of a function. It may
+be called with the same syntax as used when calling a standard function. It may
+be reassigned to the address of an equivalent function. It must always have a
+valid function as a value.
+
+A function reference variable cannot be defined at the unit level (unit level
+declarations are immutable).
+
+To retrieve a function reference value at run time (within a function body), use
+an <<_address>> expression.
+
+Function references can be used as: 
+
+- local variables 
+- fields of an object
+- function parameters 
+- function return values
+
+For local variable function references, declare, assign and reassign to an
+<<_address>> expression.
+
+For field function references:
+
+- define a complete function either at the unit level or within the object (a
+  class method, no #~"this")
+- **__OR__** define a spec at the unit level
+- use the name of that function or spec as the RHS of a field
+- if a function name is used, that function becomes the default value for that
+  field (same as a default numeric field)
+- if a spec name is used, there is no default value and the address of a
+  function **__must__** be passed to the constructor of this object (using
+  <<_address>>).
+- the function reference can be reassigned to an equivalent function at any
+  time (with <<_address>>).
+
+To create a function reference as a function return value:
+
+- define a function spec at unit level
+- in the function definition, use the name of the spec as the return type
+- in the body of the function, return an equivalent function reference 
+
+The above applies to standard function references (non-method pointers; no
+#~"this" parameter). Method pointers have additional restrictions:
+
+- all methods must be defined within the object (#~"this" is not available
+  outside the object definition)
+- method pointers must be declared by referring to an existing method
+- so, method pointers always have a default value (there is no way to define a
+  method pointer spec)
+- method pointers can only be replaced by another equivalent method within the
+  object
+- method pointers cannot be function return values (thay can never escape the
+  object)
+
+
+#---: record
+
+Defines a user defined, compound, value type.
+
+Arguments for #~"record":
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument   |Default |Description
+
+|is         |Yes     |Block of child types and generic parameters
+|as         |Yes     |Block of static types, generic parameters and associated methods
+|===
+
+Private members (having names with a leading '_') can only be modified within
+the record's namespace.
+
+The body can include #~"is" clauses that indicate instances of this record
+implement that protocol. 
+
+A constructor can be provided (and must be if there are private subtypes
+without default values). The constructor is given a preinitialised record --
+#~"this" (NOPE). It can accept no other parameters. All private parameters must be given
+a value and any invariants can be established. No other methods can be called
+on #~"this" because it is incomplete. Additional constructors can be written as
+normal methods, but all will receive their base instance from this constructor.
+
+#code language=zerolang: """
+  # private member with default value
+  myrec: record {
+      a: u32
+      b: u8
+      _c: "a"_c32
+  }
+
+  # with constructor:
+  myrec: record {
+      a: u32
+      b: u8
+      c: c32
+
+      # TODO: don't do this? See constructors above, rust style...
+      create: function {a: u32 b: u8} out this is {
+          this.c = "a"_c32
+          return this
+      }
+  }
+  """
+
+
+Can inline (including other records) but not take references to anything else
+(must be fully self contained). ??? 
+
+Generic types can also be used in records:
+
+#code language=zerolang: """
+  # k and v can be anything (seperately)
+  dictelement: record {
+      tk: generic any
+      tv: generic any
+      k: tk
+      v: tv
+  }
+
+  # k and v can be anything but must be the same anything for both
+  dictelement2: record {
+      t: generic any
+      k: t
+      v: t
+  }
+  """
+
+#---: class
+
+Arguments for #~"class":
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument   |Default |Description
+
+|is         |Yes     |Block of subtypes, generic parameters and associated methods
+|===
+
+Defines a user defined reference type.
+
+The body can include #~"is" clauses that indicate instances of this class
+implement that protocol. 
+
+How to do this?
+
+----
+class Node<T> {
+	val   T
+	left  &Node
+	right &Node
+}
+
+# like this???
+mynode: class {
+    t: generic any
+    val: t
+    left: (this t)
+    right: (this t)
+}
+----
+
+
+#---: protocol
+
+A protocol is defined as a list of function specs. The receiver (#~"this") is
+always omitted from each spec definition (NO!!!, #~"this" must be specified.
+Static methods can be part of a protocol). Note that a protocol cannot include
+definitions for constructors or destructors because they are not on the object,
+only in it's namespace.
+
+Protocol methods cannot have function bodies. The protocol defines the
+interface only without any implementation. If additional methods over a
+protocol object are required, a <<Type Definition,type definition>> can be
+defined over the protocol object and addition methods (that can only interact
+with the object via protocol methods) can be defined.
+
+Types (records, classes, unions, variants and enums, including protocols
+themselves) can claim support for one or more protocols by naming each protocol
+in an #~"as" clause and implementing (or relisting for protocols) all specs
+listed in that protocol as methods. All protocols supported must be given a
+label that exists in the same namespace on the object as its fields and
+methods.
+
+Protocols can be used:
+
+- to create protocol instances: see <<Protocol Instance Creation,protocol instance creation>>.
+- as generic constraints: see <<Generic types>>
+- as type limiting constraints: see <<Limited types>>
+
+
+#code language=zerolang: """
+  reader: protocol {
+      read: function {:this b: buffer} out boolean
+  }
+
+  writer: protocol {
+      write: function {:this b: buffer} out boolean
+  }
+
+  readerwriter: protocol {
+      reader: as reader
+      writer: as writer
+
+      read: function {:this b: buffer} out boolean
+      write: function {:this b: buffer} out boolean
+  }
+  """
+
+#----: Protocol Instance Creation
+
+Fields, variables and parameters can be declared to be instances of a named
+protocol. Protocol instances can then be assigned to those fields, variables or
+call arguments.
+
+Protocol instances can be created by accessing the named protocol member in the
+'as' clause of an object that implements a protocol.
+
+Protocol instances are reference types. They have an external reference to the
+underlying type and a reference to a record containing a reference to each
+method in protocol order. Note that underlying value types require two
+allocations when creating an explicit protocol object: one to store a copy of
+the value type on the heap and one to store the protocol instance. For
+underlying reference types, the protocol object will take ownership. It is not
+possible to extract the underlying type back out of a protocol instance.
+
+Accessing a named object's protocol in a named context (ie. assigning to a new
+variable; in a 'give' argument; in a swap statement), will cause the original
+name to be inaccessible from that point. The new named context will have the
+same ownership as the original name.
+
+If the protocol instance is created in a lower scope (eg. a 'do' clause;
+passing as a standard loaned argument) then after that scope, the created
+protocol object is destroyed and the underlying variable is again available for
+use. 
+
+#code language=zerolang: """
+  myfunc1: function {arg: myprotocol} is {
+    # ...
+  }
+
+  somecode1: function is {
+      myref: #... # myref type implements protocol with label 'myprotocol'
+
+      # myref is converted to myprotocol object and used as a standard 
+      # argument (no 'give')
+      myfunc1 myref.myprotocol
+
+      # myref can be used in subsequent code
+
+      print myref
+  }
+
+  myfunc2: function {from: take myprotocol} is {
+    # ...
+  }
+
+  somecode2: function is {
+      myref: #... # myref type implements myprotocol
+
+      # myref is converted to myprotocol object and passed to function...
+      myfunc2 from: take myref.myprotocol
+      # myref is no longer valid...
+  }
+
+  myref: #... # myref type implements protocol with label 'myprotocol'
+  do {
+    myproto: myref.myprotocol # myproto is borrowed
+  } # myproto destroyed here
+  print myref   # myref is again accessible (as it's original type)
+  myproto: myref.myprotocol # myproto is owned, myref ceases to be accessible
+  """
+
+#---: facet
+
+TODO: describe facet, also check above protocol section for overlap
+
+#---: union
+
+For controlling the discrimiator, see also the <<_tag,tag>> type.
+
+TODO: all of this sections needs to be cleaned up.
+
+TODO: generics as well. And special note that generic params are shared by all
+subtypes as opposed to normal subtypes that are only used in that one 'arm'
+
+TODO: tag may be null for reftype that is optional.
+
+TODO: can define methods too, but the methods work on the top level union only.
+Once 'case' is used to dissect, then the method available are for the subobject
+only.
+
+TODO: size of all unions of a single type is size of the tag plus size of the
+largest element. For reftypes, size is just a reference. For valtypes, the
+value is copied inline (because union is a reftype itself, it takes a copy of
+underlying value when created)
+
+Unions are sum-types that can contain only one of it's child types at any given
+time. A descriminator is usually generated or set for each case. A union is a
+reference type, all member types may be reference types or value types.
+
+Arguments for both #~"union":
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Description
+
+|is        |Yes     |Block of independent subtypes, generic parameters and associated methods
+|===
+
+
+A sum-type definition is a block listing one definition for each subtype,
+providing a name and a type.
+
+If there is no associated type for a subtype, the type is specified with a
+#~"null".
+
+There is an accessor for each case that returns an optional.
+
+#code language=zerolang: """
+  myunion: union {
+      u1: null       # no user stored value. Discriminator only
+      :u2            # no user stored value. Shortened syntax
+      u3: u32
+      u4: string
+      u5: myreftype       # a named record defined elsewhere with methods
+  }
+
+  myvariant: variant {
+      v1: null       # no user stored value. Discriminator only
+      v2: u32
+  }
+  """
+
+After a sum-type type has been defined, instances of the type can be
+constructed. A constructor is created for each subtype. Reference types passed
+in are required to use 'give' to pass in the 
+
+TODO: also a single constructor 'create' for all types that takes a single
+argument of that type? Will match the first type that matches from the sum
+type. Will fail if more than one type matches?
+
+#code language=zerolang: """
+  i1: myunion.u1                      # no argument
+  i2: myunion.u2 0
+  i5: myunion.u5 take areftype        # ownership is passed into the union. 
+                                      # named argument 'give' must be used
+                                      # areftype is no longer valid
+  i5: myunion.u5 from: take areftype  # ... or named argument
+  """
+
+Unions are also used to define generic types along with protocols. #~"any" is a
+system defined union that includes all possible types used in the current
+program. 
+
+#code language=zerolang:
+  smallint: union { i8: none u8: none }
+
+
+TODO: examples Some/None unions (like option). Generics
+
+- TODO: destroying union reference types could be difficult. Need to apply the
+  correct destructor for each subtype. Use a #~"case" with '@' 'in' argument
+- TODO: can a union instance be updated with a different subitem? Is this worth
+  the hassle or just create a new one? Would need arguments for each type on
+  the resulting union object?
+- TODO: access back to the tag. TAG or @TAG attribute on the sum-type var? NO, out of channel access: union.tag(myunion)
+- TODO: need a way to convert back to the tag name (string). @ID on the sum-type var?
+
+#code language=zerolang: """
+  # REMOVE THIS. all subtypes must be named types. tag values cannot b specified.
+  myunion: union {
+      t1: record { _TAG: 100 }     # descriminator only
+      t2: record { _TAG: 200 # ... 
+      }
+      t3: record { _TAG: 300 # ... 
+      }
+      t4: record { _TAG: 400 # ... 
+      }
+  }
+  """
+
+#----: Creating sum-type instances
+
+Creating/setting a union value:
+
+#code language=zerolang: """
+  myclass: class {a: u32 b: u32}
+
+  myunion2: union {
+      t1: null      # discriminator only
+      t2: u32     # an int in addition to the descriminator
+      t3: string
+      t5: myclass
+  }
+
+  v1: myunion2.t1
+  v2: myunion2.t2 0
+  v3: myunion2.t3 "hello"             # will copy string?
+  myclassi: (myclass a: 1 b: 2)
+  v4: myunion2.t5 take myrecordi        # need #~"take" here, union needs ownership
+  v5: myunion2.t5 (myclass a: 1 b: 2)    # no #~"take". Anonymous instance
+
+  const_int: {
+      t: tag u8
+      a: 0
+      b: 1
+  }
+
+  # enum descriminator: TODO: still want this????
+
+  myenum: variant {
+      a: 0
+      b: 1
+  }
+
+  myvariant: variant {
+      x: tag myenum
+      a: u32
+      b: f32
+  }
+  """
+
+TODO: show generic example:
+
+#code language=zerolang: """
+  option: union {
+      t: any.generic  # any type
+      some: t         # any is a value. In this case limited to type t
+      none: null      # no value will be stored but type of '~t' must be specified
+  }
+
+  # to create none type, need to specify any unspecified types...
+  mynone: option.none u32     # t is only argument so argname may be omitted
+  mynone: option.some 0       # each arm is a constructor
+
+  # ... but, if reassigning (or returning when we know the return type), the type is 
+  # already known so does not need to be specified (again)?
+  # don't to this? Too magic?
+  mynone = option.none    # ???
+  return option.none
+  """
+
+TODO: Anonymous unions? #~"if" functions could return anonymous unions....
+TODO: Type unions documentation. Used for generic type specifiers.
+Stores fully qualified type name (but what about anonymous types?
+Can't have? Must always be named?). User code can use short type name but the
+correct one will be looked up.
+
+#code language=zerolang: """
+  # identifiers are the same as the types
+  # what about dotted identifiers? just the part after then dot as long as there 
+  # are no collisions?
+  numeric: union {
+      u8
+      u16
+      u32
+  }
+
+  numeric: union {
+      u8: none
+      u16: none
+      u32: none
+  }
+  """
+
+TODO: how to get a reference type back out of a union? Union needs to be
+destroyed? Would need to own the union. Would definitely need to do this for
+options so we can return the option if it exists. #~"final" method
+
+TODO: embedding unions. This should be allowed but embedded unions are
+flattened. No relationship to original union (ie. decriminators likely
+different). This is really just for categorisation eg. for type unions, could
+have numericsigned, numericunsigned and then embed both of these in a numeric
+type union. How to tell that you want to embed subtypes rather than the top
+level union itself? Maybe can't embed?
+
+#---: variant
+
+Variants are sum-types that can contain only one of it's child types at any
+given time. A descriminator is usually generated or set for each case. A
+variant is a value type and all child types must be value types. A variant is
+always as large as its largest containing type plus the descriminator.
+
+Arguments for #~"variant":
+
+[width="90%",cols="2,2,4",grid="rows"]
+|===
+|Argument  |Default |Description
+
+|is        |Yes     |Block of independent subtypes, generic parameters and associated methods
+|===
+
+See also the <<_union,union>> section. Other than variants being a value type, all
+other instructions for a union also apply to a variant.
+
+#----: Enumerated Types
+
+TODO: enums are also variants/unions... Fix this section.... Move it within union and variant
+
+A variant or union without additional data on each variation creates an
+enumerated type based on an underlying numeric type. To specify that there is
+no additional data on each arm, #~"null" can be specified as the type, or better,
+leave the type specifier out completely. A constant numeric value can be
+specified for each arm and provided it is distinct for each option and can be
+stored within the tag type, then that value will be used as the discriminator
+value.
+
+The constant values are accessed by dot notation (they are accessed, not
+constructed). Each value must be unique and if defined without a value, will be
+one higher than the previous value or start from #~"0_u8". 
+
+The default underlying type is u8 if no values are specified. A numeric
+constant of a different type can be specified if required. All numeric values
+specified must be of the same type. Any unspecified values will be one higher
+than the previous value using the same type as the previous value.
+
+Any member value that collides with another or overflows the underlying type
+will cause a compilation error. 
+
+#code language=zerolang: """
+  # underlying type defaults to u8
+  # first unspecified value starts at 0_u8
+  myenum: variant {
+      :FIRST
+      :SECOND
+  }
+
+  # can specify unique values if required. Subsequent unspecified members will be
+  # 1 higher than the largest previous member. tag can specify another numeric
+  # type for the tag.
+
+  myenum2: variant {     
+      FIRST: 1
+      SECOND: 2
+      :THIRD
+  } tag u16
+
+  # can be out of order but is usually poor style
+  myenum3: variant {     
+      SECOND: 200
+      FIRST: 100
+      :ANOTHER   # will be 101
+  }
+
+  # usage
+
+  v: myenum.FIRST     # myenum.FIRST is a value (of type myenum)
+
+  if v.FIRST then {  # v.FIRST is a predicate
+      # ...
+  }
+
+  # effectively equivalent to...
+
+  if v == myenum.FIRST then {
+      # ...
+  }
+  """
+
+The built-in 'boolean' type is a system defined enumeration. The boolean values
+may be created directly by name or indirectly via the comparison or logical
+operators.
+
+#code language=zerolang:
+  # boolean types are a system defined enumeration equivalent to:
+  boolean: variant { FALSE TRUE }
+  true: boolean.TRUE
+  false: boolean.FALSE
+
+#----: Using sum-type instances
+
+A sum type instance can be tested to see if it is a specific subtype. A
+predicate #~"method" is generated for each member named as the member name
+followed by a question mark. The method returns a boolean. 
+
+#code language=zerolang: """
+  myunion: union {
+      t1: u32
+      t2: string
+      t3: null
+  }
+
+  x: myunion t2: "hello"
+
+  if x.t3 then {
+      print "x is an instance of subtype 't3'"
+  }
+  """
+
+
+To use submember data from a union instance, it must be narrowed (or
+destroyed?). Assignment to a union's subtype may only be attempted in an #~"if"
+expression. If successful, the subtype can be used in that body specified in
+#~"do". 
+
+Note that subtypes with no associated data cannot be assigned in this way.
+
+#code language=zerolang: """
+  myunion: union {
+      t1: u32
+      t2: string
+      t3: _
+  }
+
+  x: myunion t2: "hello"
+
+  if y: x.t2 then {
+      print y     # y is a string ("hello") here
+  }
+
+  if y: x.t3 then {    # ERROR: syntax error, cannot assign myunion.t3 to y
+      # ...
+  }
+  """
+
+#---: Operations
+
+#----: Constants and Variables
+
+Literals
+Top level definitions
+
+Names - identifiers
+
+Declaration and Initialisation (happen at the same time, must be initialised)
+Includes functions definitions/literals.
+
+#----: Binary operations
+
+All operations are binary. There are no unary operations. Operation syntax is
+an alternate function call syntax for methods with a receiver and a single
+parameter.
+
+Operations are evaluated left to right. Only parentheses can be used to change
+precedence.
+
+Operator names are simply method names. Identifiers used for method names can
+include the usual mathematical operator names eg. #~"+ - / *"
+
+
+
+
+
+#--: Compile Time Operations
+
+#---: Constant Folding 
+
+Operations on compile time constants are evaluated at compile time when
+possible.
+
+#---: Conditional Compilation
+
+Normal if expressions with constant conditions will be evaluated at compile
+time and compilation will be completely bybassed if the condition is not
+satisfied.
+
+#---: Error Directive 
+
+TODO: put this at #~"meta.error"?
+
+The #~"error" directive forces a compilation error (during code generation?).
+This would usually be within a conditionally compiled section (otherwise
+compilation will always fail).
+
+#code language=zerolang: """
+  error "Constant error string"   # "stack" with lineno's and filenames will
+                                  # also be shown
+  """
+
+#---: Identifier Metadata
+
+TODO: metadata about identifiers exposed by compile time constant #~"@" fields... use #~"meta" instead?
+
+
+#code language=zerolang: """
+  myconstants: unit {
+      FIRST: 0
+      SECOND: 1
+  }
+
+  # TODO: need some general way to get back to the name of a constant. And to 
+  # list all definitions in a unit
+  io.write "First is \{myconstants.FIRST}"
+  """

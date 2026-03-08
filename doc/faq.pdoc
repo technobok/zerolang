@@ -1,0 +1,537 @@
+#doc.lang: en
+
+#//: Zerolang FAQ
+
+#doc.title: Zero Language FAQ
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css 
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2021-05-03
+#doc.version: v0.1
+
+#//: #doc.script src=style/prism-zerolang.js
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zero Language FAQ
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Why must operators be surrounded by whitespace 
+
+#ul:
+  [#*: required to allow bracketless function calls (otherwise how to read print-1 ?
+    is print a var that 1 is being subtracted from or a function call with an
+    argument of -1)]
+  [#*: looks neater anyway]
+  [#*: allows additional chars to be used in identifiers: #~"+ - / * < > & |" etc]
+  [#*: nb: these are not operators so are not required to have surrounding ws: ':',
+    '=]
+
+#--: Why no unary operators?
+
+#ul:
+  [#*: ugly]
+  [#*: ambiguous]
+  [#*: can have unary #~"-" #~"+" on constants (but it is part of the constant, not an
+    operator)]
+  [#*: to make negative: 0 - x  or make a function. A builtin?]
+
+#--: Why no bitwise operators (#~"<< >> | & ^ ~")?
+
+#ul:
+  #*: not used so often.... (?)
+  #*: also don't want the unary operators, see above
+  #*: use method names on bool instead
+
+#--: Why is assignment NOT an expression?
+
+This is changed. Old reasons why it was going to be an expression:
+
+#ul:
+  [#*: can be used in if/for/while statements]
+  [#*: C like]
+  [#*: to protect against errors, if/for/while condition must evaluate to a bool and
+    (maybe) if the bool is the result of an expression there should be a warning
+    or require extra brackets around it like c\# (ugly?)]
+
+New:
+
+#ul:
+  [#*: it is safer. Assignment (mutation) should not be buried inside a line, needs
+    its own line]
+  [#*: if/do can bind and then test in subsequent clauses eg. if x: read() if:
+    len(x) > 0 then: {...}]
+  [#*: Pascal/Haskell do not have assignment as an expression]
+
+New new:
+
+#ul:
+  #*: it is a special (compiler only) expression that returns the old value
+
+#--: Why no precedence?
+
+#ul:
+  [#*: simpler, remembering large precendence order table is error prone]
+  [#*: explicit is better than implicit]
+  [#*: can warn if precendence is different to usual mathematical precedence (with a
+    linter?)]
+  [#*: precendence left to right, associativity left to right]
+  [#*: can have simplified operator overloading, they are just functions]
+  [#*: operators are then just calls with 2 params]
+  [#*: look at Rebol, 2 levels of precedence: functions calls (lower) and
+    expressions (higher) BUT don't do this. Only left to right and parens affect
+    precedence. Compiler enforces declaration and reassignment at a hardcoded
+    lower precedence so that parens are not required for rhs calls in this common
+    case]
+
+#--: Why are top level items always constant?
+
+#ul:
+  #*: there is no need for a constant keyword or syntax
+  #*: modules are stateless so they can be called without #~"import"
+
+And why can constants only be defined at the top level? Consequence of the
+above, which are considered more important than allowing low level constants.
+
+#--: Why macros?
+
+See below this is changed, no macros...
+
+Macros traditionally have 'issues' but not having macros requires having
+special syntax for the features that macros can provide (constants, inline
+functions, generics, minor code generation, side-stepping the type system).
+
+Instead, try to overcome the issues that macros have traditionally had:
+
+#ul:
+  [#*: unaware of language syntax (textual, C-style macros) -> make the macro syntax
+    part of the language]
+  [#*: macros are unscoped -> make the scoping rules the same as all other language
+    definitions]
+  [#*: macros can be slow / run indefinitely -> give macros a limited execution
+    model (no procedural loops (be almost functional), no redefinition, limited
+    stack depth)]
+  [#*: macros can be hard to read and define -> make macros have limited, special
+    purpose features available.  Macro facilities have different keywords from
+    the base language.  But macros are not able to change the syntax of the base
+    language... they must look like normal function calls or variable uses at the
+    call site.]
+  [#*: macros are too powerful -> make macros limited (see above).  Recommend
+    writing programs that generate code if that is what is required.  Macros
+    bridge the gap between a totally static language and code generation.  Don't
+    expect too much from them.]
+
+New thoughts, don't really need them? Alternatives for common macro usages:
+
+#ul:
+  [#*: for constants: top level definitions in units; enums]
+  [#*: for inline functions: use normal functions, compiler will optimise as
+    necessary]
+  [#*: for generics/templating: use generic types and parameters]
+  [#*: for conditional compilation, just use normal if's with constant expressions
+    that will be evaluated at compile time. And the #~"error" directive for
+    commmunicating back to the compiler user.]
+  [#*: for side stepping type system: generics/protocols. What others? examples?]
+
+#--: Why no cyclical data structures?
+
+#ul:
+  [#*: simplifies garbage collection/disposal. No garbage collection. Single owner]
+  [#*: destructors run deterministically]
+  [#*: cyclical data structures need special care in the code to prevent infinite
+    loops/recursion]
+  [#*: sql databases do not have cyclical data (mainly because they don't really
+    have pointers...), but can still handle most forms of datastructures (some
+    more clumsily than others...)]
+
+May need to redefine some algorithms:
+
+#ul:
+[#*: circular buffer: use a list and mod arithmetic instead]
+[#*: doubly linked lists... could be done in C and a wrapper provided or use
+  indexes rather than pointers (but a bit clumsy).]
+
+#--: Why the restrictions on calls that can be made in method bodies?
+
+#ul:
+[#*: so that mutable reference types can have a single owner BUT can be loaned to
+  subcalls (as parameters) with zero overhead (ie. just use the pointer; the
+  restrictions prevent the original pointer from being freed)]
+[#*: reduces tight coupling... 1. can't use an internal part of the object with a
+  passed in reftype 2. can't return an internal part of the object]
+[#*: easy to tell who owns what at a call site (both before and after the call)
+  ie. everything belongs to me (the caller) unless it is to the right of an
+  assignment or passed as a @retained argument]
+
+#--: Why no unicode (except in comments and string literals)?
+
+#ul:
+  [#*: potential security issues see #>"https://unicode.org/reports/tr36"]
+  [#*: #>"https://github.com/reinderien/mimic"]
+  [#*: English (or at least latin characters) are the common ground for programming
+    (?) cf. Italian for music]
+  [#*: no ambiguity, rendering issues, combining characters...]
+  [#*: language keywords are in English-like anyway, so best case is a mix of those
+    with the native language]
+  [#*: probably best to have a preprocessor if true non-latin/English language
+    support (everywhere) is required.]
+
+#--: What aliasing of memory addresses (objects/records/values) is forbidden?
+
+All of it:
+
+#ul:
+  [#*: cannot assign (copy) to another variable.  It is moved (for reference types),
+  copied (for value types) or refcounted]
+  [#*: cannot make a method/function call with the same reference argument more than 
+  once]
+
+#--: Why no aliasing of memory addresses (objects/records/values)?
+
+#ul:
+  [#*: aliases breaks the strict hierarchical ownership.  Who will free the object?]
+  [#*: can over-share]
+  [#*: can mutate another seemingly unrelated object - can be confusing (a=b;
+    b.mutate(); a is also changed)]
+
+#--: Why are functions assumed to be called?
+
+ie. why no brackets for parameterless function calls?
+
+#ul:
+  [#*: same as variable use (use of the name 'returns' its contents; taking a
+    'pointer' must be explicit)]
+  [#*: looks nicer (less parentheses)]
+  [#*: 'attribute' members of a structure are just function calls but they look like
+    attributes at the call site. Can also be used for macros.]
+
+#--: Why 'record' and not 'struct'?
+
+#ul:
+  #*: homage to Pascal ? :)
+  #*: prefer a full word over a contraction
+
+#--: Why 'protocol' and not 'interface'?
+
+#ul:
+  #*: easier to type protocol :)
+  #*: cooler word :)
+
+#--: Why prefer to call functions with named parameters?
+
+#ul:
+  [#*: easier for reader to read]
+  [#*: like additional type checking - extra safety]
+  [#*: argument name is part of function signature?]
+  [#*: smalltalk has only named arguments (?)]
+  [#*: allowing first arg only to be unnamed is a good compromise; prevents
+    ugliness like: print str: "hello"]
+
+#--: Why case insensitive and ignore underscores?
+
+#ul:
+  [#*: (not decided yet) Probably not for both... will be case sensitive and
+    underscores are part of identifier]
+  [#*: ignore underscores and dashes (for kebab case)]
+  [#*: vars that differ by case only are confusing anyway]
+  [#*: compiler should warn on a use that differs by case from the definition]
+  [#*: ..but the warning can be disabled where camel case is used for snake case
+    (and vice versa) only.]
+  [#*: seems that case sensitivity is an old optimisation that is not really
+    required anymore]
+  [#*: case sensitivity is confusing and annoying to newcomers?]
+
+#--: Why no shadowing of vars?
+
+#ul:
+  [#*: (no shadowing within functions... can shadow anything in the std lib)]
+  [#*: compile time error to shadow]
+  [#*: only applies within a single file]
+  [#*: why is shadowing required? It is just asking for trouble and may hide a bug.]
+  [#*: good for search/replace, you can be confident you are replacing the right
+    thing :)]
+  [#*: note that shadowing of #~"units" can still take place. Units defined within the
+    current source will shadow private units in a subdirectory with the same
+    name.  There will be no warning because the compiler is not going to list all
+    files in subdirectories to check (too expensive)]
+  [#*: ?? even params of functions/records and local vars cannot shadow top level
+    definitions. This could be a little annoying but is required to be
+    unambiguous because arguments/fields can refer to each other (including
+    forward references to args/fields defined later in the arglist) eg. to get
+    their type for generics.  The annoyance can be mitigated a little by careful
+    naming - higher level declarations would usually have descriptive names,
+    argument names should be quite short (but still obvious in the context of the
+    function/record name.]
+  [#*: instance vars must be qualified by the 'this' var, so they cannot be shadowed
+    by argument names or by local vars]
+
+#--: Why do #~"( {" require whitespace before them?
+
+#ul:
+  [#*: it is ugly not to]
+  [#*: to minimise the possibility of trying to do a C-style function call. There
+    are no C-style function calls with parens. Usually, in C the parens
+    immediately follow the function call so this restriction may highlight a
+    misunderstanding of this.]
+
+#--: Why no bitfields / flags?
+
+#ul:
+  #*: not yet, maybe one day...
+  #*: but is special syntax required?
+  #*: can handle this with a custom record. May be a bit wordy though...
+
+#--: Why no downcasting?
+
+#ul:
+  #*: ie. from a protocol back to a concrete object...
+  #*: not safe
+  #*: apparently Ocaml doesn't allow it
+  #*: use a union for typesafe RTTI, then write to code to tease the types apart.
+
+#--: When to use Enumerations vs Unions vs Variants?
+
+An enumeration can provide similar features to #~"union"s when the associated
+types in the #~"union" are a simple homogeneous type. Prefer to use
+enumerations if possible for these simple cases.
+
+#~"variants"s are value types and #~"union"s are reference types. Prefer to use
+variants were possible but they should be fairly small.
+
+Comparison:
+
+#table:
+|Feature                |Enumeration                |Variant                      |Union
+|Creation               |Referenced by dot notation |Constructed                  |Constructed
+|Type                   |Value Type                 |Value type                   |Reference type
+|Variability            |Homogeneous                |Heterogeneous                |Heterogeneous
+|Underlying Type        |Consistent Numeric Type    |Any value type               |Complex (any combination of types)
+|Conditional Expression |Yes                        |Yes                          |Yes
+|Assignment in Condition|Yes (to numeric value)     |Yes (to associated type)     |Yes (to associated type)
+|Truthy at top level    |Yes (provided 0/non-0 only)|Yes (provided 0/non-0 only)  |Yes (to associated type)
+
+
+#--: Interfaces
+
+#table:
+|Type                           |Has State           |User definable operations                    |Generic
+|Basic types (int, string etc)  |Yes (the value)     |No, only can attach methods                  |No
+|Signature (spec?)              |No                  |Yes, pass a function that matches            |Can be
+|Record of specs                |No                  |Yes, fill record with functions that match   |Can be
+|Protocol                       |Yes (the object)    |Yes, define methods that match               |Can be
+
+#--: Why are Enumerations vs Unions different things?
+
+#ul:
+  [#*: otherwise would be jamming too many concepts together]
+  [#*: if not then how to represent a union's descriminator? Another simpler union?]
+  [#*: if not then how to specify descriminator type for a union? Need some clumsy
+    syntax? Enum syntax is simpler]
+  [#*: enumerations are homogenous. Could do that with union but would need to scan
+    each subtype to ensure it is all same type. Using a union seems clumsier]
+  [#*: constructing a union member in a consistent way would make the syntax
+    overcomplicated for a simple enum. Better to separate enums (accessing simple
+    constant values by dot notation) and unions (constructing complex types or
+    assigning them into the union)]
+  [#*: it would be confusing to have both dot notation (for the descriminator) and
+    constructor notation for the union itself. And how would you specify the type
+    of the descriminator?]
+
+Downside for Enumerations: accessing them in a module requires 2 dots. This is
+mitigated by using parameter namespaces if the enum will only be passed to
+functions. But still might want to store them and then supply them to a
+function.... Should prefer to 'import' the parent item and refer to subvalues
+from there in that case. 
+
+[#code:
+  x: mymod.myenum.myvalue
+
+  myenum: mymod.myenum
+  x: myenum.myvalue
+]
+
+#--: Why no closures?
+
+Maybe one day, somehow.
+
+But ownership could cause problems. Could only capture static or readonly vars.
+
+#--: Why Generators/yield?
+
+#ul:
+  #*: used because need a way to enforce ownership during iteration/generation
+  #*: generators are composable
+  #*: yield is nice to turn functions 'inside out' which simplifies some algorithms
+
+Against:
+
+#ul:
+  #*: need another keyword. #~"generator"
+
+#--: Why operator overloading?
+
+For:
+
+#ul:
+  #*: More natural handling of math for number like objects.
+
+Against:
+
+#ul:
+  #*: can be abused for non-math operations
+
+Binary operators only.
+
+Precedence always from left to right.
+
+Special function names: Don't use these. The operator names are valid names so
+just use the actual operator in the definition.
+
+
+#--: Why no overloading for assignment ('=')?
+
+Relates to ownership and ownership is owned and strictly controlled by the
+compiler...
+
+
+#--: Why no embedding (records, classes)?
+
+Disagree with this now. records can be embedded without flattening. They would
+always be passed by value, they should not have traditional constructors (set
+to 'zero' value, see below)
+
+#ul:
+  [#*: "Flat is better than nested"]
+  [#*: ugly and messy]
+  [#*: how to construct sub components?]
+  [#*: how to access sub-subcomponents? Treat as a whole or flatten, but then how to
+    call methods on the whole?]
+  [#*: databases don't (usually) allow embedding multivalue fields]
+
+#--: New stuff - No constructors for records
+
+Why not?
+
+#ul:
+  [#*: records cannot have constructors]
+  [#*: the default is to always create each sub-member with the 'zero' value]
+  [#*: recursively if there are sub-records]
+  [#*: but records can be made private and can be forced to be created by a static
+    method]
+  [#*: that method is responsible for enforcing all invariants, even on sub-records
+    (possibly by calling sub-'constructors')]
+
+#--: New stuff - references to classes are also (retention/move) methods
+
+Ignore all this. Moving is done with syntax:
+    oldref: replacedref = newref!
+
+#ul:
+  [#*: reference variables can be 'called' with an exclamation mark on the end]
+  [#*: the call takes one argument (the new value to be stored) and returns one item
+    (the previous/old value of the variable).]
+  [#*: then we do not need the retention/move operator (<-). It can be removed from
+    the language]
+  [#*: function pointers (or 'spec' s) are not reference types, so we would not need
+    to 'call' any other reference var]
+
+#--: Why no typedefs?
+
+#ul:
+  [#*: seems that they do not carry their weight. Complicates the compiler, confuses
+    the reader for little benefit.]
+  [#*: probably better to make a real new type or refactor (rename) as required]
+  [#*: but if decision ever changes, perfect syntax would be to reuse the typeonly
+    tilde from generics. #~"newtype~: int"]
+  [#*: typedefs like this would only be allowed at the top level of a unit and would
+    be constant readonly specific types.]
+
+XXX note that rust manual says typedefs (aliases) are useful to simplify type
+specifiers and reduce boiler plate for generic types. So, perhaps they should
+be added. See here: https://doc.rust-lang.org/rust-by-example/types/alias.html
+
+Yes, have typedefs (real typedef not an alias). Top level definition to a type
+is a typedef. Makes a new type. Requiring that newtype (ie in parameters)
+requires that newtype but the newtype can also be automatically used when the
+old type is required. The new type instance can be 'created' (type system only,
+no runtime effect) by calling the typedef with an instance of the underlying
+type.
+
+NOTE:
+is a typedef to a real instantiable type different from a creation of a shortened unit name?
+Units cant be instantiated so still ok?
+
+Can have methods on a typedef? How?
+
+#--: Why no comma separators?
+
+#ul:
+  [#*: commas are also not used by Lisp, Tcl, Forth, Haskell, OCaml, Rebol and Shell]
+  [#*: comma (and semicolon) is syntax error for consistency, to prevent accidental 
+    use as in other languages]
+  [#*: newline and labels (id with colons) are used to separate]
+
+#--: Why no line continuation or statement separator?
+
+#ul:
+  [#*: Simplifies syntax]
+  [#*: Mostly useful for one liners from the command line. Can do without?]
+  [#*: python uses ';' for statement separator but statement after a ';' is not the 
+    same as one before (eg can't have for after a ';') ]
+  [#*: For line continuation, trailing '\\' is fairly ugly and can be defeated by 
+    invisible trailing whitespace]
+  [#*: Better to surround expression in parens to break over a line]
+
+
+
+#--: Why no functions (only specs) in protocols?
+
+#ul:
+  [#*: more complicated for little gain]
+  [#*: to handle this, make a class alias to the protocol and add the extra
+    functions to that]
+
+
+#--: Why no short-cicuit operations?
+
+#ul:
+  [#*: complicates order of execution (simply left to right...) if can take multiple]
+  [#*: 'if' args and will short-circuit fail after the first 'if' that fails, so
+    (almost) similar (no short-circuit 'or' though... only 'and')]
+
+#--: The bottom type (empty type)?
+
+#ul:
+  #*: is this required?
+  #*: could be defined as union {}
+
+#--: Swap/redefinition?
+
+For reference types, reassigning destroys the old value. Was contemplating
+special syntax for swapping or retaining the old value but may be confusing
+(see ponylang).
+
+Instead, just define a new var to hold the old value. This will destoy the old
+variable name. Then recreate the old variable name on the next line assigning
+its new value. The underlying generated code is free to reuse the variable with
+the new definition for efficiency.
+
+#--: Why allow optional block delimiters (braces)?
+
+... since they cause problems like gotofail
+
+#ul:
+  [#*: but control structures are expressions, so we need simplified syntax]
+  [#*: modern practise is to use an automatic formatter, will mitigate chance of
+    gotofail style errors?]

@@ -1,0 +1,151 @@
+#doc.lang: en
+
+#//: Zerolang Compiler Overview
+
+#doc.title: Zero Language Compiler Overview
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css 
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#//: #doc.script src=style/prism.min.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2021-05-03
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zero Language Compiler Overview
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Introduction
+
+A document showing the compiler architecture overview.
+
+#--: Virtual File System
+
+A simple readonly Virtual File System (VFS) is used to present a unified source
+tree to the compiler.
+
+The VFS allows union or bind mounts to mount one filesystem over another. The
+VFS tree presented to the compiler is usually the system directory with the
+user source directory union mounted over this. In this way, user units are
+found first, shadowing system units. This offers some backwards compatibility -
+future system modules that may be released that collide with user modules will
+be hidden by them. The user modules would need to be refactored/renamed to make
+use of the new system modules.
+
+The VFS allows abstraction over a source tree that may be arbitrarily complex
+while providing a simple interface to the compiler. The VFS tree can be built
+from multiple physical filesystems or can be built from alternate data stores
+(such as databases or remote systems).
+
+#--: Tokenizer
+
+The Tokenizer splits a single top level unit aquired from the VFS (usually
+represented by a file) into a stream of tokens. Every part of the source
+becomes part of a token and so the original source could be recreated by
+concatenating all of the tokens returned by the tokenizer.
+
+The tokenizer splits the file into tokens such as:
+
+#ul:
+  #*: horizontal whitespace (spaces and tabs only)
+  #*: end of line
+  #*: comments
+  #*: identifiers
+  #*: keywords
+  #*: delimiters such as #~"(", #~")", #~"{" and #~"}"
+  #*: dot operator: #~"."
+  #*: parts of string literals (raw and interpolated)
+  #*: numeric literals
+  #*: error tokens
+
+The tokens have a type, the string contents and an identifier for the file that
+they are contained within and the location (line and column) within that source
+file.
+
+The Tokenizer follows the ITokenizer protocol which provides a single 'token'
+method.  This allows alternate tokenizers to be provided or allows filtering or
+logging to be inserted.
+
+#--: Lexer
+
+The Lexer provides another layer over the Tokenizer to ease the job of the
+parser which will follow.
+
+The Lexer filters comments and whitespace as these are not used by the parser.
+It also keeps a small stack to maintain context for handling end-of-line (EOL).
+
+In Blocks (the top level of a unit or a brace delimitered block), multiple
+EOL's are coalesced into a single EOL token. In parenthesized expressions, all
+EOL's are ignored. In string literals, all EOL's are passed through as-is and
+form part of that string literal.
+
+#--: Parser
+
+The parser creates an abstract syntax tree (AST) based on the source units
+supplied. It begins with the 'core' system module and the user 'main' module
+and compiles each, following any unresolved references as they are found.
+
+xxx The Parser maintains an Environment stack for recording definitions at each
+scope. At the beginning of each new scope, a new frame is pushed onto the
+Environment. The Parser records each definition made as compilation proceeds.
+References to these definitions are recorded as they are found.
+
+Since forward references within a unit are allowed, a list of undefined
+identifiers are also maintained in the Environment. After compiling the current
+unit, an attempt is then made to resolve these reference. 
+
+Firstly, a check is made to see if there is a file with the same name as the
+reference in a subdirectory with the same name as the current source file (an
+implimentation subunit). If found, this unit file is then compiled following
+the same process as above, recursively.
+
+If a subunit is not found, the undefined reference is promoted to the next
+higher unit to see if it is defined there. This continues until the reference
+is promoted to top level 'global' unit. If still not found, the system 'core'
+unit is searched. And if not found there, a syntax error is returned.
+
+Only the first (left-most or only) reference in a dotted path is attempted to be found
+by the Parser. The goal is to ensure a complete AST that includes all referenced
+units is created.
+
+The Parser is not concerned with any typing information and does not ensure dot
+operators against the left-most reference will succeed. That task is given to
+the type checker.
+
+The Parser will return the first syntax error found immediately. It does not
+attempt to reset and continue compilation.
+
+#--: Semantic Analyser (Type/Ownership/Lock checking)
+
+The Semantic Analyser assigns a type to each node in the AST. It compares
+types of definitions, assignments and arguments being passed to ensure the
+types are compatible.
+
+A stack of nodes being typechecked is maintained as checking proceeds. This
+allows the type checker to catch circular dependancies
+
+The ownership status of each expression is also determined (free, owned,
+borrowed, linked).
+
+Lock checking is also done at the same time. Locks are taken when evaluating
+each expression part, conferred to variable names (when assigned/created).
+Locks are dropped when the expression falls out of scope (before next
+expression, if 'free'; else when the name falls out of scope)
+
+#--: Code Generator
+
+Finally, the code generator generates output in the destination based on the
+typed AST.
+
+The output is usually source code for the targer system that requires further
+compilation (C, Python, Webassembly).
