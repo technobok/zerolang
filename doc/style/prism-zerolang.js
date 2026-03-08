@@ -78,6 +78,7 @@
                         }
                     },
                     'escape': /\\(?:[\\bnrt"']|x[a-fA-F0-9]{2}|u[a-fA-F0-9]{4,8})/,
+                    'error': /\\./,
                     'string': /[\s\S]+/
                 }
             }
@@ -105,7 +106,7 @@
                 'keyword':  { pattern: new RegExp('^(?:' + keywords.join('|') + ')$') },
                 'error':    { pattern: new RegExp('^(?:' + reserved.join('|') + ')$') },
                 'builtin':  { pattern: new RegExp('^(?:' + builtins.join('|').replace(/[|]/g, '|').replace('_', '\\_') + ')$') },
-                'namespace': /[\s\S]+/
+                'variable': /[\s\S]+/
             }
         },
 
