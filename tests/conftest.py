@@ -7,7 +7,7 @@ import os
 
 import pytest
 
-from zvfs import ZVfsOpenFile, DEntryID, ZVfs, FSProvider, BindType
+from zvfs import ZVfsOpenFile, DEntryID, ZVfs, FSProvider, StringProvider, BindType
 from zlexer import Tokenizer, Lexer
 from ztokentype import TT
 
@@ -60,20 +60,12 @@ def make_parser_vfs(source: str, unitname: str = "test", src_dir: str | None = N
     Create a VFS with a virtual test unit and the real system directory.
     Returns (vfs, unitname) suitable for Parser.
     """
-    import tempfile
-
     if src_dir is None:
         src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
 
-    tmpdir = tempfile.mkdtemp()
-    # Write the source to a .z file
-    filepath = os.path.join(tmpdir, f"{unitname}.z")
-    with open(filepath, "w") as f:
-        f.write(source)
-
     vfs = ZVfs()
     psystemid = vfs.register(FSProvider(rootpath=src_dir, parentpath="system"))
-    pmainid = vfs.register(FSProvider(rootpath=tmpdir, parentpath=""))
+    pmainid = vfs.register(StringProvider(files={f"{unitname}.z": source}))
     rootid = vfs.walk()
     rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
     rootid = vfs.bind(

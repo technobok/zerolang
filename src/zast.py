@@ -84,7 +84,7 @@ def errortomessage(err: Error, vfs: zvfs.ZVfs) -> str:
     if err.loc:
         loc = err.loc
         result.append(f"ERROR: {err.err.name} {err.msg}")
-        path = vfs.pathfromdriver(loc.fsno)
+        path = vfs.pathfromprovider(loc.fsno)
         result.append(f'In file "{path}", line {loc.lineno}, column {loc.colno}')
         line = vfs.getline(loc.fsno, loc.lineno)
         if line:

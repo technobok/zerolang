@@ -8,6 +8,7 @@ import tempfile
 from zvfs import (
     ZVfs,
     FSProvider,
+    StringProvider,
     NullProvider,
     BindType,
     DEntryFile,
@@ -240,3 +241,126 @@ class TestVfsOpen:
             entryid = vfs.walk(["test.z"])
             line = vfs.getline(entryid, 2)
             assert line == "line2\n"
+
+
+class TestStringProvider:
+    def test_walk_to_file(self):
+        provider = StringProvider(files={"test.z": "hello"})
+        nodeid = provider.walk("test.z")
+        assert provider.stat(nodeid) == ProviderNodeType.FILE
+
+    def test_walk_to_missing(self):
+        provider = StringProvider(files={"test.z": "hello"})
+        nodeid = provider.walk("nope.z")
+        assert provider.stat(nodeid) == ProviderNodeType.NOTFOUND
+
+    def test_open_and_read(self):
+        provider = StringProvider(files={"test.z": "content"})
+        nodeid = provider.walk("test.z")
+        fh = provider.open(nodeid)
+        assert fh.read() == "content"
+        fh.close()
+
+    def test_subdirectory(self):
+        provider = StringProvider(files={"sub/test.z": "nested"})
+        subid = provider.walk("sub")
+        assert provider.stat(subid) == ProviderNodeType.DIR
+        fileid = provider.walk("test.z", subid)
+        assert provider.stat(fileid) == ProviderNodeType.FILE
+        fh = provider.open(fileid)
+        assert fh.read() == "nested"
+        fh.close()
+
+
+class TestUnionCaching:
+    def test_union_walk_same_result_twice(self):
+        """Walking same name through union twice returns same DEntryID (proves caching)."""
+        vfs = ZVfs()
+        fs1 = vfs.register(StringProvider(files={"a.z": "hello"}))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=fs1)
+
+        eid1 = vfs.walk(["a.z"])
+        eid2 = vfs.walk(["a.z"])
+        assert eid1 == eid2
+
+    def test_union_first_notfound_second_found(self):
+        """Walk through union where first=NOTFOUND, second=found."""
+        vfs = ZVfs()
+        fs1 = vfs.register(StringProvider(files={"a.z": "from1"}))
+        fs2 = vfs.register(StringProvider(files={"b.z": "from2"}))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=fs1)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=fs2, bindtype=BindType.AFTER
+        )
+
+        eid = vfs.walk(["b.z"])
+        entry = vfs.stat(eid)
+        assert isinstance(entry, DEntryFile)
+
+        # Second walk should use cache
+        eid2 = vfs.walk(["b.z"])
+        assert eid == eid2
+
+    def test_union_subdir_walk(self):
+        """Walk subdirectory path through union."""
+        vfs = ZVfs()
+        fs = vfs.register(StringProvider(files={"sub/test.z": "nested"}))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=fs)
+
+        eid = vfs.walk(["sub", "test.z"])
+        entry = vfs.stat(eid)
+        assert isinstance(entry, DEntryFile)
+
+
+class TestGetlineEdgeCases:
+    def test_getline_past_end(self):
+        """getline() past end of file returns None."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            filepath = os.path.join(tmpdir, "test.z")
+            with open(filepath, "w") as f:
+                f.write("line1\nline2\n")
+
+            vfs = ZVfs()
+            fsid = vfs.register(FSProvider(rootpath=tmpdir, parentpath=""))
+            rootid = vfs.walk()
+            rootid = vfs.bind(parentid=rootid, name=None, newid=fsid)
+
+            entryid = vfs.walk(["test.z"])
+            line = vfs.getline(entryid, 999)
+            assert line is None
+
+    def test_getline_on_nonfile(self):
+        """getline() on non-file entry returns None (not crash)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            subdir = os.path.join(tmpdir, "sub")
+            os.makedirs(subdir)
+
+            vfs = ZVfs()
+            fsid = vfs.register(FSProvider(rootpath=tmpdir, parentpath=""))
+            rootid = vfs.walk()
+            rootid = vfs.bind(parentid=rootid, name=None, newid=fsid)
+
+            entryid = vfs.walk(["sub"])
+            entry = vfs.stat(entryid)
+            assert isinstance(entry, DEntryDirectory)
+
+            line = vfs.getline(entryid, 1)
+            assert line is None
+
+    def test_getline_on_notfound(self):
+        """getline() on NOTFOUND entry returns None (not crash)."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            vfs = ZVfs()
+            fsid = vfs.register(FSProvider(rootpath=tmpdir, parentpath=""))
+            rootid = vfs.walk()
+            rootid = vfs.bind(parentid=rootid, name=None, newid=fsid)
+
+            entryid = vfs.walk(["nonexistent.z"])
+            entry = vfs.stat(entryid)
+            assert isinstance(entry, DEntryNotFound)
+
+            line = vfs.getline(entryid, 1)
+            assert line is None

@@ -191,36 +191,28 @@ class Parser:
             )
             return zast.Error(err=ERR.BADUNITNAME, msg=msg, loc=reference)
 
-        # TODO: take a file handle here and close it before returning error or compiling successfully
         openfile = self._unitfileopen(parentid, unitname, reference)
         if isinstance(openfile, zast.Error):
             return openfile  # propagate error
 
-        tokenizer = Tokenizer(openfile)
-        lex = Lexer(tokenizer)
-        fsid = openfile.entryid
-        print(f"Compiling module file at: {self.vfs.path(fsid)}")
+        with openfile:
+            tokenizer = Tokenizer(openfile)
+            lex = Lexer(tokenizer)
+            fsid = openfile.entryid
+            print(f"Compiling module file at: {self.vfs.path(fsid)}")
 
-        # start = lex.peek()
+            unitorerr = self._acceptunitbody(lex)
+            if isinstance(unitorerr, zast.Error):
+                return unitorerr  # propagate error
 
-        unitorerr = self._acceptunitbody(lex)
-        if isinstance(unitorerr, zast.Error):
-            openfile.close()
-            return unitorerr  # propagate error
+            unit = unitorerr.node
+            toresolve = unitorerr.extern
 
-        # definitions = definitionlist.definitions
-        unit = unitorerr.node
-        toresolve = unitorerr.extern
-
-        # check EOF
-        if not lex.accept(TT.EOF):
-            openfile.close()
-            msg = "Expected EOF at end of Unit file"
-            err = zast.Error(err=ERR.BADUNIT, msg=msg, loc=lex.peek())
-            return err
-
-        # close, we are finished compiling this file
-        openfile.close()
+            # check EOF
+            if not lex.accept(TT.EOF):
+                msg = "Expected EOF at end of Unit file"
+                err = zast.Error(err=ERR.BADUNIT, msg=msg, loc=lex.peek())
+                return err
 
         # possible directory of same name as unit, for subunits
         dirid = self.vfs.walk([unitname], parentid)
@@ -1061,11 +1053,14 @@ class Parser:
             if t.toktype == TT.IS:
                 if is_body is not None:
                     msg = "Duplicate 'is' clause"
-                    return None, None, None, zast.Error(
-                        err=ERR.BADITEM, msg=msg, loc=t
-                    )
+                    return None, None, None, zast.Error(err=ERR.BADITEM, msg=msg, loc=t)
                 lex.acceptany()
-                b = self._getobjectbody(lex, allowtag=allowtag, unlabelledpath=unlabelledpath, unlabelledid=unlabelledid)
+                b = self._getobjectbody(
+                    lex,
+                    allowtag=allowtag,
+                    unlabelledpath=unlabelledpath,
+                    unlabelledid=unlabelledid,
+                )
                 if isinstance(b, zast.Error):
                     return None, None, None, b
                 is_body = b
@@ -1073,18 +1068,26 @@ class Parser:
             elif t.toktype == TT.AS:
                 if as_body is not None:
                     msg = "Duplicate 'as' clause"
-                    return None, None, None, zast.Error(
-                        err=ERR.BADITEM, msg=msg, loc=t
-                    )
+                    return None, None, None, zast.Error(err=ERR.BADITEM, msg=msg, loc=t)
                 lex.acceptany()
-                b = self._getobjectbody(lex, allowtag=False, unlabelledpath=unlabelledpath, unlabelledid=False)
+                b = self._getobjectbody(
+                    lex,
+                    allowtag=False,
+                    unlabelledpath=unlabelledpath,
+                    unlabelledid=False,
+                )
                 if isinstance(b, zast.Error):
                     return None, None, None, b
                 as_body = b
                 promoteexterns(addto=extern, addfrom=b.extern)
             elif t.toktype == TT.BRACEOPEN and is_body is None:
                 # unnamed first arg defaults to 'is'
-                b = self._getobjectbody(lex, allowtag=allowtag, unlabelledpath=unlabelledpath, unlabelledid=unlabelledid)
+                b = self._getobjectbody(
+                    lex,
+                    allowtag=allowtag,
+                    unlabelledpath=unlabelledpath,
+                    unlabelledid=unlabelledid,
+                )
                 if isinstance(b, zast.Error):
                     return None, None, None, b
                 is_body = b
@@ -1094,8 +1097,11 @@ class Parser:
 
         if is_body is None:
             msg = "Expected '{' for item body"
-            return None, None, None, zast.Error(
-                err=ERR.BADARGUMENT, msg=msg, loc=lex.peek()
+            return (
+                None,
+                None,
+                None,
+                zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.peek()),
             )
 
         return is_body, as_body, extern, None

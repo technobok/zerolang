@@ -6,7 +6,6 @@ dir-like and file-like objects to the compiler.
 """
 
 import os
-import threading
 from abc import ABC, abstractmethod
 from enum import IntEnum
 from typing import IO, Optional, List, Dict, Tuple, NewType
@@ -117,7 +116,6 @@ class DEntryTable:
 
     def __init__(self) -> None:
         self._table: List[DEntry] = []
-        self._lock = threading.Lock()
 
     def __getitem__(self, index: DEntryID) -> DEntry:
         return self._table[index]
@@ -125,12 +123,9 @@ class DEntryTable:
     def _append(self, entry: DEntry) -> DEntryID:
         """
         _append - append a new DEntry into the table returning its id
-
-        This method is locked to prevent a race if threaded
         """
-        with self._lock:
-            idx = DEntryID(len(self._table))
-            self._table.append(entry)  # will be appended at idx
+        idx = DEntryID(len(self._table))
+        self._table.append(entry)  # will be appended at idx
         return idx
 
     def none(
@@ -184,7 +179,7 @@ class DEntryTable:
 
 class ZVfsProvider(ABC):
     """
-    Abstract FS Provider interface. ZVfsProvider instances must impliment this
+    Abstract FS Provider interface. ZVfsProvider instances must implement this
     """
 
     @abstractmethod
@@ -223,7 +218,7 @@ class ZVfsProvider(ABC):
     def path(self, item: NodeID) -> str:
         """
         path - return the underlying path for this named entry within this
-        driver
+        provider
         name: name of entry (no '/'s)
 
         Returns a path string
@@ -240,6 +235,12 @@ class ZVfsOpenFile:
     entryid: DEntryID
     filehandle: IO[str]
 
+    def __enter__(self) -> "ZVfsOpenFile":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.close()
+
     def close(self) -> None:
         """
         close the underlying file
@@ -252,13 +253,12 @@ class ZVfs:
     Virtual File System
 
     Does entryid generation and maintenance and cache over a tree of
-    ZVfsDrivers
+    ZVfsProviders
     """
 
     def __init__(self) -> None:
         self.entrytable = DEntryTable()
         self._providertable: List[ZVfsProvider] = []
-        self._lock = threading.Lock()
 
         self.rootid: DEntryID = self.register(NullProvider())
 
@@ -282,9 +282,8 @@ class ZVfs:
         Mounts the root (NodeID = 0) of the provider
         """
         # store the provider
-        with self._lock:
-            providerid = ProviderID(len(self._providertable))
-            self._providertable.append(provider)
+        providerid = ProviderID(len(self._providertable))
+        self._providertable.append(provider)
 
         # create the DEntry. NodeID(0) is the root
         entryid = self.entrytable.directory(
@@ -305,11 +304,9 @@ class ZVfs:
 
         walk() without arguments will return the current root.
         """
-        # pylint: disable=R0912
-        # print(f"walk(): path:{path!r} parentid:{parentid!r}")
         if path is None:
             path = []
-        if parentid:
+        if parentid is not None:
             entry: DEntry = self.entrytable[parentid]
             newentryid: DEntryID = parentid
         else:
@@ -321,7 +318,7 @@ class ZVfs:
             if isinstance(entry, (DEntryDirectory, DEntryNotFound, DEntryFile)):
                 # always try to walk (even from File or None) so we get path for error
                 cachedentryid = entry.cache.get(p, None)
-                if cachedentryid:
+                if cachedentryid is not None:
                     newentryid = cachedentryid
                     entry = self.entrytable[newentryid]
                     continue  # got it from cache
@@ -343,8 +340,6 @@ class ZVfs:
                         nodeid=newnodeid,
                     )
                 else:  # ProviderNodeType.NONE
-                    # cannot find it, cache a none entry
-                    # newentryid = self.entrytable.none(parentid=newentryid)
                     newentryid = self.entrytable.none(
                         parentid=newentryid,
                         providerid=entry.providerid,
@@ -355,58 +350,27 @@ class ZVfs:
                 entry = self.entrytable[newentryid]
                 continue
 
-            # old way....
-            # if isinstance(entry, (DEntryNotFound, DEntryFile)):
-            #     # can't walk from None or File
-            #     # cache a none entry
-            #     newentryid = self.entrytable.none(parentid=newentryid)
-            #     entry.cache[p] = newentryid
-            #     entry = self.entrytable[newentryid]
-            #     continue
-
-            # if isinstance(entry, DEntryDirectory):
-            #     cachedentryid = entry.cache.get(p, None)
-            #     if cachedentryid:
-            #         newentryid = cachedentryid
-            #         entry = self.entrytable[newentryid]
-            #         continue  # got it from cache
-
-            #     # try to look it up in Provider
-            #     provider = self._providertable[entry.providerid]
-            #     newnodeid = provider.walk(p, entry.nodeid)
-            #     newnodeidstat = provider.stat(newnodeid)
-            #     if newnodeidstat == ProviderNodeType.FILE:
-            #         newentryid = self.entrytable.file(
-            #             parentid=newentryid,
-            #             providerid=entry.providerid,
-            #             nodeid=newnodeid,
-            #         )
-            #     elif newnodeidstat == ProviderNodeType.DIR:
-            #         newentryid = self.entrytable.directory(
-            #             parentid=newentryid,
-            #             providerid=entry.providerid,
-            #             nodeid=newnodeid,
-            #         )
-            #     else:  # ProviderNodeType.NONE
-            #         # cannot find it, cache a none entry
-            #         newentryid = self.entrytable.none(parentid=newentryid)
-
-            #     entry.cache[p] = newentryid  # cache it in parent for next time
-            #     entry = self.entrytable[newentryid]
-            #     continue
-
             if isinstance(entry, DEntryUnion):
+                # check union cache first
+                cachedentryid = entry.cache.get(p, None)
+                if cachedentryid is not None:
+                    newentryid = cachedentryid
+                    entry = self.entrytable[newentryid]
+                    continue
+
                 # walk in first
                 newentryid = self.walk(path=[p], parentid=entry.first)
                 newentry = self.entrytable[newentryid]
 
                 if not isinstance(newentry, DEntryNotFound) or (entry.second is None):
                     # got something or no second, return what we got
+                    entry.cache[p] = newentryid
                     entry = newentry
                     continue
 
                 # walk in second, and return whatever is returned
                 newentryid = self.walk(path=[p], parentid=entry.second)
+                entry.cache[p] = newentryid
                 entry = self.entrytable[newentryid]
                 continue
 
@@ -499,22 +463,17 @@ class ZVfs:
         """
         eid: DEntryID = entryid
         entry = self.entrytable[eid]
-        # print(f"Entry:{eid}:{entry!r}")
         pathlist: List[str] = []
         while True:
-            # parentid: Optional[DEntryID] = entry.parentid
             if entry.parentid is None:
                 break  # at root
             parentid: DEntryID = entry.parentid
             parententry = self.entrytable[parentid]
             found = False
-            # print(f"cache:{parententry.cache!r}")
             for name, cid in parententry.cache.items():
-                # print(name, cid, "Looking for", entryid)
                 if cid == eid:
                     pathlist.append(name)
                     found = True
-                    # print("got", entryid)
                     break
             if not found:
                 pathlist.append("[NOT FOUND]")
@@ -523,12 +482,11 @@ class ZVfs:
             entry = parententry
 
         result = "/".join(reversed(pathlist))
-        # print(repr(result))
         return result
 
-    def pathfromdriver(self, entryid: DEntryID) -> Optional[str]:
+    def pathfromprovider(self, entryid: DEntryID) -> Optional[str]:
         """
-        path - return the full path given an DEntryID, as described by the driver
+        path - return the full path given an DEntryID, as described by the provider
 
         returns the path or None if there was an error
 
@@ -569,7 +527,10 @@ class ZVfs:
 
         Return None if the line cannot be found. May throw IO errors.
         """
-        f = self.open(entryid)
+        try:
+            f = self.open(entryid)
+        except IOError:
+            return None
         filehandle = f.filehandle
         result: Optional[str] = None
         currline = 0
@@ -633,7 +594,7 @@ class NullProvider(ZVfsProvider):
     def path(self, item: NodeID) -> str:
         """
         path - return the underlying path for this named entry within this
-        driver
+        provider
         name: name of entry (no '/'s)
 
         Returns a path string
@@ -652,23 +613,20 @@ class FSProvider(ZVfsProvider):
         self._rootpath = rootpath
         # pathtable is a list of tuples of (path, isdir)
         self._pathtable: List[Tuple[str, ProviderNodeType]] = []
-        self._lock = threading.Lock()
+        self._pathcache: Dict[str, NodeID] = {}
 
         path = os.path.join(rootpath, parentpath)
         if not os.path.isdir(path):
             raise IOError(f"Root [{path}] is not a directory")
 
-        # store the parent
-        # self._appendpath(rootpath, nodetype=ProviderNodeType.DIR)
         self._appendpath(parentpath, nodetype=ProviderNodeType.DIR)
 
     def _appendpath(self, path: str, nodetype: ProviderNodeType) -> NodeID:
         """
         _appendpath - append a path to the table return the index into the table
         """
-        with self._lock:
-            idx = NodeID(len(self._pathtable))
-            self._pathtable.append((path, nodetype))  # appended at idx
+        idx = NodeID(len(self._pathtable))
+        self._pathtable.append((path, nodetype))  # appended at idx
         return idx
 
     def walk(self, name: str, parent: NodeID = NodeID(0)) -> NodeID:
@@ -682,10 +640,13 @@ class FSProvider(ZVfsProvider):
         May throw IO errors (file doesn't exist, permission errors)
         """
         parentpath, _ = self._pathtable[parent]
-        # itempath = os.path.join(parentpath, name)
         itempath = os.path.join(parentpath, name)
+
+        cached = self._pathcache.get(itempath)
+        if cached is not None:
+            return cached
+
         itempathfull = os.path.join(self._rootpath, itempath)
-        # print(f"FSProvider.walk(): {itempath}")
         if not os.path.exists(itempathfull):
             nodetype = ProviderNodeType.NOTFOUND
         elif os.path.isdir(itempathfull):
@@ -695,7 +656,9 @@ class FSProvider(ZVfsProvider):
         else:
             nodetype = ProviderNodeType.NOTFOUND
 
-        return self._appendpath(itempath, nodetype=nodetype)
+        nodeid = self._appendpath(itempath, nodetype=nodetype)
+        self._pathcache[itempath] = nodeid
+        return nodeid
 
     def open(self, item: NodeID) -> IO[str]:
         """
@@ -705,8 +668,6 @@ class FSProvider(ZVfsProvider):
         Returns a filelike object for reading
         May throw IO errors (file doesn't exist, permission errors)
         """
-
-        # print(f"FSProvider.open(): {item}")
         path, nodetype = self._pathtable[item]
         if nodetype != ProviderNodeType.FILE:
             raise IOError("This is not a file")
@@ -727,11 +688,74 @@ class FSProvider(ZVfsProvider):
     def path(self, item: NodeID) -> str:
         """
         path - return the underlying path for this named entry within this
-        driver
+        provider
         name: name of entry (no '/'s)
 
         Returns a path string
         May throw IO errors (file doesn't exist, permission errors)
         """
         path, _ = self._pathtable[item]
+        return path
+
+
+class StringProvider(ZVfsProvider):
+    """
+    StringProvider - an in-memory provider that serves content from strings.
+    Useful for testing without touching the filesystem.
+    """
+
+    def __init__(self, files: Dict[str, str]) -> None:
+        # Build a tree: NodeID 0 is root dir
+        # _nodes: list of (path, nodetype, content_or_None)
+        self._nodes: List[Tuple[str, ProviderNodeType, Optional[str]]] = []
+        self._nodes.append(("", ProviderNodeType.DIR, None))  # root
+
+        # Index children by (parent_nodeid, childname) -> NodeID
+        self._children: Dict[Tuple[int, str], NodeID] = {}
+
+        # Build nodes for all files and intermediate directories
+        for filepath, content in files.items():
+            parts = filepath.split("/")
+            parent = NodeID(0)
+            for i, part in enumerate(parts):
+                key = (int(parent), part)
+                if key in self._children:
+                    parent = self._children[key]
+                else:
+                    is_last = i == len(parts) - 1
+                    if is_last:
+                        nid = NodeID(len(self._nodes))
+                        self._nodes.append((filepath, ProviderNodeType.FILE, content))
+                    else:
+                        dirpath = "/".join(parts[: i + 1])
+                        nid = NodeID(len(self._nodes))
+                        self._nodes.append((dirpath, ProviderNodeType.DIR, None))
+                    self._children[key] = nid
+                    parent = nid
+
+    def walk(self, name: str, parent: NodeID = NodeID(0)) -> NodeID:
+        key = (int(parent), name)
+        if key in self._children:
+            return self._children[key]
+        # Return a NOTFOUND node
+        nid = NodeID(len(self._nodes))
+        parentpath, _, _ = self._nodes[parent]
+        notfound_path = f"{parentpath}/{name}" if parentpath else name
+        self._nodes.append((notfound_path, ProviderNodeType.NOTFOUND, None))
+        return nid
+
+    def open(self, item: NodeID) -> IO[str]:
+        import io
+
+        path, nodetype, content = self._nodes[item]
+        if nodetype != ProviderNodeType.FILE:
+            raise IOError(f"Not a file: {path}")
+        return io.StringIO(content)
+
+    def stat(self, item: NodeID) -> ProviderNodeType:
+        _, nodetype, _ = self._nodes[item]
+        return nodetype
+
+    def path(self, item: NodeID) -> str:
+        path, _, _ = self._nodes[item]
         return path
