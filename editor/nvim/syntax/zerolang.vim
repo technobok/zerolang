@@ -35,7 +35,7 @@ syn keyword zerolangKeyword unit record class variant union facet protocol data
 syn keyword zerolangKeyword function in out is as
 syn keyword zerolangKeyword if when then else
 syn keyword zerolangKeyword for while loop with do switch on
-syn keyword zerolangKeyword case break continue yield return swap
+syn keyword zerolangKeyword match case break continue yield return swap
 syn match   zerolangKeyword /=/
 
 " Reserved words (highlighted as errors)

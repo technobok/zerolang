@@ -54,6 +54,7 @@ module Rouge
           switch
           on
 
+          match
           case
           break
           continue
