@@ -56,10 +56,10 @@ class TokStateType(Enum):
     FILE = 0  # inside a file
     STRING = 1  # inside a standard string
     STRINGRAW = 2  # inside a raw string
-    # inside a stringvar ("\(..)")
-    STRINGEXPR = 3  # after the \ only in \(...)
-    # can be multiple levels deep for each set of parens
-    STRINGEXPRPAREN = 4  # after each '(' (and popped for each ')')
+    # inside a stringexpr ("\{..}")
+    STRINGEXPR = 3  # after the \ only in \{...}
+    # can be multiple levels deep for each set of braces
+    STRINGEXPRBRACE = 4  # after each '{' (and popped for each '}')
 
 
 @dataclass
@@ -216,34 +216,29 @@ class Tokenizer(ITokenizer):
 
         if c == zchar.BRACEOPEN:
             self._accept()
-            return Token(TT.BRACEOPEN, chr(c), self.fsno, lineno, colno)
+            tok = Token(TT.BRACEOPEN, chr(c), self.fsno, lineno, colno)
+            if state.statetype in (
+                TokStateType.STRINGEXPRBRACE,
+                TokStateType.STRINGEXPR,
+            ):
+                self._statepush(TokStateType.STRINGEXPRBRACE, tok)
+            return tok
 
         if c == zchar.BRACECLOSE:
             self._accept()
+            if state.statetype == TokStateType.STRINGEXPRBRACE:
+                self._statepop()
+                if self._statecurrent().statetype == TokStateType.STRINGEXPR:
+                    # was last STRINGEXPRBRACE, pop the backslash too
+                    self._statepop()
             return Token(TT.BRACECLOSE, chr(c), self.fsno, lineno, colno)
 
         if c == zchar.PARENOPEN:
             self._accept()
-            tok = Token(TT.PARENOPEN, chr(c), self.fsno, lineno, colno)
-            if state.statetype in (
-                TokStateType.STRINGEXPRPAREN,
-                TokStateType.STRINGEXPR,
-            ):
-                self._statepush(TokStateType.STRINGEXPRPAREN, tok)
-            return tok
+            return Token(TT.PARENOPEN, chr(c), self.fsno, lineno, colno)
 
         if c == zchar.PARENCLOSE:
             self._accept()
-            if state.statetype == TokStateType.STRINGEXPRPAREN:
-                self._statepop()
-                if self._statecurrent().statetype == TokStateType.STRINGEXPR:
-                    # was last STRINGEXPRPAREN, pop the slash too and queue
-                    # the STRVAREND token
-                    self._statepop()
-                    # zero width token to mark end of STRINGEXP expression
-
-                    # self.nexttoken = Token(TT.STREXPREND,
-                    #                        "", self.fsno, lineno, colno)
             return Token(TT.PARENCLOSE, chr(c), self.fsno, lineno, colno)
 
         if c == zchar.SEMICOLON:
@@ -492,10 +487,8 @@ class Tokenizer(ITokenizer):
             tokstr = "".join(parts)
             return Token(tt, tokstr, self.fsno, lineno, colno)
 
-        if c == zchar.PARENOPEN:  # start of a strvar "\(//)"
-            # do NOT accept or append the PARENOPEN, it will be the next token
-            # parts.append(chr(c))  # accept and add openparen
-            # c = self._accept()
+        if c == zchar.BRACEOPEN:  # start of a strexpr "\{//}"
+            # do NOT accept or append the BRACEOPEN, it will be the next token
             tokstr = "".join(parts)  # '\' only...
             tok = Token(TT.STREXPRBEG, tokstr, self.fsno, lineno, colno)
             self._statepush(TokStateType.STRINGEXPR, tok)

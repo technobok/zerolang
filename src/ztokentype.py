@@ -44,9 +44,6 @@ class TT(IntEnum):
 
     # keywords
     FUNCTION = 100
-    ACCEPT = 101
-    RETURN = 102
-    YIELD = 103
     IF = 104
     WHEN = 105
     THEN = 106
@@ -57,11 +54,8 @@ class TT(IntEnum):
     DO = 111
     BLOCK = 112
     CASE = 113
-    CAST = 114
     IN = 116
     OF = 117
-    CONTINUE = 119
-    BREAK = 120
     SWAP = 121
     UNIT = 122
     RECORD = 123
@@ -76,6 +70,7 @@ class TT(IntEnum):
     AS = 134
     OUT = 115
     MATCH = 118
+    ON = 137
     EQUALS = 135
     UNDERSCORE = 136
 
@@ -87,9 +82,6 @@ TTKWMAP = {
     "=": TT.EQUALS,
     "_": TT.UNDERSCORE,
     "function": TT.FUNCTION,
-    "accept": TT.ACCEPT,
-    "return": TT.RETURN,
-    "yield": TT.YIELD,
     "if": TT.IF,
     "when": TT.WHEN,
     "then": TT.THEN,
@@ -101,12 +93,10 @@ TTKWMAP = {
     "block": TT.BLOCK,
     "case": TT.CASE,
     "match": TT.MATCH,
+    "on": TT.ON,
     "out": TT.OUT,
-    "cast": TT.CAST,
     "in": TT.IN,
     "of": TT.OF,
-    "continue": TT.CONTINUE,
-    "break": TT.BREAK,
     "swap": TT.SWAP,
     "unit": TT.UNIT,
     "record": TT.RECORD,

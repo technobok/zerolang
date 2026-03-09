@@ -129,11 +129,19 @@ class TestTokenizerStrings:
         assert mid[0].tokstr == "raw text"
 
     def test_string_interpolation(self):
-        # Zero uses \( for string interpolation expressions
-        source = '"x=\\(x)"'
+        # Zero uses \{ for string interpolation expressions
+        source = '"x=\\{x}"'
         tokens = collect_tokens(source)
         types = [t.toktype for t in tokens]
         assert TT.STREXPRBEG in types
+
+    def test_old_string_interpolation_is_error(self):
+        # Old \( syntax should now be an error, not STREXPRBEG
+        source = '"x=\\(x)"'
+        tokens = collect_tokens(source)
+        types = [t.toktype for t in tokens]
+        assert TT.STREXPRBEG not in types
+        assert TT.ERR in types
 
 
 class TestTokenizerEscapeSequences:

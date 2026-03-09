@@ -57,7 +57,6 @@ class ERR(IntEnum):
     BADELSE = 30
     BADCASE = 31
     BADFOR = 32
-    BADCAST = 33
     BADDATA = 34
     BADSTATEMENT = 35
 
@@ -139,7 +138,6 @@ class NodeType(IntEnum):
     DO = 34  # executable component
     CASE = 35
     CASECLAUSE = 36
-    CAST = 37
     CALL = 38
     # ARRAY = 38
     # LIST = 39
@@ -151,9 +149,6 @@ class NodeType(IntEnum):
     # StatementLine
     STATEMENT = 50
     STATEMENTLINE = 51
-    BREAK = 52
-    CONTINUE = 53
-    RETURN = 54
     ASSIGNMENT = 55
     REASSIGNMENT = 56
     SWAP = 57
@@ -273,7 +268,6 @@ class Function(Node):
 
     nodetype: NodeType = field(default=NodeType.FUNCTION, init=False)
     returntype: Optional["Path"]  # really a Typeref
-    yieldtype: Optional["Path"]  # really a Typeref
     # parameters - both normal and generic in same frame
     parameters: Dict[
         str, "Path"
@@ -376,7 +370,6 @@ ExpressionSubTypes = typing.Union[
     "For",
     "Do",
     "Case",
-    "Cast",
     "Data",
     "Operation",
     "Call",  # "Array", "List"
@@ -474,18 +467,6 @@ class Case(Node):
 
 
 @dataclass
-class Cast(Node):
-    """
-    Cast Node - represents Cast statement
-    """
-
-    nodetype: NodeType = field(default=NodeType.CAST, init=False)
-    # subject of the Case clause from 'in'
-    subject: "Operation"
-    astype: "Path"
-
-
-@dataclass
 class CaseClause(Node):
     """
     CaseClause Node - represents one condition and statement for Case
@@ -551,32 +532,6 @@ class Data(Node):
     data: typing.List["NamedOperation"]  # data, change to dict?
 
 
-# @dataclass
-# class Array(Node):
-#     """
-#     Array Node
-#     """
-#
-#     nodetype: NodeType = field(default=NodeType.ARRAY, init=False)
-#     # generic, can be a generic reference or constant numeric expression
-#     length: Optional["Path"]    # a TyperefOrNum
-#     subtype: Optional["Path"]  # inferred if None, generic parameter, a Typeref
-#     data: typing.List["NamedOperation"]  # data, change to dict?
-#
-#
-# @dataclass
-# class List(Node):
-#     """
-#     List Node
-#     """
-#
-#     nodetype: NodeType = field(default=NodeType.LIST, init=False)
-#     length: Optional["Operation"]   # can be a runtime call. Not a generic parameter
-#     subtype: Optional["Path"]  # inferred if None, generic parameter, a Typeref
-#     data: typing.List["NamedOperation"]  # data, change to dict?
-#
-
-
 @dataclass
 class BinOp(Operation):
     """
@@ -615,42 +570,11 @@ class StatementLine(Node):
 
     nodetype: NodeType = field(default=NodeType.STATEMENTLINE, init=False)
     statementline: typing.Union[
-        "Break",
-        "Continue",
-        "Return",
         "Assignment",
         "Reassignment",
         "Swap",
         "Expression",
     ]
-
-
-@dataclass
-class Break(Node):
-    """
-    Break Node
-    """
-
-    nodetype: NodeType = field(default=NodeType.BREAK, init=False)
-
-
-@dataclass
-class Continue(Node):
-    """
-    Break Node
-    """
-
-    nodetype: NodeType = field(default=NodeType.CONTINUE, init=False)
-
-
-@dataclass
-class Return(Node):
-    """
-    Return Node
-    """
-
-    nodetype: NodeType = field(default=NodeType.RETURN, init=False)
-    expression: Optional[Expression]
 
 
 @dataclass

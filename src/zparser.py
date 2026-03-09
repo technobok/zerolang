@@ -405,8 +405,32 @@ class Parser:
             return self._acceptenum(lex)
         if tt == TT.PROTOCOL:
             return self._acceptprotocol(lex)
+        if tt == TT.IF:
+            return self._acceptifastypedef(lex)
+        if tt == TT.MATCH:
+            return self._acceptmatchastypedef(lex)
         # at unit level, only operations (not calls) are valid
         return self._acceptoperation(lex)
+
+    def _acceptifastypedef(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Expression], zast.Error, None]:
+        """Wrap _acceptif result as an Expression for use at type definition level."""
+        node = self._acceptif(lex)
+        if isinstance(node, zast.Error) or node is None:
+            return node
+        expression = zast.Expression(expression=node.node, start=node.node.start)
+        return NodeX(node=expression, extern=node.extern)
+
+    def _acceptmatchastypedef(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Expression], zast.Error, None]:
+        """Wrap _acceptmatch result as an Expression for use at type definition level."""
+        node = self._acceptmatch(lex)
+        if isinstance(node, zast.Error) or node is None:
+            return node
+        expression = zast.Expression(expression=node.node, start=node.node.start)
+        return NodeX(node=expression, extern=node.extern)
 
     def _acceptexpression(
         self, lex: Lexer
@@ -417,9 +441,7 @@ class Parser:
             expression
                 if
                 | for
-                | do
                 | case
-                | cast
                 | data
                 | operation
                 | call
@@ -440,12 +462,8 @@ class Parser:
             node = self._acceptif(lex)
         elif tt == TT.FOR:
             node = self._acceptfor(lex)
-        elif tt == TT.DO:
-            node = self._acceptdo(lex)
         elif tt == TT.MATCH:
-            node = self._acceptcase(lex)
-        elif tt == TT.CAST:
-            node = self._acceptcast(lex)
+            node = self._acceptmatch(lex)
         elif tt == TT.DATA:
             node = self._acceptdata(lex)
         # elif tt == TT.ARRAY:
@@ -510,50 +528,6 @@ class Parser:
             paths=oplist, nexttoken=lex.peek()
         )  # don't propagate error, may be call
         return opx
-
-    # old way (crap?)
-    #         # TODO: do the odd (=operation), even (=call) thing and
-    #         # just assume the first oplist item is callable for a call,
-    #         # let the type checker sort it out
-    #         print("In acceptioerationorcall", lex.peek())
-
-    #         oplist: OpListType = []
-    #         # first, handle the case where there is a call followed by a named parameter
-    #         if lex.peek().toktype == TT.REFID:  # must be a dottedid only
-    #             dottedidx = self._acceptpath(lex)
-    #             print("In acceptioerationorcall2", lex.peek())
-    #             if dottedidx and not isinstance(dottedidx, zast.Error):
-    #                 # must be a NodeX
-    #                 oplist.append(dottedidx)
-    #                 if lex.peek().toktype == TT.LABEL:
-    #                     # must be a call
-    #                     return self._acceptcall(lex=lex, paths=oplist)
-    #             # else:
-    #             # this cannot happen
-
-    #         print("In acceptioerationorcall3", lex.peek())
-
-    #         oplistnext = self._getoplist(lex)
-    #         if isinstance(oplistnext, zast.Error):
-    #             if not oplist:
-    #                 return oplistnext  # we have nothing, propagate error
-    #         else:
-    #             # add to oplist (may already have 1 from above)
-    #             oplist.extend(oplistnext)
-
-    #         print("In acceptioerationorcall4", lex.peek())
-
-    #         # try to get an op...
-    #         opx = self._getop(lex, paths=oplist)  # don't propagate error, may be call
-    #         # may get strange errors if user provided bad Operation
-    #         # will complain below about a bad Call instead....
-    #         if opx and not isinstance(opx, zast.Error):
-    #             return opx  # got an op
-
-    #         print("In acceptioerationorcall5", lex.peek())
-
-    #         # return whatever call produces (could be error or None)
-    #         return self._acceptcall(lex=lex, paths=oplist)
 
     def _getoplist(self, lex: Lexer) -> Union[List[NodeX[zast.Path]], zast.Error]:
         """
@@ -722,9 +696,8 @@ class Parser:
 
             function
                 "function"
-                [ [ "accept" ] "{" { parameteritem | newline } "}" ]
+                [ [ "in" ] "{" { parameteritem | newline } "}" ]
                 [ "out" typeref ]
-                [ "yield" typeref ]
                 [ "is" statement ]
 
         Returns a Function or Error or None (if no 'function' keyword)
@@ -735,9 +708,7 @@ class Parser:
         if not lex.accept(TT.FUNCTION):
             return None
 
-        # None for procedure or yield generator
         returntype: Optional[zast.Path] = None
-        yieldtype: Optional[zast.Path] = None  # None for normal function
         parameters: Dict[str, zast.Path] = {}
         # externs from 'accept' function parameters
         externparam: Dict[str, zast.AtomId] = {}
@@ -756,10 +727,6 @@ class Parser:
                     msg = "Duplicate 'out'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
 
-                if yieldtype:
-                    msg = "'out' not permitted with 'yield'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
-
                 typeref = self._acceptpath(lex)
                 if typeref is None:
                     msg = "Expected type reference for 'out'"
@@ -769,26 +736,6 @@ class Parser:
                     return typeref  # propagate any other error
 
                 returntype = typeref.node
-                first = False
-
-            elif lex.accept(TT.YIELD):
-                if yieldtype:
-                    msg = "Duplicate 'yield'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
-
-                if returntype:
-                    msg = "'yield' not permitted with 'return'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
-
-                typeref = self._acceptpath(lex)
-                if typeref is None:
-                    msg = "Expected type reference for 'yield'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
-
-                if isinstance(typeref, zast.Error):
-                    return typeref  # propagate any other error
-
-                yieldtype = typeref.node
                 first = False
 
             elif lex.accept(TT.IS):
@@ -808,17 +755,17 @@ class Parser:
                 externbody = statement.extern
                 first = False
             elif (
-                lex.accept(TT.ACCEPT) or first
+                lex.accept(TT.IN) or first
             ):  # must be last to handle other keywords first
                 if not first:
-                    lex.accept(TT.ACCEPT)
+                    lex.accept(TT.IN)
 
                 if gotaccept:
-                    msg = "Duplicate 'accept'"
+                    msg = "Duplicate 'in'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
 
                 if not lex.accept(TT.BRACEOPEN):
-                    msg = "Expected open brace '{' after 'accept'"
+                    msg = "Expected open brace '{' after 'in'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
 
                 while True:
@@ -868,7 +815,6 @@ class Parser:
 
         func = zast.Function(
             returntype=returntype,
-            yieldtype=yieldtype,
             parameters=parameters,
             body=body,
             start=start,
@@ -1030,7 +976,7 @@ class Parser:
         Returns an Enum or Error or None (if no 'enum' keyword)
         """
         start = lex.peek()
-        if not lex.accept(TT.RECORD):
+        if not lex.accept(TT.ENUM):
             return None
 
         lex.accept(TT.IS)  # optional 'is'
@@ -1236,6 +1182,8 @@ class Parser:
         if not lex.accept(TT.UNIT):
             return None
 
+        lex.accept(TT.AS)  # optional 'as'
+
         if not lex.accept(TT.BRACEOPEN):
             msg = "Expected brace delimited 'is' argument for Unit body"
             return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.peek())
@@ -1259,13 +1207,11 @@ class Parser:
         acceptif - accept an if clause (conditional)
 
             "if" [ operation ]
-            {
-                {
-                    ( "when" [ newline ] operation )
-                    | ( label [ newline ] operation )
-                }
-                "then" statement
-            }
+            { "when" [ newline ] operation }
+            "then" statement
+            { "when" [ newline ] operation }
+            "then" statement
+            ...
             [ "else" statement ]
 
 
@@ -1305,22 +1251,6 @@ class Parser:
                 whenindex += 1
                 # nb: local - can refer to prior bindings...
                 promoteexterns(addto=extern, addfrom=op.extern, local=local)
-                first = False
-
-            elif t.toktype == TT.LABEL:
-                name = lex.acceptany().tokstr
-                lex.accept(TT.EOL)  # optional EOL
-                op = self._acceptoperation(lex)
-                if isinstance(op, zast.Error):
-                    return op  # propagate error
-                if not op:
-                    msg = f"Expected operation for 'if' binding label: {name}"
-                    return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
-
-                conditions[name] = op.node
-                # nb: local - can refer to prior bindings...
-                promoteexterns(addto=extern, addfrom=op.extern, local=local)
-                local.add(name)
                 first = False
 
             elif t.toktype == TT.THEN:
@@ -1375,12 +1305,12 @@ class Parser:
         ifnode = zast.If(clauses=clauses, elseclause=elseclause, start=start)
         return NodeX(ifnode, extern=extern)
 
-    def _acceptcase(self, lex: Lexer) -> Union[NodeX[zast.Case], zast.Error, None]:
+    def _acceptmatch(self, lex: Lexer) -> Union[NodeX[zast.Case], zast.Error, None]:
         """
         acceptcase - accept a match clause (exhaustive conditional)
 
             "match"
-            ( ["when"] operation )
+            ( ["on"] operation )
             {
                 (
                     ( "case" [ newline ] id )
@@ -1403,8 +1333,8 @@ class Parser:
 
         extern: Dict[str, zast.AtomId] = {}
 
-        # -- 'when'
-        lex.accept(TT.WHEN)  # optional 'when'
+        # -- 'on'
+        lex.accept(TT.ON)  # optional 'on'
         op = self._acceptoperation(lex)
         if isinstance(op, zast.Error):
             return op  # propagate error
@@ -1621,80 +1551,11 @@ class Parser:
         donode = zast.Do(statement=statementx.node, start=start)
         return NodeX(donode, extern=extern)
 
-    def _acceptcast(self, lex: Lexer) -> Union[NodeX[zast.Cast], zast.Error, None]:
-        """
-        acceptcast - accept a cast clause
-
-            "cast" [ "of" ] operation "as" typeref
-
-        Return a Cast or Error or None for no cast (missing "cast" keyword)
-        """
-        start = lex.peek()
-        if not lex.accept(TT.CAST):
-            return None
-
-        local: Set[str] = set()
-        extern: Dict[str, zast.AtomId] = {}
-        first = True  # first is allowed to not have a "of"
-        ofop: Optional[zast.Operation] = None
-        aspath: Optional[zast.Path] = None
-
-        while True:
-            t = lex.peek()
-            if first or t.toktype == TT.OF:
-                if t.toktype == TT.OF:
-                    lex.acceptany()  # 'of'
-
-                op = self._acceptoperation(lex)
-                if isinstance(op, zast.Error):
-                    return op  # propagate error
-                if not op:
-                    msg = "Expected operation ('of' subject) for 'cast'"
-                    return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
-
-                # nb: local - can refer to prior bindings...
-                promoteexterns(addto=extern, addfrom=op.extern, local=local)
-
-                if ofop:
-                    msg = "Duplicate 'of' argument in 'cast'"
-                    return zast.Error(err=ERR.BADCAST, msg=msg, loc=lex.acceptany())
-                ofop = op.node
-                first = False
-
-            elif t.toktype == TT.AS:
-                if aspath:
-                    msg = "Duplicate 'as' in 'cast'"
-                    return zast.Error(err=ERR.BADCAST, msg=msg, loc=lex.acceptany())
-
-                lex.acceptany()  # 'as'
-
-                typerefx = self._acceptpath(lex)
-                if isinstance(typerefx, zast.Error):
-                    return typerefx  # propagate error
-                if not typerefx:
-                    msg = "Expected typeref for 'as' (cast data type)"
-                    return zast.Error(err=ERR.BADCAST, msg=msg, loc=lex.acceptany())
-                aspath = typerefx.node
-                promoteexterns(addto=extern, addfrom=typerefx.extern)
-                first = False
-
-            else:
-                break  # nothing matched, end of 'if'
-
-        if not ofop or not aspath:
-            msg = "Require both 'of' and 'as' arguments for 'cast'"
-            return zast.Error(err=ERR.BADCAST, msg=msg, loc=lex.acceptany())
-
-        castnode = zast.Cast(subject=ofop, astype=aspath, start=start)
-        return NodeX(castnode, extern=extern)
-
     def _acceptdata(self, lex: Lexer) -> Union[NodeX[zast.Data], zast.Error, None]:
         """
         acceptdata - accept a data clause
 
-            "data"
-            [ "is" ] "{" { sequenceitem | newline } "}"
-            [ "of" typeref ]
+            "data" [ "is" ] "{" { ( [ label ] term ) | label_value } "}"
 
         Return a Data or Error or None for no data (missing "data" keyword)
         """
@@ -1703,316 +1564,50 @@ class Parser:
         if not lex.accept(TT.DATA):
             return None
 
-        # length: Optional[zast.Path] = None
         subtype: Optional[zast.Path] = None
         data: List[zast.NamedOperation] = []
         extern: Dict[str, zast.AtomId] = {}
-        first = True  # first is allowed to not have a label/"is"
 
+        lex.accept(TT.IS)  # optional 'is'
+
+        if not lex.accept(TT.BRACEOPEN):
+            msg = "Expected opening brace '{' for data body"
+            return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
+
+        datanames: Set[str] = set()
         while True:
-            t = lex.peek()
-            if first or t.toktype == TT.IS:
-                if data:
-                    msg = "Duplicate 'is'"
-                    return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
-                if t.toktype == TT.IS:
-                    lex.acceptany()  # 'is'
-                if not lex.accept(TT.BRACEOPEN):
-                    msg = "Expected opening brace '{' for data body"
-                    return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
+            label: Optional[Token] = None
+            if lex.peek().toktype == TT.LABEL:
+                label = lex.acceptany()
+                if label.tokstr in datanames:
+                    msg = f"Duplicate data member name: {label.tokstr}"
+                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                datanames.add(label.tokstr)
 
-                datanames: Set[str] = set()
-                while True:
-                    label: Optional[Token] = None
-                    if (
-                        lex.peek().toktype == TT.LABEL
-                    ):  # TODO: must be int, add label to each data item?
-                        label = lex.acceptany()
-                        if label.tokstr in datanames:
-                            msg = f"Duplicate data member name: {label.tokstr}"
-                            return zast.Error(
-                                err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany()
-                            )
-                        datanames.add(label.tokstr)
-
-                    opx = self._acceptoperation(lex)
-                    if isinstance(opx, zast.Error):
-                        return opx  # propagate error
-                    if opx:
-                        if label:
-                            namedop = zast.NamedOperation(
-                                name=label.tokstr, valtype=opx.node, start=label
-                            )
-                        else:
-                            namedop = zast.NamedOperation(
-                                name=None, valtype=opx.node, start=opx.node.start
-                            )
-                        promoteexterns(addto=extern, addfrom=opx.extern)
-                        data.append(namedop)
-                    else:
-                        # no op, finished block
-                        break
-
-                if not lex.accept(TT.BRACECLOSE):
-                    msg = "Expected closing brace '}' for data body"
-                    return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
-
-                first = False
-
-            elif t.toktype == TT.OF:
-                if subtype:
-                    msg = "Duplicate 'of' (data member type)"
-                    return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
-
-                lex.acceptany()  # 'of'
-
-                typerefx = self._acceptpath(lex)
-                if isinstance(typerefx, zast.Error):
-                    return typerefx  # propagate error
-                if not typerefx:
-                    msg = "Expected typeref for 'of' (data member type)"
-                    return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
-                subtype = typerefx.node
-                promoteexterns(addto=extern, addfrom=typerefx.extern)
-                first = False
+            pathx = self._acceptpath(lex)
+            if isinstance(pathx, zast.Error):
+                return pathx  # propagate error
+            if pathx:
+                if label:
+                    namedop = zast.NamedOperation(
+                        name=label.tokstr, valtype=pathx.node, start=label
+                    )
+                else:
+                    namedop = zast.NamedOperation(
+                        name=None, valtype=pathx.node, start=pathx.node.start
+                    )
+                promoteexterns(addto=extern, addfrom=pathx.extern)
+                data.append(namedop)
             else:
-                break  # nothing matched, end of 'array'
+                # no path, finished block
+                break
 
-        if not subtype and not data:
-            msg = "Require at least one of 'is' or 'of'"
+        if not lex.accept(TT.BRACECLOSE):
+            msg = "Expected closing brace '}' for data body"
             return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
 
         datanode = zast.Data(subtype=subtype, data=data, start=start)
         return NodeX(datanode, extern=extern)
-
-    # def _acceptarray(self, lex: Lexer) -> Union[NodeX[zast.Array], zast.Error, None]:
-    #     """
-    #     acceptarray - accept a array clause
-    #     acceptarray and acceptlist are very similar - keep in sync
-    #
-    #         "array"
-    #         [ [ "is" ] "{" { sequenceitem | newline } "}" ]
-    #         [ "~to" typeref_or_num ]
-    #         [ "~of" typeref ]
-    #
-    #     Return an Array or Error or None for no unit (missing "array" keyword)
-    #     """
-    #     # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
-    #     start = lex.peek()
-    #     if not lex.accept(TT.ARRAY):
-    #         return None
-    #
-    #     length: Optional[zast.Path] = None
-    #     subtype: Optional[zast.Path] = None
-    #     data: List[zast.NamedOperation] = []
-    #     extern: Dict[str, zast.AtomId] = {}
-    #     first = True  # first is allowed to not have a label/"when"
-    #
-    #     while True:
-    #         t = lex.peek()
-    #         if first or t.toktype == TT.IS:
-    #             if data:
-    #                 msg = "Duplicate 'is'"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #             if t.toktype == TT.IS:
-    #                 lex.acceptany()  # 'is'
-    #             if not lex.accept(TT.BRACEOPEN):
-    #                 msg = "Expected opening brace '{' for array body"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #             datanames: Set[str] = set()
-    #             while True:
-    #                 label: Optional[Token] = None
-    #                 if lex.peek().toktype == TT.LABEL:
-    #                     label = lex.acceptany()
-    #                     if label.tokstr in datanames:
-    #                         msg = f"Duplicate array member name: {label.tokstr}"
-    #                         return zast.Error(
-    #                             err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany()
-    #                         )
-    #                     datanames.add(label.tokstr)
-    #
-    #                 opx = self._acceptoperation(lex)
-    #                 if isinstance(opx, zast.Error):
-    #                     return opx  # propagate error
-    #                 if opx:
-    #                     if label:
-    #                         namedop = zast.NamedOperation(
-    #                             name=label.tokstr, valtype=opx.node, start=label
-    #                         )
-    #                     else:
-    #                         namedop = zast.NamedOperation(
-    #                             name=None, valtype=opx.node, start=opx.node.start
-    #                         )
-    #                     promoteexterns(addto=extern, addfrom=opx.extern)
-    #                     data.append(namedop)
-    #                 else:
-    #                     # no op, finished block
-    #                     break
-    #
-    #             if not lex.accept(TT.BRACECLOSE):
-    #                 msg = "Expected closing brace '}' for array body"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #         elif t.toktype == TT.TO_TILDE:
-    #             if length:
-    #                 msg = "Duplicate '~to' (array length)"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #             lex.acceptany()  # '~to'
-    #
-    #             typerefornumx = self._acceptpath(lex)
-    #             if isinstance(typerefornumx, zast.Error):
-    #                 return typerefornumx  # propagate error
-    #             if not typerefornumx:
-    #                 msg = (
-    #                     "Expected typeref of numeric constant for '~to' (array length)"
-    #                 )
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #             length = typerefornumx.node
-    #             promoteexterns(addto=extern, addfrom=typerefornumx.extern)
-    #             first = False
-    #
-    #         elif t.toktype == TT.OF_TILDE:
-    #             if subtype:
-    #                 msg = "Duplicate '~of' (array member type)"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #             lex.acceptany()  # '~of'
-    #
-    #             typerefx = self._acceptpath(lex)
-    #             if isinstance(typerefx, zast.Error):
-    #                 return typerefx  # propagate error
-    #             if not typerefx:
-    #                 msg = "Expected typeref for '~of' (array member type)"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #             subtype = typerefx.node
-    #             promoteexterns(addto=extern, addfrom=typerefx.extern)
-    #             first = False
-    #         else:
-    #             break  # nothing matched, end of 'array'
-    #
-    #     if not length and not subtype and not data:
-    #         msg = "Require at least one of 'is', '~to', '~of'"
-    #         return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #     arraynode = zast.Array(length=length, subtype=subtype, data=data, start=start)
-    #     return NodeX(arraynode, extern=extern)
-    #
-    # def _acceptlist(self, lex: Lexer) -> Union[NodeX[zast.List], zast.Error, None]:
-    #     """
-    #     acceptlist - accept a list clause
-    #     acceptarray and acceptlist are very similar - keep in sync
-    #
-    #         "list"
-    #         [ [ "is" ] "{" { sequenceitem | newline } "}" ]
-    #         [ "to" operation ]
-    #         [ "~of" typeref ]
-    #
-    #     Return an Array or Error or None for no unit (missing "array" keyword)
-    #
-    #     """
-    #     # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
-    #     start = lex.peek()
-    #     if not lex.accept(TT.ARRAY):
-    #         return None
-    #
-    #     length: Optional[zast.Operation] = None
-    #     subtype: Optional[zast.Path] = None
-    #     data: List[zast.NamedOperation] = []
-    #     extern: Dict[str, zast.AtomId] = {}
-    #     first = True  # first is allowed to not have a label/"when"
-    #
-    #     while True:
-    #         t = lex.peek()
-    #         if first or t.toktype == TT.IS:
-    #             if data:
-    #                 msg = "Duplicate 'is'"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #             if t.toktype == TT.IS:
-    #                 lex.acceptany()  # 'is'
-    #             if not lex.accept(TT.BRACEOPEN):
-    #                 msg = "Expected opening brace '{' for array body"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #             datanames: Set[str] = set()
-    #             while True:
-    #                 label: Optional[Token] = None
-    #                 if lex.peek().toktype == TT.LABEL:
-    #                     label = lex.acceptany()
-    #                     if label.tokstr in datanames:
-    #                         msg = f"Duplicate list member name: {label.tokstr}"
-    #                         return zast.Error(
-    #                             err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany()
-    #                         )
-    #                     datanames.add(label.tokstr)
-    #
-    #                 opx = self._acceptoperation(lex)
-    #                 if isinstance(opx, zast.Error):
-    #                     return opx  # propagate error
-    #                 if opx:
-    #                     if label:
-    #                         namedop = zast.NamedOperation(
-    #                             name=label.tokstr, valtype=opx.node, start=label
-    #                         )
-    #                     else:
-    #                         namedop = zast.NamedOperation(
-    #                             name=None, valtype=opx.node, start=opx.node.start
-    #                         )
-    #                     promoteexterns(addto=extern, addfrom=opx.extern)
-    #                     data.append(namedop)
-    #                 else:
-    #                     # no op, finished block
-    #                     break
-    #
-    #             if not lex.accept(TT.BRACECLOSE):
-    #                 msg = "Expected closing brace '}' for array body"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #         elif t.toktype == TT.TO:
-    #             if length:
-    #                 msg = "Duplicate 'to' (array length)"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #             lex.acceptany()  # 'to'
-    #
-    #             opx = self._acceptoperation(lex)
-    #             if isinstance(opx, zast.Error):
-    #                 return opx  # propagate error
-    #             if not opx:
-    #                 msg = (
-    #                     "Expected typeref of numeric constant for '~to' (array length)"
-    #                 )
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #             length = opx.node
-    #             promoteexterns(addto=extern, addfrom=opx.extern)
-    #             first = False
-    #
-    #         elif t.toktype == TT.OF_TILDE:
-    #             if subtype:
-    #                 msg = "Duplicate '~of' (array member type)"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #             lex.acceptany()  # '~of'
-    #
-    #             typerefx = self._acceptpath(lex)
-    #             if isinstance(typerefx, zast.Error):
-    #                 return typerefx  # propagate error
-    #             if not typerefx:
-    #                 msg = "Expected typeref for '~of' (array member type)"
-    #                 return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #             subtype = typerefx.node
-    #             promoteexterns(addto=extern, addfrom=typerefx.extern)
-    #             first = False
-    #         else:
-    #             break  # nothing matched, end of 'array'
-    #
-    #     if not length and not subtype and not data:
-    #         msg = "Require at least one of 'is', '~to', '~of'"
-    #         return zast.Error(err=ERR.BADARRAY, msg=msg, loc=lex.acceptany())
-    #
-    #     listnode = zast.List(length=length, subtype=subtype, data=data, start=start)
-    #     return NodeX(listnode, extern=extern)
 
     def _acceptoperation(
         self, lex: Lexer
@@ -2133,10 +1728,7 @@ class Parser:
         """
         acceptstatementline - accept a statementline clause
 
-            "break"
-            | "continue"
-            |( "return" [ expression ] )
-            | ( label [ newline ] expression )
+            ( label [ newline ] expression )
             | ( path "=" expression )
             | ( expression )
 
@@ -2145,32 +1737,6 @@ class Parser:
         # pylintxxx: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
         extern: Dict[str, zast.AtomId] = {}
         start = lex.peek()
-        if start.toktype == TT.BREAK:
-            lex.acceptany()
-            breaknode = zast.Break(start=start)
-            statementline = zast.StatementLine(statementline=breaknode, start=start)
-            return NodeX(node=statementline, extern=extern)
-
-        if start.toktype == TT.CONTINUE:
-            lex.acceptany()
-            continuenode = zast.Continue(start=start)
-            statementline = zast.StatementLine(statementline=continuenode, start=start)
-            return NodeX(node=statementline, extern=extern)
-
-        if start.toktype == TT.RETURN:
-            lex.acceptany()
-            expression: Optional[zast.Expression] = None
-
-            exprx = self._acceptexpression(lex)
-            if isinstance(exprx, zast.Error):
-                return exprx  # propagate error
-            if exprx:
-                expression = exprx.node
-                promoteexterns(addto=extern, addfrom=exprx.extern)
-
-            returnnode = zast.Return(expression=expression, start=start)
-            statementline = zast.StatementLine(statementline=returnnode, start=start)
-            return NodeX(node=statementline, extern=extern)
 
         if start.toktype == TT.LABEL:  # an assignment to new var
             lex.acceptany()  # label
@@ -2436,9 +2002,14 @@ class Parser:
                 stringparts.append(t)
             elif tt == TT.STREXPRBEG:
                 lex.acceptany()
-                expr = self._acceptatomexpr(lex)
+                # string interpolation is \{expr} - braces are consumed by
+                # the lexer state machine (STRINGEXPR/STRINGEXPRBRACE)
+                if not lex.accept(TT.BRACEOPEN):
+                    msg = "Expected '{' after '\\' in string interpolation"
+                    return zast.Error(err=ERR.BADSTRING, msg=msg, loc=lex.peek())
+                expr = self._acceptexpression(lex)
                 if expr is None:
-                    msg = "Bad expression in string"
+                    msg = "Bad expression in string interpolation"
                     return zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=lex.peek())
                 if isinstance(expr, zast.Error):
                     return expr  # propagate error
@@ -2446,9 +2017,8 @@ class Parser:
                 # update new with old to retain old values
                 expr.extern.update(extern)
                 extern = expr.extern
-
-                if not lex.accept(TT.PARENCLOSE):
-                    msg = "Unmatched string expression delimiter"
+                if not lex.accept(TT.BRACECLOSE):
+                    msg = "Expected '}' after string interpolation expression"
                     return zast.Error(err=ERR.BADSTRING, msg=msg, loc=lex.peek())
             else:
                 # error
