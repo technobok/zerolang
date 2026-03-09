@@ -230,11 +230,13 @@ class ZVfsProvider(ABC):
         May throw IO errors (file doesn't exist, permission errors)
         """
 
+
 @dataclass
 class ZVfsOpenFile:
     """
     An open file handle.
     """
+
     entryid: DEntryID
     filehandle: IO[str]
 
@@ -243,7 +245,6 @@ class ZVfsOpenFile:
         close the underlying file
         """
         self.filehandle.close()
-
 
 
 class ZVfs:
@@ -558,7 +559,6 @@ class ZVfs:
         provider = self._providertable[entry.providerid]
         filehandle = provider.open(entry.nodeid)
         return ZVfsOpenFile(entryid=entryid, filehandle=filehandle)
-
 
     def getline(self, entryid: DEntryID, lineno: int) -> Optional[str]:
         """

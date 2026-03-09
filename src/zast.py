@@ -14,7 +14,6 @@ from itertools import count
 import zvfs
 from zlexer import Token
 from ztypechecker import ZType
-from zsymbol import ZSymbol
 
 
 @unique
@@ -208,7 +207,9 @@ class Program:
     """
 
     vfs: zvfs.ZVfs  # vfs for reading source files. Needed to report errors
-    units: Dict[str, "Unit"]    # TODO: change this into a single top level unit (not a dict)
+    units: Dict[
+        str, "Unit"
+    ]  # TODO: change this into a single top level unit (not a dict)
     mainunitname: str
 
 
@@ -229,12 +230,13 @@ class Node:
     nodetype: NodeType
     # symbol holding the specific instance where this reference is defined
     # filled in typechecking pass... what is this for?
-    #definition: Optional[ZSymbol] = field(default=None, init=False)
+    # definition: Optional[ZSymbol] = field(default=None, init=False)
     # type of this Node, filled in typechecking pass
     # TODO: maybe Union(None, ZType, ZTypeCheckInProgress)
     type: Optional[ZType] = field(default=None, init=False)
 
     start: Token  # start location in the source for this Node
+
 
 # TypeDefinition - one of the following, real Node is not needed
 TypeDefinition = typing.Union[
@@ -247,6 +249,7 @@ TypeDefinition = typing.Union[
     "Enum",
     "Protocol",
     "Expression",
+    "Operation",
 ]
 
 
@@ -259,7 +262,7 @@ class Unit(Node):
     nodetype: NodeType = field(default=NodeType.UNIT, init=False)
     # type definitions and generic parameters all included here
     # body: Dict[str, typing.Union["Definition", "Unit"]]
-    body: Dict[str, TypeDefinition]         # xxTypeDefinition?
+    body: Dict[str, TypeDefinition]  # xxTypeDefinition?
 
 
 @dataclass
@@ -269,10 +272,12 @@ class Function(Node):
     """
 
     nodetype: NodeType = field(default=NodeType.FUNCTION, init=False)
-    returntype: Optional["Path"] # really a Typeref
-    yieldtype: Optional["Path"] # really a Typeref
+    returntype: Optional["Path"]  # really a Typeref
+    yieldtype: Optional["Path"]  # really a Typeref
     # parameters - both normal and generic in same frame
-    parameters: Dict[str, "Path"]   # really, a TyperefOrNum            # xxTypeDefinition?
+    parameters: Dict[
+        str, "Path"
+    ]  # really, a TyperefOrNum            # xxTypeDefinition?
     body: Optional["Statement"]  # None for Spec
 
 
@@ -284,7 +289,9 @@ class Record(Node):
 
     nodetype: NodeType = field(default=NodeType.RECORD, init=False)
     items: Dict[str, "Path"]  # generic and normal fields, a TyperefOrNum
-    implements: typing.List["Path"]  # 'is' interfaces satisfied by this record, a Typeref
+    implements: typing.List[
+        "Path"
+    ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
 
 
@@ -296,7 +303,9 @@ class Class(Node):
 
     nodetype: NodeType = field(default=NodeType.CLASS, init=False)
     items: Dict[str, "Path"]  # generic and normal, a TyperefOrNum
-    implements: typing.List["Path"]  # 'is' interfaces satisfied by this record, a Typeref
+    implements: typing.List[
+        "Path"
+    ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
 
 
@@ -309,9 +318,11 @@ class Union(Node):
 
     nodetype: NodeType = field(default=NodeType.UNION, init=False)
     items: Dict[str, "Path"]  # generic and normal (???) a TyperefOrNum
-    implements: typing.List["Path"]  # 'is' interfaces satisfied by this record, a Typeref
+    implements: typing.List[
+        "Path"
+    ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
-    tag: Optional["Path"]    # a Typeref
+    tag: Optional["Path"]  # a Typeref
 
 
 @dataclass
@@ -322,9 +333,11 @@ class Variant(Node):
 
     nodetype: NodeType = field(default=NodeType.VARIANT, init=False)
     items: Dict[str, "Path"]  # generic and normal (???) as TyperefOrNum
-    implements: typing.List["Path"]  # 'is' interfaces satisfied by this record, a Typeref
+    implements: typing.List[
+        "Path"
+    ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
-    tag: Optional["Path"]    # a Typeref
+    tag: Optional["Path"]  # a Typeref
 
 
 @dataclass
@@ -338,7 +351,9 @@ class Enum(Node):
     # otherwise, Path will just refer to itself...:
     # value is AtomId and AtomId.name == same as str)
     items: Dict[str, "Path"]
-    implements: typing.List["Path"]  # 'is' interfaces satisfied by this record, a Typeref
+    implements: typing.List[
+        "Path"
+    ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
     tag: Optional["Path"]  # must be a simple numeric type (including char), a Typeref
 
@@ -357,8 +372,16 @@ class Protocol(Node):
 
 
 ExpressionSubTypes = typing.Union[
-    "If", "For", "Do", "Case", "Cast", "Data", "Operation", "Call",             # "Array", "List"
+    "If",
+    "For",
+    "Do",
+    "Case",
+    "Cast",
+    "Data",
+    "Operation",
+    "Call",  # "Array", "List"
 ]
+
 
 # Operation - real Node not required
 @dataclass
@@ -367,12 +390,14 @@ class Operation(Node):
     Operation - parent of Path and BinOp
     """
 
+
 @dataclass
 class Path(Operation):
     """
     Path - parent of both DottedPath and Atom
     Also a typeref and a typeref_or_num
     """
+
 
 @dataclass
 class Atom(Path):
@@ -420,7 +445,7 @@ class IfClause(Node):
 
     nodetype: NodeType = field(default=NodeType.IFCLAUSE, init=False)
     # name bindings or 'when' arguments (start with space)
-    conditions: Dict[str, "Operation"]      # xxTypeDefinition?
+    conditions: Dict[str, "Operation"]  # xxTypeDefinition?
     statement: "Statement"  # then statement to execute. Should be optional?
 
 
@@ -447,6 +472,7 @@ class Case(Node):
     clauses: typing.List["CaseClause"]
     elseclause: Optional["Statement"]
 
+
 @dataclass
 class Cast(Node):
     """
@@ -458,6 +484,7 @@ class Cast(Node):
     subject: "Operation"
     astype: "Path"
 
+
 @dataclass
 class CaseClause(Node):
     """
@@ -466,7 +493,7 @@ class CaseClause(Node):
 
     nodetype: NodeType = field(default=NodeType.CASECLAUSE, init=False)
     # name bindings or 'of' arguments (start with space)
-    name: str           # xxTypeDefinition?
+    name: str  # xxTypeDefinition?
     match: "AtomId"
     statement: "Statement"  # then statement to execute
 
@@ -511,6 +538,7 @@ class Call(Node):
     # even though it could still be a call with 0 args)
     arguments: typing.List["NamedOperation"]
 
+
 @dataclass
 class Data(Node):
     """
@@ -521,7 +549,6 @@ class Data(Node):
     # generic, can be a generic reference or constant numeric expression
     subtype: Optional["Path"]  # inferred if None, a Typeref
     data: typing.List["NamedOperation"]  # data, change to dict?
-
 
 
 # @dataclass
@@ -556,6 +583,7 @@ class BinOp(Operation):
     BinOp - binary operation
     Left recursive
     """
+
     nodetype: NodeType = field(default=NodeType.BINOP, init=False)
     lhs: "Operation"
     operator: "AtomId"
@@ -587,7 +615,13 @@ class StatementLine(Node):
 
     nodetype: NodeType = field(default=NodeType.STATEMENTLINE, init=False)
     statementline: typing.Union[
-        "Break", "Continue", "Return", "Assignment", "Reassignment", "Swap", "Expression"
+        "Break",
+        "Continue",
+        "Return",
+        "Assignment",
+        "Reassignment",
+        "Swap",
+        "Expression",
     ]
 
 
@@ -618,6 +652,7 @@ class Return(Node):
     nodetype: NodeType = field(default=NodeType.RETURN, init=False)
     expression: Optional[Expression]
 
+
 @dataclass
 class Assignment(Node):
     """
@@ -625,8 +660,9 @@ class Assignment(Node):
     """
 
     nodetype: NodeType = field(default=NodeType.ASSIGNMENT, init=False)
-    name: str   # also in start     # xxTypeDefinition?
+    name: str  # also in start     # xxTypeDefinition?
     value: "Expression"  # source expression
+
 
 @dataclass
 class Reassignment(Node):
@@ -700,8 +736,6 @@ class AtomString(Atom):
     nodetype: NodeType = field(default=NodeType.ATOMSTRING, init=False)
     # bit messy... Token for literal parts, Expression for strexpr
     stringparts: typing.List[typing.Union["Token", "Expression"]]
-
-
 
 
 # class NodeTable:

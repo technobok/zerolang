@@ -5,8 +5,8 @@ ZeroLang compiler
 
 import sys
 import os
+import argparse
 
-# from typing import Optional
 import zprettyprint
 
 # import zemitterc
@@ -20,11 +20,21 @@ def main() -> None:
     """
     main
     """
-    if len(sys.argv) != 2:
-        print("Usage: zc unitname")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="ZeroLang compiler")
+    parser.add_argument("unitname", help="Name of the unit to compile")
+    parser.add_argument(
+        "--system",
+        default=None,
+        help="Path to the system directory (default: <script_dir>/system)",
+    )
+    parser.add_argument(
+        "--src",
+        default=None,
+        help="Path to the user source directory (default: current directory)",
+    )
+    args = parser.parse_args()
 
-    unitname = sys.argv[1].lower()
+    unitname = args.unitname.lower()
     if not isvalidunitname(unitname):
         print(
             f"Main unit [{unitname}] is not a valid unit name "
@@ -32,12 +42,17 @@ def main() -> None:
         )
         sys.exit(1)
 
-    cwd = os.getcwd()
-    # TODO: have a named parameter for system directory root
-    # systempath = os.path.join(cwd, "system")
+    srcdir = args.src if args.src else os.getcwd()
+    if args.system:
+        systemdir = args.system
+    else:
+        # default: system/ directory next to this script
+        scriptdir = os.path.dirname(os.path.abspath(__file__))
+        systemdir = os.path.join(scriptdir, "system")
+
     vfs: ZVfs = ZVfs()
-    psystemid = vfs.register(FSProvider(rootpath=cwd, parentpath="system"))
-    pmainid = vfs.register(FSProvider(rootpath=cwd, parentpath=""))
+    psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+    pmainid = vfs.register(FSProvider(rootpath=srcdir, parentpath=""))
 
     rootid: DEntryID = vfs.walk()  # old root
 

@@ -2,6 +2,7 @@
 """
 ZeroLang parser
 """
+
 # pylint: disable=too-many-lines
 from typing import List, Dict, Optional, Union, TypeVar, Generic, Set
 from dataclasses import dataclass
@@ -195,7 +196,6 @@ class Parser:
         if isinstance(openfile, zast.Error):
             return openfile  # propagate error
 
-
         tokenizer = Tokenizer(openfile)
         lex = Lexer(tokenizer)
         fsid = openfile.entryid
@@ -271,7 +271,7 @@ class Parser:
         self, parentid: DEntryID, unitname: str, reference: Optional[Token]
     ) -> Union[ZVfsOpenFile, zast.Error]:
         """
-        unitfileopen - open a unit file 
+        unitfileopen - open a unit file
 
         parentid: DEntryID of parent directory that should contain this unit
         unitname: name of unit (no slashes and no .z)
@@ -297,7 +297,6 @@ class Parser:
         # must have opened ok
         return openfile
 
-
     def _acceptunitbody(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error]:
         """
         _acceptunitbody = accept the body of a unit. Used by unitfile and
@@ -319,6 +318,9 @@ class Parser:
 
         start = lex.peek()
 
+        lex.filtereol(False)  # need EOLs as definition separators
+        error: Optional[zast.Error] = None
+
         while True:
             if lex.accept(TT.EOL):
                 continue
@@ -327,33 +329,41 @@ class Parser:
             if not label:
                 break  # no definition
 
-            lex.accept(TT.EOL)  # optional EOL
+            lex.accept(TT.EOL)  # optional EOL after label
 
             t = lex.peek()
+            lex.filtereol(True)  # filter EOLs within definition value
             typedefinitionx = self._accepttypedefinition(lex)
+            lex.filtereol(False)  # restore for next definition boundary
             if typedefinitionx is None:
                 msg = (
                     f"Expected TypeDefinition after Definition name, got '{t.tokstr}' "
                     + repr(t)
                 )
-                err = zast.Error(err=ERR.EXPECTEDTYPEDEF, msg=msg, loc=t)
-                return err
+                error = zast.Error(err=ERR.EXPECTEDTYPEDEF, msg=msg, loc=t)
+                break
             if isinstance(typedefinitionx, zast.Error):
-                return typedefinitionx  # return error
+                error = typedefinitionx
+                break
 
             definition = typedefinitionx.node
             name = label.tokstr
             if name in definitions:
-                return zast.Error(
+                error = zast.Error(
                     ERR.DUPLICATEDEF,
                     f"Duplicate definition of {name}",
                     definition.start,
                 )
+                break
             # extern references that need to be push upwards....
             promoteexterns(
                 addto=extern, addfrom=typedefinitionx.extern, local=localdefs
             )
             definitions[name] = definition
+
+        lex.filtereol(True)  # restore default
+        if error:
+            return error
 
         return NodeX(node=zast.Unit(start=start, body=definitions), extern=extern)
 
@@ -395,8 +405,8 @@ class Parser:
             return self._acceptenum(lex)
         if tt == TT.PROTOCOL:
             return self._acceptprotocol(lex)
-        # otherwise, try Expression...
-        return self._acceptexpression(lex)
+        # at unit level, only operations (not calls) are valid
+        return self._acceptoperation(lex)
 
     def _acceptexpression(
         self, lex: Lexer
@@ -432,7 +442,7 @@ class Parser:
             node = self._acceptfor(lex)
         elif tt == TT.DO:
             node = self._acceptdo(lex)
-        elif tt == TT.CASE:
+        elif tt == TT.MATCH:
             node = self._acceptcase(lex)
         elif tt == TT.CAST:
             node = self._acceptcast(lex)
@@ -457,7 +467,7 @@ class Parser:
         return NodeX(node=expression, extern=node.extern)
 
     def _acceptoperationorcall(
-            self, oplist: List[NodeX[zast.Path]], lex: Lexer
+        self, oplist: List[NodeX[zast.Path]], lex: Lexer
     ) -> Union[NodeX[zast.Operation], NodeX[zast.Call], zast.Error, None]:
         """
 
@@ -465,7 +475,7 @@ class Parser:
         need additional lookahead to discern.
 
         oplist: a list of ops already consumed
-        lex: lexer to possibly get remainder of operation or call 
+        lex: lexer to possibly get remainder of operation or call
 
         Returns an Operation or a Call or an error or None
 
@@ -489,14 +499,16 @@ class Parser:
 
         if not oplist:  # len(oplist) == 0
             return None
-        
+
         if (len(oplist) == 1 and lex.peek().toktype == TT.LABEL) or (
             len(oplist) % 2 == 0
         ):
             return self._acceptcall(lex=lex, paths=oplist)
 
         # else: op or error...
-        opx = self._getop(paths=oplist, nexttoken=lex.peek())  # don't propagate error, may be call
+        opx = self._getop(
+            paths=oplist, nexttoken=lex.peek()
+        )  # don't propagate error, may be call
         return opx
 
     # old way (crap?)
@@ -566,8 +578,7 @@ class Parser:
 
     @staticmethod
     def _getop(
-        paths: List[NodeX[zast.Path]],
-        nexttoken: Token
+        paths: List[NodeX[zast.Path]], nexttoken: Token
     ) -> Union[NodeX[zast.Operation], zast.Error, None]:
         """
         Given a list of paths (from getoplist), return an Operation. Helper
@@ -633,7 +644,7 @@ class Parser:
         return NodeX(operation, extern=extern)
 
     def _acceptcall(
-        self, lex: Lexer, paths: List[NodeX[zast.Path]] 
+        self, lex: Lexer, paths: List[NodeX[zast.Path]]
     ) -> Union[NodeX[zast.Call], zast.Error, None]:
         """
         Given a list of paths (from getoplist) and a Lexer, return a Call
@@ -712,7 +723,7 @@ class Parser:
             function
                 "function"
                 [ [ "accept" ] "{" { parameteritem | newline } "}" ]
-                [ "return" typeref ]
+                [ "out" typeref ]
                 [ "yield" typeref ]
                 [ "is" statement ]
 
@@ -740,18 +751,18 @@ class Parser:
         while True:
             tok = lex.peek()
 
-            if lex.accept(TT.RETURN):
+            if lex.accept(TT.OUT):
                 if returntype:
-                    msg = "Duplicate 'return'"
+                    msg = "Duplicate 'out'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
 
                 if yieldtype:
-                    msg = "'return' not permitted with 'yield'"
+                    msg = "'out' not permitted with 'yield'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
 
                 typeref = self._acceptpath(lex)
                 if typeref is None:
-                    msg = "Expected type reference for 'return'"
+                    msg = "Expected type reference for 'out'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
 
                 if isinstance(typeref, zast.Error):
@@ -1201,7 +1212,6 @@ class Parser:
                     msg = "Expected a label, an id or closing brace"
                     return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
             else:
-
                 # error - no other options
                 msg = "Expected a label, expression or closing brace"
                 return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
@@ -1367,24 +1377,24 @@ class Parser:
 
     def _acceptcase(self, lex: Lexer) -> Union[NodeX[zast.Case], zast.Error, None]:
         """
-        acceptcase - accept a case clause (exhaustive conditional)
+        acceptcase - accept a match clause (exhaustive conditional)
 
-            "case"
+            "match"
             ( ["when"] operation )
             {
                 (
-                    ( "of" [ newline ] id )
+                    ( "case" [ newline ] id )
                     | ( label [ newline ] id )
                 )
                 "then" statement
             }
             | ( "else" statement )
 
-        Return a Case or Error or None for no unit (missing "case" keyword)
+        Return a Case or Error or None for no unit (missing "match" keyword)
         """
         # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
         start = lex.peek()
-        if not lex.accept(TT.CASE):
+        if not lex.accept(TT.MATCH):
             return None
 
         subject: Optional[zast.Operation]  # required
@@ -1399,30 +1409,30 @@ class Parser:
         if isinstance(op, zast.Error):
             return op  # propagate error
         if not op:
-            msg = "Expected operation for 'case' (subject)"
+            msg = "Expected operation for 'match' (subject)"
             return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
 
         subject = op.node
         promoteexterns(addto=extern, addfrom=op.extern)
 
-        ofindex = 0  # counter for 'fake' binding names (for 'of' clauses)
+        ofindex = 0  # counter for 'fake' binding names (for 'case' clauses)
         while True:
             startclause = lex.peek()  # for each CaseClause
             local: Set[str] = set()  # for each CaseClause
 
             t = lex.peek()
-            if t.toktype not in (TT.LABEL, TT.OF):
+            if t.toktype not in (TT.LABEL, TT.CASE):
                 break  # end of clauses
 
-            # ----- get label or 'of' (get name)
+            # ----- get label or 'case' (get name)
             name: str
             if t.toktype == TT.LABEL:
                 name = t.tokstr
                 local.add(name)
-            else:  # t.toktype == TT.OF:
+            else:  # t.toktype == TT.CASE:
                 name = " *{ofindex}"
                 ofindex += 1
-            lex.acceptany()  # label/'of'
+            lex.acceptany()  # label/'case'
             lex.accept(TT.EOL)  # optional EOL
 
             # ----- get id
@@ -1651,7 +1661,6 @@ class Parser:
                 ofop = op.node
                 first = False
 
-
             elif t.toktype == TT.AS:
                 if aspath:
                     msg = "Duplicate 'as' in 'cast'"
@@ -1678,7 +1687,6 @@ class Parser:
 
         castnode = zast.Cast(subject=ofop, astype=aspath, start=start)
         return NodeX(castnode, extern=extern)
-
 
     def _acceptdata(self, lex: Lexer) -> Union[NodeX[zast.Data], zast.Error, None]:
         """
@@ -1716,7 +1724,9 @@ class Parser:
                 datanames: Set[str] = set()
                 while True:
                     label: Optional[Token] = None
-                    if lex.peek().toktype == TT.LABEL:  # TODO: must be int, add label to each data item?
+                    if (
+                        lex.peek().toktype == TT.LABEL
+                    ):  # TODO: must be int, add label to each data item?
                         label = lex.acceptany()
                         if label.tokstr in datanames:
                             msg = f"Duplicate data member name: {label.tokstr}"
@@ -1746,6 +1756,8 @@ class Parser:
                 if not lex.accept(TT.BRACECLOSE):
                     msg = "Expected closing brace '}' for data body"
                     return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
+
+                first = False
 
             elif t.toktype == TT.OF:
                 if subtype:
@@ -2059,7 +2071,7 @@ class Parser:
 
         if lex.accept(TT.BRACEOPEN):
             # block
-            lex.filtereol(False)    # disable EOL filtering. Need to parse them correctly
+            lex.filtereol(False)  # disable EOL filtering. Need to parse them correctly
             error: Optional[zast.Error] = None
             while True:
                 if statements:
@@ -2093,15 +2105,26 @@ class Parser:
                         break
                     local.add(name)
 
-            lex.filtereol(True)    # reenable EOL filtering
+            lex.filtereol(True)  # reenable EOL filtering
             if error:
                 return error
 
-        if not lex.accept(TT.BRACECLOSE):
-            msg = "Expected closing brace '}' for statement body 2076"
-            return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=lex.acceptany())
+            if not lex.accept(TT.BRACECLOSE):
+                msg = "Expected closing brace '}' for statement body"
+                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=lex.acceptany())
 
-        statement = zast.Statement(statements=statements, start=start)
+            statement = zast.Statement(statements=statements, start=start)
+            return NodeX(statement, extern=extern)
+
+        # bare statement (no braces) - single statementline
+        statementlinex = self._acceptstatementline(lex)
+        if isinstance(statementlinex, zast.Error):
+            return statementlinex
+        if not statementlinex:
+            return None
+
+        promoteexterns(addto=extern, addfrom=statementlinex.extern)
+        statement = zast.Statement(statements=[statementlinex.node], start=start)
         return NodeX(statement, extern=extern)
 
     def _acceptstatementline(
@@ -2196,7 +2219,7 @@ class Parser:
             statementline = zast.StatementLine(statementline=reassignment, start=start)
             return NodeX(node=statementline, extern=extern)
 
-        if lex.accept(TT.SWAP): # a swap
+        if lex.accept(TT.SWAP):  # a swap
             if not oplist:
                 msg = "Swap requires a left hand side"
                 return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
@@ -2216,7 +2239,7 @@ class Parser:
                 return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
 
             promoteexterns(addto=extern, addfrom=rhsx.extern)
-            swap = zast.Swap( lhs=lhsx.node, rhs=rhsx.node, start=start)
+            swap = zast.Swap(lhs=lhsx.node, rhs=rhsx.node, start=start)
             statementline = zast.StatementLine(statementline=swap, start=start)
             return NodeX(node=statementline, extern=extern)
 
@@ -2349,7 +2372,7 @@ class Parser:
 
         error: Optional[zast.Error] = None
 
-        lex.filtereol(True)    # enable EOL filtering. EOL's are ignored within parens
+        lex.filtereol(True)  # enable EOL filtering. EOL's are ignored within parens
 
         expr = self._acceptexpression(lex)
         while True:
@@ -2369,7 +2392,7 @@ class Parser:
 
             break
 
-        lex.filtereol(False)    # re-disable EOL filtering
+        lex.filtereol(False)  # re-disable EOL filtering
         if error:
             return error
 
@@ -2424,7 +2447,7 @@ class Parser:
                 expr.extern.update(extern)
                 extern = expr.extern
 
-                if not lex.accept(TT.STREXPREND):
+                if not lex.accept(TT.PARENCLOSE):
                     msg = "Unmatched string expression delimiter"
                     return zast.Error(err=ERR.BADSTRING, msg=msg, loc=lex.peek())
             else:

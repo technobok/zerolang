@@ -171,9 +171,28 @@ be freed at scope exit (simple stack-based lifetime). This is incorrect for the
 full language but sufficient to get programs running. Ownership enforcement
 comes in v2.</p>
 <h3 id="v1-note-on-strings"><a href="#v1-note-on-strings">2.4. v1 Note on Strings</a></h3>
-<p>v1 uses a simple immutable string type. Strings are heap-allocated with a
-length prefix. String literals and interpolation are supported. Advanced string
-designs (stringref, stringval, stringdef) are deferred.</p>
+<p>v1 uses a simple immutable string type with a home-grown implementation
+(<code>ZStr</code>). Strings are heap-allocated as a single contiguous block using a C
+flexible array member:</p>
+<pre><code class="language-c">typedef struct {
+    int32_t len;    // byte length (excl NUL)
+    char data[];    // NUL-terminated UTF-8
+} ZStr;</code></pre>
+<p>This layout was chosen over external libraries (bstrlib, SDS) because:</p>
+<ul>
+<li>Immutability is fundamental to zerolang strings. Both bstrlib and SDS are
+    mutable-by-design; adopting either means paying API complexity for features
+    that are actively unwanted.</li>
+<li>Single allocation (header + data together) is cache-friendly and matches
+    the spec's zstring design (see TODO).</li>
+<li>v1 needs very few operations: create, concatenate (returns new string),
+    compare, length, print, free. ~100 lines of implementation.</li>
+<li>The struct layout evolves directly into v2 string types: <code>stringdef</code> is
+    ZStr as-is (immutable); <code>stringref</code> adds a capacity field for mutation;
+    <code>stringval</code> is stack-allocated with a compile-time-known max size.</li>
+</ul>
+<p>String literals and interpolation are supported. Advanced string designs
+(stringref, stringval, stringdef) are deferred to v2.</p>
 <h2 id="v1-example-programs"><a href="#v1-example-programs">3. v1 Example Programs</a></h2>
 <p>These programs define the v1 compilation targets. Each must parse, type-check
 and emit correct C.</p>

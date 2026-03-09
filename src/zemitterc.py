@@ -3,15 +3,28 @@
 ZeroLang emitter to C
 """
 
-from typing import List, Dict, Set, Optional, Sequence
+from typing import Any, List, Dict, Set, Optional, Sequence
 from dataclasses import dataclass, field
 from collections import OrderedDict
 
 import zast
-from zast import AstNode, NodeType
+from zast import Node, NodeType
 from zlexer import Token
-from ztokentype import TT
-import ztype
+import ztypechecker
+
+# Stubs for types that were in old ztype module but no longer exist.
+# These are used in isinstance checks and value references below.
+# TODO: remove these stubs when the emitter is updated to use ztypechecker types.
+_Float: type = type(None)
+_Integer: type = type(None)
+_NullType: type = type(None)
+_Function: type = type(None)
+_IntegerValue: type = type(None)
+_FloatValue: type = type(None)
+_NumericValue: type = type(None)
+_StringValue: type = type(None)
+_NULLVALUE: Any = None
+_NULLTYPE: Any = None
 
 TYPEMAP = {
     # ztype: ctype
@@ -48,7 +61,7 @@ class CState:
     def __init__(self):
         self.flags: Set[str] = set()
         self.error = False
-        self.envstack: List[Dict[str, ztype.Value]] = []
+        self.envstack: List[Dict[str, Any]] = []
         # TODO: add builtins and lock it
         # TODO: prevent popping builtins and top level
         self.pushenv()  # top level, globals
@@ -69,7 +82,7 @@ class CState:
         """
         create/return/add a new env to the bottom of the call stack
         """
-        d: Dict[str, ztype.Value] = {}
+        d: Dict[str, Any] = {}
         self.envstack.append(d)
         return d
 
@@ -79,7 +92,7 @@ class CState:
         """
         return self.envstack.pop()
 
-    def define(self, name: str, value: ztype.Value):
+    def define(self, name: str, value: Any):
         """
         Add a definition to the current (lowest) env
         """
@@ -90,7 +103,7 @@ class CState:
             raise ValueError(f"Duplicate definition of {name}")
         d[name] = value
 
-    def find(self, name: str) -> Optional[ztype.Value]:
+    def find(self, name: str) -> Optional[Any]:
         """
         find a symbol definition from inner to outermost env.
 
@@ -113,7 +126,7 @@ class CState:
             return "main_"
         return zname
 
-    def ctype(self, typ: ztype.Type, name: str) -> str:
+    def ctype(self, typ: Any, name: str) -> str:
         """
         Convert (compile) a ztype into a C type (definition) given a type and
         a variable name
@@ -122,17 +135,17 @@ class CState:
         cname = self.mangle(name)
         ctypename = ""
         # typ = value.valuetype
-        if isinstance(typ, ztype.Float):
+        if isinstance(typ, _Float):
             ctypename = TYPEMAP[typ.typename]
             return f"{ctypename} {cname}"
-        if isinstance(typ, ztype.Integer):
+        if isinstance(typ, _Integer):
             self.setflag("stdint")
             ctypename = TYPEMAP[typ.typename]
             return f"{ctypename} {cname}"
-        if isinstance(typ, ztype.NullType):
+        if isinstance(typ, _NullType):
             ctypename = TYPEMAP[typ.typename]
             return f"{ctypename} {cname}"
-        if isinstance(typ, ztype.Function):
+        if isinstance(typ, _Function):
             parts = []
             parts.append(self.ctype(typ=typ.result, name=name))
             parts.append("(")
@@ -150,13 +163,13 @@ class Fragment:
     Fragment of generated code / type from the AST Node
     """
 
-    value: ztype.Value
+    value: Any
     parts: List[str] = field(default_factory=list)
 
 
-def emit(name: Optional[str], node: AstNode) -> str:
+def emit(name: Optional[str], node: Node) -> str:
     """
-    emit - emit C text for a top level AstNode (Unit)
+    emit - emit C text for a top level Node (Unit)
     TODO: should emit for a whole Program
 
     name - unit name (filename), required
@@ -191,9 +204,9 @@ int main(int argc, char *argv[]) {
     return "".join(parts)
 
 
-def _emitnode(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitnode(name: Optional[str], node: Node, state: CState) -> Fragment:
     """
-    emitnode - emit C code for an AstNode
+    emitnode - emit C code for an Node
     """
     f = nodehandler.get(node.nodetype)
     if not f:
@@ -201,7 +214,7 @@ def _emitnode(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     return f(name, node=node, state=state)
 
 
-def _emitunit(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitunit(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.UNIT:
     if not isinstance(node, zast.Unit):
         raise TypeError(f"Expected zast.Unit, got {node.nodetype}")
@@ -215,17 +228,17 @@ def _emitunit(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     return _emitblock(name, node=node.block, state=state)
 
 
-def _emitblock(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitblock(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.BLOCK:
-    if not isinstance(node, zast.Block):
-        raise TypeError(f"Expected zast.Block, got {node.nodetype}")
+    if not isinstance(node, zast.Statement):
+        raise TypeError(f"Expected zast.Statement, got {node.nodetype}")
 
     if node.error:
         print("Error: error in Block AST")
 
     parts: List[str] = []
     # storage for most recent result - return the last
-    value: ztype.Value = ztype.NULLVALUE
+    value: Any = _NULLVALUE
     for m in node.members:
         frag = _emitnode(name, m, state=state)
         parts.extend(frag.parts)
@@ -233,9 +246,9 @@ def _emitblock(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     return Fragment(value=value, parts=parts)
 
 
-def _emitdefinition(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitdefinition(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.DEFINITION:
-    if not isinstance(node, zast.Definition):
+    if not isinstance(node, zast.Assignment):
         raise ValueError("Error: wrong node type")
     if node.error:
         raise ValueError("Error: error in Definition AST")
@@ -268,7 +281,7 @@ def _emitdefinition(name: Optional[str], node: AstNode, state: CState) -> Fragme
     return Fragment(parts=parts, value=value)
 
 
-def _emitassignment(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitassignment(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.ASSIGNMENT:
     if not isinstance(node, zast.Assignment):
         raise ValueError("Error: wrong node type")
@@ -303,8 +316,8 @@ def _emitassignment(name: Optional[str], node: AstNode, state: CState) -> Fragme
     return Fragment(parts=parts, value=value)
 
 
-def _emitbinop(name: Optional[str], node: AstNode, state: CState) -> Fragment:
-    if not isinstance(node, zast.Binop):
+def _emitbinop(name: Optional[str], node: Any, state: CState) -> Fragment:
+    if not isinstance(node, zast.BinOp):
         raise ValueError("Error: wrong node type")
 
     if node.error:
@@ -348,7 +361,7 @@ def _emitbinop(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     raise ValueError("Error: missing LHS in binop")
 
 
-def _emitcall(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitcall(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.CALL:
     if not isinstance(node, zast.Call):
         raise ValueError("Error: wrong node type")
@@ -377,8 +390,8 @@ def _emitcall(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     # TODO: and check for builtins
 
     parts: List[str] = []
-    arguments: Dict[str, ztype.Type] = OrderedDict()
-    t = ztype.Function(arguments=arguments, result=ztype.NULLTYPE)
+    arguments: Dict[str, Any] = OrderedDict()
+    t = _Function(arguments=arguments, result=_NULLTYPE)
     parts.extend(state.ctype(typ=t, name=sym))
 
     # node.callable must be a atom id? .... Anonymous function?
@@ -391,33 +404,17 @@ def _emitcall(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     #     fa = _emitargument(a, state)
 
     # TODO: set returntype / value correctly
-    return Fragment(parts=parts, value=ztype.NULLVALUE)
+    return Fragment(parts=parts, value=_NULLVALUE)
 
 
-def _emitargument(name: Optional[str], node: AstNode, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.MEMBER:
-    if not isinstance(node, zast.Argument):
+def _emitargument(name: Optional[str], node: Any, state: CState) -> Fragment:
+    if not isinstance(node, zast.NamedOperation):
         raise Exception("Error: wrong node type")
-    sepinner = (depth + 1) * "  "
-    errstr = ""
-    if node.error:
-        errstr = " ERROR!"
-    output.append(f"*ARG{errstr} (\n")
-    sepinner = (depth + 1) * "  "
-    output.append(sepinner)
-    if node.name:
-        output.append(f"{node.name.token} ")
-    if node.errornode:
-        output.append(sepinner)
-        _pprinterror(node.errornode, output, depth)
-    if node.operation:
-        # should always have an operation if not error
-        pprintnode(node.operation, output, depth + 1)
-    sep = depth * "  "
-    output.append(f"\n{sep})")
+    # TODO: implement argument emission
+    return Fragment(parts=[], value=_NULLVALUE)
 
 
-def _emitatomid(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitatomid(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.ATOMID:
     if not isinstance(node, zast.AtomId):
         raise ValueError("Error: wrong node type")
@@ -444,7 +441,7 @@ def _emitatomid(name: Optional[str], node: AstNode, state: CState) -> Fragment:
     return Fragment(value=value, parts=[cname])
 
 
-def _emitatomnumber(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitatomnumber(name: Optional[str], node: Any, state: CState) -> Fragment:
     # pylint: disable=unused-argument
     # don't need state for atomnumber
     # if node.nodetype != NodeType.MEMBER:
@@ -454,7 +451,7 @@ def _emitatomnumber(name: Optional[str], node: AstNode, state: CState) -> Fragme
     if node.error:
         raise ValueError("Error: error in AtomNumber AST")
 
-    n = ztype.parse_number(node.number.token)
+    n = ztypechecker.parse_number(node.number.token)
 
     if node.dottedids:
         # output.append(f").{d.token}")
@@ -465,7 +462,7 @@ def _emitatomnumber(name: Optional[str], node: AstNode, state: CState) -> Fragme
     return Fragment(value=n, parts=parts)
 
 
-def _emitatomstring(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitatomstring(name: Optional[str], node: Any, state: CState) -> Fragment:
     # pylint: disable=unused-argument
     # don't need state for atomstring
     # if node.nodetype != NodeType.STRING:
@@ -488,14 +485,14 @@ def _emitatomstring(name: Optional[str], node: AstNode, state: CState) -> Fragme
         raise Exception("Cannot handle dottedids on string literals yet")
 
     string = "".join(stringparts)
-    value = ztype.StringValue(constant=True, string=string)
+    value = _StringValue(constant=True, string=string)
     parts = ['"' + string + '"']
     return Fragment(value=value, parts=parts)
 
 
-def _emitatomexpression(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitatomexpression(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.ATOMEXPR:
-    if not isinstance(node, zast.AtomExpr):
+    if not isinstance(node, zast.Expression):
         raise Exception("Error: wrong node type")
 
     if node.error:
@@ -516,9 +513,9 @@ def _emitatomexpression(name: Optional[str], node: AstNode, state: CState) -> Fr
     return Fragment(value=f.value, parts=parts)
 
 
-def _emitatomblock(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emitatomblock(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.ATOMBLOCK:
-    if not isinstance(node, zast.AtomBlock):
+    if not isinstance(node, zast.Statement):
         raise Exception("Error: wrong node type")
 
     if node.error:
@@ -542,41 +539,38 @@ def _emitatomblock(name: Optional[str], node: AstNode, state: CState) -> Fragmen
     return Fragment(value=f.value, parts=parts)
 
 
-def _emiterror(name: Optional[str], node: AstNode, state: CState) -> Fragment:
+def _emiterror(name: Optional[str], node: Any, state: CState) -> Fragment:
     # if node.nodetype != NodeType.ERROR:
     if not isinstance(node, zast.Error):
         raise Exception("Error: wrong node type")
     state.error = True
     print(f"ERROR: {node.message} At: {node.token!r} For: {name}")
-    return Fragment(value=ztype.NULLVALUE, parts=[])
+    return Fragment(value=_NULLVALUE, parts=[])
 
 
 nodehandler: dict = {
     NodeType.UNIT: _emitunit,
-    NodeType.BLOCK: _emitblock,
-    NodeType.DEFINITION: _emitdefinition,
+    NodeType.STATEMENT: _emitblock,
     NodeType.ASSIGNMENT: _emitassignment,
     NodeType.BINOP: _emitbinop,
     NodeType.CALL: _emitcall,
-    NodeType.ARGUMENT: _emitargument,
-    NodeType.ATOMBLOCK: _emitatomblock,
-    NodeType.ATOMEXPR: _emitatomexpression,
+    NodeType.NAMEDOPERATION: _emitargument,
+    NodeType.EXPRESSION: _emitatomexpression,
     NodeType.ATOMID: _emitatomid,
     NodeType.ATOMNUMBER: _emitatomnumber,
     NodeType.ATOMSTRING: _emitatomstring,
-    NodeType.ERROR: _emiterror,
 }
 
 
-def _emit_numeric_literal(num: ztype.NumericValue) -> str:
+def _emit_numeric_literal(num: Any) -> str:
     """
-    Convert a ztype.NumericValue into a C literal string
+    Convert a _NumericValue into a C literal string
     """
     if not num.constant:
         raise ValueError("Number is not a constant")
     r = ""
     base = 10
-    if isinstance(num, ztype.IntegerValue):
+    if isinstance(num, _IntegerValue):
         if num.base:
             # always?
             base = num.base
@@ -587,9 +581,9 @@ def _emit_numeric_literal(num: ztype.NumericValue) -> str:
     elif base == 8:
         r = "0"
 
-    if isinstance(num, ztype.FloatValue):
+    if isinstance(num, _FloatValue):
         r += f"{num.number:f}"
-    elif isinstance(num, ztype.IntegerValue):
+    elif isinstance(num, _IntegerValue):
         if base == 8:
             r += f"{num.number:o}"
         elif base == 16:
@@ -606,7 +600,7 @@ def _emit_numeric_literal(num: ztype.NumericValue) -> str:
 
 
 def _emitbuiltinfunction(
-    name: Optional[str], arguments: Sequence[zast.Argument], state: CState
+    name: Optional[str], arguments: Sequence[zast.NamedOperation], state: CState
 ) -> Fragment:
     """
     TODO: change all names to Optional[Token]. Need to ensure this is a DEFINITION
@@ -616,29 +610,29 @@ def _emitbuiltinfunction(
     # in
     # do (required)
     parts = []
-    #if not name or name.toktype != TT.DEFINITION:
+    # if not name or name.toktype != TT.DEFINITION:
     if not name:
         raise ValueError("Function requires a Definition name")
 
     parts.append(f"/* arguments for [{name}] */\n")
     for a in arguments:
         if a.name:
-            parts.append(f"ARG: {a.name.token}\n")
+            parts.append(f"ARG: {a.name}\n")
         else:
             parts.append("ARG: [UNNAMED PARAM]\n")
-    return Fragment(value=ztype.NULLVALUE, parts=parts)
+    return Fragment(value=_NULLVALUE, parts=parts)
 
 
 def _emitbuiltinif(
-    name: Optional[Token], arguments: Sequence[zast.Argument], state: CState
+    name: Optional[Token], arguments: Sequence[zast.NamedOperation], state: CState
 ) -> Fragment:
-    return Fragment(value=None, parts=None)
+    return Fragment(value=None, parts=[])
 
 
 def _emitbuiltindo(
-    name: Optional[Token], arguments: Sequence[zast.Argument], state: CState
+    name: Optional[Token], arguments: Sequence[zast.NamedOperation], state: CState
 ) -> Fragment:
-    return Fragment(value=None, parts=None)
+    return Fragment(value=None, parts=[])
 
 
 builtinhandler: dict = {
@@ -646,4 +640,3 @@ builtinhandler: dict = {
     "if": _emitbuiltinif,
     "do": _emitbuiltindo,
 }
-

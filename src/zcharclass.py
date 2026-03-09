@@ -44,7 +44,7 @@ def makecharflags() -> bytes:
     """
     make the list of character flags (character classes)
     """
-    charflags: List[int] = [Charflag.NONE] * 128
+    charflags: List[int] = [int(Charflag.NONE)] * 128
 
     for c in range(128):
         flags: int = 0
@@ -54,17 +54,17 @@ def makecharflags() -> bytes:
             zchar.DOUBLEQUOTE,
             zchar.DOT,
             zchar.HASH,
-            #zchar.SINGLEQUOTE, # this is allowed now
+            # zchar.SINGLEQUOTE, # this is allowed now
             zchar.PARENOPEN,
             zchar.PARENCLOSE,
-            zchar.COMMA,    # error
+            zchar.COMMA,  # error
             zchar.DOT,
             zchar.COLON,
-            zchar.SEMICOLON,    # error
-            zchar.SQBRACKETOPEN,    # error
-            #zchar.BACKSLASH,   # this is allowed now
-            zchar.SQBRACKETCLOSE,   # error
-            zchar.BACKQUOTE,    # error
+            zchar.SEMICOLON,  # error
+            zchar.SQBRACKETOPEN,  # error
+            # zchar.BACKSLASH,   # this is allowed now
+            zchar.SQBRACKETCLOSE,  # error
+            zchar.BACKQUOTE,  # error
             zchar.BRACEOPEN,
             zchar.BRACECLOSE,
         ):

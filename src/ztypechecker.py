@@ -36,7 +36,7 @@ class ZTypeType(IntEnum):
 
     # a reference (instance) of a type. ie. a variable or argument
     # first parameter[0] of this type points to a *_DEF type
-    #REFERENCE = 1
+    # REFERENCE = 1
     # TODO: why? don't need this? Top levels are always definition types, lower level are always instance type
     # INSTANCE = 1
 
@@ -65,7 +65,7 @@ class ZTypeType(IntEnum):
     ENUM = 56
     PROTOCOL = 57
 
-    DATA = 60   # constant array data
+    DATA = 60  # constant array data
 
 
 @unique
@@ -78,6 +78,7 @@ class ZOwnership(IntEnum):
     OWNED = 1  # eg. local var or @parameter, value types are always owned
     BORROWED = 2  # eg. standard (non-@) function parameter
     LINKED = 3  # eg 'this', "shared" mutable ownership
+
 
 @unique
 class ZNaming(IntEnum):
@@ -111,7 +112,7 @@ class ZType:
 
     # name of this type (final component of fully qualified path name only)
     # for error reporting.
-    # TODO: add specialised types here too? name would be base name with 
+    # TODO: add specialised types here too? name would be base name with
     # comma/colon separated generic argument typeids? Yes, then this will be a GENERIC_CALL (children specify type values)
     name: str
     typetype: ZTypeType
@@ -136,27 +137,29 @@ class ZType:
     #   :yield - for yield type of iterator function
     #   :type - for a typedef - points to underlying type
     #   :tag - descriminator type for union, variant, enum
-    #   :is - child type that has a list of all of the additional interfaces 
+    #   :is - child type that has a list of all of the additional interfaces
     #       that this object supports (name of child type is ":is" and parent is this type)
-    #   :type (again) - More generic parent type (for GENERIC_CALL or application of concrete 
-    #     types to a generic type to create a new type - args are normal '~' 
+    #   :type (again) - More generic parent type (for GENERIC_CALL or application of concrete
+    #     types to a generic type to create a new type - args are normal '~'
     #     names but types are concrete types). If this type is generic again, assign NULL to the unspecified ~ parameters.
     #   [others] - all other normal (non-generic, non-ownership taking) field and method names
     children: "OrderedDict[str, ZType]" = field(default_factory=OrderedDict, init=False)
 
     # TODO: how to specify a constant numeric item here (eg for List length) -- done, numeric constants are types
 
-    # quick check to see if this is a generic type (ie. has 1+ generic fields in 
+    # quick check to see if this is a generic type (ie. has 1+ generic fields in
     # children())
     # is this required? why?
     isgeneric: bool = False
 
-    # True if a literal value (name is canonical string of that value). 
+    # True if a literal value (name is canonical string of that value).
     # Will be a typedef to another broader type used for parameter type
     isliteral: bool = False
 
+
 # a typesafe variable id
 VariableID = NewType("VariableID", int)
+
 
 @dataclass
 class ZVariable:
@@ -165,6 +168,7 @@ class ZVariable:
 
     This is also used for constants. All parts of the AST have a ZVariable assigned to them.
     """
+
     variableid: VariableID = field(
         default_factory=cast(Callable[[], VariableID], count().__next__), init=False
     )
@@ -173,7 +177,6 @@ class ZVariable:
     named: ZNaming
     # or instead of ZNaming...
     # name: Optional[Token] # ??? to point to name?
-
 
 
 # @dataclass
@@ -240,7 +243,6 @@ class TypeTable:
         self,
         name: str,
         typetype: ZTypeType,
-        ownership: ZOwnership,
         # definition: Optional[Token] = None,
         # members: how to add this? Optional?
         # arraycount: int = 1,
@@ -258,7 +260,7 @@ class TypeTable:
         t = ZType(
             name=name,
             typetype=typetype,
-            ownership=ownership,
+            parent=None,
             # definition=definition,
             # arraycount=arraycount,
             # defaultvalue=defaultvalue,
@@ -303,7 +305,7 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
             return (
                 numtype,
                 0,
-                f"Numeric numtype specifier must be float for literals "
+                "Numeric numtype specifier must be float for literals "
                 + "with decimal points",
             )
     elif not numtype:

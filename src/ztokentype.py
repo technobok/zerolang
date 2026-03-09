@@ -2,6 +2,7 @@
 """
 Token types for lexer (tokenizer)
 """
+
 from enum import IntEnum
 
 
@@ -10,8 +11,8 @@ class TT(IntEnum):
     Token Type
     """
 
-    BOF = 0     # beginning of file
-    EOF = 1     # end of file
+    BOF = 0  # beginning of file
+    EOF = 1  # end of file
     NONE = 2  # this is not a valid tokenstype. Placeholder only.
     ERR = 3  # an error token
     WS = 4
@@ -73,6 +74,8 @@ class TT(IntEnum):
     DATA = 132
     IS = 133
     AS = 134
+    OUT = 115
+    MATCH = 118
     EQUALS = 135
     UNDERSCORE = 136
 
@@ -97,6 +100,8 @@ TTKWMAP = {
     "do": TT.DO,
     "block": TT.BLOCK,
     "case": TT.CASE,
+    "match": TT.MATCH,
+    "out": TT.OUT,
     "cast": TT.CAST,
     "in": TT.IN,
     "of": TT.OF,

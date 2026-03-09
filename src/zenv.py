@@ -2,18 +2,13 @@
 """
 ZeroLang Environment for parser
 """
-from typing import List, Dict, Optional, Union
-from dataclasses import dataclass, field
-
-import zast
-from zast import NodeType, ERR, Context
-from zlexer import Token
 
 
 class Environment:
     """
     Environment or Symboltable
     """
+
 
 # TODO: rename to SymbolTable and SymbolFrame ????????????????????
 # @dataclass
@@ -314,40 +309,40 @@ class Environment:
 #         self.frames.pop()
 #         return frame
 
-    # def _addbuiltins(self) -> None:
-    #     """
-    #     addbuiltins - add all of the compiler built-in types
-    #     """
-    #     # signed integer types
+# def _addbuiltins(self) -> None:
+#     """
+#     addbuiltins - add all of the compiler built-in types
+#     """
+#     # signed integer types
 
-    #     self.addbuiltin(self.makebuiltin("i8", "i8"))
-    #     self.addbuiltin(self.makebuiltin("i16", "i16"))
-    #     self.addbuiltin(self.makebuiltin("i32", "i32"))
-    #     self.addbuiltin(self.makebuiltin("i64", "i64"))
-    #     self.addbuiltin(self.makebuiltin("i128", "i128"))
+#     self.addbuiltin(self.makebuiltin("i8", "i8"))
+#     self.addbuiltin(self.makebuiltin("i16", "i16"))
+#     self.addbuiltin(self.makebuiltin("i32", "i32"))
+#     self.addbuiltin(self.makebuiltin("i64", "i64"))
+#     self.addbuiltin(self.makebuiltin("i128", "i128"))
 
-    #     # unsigned integer types
+#     # unsigned integer types
 
-    #     self.addbuiltin(self.makebuiltin("u8", "u8"))
-    #     self.addbuiltin(self.makebuiltin("u16", "u16"))
-    #     self.addbuiltin(self.makebuiltin("u32", "u32"))
-    #     self.addbuiltin(self.makebuiltin("u64", "u64"))
-    #     self.addbuiltin(self.makebuiltin("u128", "u128"))
+#     self.addbuiltin(self.makebuiltin("u8", "u8"))
+#     self.addbuiltin(self.makebuiltin("u16", "u16"))
+#     self.addbuiltin(self.makebuiltin("u32", "u32"))
+#     self.addbuiltin(self.makebuiltin("u64", "u64"))
+#     self.addbuiltin(self.makebuiltin("u128", "u128"))
 
-    #     # floating point types
-    #     self.addbuiltin(self.makebuiltin("f32", "f32"))
-    #     self.addbuiltin(self.makebuiltin("f64", "f64"))
+#     # floating point types
+#     self.addbuiltin(self.makebuiltin("f32", "f32"))
+#     self.addbuiltin(self.makebuiltin("f64", "f64"))
 
-    #     # functions
-    #     self.addbuiltin(self.makebuiltin("print", "io.print"))
+#     # functions
+#     self.addbuiltin(self.makebuiltin("print", "io.print"))
 
-    # @staticmethod
-    # def makebuiltin(name: str, builtin: str) -> Definition:
-    #     """
-    #     makebuiltin - utility function to make a builtin Definition
+# @staticmethod
+# def makebuiltin(name: str, builtin: str) -> Definition:
+#     """
+#     makebuiltin - utility function to make a builtin Definition
 
-    #     Returns a Definition
-    #     """
-    #     b = Builtin(start=None, builtin=builtin)
-    #     d = Definition(start=None, name=name, expression=b, context=Context.BUILTIN)
-    #     return d
+#     Returns a Definition
+#     """
+#     b = Builtin(start=None, builtin=builtin)
+#     d = Definition(start=None, name=name, expression=b, context=Context.BUILTIN)
+#     return d

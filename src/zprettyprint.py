@@ -51,7 +51,7 @@ def _pprintunit(node: Node, depth: int) -> str:
     sep = depth * "  "
 
     # s = f"{sep}*UNIT {{\n"
-    s = "*UNIT {\n" # no sep, we are always after a name
+    s = "*UNIT {\n"  # no sep, we are always after a name
     # sepinner = (depth + 1) * "  "
 
     # output.append(sepinner)
@@ -90,12 +90,12 @@ def _pprintrecord(node: Node, depth: int) -> str:
         o.append(s)
 
     for name, f in node.functions.items():
-        s = (f"{sepinner}{name}: ")
+        s = f"{sepinner}{name}: "
         s += pprintnode(f, depth + 1)
         o.append(s)
 
     for path in node.implements:
-        s = (f"{sepinner}IMPLEMENTS: ")
+        s = f"{sepinner}IMPLEMENTS: "
         s += pprintnode(path, depth + 1)
         o.append(s)
 
@@ -286,7 +286,7 @@ def _pprintfunction(node: Node, depth: int) -> str:
 
     if node.body:
         s = f"{sepinner}*BODY{{\n"
-        s+= pprintnode(node.body, depth + 2)
+        s += pprintnode(node.body, depth + 2)
         s += "\n" + sepinner + "}"
         o.append(s)
 
@@ -295,9 +295,7 @@ def _pprintfunction(node: Node, depth: int) -> str:
     return s
 
 
-def _pprintparameters(
-    params: Dict[str, zast.Path], depth: int
-) -> str:
+def _pprintparameters(params: Dict[str, zast.Path], depth: int) -> str:
 
     o: List[str] = []
     sep = depth * "  "
@@ -383,6 +381,7 @@ def _pprintfor(node: Node, depth: int) -> str:
 
     o.append("\n" + sepinner + "}")
     return "\n".join(o)
+
 
 def _pprintdo(node: Node, depth: int) -> str:
     if not isinstance(node, zast.Do):

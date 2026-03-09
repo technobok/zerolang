@@ -7,6 +7,7 @@ Convert a file (or file-like object) into a stream of tokens.
 Usage:
 
 """
+
 from enum import Enum
 from typing import Optional, Sequence, List, Protocol, Tuple
 from abc import abstractmethod
@@ -188,9 +189,9 @@ class Tokenizer(ITokenizer):
         if c == zchar.DOT:
             while c == zchar.DOT:
                 tokparts.append(chr(c))
-                self._accept()
+                c = self._accept()
             if len(tokparts) == 1:
-                return Token(TT.DOT, chr(c), self.fsno, lineno, colno)
+                return Token(TT.DOT, ".", self.fsno, lineno, colno)
             if len(tokparts) == 3:
                 return Token(TT.DOTDOTDOT, "".join(tokparts), self.fsno, lineno, colno)
             return Token(TT.ERR, "".join(tokparts), self.fsno, lineno, colno)
@@ -528,7 +529,6 @@ class Tokenizer(ITokenizer):
         self.statestack.append(state)
 
 
-
 class Lexer:
     """
     Lexer - Public interface to the lexer that allows peeking and accepting
@@ -549,10 +549,14 @@ class Lexer:
         self._lexer = lexer
         # start in NORMAL
         # self.blockstack: List[BlockType] = [BlockType.NORMAL]
-        self._nexttoken: Optional[Token] = None  # lookahead used for LABELPRE conversion
+        self._nexttoken: Optional[Token] = (
+            None  # lookahead used for LABELPRE conversion
+        )
         # buffer of max 1 token
         self._thistoken: Token
-        self._filtereol: bool = True    # filter (skip) EOL's. Default is true. See filtereol()
+        self._filtereol: bool = (
+            True  # filter (skip) EOL's. Default is true. See filtereol()
+        )
         self._advance()  # prime the buffer
 
     def _advance(self) -> None:
@@ -596,21 +600,21 @@ class Lexer:
                     TT.LABEL, token.tokstr, token.fsno, token.lineno, token.colno
                 )
 
-            break   # store this token
+            break  # store this token
 
         self._thistoken = token
         return
 
-# class BlockType(Enum):
-#     """
-#     BlockType - type of block that the parser is currently inside. Used for "sep"
-#         token and eol handling
-#     """
-#
-#     NORMAL = 0  # handle eol's 'normally': pass first one then coalesce
-#     PAREN = 1  # an expression within parens (including STRVAR)
-#     STRING = 2  # a string literal
-#     EOLS = 3  # coalesced eols (after returning the first one
+    # class BlockType(Enum):
+    #     """
+    #     BlockType - type of block that the parser is currently inside. Used for "sep"
+    #         token and eol handling
+    #     """
+    #
+    #     NORMAL = 0  # handle eol's 'normally': pass first one then coalesce
+    #     PAREN = 1  # an expression within parens (including STRVAR)
+    #     STRING = 2  # a string literal
+    #     EOLS = 3  # coalesced eols (after returning the first one
     # def _read(self) -> Token:
     #     """
     #     read and return next token
@@ -730,7 +734,7 @@ class Lexer:
         """
         Set the EOL filtering status
 
-        filtereol: True to filter (skip) EOL's. False to pass through (return) 
+        filtereol: True to filter (skip) EOL's. False to pass through (return)
             all EOL tokens.
         """
         self._filtereol = filtereol

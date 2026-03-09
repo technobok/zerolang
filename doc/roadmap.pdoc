@@ -77,9 +77,33 @@ comes in v2.
 
 #---: v1 Note on Strings
 
-v1 uses a simple immutable string type. Strings are heap-allocated with a
-length prefix. String literals and interpolation are supported. Advanced string
-designs (stringref, stringval, stringdef) are deferred.
+v1 uses a simple immutable string type with a home-grown implementation
+(#~"ZStr"). Strings are heap-allocated as a single contiguous block using a C
+flexible array member:
+
+#code language=c: """
+  typedef struct {
+      int32_t len;    // byte length (excl NUL)
+      char data[];    // NUL-terminated UTF-8
+  } ZStr;
+  """
+
+This layout was chosen over external libraries (bstrlib, SDS) because:
+
+#ul:
+  [#*: Immutability is fundamental to zerolang strings. Both bstrlib and SDS are
+    mutable-by-design; adopting either means paying API complexity for features
+    that are actively unwanted.]
+  [#*: Single allocation (header + data together) is cache-friendly and matches
+    the spec's zstring design (see TODO).]
+  [#*: v1 needs very few operations: create, concatenate (returns new string),
+    compare, length, print, free. ~100 lines of implementation.]
+  [#*: The struct layout evolves directly into v2 string types: #~"stringdef" is
+    ZStr as-is (immutable); #~"stringref" adds a capacity field for mutation;
+    #~"stringval" is stack-allocated with a compile-time-known max size.]
+
+String literals and interpolation are supported. Advanced string designs
+(stringref, stringval, stringdef) are deferred to v2.
 
 #--: v1 Example Programs
 
