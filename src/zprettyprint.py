@@ -271,13 +271,6 @@ def _pprintfunction(node: Node, depth: int) -> str:
         s += ")"
         o.append(s)
 
-    if node.yieldtype:
-        s = f"{sepinner}*YIELD("
-        # _pprintdottedpath(node.result, output, depth + 1)
-        s += pprintnode(node.yieldtype, depth + 1)
-        s += ")"
-        o.append(s)
-
     if node.parameters:
         s = f"{sepinner}*PARAMS {{\n"
         s += _pprintparameters(node.parameters, depth + 2)

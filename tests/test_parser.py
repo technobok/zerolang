@@ -3,14 +3,17 @@ Tests for the Parser
 """
 
 import os
+import pytest
 
 from conftest import make_parser_vfs
 from zparser import Parser
+from zvfs import ZVfs, FSProvider, BindType
 import zast
 from zast import ERR
 
 
 SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src")
+EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 
 def parse_unit(source: str, unitname: str = "test") -> zast.Program | zast.Error:
@@ -451,3 +454,59 @@ class TestAsClause:
         assert isinstance(u, zast.Union)
         assert "x" in u.items
         assert "y" in u.as_items
+
+
+def parse_example(unitname: str) -> zast.Program | zast.Error:
+    """Parse an example .z file using the same VFS setup as zc.py."""
+    systemdir = os.path.join(SRC_DIR, "system")
+    vfs = ZVfs()
+    psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+    pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
+    rootid = vfs.walk()
+    rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+    rootid = vfs.bind(
+        parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+    )
+    p = Parser(vfs, unitname)
+    return p.parse()
+
+
+def get_example_names():
+    """Get all example unit names from .z files in examples/."""
+    names = []
+    for f in sorted(os.listdir(EXAMPLES_DIR)):
+        if f.endswith(".z"):
+            names.append(f[:-2])
+    return names
+
+
+# Examples that need updating after grammar alignment (break/continue/return
+# are now regular identifiers, string interpolation changed from \( to \{, etc.)
+EXAMPLES_NEEDING_UPDATE = {
+    "case",
+    "control",
+    "data",
+    "factorial",
+    "fibonacci",
+    "mathutil",
+    "multimod",
+    "records",
+    "strings",
+    "swap",
+}
+
+
+class TestExamples:
+    @pytest.mark.parametrize("unitname", get_example_names())
+    def test_example_parses(self, unitname):
+        """Each example .z file should parse without errors."""
+        if unitname in EXAMPLES_NEEDING_UPDATE:
+            pytest.xfail(f"{unitname}.z needs grammar update")
+        result = parse_example(unitname)
+        if isinstance(result, zast.Error):
+            msg = f"{unitname}.z: {result.err.name} - {result.msg}"
+            if result.loc:
+                msg += f" at line {result.loc.lineno}:{result.loc.colno}"
+            pytest.fail(msg)
+        assert isinstance(result, zast.Program)
+        assert unitname in result.units
