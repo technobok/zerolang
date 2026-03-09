@@ -71,6 +71,8 @@ class TT(IntEnum):
     OUT = 115
     MATCH = 118
     ON = 137
+    WITH = 138
+    FACET = 139
     EQUALS = 135
     UNDERSCORE = 136
 
@@ -109,4 +111,6 @@ TTKWMAP = {
     "data": TT.DATA,
     "is": TT.IS,
     "as": TT.AS,
+    "with": TT.WITH,
+    "facet": TT.FACET,
 }

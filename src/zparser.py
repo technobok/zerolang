@@ -405,6 +405,8 @@ class Parser:
             return self._acceptenum(lex)
         if tt == TT.PROTOCOL:
             return self._acceptprotocol(lex)
+        if tt == TT.FACET:
+            return self._acceptfacet(lex)
         if tt == TT.IF:
             return self._acceptifastypedef(lex)
         if tt == TT.MATCH:
@@ -466,6 +468,8 @@ class Parser:
             node = self._acceptmatch(lex)
         elif tt == TT.DATA:
             node = self._acceptdata(lex)
+        elif tt == TT.WITH:
+            node = self._acceptwith(lex)
         # elif tt == TT.ARRAY:
         #     node = self._acceptarray(lex)
         # elif tt == TT.LIST:
@@ -834,18 +838,21 @@ class Parser:
         if not lex.accept(TT.RECORD):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._getobjectbody(
+        is_body, as_body, extern, err = self._acceptitembodies(
             lex, allowtag=False, unlabelledpath=True, unlabelledid=False
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if err:
+            return err
 
         record = zast.Record(
-            items=b.items, implements=b.islist, functions=b.functions, start=start
+            items=is_body.items,
+            implements=is_body.islist,
+            functions=is_body.functions,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
+            start=start,
         )
-        return NodeX(node=record, extern=b.extern)
+        return NodeX(node=record, extern=extern)
 
     def _acceptclass(self, lex: Lexer) -> Union[NodeX[zast.Class], zast.Error, None]:
         """
@@ -860,18 +867,21 @@ class Parser:
         if not lex.accept(TT.CLASS):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._getobjectbody(
+        is_body, as_body, extern, err = self._acceptitembodies(
             lex, allowtag=False, unlabelledpath=True, unlabelledid=False
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if err:
+            return err
 
         c = zast.Class(
-            items=b.items, implements=b.islist, functions=b.functions, start=start
+            items=is_body.items,
+            implements=is_body.islist,
+            functions=is_body.functions,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
+            start=start,
         )
-        return NodeX(node=c, extern=b.extern)
+        return NodeX(node=c, extern=extern)
 
     def _acceptvariant(
         self, lex: Lexer
@@ -888,22 +898,22 @@ class Parser:
         if not lex.accept(TT.VARIANT):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._getobjectbody(
+        is_body, as_body, extern, err = self._acceptitembodies(
             lex, allowtag=True, unlabelledpath=True, unlabelledid=False
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if err:
+            return err
 
         variant = zast.Variant(
-            items=b.items,
-            implements=b.islist,
-            functions=b.functions,
-            tag=b.tag,
+            items=is_body.items,
+            implements=is_body.islist,
+            functions=is_body.functions,
+            tag=is_body.tag,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
             start=start,
         )
-        return NodeX(node=variant, extern=b.extern)
+        return NodeX(node=variant, extern=extern)
 
     def _acceptunion(self, lex: Lexer) -> Union[NodeX[zast.Union], zast.Error, None]:
         """
@@ -918,22 +928,22 @@ class Parser:
         if not lex.accept(TT.UNION):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._getobjectbody(
+        is_body, as_body, extern, err = self._acceptitembodies(
             lex, allowtag=True, unlabelledpath=True, unlabelledid=False
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if err:
+            return err
 
         union = zast.Union(
-            items=b.items,
-            implements=b.islist,
-            functions=b.functions,
-            tag=b.tag,
+            items=is_body.items,
+            implements=is_body.islist,
+            functions=is_body.functions,
+            tag=is_body.tag,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
             start=start,
         )
-        return NodeX(node=union, extern=b.extern)
+        return NodeX(node=union, extern=extern)
 
     def _acceptprotocol(
         self, lex: Lexer
@@ -979,22 +989,116 @@ class Parser:
         if not lex.accept(TT.ENUM):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._getobjectbody(
+        is_body, as_body, extern, err = self._acceptitembodies(
             lex, allowtag=True, unlabelledpath=False, unlabelledid=True
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if err:
+            return err
 
         enum = zast.Enum(
-            items=b.items,
-            implements=b.islist,
-            functions=b.functions,
-            tag=b.tag,
+            items=is_body.items,
+            implements=is_body.islist,
+            functions=is_body.functions,
+            tag=is_body.tag,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
             start=start,
         )
-        return NodeX(node=enum, extern=b.extern)
+        return NodeX(node=enum, extern=extern)
+
+    def _acceptfacet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
+        """
+        accept a facet
+
+            facet
+                "facet" [ "is" ] "{" { item | newline } "}"
+                [ "as" "{" { item | newline } "}" ]
+
+        Returns a Facet or Error or None (if no 'facet' keyword)
+        """
+        start = lex.peek()
+        if not lex.accept(TT.FACET):
+            return None
+
+        is_body, as_body, extern, err = self._acceptitembodies(
+            lex, allowtag=False, unlabelledpath=True, unlabelledid=False
+        )
+        if err:
+            return err
+
+        facet = zast.Facet(
+            items=is_body.items,
+            implements=is_body.islist,
+            functions=is_body.functions,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
+            start=start,
+        )
+        return NodeX(node=facet, extern=extern)
+
+    def _acceptitembodies(
+        self,
+        lex: Lexer,
+        allowtag: bool,
+        unlabelledpath: bool,
+        unlabelledid: bool,
+    ) -> tuple:
+        """
+        Parse 'is' and 'as' bodies for item definitions.
+        'is' and 'as' can appear in any order if named.
+        Unnamed first arg defaults to 'is'.
+
+        Returns (is_body, as_body, extern, error)
+        where is_body is ObjectBody, as_body is Optional[ObjectBody],
+        extern is Dict, error is Optional[Error]
+        """
+        is_body: Optional[ObjectBody] = None
+        as_body: Optional[ObjectBody] = None
+        extern: Dict[str, zast.AtomId] = {}
+
+        for _ in range(2):  # max 2 iterations: one for is, one for as
+            t = lex.peek()
+            if t.toktype == TT.IS:
+                if is_body is not None:
+                    msg = "Duplicate 'is' clause"
+                    return None, None, None, zast.Error(
+                        err=ERR.BADITEM, msg=msg, loc=t
+                    )
+                lex.acceptany()
+                b = self._getobjectbody(lex, allowtag=allowtag, unlabelledpath=unlabelledpath, unlabelledid=unlabelledid)
+                if isinstance(b, zast.Error):
+                    return None, None, None, b
+                is_body = b
+                promoteexterns(addto=extern, addfrom=b.extern)
+            elif t.toktype == TT.AS:
+                if as_body is not None:
+                    msg = "Duplicate 'as' clause"
+                    return None, None, None, zast.Error(
+                        err=ERR.BADITEM, msg=msg, loc=t
+                    )
+                lex.acceptany()
+                b = self._getobjectbody(lex, allowtag=False, unlabelledpath=unlabelledpath, unlabelledid=False)
+                if isinstance(b, zast.Error):
+                    return None, None, None, b
+                as_body = b
+                promoteexterns(addto=extern, addfrom=b.extern)
+            elif t.toktype == TT.BRACEOPEN and is_body is None:
+                # unnamed first arg defaults to 'is'
+                b = self._getobjectbody(lex, allowtag=allowtag, unlabelledpath=unlabelledpath, unlabelledid=unlabelledid)
+                if isinstance(b, zast.Error):
+                    return None, None, None, b
+                is_body = b
+                promoteexterns(addto=extern, addfrom=b.extern)
+            else:
+                break
+
+        if is_body is None:
+            msg = "Expected '{' for item body"
+            return None, None, None, zast.Error(
+                err=ERR.BADARGUMENT, msg=msg, loc=lex.peek()
+            )
+
+        return is_body, as_body, extern, None
 
     def _getobjectbody(
         self,
@@ -1550,6 +1654,61 @@ class Parser:
 
         donode = zast.Do(statement=statementx.node, start=start)
         return NodeX(donode, extern=extern)
+
+    def _acceptwith(self, lex: Lexer) -> Union[NodeX[zast.With], zast.Error, None]:
+        """
+        acceptwith - accept a with expression (scoped definition)
+
+            "with" label operation "do" expression
+
+        Return a With or Error or None for no 'with' keyword
+        """
+        start = lex.peek()
+        if not lex.accept(TT.WITH):
+            return None
+
+        extern: Dict[str, zast.AtomId] = {}
+
+        # expect label (name:)
+        t = lex.peek()
+        if t.toktype != TT.LABEL:
+            msg = "Expected label after 'with'"
+            return zast.Error(err=ERR.EXPECTEDDEF, msg=msg, loc=lex.acceptany())
+        name = t.tokstr
+        lex.acceptany()  # consume the label
+
+        # accept the value expression
+        valuex = self._acceptexpression(lex)
+        if isinstance(valuex, zast.Error):
+            return valuex
+        if not valuex:
+            msg = "Expected expression for 'with' value"
+            return zast.Error(err=ERR.EXPECTEDEXP, msg=msg, loc=lex.acceptany())
+
+        # the name is locally defined, don't propagate it as extern
+        promoteexterns(addto=extern, addfrom=valuex.extern)
+
+        # expect 'do'
+        if not lex.accept(TT.DO):
+            msg = "Expected 'do' after 'with' definition"
+            return zast.Error(err=ERR.EXPECTEDEXP, msg=msg, loc=lex.peek())
+
+        # accept the do expression - the name is in scope here
+        doexprx = self._acceptexpression(lex)
+        if isinstance(doexprx, zast.Error):
+            return doexprx
+        if not doexprx:
+            msg = "Expected expression after 'do'"
+            return zast.Error(err=ERR.EXPECTEDEXP, msg=msg, loc=lex.acceptany())
+
+        # the locally defined name should not be promoted as extern
+        promoteexterns(addto=extern, addfrom=doexprx.extern)
+        extern.pop(name, None)  # remove locally defined name
+
+        withnode = zast.With(
+            name=name, value=valuex.node, doexpr=doexprx.node, start=start
+        )
+        return NodeX(withnode, extern=extern)
 
     def _acceptdata(self, lex: Lexer) -> Union[NodeX[zast.Data], zast.Error, None]:
         """

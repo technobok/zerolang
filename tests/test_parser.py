@@ -314,3 +314,140 @@ class TestErrorCases:
         # This used to cause infinite loops due to tokenizer dot bug
         result = parse_unit("x: system.u8\ny: system.i64")
         assert isinstance(result, zast.Program)
+
+
+class TestWithExpression:
+    def test_simple_with(self):
+        """with label operation do expression"""
+        result = parse_unit("f: function is { with x: 42 do x }")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+
+    def test_with_chained(self):
+        """with can be chained"""
+        result = parse_unit("f: function is { with x: 1 do with y: 2 do x }")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+
+    def test_with_at_unit_level(self):
+        """with can be used as an expression in type definitions"""
+        result = parse_unit("f: function is { with n: 10 do n }")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        stmts = func.body.statements
+        assert len(stmts) == 1
+        sl = stmts[0].statementline
+        assert isinstance(sl, zast.Expression)
+        assert isinstance(sl.expression, zast.With)
+        assert sl.expression.name == "n"
+
+    def test_with_missing_label(self):
+        """with without label should error"""
+        result = parse_unit("f: function is { with 42 do 1 }")
+        assert isinstance(result, zast.Error)
+
+    def test_with_missing_do(self):
+        """with without do should error"""
+        result = parse_unit("f: function is { with x: 42 1 }")
+        assert isinstance(result, zast.Error)
+
+
+class TestFacetDefinition:
+    def test_simple_facet(self):
+        """facet definition similar to record"""
+        result = parse_unit("f: facet { x: f64\n y: f64 }")
+        body = get_unit_body(result)
+        assert "f" in body
+        assert isinstance(body["f"], zast.Facet)
+
+    def test_facet_with_is(self):
+        """facet with explicit is keyword"""
+        result = parse_unit("f: facet is { x: f64 }")
+        body = get_unit_body(result)
+        assert isinstance(body["f"], zast.Facet)
+
+    def test_facet_with_as(self):
+        """facet with as clause"""
+        result = parse_unit("f: facet { x: f64 } as { y: f64 }")
+        body = get_unit_body(result)
+        fac = body["f"]
+        assert isinstance(fac, zast.Facet)
+        assert "x" in fac.items
+        assert "y" in fac.as_items
+
+
+class TestAsClause:
+    def test_record_with_as(self):
+        """record with as clause for static members"""
+        result = parse_unit("p: record { x: f64 } as { y: f64 }")
+        body = get_unit_body(result)
+        rec = body["p"]
+        assert isinstance(rec, zast.Record)
+        assert "x" in rec.items
+        assert "y" in rec.as_items
+
+    def test_record_without_as(self):
+        """record without as clause still works"""
+        result = parse_unit("p: record { x: f64 }")
+        body = get_unit_body(result)
+        rec = body["p"]
+        assert isinstance(rec, zast.Record)
+        assert rec.as_items == {}
+        assert rec.as_functions == {}
+
+    def test_record_is_as_named(self):
+        """record with explicitly named is and as"""
+        result = parse_unit("p: record is { x: f64 } as { y: f64 }")
+        body = get_unit_body(result)
+        rec = body["p"]
+        assert isinstance(rec, zast.Record)
+        assert "x" in rec.items
+        assert "y" in rec.as_items
+
+    def test_record_as_is_reversed(self):
+        """as before is when both named"""
+        result = parse_unit("p: record as { y: f64 } is { x: f64 }")
+        body = get_unit_body(result)
+        rec = body["p"]
+        assert isinstance(rec, zast.Record)
+        assert "x" in rec.items
+        assert "y" in rec.as_items
+
+    def test_class_with_as(self):
+        """class with as clause"""
+        result = parse_unit("c: class { x: f64 } as { y: f64 }")
+        body = get_unit_body(result)
+        cls = body["c"]
+        assert isinstance(cls, zast.Class)
+        assert "x" in cls.items
+        assert "y" in cls.as_items
+
+    def test_enum_with_as(self):
+        """enum with as clause"""
+        result = parse_unit("c: enum { red\n green } as { x: f64 }")
+        body = get_unit_body(result)
+        e = body["c"]
+        assert isinstance(e, zast.Enum)
+        assert "red" in e.items
+        assert "x" in e.as_items
+
+    def test_variant_with_as(self):
+        """variant with as clause"""
+        result = parse_unit("v: variant { x: f64 } as { y: f64 }")
+        body = get_unit_body(result)
+        v = body["v"]
+        assert isinstance(v, zast.Variant)
+        assert "x" in v.items
+        assert "y" in v.as_items
+
+    def test_union_with_as(self):
+        """union with as clause"""
+        result = parse_unit("u: union { x: f64 } as { y: f64 }")
+        body = get_unit_body(result)
+        u = body["u"]
+        assert isinstance(u, zast.Union)
+        assert "x" in u.items
+        assert "y" in u.as_items

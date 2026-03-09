@@ -128,6 +128,8 @@ class NodeType(IntEnum):
     VARIANT = 26
     # SPEC = 27
     ENUM = 28
+    FACET = 29
+    WITH = 37
 
     # PARAMETER = 29
 
@@ -243,6 +245,7 @@ TypeDefinition = typing.Union[
     "Union",
     "Enum",
     "Protocol",
+    "Facet",
     "Expression",
     "Operation",
 ]
@@ -287,6 +290,8 @@ class Record(Node):
         "Path"
     ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
+    as_items: Dict[str, "Path"]
+    as_functions: Dict[str, "Function"]
 
 
 @dataclass
@@ -301,6 +306,8 @@ class Class(Node):
         "Path"
     ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
+    as_items: Dict[str, "Path"]
+    as_functions: Dict[str, "Function"]
 
 
 @dataclass
@@ -317,6 +324,8 @@ class Union(Node):
     ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
     tag: Optional["Path"]  # a Typeref
+    as_items: Dict[str, "Path"]
+    as_functions: Dict[str, "Function"]
 
 
 @dataclass
@@ -332,6 +341,8 @@ class Variant(Node):
     ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
     tag: Optional["Path"]  # a Typeref
+    as_items: Dict[str, "Path"]
+    as_functions: Dict[str, "Function"]
 
 
 @dataclass
@@ -350,6 +361,8 @@ class Enum(Node):
     ]  # 'is' interfaces satisfied by this record, a Typeref
     functions: Dict[str, "Function"]
     tag: Optional["Path"]  # must be a simple numeric type (including char), a Typeref
+    as_items: Dict[str, "Path"]
+    as_functions: Dict[str, "Function"]
 
 
 @dataclass
@@ -365,10 +378,25 @@ class Protocol(Node):
     includes: typing.List["Path"]  # interfaces satisfied by this record, a Typeref
 
 
+@dataclass
+class Facet(Node):
+    """
+    Facet Definition Node - similar to protocol/record
+    """
+
+    nodetype: NodeType = field(default=NodeType.FACET, init=False)
+    items: Dict[str, "Path"]
+    implements: typing.List["Path"]
+    functions: Dict[str, "Function"]
+    as_items: Dict[str, "Path"]
+    as_functions: Dict[str, "Function"]
+
+
 ExpressionSubTypes = typing.Union[
     "If",
     "For",
     "Do",
+    "With",
     "Case",
     "Data",
     "Operation",
@@ -504,6 +532,19 @@ class Do(Node):
 
     nodetype: NodeType = field(default=NodeType.DO, init=False)
     statement: "Statement"
+
+
+@dataclass
+class With(Node):
+    """
+    With Node - scoped definition with do expression
+    'with' label operation 'do' expression
+    """
+
+    nodetype: NodeType = field(default=NodeType.WITH, init=False)
+    name: str
+    value: "Expression"
+    doexpr: "Expression"
 
 
 @dataclass
