@@ -403,6 +403,8 @@ class Parser:
             return self._acceptifastypedef(lex)
         if tt == TT.MATCH:
             return self._acceptmatchastypedef(lex)
+        if tt == TT.DATA:
+            return self._acceptdataastypedef(lex)
         # at unit level, only operations (not calls) are valid
         return self._acceptoperation(lex)
 
@@ -421,6 +423,16 @@ class Parser:
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """Wrap _acceptmatch result as an Expression for use at type definition level."""
         node = self._acceptmatch(lex)
+        if isinstance(node, zast.Error) or node is None:
+            return node
+        expression = zast.Expression(expression=node.node, start=node.node.start)
+        return NodeX(node=expression, extern=node.extern)
+
+    def _acceptdataastypedef(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Expression], zast.Error, None]:
+        """Wrap _acceptdata result as an Expression for use at type definition level."""
+        node = self._acceptdata(lex)
         if isinstance(node, zast.Error) or node is None:
             return node
         expression = zast.Expression(expression=node.node, start=node.node.start)
@@ -1563,7 +1575,7 @@ class Parser:
         whileindex = 0  # counter for 'fake' binding names (for 'when' clauses)
         while True:
             t = lex.peek()
-            if first or t.toktype == TT.WHILE:
+            if (first or t.toktype == TT.WHILE) and t.toktype != TT.LABEL:
                 if t.toktype == TT.WHILE:
                     lex.acceptany()  # 'while'
                     lex.accept(TT.EOL)  # optional EOL
@@ -1817,10 +1829,10 @@ class Parser:
         """
         acceptstatement - accept a statement clause
 
-            ( "{" [ statementline ] { newline [ statementline ] } "}" )
+            ( "{" [ blockline ] { ( eol | ";" ) [ blockline ] } "}" )
             | operation
 
-        Return an Array or Error or None (no braceopne or operation)
+        Return an Array or Error or None (no braceopen or operation)
 
         """
         statements: List[zast.StatementLine] = []
@@ -1834,11 +1846,9 @@ class Parser:
             lex.filtereol(False)  # disable EOL filtering. Need to parse them correctly
             error: Optional[zast.Error] = None
             while True:
-                if statements:
-                    if not lex.accept(TT.EOL):
-                        break  # end of block
-                else:
-                    lex.accept(TT.EOL)  # optional first EOL
+                # consume all separators (EOL and ";")
+                while lex.accept(TT.EOL) or lex.accept(TT.SEMICOLON):
+                    pass
                 statementlinex = self._acceptstatementline(lex)
                 if isinstance(statementlinex, zast.Error):
                     error = statementlinex  # propagate error
