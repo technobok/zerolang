@@ -310,6 +310,7 @@ class Parser:
 
         start = lex.peek()
 
+        prev_filtereol = lex._filtereol
         lex.filtereol(False)  # need EOLs as definition separators
         error: Optional[zast.Error] = None
 
@@ -353,7 +354,7 @@ class Parser:
             )
             definitions[name] = definition
 
-        lex.filtereol(True)  # restore default
+        lex.filtereol(prev_filtereol)  # restore previous state
         if error:
             return error
 
@@ -1600,8 +1601,7 @@ class Parser:
 
             elif t.toktype == TT.LABEL:
                 if loop:
-                    msg = "Named (bound) conditions not permitted after 'loop'"
-                    return zast.Error(err=ERR.BADFOR, msg=msg, loc=lex.acceptany())
+                    break  # label after loop belongs to the enclosing scope
                 name = lex.acceptany().tokstr
                 lex.accept(TT.EOL)  # optional EOL
                 op = self._acceptoperation(lex)
@@ -1843,6 +1843,7 @@ class Parser:
 
         if lex.accept(TT.BRACEOPEN):
             # block
+            prev_filtereol = lex._filtereol
             lex.filtereol(False)  # disable EOL filtering. Need to parse them correctly
             error: Optional[zast.Error] = None
             while True:
@@ -1875,7 +1876,7 @@ class Parser:
                         break
                     local.add(name)
 
-            lex.filtereol(True)  # reenable EOL filtering
+            lex.filtereol(prev_filtereol)  # restore EOL filtering
             if error:
                 return error
 
@@ -2118,6 +2119,7 @@ class Parser:
 
         error: Optional[zast.Error] = None
 
+        prev_filtereol = lex._filtereol
         lex.filtereol(True)  # enable EOL filtering. EOL's are ignored within parens
 
         expr = self._acceptexpression(lex)
@@ -2138,7 +2140,7 @@ class Parser:
 
             break
 
-        lex.filtereol(False)  # re-disable EOL filtering
+        lex.filtereol(prev_filtereol)  # restore previous state
         if error:
             return error
 

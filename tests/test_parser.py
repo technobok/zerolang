@@ -482,9 +482,7 @@ def get_example_names():
 
 
 # Examples that still need fixes for other reasons (e.g., scoping bugs)
-EXAMPLES_NEEDING_UPDATE = {
-    "control",  # local var "result" not found in string interpolation scope
-}
+EXAMPLES_NEEDING_UPDATE: set[str] = set()
 
 
 class TestExamples:

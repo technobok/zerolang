@@ -8,6 +8,7 @@ import os
 import argparse
 
 import zprettyprint
+import ztypecheck
 
 # import zemitterc
 import zast
@@ -86,10 +87,14 @@ def main() -> None:
         # do proper error printing, with file location
         # print(repr(program))
         sys.exit(1)
-    # TODO: check for errors
-    # program = p.typecheck() # second pass
+    # type check (second pass)
+    type_errors = ztypecheck.typecheck(program)
+    if type_errors:
+        for err in type_errors:
+            print(zast.errortomessage(err=err, vfs=vfs))
+        sys.exit(1)
 
-    # print(a)
+    print("Type check passed.")
 
     zprettyprint.pprintprogram(program)
 
