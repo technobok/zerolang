@@ -480,19 +480,9 @@ def get_example_names():
     return names
 
 
-# Examples that need updating after grammar alignment (break/continue/return
-# are now regular identifiers, string interpolation changed from \( to \{, etc.)
+# Examples that still need fixes for other reasons (e.g., scoping bugs)
 EXAMPLES_NEEDING_UPDATE = {
-    "case",
-    "control",
-    "data",
-    "factorial",
-    "fibonacci",
-    "mathutil",
-    "multimod",
-    "records",
-    "strings",
-    "swap",
+    "control",  # local var "result" not found in string interpolation scope
 }
 
 
