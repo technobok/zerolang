@@ -731,6 +731,8 @@ class Lexer:
             all EOL tokens.
         """
         self._filtereol = filtereol
+        if filtereol and self._thistoken.toktype == TT.EOL:
+            self._advance()
 
     def peek(self) -> Token:
         """

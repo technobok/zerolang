@@ -6,7 +6,7 @@ check:
 	uv run ty check src/
 
 test:
-	uv run pytest tests/ -v
+	uv run python -m pytest tests/ -v
 
 fmt:
 	uv run ruff format src/ tests/
