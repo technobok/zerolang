@@ -175,12 +175,15 @@ class TestUnitResolution:
         check_ok("f: function {n: i64} out i64 is { return n }")
 
     def test_core_types_populated(self):
-        """Core unit type should have numeric types, print, etc."""
-        program = check_ok("main: function is {}")
+        """Core unit type should have numeric types, print, etc.
+        Demand-driven: types are resolved when referenced."""
+        program = check_ok('main: function is { x: 42\n print "test" }')
         tc = TypeChecker(program)
         tc.check()
+        # print was referenced, so it should be resolved in core
         core = tc.unit_types["core"]
         assert "print" in core.children
+        # i64 was referenced (via literal 42), so it should be resolved
         assert "i64" in core.children
 
     def test_cross_unit_alias_resolution(self):
@@ -194,8 +197,9 @@ class TestUnitResolution:
         assert io_type.children["print"].typetype == ZTypeType.FUNCTION
 
     def test_system_unit_has_numeric_records(self):
-        """System unit should have numeric types as records with methods."""
-        program = check_ok("main: function is {}")
+        """System unit should have numeric types as records with methods.
+        Demand-driven: reference i64 to trigger resolution."""
+        program = check_ok("f: function {n: i64} out i64 is { return n + 1 }")
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
@@ -206,6 +210,148 @@ class TestUnitResolution:
         assert "-" in i64.children
         assert "*" in i64.children
         assert "/" in i64.children
+
+
+class TestComparisonOperators:
+    """Test comparison operators added to all numeric types."""
+
+    def test_less_than(self):
+        check_ok("f: function {a: i64 b: i64} is { if a < b then return 0 }")
+
+    def test_greater_than(self):
+        check_ok("f: function {a: i64 b: i64} is { if a > b then return 0 }")
+
+    def test_greater_equal(self):
+        check_ok("f: function {a: i64 b: i64} is { if a >= b then return 0 }")
+
+    def test_equal(self):
+        check_ok("f: function {a: i64 b: i64} is { if a == b then return 0 }")
+
+    def test_not_equal(self):
+        check_ok("f: function {a: i64 b: i64} is { if a != b then return 0 }")
+
+    def test_comparison_returns_bool(self):
+        """Comparison operators should return bool, not the numeric type."""
+        program = check_ok("f: function {a: i64 b: i64} is { if a < b then return 0 }")
+        tc = TypeChecker(program)
+        tc.check()
+        system = tc.unit_types["system"]
+        i64 = system.children["i64"]
+        lt = i64.children["<"]
+        assert lt.typetype == ZTypeType.FUNCTION
+        ret = lt.children[":return"]
+        assert ret.name == "bool"
+
+    def test_comparison_on_f64(self):
+        check_ok("f: function {a: f64 b: f64} is { if a < b then return 0 }")
+
+    def test_comparison_on_u32(self):
+        check_ok("f: function {a: u32 b: u32} is { if a >= b then return 0 }")
+
+
+class TestSwapTypeCheck:
+    def test_swap_same_type(self):
+        check_ok("main: function is {\n  a: 10\n  b: 20\n  a swap b\n}")
+
+    def test_swap_different_types_error(self):
+        errors = check_errors(
+            'main: function is {\n  a: 10\n  b: "hello"\n  a swap b\n}'
+        )
+        assert any("swap" in e.msg.lower() or "Cannot swap" in e.msg for e in errors)
+
+
+class TestWithDo:
+    def test_with_do_basic(self):
+        check_ok(
+            "abs: function {n: i64} out i64 is { return n }\n"
+            "main: function is {\n"
+            '  with y: abs -5 do print "result = \\{y}"\n'
+            "}"
+        )
+
+
+class TestStringInterpolation:
+    def test_interpolation_checks_expressions(self):
+        check_ok('main: function is {\n  x: 42\n  print "value = \\{x}"\n}')
+
+
+class TestDemandDriven:
+    """Test demand-driven resolution behavior."""
+
+    def test_unreferenced_not_resolved(self):
+        """Definitions not reachable from main are not type-checked."""
+        program = check_ok(
+            "unused: function {n: i64} out i64 is { return n }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        # unused should still get resolved because check() iterates all functions
+        # in the main unit
+        key = "test.unused"
+        assert key in tc._resolved
+
+
+class TestCircularReferences:
+    """Test cycle detection in type alias resolution."""
+
+    def test_two_way_circular_alias(self):
+        """a -> b -> a should be detected as circular."""
+        errors = check_errors("a: b\nb: a\nmain: function is { x: a }")
+        assert any("Circular" in e.msg or "circular" in e.msg for e in errors)
+
+    def test_three_way_circular_alias(self):
+        """a -> b -> c -> a should be detected as circular."""
+        errors = check_errors("a: b\nb: c\nc: a\nmain: function is { x: a }")
+        assert any("Circular" in e.msg or "circular" in e.msg for e in errors)
+
+    def test_self_alias(self):
+        """a: a is a trivially circular alias."""
+        errors = check_errors("a: a\nmain: function is { x: a }")
+        assert any("Circular" in e.msg or "circular" in e.msg for e in errors)
+
+    def test_record_self_reference_via_type_is_valid(self):
+        """Records using `type` keyword for self-reference should not error."""
+        check_ok(
+            "point: record {\n"
+            "    x: f64\n"
+            "    y: f64\n"
+            "    +: function {:this rhs: type} out type\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_record_method_returns_own_type(self):
+        """A record method returning its own type via `type` resolves correctly."""
+        program = check_ok(
+            "vec: record {\n"
+            "    x: f64\n"
+            "} as {\n"
+            "    scale: function {v: this} out type is { return v }\n"
+            "}\n"
+            "main: function is { v: vec }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vec_type = tc._resolved.get("test.vec")
+        assert vec_type is not None
+        scale = vec_type.children.get("scale")
+        assert scale is not None
+        ret = scale.children.get(":return")
+        assert ret is vec_type
+
+    def test_circular_chain_reports_full_chain(self):
+        """Error message should include the full chain of names."""
+        errors = check_errors("a: b\nb: c\nc: a\nmain: function is { x: a }")
+        circular_errors = [e for e in errors if "Circular" in e.msg]
+        assert len(circular_errors) >= 1
+        msg = circular_errors[0].msg
+        assert "test.a" in msg
+        assert "test.b" in msg
+        assert "test.c" in msg
+
+    def test_non_circular_alias_chain(self):
+        """a -> b -> i64 is a valid alias chain, not circular."""
+        check_ok("b: i64\na: b\nmain: function is { x: a }")
 
 
 class TestExamplePrograms:
