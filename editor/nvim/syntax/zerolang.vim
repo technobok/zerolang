@@ -6,6 +6,11 @@ if exists("b:current_syntax")
   finish
 endif
 
+" Set syntax-only keyword chars to match zerolang WORD characters:
+"   [-!$%&'*+/<=>?@\^_|~a-zA-Z0-9]
+" This makes \< \> and \k work correctly for zerolang identifiers.
+syn iskeyword @,48-57,33,36-39,42-43,45,47,60-64,92,94-95,124,126
+
 " Comments: # to end of line
 syn match zerolangComment "#.*$" contains=@Spell
 
@@ -30,40 +35,40 @@ syn match zerolangEscapeError /\\$/ contained
 " String interpolation: \{...}
 syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\{/ end=/}/ contained contains=TOP
 
-" Keywords
-syn keyword zerolangKeyword unit record class variant union facet protocol data
-syn keyword zerolangKeyword function in out is as
-syn keyword zerolangKeyword if when then else
-syn keyword zerolangKeyword for while loop with do on
-syn keyword zerolangKeyword match case break continue yield return swap
-syn match   zerolangKeyword /=/
+" Keywords (use syn match so labels can take priority)
+syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|protocol\|data\)\>/
+syn match zerolangKeyword /\<\%(function\|in\|out\|is\|as\)\>/
+syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
+syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
+syn match zerolangKeyword /\<\%(match\|case\|break\|continue\|yield\|return\|swap\)\>/
+syn match zerolangKeyword /=/
 
 " Reserved words (highlighted as errors)
-syn keyword zerolangReserved macro goto repeat until flag cell
-syn keyword zerolangReserved pragma enum view unsafe switch
+syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
+syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 
 " Built-in / predeclared identifiers
-syn keyword zerolangBuiltin null never any _ typedef tag
-syn keyword zerolangBuiltin u8 u16 u32 u64 u128
-syn keyword zerolangBuiltin i8 i16 i32 i64 i128
-syn keyword zerolangBuiltin f8 f16 f32 f64 f128
-syn keyword zerolangBuiltin c8 c32 string
-syn keyword zerolangBuiltin true false
-syn keyword zerolangBuiltin public private
-syn keyword zerolangBuiltin this meta error
-syn keyword zerolangBuiltin iterator
-syn keyword zerolangBuiltin take borrow lock generic
+syn match zerolangBuiltin /\<\%(null\|never\|any\|_\|typedef\|tag\)\>/
+syn match zerolangBuiltin /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
+syn match zerolangBuiltin /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
+syn match zerolangBuiltin /\<\%(f8\|f16\|f32\|f64\|f128\)\>/
+syn match zerolangBuiltin /\<\%(c8\|c32\|string\)\>/
+syn match zerolangBuiltin /\<\%(true\|false\)\>/
+syn match zerolangBuiltin /\<\%(public\|private\)\>/
+syn match zerolangBuiltin /\<\%(this\|meta\|error\)\>/
+syn match zerolangBuiltin /\<iterator\>/
+syn match zerolangBuiltin /\<\%(take\|borrow\|lock\|generic\)\>/
 
-" Labels: word: and :word
-" The identifier character class from the Rouge WORD pattern
-syn match zerolangLabel /[-!$%&'*+\/<=>?@\\^_|~a-zA-Z0-9]\+:/ contains=zerolangKeyword,zerolangReserved,zerolangBuiltin
-syn match zerolangLabel /:[-!$%&'*+\/<=>?@\\^_|~a-zA-Z0-9]\+/
+" Labels: word: and :word (defined after keywords — later match wins)
+syn match zerolangLabel /\k\+:/ contains=zerolangKeyword,zerolangReserved,zerolangBuiltin
+syn match zerolangLabel /:\k\+/
 
 " Illegal characters
 syn match zerolangError /[[\],;`]/
 
 " Punctuation (no special highlighting — uses default text color)
-syn match zerolangPunctuation /[(){}."]/
+" Note: " is NOT included — it is handled by string regions
+syn match zerolangPunctuation /[(){}.]/
 
 " Highlight linking
 hi def link zerolangComment    Comment
