@@ -88,7 +88,7 @@ hi def link zerolangInterpolationDelim Delimiter
 hi def link zerolangKeyword    Keyword
 hi def link zerolangReserved   Error
 hi def link zerolangBuiltin    Type
-hi def link zerolangLabel      Label
+hi def link zerolangLabel      Identifier
 hi def link zerolangError      Error
 hi def link zerolangPunctuation Delimiter
 
