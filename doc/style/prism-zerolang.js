@@ -62,13 +62,17 @@
             { pattern: /"{5}[\s\S]*?"{5}/, greedy: true },
             { pattern: /"{4}[\s\S]*?"{4}/, greedy: true },
             { pattern: /"{3}[\s\S]*?"{3}/, greedy: true },
-            // Interpreted strings with escape sequences and interpolation
+            // Interpreted strings with escape sequences and interpolation.
+            // The outer regex must handle \{...} interpolations that contain
+            // nested "..." strings, so we try the interpolation alternative
+            // before the generic \\. escape to avoid terminating early at a
+            // quote inside an interpolation.
             {
-                pattern: /"(?:[^"\\]|\\.)*"/,
+                pattern: /"(?:[^"\\]|\\\{(?:[^}"]|"(?:[^"\\]|\\.)*")*\}|\\.)*"/,
                 greedy: true,
                 inside: {
                     'interpolation': {
-                        pattern: /\\\{[^}]*\}/,
+                        pattern: /\\\{(?:[^}"]|"(?:[^"\\]|\\.)*")*\}/,
                         inside: {
                             'interpolation-punctuation': {
                                 pattern: /^\\\{|\}$/,
