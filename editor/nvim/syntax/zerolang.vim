@@ -34,13 +34,13 @@ syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\
 syn keyword zerolangKeyword unit record class variant union facet protocol data
 syn keyword zerolangKeyword function in out is as
 syn keyword zerolangKeyword if when then else
-syn keyword zerolangKeyword for while loop with do switch on
+syn keyword zerolangKeyword for while loop with do on
 syn keyword zerolangKeyword match case break continue yield return swap
 syn match   zerolangKeyword /=/
 
 " Reserved words (highlighted as errors)
 syn keyword zerolangReserved macro goto repeat until flag cell
-syn keyword zerolangReserved pragma enum view unsafe
+syn keyword zerolangReserved pragma enum view unsafe switch
 
 " Built-in / predeclared identifiers
 syn keyword zerolangBuiltin null never any _ typedef tag

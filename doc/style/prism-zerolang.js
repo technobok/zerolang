@@ -26,13 +26,13 @@
         'unit', 'record', 'class', 'variant', 'union', 'facet', 'protocol', 'data',
         'function', 'in', 'out', 'is', 'as',
         'if', 'when', 'then', 'else',
-        'for', 'while', 'loop', 'with', 'do', 'switch', 'on',
+        'for', 'while', 'loop', 'with', 'do', 'on',
         'match', 'case', 'break', 'continue', 'yield', 'return', 'swap'
     ];
 
     var reserved = [
         'macro', 'goto', 'repeat', 'until', 'flag', 'cell',
-        'pragma', 'enum', 'view', 'unsafe'
+        'pragma', 'enum', 'view', 'unsafe', 'switch'
     ];
 
     var builtins = [

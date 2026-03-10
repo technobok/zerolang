@@ -51,7 +51,6 @@ module Rouge
           loop
           with
           do
-          switch
           on
 
           match
@@ -73,8 +72,8 @@ module Rouge
           until          
           flag
           cell
-          with
           pragma
+          switch
           enum
           view
           unsafe
