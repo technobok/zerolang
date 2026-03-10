@@ -10,7 +10,6 @@ from collections import OrderedDict
 import zast
 from zast import Node, NodeType
 from zlexer import Token
-import ztypechecker
 
 # Stubs for types that were in old ztype module but no longer exist.
 # These are used in isinstance checks and value references below.
@@ -441,27 +440,6 @@ def _emitatomid(name: Optional[str], node: Any, state: CState) -> Fragment:
     return Fragment(value=value, parts=[cname])
 
 
-def _emitatomnumber(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # pylint: disable=unused-argument
-    # don't need state for atomnumber
-    # if node.nodetype != NodeType.MEMBER:
-    if not isinstance(node, zast.AtomNumber):
-        raise Exception("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in AtomNumber AST")
-
-    n = ztypechecker.parse_number(node.number.token)
-
-    if node.dottedids:
-        # output.append(f").{d.token}")
-        raise Exception("Cannot handle dottedids on numeric literals yet")
-
-    parts: List[str] = [_emit_numeric_literal(n)]
-
-    return Fragment(value=n, parts=parts)
-
-
 def _emitatomstring(name: Optional[str], node: Any, state: CState) -> Fragment:
     # pylint: disable=unused-argument
     # don't need state for atomstring
@@ -557,7 +535,6 @@ nodehandler: dict = {
     NodeType.NAMEDOPERATION: _emitargument,
     NodeType.EXPRESSION: _emitatomexpression,
     NodeType.ATOMID: _emitatomid,
-    NodeType.ATOMNUMBER: _emitatomnumber,
     NodeType.ATOMSTRING: _emitatomstring,
 }
 

@@ -327,10 +327,6 @@ class Tokenizer(ITokenizer):
             c = self._accept()  # accept the ':'
             return tok
 
-        if is_number:
-            # NUMBER
-            return Token(TT.NUMBER, tstr, self.fsno, lineno, colno)
-
         if ttkw:
             # KEYWORD: eg function, for, while, return
             return Token(ttkw, tstr, self.fsno, lineno, colno)
@@ -580,13 +576,8 @@ class Lexer:
 
             if tt == TT.LABELPRE:
                 # unpack a LABELPRE -> LABEL: REFID
-                # REFID could be a number literal
-                c = ord(token.tokstr[0])
-                tt2 = TT.REFID
-                if c < zchar.DEL and ((CHARFLAGS[c] & Charflag.DECD) != 0):
-                    tt2 = TT.NUMBER
                 self._nexttoken = Token(
-                    tt2, token.tokstr, token.fsno, token.lineno, token.colno
+                    TT.REFID, token.tokstr, token.fsno, token.lineno, token.colno
                 )
                 # set token to this instead...
                 token = Token(

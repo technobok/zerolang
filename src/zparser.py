@@ -2052,7 +2052,6 @@ class Parser:
             atom
                 atomexpr
                 | atomid
-                | atomnumber
                 | atomstring
                 | atomstringraw
 
@@ -2065,9 +2064,6 @@ class Parser:
 
         if tt == TT.REFID:
             return self._acceptatomid(lex)
-
-        if tt == TT.NUMBER:
-            return NodeX(node=zast.AtomNumber(start=lex.acceptany()), extern={})
 
         if tt == TT.STRBEG:
             return self._acceptatomstring(lex)
@@ -2089,11 +2085,20 @@ class Parser:
         if not start:
             return None
 
+        # numeric literals (starting with digit or sign+digit) are predeclared
+        # identifiers — not external references and not module refs
+        name = start.tokstr
+        c0 = name[0]
+        is_numeric = c0.isdigit() or (
+            c0 in ("+", "-") and len(name) > 1 and name[1].isdigit()
+        )
+
         atomid: zast.AtomId = zast.AtomId(
-            start=start, name=start.tokstr, canbemoduleref=True
+            start=start, name=name, canbemoduleref=not is_numeric
         )
         extern: Dict[str, zast.AtomId] = {}
-        extern[start.tokstr] = atomid  # atom itself is an external reference
+        if not is_numeric:
+            extern[name] = atomid  # atom itself is an external reference
         return NodeX(node=atomid, extern=extern)
 
     def _acceptatomexpr(

@@ -168,7 +168,7 @@ class NodeType(IntEnum):
     # ATOMEXPR = 81
     # Expression is also an ATOM for AST due to AtomExpr
     ATOMID = 82  # a reference
-    ATOMNUMBER = 83
+
     ATOMSTRING = 84
 
 
@@ -425,11 +425,11 @@ class Atom(Path):
     """
     Atom Node
 
-    Parent of: Expression (because of AtomExpr), AtomId, AtomNumber, AtomString
+    Parent of: Expression (because of AtomExpr), AtomId, AtomString
     """
 
     # nodetype: NodeType = field(default=NodeType.ATOM, init=False)
-    # atom: typing.Union["AtomExpr", "AtomId", "AtomNumber", "AtomString"]
+    # atom: typing.Union["AtomExpr", "AtomId", "AtomString"]
 
 
 @dataclass
@@ -678,16 +678,6 @@ class AtomId(Atom):
     nodetype: NodeType = field(default=NodeType.ATOMID, init=False)
     name: str  # this is also in the start token
     canbemoduleref: bool
-
-
-@dataclass
-class AtomNumber(Atom):
-    """
-    AtomNumber Node - Numeric Literal. Literal value is stored in the type.
-    """
-
-    nodetype: NodeType = field(default=NodeType.ATOMNUMBER, init=False)
-    # start has number id token
 
 
 @dataclass

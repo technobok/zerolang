@@ -13,15 +13,7 @@ module Rouge
       filenames '*.z'
       mimetypes 'application/x-zerolang'
 
-      # Old version (no number): WORD = /[-!$%&'*+\/<=>?@\\^_|~a-zA-Z][-!$%&'*+\/<=>?@\\^_|~a-zA-Z0-9]*/
       WORD = /[-!$%&'*+\/<=>?@\\^_|~a-zA-Z0-9]+/
-      #WORD = /[!$%&*\/<=>\?&\^_|~a-zA-Z][!$%&*\/<=>\?&\^_|~a-zA-Z\-+0-9]*/
-      #NUMBER = /[\-+0-9][!$%&*\/<=>\?&\^_|~a-zA-Z0-9]*\.?[!$%&*\/?&^_|~a-zA-Z\-+0-9]*/
-      #NUMBER = /[\-+]?[0-9]#{WORD}?(\.[0-9]#{WORD}*)?/
-      #NUMBER = /[\-+]?[0-9]#{WORD}?(\.[0-9]#{WORD})?/
-      # not used anymore
-      #NUMBER = /[\-+]?[0-9][-!$%&'*+\/<=>?@\\^_|~a-zA-Z0-9]*(\.[0-9][-!$%&'*+\/<=>?@\\^_|~a-zA-Z0-9]*)?/
-      x = 8
 
 
       def self.keywords

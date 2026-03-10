@@ -45,31 +45,31 @@ class TestTokenizerNumbers:
     def test_integer(self):
         tok = make_tokenizer("42")
         t = tok.token()
-        assert t.toktype == TT.NUMBER
+        assert t.toktype == TT.REFID
         assert t.tokstr == "42"
 
     def test_float(self):
         tok = make_tokenizer("1.5")
         t = tok.token()
-        assert t.toktype == TT.NUMBER
+        assert t.toktype == TT.REFID
         assert t.tokstr == "1.5"
 
     def test_signed_negative(self):
         tok = make_tokenizer("-3")
         t = tok.token()
-        assert t.toktype == TT.NUMBER
+        assert t.toktype == TT.REFID
         assert t.tokstr == "-3"
 
     def test_signed_positive(self):
         tok = make_tokenizer("+5")
         t = tok.token()
-        assert t.toktype == TT.NUMBER
+        assert t.toktype == TT.REFID
         assert t.tokstr == "+5"
 
     def test_zero(self):
         tok = make_tokenizer("0")
         t = tok.token()
-        assert t.toktype == TT.NUMBER
+        assert t.toktype == TT.REFID
         assert t.tokstr == "0"
 
 

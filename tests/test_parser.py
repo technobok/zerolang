@@ -35,7 +35,8 @@ class TestSimpleDefinitions:
         result = parse_unit("x: 42")
         body = get_unit_body(result)
         assert "x" in body
-        assert isinstance(body["x"], zast.AtomNumber)
+        assert isinstance(body["x"], zast.AtomId)
+        assert body["x"].name == "42"
 
     def test_dotted_path(self):
         """Dotted paths referencing known system types work."""

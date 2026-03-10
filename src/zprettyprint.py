@@ -421,16 +421,6 @@ def _pprintatomid(node: Node, depth: int) -> str:
     return f"*ATOMID({node.name})"
 
 
-def _pprintatomnumber(node: Node, depth: int) -> str:
-    del depth
-    # if node.nodetype != NodeType.MEMBER:
-    if not isinstance(node, zast.AtomNumber):
-        raise Exception("Error: wrong node type")
-
-    s = f"*ATOMNUMBER({node.start.tokstr})"
-    return s
-
-
 def _pprintatomstring(node: Node, depth: int) -> str:
     # if node.nodetype != NodeType.MEMBER:
     if not isinstance(node, zast.AtomString):
@@ -549,7 +539,6 @@ nodehandler: dict = {
     # NodeType.ATOMBLOCK: _pprintatomblock,
     # NodeType.ATOMEXPR: _pprintatomexpression,
     NodeType.ATOMID: _pprintatomid,
-    NodeType.ATOMNUMBER: _pprintatomnumber,
     NodeType.ATOMSTRING: _pprintatomstring,
     # NodeType.ARGUMENT: _pprintargument,
     NodeType.NAMEDOPERATION: _pprintnamedoperation,

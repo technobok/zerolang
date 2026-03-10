@@ -623,21 +623,6 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
 #     # output.append(f"{sep}}}\n")
 
 
-# def checkatomnumber(node: Node, output: List[str], depth: int) -> None:
-#     """
-#     checkatomnumber
-#     """
-#     del depth
-#     # if node.nodetype != NodeType.MEMBER:
-#     if not isinstance(node, zast.AtomNumber):
-#         raise Exception("Error: wrong node type")
-#     output.append(f"*ATOMNUMBER(")
-#     # sepinner = (depth + 1) * "  "
-#     # output.append(sepinner)
-#     output.append(node.start.token)
-#     output.append(")")
-
-
 # def checkatomstring(node: Node, output: List[str], depth: int) -> None:
 #     """
 #     checkatomstring
@@ -742,7 +727,6 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
 #     # NodeType.ATOMBLOCK: checkatomblock,
 #     # NodeType.ATOMEXPR: checkatomexpr,
 #     NodeType.ATOMID: checkatomid,
-#     NodeType.ATOMNUMBER: checkatomnumber,
 #     NodeType.ATOMSTRING: checkatomstring,
 #     # NodeType.ARGUMENT: _pprintargument,
 #     # NodeType.NAMEDOPERATION: checknamedoperation,

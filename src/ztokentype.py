@@ -38,8 +38,6 @@ class TT(IntEnum):
     # STREXPREND = 24  # backslash escaped expr in braces end (zero width token)
     STREND = 25  # end of string (" or `)
 
-    NUMBER = 30
-
     REFID = 40  # Identifier as a reference
 
     # keywords
