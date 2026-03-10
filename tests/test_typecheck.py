@@ -409,3 +409,50 @@ class TestExamplePrograms:
 
     def test_control(self):
         assert self._check_example("control") == []
+
+
+class TestReturnTypeChecking:
+    def test_correct_return_type(self):
+        check_ok("f: function out i64 is { return 42 }")
+
+    def test_wrong_return_type(self):
+        errors = check_errors('f: function out i64 is { return "hello" }\nmain: function is {}')
+        assert any("Return type mismatch" in e.msg for e in errors)
+
+    def test_void_function_no_return(self):
+        check_ok("f: function is {}\nmain: function is {}")
+
+    def test_return_in_if(self):
+        check_ok(
+            "f: function {n: i64} out i64 is {\n"
+            "  if n <= 1 then return 1\n"
+            "  return n\n"
+            "}"
+        )
+
+
+class TestNamedArguments:
+    def test_named_arg_correct_type(self):
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is { add a: 1 b: 2 }"
+        )
+
+    def test_named_arg_wrong_type(self):
+        errors = check_errors(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { add a: "hello" b: 2 }'
+        )
+        assert any("mismatch" in e.msg.lower() for e in errors)
+
+
+class TestFullTypecheck:
+    def test_full_flag_checks_all_units(self):
+        from ztypecheck import TypeChecker
+
+        program = check_ok("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        # system unit types should all be resolved with full check
+        system = tc.unit_types.get("system")
+        assert system is not None

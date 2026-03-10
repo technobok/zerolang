@@ -1391,7 +1391,7 @@ class Parser:
                     )
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 ifclause = zast.IfClause(
-                    conditions=conditions, statement=statementx.node, start=startclause
+                    conditions=dict(conditions), statement=statementx.node, start=startclause
                 )
                 clauses.append(ifclause)
                 # reset for another ifclause

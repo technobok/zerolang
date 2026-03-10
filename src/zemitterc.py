@@ -1,619 +1,740 @@
-#!/usr/bin/python3
 """
-ZeroLang emitter to C
+ZeroLang C code emitter
+
+Walks a type-checked AST and emits C source code.
 """
 
-from typing import Any, List, Dict, Set, Optional, Sequence
-from dataclasses import dataclass, field
-from collections import OrderedDict
+from typing import Optional, List, Dict
 
 import zast
-from zast import Node, NodeType
-from zlexer import Token
+from ztypechecker import ZType, ZTypeType, parse_number
 
-# Stubs for types that were in old ztype module but no longer exist.
-# These are used in isinstance checks and value references below.
-# TODO: remove these stubs when the emitter is updated to use ztypechecker types.
-_Float: type = type(None)
-_Integer: type = type(None)
-_NullType: type = type(None)
-_Function: type = type(None)
-_IntegerValue: type = type(None)
-_FloatValue: type = type(None)
-_NumericValue: type = type(None)
-_StringValue: type = type(None)
-_NULLVALUE: Any = None
-_NULLTYPE: Any = None
-
-TYPEMAP = {
-    # ztype: ctype
+TYPEMAP: Dict[str, str] = {
     "i8": "int8_t",
     "i16": "int16_t",
     "i32": "int32_t",
     "i64": "int64_t",
-    "i128": "int128_t",
+    "i128": "__int128",
     "u8": "uint8_t",
     "u16": "uint16_t",
     "u32": "uint32_t",
     "u64": "uint64_t",
-    "u128": "uint128_t",
-    "f32": "float",  # cannot guarantee float bitsizes?
+    "u128": "unsigned __int128",
+    "f32": "float",
     "f64": "double",
     "f128": "long double",
     "null": "void",
-    "record": "struct",
-    "string": "char",  # XXX needs [] after type name...
+    "bool": "int",
+    "never": "void",
 }
 
-FLAGOUTPUT = {
-    # flag: output code
-    "stdio": "#include <stdio.h>\n",
-    "stdint": "#include <stdint.h>\n",
+C_OPS: Dict[str, str] = {
+    "+": "+",
+    "-": "-",
+    "*": "*",
+    "/": "/",
+    "<=": "<=",
+    "<": "<",
+    ">": ">",
+    ">=": ">=",
+    "==": "==",
+    "!=": "!=",
 }
 
 
-class CState:
-    """
-    State storage for C Compiler
-    """
-
-    def __init__(self):
-        self.flags: Set[str] = set()
-        self.error = False
-        self.envstack: List[Dict[str, Any]] = []
-        # TODO: add builtins and lock it
-        # TODO: prevent popping builtins and top level
-        self.pushenv()  # top level, globals
-
-    def setflag(self, flagname: str):
-        """
-        output flags, for required headers etc
-        """
-        self.flags.add(flagname)
-
-    def depth(self):
-        """
-        return depth in call stack, 0 for top level
-        """
-        return len(self.envstack)
-
-    def pushenv(self):
-        """
-        create/return/add a new env to the bottom of the call stack
-        """
-        d: Dict[str, Any] = {}
-        self.envstack.append(d)
-        return d
-
-    def popenv(self):
-        """
-        pop the lowest env off of the call stack
-        """
-        return self.envstack.pop()
-
-    def define(self, name: str, value: Any):
-        """
-        Add a definition to the current (lowest) env
-        """
-        if not name:
-            raise ValueError("Must supply a name to Define ")
-        d = self.envstack[-1]
-        if name in d:
-            raise ValueError(f"Duplicate definition of {name}")
-        d[name] = value
-
-    def find(self, name: str) -> Optional[Any]:
-        """
-        find a symbol definition from inner to outermost env.
-
-        Return Value if found, None if not
-        """
-        for e in reversed(self.envstack):
-            r = e.get(name, None)
-            if r:
-                return r
-        return None
-
-    @staticmethod
-    def mangle(zname: str) -> str:
-        """
-        'mangle' a zname into something that can be used by C
-
-        TODO: look in (current?) scope to ensure no collisions on the C name?
-        """
-        if zname == "main":
-            return "main_"
-        return zname
-
-    def ctype(self, typ: Any, name: str) -> str:
-        """
-        Convert (compile) a ztype into a C type (definition) given a type and
-        a variable name
-        """
-        # if typ.typetype == TypeType.PRIMITIVE:
-        cname = self.mangle(name)
-        ctypename = ""
-        # typ = value.valuetype
-        if isinstance(typ, _Float):
-            ctypename = TYPEMAP[typ.typename]
-            return f"{ctypename} {cname}"
-        if isinstance(typ, _Integer):
-            self.setflag("stdint")
-            ctypename = TYPEMAP[typ.typename]
-            return f"{ctypename} {cname}"
-        if isinstance(typ, _NullType):
-            ctypename = TYPEMAP[typ.typename]
-            return f"{ctypename} {cname}"
-        if isinstance(typ, _Function):
-            parts = []
-            parts.append(self.ctype(typ=typ.result, name=name))
-            parts.append("(")
-            for argname, argtype in typ.arguments.items():
-                parts.append(self.ctype(typ=argtype, name=argname))
-            parts.append(")")
-            return "".join(parts)
-
-        raise Exception("Cannot handle type {otype}")
+def _is_numeric_id(name: str) -> bool:
+    c0 = name[0]
+    return c0.isdigit() or (c0 in ("+", "-") and len(name) > 1 and name[1].isdigit())
 
 
-@dataclass
-class Fragment:
-    """
-    Fragment of generated code / type from the AST Node
-    """
+def _ctype(ztype: Optional[ZType]) -> str:
+    if not ztype:
+        return "void"
+    name = ztype.name
+    if name in TYPEMAP:
+        return TYPEMAP[name]
+    if name == "string":
+        return "ZStr*"
+    if ztype.typetype == ZTypeType.RECORD and name not in TYPEMAP:
+        return f"z_{name}_t"
+    return "void"
 
-    value: Any
-    parts: List[str] = field(default_factory=list)
+
+def _mangle_func(name: str) -> str:
+    """Mangle a zerolang function/global name for C."""
+    if name == "main":
+        return "z_main"
+    return "z_" + name.replace(".", "_")
 
 
-def emit(name: Optional[str], node: Node) -> str:
-    """
-    emit - emit C text for a top level Node (Unit)
-    TODO: should emit for a whole Program
+def _mangle_var(name: str) -> str:
+    """Mangle a local variable name — only escape C reserved words."""
+    if name in ("main", "break", "continue", "return", "switch", "case",
+                "default", "if", "else", "for", "while", "do", "int",
+                "float", "double", "char", "void", "struct", "union",
+                "enum", "static", "const", "auto", "register", "extern",
+                "volatile", "signed", "unsigned", "long", "short", "sizeof",
+                "typedef", "goto", "abs", "exit"):
+        return f"v_{name}"
+    return name
 
-    name - unit name (filename), required
-    """
-    state = CState()
-    # TODO: do a first pass to get the top level definitions
-    # then a second pass to do generation
 
-    if not name:
-        raise ValueError("Name of unit is required")
+class CEmitter:
+    def __init__(self, program: zast.Program) -> None:
+        self.program = program
+        self.out: List[str] = []
+        self.indent_level = 0
+        self.needs_stdio = False
+        self.needs_stdint = False
+        self.needs_stdlib = False
+        self.needs_string = False
+        self.forward_decls: List[str] = []
+        self.struct_defs: List[str] = []
+        self.func_defs: List[str] = []
+        self.data_defs: List[str] = []
+        # track which names are functions/records/data (unit-level defs)
+        self._func_names: set[str] = set()
+        self._data_names: set[str] = set()
+        self._const_names: set[str] = set()
+        self._record_names: set[str] = set()
 
-    frag = _emitunit(name, node, state)
-    parts: List[str] = []
-    parts.append(f"/* unit: {name} */\n\n")
-    for f in state.flags:
-        if f in FLAGOUTPUT:
-            parts.append(FLAGOUTPUT[f])
+    def _indent(self) -> str:
+        return "    " * self.indent_level
+
+    def emit(self) -> str:
+        mainunit = self.program.units.get(self.program.mainunitname)
+        if not mainunit:
+            return "/* empty program */\n"
+
+        # first pass: collect all unit-level definition names
+        for name, defn in mainunit.body.items():
+            if isinstance(defn, zast.Function) and defn.body:
+                self._func_names.add(name)
+            elif isinstance(defn, zast.Record):
+                self._record_names.add(name)
+            elif isinstance(defn, zast.Data):
+                self._data_names.add(name)
+            elif isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.Data):
+                self._data_names.add(name)
+            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
+                self._const_names.add(name)
+
+        for unitname, unit in self.program.units.items():
+            if unitname in ("system", "core", "io", self.program.mainunitname):
+                continue
+            for name, defn in unit.body.items():
+                if isinstance(defn, zast.Function) and defn.body:
+                    self._func_names.add(f"{unitname}.{name}")
+
+        # second pass: emit definitions
+        for name, defn in mainunit.body.items():
+            if isinstance(defn, zast.Record):
+                self._emit_record(name, defn)
+            elif isinstance(defn, zast.Function) and defn.body:
+                self._emit_function(name, defn)
+            elif isinstance(defn, zast.Data):
+                self._emit_data(name, defn)
+            elif isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.Data):
+                self._emit_data(name, defn.expression)
+            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
+                self._emit_constant(name, defn)
+
+        for unitname, unit in self.program.units.items():
+            if unitname in ("system", "core", "io", self.program.mainunitname):
+                continue
+            for name, defn in unit.body.items():
+                if isinstance(defn, zast.Function) and defn.body:
+                    self._emit_function(f"{unitname}.{name}", defn)
+
+        # assemble output
+        parts: List[str] = []
+        parts.append("/* Generated by zerolang compiler */\n\n")
+
+        if self.needs_stdio:
+            parts.append("#include <stdio.h>\n")
+        if self.needs_stdint:
+            parts.append("#include <stdint.h>\n")
+        if self.needs_stdlib:
+            parts.append("#include <stdlib.h>\n")
+        if self.needs_string:
+            parts.append("#include <string.h>\n")
+        if self.needs_stdio or self.needs_stdint or self.needs_stdlib or self.needs_string:
+            parts.append("\n")
+
+        if self.needs_string or self.needs_stdio:
+            parts.append(
+                "typedef struct {\n"
+                "    int32_t len;\n"
+                "    char data[];\n"
+                "} ZStr;\n\n"
+                "static ZStr* zstr_new(const char* s) {\n"
+                "    int32_t len = (int32_t)strlen(s);\n"
+                "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + len + 1);\n"
+                "    z->len = len;\n"
+                "    memcpy(z->data, s, len + 1);\n"
+                "    return z;\n"
+                "}\n\n"
+                "static ZStr* zstr_cat(ZStr* a, ZStr* b) {\n"
+                "    int32_t len = a->len + b->len;\n"
+                "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + len + 1);\n"
+                "    z->len = len;\n"
+                "    memcpy(z->data, a->data, a->len);\n"
+                "    memcpy(z->data + a->len, b->data, b->len + 1);\n"
+                "    return z;\n"
+                "}\n\n"
+                "static ZStr* zstr_from_i64(int64_t n) {\n"
+                "    char buf[32];\n"
+                "    snprintf(buf, sizeof(buf), \"%ld\", (long)n);\n"
+                "    return zstr_new(buf);\n"
+                "}\n\n"
+                "static ZStr* zstr_from_f64(double n) {\n"
+                "    char buf[64];\n"
+                "    snprintf(buf, sizeof(buf), \"%g\", n);\n"
+                "    return zstr_new(buf);\n"
+                "}\n\n"
+                "static void zstr_print(ZStr* s) {\n"
+                "    printf(\"%.*s\\n\", s->len, s->data);\n"
+                "}\n\n"
+            )
+
+        for sd in self.struct_defs:
+            parts.append(sd)
+        for fd in self.forward_decls:
+            parts.append(fd)
+        if self.forward_decls:
+            parts.append("\n")
+        for dd in self.data_defs:
+            parts.append(dd)
+        for fd in self.func_defs:
+            parts.append(fd)
+
+        parts.append("int main(int argc, char* argv[]) {\n")
+        parts.append("    z_main();\n")
+        parts.append("    return 0;\n")
+        parts.append("}\n")
+
+        return "".join(parts)
+
+    def _emit_constant(self, name: str, atom: zast.AtomId) -> None:
+        typename, value, err = parse_number(atom.name)
+        if err:
+            return
+        self.needs_stdint = True
+        ctype = TYPEMAP.get(typename, "int64_t")
+        cname = _mangle_func(name)
+        if typename.startswith("f"):
+            self.data_defs.append(f"static const {ctype} {cname} = {value};\n")
         else:
-            raise ValueError(f"Unknown flag: {f}")
-    if len(state.flags) > 0:
-        parts.append("\n")
-    parts.extend(frag.parts)
+            self.data_defs.append(f"static const {ctype} {cname} = {int(value)};\n")
 
-    parts.append(
-        """
-int main(int argc, char *argv[]) {
-  main_();
-}
-"""
-    )
+    def _emit_record(self, name: str, rec: zast.Record) -> None:
+        self.needs_stdint = True
+        lines: List[str] = []
+        lines.append("typedef struct {\n")
+        for fname, fpath in rec.items.items():
+            ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
+            if ftype == "void":
+                if isinstance(fpath, zast.AtomId):
+                    ftype = TYPEMAP.get(fpath.name, "int64_t")
+            lines.append(f"    {ftype} {fname};\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+        self.struct_defs.append("".join(lines))
 
-    return "".join(parts)
+        all_funcs = list(rec.functions.items()) + list(rec.as_functions.items())
+        for mname, mfunc in all_funcs:
+            if mfunc.body:
+                self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
+    def _emit_data(self, name: str, data: zast.Data) -> None:
+        self.needs_stdint = True
+        values: List[str] = []
+        for item in data.data:
+            op = item.valtype
+            if isinstance(op, zast.AtomId) and _is_numeric_id(op.name):
+                _, val, err = parse_number(op.name)
+                if not err:
+                    if isinstance(val, float):
+                        values.append(str(val))
+                    else:
+                        values.append(str(int(val)))
+        cname = _mangle_func(name)
+        if values:
+            self.data_defs.append(
+                f"static const int64_t {cname}[] = {{{', '.join(values)}}};\n"
+                f"static const int64_t {cname}_len = {len(values)};\n\n"
+            )
 
-def _emitnode(name: Optional[str], node: Node, state: CState) -> Fragment:
-    """
-    emitnode - emit C code for an Node
-    """
-    f = nodehandler.get(node.nodetype)
-    if not f:
-        raise Exception(f"No handler for node type {node.nodetype}")
-    return f(name, node=node, state=state)
+    def _resolve_param_ctype(self, ppath: zast.Path, record_name: str = "") -> str:
+        if hasattr(ppath, "type") and ppath.type:
+            return _ctype(ppath.type)
+        if isinstance(ppath, zast.AtomId):
+            name = ppath.name
+            if name == "this" and record_name:
+                return f"z_{record_name}_t"
+            if name == "type" and record_name:
+                return f"z_{record_name}_t"
+            if name in TYPEMAP:
+                return TYPEMAP[name]
+            if name == "string":
+                return "ZStr*"
+            # check if it's a record name defined in the main unit
+            if name in self._record_names:
+                return f"z_{name}_t"
+        return "int64_t"
 
+    def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
+        if not func.returntype:
+            return "void"
+        if hasattr(func.returntype, "type") and func.returntype.type:
+            return _ctype(func.returntype.type)
+        if isinstance(func.returntype, zast.AtomId):
+            name = func.returntype.name
+            if name == "type" and record_name:
+                return f"z_{record_name}_t"
+            if name in TYPEMAP:
+                return TYPEMAP[name]
+            if name == "string":
+                self.needs_string = True
+                self.needs_stdlib = True
+                return "ZStr*"
+            if name in self._record_names:
+                return f"z_{name}_t"
+        return "void"
 
-def _emitunit(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.UNIT:
-    if not isinstance(node, zast.Unit):
-        raise TypeError(f"Expected zast.Unit, got {node.nodetype}")
+    def _emit_function(
+        self, name: str, func: zast.Function, record_name: str = ""
+    ) -> None:
+        self.needs_stdint = True
+        cname = _mangle_func(name)
 
-    if node.error:
-        print("Error: error in Unit AST")
+        ret_ctype = self._resolve_return_ctype(func, record_name)
 
-    if node.errornode:
-        return _emiterror(name, node.errornode, state)
+        params: List[str] = []
+        for pname, ppath in func.parameters.items():
+            # skip hidden :this parameter (unnamed first param of methods)
+            if pname.startswith(":"):
+                continue
+            ptype_str = self._resolve_param_ctype(ppath, record_name)
+            params.append(f"{ptype_str} {_mangle_var(pname)}")
 
-    return _emitblock(name, node=node.block, state=state)
+        param_str = ", ".join(params) if params else "void"
 
+        self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
-def _emitblock(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.BLOCK:
-    if not isinstance(node, zast.Statement):
-        raise TypeError(f"Expected zast.Statement, got {node.nodetype}")
+        lines: List[str] = []
+        lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
+        self.indent_level = 1
+        if func.body:
+            body_code = self._emit_statement(func.body)
+            lines.append(body_code)
+        lines.append("}\n\n")
+        self.func_defs.append("".join(lines))
 
-    if node.error:
-        print("Error: error in Block AST")
+    def _emit_statement(self, stmt: zast.Statement) -> str:
+        parts: List[str] = []
+        for sline in stmt.statements:
+            parts.append(self._emit_statement_line(sline))
+        return "".join(parts)
 
-    parts: List[str] = []
-    # storage for most recent result - return the last
-    value: Any = _NULLVALUE
-    for m in node.members:
-        frag = _emitnode(name, m, state=state)
-        parts.extend(frag.parts)
-        value = frag.value
-    return Fragment(value=value, parts=parts)
+    def _emit_statement_line(self, sline: zast.StatementLine) -> str:
+        inner = sline.statementline
+        if isinstance(inner, zast.Assignment):
+            return self._emit_assignment(inner)
+        if isinstance(inner, zast.Reassignment):
+            return self._emit_reassignment(inner)
+        if isinstance(inner, zast.Swap):
+            return self._emit_swap(inner)
+        if isinstance(inner, zast.Expression):
+            return self._emit_expression_stmt(inner)
+        return ""
 
+    def _emit_assignment(self, assign: zast.Assignment) -> str:
+        indent = self._indent()
+        ctype = "int64_t"
+        if assign.type:
+            ctype = _ctype(assign.type)
+        cname = _mangle_var(assign.name)
+        val = self._emit_expression_value(assign.value)
+        if ctype == "ZStr*":
+            self.needs_string = True
+            self.needs_stdlib = True
+        # check if value is a bare record name (zero-initialization)
+        inner = assign.value.expression
+        if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
+            ctype = f"z_{inner.name}_t"
+            val = f"({ctype}){{0}}"
+        return f"{indent}{ctype} {cname} = {val};\n"
 
-def _emitdefinition(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.DEFINITION:
-    if not isinstance(node, zast.Assignment):
-        raise ValueError("Error: wrong node type")
-    if node.error:
-        raise ValueError("Error: error in Definition AST")
+    def _emit_reassignment(self, reassign: zast.Reassignment) -> str:
+        indent = self._indent()
+        lhs = self._emit_path_value(reassign.topath)
+        rhs = self._emit_expression_value(reassign.value)
+        return f"{indent}{lhs} = {rhs};\n"
 
-    if not node.expression:
-        raise ValueError("Error: Bad operation")
-
-    frag = _emitnode(name, node.expression, state=state)
-    value = frag.value
-    depth = state.depth()
-    if depth == 1:
-        if not value.constant:
-            raise ValueError("Error: top level definitions must be constant")
-        if not node.name:
-            raise ValueError("Error: top level definitions must be named")
-
-    indent = "  " * (depth - 1)
-    parts: List[str] = [indent]
-    if node.name:
-        # make new mapping in the state
-        # strip colon from end (always must be present)
-        n = node.name.token
-        state.define(name=n, value=frag.value)
-        parts.append(state.ctype(typ=value.valuetype, name=n))
-        parts.append(" = ")
-
-    parts.extend(frag.parts)
-    parts.append(";\n")
-
-    return Fragment(parts=parts, value=value)
-
-
-def _emitassignment(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.ASSIGNMENT:
-    if not isinstance(node, zast.Assignment):
-        raise ValueError("Error: wrong node type")
-    if node.error:
-        raise ValueError("Error: error in Definition AST")
-
-    if not node.expression:
-        raise ValueError("Error: Bad operation")
-
-    frag = _emitnode(name, node.expression, state=state)
-    value = frag.value
-    depth = state.depth()
-    if depth == 1:
-        if not value.constant:
-            raise ValueError("Error: can not have top level assignment")
-
-    indent = "  " * (depth - 1)
-    parts: List[str] = [indent]
-    if node.name:
-        # ensure name already exists
-
-        # make new mapping in the state
-        # strip colon from end (always must be present)
-        n = node.name.token[:-1]
-        state.define(name=n, value=frag.value)
-        parts.append(state.ctype(typ=value.valuetype, name=n))
-        parts.append(" = ")
-
-    parts.extend(frag.parts)
-    parts.append(";\n")
-
-    return Fragment(parts=parts, value=value)
-
-
-def _emitbinop(name: Optional[str], node: Any, state: CState) -> Fragment:
-    if not isinstance(node, zast.BinOp):
-        raise ValueError("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in Member AST")
-
-    # if node.errornode:
-    #     output.append(sepinner)
-    #     _pprinterror(node.errornode, output, depth)
-
-    if node.lhs:
-        parts: List[str] = ["("]
-        f = _emitnode(name="", node=node.lhs, state=state)
-        parts.extend(f.parts)
-
-        if node.operator:
-            op = node.operator.token
-            if op in ("+", "-", "*", "/"):
-                parts.append(f" {op} ")
-            else:
-                raise ValueError(f"Error: cannot handle {op} operator (yet)")
-        else:
-            raise ValueError("Error: missing operator in binop")
-
-        if node.rhs:
-            # an atom
-            f2 = _emitnode(name="", node=node.rhs, state=state)
-            parts.extend(f2.parts)
-        else:
-            raise ValueError("Error: missing RHS in binop")
-        parts.append(")")
-
-        # check lhs and rhs types are the same (relax this in the future to be
-        # compatible types instead?)
-        if f.value.valuetype != f2.value.valuetype:
-            raise ValueError("Error: LHS and RHS types must be equivalent")
-
-        # TODO: and they must be simple types?
-
-        return Fragment(parts=parts, value=f.value)
-
-    raise ValueError("Error: missing LHS in binop")
-
-
-def _emitcall(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.CALL:
-    if not isinstance(node, zast.Call):
-        raise ValueError("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in Call AST")
-
-    # if node.errornode:
-    #     _pprinterror(node.errornode, output, depth)
-
-    c = node.callable
-
-    if not isinstance(c, zast.AtomId):
-        raise ValueError("Error: can only handle AtomId callables (so far)")
-
-    if c.dottedids:
-        raise ValueError(
-            "Error: can only handle AtomId callables without dottedids (so far)"
+    def _emit_swap(self, swap: zast.Swap) -> str:
+        indent = self._indent()
+        lhs = self._emit_path_value(swap.lhs)
+        rhs = self._emit_path_value(swap.rhs)
+        ctype = "int64_t"
+        if swap.lhs.type:
+            ctype = _ctype(swap.lhs.type)
+        return (
+            f"{indent}{{\n"
+            f"{indent}    {ctype} _tmp = {lhs};\n"
+            f"{indent}    {lhs} = {rhs};\n"
+            f"{indent}    {rhs} = _tmp;\n"
+            f"{indent}}}\n"
         )
 
-    sym = c.name.token
-    builtin = builtinhandler.get(sym, None)
-    if builtin:
-        return builtin(name, node.arguments, state)
-    # TODO: look sym up in env
-    # TODO: and check for builtins
+    def _emit_expression_stmt(self, expr: zast.Expression) -> str:
+        indent = self._indent()
+        inner = expr.expression
+        if isinstance(inner, zast.Call):
+            return self._emit_call_stmt(inner, indent)
+        if isinstance(inner, zast.If):
+            return self._emit_if(inner)
+        if isinstance(inner, zast.For):
+            return self._emit_for(inner)
+        if isinstance(inner, zast.Do):
+            return self._emit_do(inner)
+        if isinstance(inner, zast.With):
+            return self._emit_with(inner)
+        if isinstance(inner, zast.Case):
+            return self._emit_case(inner)
+        if isinstance(inner, zast.Operation):
+            val = self._emit_operation_value(inner)
+            return f"{indent}{val};\n"
+        return ""
 
-    parts: List[str] = []
-    arguments: Dict[str, Any] = OrderedDict()
-    t = _Function(arguments=arguments, result=_NULLTYPE)
-    parts.extend(state.ctype(typ=t, name=sym))
+    def _is_data_index_call(self, call: zast.Call) -> bool:
+        """Check if this is a data.index call like primes.index i."""
+        if isinstance(call.callable, zast.DottedPath):
+            if isinstance(call.callable.parent, zast.AtomId):
+                pname = call.callable.parent.name
+                child = call.callable.child.name
+                if pname in self._data_names and child == "index":
+                    return True
+        return False
 
-    # node.callable must be a atom id? .... Anonymous function?
-    # ensure it is callable...
-    # f = _emitnode(node.callable, state)
-    # parts.extend(f.parts)
+    def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
+        callable_name = self._get_callable_name(call.callable)
 
-    # TODO: do argument values correctly
-    # for a in node.arguments:
-    #     fa = _emitargument(a, state)
+        if callable_name == "print":
+            self.needs_stdio = True
+            self.needs_string = True
+            self.needs_stdlib = True
+            if call.arguments:
+                arg = self._emit_operation_value(call.arguments[0].valtype)
+                return f"{indent}zstr_print({arg});\n"
+            return f"{indent}zstr_print(zstr_new(\"\"));\n"
 
-    # TODO: set returntype / value correctly
-    return Fragment(parts=parts, value=_NULLVALUE)
+        if callable_name == "return":
+            if call.arguments:
+                val = self._emit_operation_value(call.arguments[0].valtype)
+                return f"{indent}return {val};\n"
+            return f"{indent}return;\n"
+
+        if callable_name == "break":
+            return f"{indent}break;\n"
+        if callable_name == "continue":
+            return f"{indent}continue;\n"
+
+        # data.index call -> array access
+        if self._is_data_index_call(call):
+            data_name = call.callable.parent.name
+            idx = self._emit_operation_value(call.arguments[0].valtype) if call.arguments else "0"
+            return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
+
+        args = self._emit_call_args(call)
+        return f"{indent}{_mangle_func(callable_name)}({args});\n"
+
+    def _emit_call_args(self, call: zast.Call) -> str:
+        parts: List[str] = []
+        for arg in call.arguments:
+            parts.append(self._emit_operation_value(arg.valtype))
+        return ", ".join(parts)
+
+    def _get_callable_name(self, path: zast.Path) -> str:
+        if isinstance(path, zast.AtomId):
+            return path.name
+        if isinstance(path, zast.DottedPath):
+            parent = self._get_callable_name(path.parent)
+            return f"{parent}.{path.child.name}"
+        return "unknown"
+
+    def _emit_expression_value(self, expr: zast.Expression) -> str:
+        inner = expr.expression
+        if isinstance(inner, zast.Call):
+            return self._emit_call_value(inner)
+        if isinstance(inner, zast.Operation):
+            return self._emit_operation_value(inner)
+        if isinstance(inner, zast.With):
+            return self._emit_expression_value(inner.doexpr)
+        return "0"
+
+    def _emit_call_value(self, call: zast.Call) -> str:
+        callable_name = self._get_callable_name(call.callable)
+
+        # data.index call -> array access
+        if self._is_data_index_call(call):
+            data_name = call.callable.parent.name
+            idx = self._emit_operation_value(call.arguments[0].valtype) if call.arguments else "0"
+            return f"{_mangle_func(data_name)}[{idx}]"
+
+        if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
+            rec_type = call.callable.type
+            ctype = f"z_{rec_type.name}_t"
+            fields: List[str] = []
+            for arg in call.arguments:
+                if arg.name:
+                    val = self._emit_operation_value(arg.valtype)
+                    fields.append(f".{arg.name} = {val}")
+            if fields:
+                return f"({ctype}){{{', '.join(fields)}}}"
+            return f"({ctype}){{0}}"
+
+        args = self._emit_call_args(call)
+        return f"{_mangle_func(callable_name)}({args})"
+
+    def _emit_operation_value(self, op: zast.Operation) -> str:
+        if isinstance(op, zast.BinOp):
+            return self._emit_binop_value(op)
+        if isinstance(op, zast.Path):
+            return self._emit_path_value(op)
+        return "0"
+
+    def _emit_binop_value(self, binop: zast.BinOp) -> str:
+        lhs = self._emit_operation_value(binop.lhs)
+        rhs = self._emit_path_value(binop.rhs)
+        op = binop.operator.name
+        cop = C_OPS.get(op, op)
+        return f"({lhs} {cop} {rhs})"
+
+    def _emit_path_value(self, path: zast.Path) -> str:
+        if isinstance(path, zast.Expression):
+            return self._emit_expression_value(path)
+        if isinstance(path, zast.AtomString):
+            return self._emit_string_value(path)
+        if isinstance(path, zast.AtomId):
+            return self._emit_atomid_value(path)
+        if isinstance(path, zast.DottedPath):
+            return self._emit_dotted_path_value(path)
+        return "0"
+
+    def _emit_atomid_value(self, atom: zast.AtomId) -> str:
+        name = atom.name
+        if _is_numeric_id(name):
+            return self._emit_numeric_literal(name)
+        # check if this refers to a function, constant, data, or record
+        if name in self._func_names or name in self._data_names or name in self._const_names:
+            return _mangle_func(name)
+        if name in self._record_names:
+            return f"(z_{name}_t){{0}}"
+        return _mangle_var(name)
+
+    def _emit_numeric_literal(self, name: str) -> str:
+        typename, value, err = parse_number(name)
+        if err:
+            return "0"
+        self.needs_stdint = True
+        if typename.startswith("f"):
+            return str(value)
+        return str(int(value))
+
+    def _emit_dotted_path_value(self, path: zast.DottedPath) -> str:
+        child = path.child.name
+
+        if isinstance(path.parent, zast.AtomId):
+            pname = path.parent.name
+            # unit.name reference
+            if pname in self.program.units and pname not in ("system", "core", "io"):
+                return _mangle_func(f"{pname}.{child}")
+            # record_name.method — method call with no extra args (implicit this)
+            if pname in self._record_names:
+                return _mangle_func(f"{pname}.{child}")
+            # data.index call
+            if pname in self._data_names and child == "index":
+                return _mangle_func(pname)
+
+        # check if the dotted path resolves to a function (method call)
+        if hasattr(path, "type") and path.type and path.type.typetype == ZTypeType.FUNCTION:
+            parent = self._emit_path_value(path.parent)
+            # determine the record type name from the function name
+            func_name = path.type.name  # e.g. "point.distance"
+            return f"{_mangle_func(func_name)}({parent})"
+
+        parent = self._emit_path_value(path.parent)
+        return f"{parent}.{child}"
+
+    def _emit_string_value(self, atom: zast.AtomString) -> str:
+        self.needs_string = True
+        self.needs_stdlib = True
+        self.needs_stdio = True
+
+        has_interp = any(isinstance(p, zast.Expression) for p in atom.stringparts)
+
+        if not has_interp:
+            literal = self._collect_string_literal(atom.stringparts)
+            return f'zstr_new("{literal}")'
+
+        parts: List[str] = []
+        for p in atom.stringparts:
+            if isinstance(p, zast.Expression):
+                val = self._emit_expression_value(p)
+                val_type = self._get_expression_type(p)
+                if val_type and val_type.name in ("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"):
+                    parts.append(f"zstr_from_i64((int64_t){val})")
+                elif val_type and val_type.name in ("f32", "f64"):
+                    parts.append(f"zstr_from_f64((double){val})")
+                elif val_type and val_type.name == "string":
+                    parts.append(val)
+                else:
+                    parts.append(f"zstr_from_i64((int64_t){val})")
+            else:
+                literal = self._escape_c_string(p.tokstr)
+                if literal:
+                    parts.append(f'zstr_new("{literal}")')
+
+        if not parts:
+            return 'zstr_new("")'
+        if len(parts) == 1:
+            return parts[0]
+        result = parts[0]
+        for p in parts[1:]:
+            result = f"zstr_cat({result}, {p})"
+        return result
+
+    def _collect_string_literal(self, parts: list) -> str:
+        result: List[str] = []
+        for p in parts:
+            if not isinstance(p, zast.Expression):
+                result.append(self._escape_c_string(p.tokstr))
+        return "".join(result)
+
+    def _escape_c_string(self, s: str) -> str:
+        return (
+            s.replace("\\", "\\\\")
+            .replace('"', '\\"')
+            .replace("\n", "\\n")
+            .replace("\t", "\\t")
+            .replace("\r", "\\r")
+        )
+
+    def _get_expression_type(self, expr: zast.Expression) -> Optional[ZType]:
+        if hasattr(expr, "type") and expr.type:
+            return expr.type
+        inner = expr.expression
+        if hasattr(inner, "type") and inner.type:
+            return inner.type
+        return None
+
+    def _get_operation_type(self, op: zast.Operation) -> Optional[ZType]:
+        if hasattr(op, "type") and op.type:
+            return op.type
+        return None
+
+    def _emit_if(self, ifnode: zast.If) -> str:
+        indent = self._indent()
+        parts: List[str] = []
+
+        for i, clause in enumerate(ifnode.clauses):
+            keyword = "if" if i == 0 else "} else if"
+            conds: List[str] = []
+            for _, cond_op in clause.conditions.items():
+                conds.append(self._emit_operation_value(cond_op))
+            cond_str = " && ".join(conds) if conds else "1"
+            parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(clause.statement))
+            self.indent_level -= 1
+
+        if ifnode.elseclause:
+            parts.append(f"{indent}}} else {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(ifnode.elseclause))
+            self.indent_level -= 1
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_for(self, fornode: zast.For) -> str:
+        indent = self._indent()
+        parts: List[str] = []
+
+        init_vars: List[str] = []
+        cond_exprs: List[str] = []
+        for name, cond_op in fornode.conditions.items():
+            if name.startswith(" "):
+                cond_exprs.append(self._emit_operation_value(cond_op))
+            else:
+                val = self._emit_operation_value(cond_op)
+                ctype = "int64_t"
+                t = self._get_operation_type(cond_op)
+                if t:
+                    ctype = _ctype(t)
+                init_vars.append(f"{indent}{ctype} {_mangle_var(name)} = {val};\n")
+
+        for iv in init_vars:
+            parts.append(iv)
+
+        cond_str = " && ".join(cond_exprs) if cond_exprs else "1"
+        parts.append(f"{indent}while ({cond_str}) {{\n")
+
+        if fornode.loop:
+            self.indent_level += 1
+            parts.append(self._emit_statement(fornode.loop))
+            self.indent_level -= 1
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_do(self, donode: zast.Do) -> str:
+        return self._emit_statement(donode.statement)
+
+    def _emit_with(self, withnode: zast.With) -> str:
+        indent = self._indent()
+        parts: List[str] = []
+
+        val = self._emit_expression_value(withnode.value)
+        val_type = self._get_expression_type(withnode.value)
+        ctype = "int64_t"
+        if val_type:
+            ctype = _ctype(val_type)
+
+        parts.append(f"{indent}{{\n")
+        self.indent_level += 1
+        inner_indent = self._indent()
+        parts.append(f"{inner_indent}{ctype} {_mangle_var(withnode.name)} = {val};\n")
+        parts.append(self._emit_expression_stmt(withnode.doexpr))
+        self.indent_level -= 1
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_case(self, casenode: zast.Case) -> str:
+        indent = self._indent()
+        parts: List[str] = []
+
+        subject = self._emit_operation_value(casenode.subject)
+
+        # use if/else if chain (case values may not be compile-time constants in C)
+        for i, clause in enumerate(casenode.clauses):
+            match_val = self._emit_atomid_value(clause.match)
+            keyword = "if" if i == 0 else "} else if"
+            parts.append(f"{indent}{keyword} ({subject} == {match_val}) {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(clause.statement))
+            self.indent_level -= 1
+
+        if casenode.elseclause:
+            parts.append(f"{indent}}} else {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(casenode.elseclause))
+            self.indent_level -= 1
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
 
 
-def _emitargument(name: Optional[str], node: Any, state: CState) -> Fragment:
-    if not isinstance(node, zast.NamedOperation):
-        raise Exception("Error: wrong node type")
-    # TODO: implement argument emission
-    return Fragment(parts=[], value=_NULLVALUE)
-
-
-def _emitatomid(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.ATOMID:
-    if not isinstance(node, zast.AtomId):
-        raise ValueError("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in AtomId AST")
-
-    # if node.errornode:
-    #     _pprinterror(node.errornode, output, depth)
-
-    sym = node.name.token
-    value = state.find(sym)
-    if not value:
-        raise Exception("ERROR: Cannot find symbol {sym}")
-
-    if node.dottedids:
-        raise Exception("Cannot handle dottedids on atomids yet")
-
-    # cname = " " + state.mangle(sym) + " "
-    cname = state.mangle(sym)
-
-    # sep = depth * "  "
-    # output.append(f"{sep}}}\n")
-    return Fragment(value=value, parts=[cname])
-
-
-def _emitatomstring(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # pylint: disable=unused-argument
-    # don't need state for atomstring
-    # if node.nodetype != NodeType.STRING:
-    if not isinstance(node, zast.AtomString):
-        raise Exception("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in AtomString AST")
-
-    stringparts: List[str] = []
-
-    for s in node.stringparts:
-        # TODO: handle non-ASCII characters properly
-        # TODO: convert escape codes that are different into c style
-        # TODO: handle variable interpolation
-        stringparts.append(s.token)
-
-    if node.dottedids:
-        # output.append(f").{d.token}")
-        raise Exception("Cannot handle dottedids on string literals yet")
-
-    string = "".join(stringparts)
-    value = _StringValue(constant=True, string=string)
-    parts = ['"' + string + '"']
-    return Fragment(value=value, parts=parts)
-
-
-def _emitatomexpression(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.ATOMEXPR:
-    if not isinstance(node, zast.Expression):
-        raise Exception("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in AtomExpr AST")
-
-    if not node.expression:
-        raise ValueError("Error: missing expression in atomexpression")
-
-    f = _emitnode(name, node.expression, state)
-    parts: List[str] = ["("]
-    parts.extend(f.parts)
-    parts.append(")")
-
-    if node.dottedids:
-        # output.append(f").{d.token}")
-        raise Exception("Cannot handle dottedids on expression atoms yet")
-
-    return Fragment(value=f.value, parts=parts)
-
-
-def _emitatomblock(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.ATOMBLOCK:
-    if not isinstance(node, zast.Statement):
-        raise Exception("Error: wrong node type")
-
-    if node.error:
-        raise ValueError("Error: error in AtomBlock AST")
-
-    if not node.block:
-        raise ValueError("Error: missing block in AtomBlock")
-
-    # nb: don't indent, use our indent already (we are just an atom)
-
-    f = _emitblock(name, node.block, state)
-
-    parts: List[str] = ["{\n"]
-    parts.extend(f.parts)
-    parts.append("\n}")
-
-    if node.dottedids:
-        # output.append(f").{d.token}")
-        raise Exception("Cannot handle dottedids on block atoms yet")
-
-    return Fragment(value=f.value, parts=parts)
-
-
-def _emiterror(name: Optional[str], node: Any, state: CState) -> Fragment:
-    # if node.nodetype != NodeType.ERROR:
-    if not isinstance(node, zast.Error):
-        raise Exception("Error: wrong node type")
-    state.error = True
-    print(f"ERROR: {node.message} At: {node.token!r} For: {name}")
-    return Fragment(value=_NULLVALUE, parts=[])
-
-
-nodehandler: dict = {
-    NodeType.UNIT: _emitunit,
-    NodeType.STATEMENT: _emitblock,
-    NodeType.ASSIGNMENT: _emitassignment,
-    NodeType.BINOP: _emitbinop,
-    NodeType.CALL: _emitcall,
-    NodeType.NAMEDOPERATION: _emitargument,
-    NodeType.EXPRESSION: _emitatomexpression,
-    NodeType.ATOMID: _emitatomid,
-    NodeType.ATOMSTRING: _emitatomstring,
-}
-
-
-def _emit_numeric_literal(num: Any) -> str:
-    """
-    Convert a _NumericValue into a C literal string
-    """
-    if not num.constant:
-        raise ValueError("Number is not a constant")
-    r = ""
-    base = 10
-    if isinstance(num, _IntegerValue):
-        if num.base:
-            # always?
-            base = num.base
-
-    if base in (2, 16):
-        base = 16  # binary and hex are output as hex
-        r = "0x"
-    elif base == 8:
-        r = "0"
-
-    if isinstance(num, _FloatValue):
-        r += f"{num.number:f}"
-    elif isinstance(num, _IntegerValue):
-        if base == 8:
-            r += f"{num.number:o}"
-        elif base == 16:
-            r += f"{num.number:x}"
-        else:
-            r += f"{num.number}"
-    else:
-        raise ValueError("ERROR: Unknow numeric type")
-
-    return r
-
-
-# ----- Builtins ----------------------------------------------------
-
-
-def _emitbuiltinfunction(
-    name: Optional[str], arguments: Sequence[zast.NamedOperation], state: CState
-) -> Fragment:
-    """
-    TODO: change all names to Optional[Token]. Need to ensure this is a DEFINITION
-    """
-    # out (default)
-    # of
-    # in
-    # do (required)
-    parts = []
-    # if not name or name.toktype != TT.DEFINITION:
-    if not name:
-        raise ValueError("Function requires a Definition name")
-
-    parts.append(f"/* arguments for [{name}] */\n")
-    for a in arguments:
-        if a.name:
-            parts.append(f"ARG: {a.name}\n")
-        else:
-            parts.append("ARG: [UNNAMED PARAM]\n")
-    return Fragment(value=_NULLVALUE, parts=parts)
-
-
-def _emitbuiltinif(
-    name: Optional[Token], arguments: Sequence[zast.NamedOperation], state: CState
-) -> Fragment:
-    return Fragment(value=None, parts=[])
-
-
-def _emitbuiltindo(
-    name: Optional[Token], arguments: Sequence[zast.NamedOperation], state: CState
-) -> Fragment:
-    return Fragment(value=None, parts=[])
-
-
-builtinhandler: dict = {
-    "function": _emitbuiltinfunction,
-    "if": _emitbuiltinif,
-    "do": _emitbuiltindo,
-}
+def emit(program: zast.Program) -> str:
+    emitter = CEmitter(program)
+    return emitter.emit()

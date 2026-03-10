@@ -54,11 +54,18 @@ class TypeChecker:
         for unitname in self.program.units:
             self.unit_types[unitname] = _make_type(unitname, ZTypeType.UNIT)
 
+        # current function return type (for return statement checking)
+        self._current_return_type: Optional[ZType] = None
+
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
 
-    def check(self) -> List[zast.Error]:
-        """Run the type checker starting from main."""
+    def check(self, full: bool = False) -> List[zast.Error]:
+        """Run the type checker starting from main.
+
+        If full=True, also check all definitions in all units (not just
+        those reachable from main).
+        """
         mainunit = self.program.units.get(self.program.mainunitname)
         if not mainunit:
             return self.errors
@@ -78,6 +85,13 @@ class TypeChecker:
             if isinstance(defn, zast.Function) and defn.body:
                 self._resolve_unit_name(self.program.mainunitname, name)
                 self._check_function_body(name, defn)
+
+        if full:
+            for unitname, unit in self.program.units.items():
+                for name, defn in unit.body.items():
+                    self._resolve_unit_name(unitname, name)
+                    if isinstance(defn, zast.Function) and defn.body:
+                        self._check_function_body(name, defn)
 
         return self.errors
 
@@ -204,8 +218,14 @@ class TypeChecker:
         self._resolved[key] = etype
         self._resolving.append((key, etype))
 
-        for vname in enum.items:
-            etype.children[vname] = etype  # variants have the enum type
+        for vname, vpath in enum.items.items():
+            # resolve variant value type if specified
+            if vpath:
+                self._resolve_typeref(vpath)
+                # variant still has the enum type, but store value type info
+                etype.children[vname] = etype
+            else:
+                etype.children[vname] = etype
 
         for mname, mfunc in enum.functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
@@ -324,7 +344,14 @@ class TypeChecker:
             pt = self._resolve_typeref(ppath)
             if pt:
                 self.symtab.define(pname, pt)
+        # set expected return type for return statement checking
+        prev_return_type = self._current_return_type
+        if func.returntype:
+            self._current_return_type = self._resolve_typeref(func.returntype)
+        else:
+            self._current_return_type = None
         self._check_statement(func.body)
+        self._current_return_type = prev_return_type
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
@@ -436,6 +463,20 @@ class TypeChecker:
         if not callee_type:
             return None
 
+        # handle return statement: check expression type against function return type
+        if (
+            callee_type.name == "return"
+            and callee_type.typetype == ZTypeType.FUNCTION
+        ):
+            return self._check_return_call(call)
+
+        # handle record construction: calling a record type creates an instance
+        if callee_type.typetype == ZTypeType.RECORD:
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            call.type = callee_type
+            return callee_type
+
         if callee_type.typetype != ZTypeType.FUNCTION:
             self._error(
                 f"Cannot call non-function type: {callee_type.name}",
@@ -450,7 +491,23 @@ class TypeChecker:
 
         for i, arg in enumerate(call.arguments):
             arg_type = self._check_operation(arg.valtype)
-            if arg_type and i < len(params):
+            if arg_type and arg.name and params:
+                # named argument: match by parameter name
+                matched = None
+                for pname, ptype in params:
+                    if pname == arg.name:
+                        matched = ptype
+                        break
+                if matched:
+                    if arg_type is not matched and arg_type.name != matched.name:
+                        self._error(
+                            f"Argument '{arg.name}' type mismatch: expected "
+                            f"{matched.name}, got {arg_type.name}",
+                            loc=arg.start,
+                        )
+                # don't error on unmatched named args for now (may be :this etc)
+            elif arg_type and i < len(params):
+                # positional argument
                 _, ptype = params[i]
                 if arg_type is not ptype and arg_type.name != ptype.name:
                     self._error(
@@ -461,6 +518,26 @@ class TypeChecker:
 
         ret = callee_type.children.get(":return")
         call.type = ret if ret else self.t_null
+        return call.type
+
+    def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
+        """Check a return statement: verify return value matches function return type."""
+        # type-check the return expression (first argument)
+        ret_type = None
+        if call.arguments:
+            ret_type = self._check_operation(call.arguments[0].valtype)
+
+        if self._current_return_type and ret_type:
+            if ret_type is not self._current_return_type and ret_type.name != self._current_return_type.name:
+                self._error(
+                    f"Return type mismatch: function expects {self._current_return_type.name}, "
+                    f"got {ret_type.name}",
+                    loc=call.start,
+                )
+
+        # return has type 'never' (control flow doesn't continue)
+        never = self._resolve_name("never")
+        call.type = never if never else self.t_null
         return call.type
 
     def _check_binop(self, binop: zast.BinOp) -> Optional[ZType]:
@@ -528,7 +605,7 @@ class TypeChecker:
         return self.t_null
 
 
-def typecheck(program: zast.Program) -> List[zast.Error]:
+def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     """Top-level entry point: type-check a parsed program."""
     tc = TypeChecker(program)
-    return tc.check()
+    return tc.check(full=full)

@@ -7,10 +7,8 @@ import sys
 import os
 import argparse
 
-import zprettyprint
 import ztypecheck
-
-# import zemitterc
+import zemitterc
 import zast
 from zparser import Parser
 from zvfs import ZVfs, FSProvider, BindType, DEntryID
@@ -32,6 +30,12 @@ def main() -> None:
         "--src",
         default=None,
         help="Path to the user source directory (default: current directory)",
+    )
+    parser.add_argument(
+        "--full-typecheck",
+        action="store_true",
+        default=False,
+        help="Type-check all definitions, not just those reachable from main",
     )
     args = parser.parse_args()
 
@@ -88,7 +92,7 @@ def main() -> None:
         # print(repr(program))
         sys.exit(1)
     # type check (second pass)
-    type_errors = ztypecheck.typecheck(program)
+    type_errors = ztypecheck.typecheck(program, full=args.full_typecheck)
     if type_errors:
         for err in type_errors:
             print(zast.errortomessage(err=err, vfs=vfs))
@@ -96,15 +100,10 @@ def main() -> None:
 
     print("Type check passed.")
 
-    zprettyprint.pprintprogram(program)
-
-    # # TODO: use zvfs - separate one for output?
-    # csource = zemitterc.emit(unitname, program)
-    # print("-----------------------------------------------------")
-    # print(csource)
-    # with open(outfn, "w") as f:
-    #     f.write(csource)
-    # print(f"Written [{outfn}]")
+    csource = zemitterc.emit(program)
+    with open(outfn, "w") as f:
+        f.write(csource)
+    print(f"Written [{outfn}]")
 
 
 if __name__ == "__main__":
