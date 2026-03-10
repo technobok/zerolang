@@ -8,8 +8,12 @@ endif
 
 " Set syntax-only keyword chars to match zerolang WORD characters:
 "   [-!$%&'*+/<=>?@\^_|~a-zA-Z0-9]
-" This makes \< \> and \k work correctly for zerolang identifiers.
+" This makes \< \> word boundaries work correctly for zerolang identifiers.
 syn iskeyword @,48-57,33,36-39,42-43,45,47,60-64,92,94-95,124,126
+
+" Zerolang WORD character class for use in patterns (matches syn iskeyword).
+" \k cannot be used because it follows buffer iskeyword, not syn iskeyword.
+let s:W = '[-!$%&''*+\/<=>?@\\^_|~a-zA-Z0-9]'
 
 " Comments: # to end of line
 syn match zerolangComment "#.*$" contains=@Spell
@@ -20,8 +24,11 @@ syn region zerolangRawString start=/\z\("\{5,}\)/ end=/\z1/ contains=@Spell
 syn region zerolangRawString start=/\z\("\{4}\)/ end=/\z1/ contains=@Spell
 syn region zerolangRawString start=/\z\("\{3}\)/ end=/\z1/ contains=@Spell
 
-" Interpreted strings
-syn region zerolangString start=/"/ skip=/\\./ end=/"/ contains=zerolangEscape,zerolangEscapeError,zerolangInterpolation,@Spell
+" Interpreted strings.
+" No skip pattern — the contained escape matches (eg. \") prevent the end
+" pattern from matching at escaped quotes. Using skip would also block the
+" interpolation region from starting at \{.
+syn region zerolangString start=/"/ end=/"/ contains=zerolangEscape,zerolangEscapeError,zerolangInterpolation,@Spell
 
 " Valid escape sequences inside interpreted strings
 syn match zerolangEscape /\\[\\bnrt"']/ contained
@@ -32,7 +39,7 @@ syn match zerolangEscape /\\u[0-9a-fA-F]\{4,8}/ contained
 syn match zerolangEscapeError /\\[^\\bnrt"'xu{]/ contained
 syn match zerolangEscapeError /\\$/ contained
 
-" String interpolation: \{...}
+" String interpolation: \{...} — code inside is highlighted as top-level
 syn region zerolangInterpolation matchgroup=zerolangInterpolationDelim start=/\\{/ end=/}/ contained contains=TOP
 
 " Keywords (use syn match so labels can take priority)
@@ -41,7 +48,7 @@ syn match zerolangKeyword /\<\%(function\|in\|out\|is\|as\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
 syn match zerolangKeyword /\<\%(match\|case\|break\|continue\|yield\|return\|swap\)\>/
-syn match zerolangKeyword /=/
+syn match zerolangKeyword /\<=/
 
 " Reserved words (highlighted as errors)
 syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
@@ -59,9 +66,9 @@ syn match zerolangBuiltin /\<\%(this\|meta\|error\)\>/
 syn match zerolangBuiltin /\<iterator\>/
 syn match zerolangBuiltin /\<\%(take\|borrow\|lock\|generic\)\>/
 
-" Labels: word: and :word (defined after keywords — later match wins)
-syn match zerolangLabel /\k\+:/ contains=zerolangKeyword,zerolangReserved,zerolangBuiltin
-syn match zerolangLabel /:\k\+/
+" Labels: word: and :word (defined after keywords — longer match wins)
+exe 'syn match zerolangLabel /' . s:W . '\+:/'
+exe 'syn match zerolangLabel /:' . s:W . '\+/'
 
 " Illegal characters
 syn match zerolangError /[[\],;`]/
