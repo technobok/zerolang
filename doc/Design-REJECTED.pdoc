@@ -416,6 +416,13 @@ argument always be borrowed? Maybe do this?
   parent type is generic, then each of the limit children take the same generic
   parameters.]
 
+#--: IDEA: No Shadowing
+
+Prevent shadowing (syntax error) at the local level. Locals cannot shadow
+anything up to parameter name and function name of function.
+
+Can shadow parent units... otherwise would be very annoying.
+
 
 #--: Why no shadowing of vars?
 
@@ -534,4 +541,103 @@ But ownership could cause problems. Could only capture static or readonly vars.
   [#*: 'if' args and will short-circuit fail after the first 'if' that fails, so
     (almost) similar (no short-circuit 'or' though... only 'and')]
 
+
+#--: THINK: how to unify strings?
+
+#ul:
+  [#*: have a union for stringref|stringval for functions that read only?]
+  [#*: stringdef is same as stringval except can never take ownership (can't assign
+    to it)]
+
+3 types:
+
+stringref:
+
+#ul:
+  [#*: reference type]
+  [#*: has a length and a capacity (in bytes) (struct will be cap int, len int,
+    bytes\[\])]
+  [#*: mutable (extend ONLY, or delete whole thing...)]
+  [#*: can be owned and borrowed]
+
+stringval:
+
+#ul:
+  [#*: a value type - so copy by value ????]
+  [#*: underlying array of u8]
+  [#*: fixed max capacity in bytes (type system holds this? yes)]
+  [#*: generic type that is generic over length]
+  [#*: length (in bytes) stored as a variable length int at the start of the
+    string]
+  [#*: null terminated as well]
+  [#*: mutable, but only by completely replacing current contents (similar to
+    assigning to a number)]
+  [#*: can convert to a Cstring (how to do ownership? cast/as ?)]
+  [#*: interop with C? Convert to C string easy, but C cannot modify the length of
+    the string]
+  [#*: interop with C: need to copy from a string created in C to a stringval or a
+    stringref (to prepend length)]
+
+stringdef:
+
+#ul:
+  [#*: top level string definition (same as stringref but immutable? And some
+    operations are compile time constant - length, retrieving a byte at an
+    offset...)]
+  [#*: string literals defined in code are stringdefs]
+  [#*: underlying array of u8]
+  [#*: immutable]
+  [#*: borrowed references only]
+  [#*: has method to create a stringref (or stringval?) based on its contents]
+
+
+need:
+
+#ul:
+  #*: reftype readonly ('data'? for string literals (incl top level - never freed)
+  #*: reftype expandable (builder)
+  #*: valtype  
+
+
+#--: IDEA: how to make a single function that takes a generic numeric item?
+
+Without specialising it. eg a function that can operate on an array of any
+size. 
+
+To fix, define the length as a variable of the type of the generic length
+variable. Then the compiler enforces that var must be a constant (exactly the
+same as the generic length 'type') and, since the generic type is a constant,
+this variable will have a default value equal to the length so need not be
+separately specified in the caller. Then refer to that variable in the body of
+the function and the generated function will be deduplicated.
+
+#code language=zerolang: """
+  # function is generic over array length 'type' (lt)... will be specialised 
+  # for all lengths...
+  # lt = generic length 'type' (constant)
+  # arr = the array itself declared in relation to the length lt
+  # l = an actual (runtime) parameter of type lt, so a constant
+
+  f: function {lt: int.generic arr: (array u32 to: l) l: lt} is {
+      for x: arr {
+          # ...
+      }
+          # l can be used as a constant value anywhere
+          print l
+          x: l + 1
+  }
+
+  # referencing 'lt' is the same a referencing a literal int BUT will be 
+  # different for each specialisation (same as being replaced with each 
+  # different constant). This will not be deduplicated
+
+  # BUT, defining an actual parameter as for 'l' above and then referencing
+  # that WILL be deduplicated because all function AST's will be the same
+  # (a reference to a parameter name)
+  """
+
+#--: THINK: how to allow an array of records? 
+
+record must have a default constructor that takes no arguments, or all fields
+have a default value? Yes. Or the array is an array of optionals.
 

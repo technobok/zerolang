@@ -99,6 +99,46 @@ Table of Contents</div>
 </li>
 <li><a href="#note-public-private">NOTE: public / private</a>
 </li>
+<li><a href="#todo-sugar">TODO: sugar</a>
+</li>
+<li><a href="#todo-compiler-generated-methods">TODO: compiler generated methods</a>
+</li>
+<li><a href="#todo-coercion">TODO: coercion</a>
+</li>
+<li><a href="#todo-type-alias-vs-new-type">TODO: type alias vs new type</a>
+</li>
+<li><a href="#what-can-be-generic">What can be generic?</a>
+</li>
+<li><a href="#generic-protocol">Generic Protocol</a>
+</li>
+<li><a href="#cast-to-compile-time-numeric-constant">cast to compile time numeric constant</a>
+</li>
+<li><a href="#memory-format-runtime-format-note">Memory format / runtime format (NOTE)</a>
+<ul>
+<li><a href="#class">class</a>
+</li>
+<li><a href="#record-and-other-valtypes">record (and other valtypes)</a>
+</li>
+<li><a href="#union">union</a>
+</li>
+<li><a href="#variant">variant</a>
+</li>
+<li><a href="#list">list</a>
+</li>
+<li><a href="#protocol-facet">protocol / facet</a>
+</li>
+</ul>
+</li>
+<li><a href="#idea-meta-namespace">IDEA: meta namespace</a>
+</li>
+<li><a href="#idea-pointers-ownership-give-take-on-valtypes">IDEA: Pointers, ownership, give/take on valtypes</a>
+</li>
+<li><a href="#think-higher-kinded-types">THINK: Higher kinded types?</a>
+</li>
+<li><a href="#think-checklist">THINK: checklist</a>
+</li>
+<li><a href="#think-how-to-typecheck">THINK: how to typecheck? </a>
+</li>
 </ul>
 </li>
 </ul>
@@ -393,6 +433,375 @@ default). Both <code>public</code> and <code>private</code> are zero overhead op
 instance is not contructed, just the type system is modified. Both <code>public</code> and
 <code>private</code> (and all interfaces supported by an object) can have an ownership
 subspecifier eg. myclass.private.lock, (or .take or .borrow)</p>
+<h2 id="todo-sugar"><a href="#todo-sugar">10. TODO: sugar</a></h2>
+<ul>
+<li>calling a 'type' (object definition) in a runtime expression is the same as
+    <code>mytype.create</code> (with arguments, if any). There can be other constructors
+    with different names but they must be called explicitly (eg.
+    <code>mytype.create2</code>). This also applies to <code>meta.create</code> = <code>meta</code> and also
+    <code>_</code> (underscore) can be used as <code>_.create</code>. Only for normal
+    expressions, this does NOT happen for generic parameters.</li>
+<li>'callable' instances. If *all* apply such that:
+<ul>
+<li>a <code>term</code> as accessed as the callable within call syntax (ie. with a named
+      argument (<code>call_labelled</code>); or a single unnamed argument (<code>term binop</code> in an
+      <code>operation</code>) or with no argument (<code>term</code> *only* in a <code>binop</code>)</li>
+<li>that is *not* in an binop with an operator and argument (<code>term id term</code>)</li>
+<li>that is in a non-constant context (eg. not in a <code>data</code> clause)</li>
+<li>that term refers to an instance with a <code>call</code> method
+
+        <p>Then, the <code>call</code> method will be implicitly called on that instance. Note that
+this makes referring to the instance itself more complicated. To refer to the
+instance itself, an ownership specifier must be used (eg. <code>myinstance.take</code> or
+        <code>.borrow</code> or <code>.lock</code>). For this reason, creating a <code>call</code> method on an object
+should be carefully considered. Note that simple <code>for</code> sugar (see below) over
+an interable instance *requires* the default iterator to return a callable
+instance (with no arguments) as described here.</p></li>
+</ul>
+</li>
+<li>binding to an instance in a <code>for</code> where that instance has an <code>iterate</code> method
+    that returns an iterator that takes no argument, is equivalent to calling
+    that <code>iterate</code> method before any iteration has begun and then using that
+    returned iterator before each iteration. eg. <code>for i: myiterable</code> is
+    equivalent to <code>with _x: myiterable.iterate for i: _x</code> (<code>_x</code> is an example
+    only and will actually be a compiler generated reference that is not
+    otherwise accessible)</li>
+<li>(this is not really sugar but compiler added attributes. see also <code>take</code>,
+    <code>borrow</code>, <code>lock</code>, <code>limit</code>, <code>generic</code>). Item definitions implicitly have
+    'public' and 'private' as members that expose the public interface (as
+    defined with the <code>as</code> keyword) and the private interface (all methods/fields
+    of an item). 'private' is only accessable from within the item definition,
+    although external 'friend' methods and items can declare that they support
+    'item.private' and methods of the orginal item can call/instantiate those
+    functions/items. If those friend methods/items return a borrowed item, then
+    the original item is locked... iterators can be implimented this way</li>
+<li>Generators with <code>yield</code> is the largest 'sugar'. It creates an entire compiler
+    generated class/record to turn the yielding function 'inside out'</li>
+</ul>
+<h2 id="todo-compiler-generated-methods"><a href="#todo-compiler-generated-methods">11. TODO: compiler generated methods</a></h2>
+<p>The compiler generates some methods automatically if they are not defined or
+explicitly removed (ie <code>name: none</code>)</p>
+<ul>
+<li>create: the compiler will expose the meta.create default constructor which requires
+    all fields to be specified in order</li>
+<li><code>==</code>: predefined for value types, same value (memory contents) is equal</li>
+</ul>
+<h2 id="todo-coercion"><a href="#todo-coercion">12. TODO: coercion</a></h2>
+<p>Can coerce at:</p>
+<ul>
+<li>function argument boundary</li>
+<li>operation (RHS only can be coerced)</li>
+<li>return (and yield)</li>
+</ul>
+<p>Can coerce to:</p>
+<ul>
+<li>losslessly to a "larger" number type (more bits, careful with floats (never 
+    coerce to a float?).</li>
+<li>from unsigned to signed (if more bits)</li>
+<li>NOT into a interface type (where the provided type implements that protocol) 
+    Must explicitly pass parent.protocolname</li>
+<li>into a union/variant type (where the provided type is unambigiously one of 
+    the members). So can 'return ...' where the return type is an Optional 
+    (NO? always explicitly create the union/variant?)</li>
+<li>into a 'free' variable from a 'owned' variable. If a parameter to a function
+    is a <code>take</code> parameter, the argument in the caller is automatically converted
+    to a 'free' item (<code>take</code> is effectively automatically inserted). That will
+    take ownership from a var in the caller even if not explicitly granted.
+    Caller can still optionally use the <code>take</code> type to make this explicit.</li>
+</ul>
+<p>Can coerce from:</p>
+<ul>
+<li>an explicitly typed and named object</li>
+<li>an anonymous object (result of a for/if/do or function call)</li>
+</ul>
+<h2 id="todo-type-alias-vs-new-type"><a href="#todo-type-alias-vs-new-type">13. TODO: type alias vs new type</a></h2>
+<p>A top level declaration can create a new name for an existing type just by
+creating a new name and referring to the old type on the rhs.</p>
+<p>int: system.int</p>
+<p>But this does not create a new type just an alias typically used to shorten
+references to that type in the current module.</p>
+<p>A new type can be created by using the class or record keyword with a single
+'is' element. </p>
+<h2 id="what-can-be-generic"><a href="#what-can-be-generic">14. What can be generic?</a></h2>
+<ul>
+<li>function: yes, generic param required</li>
+<li>class: yes, generic field required</li>
+<li>record: yes, generic field required</li>
+<li>union: yes (required for optionals), generic field required</li>
+<li>variant: yes (same as union), generic field required</li>
+<li>protocol: yes, declared the normal way (with a shared generic field), then
+    used in the destination (eg class) by declaring the fully qualified protocol
+    name with generic argument, then all related functions must resolve to that
+    consistent type (or all refer to a common generic parameter)</li>
+<li>enum: no, tag must be concrete numeric type</li>
+</ul>
+<h2 id="generic-protocol"><a href="#generic-protocol">15. Generic Protocol</a></h2>
+<p>Yes, generic protocols are allowed.</p>
+<pre><code class="language-zerolang">
+i32or64: union { :i32 :i64 }
+
+# a generic protocol declaration
+addable: protocol {
+    term: i32ori64.generic
+    add: function lhs: term rhs: term
+}
+
+# concrete class
+c: class {
+    add: function {lhs: i32 rhs: i32} is {
+      # ...
+    }
+} as {
+    # same as (addable term: i32)   # term is default for type specifier
+    addable: addable i32
+}</code></pre>
+<h2 id="cast-to-compile-time-numeric-constant"><a href="#cast-to-compile-time-numeric-constant">16. cast to compile time numeric constant</a></h2>
+<p>At unit level:</p>
+<p>x: 4</p>
+<p>is equivalent to:</p>
+<p>x: cast 4 as 4</p>
+<p>So x is specifically of type '4' but also an 'i64'</p>
+<p>All the const types live at the synthetic namespace at eg. system.const.i64_4 etc?</p>
+<p>---</p>
+<p>Each type has different methods for 'call' which determines
+their default runtime type, and other conversion methods provided this constant
+can losslessly be converted to those types. Some rules:</p>
+<ul>
+<li>default numeric type is i64 for all integer constants that can be stored in
+    an i64. Larger numbers have no 'call' method and must be explicitly converted
+    to a runtime type.</li>
+<li>default numeric type is f64 for all float constants that can be stored in an
+    f64. Larger numbers have no 'call' method and must be explicitly converted to
+    a runtime type.</li>
+<li>negative constants have no 'u' methods (eg 'u64') since negative numbers
+    cannot be converted to an unsigned type</li>
+</ul>
+<p>The constant types:</p>
+<ul>
+<li><code>cip8</code> - constant positive int that can fit in 8 bits (supported methods: u8
+u16 i16 u32 i32 u64 i64 u128 i128 c8 c32) - note, not i8 because it may not
+fit. Default (result of 'call') is i64.</li>
+<li><code>cin8</code> - constant negative int that can fit in 8 bits (supported methods: i8
+i16 i32 i64 i128). Default (retult of 'call') is i64.</li>
+<li><code>cip16</code> - supports methods as for <code>cip8</code> but NOT u8, i8, c8</li>
+<li><code>cin16</code> - supports methods as for <code>cin8</code> but NOT i8</li>
+<li><code>cip32</code></li>
+<li><code>cin32</code></li>
+<li><code>cip64</code></li>
+<li><code>cin64</code></li>
+<li><code>cip128</code> - no default (result of call method)</li>
+<li><code>cin128</code> - no default (result of call method)</li>
+<li><code>cf16</code> - constant float that can fit in a f16</li>
+<li><code>cf32</code> - constant float that can fit in a f32</li>
+<li><code>cf64</code> - constant float that can fit in a f64</li>
+<li><code>cf128</code> - constant float that can fit in a f128</li>
+<li><code>cc8</code> - constant character that can fit in 8 bits, always positive (supported
+methods: u8 u16 i16 u32 i32 u64 i64 u128 i128 c8 c32) - note, not i8 because
+it may not fit. Default (result of 'call') is c8</li>
+<li><code>cc16</code> - constant character that can fit in 8 bits, always positive
+(supported methods: u8 i8 u16 i16 u32 i32 u64 i64 u128 i128 c8 c32). Default
+(result of 'call') is c32</li>
+</ul>
+<p>Character types?</p>
+<h2 id="memory-format-runtime-format-note"><a href="#memory-format-runtime-format-note">17. Memory format / runtime format (NOTE)</a></h2>
+<h3 id="class"><a href="#class">17.1. class</a></h3>
+<p>class instances are always references (pointers) to a piece of memory.</p>
+<p>But what about a class that has no fields? Can it be created with no
+allocation? Just held in the typesystem? This would be good for iterators with
+no fields. Still need a place in memory to hold them? Could be a null pointer?
+The class could still lock a parent and use it for state management - no, need
+to store reference to parent somewhere.</p>
+<h3 id="record-and-other-valtypes"><a href="#record-and-other-valtypes">17.2. record (and other valtypes)</a></h3>
+<p>records are always embedded in a container (local var/stack; part of another
+reftype or class). A valtype can be 'boxed' by the compiler to convert it into
+a reftype.</p>
+<p>As with class, can a record have no fields so a size of 0? </p>
+<h3 id="union"><a href="#union">17.3. union</a></h3>
+<p>union is always 2 words, stored inline:</p>
+<ul>
+<li>a descriminator, marking the specific subtype being stored</li>
+<li>the reference (pointer) to the underlying reftype value</li>
+</ul>
+<p>To store a valtype in a union requires it to be boxed.</p>
+<h3 id="variant"><a href="#variant">17.4. variant</a></h3>
+<p>Can only store valtypes within it. Its layout is:</p>
+<ul>
+<li>a descriminator, marking the specific subtype being stored</li>
+<li>block of memory equal to the largest size of any of the subtypes</li>
+</ul>
+<h3 id="list"><a href="#list">17.5. list</a></h3>
+<p>'list' is the only object instance that can have a variable size set at
+runtime. This will need compiler support. list has a capacity and a length. To
+destroy a list, each object in it will need to be destroyed. A list of classes
+is a list of 'pointers'. A list of unions or protocols store the top level of
+those structures inline. A list of valtypes is a single contiguous block
+storing the valtypes inline. For a list of reftypes, each element needs to be
+finalized and destroyed. Finally, the list itself is destroyed in both cases
+(reftype or valtype).</p>
+<p>For homogenous types, the compiler knows the correct destructor to call. For
+object such as protocols, the protocol object knows how to destroy the
+underlying object and the protocol object itself is a fixed size.</p>
+<h3 id="protocol-facet"><a href="#protocol-facet">17.6. protocol / facet</a></h3>
+<p>For each protocol/facet... the compiler must generate a constant method table
+for each object type that adopts a protocol/facet and uses it at runtime (ie.
+not only used for generic purposes or to restrict a public interface). This can
+be shared by all objects of that type that are converted to this
+protocol/facet.</p>
+<p>Protocol construction is then allocating a small object that has:</p>
+<ul>
+<li>one pointer to the method table</li>
+<li>one pointer to the underlying reftype object. If the underlying object is a
+    valtype, it will need to be 'boxed' into a reftype (requires an allocation
+    then a copy of the value)</li>
+<li>one pointer to the destructor of the underlying object - to destroy and free
+    its memory</li>
+</ul>
+<p>For borrowed protocol instances, the allocation is done on the stack and falls
+out of scope without destroying the underlying object so that it is available
+after the scope ends. And there is no destructor for these stored in the
+protocol instance...</p>
+<p>Facet construction is allocating an object that has:</p>
+<ul>
+<li>one pointer to the method table</li>
+<li>block of memory equal to the largest size of any of the types that claim to
+    implement this facet. The value is then copied into this block during
+    assignment.</li>
+</ul>
+<h2 id="idea-meta-namespace"><a href="#idea-meta-namespace">18. IDEA: meta namespace</a></h2>
+<p>'meta' is a special, dynamic namespace provided by the compiler at compile-time
+only. All items are readonly (?)</p>
+<p>meta can sort-of be used to add additional <code>keywords</code></p>
+<ul>
+<li>meta.create - the one true constructor for the current object (since,
+    '.create' is automatically used (see Sugar), can also just call <code>meta ...</code>)</li>
+</ul>
+<p>meta.function: current function. Error if not in a function</p>
+<ul>
+<li>meta.function.name - short name (label)</li>
+<li>meta.function.path - fully qualified name (dotted)</li>
+<li>meta.function.reference - the function itself (pointer)... can be used for
+    recursive calls without using the name?</li>
+<li>meta.function.parent - link to containing object (same as meta.object)</li>
+</ul>
+<p>meta.object: containing object (class/record...). Error if not in an object
+  definition.</p>
+<ul>
+<li>meta.object.name - short name (label)</li>
+<li>meta.object.path - fully qualified name (dotted)</li>
+<li>meta.object.reference - the object itself, can be used for self referential
+    structures without using the parent's name</li>
+<li>meta.object.parent - link to containing unit (same as meta.unit)</li>
+</ul>
+<p>meta.unit: details about the current unit</p>
+<ul>
+<li>meta.unit.name - short name (label)</li>
+<li>meta.unit.path - fully qualified name (dotted)</li>
+<li>meta.unit.reference - the object itself, can be used to refer to the current
+    unit without using its name</li>
+<li>meta.unit.parent - link to containing unit (compilation error if there is no
+    parent unit (at top level))</li>
+</ul>
+<p>meta.definition: details about a named definition ('name' - can be a name
+within the current scope or a fully qualified varname, it is no withing parens
+and the name is NOT evaluated).</p>
+<ul>
+<li>meta.definition name - the root of the meta namespace for 'name'.</li>
+<li>(meta.definition name).name - short name (label)</li>
+<li>(meta.definition name).path - fully qualified name (dotted)</li>
+<li>(meta.definition name).reference - this name's definition (why would you
+    ever use this?)</li>
+<li>(meta.definition name).parent - parent container of this name?
+    (function/object/unit)</li>
+<li>(meta.definition name).type - type of this name (as a fully qualified string?)</li>
+</ul>
+<p>meta.source: details about the current source file</p>
+<ul>
+<li>meta.source.name - current filename</li>
+<li>meta.source.path - current filename full path</li>
+<li>meta.source.line - current linenumber</li>
+</ul>
+<p>meta.define: compiler 'definitions' (like c compiler defines/command line
+<code>-D</code> values)</p>
+<ul>
+<li>meta.define NAME - return the string value of the definition NAME. The
+    definitions can be passed in on the command line invocation of the compiler
+    (<code>-D name=value</code>)</li>
+</ul>
+<p>meta.environment: access to environment variables (should this be done? Or just
+use defines?)</p>
+<ul>
+<li>meta.environment 'NAME' - return the string value of the environment variable
+    NAME. The name provided is a string because environment variable names may be
+    very flexible.</li>
+</ul>
+<p>meta.compiler: details about the compiler and language</p>
+<ul>
+<li>meta.compiler.name - name of the compiler</li>
+<li>meta.compiler.version - version of the compiler</li>
+<li>meta.compiler.commandline - the commandline passed to the compiler?</li>
+</ul>
+<p>meta.language: - details about the language being compiled</p>
+<ul>
+<li>meta.language.name - name of the language being compiled ('ZeroLang' ?)</li>
+<li>meta.language.version - version being compiled by the compiler</li>
+</ul>
+<p>meta.error: force a compile time error?</p>
+<p>TODO: move 'type' to 'meta.type'?</p>
+<h2 id="idea-pointers-ownership-give-take-on-valtypes"><a href="#idea-pointers-ownership-give-take-on-valtypes">19. IDEA: Pointers, ownership, give/take on valtypes</a></h2>
+<ul>
+<li>'this' is always passed as a pointer. object cannot be destroyed within a
+    method, so should be safe even for reftypes</li>
+<li>more efficient for large reftypes - records. 'this' implies this
+    particular instance so signals that pass by reference is not used</li>
+<li>can never assign to 'this'</li>
+<li>can valtypes be passed by 'take'? Yes. But note that this would destroy the
+    var in the caller. Would need to return this value if you want to pass it
+    back. Compiler would need to be smart enough to pass a pointer back on return
+    to avoid copy both ways. Would be more efficient for large records.</li>
+</ul>
+<h2 id="think-higher-kinded-types"><a href="#think-higher-kinded-types">20. THINK: Higher kinded types?</a></h2>
+<p>How would this even look? A generic field that takes a generic field as an
+argument?...</p>
+<pre><code class="language-zerolang">r: class {
+  i: thing.generic
+  j: generic # ...
+
+}</code></pre>
+<h2 id="think-checklist"><a href="#think-checklist">21. THINK: checklist</a></h2>
+<p>Think about:</p>
+<ul>
+<li>how to 'take' in a 'match' statement (preferably once in the <code>in</code> operation...</li>
+<li>how to 'take' vs 'borrow' in a generator or iterator that accepts a value in
+    on each iteration. Also, how to control ownership of the returned item...
+    defaults to 'taken' but may want to return 'borrowed' sometimes...?</li>
+</ul>
+<h2 id="think-how-to-typecheck"><a href="#think-how-to-typecheck">22. THINK: how to typecheck? </a></h2>
+<p>Top level (definitions) first? then go back and do all code blocks? Also, a
+special 'type' to store in the AST to mark that compilation is in progress to
+prevent cycles?</p>
+<p>Array and list should be predeclared types (functions?) rather than special
+syntax? Why?</p>
+<ul>
+<li>syntax is weird, keywords with '~' in them</li>
+<li>can NOT have them as top level items. (need something else to store bulk
+    data? yes, 'data')</li>
+</ul>
+<p>BUT!:</p>
+<ul>
+<li>cannot pass a literal list of items to a function....</li>
+</ul>
+<p>TODO:</p>
+<ul>
+<li>remove array and list from spec? Only have 'data'? array and list can be in std lib</li>
+</ul>
+<p>Top level data: </p>
+<ul>
+<li>can have array but not list</li>
+<li>NO, NO RECORDS. can have records but they cannot have a custom constructor
+    (at 'create') and all non-default fields must be provided (as usual). NO</li>
+<li>records within records? declare in a static way? Yes.</li>
+<li>how to prevent mutation in top level records? Can't. Don't do it</li>
+</ul>
 </main>
 </body>
 </html>
