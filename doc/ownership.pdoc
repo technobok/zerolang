@@ -50,16 +50,17 @@ ownership (although the ownership model is still consistent between the two).
 
 Value types (valtypes) are low level items such as the numeric types. The user
 defined compound value types are 'record' (product value type) and 'variant'
-(sum value type). They typically live on the heap. Each instance of a reftype
-may use different amounts of memory and may themselves have references to other
-reftype (which they are responsible for destroying). They cannot have refeences
-to external memory. Value types are passed by value (copied) and each copy is
-always 'owned'.
+(sum value type). They 'live' within other memory such as the stack or within
+other valtypes or reftypes. They cannot have references to external memory.
+Value types are passed by value (copied) and each copy is always 'owned'.
 
 Reference types (reftypes) are interacted with via a reference. The user
 defined compound reference types are 'class' (product reference type) and
 'union' (sum reference type). Reference types are passed by reference and only
-one reference can be the owner, any others are borrowed.
+one reference can be the owner, any others are borrowed. They typically live on
+the heap. Each instance of a reftype may use different amounts of memory and
+may themselves have references to other reftype (which they are responsible for
+destroying). 
 
 
 #--: Attributes of Instances
@@ -70,17 +71,20 @@ compiler throughout the life of the instance. Each of the groups is orthogonal:
 #---: Ownership
 
 #ul: 
-  [#*: owned - this instance is owned at this current location. All reftypes
-  are always owned. Reftype constructors often return owned reftype instances]
+  [#*: owned - this instance is owned at this current location. All instances
+  have exactly one owner. Reftype constructors often return owned reftype
+  instances]
   [#*: borrowed - only for reftypes. The instance at this location has been
   borrowed from an owned reftype. A function parameter may borrow an instance
   from its caller.]
 
 'this' within object methods is always 'borrowed' (you cannot own yourself).
 
-Instance fields are always borrowed even if the parent is owned. Fields must be
-set in the constructor and only can be changed later with 'swap'. Fields must
-always contain a valid instance throughout the lifetime of the parent object.
+Instance fields are always borrowed even if the parent is owned. Valtype fields
+can be reassigned freely with '='. Reftype fields must be set in the
+constructor and can only be changed later with 'swap' - this ensures that both
+locations always contain a valid instance throughout the lifetime of the parent
+object.
 
 Arguments to 'swap' must be owned if single variables. If dotted, the parent
 must be owned (and the field will by definition be borrowed - but it can still
@@ -106,6 +110,10 @@ scope or is otherwise freed.
 The result of the compiler 'method' called 'borrow' will return a borrowed
 instance that holds an exclusive lock over the receiver of the borrow call for
 that returned instances lifetime.
+
+Accessing a reftype field (eg. #~"x: obj.field") produces a borrowed reference
+to that field. The borrowed reference holds a shared lock on the parent
+(#~"obj") and an exclusive lock on the field itself.
 
 #---: Naming
 
@@ -148,9 +156,10 @@ The type attributes are:
   in the 'in' parameters.]
   [#*: 'lock' - for 'in' parameters, this indicates that this parameter will be
   locked by the return value for the lifetime of that return value. The return
-  value may be owned or borrowed. It is illegal to specify 'lock' on a return
-  value. It is illegal to 'lock' a parameter when there is no return value from
-  the function.]
+  value may be owned or borrowed. Multiple parameters may be marked as 'lock';
+  all locks will be transferred to the return value. It is illegal to specify
+  'lock' on a return value. It is illegal to 'lock' a parameter when there is
+  no return value from the function.]
 
 In addition, 'take' and 'borrow' can be used as compiler created methods on
 runtime instances in code.

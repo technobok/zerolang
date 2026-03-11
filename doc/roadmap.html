@@ -117,7 +117,17 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-3-c-code-emitter-complete">Phase 3: C Code Emitter [COMPLETE]</a>
 </li>
-<li><a href="#phase-4-expand-to-v2-ownership-reference-types">Phase 4: Expand to v2 (Ownership + Reference Types)</a>
+<li><a href="#phase-4a-documentation-update-ownership-spec-consistency">Phase 4a: Documentation Update (Ownership + Spec Consistency)</a>
+</li>
+<li><a href="#phase-4b-ownership-infrastructure-in-type-system">Phase 4b: Ownership Infrastructure in Type System</a>
+</li>
+<li><a href="#phase-4c-ownership-checking-compile-time-enforcement">Phase 4c: Ownership Checking (Compile-Time Enforcement)</a>
+</li>
+<li><a href="#phase-4d-lock-checking-compile-time-enforcement">Phase 4d: Lock Checking (Compile-Time Enforcement)</a>
+</li>
+<li><a href="#phase-4e-c-emitter-updates-for-ownership">Phase 4e: C Emitter Updates for Ownership</a>
+</li>
+<li><a href="#phase-4f-classes-unions-protocols-generics-typedefs">Phase 4f: Classes, Unions, Protocols, Generics, Typedefs</a>
 </li>
 <li><a href="#phase-5-expand-to-v3-full-language">Phase 5: Expand to v3 (Full Language)</a>
 </li>
@@ -324,24 +334,138 @@ unit body, core unit, system unit.</p>
 <li>[DONE] All 11 example programs compile with gcc and produce correct output.</li>
 <li>[DONE] Test: 18 emitter tests (8 unit + 10 example integration).</li>
 </ol>
-<h3 id="phase-4-expand-to-v2-ownership-reference-types"><a href="#phase-4-expand-to-v2-ownership-reference-types">5.5. Phase 4: Expand to v2 (Ownership + Reference Types)</a></h3>
+<h3 id="phase-4a-documentation-update-ownership-spec-consistency"><a href="#phase-4a-documentation-update-ownership-spec-consistency">5.5. Phase 4a: Documentation Update (Ownership + Spec Consistency)</a></h3>
+<p>Canonical ownership model is defined in <code>doc/ownership.pdoc</code>. The spec
+(<code>doc/spec.pdoc</code>) must be updated to be consistent with it.</p>
 <ol>
-<li>Add classes, unions, variants to parser/typechecker/emitter.</li>
-<li>Add generics (type parameters, monomorphization).</li>
-<li>Implement ownership enforcement (owned/borrowed/free).</li>
-<li>Add protocols and facets.</li>
+<li>Update spec Ownership section (line ~1410): replace 4-state model</li>
+<li>Update spec Ownership section: <code>this</code> is always borrowed, not a separate</li>
+<li>Update spec Ownership section: add field rules -- valtype fields freely</li>
+<code>swap</code>
+<li>Update spec Ownership section: add field access rule -- accessing a reftype</li>
+<li>Update spec: add locking as an orthogonal attribute (unlocked/exclusive/</li>
+<li>Update spec: add naming attribute (named/unnamed) and destruction rules</li>
+<li>Update spec: document <code>take</code>/<code>borrow</code>/<code>lock</code> as type attributes on</li>
+<li>Update spec: document <code>take</code> and <code>borrow</code> as compiler methods on</li>
+<li>Update spec: add locking algorithm (left-to-right argument processing,</li>
+<li>Update spec: document multiple <code>lock</code> parameters allowed; all locks</li>
+<li>Update spec: document protocol object ownership (borrowed via dotted</li>
+<code>protocol.create</code>
+<li>Update spec: remove or mark as superseded the old restriction tables</li>
+<li>Review and update grammar.pdoc for any ownership-related syntax</li>
+<code>type.take</code>
+<code>type.borrow</code>
+<code>type.lock</code>
+</ol>
+<h3 id="phase-4b-ownership-infrastructure-in-type-system"><a href="#phase-4b-ownership-infrastructure-in-type-system">5.6. Phase 4b: Ownership Infrastructure in Type System</a></h3>
+<p>Update <code>ztypechecker.py</code> and <code>zast.py</code> to represent ownership and locking
+information. No enforcement yet -- this phase adds the data structures.</p>
+<ol>
+<li>Update <code>ZOwnership</code> enum: replace 4-state (IMMUTABLE/OWNED/BORROWED/</li>
+<li>Add <code>ZLockState</code> enum: UNLOCKED/EXCLUSIVE/SHARED.</li>
+<li>Update <code>ZVariable</code> dataclass: add <code>lock_state: ZLockState</code> field and</li>
+<code>lock_targets: List</code>
+<li>Add <code>ZParamOwnership</code> enum or similar: TAKE/BORROW/LOCK to represent</li>
+<li>Extend <code>ZType</code> for functions: store parameter ownership attributes</li>
+<li>Extend <code>ZType</code> for functions: store return ownership attribute</li>
+<code>:return</code>
+<li>Parse <code>type.take</code>, <code>type.borrow</code>, <code>type.lock</code> in function parameter</li>
+<li>Store parsed ownership attributes on AST parameter nodes.</li>
+<li>Ensure <code>system.z</code> types are tagged as valtype (numeric types, records,</li>
+<li>Tests: verify ownership attributes parse and round-trip correctly.</li>
+</ol>
+<h3 id="phase-4c-ownership-checking-compile-time-enforcement"><a href="#phase-4c-ownership-checking-compile-time-enforcement">5.7. Phase 4c: Ownership Checking (Compile-Time Enforcement)</a></h3>
+<p>Add a new pass (or extend the existing type checker) to enforce ownership
+rules. This is the core safety analysis.</p>
+<ol>
+<li>Track ownership state per variable through function bodies: each local</li>
+<code>take</code>
+<li>Enforce: <code>take</code> parameters consume ownership -- caller's name is invalid</li>
+<li>Enforce: borrowed variables cannot be stored, returned (without lock), or</li>
+<li>Enforce: reftype fields can only be changed with <code>swap</code>, not direct</li>
+<li>Enforce: valtype fields can be freely reassigned with <code>=</code>.</li>
+<li>Enforce: <code>this</code> is always borrowed within methods.</li>
+<li>Enforce: unnamed instances (function return values) are destroyed at end of</li>
+<li>Enforce: <code>swap</code> arguments must be owned (if single variable) or parent</li>
+<li>Enforce: a function returning <code>borrow</code> must have at least one <code>lock</code></li>
+<li>Enforce: cannot return a local variable as borrowed.</li>
+<li>Enforce: no reftype aliasing -- a reftype cannot appear twice as an</li>
+<li>Track ownership flow through <code>if</code>/<code>match</code>/<code>for</code> branches: if a</li>
+<li>Implement <code>take</code> as a compiler method: invalidates the source name,</li>
+<li>Implement <code>borrow</code> as a compiler method: returns a borrowed reference,</li>
+<li>Error messages: clear diagnostics for ownership violations with source</li>
+<li>Tests: ownership checking tests for each rule above using small programs.</li>
+<li>Tests: verify all v1 example programs still pass (valtypes only, should</li>
+<li>Tests from ownership.pdoc examples -- each must produce the expected</li>
+<ul>
+<li>OK: <code>y: x.borrow</code> -- borrowed over lock on x.</li>
+<li>OK: <code>z: y.borrow</code> -- chained borrow maintains lock.</li>
+<li>OK: <code>a: z.childref.borrow</code> -- borrow over lock on parent.</li>
+<li>ERROR: function returning borrow without lock parameter.</li>
+<li>ERROR: function returning local var as borrow.</li>
+<li>OK: function with <code>lock</code> parameter returning borrow.</li>
+<li>ERROR: function with lock param but returning a different local var.</li>
+<li>ERROR: method returning borrow of field without <code>this.lock</code>.</li>
+<li>OK: method with <code>this.lock</code> returning borrow of field.</li>
+<li>OK: chained lock -- function calls sub-function that locks, caller</li>
+</ul>
+<h3 id="phase-4d-lock-checking-compile-time-enforcement"><a href="#phase-4d-lock-checking-compile-time-enforcement">5.8. Phase 4d: Lock Checking (Compile-Time Enforcement)</a></h3>
+</ol>
+<p>Add lock checking as part of the ownership analysis. Locking prevents
+aliasing and data races at compile time.</p>
+<ol>
+<li>Implement lock state tracking per variable: unlocked, exclusive, shared.</li>
+<li>Implement the locking algorithm for function calls:</li>
+<li>Implement: top-level <code>data</code> items are exempt from locking (immutable).</li>
+<li>Implement: recursive locking for sub-calls in arguments -- locks from</li>
+<li>Implement: after call, <code>lock</code>-typed parameter locks transfer to return</li>
+<li>Implement: lock on receiver (exclusive lock on each component of dotted</li>
+<li>Implement: locks on <code>match</code>/<code>if</code>/<code>for</code> targets to prevent mutation</li>
+<li>Implement: <code>match</code> with <code>.take</code> takes ownership of target with</li>
+<li>Implement: field access locking -- shared lock on parent, exclusive on</li>
+<li>Implement: scope exit frees all locks held by the exiting variable.</li>
+<li>Error messages: clear diagnostics for lock conflicts.</li>
+<li>Tests: locking tests for each rule, including:</li>
+<ul>
+<li>ERROR: same reftype passed as two arguments to a single call</li>
+<li>ERROR: exclusive lock on item that already has shared lock from</li>
+<li>OK: two dotted arguments sharing a parent (shared locks on parent</li>
+<li>OK: data items passed freely without locking.</li>
+<li>ERROR: mutating a <code>match</code>/<code>for</code> target inside the body.</li>
+<li>OK: <code>match</code> with <code>.take</code> -- target owned with narrowed type in</li>
+</ul>
+<h3 id="phase-4e-c-emitter-updates-for-ownership"><a href="#phase-4e-c-emitter-updates-for-ownership">5.9. Phase 4e: C Emitter Updates for Ownership</a></h3>
+</ol>
+<p>Update <code>zemitterc.py</code> to emit correct C code for ownership semantics.</p>
+<ol>
+<li>Emit destructor calls at scope exit for owned reftypes (currently all</li>
+<li>Emit scope-exit cleanup in correct reverse order of declaration.</li>
+<li>Handle <code>take</code> semantics: after ownership transfer, do not free at</li>
+<li>Handle <code>swap</code> for reftypes: emit temp-variable swap without freeing</li>
+<li>Handle borrowed references: emit as pointers without ownership transfer.</li>
+<li>Handle unnamed temporaries: emit cleanup after the statement completes.</li>
+<li>Note: locking is purely compile-time and requires NO runtime code.</li>
+<li>Tests: verify emitted C compiles and runs correctly for ownership</li>
+</ol>
+<h3 id="phase-4f-classes-unions-protocols-generics-typedefs"><a href="#phase-4f-classes-unions-protocols-generics-typedefs">5.10. Phase 4f: Classes, Unions, Protocols, Generics, Typedefs</a></h3>
+<p>Remaining v2 language features that build on the ownership model.</p>
+<ol>
+<li>Add classes to parser/typechecker/emitter (product reftypes with heap</li>
+<li>Add unions to parser/typechecker/emitter (sum reftypes).</li>
+<li>Add protocols and facets (interface types, borrowed vs taken protocol</li>
+<li>Add generics (type parameters, monomorphization strategy).</li>
 <li>Add typedefs.</li>
+<li>Write v2 example programs exercising ownership, classes, unions,</li>
 <li>Expand test suite at each step.</li>
 </ol>
-<h3 id="phase-5-expand-to-v3-full-language"><a href="#phase-5-expand-to-v3-full-language">5.6. Phase 5: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-5-expand-to-v3-full-language"><a href="#phase-5-expand-to-v3-full-language">5.11. Phase 5: Expand to v3 (Full Language)</a></h3>
 <ol>
-<li>Lock checking.</li>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-6-self-hosting"><a href="#phase-6-self-hosting">5.7. Phase 6: Self-Hosting</a></h3>
+<h3 id="phase-6-self-hosting"><a href="#phase-6-self-hosting">5.12. Phase 6: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>

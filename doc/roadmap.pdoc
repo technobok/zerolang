@@ -254,20 +254,201 @@ File: #~"src/zemitterc.py"
   #*: \[DONE\] All 11 example programs compile with gcc and produce correct output.
   #*: \[DONE\] Test: 18 emitter tests (8 unit + 10 example integration).
 
-#---: Phase 4: Expand to v2 (Ownership + Reference Types)
+#---: Phase 4a: Documentation Update (Ownership + Spec Consistency)
+
+Canonical ownership model is defined in #~"doc/ownership.pdoc". The spec
+(#~"doc/spec.pdoc") must be updated to be consistent with it.
 
 #ol:
-  #*: Add classes, unions, variants to parser/typechecker/emitter.
-  #*: Add generics (type parameters, monomorphization).
-  #*: Implement ownership enforcement (owned/borrowed/free).
-  #*: Add protocols and facets.
+  #*: Update spec Ownership section (line ~1410): replace 4-state model
+    (Owned/Borrowed/Shared/This) with 2-state model (owned/borrowed) from
+    ownership.pdoc. Remove Shared Mutable and This as separate ownership
+    categories.
+  #*: Update spec Ownership section: #~"this" is always borrowed, not a separate
+    ownership type. Remove This column from restriction tables.
+  #*: Update spec Ownership section: add field rules -- valtype fields freely
+    assignable, reftype fields require #~"swap" to ensure both locations always
+    hold a valid instance.
+  #*: Update spec Ownership section: add field access rule -- accessing a reftype
+    field produces a borrowed reference with shared lock on parent and exclusive
+    lock on field.
+  #*: Update spec: add locking as an orthogonal attribute (unlocked/exclusive/
+    shared). Locking was previously deferred to v3; it is now part of the
+    ownership model and should be documented alongside it.
+  #*: Update spec: add naming attribute (named/unnamed) and destruction rules
+    for unnamed instances (destroyed at end of statement).
+  #*: Update spec: document #~"take"/#~"borrow"/#~"lock" as type attributes on
+    function parameters and return types, with defaults (borrow for in, take
+    for out).
+  #*: Update spec: document #~"take" and #~"borrow" as compiler methods on
+    runtime instances.
+  #*: Update spec: add locking algorithm (left-to-right argument processing,
+    exclusive/shared lock rules, lock transfer on return).
+  #*: Update spec: document multiple #~"lock" parameters allowed; all locks
+    transfer to return value.
+  #*: Update spec: document protocol object ownership (borrowed via dotted
+    access, taken via #~"protocol.create").
+  #*: Update spec: remove or mark as superseded the old restriction tables
+    (Owned/Borrowed/Shared/This x Reference/Value).
+  #*: Review and update grammar.pdoc for any ownership-related syntax
+    (#~"type.take", #~"type.borrow", #~"type.lock" on parameter declarations).
+
+#---: Phase 4b: Ownership Infrastructure in Type System
+
+Update #~"ztypechecker.py" and #~"zast.py" to represent ownership and locking
+information. No enforcement yet -- this phase adds the data structures.
+
+#ol:
+  #*: Update #~"ZOwnership" enum: replace 4-state (IMMUTABLE/OWNED/BORROWED/
+    LINKED) with 2-state (OWNED/BORROWED).
+  #*: Add #~"ZLockState" enum: UNLOCKED/EXCLUSIVE/SHARED.
+  #*: Update #~"ZVariable" dataclass: add #~"lock_state: ZLockState" field and
+    #~"lock_targets: List" for tracking which instances this variable holds
+    locks over.
+  #*: Add #~"ZParamOwnership" enum or similar: TAKE/BORROW/LOCK to represent
+    type attributes on function parameters and return types.
+  #*: Extend #~"ZType" for functions: store parameter ownership attributes
+    (take/borrow/lock) alongside parameter types in children.
+  #*: Extend #~"ZType" for functions: store return ownership attribute
+    (take/borrow) on the #~":return" child.
+  #*: Parse #~"type.take", #~"type.borrow", #~"type.lock" in function parameter
+    declarations. Extend parser to recognise dotted type paths as ownership
+    annotations.
+  #*: Store parsed ownership attributes on AST parameter nodes.
+  #*: Ensure #~"system.z" types are tagged as valtype (numeric types, records,
+    variants) vs reftype (classes, unions) so ownership rules can distinguish
+    them.
+  #*: Tests: verify ownership attributes parse and round-trip correctly.
+
+#---: Phase 4c: Ownership Checking (Compile-Time Enforcement)
+
+Add a new pass (or extend the existing type checker) to enforce ownership
+rules. This is the core safety analysis.
+
+#ol:
+  #*: Track ownership state per variable through function bodies: each local
+    variable starts as owned (for declarations) or borrowed (for parameters
+    without #~"take").
+  #*: Enforce: #~"take" parameters consume ownership -- caller's name is invalid
+    after the call.
+  #*: Enforce: borrowed variables cannot be stored, returned (without lock), or
+    destroyed.
+  #*: Enforce: reftype fields can only be changed with #~"swap", not direct
+    assignment.
+  #*: Enforce: valtype fields can be freely reassigned with #~"=".
+  #*: Enforce: #~"this" is always borrowed within methods.
+  #*: Enforce: unnamed instances (function return values) are destroyed at end of
+    statement if not assigned or passed to an owned parameter.
+  #*: Enforce: #~"swap" arguments must be owned (if single variable) or parent
+    must be owned (if dotted).
+  #*: Enforce: a function returning #~"borrow" must have at least one #~"lock"
+    parameter; the returned value must originate from a locked parameter.
+  #*: Enforce: cannot return a local variable as borrowed.
+  #*: Enforce: no reftype aliasing -- a reftype cannot appear twice as an
+    argument in a single call.
+  #*: Track ownership flow through #~"if"/#~"match"/#~"for" branches: if a
+    variable is taken in one branch, it must be taken in all branches (or not
+    used after the branch).
+  #*: Implement #~"take" as a compiler method: invalidates the source name,
+    returns an unnamed owned instance.
+  #*: Implement #~"borrow" as a compiler method: returns a borrowed reference,
+    exclusively locks the receiver.
+  #*: Error messages: clear diagnostics for ownership violations with source
+    location and explanation.
+  #*: Tests: ownership checking tests for each rule above using small programs.
+  #*: Tests: verify all v1 example programs still pass (valtypes only, should
+    trivially satisfy ownership rules).
+  #*: Tests from ownership.pdoc examples -- each must produce the expected
+    error or pass:
+    #ul:
+      #*: OK: #~"y: x.borrow" -- borrowed over lock on x.
+      #*: OK: #~"z: y.borrow" -- chained borrow maintains lock.
+      #*: OK: #~"a: z.childref.borrow" -- borrow over lock on parent.
+      #*: ERROR: function returning borrow without lock parameter.
+      #*: ERROR: function returning local var as borrow.
+      #*: OK: function with #~"lock" parameter returning borrow.
+      #*: ERROR: function with lock param but returning a different local var.
+      #*: ERROR: method returning borrow of field without #~"this.lock".
+      #*: OK: method with #~"this.lock" returning borrow of field.
+      #*: OK: chained lock -- function calls sub-function that locks, caller
+        also locks, borrow escapes correctly.
+
+#---: Phase 4d: Lock Checking (Compile-Time Enforcement)
+
+Add lock checking as part of the ownership analysis. Locking prevents
+aliasing and data races at compile time.
+
+#ol:
+  #*: Implement lock state tracking per variable: unlocked, exclusive, shared.
+  #*: Implement the locking algorithm for function calls:
+    process arguments left to right; exclusive lock on each argument; shared
+    lock on parent chain for dotted arguments; error on double-lock.
+  #*: Implement: top-level #~"data" items are exempt from locking (immutable).
+  #*: Implement: recursive locking for sub-calls in arguments -- locks from
+    sub-call are cleared or assigned to sub-call result.
+  #*: Implement: after call, #~"lock"-typed parameter locks transfer to return
+    value; all other argument locks are freed.
+  #*: Implement: lock on receiver (exclusive lock on each component of dotted
+    receiver chain) after arguments are processed.
+  #*: Implement: locks on #~"match"/#~"if"/#~"for" targets to prevent mutation
+    in body.
+  #*: Implement: #~"match" with #~".take" takes ownership of target with
+    narrowed type in branches.
+  #*: Implement: field access locking -- shared lock on parent, exclusive on
+    field.
+  #*: Implement: scope exit frees all locks held by the exiting variable.
+  #*: Error messages: clear diagnostics for lock conflicts.
+  #*: Tests: locking tests for each rule, including:
+    #ul:
+      #*: ERROR: same reftype passed as two arguments to a single call
+        (exclusive lock conflict / aliasing).
+      #*: ERROR: exclusive lock on item that already has shared lock from
+        parent chain.
+      #*: OK: two dotted arguments sharing a parent (shared locks on parent
+        are compatible).
+      #*: OK: data items passed freely without locking.
+      #*: ERROR: mutating a #~"match"/#~"for" target inside the body.
+      #*: OK: #~"match" with #~".take" -- target owned with narrowed type in
+        branches.
+
+#---: Phase 4e: C Emitter Updates for Ownership
+
+Update #~"zemitterc.py" to emit correct C code for ownership semantics.
+
+#ol:
+  #*: Emit destructor calls at scope exit for owned reftypes (currently all
+    heap allocations lack cleanup).
+  #*: Emit scope-exit cleanup in correct reverse order of declaration.
+  #*: Handle #~"take" semantics: after ownership transfer, do not free at
+    original scope exit.
+  #*: Handle #~"swap" for reftypes: emit temp-variable swap without freeing
+    either side.
+  #*: Handle borrowed references: emit as pointers without ownership transfer.
+  #*: Handle unnamed temporaries: emit cleanup after the statement completes.
+  #*: Note: locking is purely compile-time and requires NO runtime code.
+    The C emitter does not emit lock/unlock operations.
+  #*: Tests: verify emitted C compiles and runs correctly for ownership
+    examples.
+
+#---: Phase 4f: Classes, Unions, Protocols, Generics, Typedefs
+
+Remaining v2 language features that build on the ownership model.
+
+#ol:
+  #*: Add classes to parser/typechecker/emitter (product reftypes with heap
+    allocation, constructors, finalizers).
+  #*: Add unions to parser/typechecker/emitter (sum reftypes).
+  #*: Add protocols and facets (interface types, borrowed vs taken protocol
+    instances).
+  #*: Add generics (type parameters, monomorphization strategy).
   #*: Add typedefs.
+  #*: Write v2 example programs exercising ownership, classes, unions,
+    protocols.
   #*: Expand test suite at each step.
 
 #---: Phase 5: Expand to v3 (Full Language)
 
 #ol:
-  #*: Lock checking.
   #*: Generators/yield (state machine transformation).
   #*: Compile-time evaluation.
   #*: Iterator protocol.
