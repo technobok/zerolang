@@ -317,58 +317,71 @@ information. No enforcement yet -- this phase adds the data structures.
   #*: \[DONE\] Tests: verify ownership attributes parse and round-trip correctly.
     Test: 20 new tests (enums, parsing, ZType propagation, valtype tagging).
 
-#---: Phase 4c: Ownership Checking (Compile-Time Enforcement)
+#---: Phase 4c: Ownership Checking (Compile-Time Enforcement) \[COMPLETE\]
 
 Add a new pass (or extend the existing type checker) to enforce ownership
 rules. This is the core safety analysis.
 
 #ol:
-  #*: Track ownership state per variable through function bodies: each local
+  #*: \[DONE\] Track ownership state per variable through function bodies: each local
     variable starts as owned (for declarations) or borrowed (for parameters
     without #~"take").
-  #*: Enforce: #~"take" parameters consume ownership -- caller's name is invalid
+  #*: \[DONE\] Enforce: #~"take" parameters consume ownership -- caller's name is invalid
     after the call.
-  #*: Enforce: borrowed variables cannot be stored, returned (without lock), or
+  #*: \[DONE\] Enforce: borrowed variables cannot be stored, returned (without lock), or
     destroyed.
-  #*: Enforce: reftype fields can only be changed with #~"swap", not direct
+  #*: \[DONE\] Enforce: reftype fields can only be changed with #~"swap", not direct
     assignment.
-  #*: Enforce: valtype fields can be freely reassigned with #~"=".
-  #*: Enforce: #~"this" is always borrowed within methods.
-  #*: Enforce: unnamed instances (function return values) are destroyed at end of
+  #*: \[DONE\] Enforce: valtype fields can be freely reassigned with #~"=".
+  #*: \[DONE\] Enforce: #~"this" is always borrowed within methods.
+  #*: \[DONE\] Enforce: unnamed instances (function return values) are destroyed at end of
     statement if not assigned or passed to an owned parameter.
-  #*: Enforce: #~"swap" arguments must be owned (if single variable) or parent
+  #*: \[DONE\] Enforce: #~"swap" arguments must be owned (if single variable) or parent
     must be owned (if dotted).
-  #*: Enforce: a function returning #~"borrow" must have at least one #~"lock"
+  #*: \[DONE\] Enforce: a function returning #~"borrow" must have at least one #~"lock"
     parameter; the returned value must originate from a locked parameter.
-  #*: Enforce: cannot return a local variable as borrowed.
-  #*: Enforce: no reftype aliasing -- a reftype cannot appear twice as an
+  #*: \[DONE\] Enforce: cannot return a local variable as borrowed.
+  #*: \[DONE\] Enforce: no reftype aliasing -- a reftype cannot appear twice as an
     argument in a single call.
   #*: Track ownership flow through #~"if"/#~"match"/#~"for" branches: if a
     variable is taken in one branch, it must be taken in all branches (or not
-    used after the branch).
-  #*: Implement #~"take" as a compiler method: invalidates the source name,
+    used after the branch). \[DEFERRED -- requires reftype usage in branches;
+    valtypes are always owned by copy so this rule is trivially satisfied for
+    v1 programs.\]
+  #*: \[DONE\] Implement #~"take" as a compiler method: invalidates the source name,
     returns an unnamed owned instance.
-  #*: Implement #~"borrow" as a compiler method: returns a borrowed reference,
+  #*: \[DONE\] Implement #~"borrow" as a compiler method: returns a borrowed reference,
     exclusively locks the receiver.
-  #*: Error messages: clear diagnostics for ownership violations with source
+  #*: \[DONE\] Error messages: clear diagnostics for ownership violations with source
     location and explanation.
-  #*: Tests: ownership checking tests for each rule above using small programs.
-  #*: Tests: verify all v1 example programs still pass (valtypes only, should
+  #*: \[DONE\] Tests: ownership checking tests for each rule above using small programs.
+  #*: \[DONE\] Tests: verify all v1 example programs still pass (valtypes only, should
     trivially satisfy ownership rules).
   #*: Tests from ownership.pdoc examples -- each must produce the expected
     error or pass:
     #ul:
-      #*: OK: #~"y: x.borrow" -- borrowed over lock on x.
-      #*: OK: #~"z: y.borrow" -- chained borrow maintains lock.
+      #*: \[DONE\] OK: #~"y: x.borrow" -- borrowed over lock on x.
+      #*: \[DONE\] OK: #~"z: y.borrow" -- chained borrow maintains lock.
       #*: OK: #~"a: z.childref.borrow" -- borrow over lock on parent.
-      #*: ERROR: function returning borrow without lock parameter.
-      #*: ERROR: function returning local var as borrow.
-      #*: OK: function with #~"lock" parameter returning borrow.
-      #*: ERROR: function with lock param but returning a different local var.
+        \[DEFERRED -- requires reftype fields.\]
+      #*: \[DONE\] ERROR: function returning borrow without lock parameter.
+      #*: \[DONE\] ERROR: function returning local var as borrow.
+      #*: \[DONE\] OK: function with #~"lock" parameter returning borrow.
+      #*: \[DONE\] ERROR: function with lock param but returning a different local var.
       #*: ERROR: method returning borrow of field without #~"this.lock".
+        \[DEFERRED -- requires class methods with reftype fields.\]
       #*: OK: method with #~"this.lock" returning borrow of field.
+        \[DEFERRED -- requires class methods with reftype fields.\]
       #*: OK: chained lock -- function calls sub-function that locks, caller
         also locks, borrow escapes correctly.
+        \[DEFERRED -- requires reftype function calls.\]
+
+  Implementation notes: SymbolTable extended with #~"define_var"/#~"lookup_var"
+  methods to track #~"ZVariable" (ownership + lock state) alongside #~"ZType".
+  Added #~"invalidate" method for .take consumption. 22 new ownership tests.
+  Branch tracking deferred: only relevant when reftypes (classes/unions) are
+  added in Phase 4f; all v1 programs use valtypes which are always copied/owned.
+  Reftype field and method tests deferred for the same reason.
 
 #---: Phase 4d: Lock Checking (Compile-Time Enforcement)
 

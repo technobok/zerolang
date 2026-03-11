@@ -525,9 +525,9 @@ class TestOwnershipParsing:
         assert func.param_ownership["a"] == ZParamOwnership.TAKE
 
     def test_param_lock(self):
-        """Parameter with .lock annotation."""
+        """Parameter with .lock annotation (requires return value)."""
         program = check_ok(
-            "f: function {a: i64.lock} is {}\n"
+            "f: function {a: i64.lock} out i64 is { return a }\n"
             "main: function is {}"
         )
         func = program.units["test"].body["f"]
@@ -675,3 +675,165 @@ class TestValTypeTagging:
         ftype = tc._resolved.get("test.f")
         assert ftype is not None
         assert ftype.is_valtype is None
+
+
+class TestOwnershipSignatureValidation:
+    """Test ownership rules on function signatures."""
+
+    def test_borrow_return_without_lock_param_error(self):
+        """Returning borrow without any lock parameter is an error."""
+        errors = check_errors(
+            "f: function {t: i64} out i64.borrow is { return t }\n"
+            "main: function is {}"
+        )
+        assert any("lock" in e.msg.lower() and "borrow" in e.msg.lower() for e in errors)
+
+    def test_borrow_return_with_lock_param_ok(self):
+        """Returning borrow with a lock parameter is OK."""
+        check_ok(
+            "f: function {t: i64.lock} out i64.borrow is { return t }\n"
+            "main: function is {}"
+        )
+
+    def test_lock_param_without_return_error(self):
+        """Lock parameter on a void function is an error."""
+        errors = check_errors(
+            "f: function {t: i64.lock} is {}\n"
+            "main: function is {}"
+        )
+        assert any("lock" in e.msg.lower() and "no return" in e.msg.lower() for e in errors)
+
+    def test_lock_param_with_return_ok(self):
+        """Lock parameter with a return value is OK."""
+        check_ok(
+            "f: function {t: i64.lock} out i64 is { return t }\n"
+            "main: function is {}"
+        )
+
+    def test_borrow_return_no_params_error(self):
+        """Returning borrow with zero parameters is an error."""
+        errors = check_errors(
+            "f: function out i64.borrow is { return 42 }\n"
+            "main: function is {}"
+        )
+        assert any("borrow" in e.msg.lower() for e in errors)
+
+
+class TestOwnershipReturnChecking:
+    """Test that returning local variables as borrowed is caught."""
+
+    def test_return_local_as_borrow_error(self):
+        """Cannot return a local variable as borrowed."""
+        errors = check_errors(
+            "f: function {t: i64.lock} out i64.borrow is {\n"
+            "  x: 42\n"
+            "  return x\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any("local variable" in e.msg.lower() or "local" in e.msg for e in errors)
+
+    def test_return_lock_param_as_borrow_ok(self):
+        """Returning a lock parameter as borrowed is OK."""
+        check_ok(
+            "f: function {t: i64.lock} out i64.borrow is { return t }\n"
+            "main: function is {}"
+        )
+
+
+class TestTakeBorrowCompilerMethods:
+    """.take and .borrow compiler methods."""
+
+    def test_take_resolves(self):
+        """x.take should resolve to x's type."""
+        check_ok(
+            "main: function is {\n"
+            "  x: 42\n"
+            "  y: x.take\n"
+            "}"
+        )
+
+    def test_borrow_resolves(self):
+        """x.borrow should resolve to x's type."""
+        check_ok(
+            "main: function is {\n"
+            "  x: 42\n"
+            "  y: x.borrow\n"
+            "}"
+        )
+
+    def test_take_invalidates_name(self):
+        """After x.take, x should be invalid."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  x: 42\n"
+            "  y: x.take\n"
+            "  z: x\n"
+            "}"
+        )
+        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+
+
+class TestSwapOwnership:
+    """Test swap ownership rules."""
+
+    def test_swap_valtype_ok(self):
+        """Swap of owned valtype variables is OK."""
+        check_ok("main: function is {\n  a: 10\n  b: 20\n  a swap b\n}")
+
+
+class TestExampleProgramsOwnership:
+    """Verify all v1 example programs still pass with ownership checking."""
+
+    EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+
+    def _check_example(self, name: str):
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, name)
+        program = p.parse()
+        assert isinstance(program, zast.Program), f"Parse failed for {name}"
+        errors = typecheck(program)
+        return errors
+
+    def test_hello(self):
+        assert self._check_example("hello") == []
+
+    def test_factorial(self):
+        assert self._check_example("factorial") == []
+
+    def test_fibonacci(self):
+        assert self._check_example("fibonacci") == []
+
+    def test_records(self):
+        assert self._check_example("records") == []
+
+    def test_strings(self):
+        assert self._check_example("strings") == []
+
+    def test_data(self):
+        assert self._check_example("data") == []
+
+    def test_mathutil(self):
+        assert self._check_example("mathutil") == []
+
+    def test_multimod(self):
+        assert self._check_example("multimod") == []
+
+    def test_swap(self):
+        assert self._check_example("swap") == []
+
+    def test_case(self):
+        assert self._check_example("case") == []
+
+    def test_control(self):
+        assert self._check_example("control") == []

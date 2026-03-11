@@ -2,6 +2,7 @@
 ZeroLang type checking pass — single depth-first pass
 
 Starts at main function, resolves names on demand, detects cycles.
+Includes ownership checking (Phase 4c).
 """
 
 from typing import Optional, List, Tuple
@@ -10,7 +11,10 @@ import zast
 from zast import ERR
 from zlexer import Token
 from zenv import SymbolTable
-from ztypechecker import ZType, ZTypeType, ZParamOwnership, parse_number
+from ztypechecker import (
+    ZType, ZTypeType, ZParamOwnership, ZOwnership, ZNaming, ZVariable,
+    parse_number,
+)
 
 
 def _is_numeric_id(name: str) -> bool:
@@ -20,6 +24,15 @@ def _is_numeric_id(name: str) -> bool:
 
 def _make_type(name: str, typetype: ZTypeType, parent: Optional[ZType] = None) -> ZType:
     return ZType(name=name, typetype=typetype, parent=parent)
+
+
+def _is_valtype(ztype: ZType) -> bool:
+    """Check if a type is a value type (copied, always owned)."""
+    if ztype.is_valtype is not None:
+        return ztype.is_valtype
+    # types without explicit classification: assume valtype for safety
+    # (numerics, strings, bools are all records tagged as valtype)
+    return ztype.typetype in (ZTypeType.RECORD, ZTypeType.ENUM, ZTypeType.DATA)
 
 
 # Sentinel for definitions currently being resolved
@@ -56,6 +69,9 @@ class TypeChecker:
 
         # current function return type (for return statement checking)
         self._current_return_type: Optional[ZType] = None
+
+        # current function's ownership annotations (for ownership checking)
+        self._current_func_ownership: dict[str, ZParamOwnership] = {}
 
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
@@ -193,8 +209,33 @@ class TypeChecker:
         if func.param_ownership:
             ftype.param_ownership = dict(func.param_ownership)
 
+        # validate function signature ownership rules
+        self._validate_function_ownership(ftype, func)
+
         self._resolving.pop()
         return ftype
+
+    def _validate_function_ownership(self, ftype: ZType, func: zast.Function) -> None:
+        """Validate ownership rules on a function signature."""
+        own = ftype.param_ownership
+        has_return = ":return" in ftype.children
+        ret_is_borrow = own.get(":return") == ZParamOwnership.BORROW
+
+        # lock parameters are only valid when there is a return value
+        has_lock_param = any(v == ZParamOwnership.LOCK for k, v in own.items() if k != ":return")
+        if has_lock_param and not has_return:
+            self._error(
+                "Parameter marked as 'lock' but function has no return value",
+                loc=func.start,
+            )
+
+        # a function returning borrow must have at least one lock parameter
+        if ret_is_borrow and not has_lock_param:
+            self._error(
+                "Function returns 'borrow' but has no 'lock' parameter; "
+                "a borrowed return value must live in a locked parameter",
+                loc=func.start,
+            )
 
     def _resolve_record_type(self, unitname: str, name: str, rec: zast.Record) -> ZType:
         key = f"{unitname}.{name}"
@@ -327,8 +368,18 @@ class TypeChecker:
             parent_type = self._resolve_dotted_path(path.parent)
         if not parent_type:
             return None
+        # check for compiler methods: .take and .borrow
+        child_name = path.child.name
+        if child_name == "take":
+            # .take returns the same type (ownership transfer)
+            path.type = parent_type
+            return parent_type
+        if child_name == "borrow":
+            # .borrow returns the same type (borrowed reference)
+            path.type = parent_type
+            return parent_type
         # for records/enums, look up child in children
-        child = parent_type.children.get(path.child.name)
+        child = parent_type.children.get(child_name)
         if child:
             return child
         return None
@@ -348,10 +399,27 @@ class TypeChecker:
         if not func.body:
             return
         self.symtab.push(f"function:{name}")
+
+        # save/restore ownership context
+        prev_func_ownership = self._current_func_ownership
+        self._current_func_ownership = dict(func.param_ownership)
+
         for pname, ppath in func.parameters.items():
             pt = self._resolve_typeref(ppath)
             if pt:
-                self.symtab.define(pname, pt)
+                # determine parameter ownership from annotations
+                param_own = func.param_ownership.get(pname)
+                if param_own == ZParamOwnership.TAKE:
+                    ownership = ZOwnership.OWNED
+                else:
+                    # default: borrow for reftypes, owned for valtypes
+                    if _is_valtype(pt):
+                        ownership = ZOwnership.OWNED
+                    else:
+                        ownership = ZOwnership.BORROWED
+                var = ZVariable(ztype=pt, ownership=ownership, named=ZNaming.NAMED)
+                self.symtab.define_var(pname, var)
+
         # set expected return type for return statement checking
         prev_return_type = self._current_return_type
         if func.returntype:
@@ -360,6 +428,7 @@ class TypeChecker:
             self._current_return_type = None
         self._check_statement(func.body)
         self._current_return_type = prev_return_type
+        self._current_func_ownership = prev_func_ownership
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
@@ -380,7 +449,9 @@ class TypeChecker:
     def _check_assignment(self, assign: zast.Assignment) -> None:
         t = self._check_expression(assign.value)
         if t:
-            self.symtab.define(assign.name, t)
+            # new local variables are always owned
+            var = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+            self.symtab.define_var(assign.name, var)
             assign.type = t
 
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
@@ -392,6 +463,15 @@ class TypeChecker:
                 loc=reassign.start,
             )
 
+        # ownership check: reftype fields can only be changed with swap
+        if existing and not _is_valtype(existing):
+            if isinstance(reassign.topath, zast.DottedPath):
+                self._error(
+                    f"Cannot reassign reftype field '{reassign.topath.child.name}' "
+                    f"with '='; use 'swap' instead",
+                    loc=reassign.start,
+                )
+
     def _check_swap(self, swap: zast.Swap) -> None:
         lhs_t = self._check_path(swap.lhs)
         rhs_t = self._check_path(swap.rhs)
@@ -400,6 +480,32 @@ class TypeChecker:
                 f"Cannot swap {lhs_t.name} with {rhs_t.name}",
                 loc=swap.start,
             )
+
+        # ownership check: swap arguments must be owned (or parent must be owned for dotted)
+        self._check_swap_ownership(swap.lhs, "left", swap.start)
+        self._check_swap_ownership(swap.rhs, "right", swap.start)
+
+    def _check_swap_ownership(self, path: zast.Path, side: str, loc: Token) -> None:
+        """Check that swap argument is owned (or parent is owned for dotted paths)."""
+        if isinstance(path, zast.AtomId):
+            var = self.symtab.lookup_var(path.name)
+            if var and var.ownership == ZOwnership.BORROWED:
+                self._error(
+                    f"Cannot swap {side} operand '{path.name}': variable is borrowed",
+                    loc=loc,
+                )
+        elif isinstance(path, zast.DottedPath):
+            # for dotted paths, check that the root parent is owned
+            root = path
+            while isinstance(root, zast.DottedPath):
+                root = root.parent
+            if isinstance(root, zast.AtomId):
+                var = self.symtab.lookup_var(root.name)
+                if var and var.ownership == ZOwnership.BORROWED:
+                    self._error(
+                        f"Cannot swap {side} operand: parent '{root.name}' is borrowed",
+                        loc=loc,
+                    )
 
     def _check_expression(self, expr: zast.Expression) -> Optional[ZType]:
         inner = expr.expression
@@ -439,11 +545,43 @@ class TypeChecker:
         if isinstance(path, zast.AtomId):
             return self._check_atomid(path)
         if isinstance(path, zast.DottedPath):
-            t = self._resolve_dotted_path(path)
-            if t:
-                path.type = t
-            return t
+            return self._check_dotted_path(path)
         return None
+
+    def _check_dotted_path(self, path: zast.DottedPath) -> Optional[ZType]:
+        """Check a dotted path, handling .take and .borrow compiler methods."""
+        child_name = path.child.name
+
+        # handle .take compiler method
+        if child_name == "take":
+            parent_type = self._check_path(path.parent)
+            if parent_type:
+                # .take invalidates the source name
+                if isinstance(path.parent, zast.AtomId):
+                    var = self.symtab.lookup_var(path.parent.name)
+                    if var and var.ownership == ZOwnership.BORROWED:
+                        self._error(
+                            f"Cannot take ownership of borrowed variable "
+                            f"'{path.parent.name}'",
+                            loc=path.start,
+                        )
+                    else:
+                        self.symtab.invalidate(path.parent.name)
+                path.type = parent_type
+            return parent_type
+
+        # handle .borrow compiler method
+        if child_name == "borrow":
+            parent_type = self._check_path(path.parent)
+            if parent_type:
+                path.type = parent_type
+            return parent_type
+
+        # regular dotted path resolution
+        t = self._resolve_dotted_path(path)
+        if t:
+            path.type = t
+        return t
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
         for part in atom.stringparts:
@@ -497,8 +635,25 @@ class TypeChecker:
             (k, v) for k, v in callee_type.children.items() if not k.startswith(":")
         ]
 
+        # check for reftype aliasing: same reftype arg passed twice
+        reftype_args: dict[str, Token] = {}
+
         for i, arg in enumerate(call.arguments):
             arg_type = self._check_operation(arg.valtype)
+
+            # reftype aliasing check
+            if arg_type and not _is_valtype(arg_type):
+                arg_name = self._get_arg_root_name(arg.valtype)
+                if arg_name:
+                    if arg_name in reftype_args:
+                        self._error(
+                            f"Reftype aliasing: '{arg_name}' passed as multiple "
+                            f"arguments in the same call",
+                            loc=arg.start,
+                        )
+                    else:
+                        reftype_args[arg_name] = arg.start
+
             if arg_type and arg.name and params:
                 # named argument: match by parameter name
                 matched = None
@@ -524,9 +679,44 @@ class TypeChecker:
                         loc=arg.start,
                     )
 
+            # ownership check: take parameters consume the argument
+            if arg_type and i < len(params):
+                pname, _ = params[i]
+                param_own = callee_type.param_ownership.get(pname)
+                if param_own == ZParamOwnership.TAKE:
+                    # invalidate the caller's name
+                    arg_root = self._get_arg_root_name(arg.valtype)
+                    if arg_root:
+                        var = self.symtab.lookup_var(arg_root)
+                        if var and var.ownership == ZOwnership.BORROWED:
+                            self._error(
+                                f"Cannot pass borrowed variable '{arg_root}' to "
+                                f"'take' parameter '{pname}'",
+                                loc=arg.start,
+                            )
+                        else:
+                            self.symtab.invalidate(arg_root)
+
         ret = callee_type.children.get(":return")
         call.type = ret if ret else self.t_null
         return call.type
+
+    def _get_arg_root_name(self, op: zast.Operation) -> Optional[str]:
+        """Get the root variable name from an operation (for aliasing checks)."""
+        if isinstance(op, zast.AtomId):
+            if not _is_numeric_id(op.name):
+                return op.name
+        elif isinstance(op, zast.DottedPath):
+            root = op
+            while isinstance(root, zast.DottedPath):
+                root = root.parent
+            if isinstance(root, zast.AtomId):
+                return root.name
+        elif isinstance(op, zast.Expression):
+            inner = op.expression
+            if isinstance(inner, zast.Operation):
+                return self._get_arg_root_name(inner)
+        return None
 
     def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
         """Check a return statement: verify return value matches function return type."""
@@ -542,6 +732,25 @@ class TypeChecker:
                     f"got {ret_type.name}",
                     loc=call.start,
                 )
+
+        # ownership check: cannot return a local variable as borrowed
+        ret_own = self._current_func_ownership.get(":return")
+        if ret_own == ZParamOwnership.BORROW and call.arguments:
+            arg_op = call.arguments[0].valtype
+            arg_name = self._get_arg_root_name(arg_op)
+            if arg_name:
+                var = self.symtab.lookup_var(arg_name)
+                if var and var.ownership == ZOwnership.OWNED:
+                    # check if this is a function parameter (not a local var)
+                    # function parameters are in the function scope, locals may shadow
+                    # if the var is owned and not a lock parameter, it's a local
+                    param_own = self._current_func_ownership.get(arg_name)
+                    if param_own != ZParamOwnership.LOCK:
+                        self._error(
+                            f"Cannot return local variable '{arg_name}' as borrowed; "
+                            f"borrowed return values must originate from a 'lock' parameter",
+                            loc=call.start,
+                        )
 
         # return has type 'never' (control flow doesn't continue)
         never = self._resolve_name("never")
