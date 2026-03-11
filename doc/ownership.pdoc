@@ -1,4 +1,3 @@
-
 #doc.lang: en
 
 #//: Zerolang Ownership
@@ -33,828 +32,179 @@
 
 Discussion and ideas around object ownership and locking in Zerolang.
 
-#--: IDEA: error not to store reftypes returned
 
-If a function returns a reftype, it should be an error to not store or
-otherwise use (eg. by immediately calling a method on it) that reftype.
+#--: Overview of Ownership and Locking
 
-Reftypes take work to allocate on the heap and build... it is likely an error
-not to use it at the call site. Or is a job for linter?
+Zerolang has concepts of ownership and locking that are inherent in the
+execution model.
 
-#--: Ownership rules
+Each instance can only have one owner at most. When the owning variable falls
+out of scope, the object is destroyed. Top level objects (ie. 'data') never
+fall out of scope. Ownership applies to the 'top level' of the variable only,
+it does not extend to child elements of that variable.
 
-Rules for 'objects':
+#--: valtype vs reftype
 
-#ul:
-  [#*: all objects have a single owner or parent which cannot be itself]
-  [#*: ownership is to direct children only, it does not extend to grandchildren and
-    there is no direct access to grandchildren]
-  [#*: valtypes are copy by value. Each can only have a single owner, but easily
-    copied so can make a new copy with a new owner.]
-  [#*: reftypes are copy by reference. Can only have a single owner, but can be
-    loaned via function calls or given away to a function call via a 'take'
-    param]
-  [#*: objects can only be disposed by their owner and no self-ownership so objects
-    cannot dispose of themselves]
-  [#*: all reftypes in object fields must be initialised and cannot be removed, only
-    swapped]
-  [#*: and, methods on reftype fields cannot be passed anything that is not owned
-    (no borrowed references, eg self to prevent killing ourselves) Why not other
-    borrowed references besides self?]
-  [#*: ...so, reftypes in calls can only be borrowed (from parent call) or owned
-    directly (local var). this.reftype???]
-  [#*: returned reftypes always give ownership from function to caller. 'take' 
-    arguments give ownership from caller to function (and are no longer valid at
-    the caller from that point forward)]
-  [#*: initialisation? The one true constructor must be called supplying all values,
-    although default values can be used for valtypes.]
-  [#*: destructor? There is a default destructor to recursively free all reftypes.
-    Can be overridden to free/cleanup non-memory resources. Can return a single
-    reftype from the class. How would that look?]
+There are two major types of instances which have differing defaults regarding
+ownership (although the ownership model is still consistent between the two).
 
-#--: TODO: enforcing correct #~"take" usage
+Value types (valtypes) are low level items such as the numeric types. The user
+defined compound value types are 'record' (product value type) and 'variant'
+(sum value type). They typically live on the heap. Each instance of a reftype
+may use different amounts of memory and may themselves have references to other
+reftype (which they are responsible for destroying). They cannot have refeences
+to external memory. Value types are passed by value (copied) and each copy is
+always 'owned'.
 
-Usage of 'take' enforced by the compiler.
-
-Sometimes 'take' is required to notify the compiler of ownership transfer (eg
-in parameter names).
-
-In all other cases, the compiler MUST enforce that 'take' is only used on names
-where the object is owned. eg. 
-
-#ul:
-  #*: NEVER on 'this'
-  #*: NEVER on 'this' members. 
-  #*: Allowed (?) on local vars (orig var is then inaccessible)
-  #*: NEVER on for loops against iterators (these vars are borrowed)
-  #*: optional on for loops against functions
-  #*: can be used on 'cast' expressions as long as LHS is owned, forbidden otherwise
-
-#--: Locking pseudocode
-
-#code:
-  start function env
-    for each argument
-      start arg env
-      for each part
-        if part exclusivelocked -> error
-        share-lock part (can only get to children) What about function calls?
+Reference types (reftypes) are interacted with via a reference. The user
+defined compound reference types are 'class' (product reference type) and
+'union' (sum reference type). Reference types are passed by reference and only
+one reference can be the owner, any others are borrowed.
 
 
-or just determine type for everything?
+#--: Attributes of Instances
+
+There a several groups of attributes of instances that are tracked by the
+compiler throughout the life of the instance. Each of the groups is orthogonal:
+
+#---: Ownership
+
+#ul: 
+  [#*: owned - this instance is owned at this current location. All reftypes
+  are always owned. Reftype constructors often return owned reftype instances]
+  [#*: borrowed - only for reftypes. The instance at this location has been
+  borrowed from an owned reftype. A function parameter may borrow an instance
+  from its caller.]
+
+'this' within object methods is always 'borrowed' (you cannot own yourself).
+
+Instance fields are always borrowed even if the parent is owned. Fields must be
+set in the constructor and only can be changed later with 'swap'. Fields must
+always contain a valid instance throughout the lifetime of the parent object.
+
+Arguments to 'swap' must be owned if single variables. If dotted, the parent
+must be owned (and the field will by definition be borrowed - but it can still
+be replaced with another instance of the same type).
+
+#---: Locking
 
 #ul:
-  [#*: reference or value]
-  [#*: ownership: owned, borrowed, this]
-  [#*: constant or variable]
-  [#*: lvalue (addressable) or rvalue (not addressable) (see also C++ categories:
-    glvalue rvalue lvalue xvalue prvalue)]
-  [#*: parent container (if any. eg in self.it, self is parent for it (for
-    sharedlock))]
-  [#*: owned component (eg, the component that is shadowed by this one while it is
-    in scope. eg x: cast y as I --- x owns y while it is in scope)]
+  [#*: unlocked - this instance is not locked (although, it may hold locks over
+  other instances)]
+  [#*: exclusive - this instance holds an exclusive lock over the instance]
+  [#*: shared - this instance holds a shared lock over the instance]
 
-After processing all args in a call, then go through the resulting type of each
-to do locking.
+'unlocked' is the default. An 'exclusive' lock it required to be taken on an
+instance to pass it as an argument to a method. A 'shared' lock will be taken
+when an 'exclusive' lock is taken on a child/grandchild member of an instance.
 
-Locks:
+For function that returns a 'borrowed' instance: that instance will retain an
+exclusive lock over the function parameter where that returned object lives
+AFTER the function has returned and until that borrowed object falls out of
+scope or is otherwise freed.
 
-#ul:
-  [#*: sharedlock - no methods can be called on it. Child fields can be accessed
-    (but not the child field that is exclusivelocked)]
-  [#*: exclusivelock - ]
-  [#*: none - like values?]
+The result of the compiler 'method' called 'borrow' will return a borrowed
+instance that holds an exclusive lock over the receiver of the borrow call for
+that returned instances lifetime.
 
-Procedure:
+#---: Naming
 
 #ul:
-  [#*: no locking for values (only for references)]
-  [#*: no locking for top level references (data). These are readonly anyway, can be
-    aliased]
-  [#*: no locking for rvalues (anonymous references - eg returned from a function
-    call) (generate an 'anonymous' name here to help with codegen?)]
-  [#*: for lvalue references, each parent is sharedlocked and the final element is
-    exclusivelocked]
-  [#*: for owned references (casts) the destination is handled as a normal
-    reference, the inner component is hidden (removed from current scope)]
+  [#*: named - the object is associated with a name]
+  [#*: unnamed - the object is anonymous]
 
-Then check locking on the call/method itself, last.
+'named' instances are accessible via that name by the zerolang programmer. This
+includes unit level items, function parameters within the body of that function
+and local variables.
 
+'unnamed' instances are transient. This is typically the result of a function
+call. Unless they are assigned to a label or passed to an 'owned' argument in a
+function call, they will be destroyed after this current line completes.
 
-#--: Attributes of expression result types:
+#--: Ownership and locking built-in 'methods'
 
-These are all (mostly) orthogonal?
+Each reftype type has a compiler defined child 'attributes' that can signify
+the type of ownership the is required or will be provided and if locking will
+be applied - when used as arguments and return values for functions.
 
-#---: Ownership:
-
-#ul:
-  [#*: immutable - top level (unit level) immutable type. The names of top level
-    items are constant, cannot be redefined. Functions, #~"data", numeric types
-    (although, these are passed by value so not a limitation that they are
-    immutable)]
-  [#*: free - (anonymous). Ownership is free to convey to the LHS/receiver. eg.
-    return values from functions (not from iterators though); or all valtypes.
-    An owned reftype variable can be converted to a free variable by using the
-    #~"take" predefined type the the variable as the parameter. If ownership of a
-    reftype is not taken by the LHS, the variable will be destroyed after the
-    current statementline.]
-  [#*: owned - var created locally or a "taken" parameter in a function body]
-  [#*: borrowed - reftypes passed in via standard (non- #~"take") function parameter]
-  [#*: linked - dotted member object of a composite type (eg record/class)]
-
-Valtypes are always 'free' because they are always copied to new locations.
-
-'linked' are dotted members of another parent variable (as with all vars, the
-parent also is owned, borrowed or linked). This is a special class of ownership
-(eg dotted members are not automatically owned just because you own the parent)
-and have some additional restrictions (ie. they must be replaced if changed).
-
-Items returned from a function calls are always free.
-
-immutable - yes/no (if yes, cannot be assigned to) - top level item usually
-
-writeable - yes/no (if yes, can be assigned to) Could be no, but not immutable
-eg an expression with no name
-
-free - (anonymous) - yes/no (if yes, can be assigned from)
-
-
-
-#---: Lock type:
-
-All vars have a lock type. Unused local vars and parameters start with 'none'.
-
-(For arguments at call sites; also 'cast', 'match', 'for' can lock target
-object)
+The type attributes are:
 
 #ul:
-  [#*: blocked - target of #~"match" (if not #~"take" -en), named (private members
-    too?); local var definitions (including 'casts', eg. #~"newvar: object.protocol") 
-    that take a non-'free' var on the RHS will take a lock while in scope. ]
-  [#*: exclusive - a reftype directly passed into a call by name, or receiver in a
-    method call]
-  [#*: shared - a parent of a linked reftype passed into a call]
-  [#*: none - for the 'free' ownership types: valtypes, result of function calls,
-    unused local vars/arguments (?? what is that?)]
+  [#*: 'take' - for 'in' parameters, this specifies that ownership will be
+  taken of the reftype. The caller must provide an owned reftype. The function
+  must store or destroy the value before it returns. For 'out' return types,
+  this means the function will return a new owned type that the caller then
+  takes ownership of. For return types, 'take' is the default and does not need
+  to be specified, but can be explicitly specified]
+  [#*: 'borrow' - for 'in' parameters, this specifies that ownership will not
+  be taken of this parameter in the function. The function can call methods on
+  the parameter but cannot store or destroy the instance - the ownership type
+  continues to remain with the caller after the call completes. 'borrow' is the
+  default for 'in' parameters and does not need to be specified, but can be
+  explicitly specified. For return types, 'borrow' means a borrowed instance is
+  returned. The instance must 'live' in one of the parameters passed in to the
+  function (since the function has no state that remains after the call
+  completes). The parameter that houses that instance must be marked as 'lock'
+  in the 'in' parameters.]
+  [#*: 'lock' - for 'in' parameters, this indicates that this parameter will be
+  locked by the return value for the lifetime of that return value. The return
+  value may be owned or borrowed. It is illegal to specify 'lock' on a return
+  value. It is illegal to 'lock' a parameter when there is no return value from
+  the function.]
 
-'blocked' makes the target totally unreferencable by that name. 
+In addition, 'take' and 'borrow' can be used as compiler created methods on
+runtime instances in code.
 
-'exclusive' can have methods called on it but no reuse elsewhere and no child
-access. All methods must take an exclusive lock on the receiver immediately
-before the call.
+'take' method will take ownership from a variable name. 'take' can be used to
+explicitly pass an owned variable to a 'take' function parameter. 'take' can
+also be used on the RHS of an assignment to explicitly pass ownership to the
+LHS. After the 'take' call, the returned valued will be 'unnamed' and if the
+receiver of the 'take' call is 'named', that name will no longer be defined
+after the 'take' call. It is an error to call 'take' on a variable that is not
+owned. 'take' is assumed (ie. the default) when passing an argument to a 'take'
+parameter, and when assigning to a new label. Calling 'take' as an expression
+that is not used (assigned/passed) has the result of destroying the instance.
 
-'shared' will be for all parent items in a dotted chain except the last (which
-will have an exclusive lock if it is a reftype field being passed); EXCEPT if
-the final item is a valtype (in which case, there are no shared locks on the
-parent items or the valtype)
+'borrow' method will return a borrowed reference to the receiver. The receiver
+will be exclusively locked after the 'borrow' call.
 
-'none' is essentially a noop for completeness; these situations have lock type
-of 'none':
+#--: Locking algorithm
 
-#ul:
-  [#*: 'free' ownership types]
-  [#*: as yet unreferenced vars]
-  [#*: the results of function calls (they are 'free')]
-  [#*: unit level items (because they are immutable (?)) - incl. functions, and
-    unit level constant numbers and 'data'.]
-  [#*: valtypes (they are free)... this includes the entire "path" up to that
-    valtype - ie. no shared locks on parent components of a valtype reference]
+During a call, locks are taken/checked/assigned on all arguments and return
+values.
 
-The typesystem will check the locking of the parts of all calls. Multiple
-shared locks on an object are ok, but only one exclusive lock on an object is
-permitted. This includes the call (method) itself, which will need an exclusive
-lock on the parent (if any).
-
-After a call, all related locks are popped and cleared and the resulting object
-is 'none'/'free' (except for iterators).
-
-All locks take a reference to the location where the lock was taken for error
-reporting purposes.
-
-#---: Parameter flow type:
-
-TODO: does statement context vs assignment context fit in this category? We
-need to know if it is statement context for control flow 'statements' since
-they have looser rules over return types (because there is no return type)
-
-(What happens to this type provided as a call argument after that call)
+Process:
 
 #ul:
-  #*: retained - ownership retained locally (at call site) after call
-  #*: passed - ownership is given to the callee
-
-Only 'owned' objects MAY be 'passed', all others are retained. To pass, the
-parameter must retain ownership (ie. parameter must be a 'take' parameter),
-otherwise, the argument will also be retained.
-  
-A 'passed' argument does not exist locally after the call. If it was 'named',
-that name is no longer valid (blocked?). If it is 'linked', this is ILLEGAL
-(subcomponents can only be changed with 'swap' (even if it is optional?))
-
-For 'free' arguments: if 'passed' there is nothing to do; if 'retained'
-then they are destroyed after the call (they can no longer be accessed since
-they have no name)
-
-#---: Ownership and Ownership movement
-
-What is owned/not owned:
-
-#ul:
-  [#*: creating a protocol instance (object.protocolname), by default will be a
-    borrowed object existing to the end of the current scope. The source name can
-    be accessed again at the end of that scope.]
-  [#*: creating a protocol instance from a taken object (take object.protocolname)
-    creates an owned object that owns the source object. The source name can
-    never be accessed again. XXX can't do this. Do protocol.create to make a
-    'taken' protocol instance]
-
-How to assign:
-
-#ul:
-  [#*: to assign to a field: source expression must be owned. Then use assignment
-    (existing value before assignment will be destroyed) or #~"swap"]
-  [#*: to use in a return expression: source expression must be owned]
-  [#*: to call a function with #~"take" parameters: #~"take" must be used where the
-    argument is specified and the source must be owned.]
-  [#*: #~"take" may be used in #~"match" target variable and in #~"if" optional variable
-    initialisation that want to take ownership of the item in the #~"then" clauses.
-    (if not specified the item is borrowed)]
-
-Note:
-
-#ul:
-  [#*: if an owned expression is not taken (by LHS (variable or field assignment) or
-    call argument -> function parameter), it is automatically destroyed after use]
-  [#*: using #~"take" on a variable that is not owned is an error]
-
-#--: Ownership v3
-
-#---: Attributes: type, ownership, mutability, lock
-
-#----: Type
-
-Type is an attribute of the object (not of the name).
-
-- definition type (deftype) - top level object definition (record, class, enum,
-  functions/methods, numeric constants, etc.) Compiler metadata only and are
-  immutable.
-- reference type (reftype) - has a runtime 'pointer'/'reference' to a type of
-  possibly indeterminate size, has identity etc. Can only be created in
-  run-time code.
-- value type (valtype) - an inline block of data with a fixed size for this
-  type. Has value semantics. Can be sources from some top level definitions
-  (compile time numeric constants, function 'references'). Can only be created
-  in run-time code.
-
-#----: Ownership
-
-Ownership is an attribute related to each expression in a function body.
-
-- free: no name (anonymous); result of a standard call (except from a
-  'borrowed' return as from an iterator); result of 'take' call; all valtypes
-  are essentially 'free' to copy.
-- owned: local owned var; #~"taken" reftype parameter
-- borrowed: local borrowed var; non- #~"taken" reftype parameter; 'borrowed'
-  return type of a function; result from an iterator; 'this' is always borrowed
-- linked: child reftype field of an object 
-
-linked....for returning borrowed, must be linked or borrowed (cannot be
-  owned because it wont exist afterwards)
-
-#----: Locality
-
-Attribute related to the location of the object:
-
-#ul:
-  [#*: local - local variable in the current function scope. Variable will be
-    destroyed when that scope ends. Includes:
-    #ul:
-      [#*: free (anonymous) objects]
-      [#*: Local variables (owned variables; and shared variables that are bound to
-        owned local vars)]
-      [#*: 'taken' function parameters]
-      [#*: (others?)]
-    ]
-  [#*: non-local - variable sourced from outside the current function scope that
-    will live on after the function returns. Includes:
-    #ul:
-      [#*: non- 'taken' parameters (shared parameters)]
-      [#*: linked variables; and shared vars bound to linked variables]
-      [#*: (others?)]
-    ]
-
-Locality is passed in from the source. 'taken' variables become local but
-otherwise a shared var will have the same locality as its source.
-
-
-#----: Mutability
-
-Mutability is an attribute related to the name of a 'variable'. The variable
-value may still be mutable.
-
-#ul:
-  [#*: immutable - top level definitions; method names of object; 'this' inside an
-    object]
-  [#*: mutable - name can be copied to (with a compatible RHS, previous reftype
-    value will be destroyed, valtypes will be copied over); or swapped]
-
-#----: Lock
-
-Lock type is an attribute related to each expression part in a function body.
-Expressions 'hold' locks over other variable names/values. Only for reftypes;
-valtypes and deftype always have a lock type of 'none'. When an expression is
-assigned to a name, the expression locks are then carried with that name and
-released when the name falls out of scope.
-
-It is an error to attempt to take a lock that breaks the below rules:
-
-#ul:
-  [#*: exclusive - holder can do anything (call method, 'take' etc). No other
-    expression can do anything with this expression while the lock is held. (ie.
-    method calls, use as argument, reference children). No other lock of any type
-    can be taken. Expression type must have a locktype of 'none' before an
-    exclusive lock can be taken.]
-  [#*: shared - can reference children, cannot call methods, cannot take an
-    exclusive lock. Expression type must have a locktype of 'none' or other
-    'shared' locks only before taking a shared lock.]
-  [#*: none - no restrictions, can take a shared or exclusive lock. Top level
-    definitions always have lock type of 'none' and take no locks on their RHS.
-    Top level definitions are immutable and shareable - they are always deftypes
-    or valtypes.]
-
-#---: Operations
-
-#----: createval
-
-Create a new valtype variable. LHS must be a new label. RHS must be a valtype,
-LHS becomes a copy of that value type.
-
-#----: createref
-
-Create a new reftype variable. LHS must be a new label. New variable will hold
-all the locks that the RHS has taken.
-
-RHS:
-
-#ul:
-  [#*: must be a reftype]
-  [#*: RHS parents and 'leaf' must have lock type of 'none', else error]
-  [#*: if free (use 'take' if required), LHS owns that expression. No locks.]
-  [#*: if owned or borrowed, LHS borrows that expression and is given an exclusive
-    lock to the RHS leaf and shared locks to all RHS parents until end of LHS's
-    scope (the locks are transferred to the LHS name)]
-
-#----: copyval
-
-Only for valtypes. LHS must be owned (valtypes can never be borrowed or
-linked). LHS name must be 'mutable'.
-
-RHS must be assignable to the type of the LHS type (same type or losslessly
-convertable to a larger numeric type in all cases).
-
-#----: moveref
-
-Only for reftypes. LHS must be owned or linked.
-
-#ul:
-  #*: RHS must be assignable to the LHS (the same type?)
-  #*: RHS must be free or owned. Owned will be automatically promoted to free
-  #*: if RHS is owned, its name will be destroyed after move
-  #*: LHS prior value will be destroyed after move
-
-#----: swapref
-
-Only for reftypes. Both LHS and RHS must be:
-
-#ul:
-  #*: same type (exactly)
-  #*: mutable variable names
-  #*: owned (not borrowed)
-  #*: must be able to take an exclusive lock on both immediately before the swap
-
-#----: call (change this to 'locking'? Happens in all expressions)
-
-A series of locking steps are done around a call.
-
-#ul:
-  #*: new lock frame added (?)
-  #*: arguments processed left to right recursively (may involve a sub call)
-  #*: shared lock taken on each parent
-  #*: exclusive lock taken on each 'leaf' (final part of path)
-  #*: 'loaned' returns ???
-
-
-#----: take
-
-#ul:
-  #*: convert a 'mutable' name to a 'free' (unnamed) variable
-  #*: variable must be 'owned'
-  #*: can only 'take' local undotted variable names (no field member names)
-  #*: the previous name is no longer available after the 'take'
-
-#----: usage?
-
-#ul:
-  [#*: iterators - return loaned items]
-  [#*: 'object.myprotocol' - returns a loaned item? Exclusively locks parent object.
-    This item can be created on the stack since it will not outlive the current
-    scope; no allocation is required.]
-  [#*: 'myprotocol from: take object' - returns a new owned item. Can never get
-    back to enclosed item]
-
-#--: More thoughts on ownership/locking
-
-For function returns:
-
-#ul:
-  [#*: take - (default) returns an owned object. Arguments are locked during the
-    call but released when the object is returned. Caller is responsible for
-    destroying returned object (this will happen when it falls out of scope)]
-  [#*: borrow - returns a borrowed object. Arguments are locked during the call and
-    remain in place until the returned object falls out of scope. Caller is NOT
-    responsible for destroying returned object (it lives inside the associated
-    object) A borrow return REQUIRES a lock on the parameter where the returned
-    value lives]
-  [#*: lock - N/A]
-
-For parameters:
-
-#ul:
-  [#*: take - will take an exclusively owned object. It will no longer be valid in
-    the caller]
-  [#*: borrow - (default) will borrow the object. Cannot store or return it. Can
-    only call methods on it]
-  [#*: lock - will borrow the object, LOCKING it in the caller even after the call
-    returns (lock is bound to the life of the returned object). Can store (in a
-    new object only...) or return it. Can only call methods on it]
-
-Inline (code):
-
-#ul:
-  [#*: take - will take an exclusively owned object. Target (if a named address)
-    will no longer be valid going forward]
-  [#*: borrow - (default) will borrow the object. Will lock the target]
-  [#*: lock - same as borrow.]
-
-In arguments:
-
-same as 'Inline'. The specifier is optional and can be included to be
-explicit/readable. But if the specifier is missing, the ownership type
-specified in the function definition will still apply which may affect
-availability of a named var after the call (for lock and take)
-
-It is an error to explicitly provide an incompatible ownership/locking type.
-eg. borrow arg, when the param is #~"take". Can this happen? if you #~"take arg" at
-the call site for a locked arg, then the call site must keep a lock on the
-anonymous var until the end of scope.
-
-
-#--: Ownership v4
-
-#---: ownership
-
-#ul:
-  #*: owned
-  #*: borrowed
-
-#---: locks
-
-#ul:
-  #*: none
-  #*: exclusive
-  #*: shared
-
-#---: named
-
-#ul:
-  #*: named - associated with a name
-  #*: anonymous - can be exclusively assigned (to a local var, to a taken argument)
-
-#---: location
-
-#ul:
-  #*: local
-  #*: nonlocal
-  #*: shared
-
-
-#--: From other notes
-
-#code language=zerolang: """
-  with x: in thing for x 
-
-
-
-  for x: in thing loop {
-  }
-
-  with i: thing.each for x: i loop {
-  }
-
-  this
-  self
-  each
-
-  """
-
-For function returns:
-
-#ul:
-  [#*: 
-    take - (default) returns an owned object. Arguments are locked during the
-    call but released when the object is returned
-    #ul:
-      #*: Caller is responsible for destroying returned object (this will happen when
-      it falls out of scope)
-  ]
-  [#*:
-    borrow - returns a borrowed object. Arguments are locked during the call and
-    remain in place until the returned object falls out of scope. 
-    #ul:
-      Caller is NOT responsible for destroying returned object (it lives inside
-      the associated object) A borrow return REQUIRES a lock on the parameter where
-      the returned value lives
-  ]
-  [#*: lock - N/A]
-
-For parameters:
-
-#ul:
-  [#*: take - will take an exclusively owned object. It will no longer be valid in
-    the caller]
-  [#*: borrow - (default) will borrow the object. Cannot store or return it. Can
-    only call methods on it]
-  [#*: lock - will borrow the object, LOCKING it in the caller even after the call
-    returns (lock is bound to the life of the returned object). Can store (in a
-    new object only...) or return it. Can only call methods on it]
-
-Inline (code):
-
-#ul:
-  [#*: take - will take an exclusively owned object. Target (if a named address)
-    will no longer be valid going forward]
-  [#*: borrow - (default) will borrow the object. Will lock the target]
-  [#*: lock - same as borrow.]
-
-In arguments:
-
-same as 'Inline'. The specifier is optional and can be included to be
-explicit/readable. But if the specifier is missing, the ownership type
-specified in the function definition will still apply which may affect
-availability of a named var after the call (for lock and take)
-
----
-
-THINK: 'lock' should be on the object being locked instead of the returned
-object? Requires returned object to be 'borrow'? This is more fine-grained
-rather than locking all arguments... Yes, this is better and is more readable
-
-
-#code language=zerolang: """
-  myfunc: function {t: this} out this.borrow is { # error, borrow but no lock
-    return t
-  }
-
-  myfunc: function {t: this.lock} out this.borrow is { # ok
-    return t
-  }
-
-  myfunc: function {t: this.lock} out x is { # error? lock without a borrowed return? NO, no error. But x must be a reftype
-    return # ...
-  }
-  """
-
-
-#code language=zerolang: """
-  myf1: function {t: this.lock} out this.borrow is {
-    return t
-  }
-
-  myf2: function {t: this.lock} out this.borrow is {
-    s: myf1 t	# will lock 't'
-    return s	# can 'escape' because myf2 continues locking t ???
-  }
-
-  # no borrow, but still lock constrained
-
-  myf1: function {t: this.lock} out this is {	# can't do this.. would need to be a borrow
-    return t
-  }
-
-  myf2: function {t: this.lock} out this is {
-    s: myf1 t	# will lock 't'
-    return s	# can 'escape' because myf2 continues locking t ??? YES
-  }
-
-  myf3: function {t: this.lock} out this is {
-    s: myf1 t	# will lock 't'
-    s1: mysomethingelse	# owned, no locks
-    if random {
-            return s	# can 'escape' because myf2 continues locking t ???
-    } else {
-            return s1	# also allowed? The lock is unnecessary in this case but allowed?
-    }
-  }
-
-
-  myf4: function {t: this.lock} out this is {
-    s: myf1 t	# will lock 't'
-    # s: myf1 lock t	# can explicitly show the lock is being taken?
-    s1: mysomethingelse	# owned, no locks
-    s3: if random {
-            take s	# can 'escape' because myf4 continues locking t ???. (Note, we need to take. can we put the take before the 'if'? NO, take requires a typeref on RHS)
-                    # BUT 's' is local... ?????
-    } else {
-            take s1	# also allowed? The lock is unnecessary in this case but allowed?
-    }
-    # both s and s1 are implied 'taken' at this point. The one that didn't get assigned to s3 it will be destroyed
-    return s3	# the type of s3 requires locks because one of its options does? yes
-  }
-  """
-
-
-take vs borrow:
-
-take = caller must destroy; borrow = callee retains ownership and must eventually destroy (implies/requires(?) a lock)
-
-#ul:
-  [#*: this is part of the type and it is not compatible to assign to each other
-    (taken v borrowed)]
-  [#*: lock - return value holds a lock over these parameters. return value may not
-    escape to an area where this lock is not held]
-  [#*: both taken and borrowed return values can lock items]
-  [#*: error to take a lock if the return is a valtype or none ?]
-  [#*: error to explicitly 'take' when providing an argument to a borrowed parameter
-    (but still need to handle this eg. when the result of a call is passed to a
-    function)]
-  [#*: locks can also be held by object instances over their constructor arguments
-    (of course: these are handled the same as normal func/method calls)]
-  [#*: locks must be on a location (ie. not on a 'free' / anonymous var such as the
-    result of a standard function call)]
-  [#*: locks are temporary (assigned by the compiler for a call only) or permanent,
-    assigned to the life of the return value so must be explicitly specified by
-    user with 'lock' keyword]
-  [#*: temporary locks can be shared or exclusive]
-  [#*: permanent locks are always exclusive (?). Nothing can be done in the
-    containing scope (no calls, can't be passed as args, returned etc)]
-
-
-lock:
-
-#ul:
-  [#*: 'anonymous' (/taken) expressions have 0 locks]
-  [#*: 'owned' (single reference) has 1 exclusive lock]
-  [#*: 'take' can only be done on an owned reference with no other locks on it]
-  [#*: an expression can have only 1 (or none) exclusive locks]
-  [#*: an expression can have multiple shared locks from multiple expressions]
-  [#*: must take an exclusive lock on an item before calling any methods on it]
-  [#*: 
-    a borrow is a borrowed reference with locks over the RHS (shared on all
-    parent parts of the RHS, and exclusive on the final part)
-
-    #ul:
-      [#*: (can borrow an anonymous expression? no, can't specify borrow as a keyword
-      here)]
-      [#*: a borrowed parameter also has a lock over the passed in argument.]
-  ]
-  [#*: 
-    for a function return, if the returned item holds any locks, the function
-    must also lock those items 
-    #ul:
-      #*: (the returned item must be returned into an equivalently locked environment)
-  ]
-  [#*: 
-    for a function returning an owned item (default), the item being returned
-    must be owned 
-          
-    #ul:
-      #*: (but may be locked if the function itself has similar locks)
-  ]
-  [#*: 
-    for a function returning a borrowed item, the item being returned must be
-    also borrowed or shared
-    #ul:
-      [#*: this is because the item needs to 'live' somewhere that will take care of
-      eventual destruction]
-      [#*: borrowed items always have locks, so the function itself must have similar
-      locks.]
-      [#*: this includes the locks over passed in arguments - if you are returning one
-      of these, the function must maintain the lock over that argument]
-  ]
-  [#*: 
-    all locks on local items are dropped and local values are destroyed
-    immediately before a 'return' statement 
-    #ul:
-      [#*: (except the item itself being returned)]
-      [#*: so if there is a lock on an item by a local item, you will be allowed to
-      return that? this is too complicated?]
-  ]
-
-lock implementation:
-
-#ul:
-  #*: locks are maintained using two way lockup? So you can see what locks are held
-  #*: by an expression over other expressions and conversely can see 
-
-#--: Convert some keywords to predeclared
-
-These are all generic types (take a generic parameter)? take, borrow, lock,
-limit, generic, tag, typedef?
-
-#code:
-  take                  (verb)  #~"mytype.take"
-  borrow    ()          (verb)  #~"mytype.borrow"
-  lock      (noun)      (verb)  #~"mytype.lock"
-  generic   (noun)      ()      #~"mytype.generic"
-
-TODO:
-
-#ul:
-  [#*: #~"take", #~"borrow" and #~"lock" (anything defined on a variable name) cannot be
-    an actual type at #~"system.*" -- they are type modifiers in the type system
-    only, so only available as a 'method'/attribute on the variable name or on
-    the type name.]
-  [#*: make #~"borrow" and #~"limit" the same? Remove #~"limit" and use #~"borrow" in all
-    cases?]
-  [#*: make #~"borrow" and #~"lock" be namespaces that hold all interfaces supported by
-    this object? Then:
-    #ul:
-      [#*: #~"myobject.borrow.myprotocol" when used as a type specifier or on a named var
-         creates/requires a borrowed reference can *only* access the methods/fields
-         specified in #~"myprotocol". In arguments, the passed type will automatically
-         convert to the limited type provided the caller has equal or higher access
-         rights to the instance (ie. has an owned reference or a limited reference that
-         includes access to the specified protocol. Can be specified in expressions,
-         parameter types (but, this is the default for args), localvars and return
-         types.]
-      [#*: #~"myobject.borrow" is equivalent to #~"myobject.borrow.public" and creates a
-         borrowed reference that can access the entire public interface of #~"myobject"]
-      [#*: #~"myobject.borrow.private" when specified as a parameter type allows access to
-         the private namespace of #~"myobject". *Only* the internal methods of #~"myobject"
-         itself can call a function that requires the private namespace. #~"private"
-         cannot be specified in local vars or return types.]
-      [#*: #~"myobject.lock.myprotocol" when used as a parameter type can only access the
-         methods/fields specified in #~"myprotocol". After returning from the function,
-         #~"myobject" will be locked, bound to the lifetime of the returned limited
-         object. Note that regardless of which subprotocol is specified, the *entire*
-         object is locked in the caller. #~"lock" cannot be used in return types or local
-         vars.]
-      [#*: #~"myobject.lock" is equivalent to #~"myobject.lock.public".]
-      [#*: #~"myobject.lock.private" when specified as a parameter type allows access to
-         the private namespace of #~"myobject" and then locks the instance in the caller,
-         bound to the life of the returned limited object. *Only* the internal methods
-         of #~"myobject" itself can call a function that requires the private namespace.
-         #~"private" cannot be specified in local vars or return types.]
-    ]
-
-
-Details (fix these):
-
-#ul:
-  [#*: #~"take" 
-    #ul:
-      [#*: is a predefined type at #~"system.take" (? no)]
-      [#*: is a predefined 'call' on a variable *_name_* (but is a no-op on valtypes)]
-      [#*: is a predefined (compiler defined) (sub-) type specifier on all types (but
-      is a no-op on valtypes ie. same as the parent type because valtypes are always
-      owned)]
-      [#*: if the parent type is generic, then the #~"take" subtype also has the same
-      generic parameters]
-  ]
-  [#*: #~"borrow" is a predefined type at #~"system.borrow". Also a predefined 'call' on
-    a variable #_*"name". And a predefined (compiler defined) type specifier on all
-    reftypes. If the parent type is generic, then the #~"borrow" subtype also has
-    the same generic parameters.]
-  [#*: #~"lock" is a predefined type at #~"system.lock". Also a predefined 'call' on
-    a variable #_*"name". And a predefined (compiler defined) type specifier on all
-    reftypes. If the parent type is generic, then the #~"lock" subtype also has the
-    same generic parameters.]
-  [#*: #~"generic" is a predefined type at #~"system.generic". Also a predefined 'call'
-    on item definitions of #~"union", #~"variant", #~"protocol" and #~"facet" (only) that
-    will define a generic field or parameter in a type specification only
-    (constant only, not usable at runtime). If the parent type is generic, then
-    this #~"generic" subtype also has the same generic parameters.]
-  [#*: #~"tag" is a predefined type at #~"system.tag". Also a predefined type on the
-    base numeric types that can be used as a tag (#~"u8" #~"u16" #~"u32" #~"u64" #~"u128"
-    #~"i8" #~"i16" #~"i32" #~"i64" #~"i128" #~"c8" #~"c32"). When using the base numeric types,
-    the descriminators do not need to be complete (specified for all values of
-    that type). Tags are also given a name in sum type definitions. If public,
-    these can be referred to in other type definitions and in this case, the
-    definition in that new type must be complete (ie. a definition given for
-    every value provided in the source tag)]
-  [#*: #~"typedef" is a predefined type at #~"system.typedef". Also a predefined 'call'
-    on all item definitions (including builtins). If the parent type is generic,
-    then this #~"typedef" subtype also has the same generic parameters. TODO: not
-    needed anymore since we can directly specify a typedef'd type in an #~"is"
-    operation of item declarations.]
-
-#code language=zerolang: """
-  myfunc: function {t: this.lock} out this.borrow is { # ok (and not a constructor)
-    return t
-  }
-  """
-
-#---: locking and escaping with a lock
+  [#*: each argument is processed left to right as specified in the call.]
+  [#*: if the argument is a top level ('data') item, no lock is taken as top
+  level items are immutable so can be freely shared]
+  [#*: otherwise, an exclusive lock is always taken on the result of the
+  argument being passed]
+  [#*: if the argument is a dotted chain, a shared lock is taken on each
+  parent, grandparent in that chain]
+  [#*: if the argument is a dotted chain that already has a shared lock on
+  parents/grandparents in that chain, that is fine and additional shared locks
+  are taken on those parents/grandparents for this argument]
+  [#*: if there is already and exclusive or shared lock of the result of an
+  argument being passed, it is an error]
+  [#*: if the argument is a call, the locking process is applied recursively to
+  that sub-call but after that call, the locks on the arguments to that subcall
+  are cleared or assigned to the result of the sub-call as necessary, see
+  below]
+  [#*: after all arguments are processed, the receiver of the call is then
+  locked - an exclusive lock is taken on each component of the receiver]
+  [#*: the call is then made]
+  [#*: after the call, for any arguments marked with a 'lock' type, those
+  exclusive locks (plus shared locks on any parent items of that argument) are
+  assigned to the returned value. All other locks on arguments are freed]
+
+Locks are also taken on targets in 'match', 'if' and 'for' as required so that
+they cannot be changed in the body of those elements. 'match' can also 'take'
+its target (if explicitly called with .take) and then the named target is owned
+in the match bodies with the narrowed type.
+
+#---: Locking/Ownership examples
 
 #code language=zerolang: """
   # OK - y is borrowed over a lock on x
@@ -866,8 +216,6 @@ Details (fix these):
 
   # OK - a (z.childref) is borrowed over a lock on the *parent* (z)
   a: z.childref.borrow
-
-  # borrow is the default so does not have to be specified
   """
 
 #code language=zerolang: """
@@ -927,3 +275,19 @@ Details (fix these):
     return x  # ok, x is escaping into an env that also locks t
   }
   """
+
+#--: Destruction / Falling out of scope
+
+When an instance falls out of scope, all of its locks are freed. If the
+variable is borrowed, the borrow is dropped and the reference is no longer
+held. If the variable is owned, it is destroyed.
+
+#--: Protocol objects
+
+#ul:
+  [#*: creating a protocol instance (object.protocolname), will return a
+  borrowed object existing to the end of the current scope. The source name
+  ('object') can be accessed again at the end of that scope.]
+  [#*: call (protocol.create object) to return a taken protocol instance, in
+  which case, the original 'object' can never be referenced again]
+
