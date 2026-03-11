@@ -712,17 +712,19 @@ that argument, it must be of the same type as the default value.</p>
 derived from another argument declared to be of that generic type. They must be
 a member of the union or implement the protocol specified as the 'type' in the
 parameter definition. </p>
-<p>Retained parameters are decorated with a leading <code>@</code> and take ownership of the
+<p>Parameters declared with <code>.take</code> on their type take ownership of the
 supplied reftype argument in the function body. The variable supplied to a
-retained argument is not valid after the call returns. </p>
+<code>.take</code> parameter is not valid after the call returns. Ownership transfer
+is performed implicitly; the caller does not need to call <code>.take</code> explicitly
+(though it may do so for clarity).</p>
 <p>In a call, the 'primary' parameter is the first parameter listed in the <code>in</code>
 parameter list of the <a href="#function">function definition</a>. In a type specifier, the
 'primary' is the first generic argument. If that is also the first argument
 supplied in a call or type specifier, then the parameter name <em><strong>may</strong></em> be
 omitted in some cases. When either:</p>
 <ul>
-<li>it is a normal argument (non-retained and non-generic)</li>
-<li>it is a retained parameter <em><strong>and</strong></em> the supplied argument is anonymous
+<li>it is a normal argument (non-take and non-generic)</li>
+<li>it is a <code>.take</code> parameter <em><strong>and</strong></em> the supplied argument is anonymous
     (i.e. the result of a function call)</li>
 <li>it is a generic parameter <em><strong>but</strong></em> a concrete arg is being provided (i.e.
     not a generic arg)</li>
@@ -731,14 +733,14 @@ omitted in some cases. When either:</p>
 type specifier argument. e.g:</p>
 <ul>
 <li>all arguments after the first argument, of any type</li>
-<li>all retained (<code>@</code>) arguments taking its value from a named variable</li>
+<li>all <code>.take</code> arguments taking their value from a named variable</li>
 </ul>
 <p>The argument name rules above are designed to:</p>
 <ul>
-<li>unambigiously document the arguments to a call or type specifier</li>
+<li>unambiguously document the arguments to a call or type specifier</li>
 <li>allow arguments in any order at the call site</li>
 <li>clearly show when local variable ownership is being given away to a call (by
-    requiring the <code>@</code> name to be specified)</li>
+    requiring the parameter name to be specified for <code>.take</code> parameters)</li>
 <li>not overburden calls with names for the 'primary' (or only) argument. The
     'primary' argument is often redundant following the name of the function/type</li>
 </ul>
@@ -788,7 +790,7 @@ mode: io.mode
 fh: open "myfile.txt" mode: mode.READ
 # or, fully qualified
 fh: open "myfile.txt" mode: io.mode.READ</code></pre>
-<p>Always need parameter name even when calling with a single <em><strong>retained</strong></em>
+<p>Always need parameter name even when calling with a single <code>.take</code>
 argument from a named variable:</p>
 <pre><code class="language-zerolang">result: parent.f from: myreftype</code></pre>
 <p>TODO: call with default arguments</p>
@@ -959,7 +961,7 @@ clause matches. It must be the final clause if present.</p>
 an assignment expression is specified or if the compiler can guarantee all
 subtypes have been specified in <code>case</code> clauses. When used as an expression, all
 <code>then</code> and <code>else</code> results must then be of the same type.</p>
-<p>If the target variable is a generic type <code>~</code>, then the <code>match</code> becomes a
+<p>If the target variable is a generic type, then the <code>match</code> becomes a
 constant expression that is evaluated at compile time for each specialisation
 during code generation.</p>
 <pre><code class="language-zerolang">match optionalthing1 case some then {
@@ -1350,110 +1352,116 @@ function/method.</p>
 object is acquired (eg. via another public function in that unit), the public
 fields and methods of that instance are accessible.</p>
 <h4 id="ownership"><a href="#ownership">5.1.8. Ownership</a></h4>
-<p>Ownership is determined by how the variable is created/declared or received.</p>
-<p>TODO: <code>take</code> on type definition vs <code>take</code> on a variable <em><strong>name</strong></em> (not
-instance)</p>
-<p>Ownership types:</p>
+<p>Ownership is determined by how the variable is created/declared or received.
+Each instance has exactly one owner at most. When the owning variable falls out
+of scope, the object is destroyed. Top level objects (ie. <code>data</code>) never fall
+out of scope.</p>
+<p>See <code>doc/ownership.pdoc</code> for the full ownership and locking model.</p>
+<p>Ownership states:</p>
 <ul>
-<li>Owned - the result of a <code>take</code> expression. <code>take</code> is implied on the result of
-    a function call if <code>borrow</code> is not specified on the return type.</li>
-<li>Borrowed - the result of a <code>borrow</code> expression. <code>borrow</code> is implied on
-    standard function parameters if <code>take</code> is not specified on the parameter
-    definition.</li>
-<li>Shared Mutable - defined as a field of a class</li>
-<li>Shared Immutable - unit level definitions (<code>data</code>, function references, type
-    definitions)</li>
-<li><code>this</code> - the parent object within a class method. Parent of all Shared items
-at current level. (But, This could also be a valtype...)</li>
+<li>Owned - the instance is owned at this location. All instances have exactly
+    one owner. Reftype constructors return owned instances. For valtypes,
+    every copy is a new owned instance.</li>
+<li>Borrowed - only for reftypes. The instance at this location has been
+    borrowed from an owned reftype. A function parameter borrows by default
+    (<code>borrow</code> is the default for <code>in</code> parameters).</li>
 </ul>
-<p>Aliasing is never permitted for reftypes (except for 'data'). The variable
-itself cannot be copied, only moved and loaned. This also means that any
-reftype can only appear once as an argument or as a receiver in any single
-function call (to prevent the same object being referenced by two different
-names in the function body).</p>
-<p>Note that the only time ownership can change is through function calls (<code>take</code>
-parameters and return values) and the result of a <code>take</code> modifier on a
-call/binary-operation. Normal arguments convert to borrowed within the called
-function. In <code>match</code> and <code>cast</code> statements, the source variable is hidden and
-the child is borrowed in the body by default. <code>take</code> arguments pass the
-ownership into the called function: the caller must <code>take</code> a local variable
-that cannot be accessed on return from that function call <em><strong>or</strong></em> provide an
-anonymous value (eg a returned value)</p>
-<p>Reference Types:</p>
-<table>
-<colgroup>
-<col style="width: 55%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Property</th><th style="text-align: left">Owned</th><th style="text-align: left">Borrowed</th><th style="text-align: left">Shared</th><th style="text-align: left">This</th></tr>
-</thead>
-<tbody>
-<tr><td>Can be returned from a function?</td><td>Yes</td><td>No</td><td>No</td><td>No</td></tr>
-<tr><td>Can be given away via a <code>take</code> parameter?</td><td>Yes</td><td>No</td><td>No</td><td>No</td></tr>
-<tr><td>Can be replaced/overwritten?</td><td>Yes</td><td>No</td><td>Yes</td><td>No</td></tr>
-<tr><td>Can pass as an argument to Owned.method?</td><td>Yes</td><td>Yes</td><td>Yes x</td><td>Yes xx</td></tr>
-<tr><td>Can pass as an argument to Borrowed.method?</td><td>Yes</td><td>Yes</td><td>Yes x</td><td>Yes xx</td></tr>
-<tr><td>Can pass as an argument to Shared.method?</td><td>Yes</td><td>Yes</td><td>Yes x</td><td>No</td></tr>
-<tr><td>Can be passed as an arg to a This.method?</td><td>Yes</td><td>Yes</td><td>No</td><td>No</td></tr>
-</tbody>
-</table>
-<p>- x: But not with 'This' as any other argument
-- xx: But not with a Shared item as an other argument</p>
-<p>Value Types:</p>
-<table>
-<colgroup>
-<col style="width: 55%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-<col style="width: 11%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Property</th><th style="text-align: left">Owned</th><th style="text-align: left">Borrowed</th><th style="text-align: left">Shared</th><th style="text-align: left">This</th></tr>
-</thead>
-<tbody>
-<tr><td>Can be returned from a function?</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-<tr><td>Can be given away via a <code>take</code> parameter?</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-<tr><td>Can be replaced/overwritten?</td><td>Yes</td><td>No(?)</td><td>Yes</td><td>Yes</td></tr>
-<tr><td>Can pass as an argument to Owned.method?</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-<tr><td>Can pass as an argument to Borrowed.method?</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-<tr><td>Can pass as an argument to Shared.method?</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-<tr><td>Can be passed as an arg to a This.method?</td><td>Yes</td><td>Yes</td><td>Yes</td><td>Yes</td></tr>
-</tbody>
-</table>
-<p>Summary of restrictions:</p>
-<table>
-<colgroup>
-<col style="width: 11%">
-<col style="width: 88%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Type</th><th style="text-align: left">Restrictions</th></tr>
-</thead>
-<tbody>
-<tr><td>Value</td><td>Minimal restrictions - copy by value, never shared</td></tr>
-<tr><td>Owned</td><td>No aliasing.</td></tr>
-<tr><td>Borrowed</td><td>No Aliasing. Cannot be given away/returned.</td></tr>
-<tr><td>Shared</td><td>No Aliasing. Cannot be given away/returned. Cannot pass to method/receiver with 'This'</td></tr>
-<tr><td>This</td><td>No Aliasing. Cannot be given away/returned. Cannot pass to method/receiver with Shared</td></tr>
-</tbody>
-</table>
-<p>TODO: implement the restrictions on a call with locking:</p>
+<p><code>this</code>within object methods is always borrowed (you cannot own yourself).</p>
+<p>Instance fields are always borrowed even if the parent is owned. Valtype fields
+can be reassigned freely with <code>=</code>. Reftype fields must be set in the
+constructor and can only be changed later with <code>swap</code> -- this ensures that
+both locations always contain a valid instance throughout the lifetime of the
+parent object.</p>
+<p>Aliasing is never permitted for reftypes (except for <code>data</code>). A reftype can
+only appear once as an argument or as a receiver in any single function call
+(enforced via <a href="#locking">locking</a>).</p>
+<p>Ownership changes only through function calls (<code>.take</code> parameters and return
+values) and the <code>.take</code> method on runtime instances. Normal arguments are
+borrowed within the called function. In <code>match</code> statements, the target is
+borrowed in the body by default; <code>match</code> with <code>.take</code> takes ownership with
+type narrowing. <code>.take</code> arguments pass ownership into the called function:
+the caller's name is invalid after the call.</p>
+<p>Unnamed instances (the result of a function call not assigned to a label) are
+transient. They are destroyed at the end of the current statement unless
+assigned or passed to an owned parameter.</p>
+<h5 id="ownership-type-attributes-on-functions">Ownership Type Attributes on Functions</h5>
+<p>Ownership is specified on function parameters and return types using dotted
+type paths:</p>
 <ul>
-<li>arguments are processed first in order, then the callable</li>
-<li>x is accessed, then x is exclusive lock</li>
-<li>child of x is accessed, then x is readonly, child is exclusive lock</li>
-<li>cannot take an exclusive lock on an item that already has a readonly or
-    exclusive lock</li>
-<li>cannot call a method on an item with a readonly or exclusive lock</li>
-<li>an argument that is a complete call has no locks and the returned item is
-    owned by that param</li>
+<li><code>type.take</code> - for <code>in</code> parameters, ownership is taken from the caller.
+The caller must provide an owned reftype. The function must store or destroy
+the value before it returns. For <code>out</code> return types, <code>.take</code> is the
+default (function returns a new owned instance to caller) and does not need
+to be specified.</li>
+<li><code>type.borrow</code> - for <code>in</code> parameters, ownership is not taken. The
+function can call methods on the parameter but cannot store or destroy it.
+    <code>.borrow</code> is the default for <code>in</code> parameters and does not need to be
+specified. For <code>out</code> return types, <code>.borrow</code> means a borrowed instance is
+returned. The parameter housing that instance must be marked <code>.lock</code>.</li>
+<li><code>type.lock</code> - for <code>in</code> parameters, this parameter will be locked by
+the return value for its lifetime. Multiple parameters may be marked
+    <code>.lock</code>; all locks transfer to the return value. It is illegal to specify
+    <code>.lock</code> on a return value. It is illegal to <code>.lock</code> a parameter when
+there is no return value.</li>
 </ul>
-<h4 id="declarations-and-references"><a href="#declarations-and-references">5.1.9. Declarations and References</a></h4>
+<h5 id="ownership-methods-on-instances">Ownership Methods on Instances</h5>
+<p><code>.take</code>and <code>.borrow</code> can also be used as compiler-generated methods on
+runtime instances:</p>
+<ul>
+<li><code>x.take</code> - takes ownership from the variable <code>x</code>. The name <code>x</code> is
+invalid after the call. Calling <code>.take</code> on an expression that is not used
+(not assigned or passed) destroys the instance.</li>
+<li><code>x.borrow</code> - returns a borrowed reference to <code>x</code>. The variable <code>x</code>
+is exclusively locked for the lifetime of the borrowed reference.</li>
+</ul>
+<h4 id="locking"><a href="#locking">5.1.9. Locking</a></h4>
+<p>Locking is an orthogonal attribute tracked alongside ownership. It prevents
+aliasing and data races at compile time. Locking is purely a compile-time
+mechanism with zero runtime overhead.</p>
+<p>Lock states:</p>
+<ul>
+<li>unlocked - the instance is not locked (default)</li>
+<li>exclusive - an exclusive lock is held over this instance</li>
+<li>shared - a shared lock is held over this instance</li>
+</ul>
+<p>An exclusive lock is required to pass an instance as an argument to a method.
+A shared lock is taken on the parent when an exclusive lock is taken on a
+child/grandchild member.</p>
+<p>Accessing a reftype field (eg. <code>x: obj.field</code>) produces a borrowed reference
+to that field. The borrowed reference holds a shared lock on the parent and
+an exclusive lock on the field.</p>
+<p>For a function that returns a borrowed instance: that instance retains an
+exclusive lock over the <code>.lock</code> parameter where the returned object lives,
+until the borrowed object falls out of scope.</p>
+<h5 id="locking-algorithm">Locking Algorithm</h5>
+<p>During a call, locks are taken/checked/assigned on all arguments and return
+values:</p>
+<ol>
+<li>Each argument is processed left to right as specified in the call.</li>
+<li>If the argument is a top level (<code>data</code>) item, no lock is taken
+    (immutable, freely shared).</li>
+<li>Otherwise, an exclusive lock is taken on the argument.</li>
+<li>If the argument is a dotted chain, a shared lock is taken on each parent
+    and grandparent in that chain.</li>
+<li>Additional shared locks on already shared-locked parents are permitted.</li>
+<li>If there is already an exclusive or shared lock on the argument being
+    passed, it is an error (prevents aliasing).</li>
+<li>If the argument is a sub-call, locking is applied recursively; after that
+    call, sub-call argument locks are cleared or assigned to the sub-call result.</li>
+<li>After all arguments are processed, the receiver is locked (exclusive lock
+    on each component of the receiver chain).</li>
+<li>The call is made.</li>
+<li>After the call, for any <code>.lock</code> parameters, their exclusive locks (plus
+    shared locks on parent items) are assigned to the returned value. All other
+    argument locks are freed.</li>
+</ol>
+<p>Locks are also taken on targets in <code>match</code>, <code>if</code> and <code>for</code> to prevent
+mutation in the body. <code>match</code> can also <code>.take</code> its target, in which case
+the target is owned with the narrowed type in the match bodies.</p>
+<p>When an instance falls out of scope, all of its locks are freed. If the
+variable is borrowed, the borrow is dropped. If the variable is owned, it is
+destroyed.</p>
+<h4 id="declarations-and-references"><a href="#declarations-and-references">5.1.10. Declarations and References</a></h4>
 <p>New user defined types are declared using the <a href="#class">class</a>,
 <a href="#record">record</a>, <a href="#protocol">protocol</a>, <a href="#union">union</a>,
 <a href="#variant">variant</a>, <a href="#function">function</a> (for specs) keywords. Each user
@@ -1471,10 +1479,12 @@ to a type reference (of the form <code>name: typereference</code>).</p>
 <li>the name of the type followed by each generic argument using syntax similar
     to function calls (to specify a generic type). As with function calls, the
     name of the first generic argument may be omitted</li>
-<li>the <code>generic</code> keyword can be used to create a generic type field in units,
-    functions, classes, records, protocols, unions and variants.</li>
-<li>the <code>take</code> keyword can be used in function parameter definitions to take
-    ownership from the caller. See <a href="#ownership">ownership</a>.</li>
+<li>a type followed by <code>.generic</code> (eg. <code>any.generic</code>) to create a generic
+    type field in units, functions, classes, records, protocols, unions and
+    variants.</li>
+<li>a type followed by <code>.take</code>, <code>.borrow</code>, or <code>.lock</code> in function
+    parameter definitions to specify ownership and locking semantics. See
+    <a href="#ownership">ownership</a>.</li>
 </ul>
 <h3 id="unit-types"><a href="#unit-types">5.2. Unit Types</a></h3>
 <p>Programs are constructed from one or more units.</p>
@@ -1620,11 +1630,30 @@ optional and if unspecified, will require the created generic field to be
 initialised at the call site either explicitly or implicitly via an associated
 argument.</p>
 <h4 id="take"><a href="#take">5.3.7. take</a></h4>
-<p><code>take</code>- to convert an owned expression to a 'free' value (or request a 'free'
-value as a parameter).</p>
+<p><code>take</code>is a predefined type attribute on all reftype types. When used as a
+dotted path on a type in function parameter or return type declarations, it
+specifies ownership transfer semantics. See <a href="#ownership">ownership</a> for
+full details.</p>
+<p>As a type attribute on function parameters (<code>type.take</code>): ownership is taken
+from the caller. As a return type attribute: the default -- function returns a
+new owned instance.</p>
+<p>As a compiler method on instances (<code>x.take</code>): takes ownership from the
+variable, rendering the name invalid. See <a href="#take-method">take (method)</a>.</p>
 <h4 id="borrow"><a href="#borrow">5.3.8. borrow</a></h4>
-<p><code>borrow</code>- to convert an ??? expression to a 'borrowed' value</p>
+<p><code>borrow</code>is a predefined type attribute on all reftype types. When used as a
+dotted path on a type in function parameter declarations, it specifies that
+ownership is not taken. <code>.borrow</code> is the default for <code>in</code> parameters.</p>
+<p>As a return type attribute (<code>out type.borrow</code>): the function returns a
+borrowed reference. At least one <code>in</code> parameter must be marked <code>.lock</code>.</p>
+<p>As a compiler method on instances (<code>x.borrow</code>): returns a borrowed reference,
+exclusively locking the receiver. See <a href="#borrow-method">borrow (method)</a>.</p>
 <h4 id="lock"><a href="#lock">5.3.9. lock</a></h4>
+<p><code>lock</code>is a predefined type attribute on reftype types for use in function
+parameter declarations only (<code>type.lock</code>). It indicates that this parameter
+will be locked by the return value for the lifetime of that return value.
+Multiple parameters may be marked <code>.lock</code>; all locks transfer to the return
+value. It is illegal to specify <code>.lock</code> on a return value or when there is no
+return value.</p>
 <h4 id="typedef"><a href="#typedef">5.3.10. typedef</a></h4>
 <p>A typedef wraps an underlying type to provide a new type. The new type has no
 run-time overhead beyond the underlying type, it is simply a compile time
@@ -1910,47 +1939,34 @@ myobject: class {
 }</code></pre>
 <h3 id="predefined-methods-on-types"><a href="#predefined-methods-on-types">5.4. Predefined Methods on Types</a></h3>
 <h4 id="take-method"><a href="#take-method">5.4.1. take (method)</a></h4>
-<p><code>take</code>is predefined on all variable <em><strong>names</strong></em> (not the variable) that
-refer to a reftype.</p>
-<p>It explicitly takes the variable value (converting it to an anonymous taken
-value) and renders the variable name as uninitialised from this point forward.</p>
+<p><code>take</code>is a compiler-generated method predefined on all variable names that
+refer to a reftype. It takes ownership from the variable, converting it to an
+anonymous owned value. The variable name is invalid from this point forward.</p>
 <p>The <code>take</code> method is zero overhead -- it is a manipulation of the compile time
-type system only. Use of the <code>take</code> method is optional when passing to
-<code>take</code>-en fields and function parameters, the compiler will implicitly <code>take</code>
-if required.</p>
-<p><code>take</code>takes no arguments.</p>
-<p>The <code>take</code> method can be used for defining local variables -- the new variable
-will take the value and the old name will be undefined.</p>
+type system only. Use of the <code>.take</code> method is optional when passing to
+<code>.take</code> function parameters; the compiler will implicitly take if required.</p>
+<p><code>.take</code>takes no arguments.</p>
+<p><code>.take</code>can be used for defining local variables -- the new variable takes the
+value and the old name becomes undefined. Calling <code>.take</code> as an expression
+that is not used (not assigned or passed) destroys the instance.</p>
 <p>See also the <a href="#ownership">ownership</a>.</p>
 <h4 id="borrow-method"><a href="#borrow-method">5.4.2. borrow (method)</a></h4>
-<p><code>borrow</code>is predefined on all variable <em><strong>names</strong></em> (not the variable) that
-refer to a reftype.</p>
-<p>It explicitly borrows the variable value locking the source variable name until
-the end of the scope of this <code>borrow</code>.</p>
+<p><code>borrow</code>is a compiler-generated method predefined on all variable names that
+refer to a reftype. It returns a borrowed reference to the receiver. The
+receiver is exclusively locked for the lifetime of the borrowed reference.</p>
 <p>The <code>borrow</code> method is zero overhead -- it is a manipulation of the compile
-time type system only. Use of the <code>borrow</code> method is optional when passing to
-<code>borrow</code>-ed fields and function parameters. The <code>borrow</code> method is required
-when returning a borrowed type from a function call.</p>
-<p><code>borrow</code>takes no arguments.</p>
-<p>The <code>borrow</code> method can be used for defining local variables -- the new
-variable will borrow the value and the source name will be locked while the new
-name is in scope.</p>
+time type system only. Use of the <code>.borrow</code> method is optional when passing
+to function parameters (parameters are borrowed by default).</p>
+<p><code>.borrow</code>takes no arguments.</p>
+<p><code>.borrow</code>can be used for defining local variables -- the new variable borrows
+the value and the source name is exclusively locked while the new name is in
+scope.</p>
 <p>See also the <a href="#ownership">ownership</a>.</p>
 <h4 id="lock-method"><a href="#lock-method">5.4.3. lock (method)</a></h4>
-<p><code>lock</code>is predefined on all variable <em><strong>names</strong></em> (not the variable) that
-refer to a reftype.</p>
-<p>It explicitly locks this variable name and binds it to a borrowed return value
-of a method/function.</p>
-<p>The lock applies until the the end of the scope of this <code>borrow</code>.</p>
-<p>The <code>borrow</code> method is zero overhead -- it is a manipulation of the compile
-time type system only. Use of the <code>borrow</code> method is optional when passing to
-<code>borrow</code>-ed fields and function parameters. The <code>borrow</code> method is required
-when returning a borrowed type from a function call.</p>
-<p><code>borrow</code>takes no arguments.</p>
-<p>The <code>borrow</code> method can be used for defining local variables -- the new
-variable will borrow the value and the source name will be locked while the new
-name is in scope.</p>
-<p>See also the <a href="#ownership">ownership</a>.</p>
+<p><code>lock</code>is not a runtime method on instances. It is a type attribute used only
+in function parameter declarations (<code>type.lock</code>) to indicate that the
+parameter will be locked by the return value. See <a href="#locking">locking</a>
+for details.</p>
 <h4 id="generic-method"><a href="#generic-method">5.4.4. generic (method)</a></h4>
 <p><code>generic</code>is a 'class method' predefined on all union, variant, protocol, facet
 and numeric types. It explicitly converts the receiver type to a generic
@@ -2054,19 +2070,22 @@ equivalent when, in both definitions:</p>
 - <code>is</code> is optional; omitted when defining a <a href="#specs">spec</a>.</p>
 <p>A <code>function</code> defined with no arguments is a spec that takes no arguments and
 returns no value. It only has side-effects.</p>
-<p>The <code>in</code>  argument takes a brace delimitered block of parameter definitions
+<p>The <code>in</code>  argument takes a brace delimited block of parameter definitions
 of the form <code>name: typereference</code>. See <a href="#declarations-and-references">Declarations and References</a> for
-details. A parameter <em><strong>must not</strong></em> be private (<code>_</code>) but may be <a href="#ownership">retained</a> (<code>@</code>) or <a href="#generic-types">generic</a> (<code>~</code>) or it
-may have a default constant numeric value or a default function reference
-value.</p>
+details. A parameter <em><strong>must not</strong></em> be private (<code>_</code>) but may have ownership
+attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.lock</code>) or be
+<a href="#generic-types">generic</a> (<code>type.generic</code>) or it may have a default
+constant numeric value or a default function reference value.</p>
 <p>The order of the parameters is significant. The first non-generic parameter may
 be the 'primary' argument that can be used without specifying the parameter
 name in a call. See <a href="#calls">Calls</a> for details. The first generic parameter may also
 be specified without name in type specifiers.</p>
 <p>A function usually will return a value. The type of the returned item is
-specified by the argument named <code>return</code>. Ownership of a returned reftype value
-after the call implicitly lies with the caller (<code>@</code> <em><strong>must not</strong></em> be
-specified on <code>return</code>).</p>
+specified by the argument named <code>out</code>. Ownership of a returned reftype value
+after the call implicitly lies with the caller (<code>.take</code> is the default for
+return types and does not need to be specified). A function may return a
+borrowed reference by specifying <code>type.borrow</code> as the return type; in this
+case, at least one parameter must be marked <code>type.lock</code>.</p>
 <p>The <code>is</code> parameter to <code>function</code> specifies the body. It may be a single
 expression or a block of code. Each line of code is a local variable definition
 or a statement. All arguments supplied can be referenced by name but are
@@ -2093,30 +2112,34 @@ zerofunc: function out u32 is {
 sayhello: function is {
     print "hello"
 }</code></pre>
-<p>A function may also retain ownership of arguments. To do so, the parameter name
-must use the 'take' "call" and the type must be a reftype or generic type that
-may include a reftype.</p>
-<p>The caller provides the object to be retained by using these arguments at the
-function call site. The caller must own these variables before the call. The
-function body is free to use the retained argument as if it created it itself
-(i.e. can be stored, returned, destroyed). </p>
-<p>Passing a value type via a retained-argument of a generic type passes a copy as
-usual. This allows the same notation to be used for generic container types
+<p>A function may also take ownership of arguments. To do so, the parameter type
+uses the <code>.take</code> attribute (<code>type.take</code>) and the type must be a reftype or
+generic type that may include a reftype.</p>
+<p>The caller must own the variable before the call. The function body is free to
+use the taken argument as if it created it itself (i.e. can be stored,
+returned, destroyed). The caller's variable name is invalid after the call.</p>
+<p>Passing a value type via a <code>.take</code> parameter of a generic type passes a copy
+as usual. This allows the same notation to be used for generic container types
 regardless of the type of subcomponents being stored (eg. for Lists). In all
-other cases, it is an error to pass valtypes in via retained-arguments.</p>
-<p>Retained arguments that take ownership from a named variable cannot be
-specified without the parameter name at the call site even if they are the
-first argument. This is to make it obvious that ownership is given up at the
-call site. Retained arguments from an anonymous value (eg. from the result of a
-direct function call) can be specified without the parameter name since the
-value would be inaccessible/destroyed after the call in any case.</p>
-<pre><code class="language-zerolang">taker: function {arg: take reftyp} is {
-    # ...
+other cases, it is an error to pass valtypes to <code>.take</code> parameters.</p>
+<p><code>.take</code>arguments from a named variable cannot be specified without the
+parameter name at the call site even if they are the first argument. This is
+to make it obvious that ownership is given up at the call site. <code>.take</code>
+arguments from an anonymous value (eg. from the result of a direct function
+call) can be specified without the parameter name since the value would be
+inaccessible/destroyed after the call in any case.</p>
+<pre><code class="language-zerolang">taker: function {arg: reftype.take} is {
+    # arg is owned in this scope
 }
 
 # call site:
-taker arg: take myreftype
-# myreftype is unavailable in the current scope from this point</code></pre>
+taker arg: myreftype
+# myreftype is unavailable in the current scope from this point
+
+# passing a lock parameter and returning a borrow:
+getter: function {t: myclass.lock} out refchild.borrow is {
+    return t.myrefchild
+}</code></pre>
 <p>TODO: generic example:</p>
 <pre><code class="language-zerolang">myfunc: function t {
     t: generic any
@@ -2126,7 +2149,7 @@ taker arg: take myreftype
     t * x
 }</code></pre>
 <h4 id="function-parameter-types"><a href="#function-parameter-types">5.7.2. Function Parameter Types</a></h4>
-<p>In the <code>from</code> block, the function argument types specified (after the
+<p>In the <code>in</code> block, the function argument types specified (after the
 function argument label), can be:</p>
 <p>- a builtin type (eg. u8, i32, f64, c8)
 - a numeric compile time constant (this is also a type). Parameter will default
@@ -2137,10 +2160,14 @@ function argument label), can be:</p>
   the same type must be passed at the call
 - <code>address</code> followed by a function or method name. This will then be a <code>spec</code>
   parameter with a default value equal to the function name specified.
-- <code>generic</code> followed by a named generic restraint type (<code>union</code>, <code>protocol</code>,
-  <code>enum</code>, <code>u8</code> etc.)
-- <code>take</code> followed by a named reftype. Function body will have ownership of this
+- a type followed by <code>.generic</code> (eg. <code>any.generic</code>, <code>myunion.generic</code>,
+  <code>myprotocol.generic</code>) to specify a generic type constraint
+- a type followed by <code>.take</code> (eg. <code>reftype.take</code>) to take ownership of the
   parameter
+- a type followed by <code>.borrow</code> (eg. <code>reftype.borrow</code>) to explicitly borrow
+  (this is the default for parameters and does not need to be specified)
+- a type followed by <code>.lock</code> (eg. <code>reftype.lock</code>) to lock the parameter for
+  the lifetime of the return value
 - a restrained type: a named type followed by a dot then a child named protocol
   or named method of that type. The call must pass an instance of the named
   type and the function declares that it will only use methods in the named
@@ -2292,15 +2319,14 @@ defined on it can be called within the destructor. Only the subcomponents of
 through destruction? Can no methods be called during destruction?
 Is there any point in having destructors?</p>
 <pre><code class="language-zerolang">myreftype: class {
-    destroy: function {@s: this} out subreftype is {
+    destroy: function {s: this.take} out subreftype is {
         s.subreftype   # return a sub ref type. Can only do this in destructor
     }
 }
 
-# destroys it? Must be called on parent namespace (like a constructor)?
-# returns the subcomponent which the caller now owns
+# destroys the instance and returns the subcomponent which the caller now owns
 # myreftypeinstance is invalid after this call
-mysubtype: myreftype.destroy @s: myreftypeinstance</code></pre>
+mysubtype: myreftype.destroy s: myreftypeinstance</code></pre>
 <h4 id="function-references"><a href="#function-references">5.7.8. Function References</a></h4>
 <p>A function reference is a variable that stores the address of a function. It may
 be called with the same syntax as used when calling a standard function. It may
@@ -2597,12 +2623,12 @@ program. </p>
 <pre><code class="language-zerolang">smallint: union { i8: none u8: none }</code></pre>
 <p>TODO: examples Some/None unions (like option). Generics</p>
 <p>- TODO: destroying union reference types could be difficult. Need to apply the
-  correct destructor for each subtype. Use a <code>match</code> with '@' 'in' argument
+  correct destructor for each subtype. Use a <code>match</code> with <code>.take</code> on target
 - TODO: can a union instance be updated with a different subitem? Is this worth
   the hassle or just create a new one? Would need arguments for each type on
   the resulting union object?
-- TODO: access back to the tag. TAG or @TAG attribute on the sum-type var? NO, out of channel access: union.tag(myunion)
-- TODO: need a way to convert back to the tag name (string). @ID on the sum-type var?</p>
+- TODO: access back to the tag via union.tag(myunion)
+- TODO: need a way to convert back to the tag name (string) via meta?</p>
 <pre><code class="language-zerolang"># REMOVE THIS. all subtypes must be named types. tag values cannot b specified.
 myunion: union {
     t1: record { _TAG: 100 }     # descriminator only
@@ -2842,7 +2868,7 @@ compilation will always fail).</p>
 <pre><code class="language-zerolang">error "Constant error string"   # "stack" with lineno's and filenames will
                                 # also be shown</code></pre>
 <h3 id="identifier-metadata"><a href="#identifier-metadata">6.4. Identifier Metadata</a></h3>
-<p>TODO: metadata about identifiers exposed by compile time constant <code>@</code> fields... use <code>meta</code> instead?</p>
+<p>TODO: metadata about identifiers exposed via <code>meta</code> namespace.</p>
 <pre><code class="language-zerolang">myconstants: unit {
     FIRST: 0
     SECOND: 1

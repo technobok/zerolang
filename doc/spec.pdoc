@@ -658,9 +658,11 @@ derived from another argument declared to be of that generic type. They must be
 a member of the union or implement the protocol specified as the 'type' in the
 parameter definition. 
 
-Retained parameters are decorated with a leading #~"@" and take ownership of the
+Parameters declared with #~".take" on their type take ownership of the
 supplied reftype argument in the function body. The variable supplied to a
-retained argument is not valid after the call returns. 
+#~".take" parameter is not valid after the call returns. Ownership transfer
+is performed implicitly; the caller does not need to call #~".take" explicitly
+(though it may do so for clarity).
 
 In a call, the 'primary' parameter is the first parameter listed in the #~"in"
 parameter list of the [#> to=function: function definition]. In a type specifier, the
@@ -669,8 +671,8 @@ supplied in a call or type specifier, then the parameter name #_*"may" be
 omitted in some cases. When either:
 
 #ul:
-  [#*: it is a normal argument (non-retained and non-generic)]
-  [#*: it is a retained parameter #_*"and" the supplied argument is anonymous
+  [#*: it is a normal argument (non-take and non-generic)]
+  [#*: it is a #~".take" parameter #_*"and" the supplied argument is anonymous
     (i.e. the result of a function call)]
   [#*: it is a generic parameter #_*"but" a concrete arg is being provided (i.e.
     not a generic arg)]
@@ -680,15 +682,15 @@ type specifier argument. e.g:
 
 #ul:
   #*: all arguments after the first argument, of any type
-  #*: all retained (#~"@") arguments taking its value from a named variable
+  #*: all #~".take" arguments taking their value from a named variable
 
 The argument name rules above are designed to:
 
 #ul:
-  [#*: unambigiously document the arguments to a call or type specifier]
+  [#*: unambiguously document the arguments to a call or type specifier]
   [#*: allow arguments in any order at the call site]
   [#*: clearly show when local variable ownership is being given away to a call (by
-    requiring the #~"@" name to be specified)]
+    requiring the parameter name to be specified for #~".take" parameters)]
   [#*: not overburden calls with names for the 'primary' (or only) argument. The
     'primary' argument is often redundant following the name of the function/type]
 
@@ -767,7 +769,7 @@ Resolving as a child of the argument type:
   fh: open "myfile.txt" mode: io.mode.READ
   """
 
-Always need parameter name even when calling with a single #_*"retained"
+Always need parameter name even when calling with a single #~".take"
 argument from a named variable:
 
 #code language=zerolang:
@@ -949,7 +951,7 @@ an assignment expression is specified or if the compiler can guarantee all
 subtypes have been specified in #~"case" clauses. When used as an expression, all
 #~"then" and #~"else" results must then be of the same type.
 
-If the target variable is a generic type #~"~", then the #~"match" becomes a
+If the target variable is a generic type, then the #~"match" becomes a
 constant expression that is evaluated at compile time for each specialisation
 during code generation.
 
@@ -1410,88 +1412,135 @@ fields and methods of that instance are accessible.
 #----: Ownership
 
 Ownership is determined by how the variable is created/declared or received.
+Each instance has exactly one owner at most. When the owning variable falls out
+of scope, the object is destroyed. Top level objects (ie. #~"data") never fall
+out of scope.
 
-TODO: #~"take" on type definition vs #~"take" on a variable #_*"name" (not
-instance)
+See #~"doc/ownership.pdoc" for the full ownership and locking model.
 
-Ownership types:
-
-#ul:
-  [#*: Owned - the result of a #~"take" expression. #~"take" is implied on the result of
-    a function call if #~"borrow" is not specified on the return type.]
-  [#*: Borrowed - the result of a #~"borrow" expression. #~"borrow" is implied on
-    standard function parameters if #~"take" is not specified on the parameter
-    definition.]
-  [#*: Shared Mutable - defined as a field of a class]
-  [#*: Shared Immutable - unit level definitions (#~"data", function references, type
-    definitions)]
-  [#*: #~"this" - the parent object within a class method. Parent of all Shared items
-    at current level. (But, This could also be a valtype...)]
-
-Aliasing is never permitted for reftypes (except for 'data'). The variable
-itself cannot be copied, only moved and loaned. This also means that any
-reftype can only appear once as an argument or as a receiver in any single
-function call (to prevent the same object being referenced by two different
-names in the function body).
-
-Note that the only time ownership can change is through function calls (#~"take"
-parameters and return values) and the result of a #~"take" modifier on a
-call/binary-operation. Normal arguments convert to borrowed within the called
-function. In #~"match" and #~"cast" statements, the source variable is hidden and
-the child is borrowed in the body by default. #~"take" arguments pass the
-ownership into the called function: the caller must #~"take" a local variable
-that cannot be accessed on return from that function call #_*"or" provide an
-anonymous value (eg a returned value)
-
-Reference Types:
-
-#table cols="5 1 1 1 1":
-  Property                                        |Owned     |Borrowed  |Shared    |This
-  Can be returned from a function?                |Yes       |No        |No        |No
-  Can be given away via a #~"take" parameter?     |Yes       |No        |No        |No
-  Can be replaced/overwritten?                    |Yes       |No        |Yes       |No
-  Can pass as an argument to Owned.method?        |Yes       |Yes       |Yes x     |Yes xx 
-  Can pass as an argument to Borrowed.method?     |Yes       |Yes       |Yes x     |Yes xx 
-  Can pass as an argument to Shared.method?       |Yes       |Yes       |Yes x     |No
-  Can be passed as an arg to a This.method?       |Yes       |Yes       |No        |No
-
-- x: But not with 'This' as any other argument
-- xx: But not with a Shared item as an other argument
-
-Value Types:
-
-#table cols="5 1 1 1 1":
-  Property                                        |Owned     |Borrowed  |Shared    |This
-  Can be returned from a function?                |Yes       |Yes       |Yes       |Yes
-  Can be given away via a #~"take" parameter?     |Yes       |Yes       |Yes       |Yes
-  Can be replaced/overwritten?                    |Yes       |No(?)     |Yes       |Yes
-  Can pass as an argument to Owned.method?        |Yes       |Yes       |Yes       |Yes
-  Can pass as an argument to Borrowed.method?     |Yes       |Yes       |Yes       |Yes
-  Can pass as an argument to Shared.method?       |Yes       |Yes       |Yes       |Yes
-  Can be passed as an arg to a This.method?       |Yes       |Yes       |Yes       |Yes
-
-
-Summary of restrictions:
-
-#table cols="1 8":
-  Type     |Restrictions
-  Value    |Minimal restrictions - copy by value, never shared
-  Owned    |No aliasing.
-  Borrowed |No Aliasing. Cannot be given away/returned.
-  Shared   |No Aliasing. Cannot be given away/returned. Cannot pass to method/receiver with 'This'
-  This     |No Aliasing. Cannot be given away/returned. Cannot pass to method/receiver with Shared
-
-TODO: implement the restrictions on a call with locking:
+Ownership states:
 
 #ul:
-  [#*: arguments are processed first in order, then the callable]
-  [#*: x is accessed, then x is exclusive lock]
-  [#*: child of x is accessed, then x is readonly, child is exclusive lock]
-  [#*: cannot take an exclusive lock on an item that already has a readonly or
-    exclusive lock]
-  [#*: cannot call a method on an item with a readonly or exclusive lock]
-  [#*: an argument that is a complete call has no locks and the returned item is
-    owned by that param]
+  [#*: Owned - the instance is owned at this location. All instances have exactly
+    one owner. Reftype constructors return owned instances. For valtypes,
+    every copy is a new owned instance.]
+  [#*: Borrowed - only for reftypes. The instance at this location has been
+    borrowed from an owned reftype. A function parameter borrows by default
+    (#~"borrow" is the default for #~"in" parameters).]
+
+#~"this" within object methods is always borrowed (you cannot own yourself).
+
+Instance fields are always borrowed even if the parent is owned. Valtype fields
+can be reassigned freely with #~"=". Reftype fields must be set in the
+constructor and can only be changed later with #~"swap" -- this ensures that
+both locations always contain a valid instance throughout the lifetime of the
+parent object.
+
+Aliasing is never permitted for reftypes (except for #~"data"). A reftype can
+only appear once as an argument or as a receiver in any single function call
+(enforced via [#> to=locking: locking]).
+
+Ownership changes only through function calls (#~".take" parameters and return
+values) and the #~".take" method on runtime instances. Normal arguments are
+borrowed within the called function. In #~"match" statements, the target is
+borrowed in the body by default; #~"match" with #~".take" takes ownership with
+type narrowing. #~".take" arguments pass ownership into the called function:
+the caller's name is invalid after the call.
+
+Unnamed instances (the result of a function call not assigned to a label) are
+transient. They are destroyed at the end of the current statement unless
+assigned or passed to an owned parameter.
+
+#-----: Ownership Type Attributes on Functions
+
+Ownership is specified on function parameters and return types using dotted
+type paths:
+
+#ul:
+  [#*: #~"type.take" - for #~"in" parameters, ownership is taken from the caller.
+    The caller must provide an owned reftype. The function must store or destroy
+    the value before it returns. For #~"out" return types, #~".take" is the
+    default (function returns a new owned instance to caller) and does not need
+    to be specified.]
+  [#*: #~"type.borrow" - for #~"in" parameters, ownership is not taken. The
+    function can call methods on the parameter but cannot store or destroy it.
+    #~".borrow" is the default for #~"in" parameters and does not need to be
+    specified. For #~"out" return types, #~".borrow" means a borrowed instance is
+    returned. The parameter housing that instance must be marked #~".lock".]
+  [#*: #~"type.lock" - for #~"in" parameters, this parameter will be locked by
+    the return value for its lifetime. Multiple parameters may be marked
+    #~".lock"; all locks transfer to the return value. It is illegal to specify
+    #~".lock" on a return value. It is illegal to #~".lock" a parameter when
+    there is no return value.]
+
+#-----: Ownership Methods on Instances
+
+#~".take" and #~".borrow" can also be used as compiler-generated methods on
+runtime instances:
+
+#ul:
+  [#*: #~"x.take" - takes ownership from the variable #~"x". The name #~"x" is
+    invalid after the call. Calling #~".take" on an expression that is not used
+    (not assigned or passed) destroys the instance.]
+  [#*: #~"x.borrow" - returns a borrowed reference to #~"x". The variable #~"x"
+    is exclusively locked for the lifetime of the borrowed reference.]
+
+#----: Locking
+
+Locking is an orthogonal attribute tracked alongside ownership. It prevents
+aliasing and data races at compile time. Locking is purely a compile-time
+mechanism with zero runtime overhead.
+
+Lock states:
+
+#ul:
+  [#*: unlocked - the instance is not locked (default)]
+  [#*: exclusive - an exclusive lock is held over this instance]
+  [#*: shared - a shared lock is held over this instance]
+
+An exclusive lock is required to pass an instance as an argument to a method.
+A shared lock is taken on the parent when an exclusive lock is taken on a
+child/grandchild member.
+
+Accessing a reftype field (eg. #~"x: obj.field") produces a borrowed reference
+to that field. The borrowed reference holds a shared lock on the parent and
+an exclusive lock on the field.
+
+For a function that returns a borrowed instance: that instance retains an
+exclusive lock over the #~".lock" parameter where the returned object lives,
+until the borrowed object falls out of scope.
+
+#-----: Locking Algorithm
+
+During a call, locks are taken/checked/assigned on all arguments and return
+values:
+
+#ol:
+  [#*: Each argument is processed left to right as specified in the call.]
+  [#*: If the argument is a top level (#~"data") item, no lock is taken
+    (immutable, freely shared).]
+  [#*: Otherwise, an exclusive lock is taken on the argument.]
+  [#*: If the argument is a dotted chain, a shared lock is taken on each parent
+    and grandparent in that chain.]
+  [#*: Additional shared locks on already shared-locked parents are permitted.]
+  [#*: If there is already an exclusive or shared lock on the argument being
+    passed, it is an error (prevents aliasing).]
+  [#*: If the argument is a sub-call, locking is applied recursively; after that
+    call, sub-call argument locks are cleared or assigned to the sub-call result.]
+  [#*: After all arguments are processed, the receiver is locked (exclusive lock
+    on each component of the receiver chain).]
+  [#*: The call is made.]
+  [#*: After the call, for any #~".lock" parameters, their exclusive locks (plus
+    shared locks on parent items) are assigned to the returned value. All other
+    argument locks are freed.]
+
+Locks are also taken on targets in #~"match", #~"if" and #~"for" to prevent
+mutation in the body. #~"match" can also #~".take" its target, in which case
+the target is owned with the narrowed type in the match bodies.
+
+When an instance falls out of scope, all of its locks are freed. If the
+variable is borrowed, the borrow is dropped. If the variable is owned, it is
+destroyed.
 
 
 #----: Declarations and References
@@ -1517,10 +1566,12 @@ The declaration typereference follows the name. It is:
   [#*: the name of the type followed by each generic argument using syntax similar
     to function calls (to specify a generic type). As with function calls, the
     name of the first generic argument may be omitted]
-  [#*: the #~"generic" keyword can be used to create a generic type field in units,
-    functions, classes, records, protocols, unions and variants.]
-  [#*: the #~"take" keyword can be used in function parameter definitions to take
-    ownership from the caller. See [#> to=ownership: ownership].]
+  [#*: a type followed by #~".generic" (eg. #~"any.generic") to create a generic
+    type field in units, functions, classes, records, protocols, unions and
+    variants.]
+  [#*: a type followed by #~".take", #~".borrow", or #~".lock" in function
+    parameter definitions to specify ownership and locking semantics. See
+    [#> to=ownership: ownership].]
 
 
 #---: Unit Types
@@ -1705,14 +1756,38 @@ argument.
 
 #----: take
 
-#~"take" - to convert an owned expression to a 'free' value (or request a 'free'
-value as a parameter).
+#~"take" is a predefined type attribute on all reftype types. When used as a
+dotted path on a type in function parameter or return type declarations, it
+specifies ownership transfer semantics. See [#> to=ownership: ownership] for
+full details.
+
+As a type attribute on function parameters (#~"type.take"): ownership is taken
+from the caller. As a return type attribute: the default -- function returns a
+new owned instance.
+
+As a compiler method on instances (#~"x.take"): takes ownership from the
+variable, rendering the name invalid. See [#> to=take-method: take (method)].
 
 #----: borrow
 
-#~"borrow" - to convert an ??? expression to a 'borrowed' value
+#~"borrow" is a predefined type attribute on all reftype types. When used as a
+dotted path on a type in function parameter declarations, it specifies that
+ownership is not taken. #~".borrow" is the default for #~"in" parameters.
+
+As a return type attribute (#~"out type.borrow"): the function returns a
+borrowed reference. At least one #~"in" parameter must be marked #~".lock".
+
+As a compiler method on instances (#~"x.borrow"): returns a borrowed reference,
+exclusively locking the receiver. See [#> to=borrow-method: borrow (method)].
 
 #----: lock
+
+#~"lock" is a predefined type attribute on reftype types for use in function
+parameter declarations only (#~"type.lock"). It indicates that this parameter
+will be locked by the return value for the lifetime of that return value.
+Multiple parameters may be marked #~".lock"; all locks transfer to the return
+value. It is illegal to specify #~".lock" on a return value or when there is no
+return value.
 
 #----: typedef
 
@@ -2042,67 +2117,46 @@ Also available is the fully qualified name for the parent object.
 
 #----: take (method)
 
-#~"take" is predefined on all variable #_*"names" (not the variable) that
-refer to a reftype.
-
-It explicitly takes the variable value (converting it to an anonymous taken
-value) and renders the variable name as uninitialised from this point forward.
+#~"take" is a compiler-generated method predefined on all variable names that
+refer to a reftype. It takes ownership from the variable, converting it to an
+anonymous owned value. The variable name is invalid from this point forward.
 
 The #~"take" method is zero overhead -- it is a manipulation of the compile time
-type system only. Use of the #~"take" method is optional when passing to
-#~"take"-en fields and function parameters, the compiler will implicitly #~"take"
-if required.
+type system only. Use of the #~".take" method is optional when passing to
+#~".take" function parameters; the compiler will implicitly take if required.
 
-#~"take" takes no arguments.
+#~".take" takes no arguments.
 
-The #~"take" method can be used for defining local variables -- the new variable
-will take the value and the old name will be undefined.
+#~".take" can be used for defining local variables -- the new variable takes the
+value and the old name becomes undefined. Calling #~".take" as an expression
+that is not used (not assigned or passed) destroys the instance.
 
 See also the [#> to=ownership: ownership].
 
 #----: borrow (method)
 
-#~"borrow" is predefined on all variable #_*"names" (not the variable) that
-refer to a reftype.
-
-It explicitly borrows the variable value locking the source variable name until
-the end of the scope of this #~"borrow".
+#~"borrow" is a compiler-generated method predefined on all variable names that
+refer to a reftype. It returns a borrowed reference to the receiver. The
+receiver is exclusively locked for the lifetime of the borrowed reference.
 
 The #~"borrow" method is zero overhead -- it is a manipulation of the compile
-time type system only. Use of the #~"borrow" method is optional when passing to
-#~"borrow"-ed fields and function parameters. The #~"borrow" method is required
-when returning a borrowed type from a function call.
+time type system only. Use of the #~".borrow" method is optional when passing
+to function parameters (parameters are borrowed by default).
 
-#~"borrow" takes no arguments.
+#~".borrow" takes no arguments.
 
-The #~"borrow" method can be used for defining local variables -- the new
-variable will borrow the value and the source name will be locked while the new
-name is in scope.
+#~".borrow" can be used for defining local variables -- the new variable borrows
+the value and the source name is exclusively locked while the new name is in
+scope.
 
 See also the [#> to=ownership: ownership].
 
 #----: lock (method)
 
-#~"lock" is predefined on all variable #_*"names" (not the variable) that
-refer to a reftype.
-
-It explicitly locks this variable name and binds it to a borrowed return value
-of a method/function.
-
-The lock applies until the the end of the scope of this #~"borrow".
-
-The #~"borrow" method is zero overhead -- it is a manipulation of the compile
-time type system only. Use of the #~"borrow" method is optional when passing to
-#~"borrow"-ed fields and function parameters. The #~"borrow" method is required
-when returning a borrowed type from a function call.
-
-#~"borrow" takes no arguments.
-
-The #~"borrow" method can be used for defining local variables -- the new
-variable will borrow the value and the source name will be locked while the new
-name is in scope.
-
-See also the [#> to=ownership: ownership].
+#~"lock" is not a runtime method on instances. It is a type attribute used only
+in function parameter declarations (#~"type.lock") to indicate that the
+parameter will be locked by the return value. See [#> to=locking: locking]
+for details.
 
 
 #----: generic (method)
@@ -2235,12 +2289,12 @@ Arguments to #~"function":
 A #~"function" defined with no arguments is a spec that takes no arguments and
 returns no value. It only has side-effects.
 
-The #~"in"  argument takes a brace delimitered block of parameter definitions
+The #~"in"  argument takes a brace delimited block of parameter definitions
 of the form #~"name: typereference". See #>"declarations-and-references" for
-details. A parameter #_*"must not" be private (#~"_") but may be [#>
-to=ownership: retained] (#~"@") or [#> to=generic-types: generic] (#~"~") or it
-may have a default constant numeric value or a default function reference
-value.
+details. A parameter #_*"must not" be private (#~"_") but may have ownership
+attributes (#~"type.take", #~"type.borrow", #~"type.lock") or be
+[#> to=generic-types: generic] (#~"type.generic") or it may have a default
+constant numeric value or a default function reference value.
 
 The order of the parameters is significant. The first non-generic parameter may
 be the 'primary' argument that can be used without specifying the parameter
@@ -2248,9 +2302,11 @@ name in a call. See #>"calls" for details. The first generic parameter may also
 be specified without name in type specifiers.
 
 A function usually will return a value. The type of the returned item is
-specified by the argument named #~"return". Ownership of a returned reftype value
-after the call implicitly lies with the caller (#~"@" #_*"must not" be
-specified on #~"return").
+specified by the argument named #~"out". Ownership of a returned reftype value
+after the call implicitly lies with the caller (#~".take" is the default for
+return types and does not need to be specified). A function may return a
+borrowed reference by specifying #~"type.borrow" as the return type; in this
+case, at least one parameter must be marked #~"type.lock".
 
 The #~"is" parameter to #~"function" specifies the body. It may be a single
 expression or a block of code. Each line of code is a local variable definition
@@ -2282,35 +2338,39 @@ body for early return of a value. Iterator results are specified by using the
   }
   """
 
-A function may also retain ownership of arguments. To do so, the parameter name
-must use the 'take' "call" and the type must be a reftype or generic type that
-may include a reftype.
+A function may also take ownership of arguments. To do so, the parameter type
+uses the #~".take" attribute (#~"type.take") and the type must be a reftype or
+generic type that may include a reftype.
 
-The caller provides the object to be retained by using these arguments at the
-function call site. The caller must own these variables before the call. The
-function body is free to use the retained argument as if it created it itself
-(i.e. can be stored, returned, destroyed). 
+The caller must own the variable before the call. The function body is free to
+use the taken argument as if it created it itself (i.e. can be stored,
+returned, destroyed). The caller's variable name is invalid after the call.
 
-Passing a value type via a retained-argument of a generic type passes a copy as
-usual. This allows the same notation to be used for generic container types
+Passing a value type via a #~".take" parameter of a generic type passes a copy
+as usual. This allows the same notation to be used for generic container types
 regardless of the type of subcomponents being stored (eg. for Lists). In all
-other cases, it is an error to pass valtypes in via retained-arguments.
+other cases, it is an error to pass valtypes to #~".take" parameters.
 
-Retained arguments that take ownership from a named variable cannot be
-specified without the parameter name at the call site even if they are the
-first argument. This is to make it obvious that ownership is given up at the
-call site. Retained arguments from an anonymous value (eg. from the result of a
-direct function call) can be specified without the parameter name since the
-value would be inaccessible/destroyed after the call in any case.
+#~".take" arguments from a named variable cannot be specified without the
+parameter name at the call site even if they are the first argument. This is
+to make it obvious that ownership is given up at the call site. #~".take"
+arguments from an anonymous value (eg. from the result of a direct function
+call) can be specified without the parameter name since the value would be
+inaccessible/destroyed after the call in any case.
 
 #code language=zerolang: """
-  taker: function {arg: take reftyp} is {
-      # ...
+  taker: function {arg: reftype.take} is {
+      # arg is owned in this scope
   }
 
   # call site:
-  taker arg: take myreftype
+  taker arg: myreftype
   # myreftype is unavailable in the current scope from this point
+
+  # passing a lock parameter and returning a borrow:
+  getter: function {t: myclass.lock} out refchild.borrow is {
+      return t.myrefchild
+  }
   """
 
 
@@ -2327,7 +2387,7 @@ TODO: generic example:
 
 #----: Function Parameter Types
 
-In the #~"from" block, the function argument types specified (after the
+In the #~"in" block, the function argument types specified (after the
 function argument label), can be:
 
 - a builtin type (eg. u8, i32, f64, c8)
@@ -2339,10 +2399,14 @@ function argument label), can be:
   the same type must be passed at the call
 - #~"address" followed by a function or method name. This will then be a #~"spec"
   parameter with a default value equal to the function name specified.
-- #~"generic" followed by a named generic restraint type (#~"union", #~"protocol",
-  #~"enum", #~"u8" etc.)
-- #~"take" followed by a named reftype. Function body will have ownership of this
+- a type followed by #~".generic" (eg. #~"any.generic", #~"myunion.generic",
+  #~"myprotocol.generic") to specify a generic type constraint
+- a type followed by #~".take" (eg. #~"reftype.take") to take ownership of the
   parameter
+- a type followed by #~".borrow" (eg. #~"reftype.borrow") to explicitly borrow
+  (this is the default for parameters and does not need to be specified)
+- a type followed by #~".lock" (eg. #~"reftype.lock") to lock the parameter for
+  the lifetime of the return value
 - a restrained type: a named type followed by a dot then a child named protocol
   or named method of that type. The call must pass an instance of the named
   type and the function declares that it will only use methods in the named
@@ -2541,15 +2605,14 @@ Is there any point in having destructors?
 
 #code language=zerolang: """
   myreftype: class {
-      destroy: function {@s: this} out subreftype is {
+      destroy: function {s: this.take} out subreftype is {
           s.subreftype   # return a sub ref type. Can only do this in destructor
       }
   }
 
-  # destroys it? Must be called on parent namespace (like a constructor)?
-  # returns the subcomponent which the caller now owns
+  # destroys the instance and returns the subcomponent which the caller now owns
   # myreftypeinstance is invalid after this call
-  mysubtype: myreftype.destroy @s: myreftypeinstance
+  mysubtype: myreftype.destroy s: myreftypeinstance
   """
 
 #----: Function References
@@ -2905,12 +2968,12 @@ program.
 TODO: examples Some/None unions (like option). Generics
 
 - TODO: destroying union reference types could be difficult. Need to apply the
-  correct destructor for each subtype. Use a #~"match" with '@' 'in' argument
+  correct destructor for each subtype. Use a #~"match" with #~".take" on target
 - TODO: can a union instance be updated with a different subitem? Is this worth
   the hassle or just create a new one? Would need arguments for each type on
   the resulting union object?
-- TODO: access back to the tag. TAG or @TAG attribute on the sum-type var? NO, out of channel access: union.tag(myunion)
-- TODO: need a way to convert back to the tag name (string). @ID on the sum-type var?
+- TODO: access back to the tag via union.tag(myunion)
+- TODO: need a way to convert back to the tag name (string) via meta?
 
 #code language=zerolang: """
   # REMOVE THIS. all subtypes must be named types. tag values cannot b specified.
@@ -3213,7 +3276,7 @@ compilation will always fail).
 
 #---: Identifier Metadata
 
-TODO: metadata about identifiers exposed by compile time constant #~"@" fields... use #~"meta" instead?
+TODO: metadata about identifiers exposed via #~"meta" namespace.
 
 
 #code language=zerolang: """
