@@ -3,7 +3,7 @@ ZeroLang scoped symbol table for the type checker
 """
 
 from typing import Optional, Dict, List
-from ztypechecker import ZType, ZVariable, ZOwnership, ZNaming
+from ztypechecker import ZType, ZVariable, ZLockState, LockEntry
 
 
 class Scope:
@@ -77,6 +77,57 @@ class SymbolTable:
                     del scope.variables[name]
                 return True
         return False
+
+    def try_lock(
+        self, target_name: str, lock_type: ZLockState, holder: str
+    ) -> Optional[str]:
+        """Try to take a lock on target_name. Returns error message or None on success."""
+        var = self.lookup_var(target_name)
+        if not var:
+            return None  # unknown variable, skip lock checking
+
+        for entry in var.locks:
+            if lock_type == ZLockState.EXCLUSIVE:
+                # exclusive conflicts with any existing lock
+                return (
+                    f"Cannot take exclusive lock on '{target_name}': "
+                    f"already has {entry.lock_type.name.lower()} lock held by '{entry.holder}'"
+                )
+            if (
+                lock_type == ZLockState.SHARED
+                and entry.lock_type == ZLockState.EXCLUSIVE
+            ):
+                return (
+                    f"Cannot take shared lock on '{target_name}': "
+                    f"already has exclusive lock held by '{entry.holder}'"
+                )
+            # shared + shared is OK
+
+        entry = LockEntry(lock_type=lock_type, holder=holder)
+        var.locks.append(entry)
+
+        # track on holder side for cleanup
+        holder_var = self.lookup_var(holder)
+        if holder_var:
+            holder_var.held_locks.append(target_name)
+
+        return None
+
+    def release_lock(self, target_name: str, holder: str) -> None:
+        """Release a specific lock held by holder on target_name."""
+        var = self.lookup_var(target_name)
+        if not var:
+            return
+        var.locks = [e for e in var.locks if e.holder != holder]
+
+    def release_held_locks(self, holder_name: str) -> None:
+        """Release all locks held by a variable (called on scope exit)."""
+        var = self.lookup_var(holder_name)
+        if not var:
+            return
+        for target_name in var.held_locks:
+            self.release_lock(target_name, holder_name)
+        var.held_locks.clear()
 
     @property
     def depth(self) -> int:

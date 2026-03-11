@@ -14,7 +14,11 @@ from zast import ERR
 from ztypechecker import ZParamOwnership
 
 # ownership annotation suffixes recognized on dotted type paths
-_OWNERSHIP_SUFFIXES = {"take": ZParamOwnership.TAKE, "borrow": ZParamOwnership.BORROW, "lock": ZParamOwnership.LOCK}
+_OWNERSHIP_SUFFIXES = {
+    "take": ZParamOwnership.TAKE,
+    "borrow": ZParamOwnership.BORROW,
+    "lock": ZParamOwnership.LOCK,
+}
 
 # A Node type.
 TN = TypeVar("TN", bound=zast.Node, covariant=True)
@@ -702,7 +706,9 @@ class Parser:
         return NodeX(node=call, extern=extern)
 
     @staticmethod
-    def _strip_ownership(path: zast.Path) -> tuple[zast.Path, Optional[ZParamOwnership]]:
+    def _strip_ownership(
+        path: zast.Path,
+    ) -> tuple[zast.Path, Optional[ZParamOwnership]]:
         """Check if a type path ends with an ownership annotation (.take/.borrow/.lock).
 
         Returns (stripped_path, ownership) where ownership is None if no annotation found.
@@ -1420,7 +1426,9 @@ class Parser:
                     )
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 ifclause = zast.IfClause(
-                    conditions=dict(conditions), statement=statementx.node, start=startclause
+                    conditions=dict(conditions),
+                    statement=statementx.node,
+                    start=startclause,
                 )
                 clauses.append(ifclause)
                 # reset for another ifclause

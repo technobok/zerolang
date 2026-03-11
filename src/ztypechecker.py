@@ -127,7 +127,9 @@ class ZType:
     isliteral: bool = False
 
     # ownership annotations for function parameters and return type
-    param_ownership: "dict[str, ZParamOwnership]" = field(default_factory=dict, init=False)
+    param_ownership: "dict[str, ZParamOwnership]" = field(
+        default_factory=dict, init=False
+    )
 
     # value type vs reference type classification
     is_valtype: Optional[bool] = field(default=None, init=False)
@@ -135,6 +137,19 @@ class ZType:
 
 # a typesafe variable id
 VariableID = NewType("VariableID", int)
+
+
+@dataclass
+class LockEntry:
+    """
+    A single lock held on a variable.
+
+    lock_type: EXCLUSIVE or SHARED
+    holder: name of the variable that holds this lock
+    """
+
+    lock_type: ZLockState
+    holder: str
 
 
 @dataclass
@@ -149,8 +164,10 @@ class ZVariable:
     ztype: ZType
     ownership: ZOwnership
     named: ZNaming
-    lock_state: ZLockState = ZLockState.UNLOCKED
-    lock_targets: List[str] = field(default_factory=list)
+    # locks held ON this variable by other variables
+    locks: List[LockEntry] = field(default_factory=list)
+    # names of variables this variable holds locks on (for cleanup on scope exit)
+    held_locks: List[str] = field(default_factory=list)
 
 
 class TypeTable:

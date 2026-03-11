@@ -12,7 +12,13 @@ from zast import ERR
 from zlexer import Token
 from zenv import SymbolTable
 from ztypechecker import (
-    ZType, ZTypeType, ZParamOwnership, ZOwnership, ZNaming, ZVariable,
+    ZType,
+    ZTypeType,
+    ZParamOwnership,
+    ZOwnership,
+    ZNaming,
+    ZVariable,
+    ZLockState,
     parse_number,
 )
 
@@ -72,6 +78,9 @@ class TypeChecker:
 
         # current function's ownership annotations (for ownership checking)
         self._current_func_ownership: dict[str, ZParamOwnership] = {}
+
+        # pending borrow lock: set by .borrow, consumed by _check_assignment
+        self._pending_borrow_lock: Optional[str] = None
 
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
@@ -222,7 +231,9 @@ class TypeChecker:
         ret_is_borrow = own.get(":return") == ZParamOwnership.BORROW
 
         # lock parameters are only valid when there is a return value
-        has_lock_param = any(v == ZParamOwnership.LOCK for k, v in own.items() if k != ":return")
+        has_lock_param = any(
+            v == ZParamOwnership.LOCK for k, v in own.items() if k != ":return"
+        )
         if has_lock_param and not has_return:
             self._error(
                 "Parameter marked as 'lock' but function has no return value",
@@ -447,11 +458,30 @@ class TypeChecker:
             self._check_expression(inner)
 
     def _check_assignment(self, assign: zast.Assignment) -> None:
+        self._pending_borrow_lock = None
         t = self._check_expression(assign.value)
         if t:
-            # new local variables are always owned
-            var = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
-            self.symtab.define_var(assign.name, var)
+            # check if this assignment is from a .borrow call
+            borrow_target = self._pending_borrow_lock
+            self._pending_borrow_lock = None
+
+            if borrow_target:
+                # the new variable is borrowed and holds an exclusive lock on the target
+                var = ZVariable(
+                    ztype=t, ownership=ZOwnership.BORROWED, named=ZNaming.NAMED
+                )
+                self.symtab.define_var(assign.name, var)
+                err = self.symtab.try_lock(
+                    borrow_target, ZLockState.EXCLUSIVE, assign.name
+                )
+                if err:
+                    self._error(err, loc=assign.start)
+            else:
+                # new local variables are always owned
+                var = ZVariable(
+                    ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED
+                )
+                self.symtab.define_var(assign.name, var)
             assign.type = t
 
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
@@ -566,6 +596,8 @@ class TypeChecker:
                             loc=path.start,
                         )
                     else:
+                        # release any locks held by this variable before invalidating
+                        self.symtab.release_held_locks(path.parent.name)
                         self.symtab.invalidate(path.parent.name)
                 path.type = parent_type
             return parent_type
@@ -574,6 +606,12 @@ class TypeChecker:
         if child_name == "borrow":
             parent_type = self._check_path(path.parent)
             if parent_type:
+                # .borrow takes an exclusive lock on the receiver
+                if isinstance(path.parent, zast.AtomId):
+                    receiver_name = path.parent.name
+                    # the borrow result will be assigned to a name by _check_assignment;
+                    # for now, use a placeholder holder that will be updated
+                    self._pending_borrow_lock = receiver_name
                 path.type = parent_type
             return parent_type
 
@@ -610,10 +648,7 @@ class TypeChecker:
             return None
 
         # handle return statement: check expression type against function return type
-        if (
-            callee_type.name == "return"
-            and callee_type.typetype == ZTypeType.FUNCTION
-        ):
+        if callee_type.name == "return" and callee_type.typetype == ZTypeType.FUNCTION:
             return self._check_return_call(call)
 
         # handle record construction: calling a record type creates an instance
@@ -637,6 +672,10 @@ class TypeChecker:
 
         # check for reftype aliasing: same reftype arg passed twice
         reftype_args: dict[str, Token] = {}
+
+        # lock tracking: accumulate locks taken during this call
+        # each entry: (target_name, holder_placeholder, param_name)
+        call_locks: List[Tuple[str, str, Optional[str]]] = []
 
         for i, arg in enumerate(call.arguments):
             arg_type = self._check_operation(arg.valtype)
@@ -680,8 +719,10 @@ class TypeChecker:
                     )
 
             # ownership check: take parameters consume the argument
+            pname_for_lock = None
             if arg_type and i < len(params):
                 pname, _ = params[i]
+                pname_for_lock = pname
                 param_own = callee_type.param_ownership.get(pname)
                 if param_own == ZParamOwnership.TAKE:
                     # invalidate the caller's name
@@ -695,11 +736,134 @@ class TypeChecker:
                                 loc=arg.start,
                             )
                         else:
+                            self.symtab.release_held_locks(arg_root)
                             self.symtab.invalidate(arg_root)
 
+            # locking algorithm: take locks on arguments
+            if arg_type and not _is_valtype(arg_type):
+                locks = self._take_arg_locks(arg.valtype, call, arg.start)
+                for target_name, holder in locks:
+                    call_locks.append((target_name, holder, pname_for_lock))
+
+        # lock the receiver (dotted chain on the callable)
+        self._lock_receiver(call.callable, call)
+
+        # after call: transfer lock-param locks to return value, release others
         ret = callee_type.children.get(":return")
+        lock_param_names = {
+            k
+            for k, v in callee_type.param_ownership.items()
+            if v == ZParamOwnership.LOCK and k != ":return"
+        }
+        for target_name, holder, pname in call_locks:
+            if pname in lock_param_names:
+                # these locks will be transferred to whoever receives the return value;
+                # keep them in place — the holder is the arg variable which remains locked
+                pass
+            else:
+                # release this call's lock
+                self.symtab.release_lock(target_name, holder)
+
         call.type = ret if ret else self.t_null
         return call.type
+
+    def _take_arg_locks(
+        self, op: zast.Operation, call: zast.Call, loc: Token
+    ) -> List[Tuple[str, str]]:
+        """Take locks for a function call argument. Returns list of (target, holder) pairs."""
+        locks_taken: List[Tuple[str, str]] = []
+        # use a synthetic holder name based on the call for tracking
+        holder = f"__call_{id(call)}"
+
+        if isinstance(op, zast.AtomId):
+            name = op.name
+            if _is_numeric_id(name):
+                return locks_taken
+            var = self.symtab.lookup_var(name)
+            if not var:
+                return locks_taken
+            # check if this is a data item (exempt from locking)
+            if var.ztype.typetype == ZTypeType.DATA:
+                return locks_taken
+            # exclusive lock on the argument
+            err = self.symtab.try_lock(name, ZLockState.EXCLUSIVE, holder)
+            if err:
+                self._error(err, loc=loc)
+            else:
+                locks_taken.append((name, holder))
+
+        elif isinstance(op, zast.DottedPath):
+            # for dotted paths: exclusive lock on leaf, shared on parent chain
+            chain = self._get_dotted_chain(op)
+            if chain:
+                # exclusive lock on the leaf (last element)
+                leaf = chain[-1]
+                leaf_var = self.symtab.lookup_var(leaf)
+                if leaf_var and leaf_var.ztype.typetype != ZTypeType.DATA:
+                    err = self.symtab.try_lock(leaf, ZLockState.EXCLUSIVE, holder)
+                    if err:
+                        self._error(err, loc=loc)
+                    else:
+                        locks_taken.append((leaf, holder))
+                # shared lock on each parent in the chain
+                for parent_name in chain[:-1]:
+                    parent_var = self.symtab.lookup_var(parent_name)
+                    if parent_var and parent_var.ztype.typetype != ZTypeType.DATA:
+                        err = self.symtab.try_lock(
+                            parent_name, ZLockState.SHARED, holder
+                        )
+                        if err:
+                            self._error(err, loc=loc)
+                        else:
+                            locks_taken.append((parent_name, holder))
+
+        elif isinstance(op, zast.Expression):
+            inner = op.expression
+            if isinstance(inner, zast.Call):
+                # sub-call: locks are handled recursively by _check_call
+                pass
+            elif isinstance(inner, zast.Operation):
+                return self._take_arg_locks(inner, call, loc)
+
+        return locks_taken
+
+    def _get_dotted_chain(self, path: zast.DottedPath) -> List[str]:
+        """Get the chain of variable names in a dotted path (root first)."""
+        parts: List[str] = []
+        node = path
+        while isinstance(node, zast.DottedPath):
+            parts.append(node.child.name)
+            node = node.parent
+        if isinstance(node, zast.AtomId):
+            parts.append(node.name)
+        parts.reverse()
+        return parts
+
+    def _lock_receiver(self, callable_path: zast.Path, call: zast.Call) -> None:
+        """Lock the receiver of a method call (dotted chain on the callable)."""
+        if not isinstance(callable_path, zast.DottedPath):
+            return
+        # only lock if the parent is a variable (not a unit)
+        chain = self._get_dotted_chain(callable_path)
+        if len(chain) < 2:
+            return
+        root = chain[0]
+        # skip if root is a unit name
+        if root in self.program.units:
+            return
+        root_var = self.symtab.lookup_var(root)
+        if not root_var:
+            return
+        # don't lock data items
+        if root_var.ztype.typetype == ZTypeType.DATA:
+            return
+        holder = f"__recv_{id(call)}"
+        # exclusive lock on root (the receiver)
+        err = self.symtab.try_lock(root, ZLockState.EXCLUSIVE, holder)
+        if err:
+            self._error(err, loc=call.start)
+        # receiver locks are released after the call
+        self.symtab.release_lock(root, holder)
 
     def _get_arg_root_name(self, op: zast.Operation) -> Optional[str]:
         """Get the root variable name from an operation (for aliasing checks)."""
@@ -726,7 +890,10 @@ class TypeChecker:
             ret_type = self._check_operation(call.arguments[0].valtype)
 
         if self._current_return_type and ret_type:
-            if ret_type is not self._current_return_type and ret_type.name != self._current_return_type.name:
+            if (
+                ret_type is not self._current_return_type
+                and ret_type.name != self._current_return_type.name
+            ):
                 self._error(
                     f"Return type mismatch: function expects {self._current_return_type.name}, "
                     f"got {ret_type.name}",
@@ -791,14 +958,25 @@ class TypeChecker:
 
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")
+        # lock tracking for for-loop targets
+        locked_targets: List[Tuple[str, str]] = []
         for name, cond_op in fornode.conditions.items():
             t = self._check_operation(cond_op)
             if t and not name.startswith(" "):
                 self.symtab.define(name, t)
+                # lock the iteration target to prevent mutation in body
+                if not _is_valtype(t):
+                    holder = f"__for_{id(fornode)}"
+                    err = self.symtab.try_lock(name, ZLockState.EXCLUSIVE, holder)
+                    if not err:
+                        locked_targets.append((name, holder))
         for postcond in fornode.postconditions:
             self._check_operation(postcond)
         if fornode.loop:
             self._check_statement(fornode.loop)
+        # release for-loop locks
+        for target_name, holder in locked_targets:
+            self.symtab.release_lock(target_name, holder)
         self.symtab.pop()
         return self.t_null
 
@@ -813,11 +991,23 @@ class TypeChecker:
 
     def _check_case(self, casenode: zast.Case) -> Optional[ZType]:
         self.symtab.push("match")
-        self._check_operation(casenode.subject)
+        subject_type = self._check_operation(casenode.subject)
+        # lock the match subject to prevent mutation in branches
+        match_lock_info: Optional[Tuple[str, str]] = None
+        if subject_type and not _is_valtype(subject_type):
+            subject_name = self._get_arg_root_name(casenode.subject)
+            if subject_name:
+                holder = f"__match_{id(casenode)}"
+                err = self.symtab.try_lock(subject_name, ZLockState.EXCLUSIVE, holder)
+                if not err:
+                    match_lock_info = (subject_name, holder)
         for clause in casenode.clauses:
             self._check_statement(clause.statement)
         if casenode.elseclause:
             self._check_statement(casenode.elseclause)
+        # release match lock
+        if match_lock_info:
+            self.symtab.release_lock(match_lock_info[0], match_lock_info[1])
         self.symtab.pop()
         return self.t_null
 

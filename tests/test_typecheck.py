@@ -8,7 +8,15 @@ import os
 from conftest import make_parser_vfs
 from zparser import Parser
 from ztypecheck import typecheck, TypeChecker
-from ztypechecker import ZTypeType, ZParamOwnership, ZOwnership, ZLockState, ZVariable, ZNaming
+from ztypechecker import (
+    ZTypeType,
+    ZParamOwnership,
+    ZOwnership,
+    ZLockState,
+    ZVariable,
+    ZNaming,
+    LockEntry,
+)
 import zast
 
 
@@ -416,7 +424,9 @@ class TestReturnTypeChecking:
         check_ok("f: function out i64 is { return 42 }")
 
     def test_wrong_return_type(self):
-        errors = check_errors('f: function out i64 is { return "hello" }\nmain: function is {}')
+        errors = check_errors(
+            'f: function out i64 is { return "hello" }\nmain: function is {}'
+        )
         assert any("Return type mismatch" in e.msg for e in errors)
 
     def test_void_function_no_return(self):
@@ -480,24 +490,28 @@ class TestOwnershipEnums:
 
     def test_zvariable_defaults(self):
         from ztypechecker import ZType
+
         t = ZType(name="i64", typetype=ZTypeType.RECORD, parent=None)
         v = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
-        assert v.lock_state == ZLockState.UNLOCKED
-        assert v.lock_targets == []
+        assert v.locks == []
+        assert v.held_locks == []
 
     def test_zvariable_with_lock(self):
         from ztypechecker import ZType
+
         t = ZType(name="point", typetype=ZTypeType.RECORD, parent=None)
         v = ZVariable(
             ztype=t,
             ownership=ZOwnership.BORROWED,
             named=ZNaming.NAMED,
-            lock_state=ZLockState.EXCLUSIVE,
-            lock_targets=["x"],
+            locks=[LockEntry(lock_type=ZLockState.EXCLUSIVE, holder="y")],
+            held_locks=["x"],
         )
         assert v.ownership == ZOwnership.BORROWED
-        assert v.lock_state == ZLockState.EXCLUSIVE
-        assert v.lock_targets == ["x"]
+        assert len(v.locks) == 1
+        assert v.locks[0].lock_type == ZLockState.EXCLUSIVE
+        assert v.locks[0].holder == "y"
+        assert v.held_locks == ["x"]
 
 
 class TestOwnershipParsing:
@@ -505,10 +519,7 @@ class TestOwnershipParsing:
 
     def test_param_borrow(self):
         """Parameter with .borrow annotation should parse and type-check."""
-        program = check_ok(
-            "f: function {a: i64.borrow} is {}\n"
-            "main: function is {}"
-        )
+        program = check_ok("f: function {a: i64.borrow} is {}\nmain: function is {}")
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
         assert "a" in func.param_ownership
@@ -516,10 +527,7 @@ class TestOwnershipParsing:
 
     def test_param_take(self):
         """Parameter with .take annotation."""
-        program = check_ok(
-            "f: function {a: i64.take} is {}\n"
-            "main: function is {}"
-        )
+        program = check_ok("f: function {a: i64.take} is {}\nmain: function is {}")
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
         assert func.param_ownership["a"] == ZParamOwnership.TAKE
@@ -527,8 +535,7 @@ class TestOwnershipParsing:
     def test_param_lock(self):
         """Parameter with .lock annotation (requires return value)."""
         program = check_ok(
-            "f: function {a: i64.lock} out i64 is { return a }\n"
-            "main: function is {}"
+            "f: function {a: i64.lock} out i64 is { return a }\nmain: function is {}"
         )
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
@@ -536,10 +543,7 @@ class TestOwnershipParsing:
 
     def test_param_no_ownership(self):
         """Parameter without annotation should have empty param_ownership."""
-        program = check_ok(
-            "f: function {a: i64} is {}\n"
-            "main: function is {}"
-        )
+        program = check_ok("f: function {a: i64} is {}\nmain: function is {}")
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
         assert "a" not in func.param_ownership
@@ -547,8 +551,7 @@ class TestOwnershipParsing:
     def test_mixed_params(self):
         """Mix of annotated and unannotated parameters."""
         program = check_ok(
-            "f: function {a: i64.take b: i64 c: i64.borrow} is {}\n"
-            "main: function is {}"
+            "f: function {a: i64.take b: i64 c: i64.borrow} is {}\nmain: function is {}"
         )
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
@@ -569,10 +572,7 @@ class TestOwnershipParsing:
 
     def test_return_type_no_ownership(self):
         """Return type without annotation should not have :return in param_ownership."""
-        program = check_ok(
-            "f: function out i64 is { return 42 }\n"
-            "main: function is {}"
-        )
+        program = check_ok("f: function out i64 is { return 42 }\nmain: function is {}")
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
         assert ":return" not in func.param_ownership
@@ -610,8 +610,7 @@ class TestOwnershipInZType:
     def test_no_ownership_empty_dict(self):
         """Functions without ownership annotations should have empty param_ownership."""
         program = check_ok(
-            "f: function {a: i64} out i64 is { return a }\n"
-            "main: function is {}"
+            "f: function {a: i64} out i64 is { return a }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -636,8 +635,7 @@ class TestValTypeTagging:
     def test_user_record_is_valtype(self):
         """User-defined records should be tagged as valtype."""
         program = check_ok(
-            "point: record { x: f64\n y: f64 }\n"
-            "main: function is { p: point }"
+            "point: record { x: f64\n y: f64 }\nmain: function is { p: point }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -658,8 +656,7 @@ class TestValTypeTagging:
     def test_enum_is_valtype(self):
         """Enums should be tagged as valtype."""
         program = check_ok(
-            "color: enum { red\n green\n blue }\n"
-            "main: function is { c: color.red }"
+            "color: enum { red\n green\n blue }\nmain: function is { c: color.red }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -683,10 +680,11 @@ class TestOwnershipSignatureValidation:
     def test_borrow_return_without_lock_param_error(self):
         """Returning borrow without any lock parameter is an error."""
         errors = check_errors(
-            "f: function {t: i64} out i64.borrow is { return t }\n"
-            "main: function is {}"
+            "f: function {t: i64} out i64.borrow is { return t }\nmain: function is {}"
         )
-        assert any("lock" in e.msg.lower() and "borrow" in e.msg.lower() for e in errors)
+        assert any(
+            "lock" in e.msg.lower() and "borrow" in e.msg.lower() for e in errors
+        )
 
     def test_borrow_return_with_lock_param_ok(self):
         """Returning borrow with a lock parameter is OK."""
@@ -697,24 +695,21 @@ class TestOwnershipSignatureValidation:
 
     def test_lock_param_without_return_error(self):
         """Lock parameter on a void function is an error."""
-        errors = check_errors(
-            "f: function {t: i64.lock} is {}\n"
-            "main: function is {}"
+        errors = check_errors("f: function {t: i64.lock} is {}\nmain: function is {}")
+        assert any(
+            "lock" in e.msg.lower() and "no return" in e.msg.lower() for e in errors
         )
-        assert any("lock" in e.msg.lower() and "no return" in e.msg.lower() for e in errors)
 
     def test_lock_param_with_return_ok(self):
         """Lock parameter with a return value is OK."""
         check_ok(
-            "f: function {t: i64.lock} out i64 is { return t }\n"
-            "main: function is {}"
+            "f: function {t: i64.lock} out i64 is { return t }\nmain: function is {}"
         )
 
     def test_borrow_return_no_params_error(self):
         """Returning borrow with zero parameters is an error."""
         errors = check_errors(
-            "f: function out i64.borrow is { return 42 }\n"
-            "main: function is {}"
+            "f: function out i64.borrow is { return 42 }\nmain: function is {}"
         )
         assert any("borrow" in e.msg.lower() for e in errors)
 
@@ -731,7 +726,9 @@ class TestOwnershipReturnChecking:
             "}\n"
             "main: function is {}"
         )
-        assert any("local variable" in e.msg.lower() or "local" in e.msg for e in errors)
+        assert any(
+            "local variable" in e.msg.lower() or "local" in e.msg for e in errors
+        )
 
     def test_return_lock_param_as_borrow_ok(self):
         """Returning a lock parameter as borrowed is OK."""
@@ -746,31 +743,15 @@ class TestTakeBorrowCompilerMethods:
 
     def test_take_resolves(self):
         """x.take should resolve to x's type."""
-        check_ok(
-            "main: function is {\n"
-            "  x: 42\n"
-            "  y: x.take\n"
-            "}"
-        )
+        check_ok("main: function is {\n  x: 42\n  y: x.take\n}")
 
     def test_borrow_resolves(self):
         """x.borrow should resolve to x's type."""
-        check_ok(
-            "main: function is {\n"
-            "  x: 42\n"
-            "  y: x.borrow\n"
-            "}"
-        )
+        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n}")
 
     def test_take_invalidates_name(self):
         """After x.take, x should be invalid."""
-        errors = check_errors(
-            "main: function is {\n"
-            "  x: 42\n"
-            "  y: x.take\n"
-            "  z: x\n"
-            "}"
-        )
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.take\n  z: x\n}")
         assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
 
 
@@ -784,6 +765,204 @@ class TestSwapOwnership:
 
 class TestExampleProgramsOwnership:
     """Verify all v1 example programs still pass with ownership checking."""
+
+    EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
+
+    def _check_example(self, name: str):
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, name)
+        program = p.parse()
+        assert isinstance(program, zast.Program), f"Parse failed for {name}"
+        errors = typecheck(program)
+        return errors
+
+    def test_hello(self):
+        assert self._check_example("hello") == []
+
+    def test_factorial(self):
+        assert self._check_example("factorial") == []
+
+    def test_fibonacci(self):
+        assert self._check_example("fibonacci") == []
+
+    def test_records(self):
+        assert self._check_example("records") == []
+
+    def test_strings(self):
+        assert self._check_example("strings") == []
+
+    def test_data(self):
+        assert self._check_example("data") == []
+
+    def test_mathutil(self):
+        assert self._check_example("mathutil") == []
+
+    def test_multimod(self):
+        assert self._check_example("multimod") == []
+
+    def test_swap(self):
+        assert self._check_example("swap") == []
+
+    def test_case(self):
+        assert self._check_example("case") == []
+
+    def test_control(self):
+        assert self._check_example("control") == []
+
+
+# ---- Phase 4d: Lock Checking Tests ----
+
+
+class TestLockEntry:
+    """Test the LockEntry dataclass."""
+
+    def test_lock_entry_exclusive(self):
+        e = LockEntry(lock_type=ZLockState.EXCLUSIVE, holder="y")
+        assert e.lock_type == ZLockState.EXCLUSIVE
+        assert e.holder == "y"
+
+    def test_lock_entry_shared(self):
+        e = LockEntry(lock_type=ZLockState.SHARED, holder="parent")
+        assert e.lock_type == ZLockState.SHARED
+        assert e.holder == "parent"
+
+
+class TestSymbolTableLocking:
+    """Test lock operations on the symbol table."""
+
+    def _make_symtab_with_vars(self, *names):
+        from zenv import SymbolTable
+        from ztypechecker import ZType
+
+        st = SymbolTable()
+        st.push("test")
+        t = ZType(name="myclass", typetype=ZTypeType.UNION, parent=None)
+        t.is_valtype = False
+        for name in names:
+            var = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+            st.define_var(name, var)
+        return st
+
+    def test_try_lock_exclusive_on_unlocked(self):
+        st = self._make_symtab_with_vars("x", "y")
+        err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        assert err is None
+        var = st.lookup_var("x")
+        assert len(var.locks) == 1
+        assert var.locks[0].lock_type == ZLockState.EXCLUSIVE
+
+    def test_try_lock_exclusive_on_exclusive_fails(self):
+        st = self._make_symtab_with_vars("x", "y", "z")
+        err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        assert err is None
+        err = st.try_lock("x", ZLockState.EXCLUSIVE, "z")
+        assert err is not None
+        assert "exclusive" in err.lower()
+
+    def test_try_lock_shared_on_shared_ok(self):
+        st = self._make_symtab_with_vars("x", "y", "z")
+        err = st.try_lock("x", ZLockState.SHARED, "y")
+        assert err is None
+        err = st.try_lock("x", ZLockState.SHARED, "z")
+        assert err is None
+        var = st.lookup_var("x")
+        assert len(var.locks) == 2
+
+    def test_try_lock_shared_on_exclusive_fails(self):
+        st = self._make_symtab_with_vars("x", "y", "z")
+        err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        assert err is None
+        err = st.try_lock("x", ZLockState.SHARED, "z")
+        assert err is not None
+        assert "exclusive" in err.lower()
+
+    def test_try_lock_exclusive_on_shared_fails(self):
+        st = self._make_symtab_with_vars("x", "y", "z")
+        err = st.try_lock("x", ZLockState.SHARED, "y")
+        assert err is None
+        err = st.try_lock("x", ZLockState.EXCLUSIVE, "z")
+        assert err is not None
+
+    def test_release_lock(self):
+        st = self._make_symtab_with_vars("x", "y")
+        st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        var = st.lookup_var("x")
+        assert len(var.locks) == 1
+        st.release_lock("x", "y")
+        assert len(var.locks) == 0
+
+    def test_release_held_locks(self):
+        st = self._make_symtab_with_vars("x", "y")
+        st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        target = st.lookup_var("x")
+        holder = st.lookup_var("y")
+        assert len(target.locks) == 1
+        assert holder.held_locks == ["x"]
+        st.release_held_locks("y")
+        assert len(target.locks) == 0
+        assert holder.held_locks == []
+
+    def test_release_only_specific_holder(self):
+        """Releasing locks for one holder should not affect another holder's locks."""
+        st = self._make_symtab_with_vars("x", "y", "z")
+        st.try_lock("x", ZLockState.SHARED, "y")
+        st.try_lock("x", ZLockState.SHARED, "z")
+        var = st.lookup_var("x")
+        assert len(var.locks) == 2
+        st.release_lock("x", "y")
+        assert len(var.locks) == 1
+        assert var.locks[0].holder == "z"
+
+
+class TestLockCheckingBorrow:
+    """Test lock checking for .borrow compiler method."""
+
+    def test_borrow_ok(self):
+        """y: x.borrow should work without errors."""
+        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n}")
+
+    def test_chained_borrow_ok(self):
+        """y: x.borrow, z: y.borrow should work (z locks y which locks x)."""
+        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n  z: y.borrow\n}")
+
+    def test_double_borrow_same_var_error(self):
+        """Cannot borrow x twice — second borrow conflicts with existing exclusive lock."""
+        errors = check_errors(
+            "main: function is {\n  x: 42\n  y: x.borrow\n  z: x.borrow\n}"
+        )
+        assert any(
+            "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+
+class TestLockCheckingDataExempt:
+    """Test that data items are exempt from locking."""
+
+    def test_data_item_no_lock(self):
+        """Data items are immutable and should not require locks."""
+        check_ok("primes: data { 2 3 5 7 }\nmain: function is { print primes.0 }")
+
+
+class TestLockCheckingScopeExit:
+    """Test that locks are released on scope exit."""
+
+    def test_borrow_released_after_take(self):
+        """After .take invalidates a var, its held locks are released."""
+        check_ok("main: function is {\n  x: 42\n  y: x.take\n}")
+
+
+class TestLockCheckingExamplePrograms:
+    """Verify all v1 example programs still pass with lock checking."""
 
     EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 

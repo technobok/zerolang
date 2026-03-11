@@ -69,12 +69,43 @@ def _mangle_func(name: str) -> str:
 
 def _mangle_var(name: str) -> str:
     """Mangle a local variable name — only escape C reserved words."""
-    if name in ("main", "break", "continue", "return", "switch", "case",
-                "default", "if", "else", "for", "while", "do", "int",
-                "float", "double", "char", "void", "struct", "union",
-                "enum", "static", "const", "auto", "register", "extern",
-                "volatile", "signed", "unsigned", "long", "short", "sizeof",
-                "typedef", "goto", "abs", "exit"):
+    if name in (
+        "main",
+        "break",
+        "continue",
+        "return",
+        "switch",
+        "case",
+        "default",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "int",
+        "float",
+        "double",
+        "char",
+        "void",
+        "struct",
+        "union",
+        "enum",
+        "static",
+        "const",
+        "auto",
+        "register",
+        "extern",
+        "volatile",
+        "signed",
+        "unsigned",
+        "long",
+        "short",
+        "sizeof",
+        "typedef",
+        "goto",
+        "abs",
+        "exit",
+    ):
         return f"v_{name}"
     return name
 
@@ -114,7 +145,9 @@ class CEmitter:
                 self._record_names.add(name)
             elif isinstance(defn, zast.Data):
                 self._data_names.add(name)
-            elif isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.Data):
+            elif isinstance(defn, zast.Expression) and isinstance(
+                defn.expression, zast.Data
+            ):
                 self._data_names.add(name)
             elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
                 self._const_names.add(name)
@@ -134,7 +167,9 @@ class CEmitter:
                 self._emit_function(name, defn)
             elif isinstance(defn, zast.Data):
                 self._emit_data(name, defn)
-            elif isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.Data):
+            elif isinstance(defn, zast.Expression) and isinstance(
+                defn.expression, zast.Data
+            ):
                 self._emit_data(name, defn.expression)
             elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
                 self._emit_constant(name, defn)
@@ -158,7 +193,12 @@ class CEmitter:
             parts.append("#include <stdlib.h>\n")
         if self.needs_string:
             parts.append("#include <string.h>\n")
-        if self.needs_stdio or self.needs_stdint or self.needs_stdlib or self.needs_string:
+        if (
+            self.needs_stdio
+            or self.needs_stdint
+            or self.needs_stdlib
+            or self.needs_string
+        ):
             parts.append("\n")
 
         if self.needs_string or self.needs_stdio:
@@ -184,16 +224,16 @@ class CEmitter:
                 "}\n\n"
                 "static ZStr* zstr_from_i64(int64_t n) {\n"
                 "    char buf[32];\n"
-                "    snprintf(buf, sizeof(buf), \"%ld\", (long)n);\n"
+                '    snprintf(buf, sizeof(buf), "%ld", (long)n);\n'
                 "    return zstr_new(buf);\n"
                 "}\n\n"
                 "static ZStr* zstr_from_f64(double n) {\n"
                 "    char buf[64];\n"
-                "    snprintf(buf, sizeof(buf), \"%g\", n);\n"
+                '    snprintf(buf, sizeof(buf), "%g", n);\n'
                 "    return zstr_new(buf);\n"
                 "}\n\n"
                 "static void zstr_print(ZStr* s) {\n"
-                "    printf(\"%.*s\\n\", s->len, s->data);\n"
+                '    printf("%.*s\\n", s->len, s->data);\n'
                 "}\n\n"
             )
 
@@ -426,7 +466,7 @@ class CEmitter:
             if call.arguments:
                 arg = self._emit_operation_value(call.arguments[0].valtype)
                 return f"{indent}zstr_print({arg});\n"
-            return f"{indent}zstr_print(zstr_new(\"\"));\n"
+            return f'{indent}zstr_print(zstr_new(""));\n'
 
         if callable_name == "return":
             if call.arguments:
@@ -442,7 +482,11 @@ class CEmitter:
         # data.index call -> array access
         if self._is_data_index_call(call):
             data_name = call.callable.parent.name
-            idx = self._emit_operation_value(call.arguments[0].valtype) if call.arguments else "0"
+            idx = (
+                self._emit_operation_value(call.arguments[0].valtype)
+                if call.arguments
+                else "0"
+            )
             return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
 
         args = self._emit_call_args(call)
@@ -478,7 +522,11 @@ class CEmitter:
         # data.index call -> array access
         if self._is_data_index_call(call):
             data_name = call.callable.parent.name
-            idx = self._emit_operation_value(call.arguments[0].valtype) if call.arguments else "0"
+            idx = (
+                self._emit_operation_value(call.arguments[0].valtype)
+                if call.arguments
+                else "0"
+            )
             return f"{_mangle_func(data_name)}[{idx}]"
 
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
@@ -526,7 +574,11 @@ class CEmitter:
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
         # check if this refers to a function, constant, data, or record
-        if name in self._func_names or name in self._data_names or name in self._const_names:
+        if (
+            name in self._func_names
+            or name in self._data_names
+            or name in self._const_names
+        ):
             return _mangle_func(name)
         if name in self._record_names:
             return f"(z_{name}_t){{0}}"
@@ -557,7 +609,11 @@ class CEmitter:
                 return _mangle_func(pname)
 
         # check if the dotted path resolves to a function (method call)
-        if hasattr(path, "type") and path.type and path.type.typetype == ZTypeType.FUNCTION:
+        if (
+            hasattr(path, "type")
+            and path.type
+            and path.type.typetype == ZTypeType.FUNCTION
+        ):
             parent = self._emit_path_value(path.parent)
             # determine the record type name from the function name
             func_name = path.type.name  # e.g. "point.distance"
@@ -582,7 +638,16 @@ class CEmitter:
             if isinstance(p, zast.Expression):
                 val = self._emit_expression_value(p)
                 val_type = self._get_expression_type(p)
-                if val_type and val_type.name in ("i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64"):
+                if val_type and val_type.name in (
+                    "i8",
+                    "i16",
+                    "i32",
+                    "i64",
+                    "u8",
+                    "u16",
+                    "u32",
+                    "u64",
+                ):
                     parts.append(f"zstr_from_i64((int64_t){val})")
                 elif val_type and val_type.name in ("f32", "f64"):
                     parts.append(f"zstr_from_f64((double){val})")

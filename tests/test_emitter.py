@@ -37,12 +37,17 @@ def compile_and_run(csource: str) -> str:
     try:
         result = subprocess.run(
             ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
-            capture_output=True, text=True, timeout=10,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         if result.returncode != 0:
             raise RuntimeError(f"gcc failed:\n{result.stderr}")
         result = subprocess.run(
-            [outpath], capture_output=True, text=True, timeout=10,
+            [outpath],
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
         return result.stdout
     finally:
@@ -60,12 +65,7 @@ class TestEmitterBasic:
         assert output.strip() == "Hello, World!"
 
     def test_integer_arithmetic(self):
-        csource = emit_source(
-            "main: function is {\n"
-            "  x: 2 + 3\n"
-            '  print "\\{x}"\n'
-            "}"
-        )
+        csource = emit_source('main: function is {\n  x: 2 + 3\n  print "\\{x}"\n}')
         output = compile_and_run(csource)
         assert output.strip() == "5"
 
@@ -79,10 +79,10 @@ class TestEmitterBasic:
 
     def test_if_else(self):
         csource = emit_source(
-            'main: function is {\n'
-            '  x: 5\n'
+            "main: function is {\n"
+            "  x: 5\n"
             '  if x > 3 then print "big" else print "small"\n'
-            '}'
+            "}"
         )
         output = compile_and_run(csource)
         assert output.strip() == "big"
@@ -103,21 +103,14 @@ class TestEmitterBasic:
 
     def test_swap(self):
         csource = emit_source(
-            "main: function is {\n"
-            "  a: 1\n  b: 2\n"
-            "  a swap b\n"
-            '  print "\\{a} \\{b}"\n'
-            "}"
+            'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "2 1"
 
     def test_string_interpolation(self):
         csource = emit_source(
-            'main: function is {\n'
-            '  name: "Zero"\n'
-            '  print "Hello, \\{name}!"\n'
-            '}'
+            'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "Hello, Zero!"
