@@ -1,0 +1,537 @@
+#doc.lang: en
+
+#//: Zerolang Design-REJECTED
+
+#doc.title: Zero Language Design-REJECTED
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css 
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-03-11
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zero Language Design Ideas Rejected
+
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+Language design ideas that were considered but rejected.
+
+#--: THINK: can valtypes assign to 'this'?
+
+I think this should be no.
+
+Is this useful or just annoying?
+
+valtype can mutate itself.
+
+typedefs can wrap a numeric then change it? Seems very surprising.
+
+If top level records (immutable) then how to stop typedefs from changing it?
+Can't wrap top level item?
+
+#--: IDEA: Destructor?
+
+#code language=zerolang: """
+  destroy: function {this: take this} is {
+    # a function that takes this and no other arguments and returns nothing. 
+    # can be named anything you like but can only have one destructor with this 
+    # signature
+
+    # does cleanup but not memory deallocation (compiler does that automatically)
+    # compiler will can this automatically when this item is being destroyed
+    # but parent owner can call #~"object.destroy this: object" itself to destroy it...
+    # need to explictly pass 
+  }
+
+  closedfile: myfile.close this: myfile    # too wordy
+  # no, should use parent namespace to get to close then pass in file...
+  closedfile: File.close take myfile
+
+  file.close    # file is now narrowed? how to see this from caller.... this doesn't work
+  """
+
+Finalizer instead? All memory destruction is handled by the compiler but a
+finalizer can be called when the object goes out of scope but before the
+compiler generated destructor is run?
+
+#--: IDEA: typestate
+
+How to represent typestate flows?
+
+Method would need to 'take' 'this' and return a typedef with the new interface.
+But new type cannot access private members...
+
+Taking 'this' is also what destructors do, so need a way to differentiate.
+(destructor takes no arguments other than this and returns nothing)
+
+Also, typedef definitions (eg #~"class {this: underlyingtype}") automatically
+expose underlying methods but probably don't want that for typestate flows.
+Also, would not want to have methods that accept the underlying type to accept
+the new type... But then, should just make a whole new class?
+
+How to make a zero overhead new class (type)?????
+
+Maybe have 2 options:
+
+#ul:
+  [#*: a typedef that uses #~"this:", to be the same type as parent but with extension
+    methods. Can be passed to a method that expects the underlying type.]
+  [#*: typedef that uses #~"type:" to make a new type that doesn't inherit the
+    underlying methods? And cannot be passed to methods that expect the
+    underlying type (distinct type)]
+
+Both are zero overhead: playing with the type system at compile time rather
+than any run time operation.
+
+But, but, but...
+
+What if the method returned a borrowed self.facet? This could be zero overhead
+at run time and so only affect the type system. The original variable with the
+old interface would be locked while the new facet was in scope...
+
+
+#--: NOPE: views
+
+Don't do this. Too complicated.
+
+See also typestate
+
+Views are different groups of accessible named children that an object can
+support throughout its lifetime. The views are specified using the 'view'
+clause in the object's definition.
+
+Public and private could be thought of as builtin views.
+
+#ul:
+  [#*: a 'view' block for an object/protocol may list children id's which are a
+    subset of the accessible methods/fields/views/protocols in that
+    object/protocol.]
+  [#*: function/method optionally takes an 'into' argument that specifies a named
+    view. TODO: How to specify that the actual view name may differ at runtime?]
+  [#*: 'return' may specified an 'into' argument (must match function signature)]
+  [#*: 'into' methods can only be called by the object *owner*. Why? How to handle
+    the types of fields that may change because of 'view/into'?]
+  [#*: the 'type' (subtype?) of the owned object will be limited to the children
+    listed in the view named in the 'into' param after the method call ]
+  [#*: this is a zero overhead change (mostly), only the compile time subtype has
+    changed. There is no runtime protocol object creation (but there is a runtime
+    tag that records the currently accessible children of the object at all
+    times)]
+  [#*: this is to facilitate flow typing API's]
+  [#*: view definition could contain 0 id's to signify that no methods are
+    available after a call that 'into' s to this. The object may then be destroyed
+    by the caller. But what if it is not owned? Forbid calling a method that
+    'into' s to an empty facet?]
+
+Also, function parameters can can have a type of parent.viewname. Where
+'parent' is an object (class, struct, etc), including a protocol or can even be
+a generic type. This will be zero overhead for the caller and will guarantee
+(compiler will check) that only methods in that interface will be used. TODO:
+can also take a parent.methodname if will only call that method? But what if
+this is a function parameter with a default value? What? This should be ok.
+Functions are not called in object or parameter definitions. Not sure about
+this...
+
+Need to handle:
+
+#ul:
+  [#*: when in conditional code that rejoins where we might have one facet in one
+    path and a different one in the other path... ]
+  [#*: And would need #~"match" to handle this to dissect back to individual view
+    again...]
+  [#*: 'public' is the default view? 'public' must be a keyword then? Or
+    predeclared.. Or '...' can match public? Or public protocol should be the
+    name of the parent class? NO. If a view is specified in (every) constructor's
+    'into' and is never changed in any other method, then that view is
+    essentially the 'public' view.]
+  [#*: how to handle run time facet narrowing? #~"return into view"? How to define the
+    method signature? 'into' what? view definitions can have views inside (like a
+    superview) that can then be specified in the 'into' of the method and a
+    subview of this can be returned?]
+  [#*: can a view be a runtime value? Can assign to a variable then and can use
+    that in the 'into' clause. What type would the variable be? Would need to
+    specify the type in the function 'into' parameter...]
+
+Need to separate syntax for converting to a protocol object (has runtype cost)
+and changing the compile type only (typedefs, views). Done? - 'as' for
+protocols and 'into' for views? Only the object itself can provide a way to
+convert to a view or protocol, this cannot be 'forced' from outside the object.
+
+#code language=zerolang: """
+  # view'ed class
+  # to use 'as', the named protocol MUST be in the 'as' section
+  # OR can 'as' to a single public method in the 'is' section
+  # if 'as' is used, there will be a field added to the object to store the 
+  # facet state. Changing facets will modify this field. Compiler may elide 
+  # checks to this field if it already knows the specific type
+
+  K: class is {
+    view1: view { method1 method2 }   # id's only within 'view'
+    view2: view { method2 method3 field1 }
+    # can refer to an external protocol and can 'as' to this protocol, 
+    # but can't use 'as' on any of those methods inside this protocol
+    extprotocol: myprotocol             
+
+    method1: function # ...
+    method2: function into: view2 # ...
+    method3: function # ...
+  }
+
+
+  # view'ed protocol
+
+  P: protocol is {
+    view1: view { method1 method2 }   # id's only within 'view'
+    view2: view { method2 method3 }
+    # can refer to an external protocol and can 'as' to this protocol, 
+    # but can't use 'as' on any of those methods inside this protocol
+    extprotocol: myprotocol             
+
+    # specs only. But 'into' must be specified
+    method1: function # ...
+    method2: function into: view2 # ...
+    method3: function # ...
+  }
+
+  # using a view'ed protocol
+
+  K2: class is {
+    P: P  # needs to be labelled to refer to it below
+    # xxx   # could have other (views or non-viewed) protocols here. 
+            # All protocols need to be satisfied simultaneously (???)
+            # NO, CAN'T. Only 1 faceted protocol because only 1 field for state. 
+            # But can have other non-viewed??? Maybe that is too hard too
+  } is {
+    method1: function # ...
+    method2: function into: P.facet2 # ...  # specify 'into' target relative to the named protocol
+    method3: function # ...
+
+  }
+  """
+
+#--: THINK: a "superprotocol"?
+
+Have a special version of a protocol that can be used for typestate. This can
+track the state of an object (class/record only?) as it transitions or flows
+through different states (eg a file object: can be open, writeable, readable,
+closed; offering different methods (a different interface) at each stage).
+
+A superprotocol can only list protocols (or individual methods?) of a given
+object (need "adopt" keyword on each? Use dotted syntax to refer to
+objectname.protocolname or objectname.methodname? Can these be generic over the
+base object?)
+
+Format:
+
+#ul:
+  [#*: #~"adopt" keyword... maybe need a special "super" keyword????]
+  [#*: Dotted syntax? -- prefer not. The "parent" object should be taken from the
+    object definition where this superprotocol is used. This allows "generic"
+    use of the superprotocol (ie. using this superprotocol with multiple
+    "parent"s). So, that means we really need a "super" keyword or something
+    similar to separate a superprotocol definition from a normal protocol that
+    is adopting (inline) another protocol.]
+
+A superprotocol has a "tag" field (which can be user specified in the
+definition?) The tag field is a numeric field that has at least one bit for
+every method that the underlying object supports (all? or only those referenced
+in the superprotocol?)
+
+An object that implements typestate must have this superprotocol as one of its
+fields. This field is readonly (?). The object transitions to a new flowstate
+by a method which has an "as" parameter. The "as" parameter specifies a new
+specific protocol that the object now supports after the method returns OR the
+superprotocol name which means that the interface may change by this call and
+the specific protocol will be chosen in the code. (How to specify the protocol?
+Use "as" as a runtime statementline?). The "as" is not part of a method
+interface when checking if a protocol is supported by an object (?).
+
+Calling a method on a flowtyped object requires a "match" statement (?) to
+determine the state of the object... Or the typesystem may be able to narrow to
+a specific typestate based on prior operations (ie. if file.close is called in
+the same scope, and close has an "as" definition specifying a "closed"
+protocol, the the compiler knows that this is supporting the file.closed
+protocol an only those methods can be called ("match" not required).
+
+Is this all too complicated?
+
+#--: Why no 'cast'?
+
+A #~"cast" keyword was considered then rejected.
+
+Was to be used for:
+
+#ol:
+  [#*: 
+  casting to a protocol supported by an object (for the remainder of the
+  scope only)
+
+  #p:
+  Instead, the object must list labelled protocols in an #~"as" clause. The
+  expression must then use dotted notation on the source to cast to that named
+  protocol. The source (if a named source) is exclusively locked while the new
+  protocol object is in scope. The protocol object is borrowed from the source
+  object.
+
+  #p:
+  Why is this better? The supported protocols are discoverable from the parent
+  object (via autocompletion or documentation on the parent).
+
+  #p:
+  To make an 'owned' protocol instance from an owned base object, you must use
+  the constuctor of the protocol. It's compiler generated 'create' method has a
+  'from' argument that will 'take' a union of all of the object that impliment
+  this method.
+  ]
+  [#*:
+  converting an underlying type to a typedef
+
+  #p:
+  Instead, the typedef has a compiler generated constructor created that will
+  'borrow' the underlying object for the remainder of the scope. Outside the
+  scope, the original variable (if a named variable and if it was not given away
+  in the innder scope) will be accessible as its original type. How to 'take'?
+  There is no conversion, only a type change.
+  ]
+  [#*:
+  converting an underlying type from a typedef
+
+  #p:
+  Instead, this is not possible. Create child scopes to convert to a typedef, and
+  let the inner scope end to get back to the underlying variable of the original
+  type.
+  ]
+
+#--: Why no short-circuit operations?
+
+Operations are very simple: always left to right; alternate 'call' syntax with
+one argument.
+
+So boolean 'and' and 'or' are methods on bool that always evaluate their
+argument.
+
+#code language=zerolang:
+  a: 1 == 1 or (x == 1)
+  b: 1 == 1 and (x == 1)
+
+But note that #~"if" will short-circuit. The first test that fails will halt
+execution. So, short-circuit 'and' (ie. fail on first false) is accomplished
+with consecutive 'when' clauses:
+
+#code language=zerolang: """
+  # safe is a bool that prevents dangerousfunc from running (when false)
+  a: if safe when dangerousfunc then true else false
+  """
+
+Short-circuit 'or' (pass on first true) must be done with separate when/then
+clauses.
+
+#code language=zerolang: """
+  # picks first non-zero item from first, second, otherthing (default)
+  a: if first != 0 then first when second != 0 then second else otherthing
+  """
+
+---
+
+#--: THINK: no need for an 'is' operator like in Python?
+
+Can't have aliases so 'is' would never return true?
+
+'==' on valtypes would compare value of memory by default? But can be
+overridden?
+
+#--: NOPE: Old section from spec about: Views
+
+Views are a set of method/field names that can be used to control the exposed
+interface of objects.
+
+Views are always a flat set of identifiers: 
+
+#ul:
+  [#*: single identifiers only (no dotted identifiers) that must be refer to
+    declarations within the object body]
+  [#*: if a subview is included in a view, that subview identifier plus all members
+    of that subview are added to the view being defined]
+  [#*: an identifier may be included more than once without error (ie. perhaps via
+    common children in included subviews), subsequent inclusions are ignored (it
+    is a set)]
+  [#*: views may be defined directly as a view argument to an object: this limits
+    the namespace of that object to that view (ie. the children available
+    directly via the defined object name). Usually used to control static
+    methods, constructors etc]
+  [#*: views defined directly on object namespaces will also be used for limiting
+    available children on instances by default. Although, this can be overridden
+    by specifying #~"this.viewname" as the return value for each of the
+    constructors]
+  [#*: typedef's may ONLY limit with a view specified directly on the typedef
+    definition as an argument. This will then be applied to instances of that
+    typedef (it cannot be overridden because it is forbidden to have constructors
+    for typedefs)]
+  [#*: If a #~"this.viewname" is specified for one constructor, it must be specified
+    for all constructors.]
+  [#*: views can be defined in the body of an object]
+  [#*: views defined in the body can be referenced as subviews in the namespace view
+    or in any other view defined in the body or on methods]
+  [#*: views can be specified with a 'view' argument to function definitions of
+    methods (only). This will limit the parent ('this') object to that view after
+    the method returns. This may require runtime support to record this state.]
+  [#*: views can be specified in external function definitions (as
+    #~"typename.viewname") provided the view name is exposed. This will limit that
+    function body to only those methods/fields listed in the view specified]
+
+#---: NOPE: old section about 'limit'
+
+Don't do this, doesn't play well with take and borrow (would need to be able to
+limit on both taken and borrowed and locked vars). BUT, wouldn't a limited
+argument always be borrowed? Maybe do this?
+
+#code:
+  limit     (noun)      (verb)  #~"mytype.limit"
+
+#ul:
+  [#*: #~"limit" is a predefined type at #~"system.limit". It is a union of all publicly
+  supported interfaces supported by this object. Also a predefined union/'call'
+  on an instance (?). And a predefined union on the type. Using it with a
+  member specifier allows access to a type on the target type/instance that
+  that is compiler limited to methods/field in that instance. Using a limit is
+  zero overhead (compiler/type-system enforced only). A limit cannot be used as
+  a return type (? can it? why not? only on a borrowed return type?). If the
+  parent type is generic, then each of the limit children take the same generic
+  parameters.]
+
+
+#--: Why no shadowing of vars?
+
+#ul:
+  [#*: (no shadowing within functions... can shadow anything in the std lib)]
+  [#*: compile time error to shadow]
+  [#*: only applies within a single file]
+  [#*: why is shadowing required? It is just asking for trouble and may hide a bug.]
+  [#*: good for search/replace, you can be confident you are replacing the right
+    thing :)]
+  [#*: note that shadowing of #~"units" can still take place. Units defined within the
+    current source will shadow private units in a subdirectory with the same
+    name.  There will be no warning because the compiler is not going to list all
+    files in subdirectories to check (too expensive)]
+  [#*: ?? even params of functions/records and local vars cannot shadow top level
+    definitions. This could be a little annoying but is required to be
+    unambiguous because arguments/fields can refer to each other (including
+    forward references to args/fields defined later in the arglist) eg. to get
+    their type for generics.  The annoyance can be mitigated a little by careful
+    naming - higher level declarations would usually have descriptive names,
+    argument names should be quite short (but still obvious in the context of the
+    function/record name.]
+  [#*: instance vars must be qualified by the 'this' var, so they cannot be shadowed
+    by argument names or by local vars]
+#--: Why do #~"( {" require whitespace before them?
+
+#ul:
+  [#*: it is ugly not to]
+  [#*: to minimise the possibility of trying to do a C-style function call. There
+    are no C-style function calls with parens. Usually, in C the parens
+    immediately follow the function call so this restriction may highlight a
+    misunderstanding of this.]
+
+#--: Why no bitfields / flags?
+
+#ul:
+  #*: not yet, maybe one day...
+  #*: but is special syntax required?
+  #*: can handle this with a custom record. May be a bit wordy though...
+
+#--: Why no downcasting?
+
+#ul:
+  #*: ie. from a protocol back to a concrete object...
+  #*: not safe
+  #*: apparently Ocaml doesn't allow it
+
+#--: Why do #~"( {" require whitespace before them?
+
+#ul:
+  [#*: it is ugly not to]
+  [#*: to minimise the possibility of trying to do a C-style function call. There
+    are no C-style function calls with parens. Usually, in C the parens
+    immediately follow the function call so this restriction may highlight a
+    misunderstanding of this.]
+
+#--: Why are Enumerations vs Unions different things?
+
+#ul:
+  [#*: otherwise would be jamming too many concepts together]
+  [#*: if not then how to represent a union's descriminator? Another simpler union?]
+  [#*: if not then how to specify descriminator type for a union? Need some clumsy
+    syntax? Enum syntax is simpler]
+  [#*: enumerations are homogenous. Could do that with union but would need to scan
+    each subtype to ensure it is all same type. Using a union seems clumsier]
+  [#*: constructing a union member in a consistent way would make the syntax
+    overcomplicated for a simple enum. Better to separate enums (accessing simple
+    constant values by dot notation) and unions (constructing complex types or
+    assigning them into the union)]
+  [#*: it would be confusing to have both dot notation (for the descriminator) and
+    constructor notation for the union itself. And how would you specify the type
+    of the descriminator?]
+
+Downside for Enumerations: accessing them in a module requires 2 dots. This is
+mitigated by using parameter namespaces if the enum will only be passed to
+functions. But still might want to store them and then supply them to a
+function.... Should prefer to 'import' the parent item and refer to subvalues
+from there in that case.
+
+[#code:
+  x: mymod.myenum.myvalue
+
+  myenum: mymod.myenum
+  x: myenum.myvalue
+]
+
+#--: Why no closures?
+
+Maybe one day, somehow.
+
+But ownership could cause problems. Could only capture static or readonly vars.
+
+#--: Why no comma separators?
+
+#ul:
+  [#*: commas are also not used by Lisp, Tcl, Forth, Haskell, OCaml, Rebol and Shell]
+  [#*: comma (and semicolon) is syntax error for consistency, to prevent accidental
+    use as in other languages]
+  [#*: newline and labels (id with colons) are used to separate]
+
+#--: Why no line continuation?
+
+#ul:
+  [#*: Simplifies syntax]
+  [#*: Mostly useful for one liners from the command line. Can do without?]
+  [#*: python uses ';' for statement separator but statement after a ';' is not the
+    same as one before (eg can't have for after a ';') ]
+  [#*: For line continuation, trailing '\\' is fairly ugly and can be defeated by
+    invisible trailing whitespace]
+  [#*: Better to surround expression in parens to break over a line]
+
+#--: Why no short-cicuit operations?
+
+#ul:
+  [#*: complicates order of execution (simply left to right...) if can take multiple]
+  [#*: 'if' args and will short-circuit fail after the first 'if' that fails, so
+    (almost) similar (no short-circuit 'or' though... only 'and')]
+
+

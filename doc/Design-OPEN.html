@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zero Language Design-OPEN</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-03-11">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+  <h1 id="zero-language-design-ideas-rejected"><a href="#zero-language-design-ideas-rejected">Zero Language Design Ideas Rejected</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+  <div id="tocfile">
+Table of Contents</div>
+
+  <ul>
+<li><a href="#zero-language-design-ideas-rejected">Zero Language Design Ideas Rejected</a>
+<ul>
+<li><a href="#why-generators-yield">Why Generators/yield?</a>
+</li>
+<li><a href="#idea-deduplication-of-functions">IDEA: deduplication of functions</a>
+</li>
+<li><a href="#note-destructors">NOTE: Destructors</a>
+</li>
+<li><a href="#note-when-does-the-compiler-forget-the-actual-type-of-an-expression">NOTE: when does the compiler 'forget' the actual type of an expression</a>
+</li>
+<li><a href="#idea-match-can-also-dissect-a-generic-field">IDEA: match can also dissect a generic field?</a>
+</li>
+<li><a href="#default-values">Default values</a>
+</li>
+<li><a href="#enum">enum</a>
+</li>
+<li><a href="#idea-vs">IDEA:  vs </a>
+</li>
+<li><a href="#note-public-private">NOTE: public / private</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<p>Language design ideas that are still under consideration/discussion.</p>
+<h2 id="why-generators-yield"><a href="#why-generators-yield">1. Why Generators/yield?</a></h2>
+<ul>
+<li>used because need a way to enforce ownership during iteration/generation</li>
+<li>generators are composable</li>
+<li>yield is nice to turn functions 'inside out' which simplifies some algorithms</li>
+</ul>
+<p>Against:</p>
+<ul>
+<li>need another keyword. <code>generator</code>. No, do it another way</li>
+</ul>
+<h2 id="idea-deduplication-of-functions"><a href="#idea-deduplication-of-functions">2. IDEA: deduplication of functions</a></h2>
+<p>Have a way for function definitions to be deduplicated by detecting functions
+that generate identical AST's.</p>
+<p>Good for allowing generics over ints for example. If the function doesn't rely
+on the actual value of the int, it will generate the same AST so can be shared
+for those calls.</p>
+<pre><code class="language-zerolang"># i is a generic int (u8)
+# it must be specified as a constant at the top level
+# AST will be templated (?) for that constant to create actual function def
+# if function 'hash' already exists, use existing one and throw away the one
+#   just generated.
+# In the end, there will be one unique function for ints below 100 and one for
+# the rest
+myfunc: function { i: generic u8 } out u8 is {
+    if i &gt; 100 then {
+        io.print i
+    }
+    return i
+}
+
+# could be done for all functions:
+func1: function { i: int } out int is {
+    io.print i
+    return i
+}
+func2: function { i: int } out int is {
+    io.print i
+    return i
+}
+
+# func1 and func2 would be seen to be the same and would only output 1 shared
+# implimentation. </code></pre>
+<p>Need a way to create a canonical hash of an AST subtree. Internal variable
+names would need to be normalised (is this worth the effort? Probably skip this
+part.</p>
+<p>BUT!!!!!, numerical and enum generic values should somehow still be passed as
+(constant) variables so that there is not an explosion of output. ie. if the
+function definition does not generate different code based on the value, then
+all values should generate and share the same function AST. Maybe need the
+author to write this in a correct way for this to happen, eg. see generic
+array deduplication below - need to pass a parameter of this type...</p>
+<h2 id="note-destructors"><a href="#note-destructors">3. NOTE: Destructors</a></h2>
+<p>Definition: a destructor destroys all external children of an object, not the
+object itself. For valtypes, there are no external children so there is no
+destructor and the parent is responsible for destruction. For reftypes, the
+object itself is a pointer so destroying a reftype destroys everything except
+the pointer and the parent is responsible for destroying the pointer. A 'list'
+for reftypes, is a list of pointers.</p>
+<p>No user defined destructors ? Only finalizers?</p>
+<p>Finalizers can only be defined on reftypes? valtypes can be copied and do not
+have identity.</p>
+<p>Destructing an owned protocol instance: xxx</p>
+<p>Destructing an borrowed protocol instance: xxx</p>
+<p>Destructing a union instance: xxx</p>
+<p>To destroy a reftype, the compiler must generate a custom destructor for each
+reftype defined. The destructor will:</p>
+<ul>
+<li>call the finalize method on the parent object (if it exists). This has to be
+    done first so that the object and its children are still in a valid state</li>
+<li>recursively destroy each child reftype stored in fields in this reftype</li>
+<li>deallocate the memory for this object (the parent object itself)</li>
+</ul>
+<p>The destructor must be stored in the reftype? At offset 0? NOOO, not if we know
+the real type. For protocol instances, the destructor must be stored</p>
+<h2 id="note-when-does-the-compiler-forget-the-actual-type-of-an-expression"><a href="#note-when-does-the-compiler-forget-the-actual-type-of-an-expression">4. NOTE: when does the compiler 'forget' the actual type of an expression</a></h2>
+<p>When does the compiler not know the specific type of an object (at least,
+without generating a runtime check). This complicates destruction.</p>
+<ul>
+<li>owned interface instance</li>
+<li>union type (but not variant: even though we don't know specific type, we know
+    the amount of memory it is using (the biggest member) and it has not external
+    pointers so we can just deallocate the full block.)</li>
+<li>list - when know the type, but we don't know the actual capacity. The list
+    needs to know how to destroy itself.</li>
+</ul>
+<h2 id="idea-match-can-also-dissect-a-generic-field"><a href="#idea-match-can-also-dissect-a-generic-field">5. IDEA: match can also dissect a generic field?</a></h2>
+<p>Yes. </p>
+<p>This would result in only the hot path being included in the generated code for
+each particular type.</p>
+<p>RHS for each arm would be the type name (could have several dots if in another
+module). RHS would NOT have generic fields (? correct?) so don't need 'call'
+syntax for fully specified types.</p>
+<h2 id="default-values"><a href="#default-values">6. Default values</a></h2>
+<p>Default values can be specified for:</p>
+<ul>
+<li>function/method parameters</li>
+<li>fields of records, classes, variants, unions (yes, sumtypes too, will be the
+    default set for the parameter on the constructor generated so can be created
+    without an argument for the child type)</li>
+</ul>
+<p>Default values can be:</p>
+<ul>
+<li>ONLY valtypes</li>
+<li>constant simple numeric values (includes char)</li>
+<li>a constant function value (not a spec)...</li>
+<li>a specific variant value. The variant subtypes must all be 'none' -- ie. enum
+    types only</li>
+<li>(for generic params/fields, after 'generic' identifier) a specific subtype of
+    a union/variant/enum.... Why? (eg for iterator, normally takes none) and how?</li>
+<li>'none'. In this case, the argument does not need to be specified. If it is
+    specified, it must be 'none'. This may be useful for generic types that do
+    not use arguments in some cases (eg. 'takes' argument of 'iterator')
+    (What???) See above, needs to be a subtype, eg. all.none</li>
+</ul>
+<p>Type of the default parameter/field will be the 'parent' type of the value.</p>
+<p>For default method pointer values.... this needs to be a separate child element
+in the object definition (ie. not a normal function definition, which are
+always methods on the object type and not stored on the instance). For methods,
+the function must be defined within the object body (to allow access to <code>this</code>
+and private fields/methods) -- this means that method pointers must always have
+a default value (since we cannot define specs within the method, they need to
+be defined at module level).</p>
+<pre><code class="language-zerolang">c: class {
+  # these are always a method on the object 'class'
+  method1: function {} out is {  }
+  method2: function {} out is {  }
+
+  # this is a function pointer that defaults to 'method1'.
+  # it can be changed to 'method2' (or another method) during creation or 
+  # afterwards during the instance lifetime (provided the new method has
+  # exactly the same signature as 'method1')
+  instancemethod: method1
+}</code></pre>
+<p>In function definitions, the parameter type must be a reference to a function
+or spec defined elsewhere. </p>
+<p>Static functions may be defined with the object or outside of it.</p>
+<pre><code class="language-zerolang"># spec (note: no 'is' definition)
+myspec: function {} out # ...
+
+# function (with body)
+myfunc: function {} out is { }
+
+# no default argument... 'callback' MUST be specified at the call site and 
+#  must be compatible with 'myspec'
+myfunctionwithcallback: {a: int callback: myspec} out is { }
+
+# has a function argument... 'callback' MAY be specified at the call site 
+#  but if not, defaulte to 'myfunc'
+myfunctionwithdefaultcallback: {a: int callback: myfunc} out is { }</code></pre>
+<h2 id="enum"><a href="#enum">7. enum</a></h2>
+<p>Enums are unions or variants with no additional data. If a value is supplied,
+it must fit into the <code>tag</code> type for that object. If a value is not supplied,
+all subelements must be none.</p>
+<p>TODO: how to differentiate between a static value that can be used as the tag
+or a default value for the constructor of that subtype? Can't? 'tag' should be
+the enum? But then how to specify the subelements? Would need to be special
+syntax... Use <code>data</code>: data can have named members...</p>
+<pre><code class="language-zerolang">t: data { FIRST: 1 SECOND: 2 THIRD: 3 }
+
+myenum: variant { 
+  FIRST: none
+  SECOND: none
+  THIRD: none
+} as {
+  tag: t.tag
+}</code></pre>
+<pre><code class="language-zerolang">myenum1: union { FIRST: none SECOND: none THIRD: none }
+
+myenum2: variant { 
+  FIRST: none
+  SECOND: none
+  THIRD: none
+}
+
+# each of these would have a constructor that defaults to 1, 2 or 3
+# but you could pass in a different value. The descriminator would always
+# be 0, 1, 2
+myenum3: variant { 
+  FIRST: 1
+  SECOND: 2
+  THIRD: 3
+}</code></pre>
+<h2 id="idea-vs"><a href="#idea-vs">8. IDEA: <code>is</code> vs <code>as</code></a></h2>
+<p>An <code>item</code> can have an <code>is</code> clause and optionally an <code>as</code> clause. (TODO: can
+have <code>as</code> clause by itself? - would be the same as a <code>unit</code>? no)</p>
+<p><code>is</code>specifies the contents of the object instance. </p>
+<p><code>as</code>specifies shared functionality and data for an instance (but all shared
+data must be static and can only be valtypes). Also, interfaces listed here
+signify that the object supports that interface (whereas if they were in the
+<code>is</code> clause, they would signify the type of that field in the instance).</p>
+<p>If <code>as</code> lists any generic fields, they must be specified first to make the
+definition 'concrete' before instances can be constructed (eg. (mything
+int).create) -- the declaration is then like a template. If <code>is</code> lists generic
+fields, they must be specified as fields in the constructor. Units can only
+list generics in <code>as</code> because they have no <code>is</code>.</p>
+<p>The items in <code>is</code> and <code>as</code> both share the same namespace.</p>
+<p>For record/class:</p>
+<ul>
+<li><code>is</code> has the fields of each instance. It can specify generic fields (which do
+not take any memory in the instance). Functions can be specified here but
+there will be a copy of the function reference in each instance, so this
+should only be used when the function is to be changed at runtime. All other
+declarations here are field member names, their types and optionally, their
+default values.</li>
+<li><code>as</code> has shared function definitions optionally including the custom
+constructor(s). Can have 'template' generic fields. Named interface
+references to interface definitions or inline interface definitions, indicate
+that this object supports that interface - and become converter functions on
+instances to convert that instance to that interface type at runtime (result
+will be a <code>borrow</code> and will <code>lock</code> 'this'). Any other fields here are static
+valtype fields that are shared across all instances and are readonly.</li>
+</ul>
+<p>For variant/union:</p>
+<ul>
+<li><code>is</code> has the list of childtypes for this sum-type (only one of which is
+'active' in each instance at runtime). Can have generic fields which then
+must be declared/specified in the implementor.</li>
+<li><code>as</code> has shared function definitions. CANNOT include any constructors
+(compiler will generate constructors for each child type). Can have
+'template' generic fields. Can list interfaces supported by this object (for
+all child types). Any other fields here are static valtype fields that are
+shared across all instances and are readonly.</li>
+</ul>
+<p>For protocol/variant:</p>
+<ul>
+<li><code>is</code> has the list of function specs of this interface, equivalent to the
+shared runtime table created for each instance that supports this interface.
+At runtime, interface instances are created that hold a reference to this
+shared method table and a reference to the underlying instance (or for
+valtypes, a copy of the instance data itself).</li>
+<li><code>as</code> has shared function definitions that may ONLY refer to fields in both
+the <code>is</code> and <code>as</code> clauses. A protocol/variant can also implement another
+interface by listing it here that becomes a converter function (same as
+record/class). Any other fields here are static valtype fields that are
+shared across all instances and are readonly. CANNOT include any contructors
+- the compiler will generate a constructor that will <code>take</code> its argument and
+returns an owned interface instance.</li>
+</ul>
+<h2 id="note-public-private"><a href="#note-public-private">9. NOTE: public / private</a></h2>
+<p><code>public</code>is an automatically defined unit (if not specified) that includes all
+members in the current <code>item</code> or <code>unit</code>.</p>
+<p>If specified explicitly, it is done so in the <code>as</code> section of the item. For
+items that can be instantiated, the public specifier applies to <em><strong>both</strong></em>
+the item namespace ('classmethods/fields') and to the instance namespace.</p>
+<p>If you would like to make the publicly accessible namespace of the 'class'
+different from the public instance methods/fields, then hide that item
+definition in the containing unit (by not including it in the unit's public
+interface), then make a subunit that specifies and links to each static element
+in the item definition that you want to make public. The caller can then use
+this subunit to access the constructor etc.</p>
+<pre><code class="language-zerolang">myobject: unit {
+  myobject_internal: class {
+    # ...
+  } as {
+    # constructors
+    create: function out this is { } # ...
+    create2: function out this is { } # ...
+
+    # other misc methods
+    mymethod1: function in { :this } out xxx is { } # ...
+    mymethod2: function in { :this } out xxx is { } # ...
+    mymethod3: function in { :this } out xxx is { } # ...
+  }
+
+  public: unit {
+    create: myobject_internal.create
+    create2: myobject_internal.create2
+  }
+}
+
+# access the constructors...
+x: myobject.create
+y: myobject.create2
+
+# can call methods on instances...
+
+x.mymethod1
+
+# error, cannot access methods that were not exposed in the unit...
+# myobject.mymethod1 x # error</code></pre>
+<p><code>private</code>is also automatically defined to have all members in the current
+item. It cannot be redefined.</p>
+<p>In parameter types, <code>public</code> could be specified but it should noe (it is the
+default). Both <code>public</code> and <code>private</code> are zero overhead operations - a protocol
+instance is not contructed, just the type system is modified. Both <code>public</code> and
+<code>private</code> (and all interfaces supported by an object) can have an ownership
+subspecifier eg. myclass.private.lock, (or .take or .borrow)</p>
+</main>
+</body>
+</html>
