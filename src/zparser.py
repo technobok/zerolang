@@ -11,6 +11,10 @@ from zlexer import Lexer, Tokenizer, Token, isvalidunitname
 from ztokentype import TT
 import zast
 from zast import ERR
+from ztypechecker import ZParamOwnership
+
+# ownership annotation suffixes recognized on dotted type paths
+_OWNERSHIP_SUFFIXES = {"take": ZParamOwnership.TAKE, "borrow": ZParamOwnership.BORROW, "lock": ZParamOwnership.LOCK}
 
 # A Node type.
 TN = TypeVar("TN", bound=zast.Node, covariant=True)
@@ -697,6 +701,21 @@ class Parser:
         )
         return NodeX(node=call, extern=extern)
 
+    @staticmethod
+    def _strip_ownership(path: zast.Path) -> tuple[zast.Path, Optional[ZParamOwnership]]:
+        """Check if a type path ends with an ownership annotation (.take/.borrow/.lock).
+
+        Returns (stripped_path, ownership) where ownership is None if no annotation found.
+        If the path is e.g. DottedPath(parent=AtomId("point"), child=AtomId("borrow")),
+        returns (AtomId("point"), ZParamOwnership.BORROW).
+        """
+        if isinstance(path, zast.DottedPath):
+            suffix = path.child.name
+            own = _OWNERSHIP_SUFFIXES.get(suffix)
+            if own is not None:
+                return path.parent, own
+        return path, None
+
     def _acceptfunction(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Function], zast.Error, None]:
@@ -719,6 +738,7 @@ class Parser:
 
         returntype: Optional[zast.Path] = None
         parameters: Dict[str, zast.Path] = {}
+        param_ownership: Dict[str, ZParamOwnership] = {}
         # externs from 'accept' function parameters
         externparam: Dict[str, zast.AtomId] = {}
         # parameter names - local definitions for determining externs
@@ -744,7 +764,11 @@ class Parser:
                 if isinstance(typeref, zast.Error):
                     return typeref  # propagate any other error
 
-                returntype = typeref.node
+                # check for ownership annotation on the return type path
+                stripped_ret, ret_own = self._strip_ownership(typeref.node)
+                returntype = stripped_ret
+                if ret_own is not None:
+                    param_ownership[":return"] = ret_own
                 first = False
 
             elif lex.accept(TT.IS):
@@ -802,7 +826,11 @@ class Parser:
 
                     # params cann refer to other params, do local below
                     promoteexterns(addto=externparam, addfrom=val.extern)
-                    parameters[paramname] = val.node
+                    # check for ownership annotation on the type path
+                    stripped, own = self._strip_ownership(val.node)
+                    parameters[paramname] = stripped
+                    if own is not None:
+                        param_ownership[paramname] = own
                     localparam.add(paramname)
 
                 if not lex.accept(TT.BRACECLOSE):
@@ -827,6 +855,7 @@ class Parser:
             parameters=parameters,
             body=body,
             start=start,
+            param_ownership=param_ownership,
         )
         return NodeX(node=func, extern=extern)
 

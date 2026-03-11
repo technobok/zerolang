@@ -37,13 +37,44 @@ class ZTypeType(IntEnum):
 @unique
 class ZOwnership(IntEnum):
     """
-    Ownership - ownership info related to variable/expression (v2)
+    Ownership - 2-state model (v2)
+
+    OWNED: the variable owns the instance and is responsible for its lifetime.
+    BORROWED: the variable has a temporary reference; it does not own the instance.
     """
 
-    IMMUTABLE = 0
-    OWNED = 1
-    BORROWED = 2
-    LINKED = 3
+    OWNED = 0
+    BORROWED = 1
+
+
+@unique
+class ZLockState(IntEnum):
+    """
+    Lock state - orthogonal to ownership (v2)
+
+    UNLOCKED: no lock held.
+    EXCLUSIVE: exclusive lock, no other references allowed.
+    SHARED: shared lock, other shared references allowed but no mutation.
+    """
+
+    UNLOCKED = 0
+    EXCLUSIVE = 1
+    SHARED = 2
+
+
+@unique
+class ZParamOwnership(IntEnum):
+    """
+    Parameter ownership annotation for function parameters and return types (v2)
+
+    TAKE: caller transfers ownership to callee (default for owned params).
+    BORROW: callee gets a borrowed reference; caller retains ownership.
+    LOCK: callee locks the argument for the duration of the call.
+    """
+
+    TAKE = 0
+    BORROW = 1
+    LOCK = 2
 
 
 @unique
@@ -71,6 +102,15 @@ class ZType:
     For records, children contains fields and methods.
 
     For units, children contains the unit's exported definitions.
+
+    param_ownership maps parameter names (and ":return") to their
+    ownership annotation (take/borrow/lock). Only populated for
+    FUNCTION types.
+
+    is_valtype indicates whether this type is a value type (records,
+    numerics, enums, variants) vs a reference type (classes, unions).
+    Value types are copied on assignment; reference types have ownership
+    semantics.
     """
 
     nodeid: TypeID = field(
@@ -86,6 +126,12 @@ class ZType:
     isgeneric: bool = False
     isliteral: bool = False
 
+    # ownership annotations for function parameters and return type
+    param_ownership: "dict[str, ZParamOwnership]" = field(default_factory=dict, init=False)
+
+    # value type vs reference type classification
+    is_valtype: Optional[bool] = field(default=None, init=False)
+
 
 # a typesafe variable id
 VariableID = NewType("VariableID", int)
@@ -94,7 +140,7 @@ VariableID = NewType("VariableID", int)
 @dataclass
 class ZVariable:
     """
-    ZVariable - type + ownership info for a variable/expression
+    ZVariable - type + ownership + lock info for a variable/expression
     """
 
     variableid: VariableID = field(
@@ -103,6 +149,8 @@ class ZVariable:
     ztype: ZType
     ownership: ZOwnership
     named: ZNaming
+    lock_state: ZLockState = ZLockState.UNLOCKED
+    lock_targets: List[str] = field(default_factory=list)
 
 
 class TypeTable:

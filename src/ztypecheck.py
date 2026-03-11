@@ -10,7 +10,7 @@ import zast
 from zast import ERR
 from zlexer import Token
 from zenv import SymbolTable
-from ztypechecker import ZType, ZTypeType, parse_number
+from ztypechecker import ZType, ZTypeType, ZParamOwnership, parse_number
 
 
 def _is_numeric_id(name: str) -> bool:
@@ -148,6 +148,7 @@ class TypeChecker:
             return self._resolve_enum_type(unitname, name, defn)
         if isinstance(defn, zast.Union):
             shell = _make_type(name, ZTypeType.UNION)
+            shell.is_valtype = False  # unions are reference types
             self._resolved[f"{unitname}.{name}"] = shell
             return shell
         if isinstance(defn, zast.Unit):
@@ -188,6 +189,10 @@ class TypeChecker:
             if pt:
                 ftype.children[pname] = pt
 
+        # propagate ownership annotations from AST to ZType
+        if func.param_ownership:
+            ftype.param_ownership = dict(func.param_ownership)
+
         self._resolving.pop()
         return ftype
 
@@ -196,6 +201,8 @@ class TypeChecker:
         rtype = _make_type(name, ZTypeType.RECORD)
         self._resolved[key] = rtype  # early register for self-reference
         self._resolving.append((key, rtype))
+
+        rtype.is_valtype = True  # records are value types
 
         for fname, fpath in rec.items.items():
             ft = self._resolve_typeref(fpath)
@@ -215,6 +222,7 @@ class TypeChecker:
     def _resolve_enum_type(self, unitname: str, name: str, enum: zast.Enum) -> ZType:
         key = f"{unitname}.{name}"
         etype = _make_type(name, ZTypeType.ENUM)
+        etype.is_valtype = True  # enums are value types
         self._resolved[key] = etype
         self._resolving.append((key, etype))
 

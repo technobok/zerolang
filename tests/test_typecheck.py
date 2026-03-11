@@ -8,7 +8,7 @@ import os
 from conftest import make_parser_vfs
 from zparser import Parser
 from ztypecheck import typecheck, TypeChecker
-from ztypechecker import ZTypeType
+from ztypechecker import ZTypeType, ZParamOwnership, ZOwnership, ZLockState, ZVariable, ZNaming
 import zast
 
 
@@ -456,3 +456,222 @@ class TestFullTypecheck:
         # system unit types should all be resolved with full check
         system = tc.unit_types.get("system")
         assert system is not None
+
+
+class TestOwnershipEnums:
+    """Test the ownership-related enums and dataclasses."""
+
+    def test_zownership_two_state(self):
+        assert ZOwnership.OWNED == 0
+        assert ZOwnership.BORROWED == 1
+        assert len(ZOwnership) == 2
+
+    def test_zlockstate_three_state(self):
+        assert ZLockState.UNLOCKED == 0
+        assert ZLockState.EXCLUSIVE == 1
+        assert ZLockState.SHARED == 2
+        assert len(ZLockState) == 3
+
+    def test_zparam_ownership(self):
+        assert ZParamOwnership.TAKE == 0
+        assert ZParamOwnership.BORROW == 1
+        assert ZParamOwnership.LOCK == 2
+        assert len(ZParamOwnership) == 3
+
+    def test_zvariable_defaults(self):
+        from ztypechecker import ZType
+        t = ZType(name="i64", typetype=ZTypeType.RECORD, parent=None)
+        v = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        assert v.lock_state == ZLockState.UNLOCKED
+        assert v.lock_targets == []
+
+    def test_zvariable_with_lock(self):
+        from ztypechecker import ZType
+        t = ZType(name="point", typetype=ZTypeType.RECORD, parent=None)
+        v = ZVariable(
+            ztype=t,
+            ownership=ZOwnership.BORROWED,
+            named=ZNaming.NAMED,
+            lock_state=ZLockState.EXCLUSIVE,
+            lock_targets=["x"],
+        )
+        assert v.ownership == ZOwnership.BORROWED
+        assert v.lock_state == ZLockState.EXCLUSIVE
+        assert v.lock_targets == ["x"]
+
+
+class TestOwnershipParsing:
+    """Test that ownership annotations parse correctly on function parameters."""
+
+    def test_param_borrow(self):
+        """Parameter with .borrow annotation should parse and type-check."""
+        program = check_ok(
+            "f: function {a: i64.borrow} is {}\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert "a" in func.param_ownership
+        assert func.param_ownership["a"] == ZParamOwnership.BORROW
+
+    def test_param_take(self):
+        """Parameter with .take annotation."""
+        program = check_ok(
+            "f: function {a: i64.take} is {}\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.param_ownership["a"] == ZParamOwnership.TAKE
+
+    def test_param_lock(self):
+        """Parameter with .lock annotation."""
+        program = check_ok(
+            "f: function {a: i64.lock} is {}\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.param_ownership["a"] == ZParamOwnership.LOCK
+
+    def test_param_no_ownership(self):
+        """Parameter without annotation should have empty param_ownership."""
+        program = check_ok(
+            "f: function {a: i64} is {}\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert "a" not in func.param_ownership
+
+    def test_mixed_params(self):
+        """Mix of annotated and unannotated parameters."""
+        program = check_ok(
+            "f: function {a: i64.take b: i64 c: i64.borrow} is {}\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.param_ownership["a"] == ZParamOwnership.TAKE
+        assert "b" not in func.param_ownership
+        assert func.param_ownership["c"] == ZParamOwnership.BORROW
+
+    def test_return_type_borrow(self):
+        """Return type with .borrow annotation."""
+        program = check_ok(
+            "f: function {a: i64.lock} out i64.borrow is { return a }\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.param_ownership[":return"] == ZParamOwnership.BORROW
+        assert func.param_ownership["a"] == ZParamOwnership.LOCK
+
+    def test_return_type_no_ownership(self):
+        """Return type without annotation should not have :return in param_ownership."""
+        program = check_ok(
+            "f: function out i64 is { return 42 }\n"
+            "main: function is {}"
+        )
+        func = program.units["test"].body["f"]
+        assert isinstance(func, zast.Function)
+        assert ":return" not in func.param_ownership
+
+
+class TestOwnershipInZType:
+    """Test that ownership annotations propagate to ZType."""
+
+    def test_param_ownership_on_ztype(self):
+        """Ownership annotations should be on the ZType after type checking."""
+        program = check_ok(
+            "f: function {a: i64.take b: i64.borrow} out i64 is { return a }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ftype = tc._resolved.get("test.f")
+        assert ftype is not None
+        assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
+        assert ftype.param_ownership["b"] == ZParamOwnership.BORROW
+
+    def test_return_ownership_on_ztype(self):
+        """Return ownership should propagate to ZType."""
+        program = check_ok(
+            "f: function {a: i64.lock} out i64.borrow is { return a }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ftype = tc._resolved.get("test.f")
+        assert ftype is not None
+        assert ftype.param_ownership[":return"] == ZParamOwnership.BORROW
+        assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
+
+    def test_no_ownership_empty_dict(self):
+        """Functions without ownership annotations should have empty param_ownership."""
+        program = check_ok(
+            "f: function {a: i64} out i64 is { return a }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ftype = tc._resolved.get("test.f")
+        assert ftype is not None
+        assert ftype.param_ownership == {}
+
+
+class TestValTypeTagging:
+    """Test that types are correctly tagged as valtype or reftype."""
+
+    def test_numeric_records_are_valtype(self):
+        """System numeric types (records) should be tagged as valtype."""
+        program = check_ok("f: function {n: i64} out i64 is { return n }")
+        tc = TypeChecker(program)
+        tc.check()
+        system = tc.unit_types["system"]
+        i64 = system.children.get("i64")
+        assert i64 is not None
+        assert i64.is_valtype is True
+
+    def test_user_record_is_valtype(self):
+        """User-defined records should be tagged as valtype."""
+        program = check_ok(
+            "point: record { x: f64\n y: f64 }\n"
+            "main: function is { p: point }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        point = tc._resolved.get("test.point")
+        assert point is not None
+        assert point.is_valtype is True
+
+    def test_union_is_reftype(self):
+        """Unions should be tagged as reftype (is_valtype=False)."""
+        program = check_ok("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        system = tc.unit_types["system"]
+        any_type = system.children.get("any")
+        assert any_type is not None
+        assert any_type.is_valtype is False
+
+    def test_enum_is_valtype(self):
+        """Enums should be tagged as valtype."""
+        program = check_ok(
+            "color: enum { red\n green\n blue }\n"
+            "main: function is { c: color.red }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        color = tc._resolved.get("test.color")
+        assert color is not None
+        assert color.is_valtype is True
+
+    def test_function_type_valtype_is_none(self):
+        """Function types don't have a valtype classification."""
+        program = check_ok("f: function is {}\nmain: function is {}")
+        tc = TypeChecker(program)
+        tc.check()
+        ftype = tc._resolved.get("test.f")
+        assert ftype is not None
+        assert ftype.is_valtype is None
