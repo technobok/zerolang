@@ -849,6 +849,36 @@ integration tests for the full v2 feature set.
   #*: Verify all v2 example programs compile with gcc and produce
     correct output under ASan (address sanitizer).
 
+#---: Phase 4m: Static String Literals + ZStr Header Modernization
+
+Modernize the #~"ZStr" layout to a 64-bit header and add static string
+support so string literals are never heap-allocated.
+
+#ol:
+  #*: Replace #~"int32_t len" with #~"uint64_t size" (byte count, not
+    character count). Bit 63 is the static flag; bits 62-0 store size.
+    Data starts at 8-byte boundary for optimal alignment.
+  #*: Add #~"ZSTR_STATIC" macro for compile-time string literal
+    declaration. Static strings live in #~".rodata" and are never freed.
+  #*: Add #~"ZSTR_SIZE", #~"ZSTR_IS_STATIC" accessor macros.
+  #*: Add #~"zstr_free" helper that checks the static flag before
+    calling #~"free".
+  #*: Update emitter to collect and deduplicate string literals,
+    emitting #~"ZSTR_STATIC" declarations at file scope.
+  #*: Plain string literals emit static references instead of
+    #~"zstr_new" calls. Interpolation fragments also use static strings.
+  #*: Replace all #~"free(stringvar)" with #~"zstr_free(stringvar)" in
+    scope cleanup, return paths, reassignment, and with-blocks.
+  #*: Update union destructor to use #~"zstr_free" for string subtypes.
+  #*: Create #~"doc/strings.pdoc" documenting ZStr layout, static flag
+    semantics, and comparison with other implementations.
+  #*: Update tests: assertions for #~"zstr_free" instead of #~"free",
+    new tests for static string deduplication, interpolation fragments,
+    and ASan verification.
+
+Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
+#~"doc/strings.pdoc", #~"doc/roadmap.pdoc"
+
 #---: Phase 5a: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently

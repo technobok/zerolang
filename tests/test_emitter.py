@@ -252,9 +252,9 @@ class TestEmitterStringOwnership:
     """Tests for string ownership semantics in emitted C code."""
 
     def test_string_scope_cleanup(self):
-        """String variables freed at function exit."""
+        """String variables freed at function exit via zstr_free."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        assert "if (s) free(s);" in csource
+        assert "zstr_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
@@ -273,11 +273,11 @@ class TestEmitterStringOwnership:
         assert output.strip() == "Hello 42!"
 
     def test_string_reassignment(self):
-        """Old value freed, new value assigned correctly."""
+        """Old value freed via zstr_free, new value assigned correctly."""
         csource = emit_source(
             'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
         )
-        assert "free(s);" in csource
+        assert "zstr_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "world"
 
@@ -298,12 +298,12 @@ class TestEmitterStringOwnership:
         assert lines[1] == "first"
 
     def test_string_temporaries(self):
-        """Interpolation intermediates freed."""
+        """Interpolation intermediates freed via zstr_free."""
         csource = emit_source(
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
-        # verify temps are freed (free(_t...) calls)
-        assert "free(_t" in csource
+        # verify temps are freed (zstr_free(_t...) calls for zstr_cat results)
+        assert "zstr_free(_t" in csource
         output = compile_and_run(csource)
         assert output.strip() == "Hello, Zero!"
 
@@ -324,11 +324,92 @@ class TestEmitterStringOwnership:
         assert lines == ["hello", "world", "!"]
 
     def test_string_in_with_do(self):
-        """Scoped string variable freed at end of with block."""
+        """Scoped string variable freed at end of with block via zstr_free."""
         csource = emit_source('main: function is {\n  with s: "hello" do print s\n}')
-        assert "free(s);" in csource
+        assert "zstr_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
+
+
+class TestEmitterStaticStrings:
+    """Tests for ZSTR_STATIC string literal emission."""
+
+    def test_literal_uses_static(self):
+        """Plain string literal should emit ZSTR_STATIC, not zstr_new."""
+        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
+        assert "ZSTR_STATIC(_zs" in csource
+        assert 'zstr_new("hello")' not in csource
+
+    def test_static_deduplication(self):
+        """Same literal used twice should produce one ZSTR_STATIC."""
+        csource = emit_source(
+            'main: function is {\n  a: "hello"\n  b: "hello"\n  print a\n  print b\n}'
+        )
+        assert csource.count('ZSTR_STATIC(_zs1, "hello")') == 1
+        # only one ZSTR_STATIC for "hello"
+        assert (
+            csource.count("_zs2") == 0
+            or '"hello"' not in csource.split("_zs2")[1].split("\n")[0]
+        )
+
+    def test_interp_fragments_use_static(self):
+        """Literal fragments in interpolation should use ZSTR_STATIC."""
+        csource = emit_source(
+            'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
+        )
+        assert "ZSTR_STATIC(" in csource
+        # "Hello, " and "!" fragments should be static
+        assert 'zstr_new("Hello, ")' not in csource
+        assert 'zstr_new("!")' not in csource
+
+    def test_static_string_var_no_temp(self):
+        """Static literal assigned to var should not create a temp."""
+        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
+        # Should directly assign: ZStr* s = _zs1;
+        assert "ZStr* s = _zs" in csource
+        # No temp allocation
+        assert "ZStr* _t" not in csource or "_t1 = zstr_new" not in csource
+
+    def test_static_string_passed_to_function(self):
+        """Static string can be passed to and returned from functions."""
+        csource = emit_source(
+            "greet: function {n: i64} out string is {\n"
+            '  return "hello"\n'
+            "}\n"
+            "main: function is {\n"
+            "  msg: greet 1\n"
+            "  print msg\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
+    def test_static_string_asan(self):
+        """Static strings should pass ASan (no leaks, no invalid frees)."""
+        csource = emit_source(
+            'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip() == "world"
+
+    def test_static_empty_string(self):
+        """Empty string literal should use ZSTR_STATIC."""
+        csource = emit_source('main: function is {\n  s: ""\n  print s\n}')
+        assert "ZSTR_STATIC(" in csource
+        assert 'zstr_new("")' not in csource
+
+    def test_zstr_free_in_scope_cleanup(self):
+        """Scope cleanup for string vars should use zstr_free."""
+        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
+        assert "zstr_free(s);" in csource
+        assert "if (s) free(s);" not in csource
+
+    def test_uint64_size_field(self):
+        """ZStr struct should use uint64_t size field."""
+        csource = emit_source('main: function is { print "hello" }')
+        assert "uint64_t size;" in csource
+        assert "int32_t len;" not in csource
 
 
 class TestEmitterMemorySafety:
@@ -740,8 +821,7 @@ class TestEmitterUnions:
     def test_union_struct_emitted(self):
         """Union should emit tag enum + struct."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         assert "Z_MYUNION_TAG_A" in csource
         assert "Z_MYUNION_TAG_B" in csource
@@ -752,8 +832,7 @@ class TestEmitterUnions:
     def test_union_construction_emits_malloc(self):
         """Union construction should emit malloc + tag + data."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 42 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 42 }"
         )
         assert "malloc(sizeof(z_myunion_t))" in csource
         assert "Z_MYUNION_TAG_A" in csource
@@ -761,8 +840,7 @@ class TestEmitterUnions:
     def test_union_null_construction(self):
         """Null subtype construction emits tag + NULL data."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.b }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
         )
         assert "Z_MYUNION_TAG_B" in csource
         assert "->data = NULL" in csource
@@ -789,8 +867,7 @@ class TestEmitterUnions:
     def test_union_scope_cleanup(self):
         """Union variables destroyed at function exit."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         assert "z_myunion_destroy(x);" in csource
 
@@ -805,8 +882,7 @@ class TestEmitterUnions:
     def test_union_destructor_emitted(self):
         """Union destructor should be generated."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         assert "z_myunion_destroy" in csource
         assert "switch (u->tag)" in csource
@@ -861,10 +937,10 @@ class TestEmitterUnionIntegration:
     def test_union_string_variant(self):
         csource = emit_source(
             "myunion: union { a: i64\n b: string\n c: null }\n"
-            'main: function is {\n'
+            "main: function is {\n"
             '  x: myunion.b "hello"\n'
             '  print "ok"\n'
-            '}'
+            "}"
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
@@ -960,7 +1036,7 @@ class TestEmitterUnionMemorySafety:
 
     def test_union_string_no_leak(self):
         csource = emit_source(
-            'myunion: union { a: string\n b: null }\n'
+            "myunion: union { a: string\n b: null }\n"
             'main: function is { x: myunion.a "hello"\n print "ok" }'
         )
         result = compile_and_run_asan(csource)

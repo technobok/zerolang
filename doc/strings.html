@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>String Internals</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-03-13">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+  <h1 id="string-internals"><a href="#string-internals">String Internals</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+  <div id="tocfile">
+Table of Contents</div>
+
+  <ul>
+<li><a href="#string-internals">String Internals</a>
+<ul>
+<li><a href="#zstr-memory-layout">ZStr Memory Layout</a>
+</li>
+<li><a href="#why-not">Why  Not </a>
+</li>
+<li><a href="#the-64-bit-header">The 64-bit Header</a>
+</li>
+<li><a href="#content-agnostic">Content Agnostic</a>
+</li>
+<li><a href="#static-vs-heap-strings">Static vs Heap Strings</a>
+</li>
+<li><a href="#comparison-with-other-implementations">Comparison with Other Implementations</a>
+<ul>
+<li><a href="#cpython">CPython</a>
+</li>
+<li><a href="#go">Go</a>
+</li>
+<li><a href="#swift">Swift</a>
+</li>
+<li><a href="#rust">Rust</a>
+</li>
+<li><a href="#zstr">ZStr</a>
+</li>
+</ul>
+</li>
+<li><a href="#future-work">Future Work</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<h2 id="zstr-memory-layout"><a href="#zstr-memory-layout">1. ZStr Memory Layout</a></h2>
+<p>The runtime string type <code>ZStr</code> is a size-prefixed, NUL-terminated byte
+buffer with a flexible array member:</p>
+<pre><code class="language-c">typedef struct {
+    uint64_t size;   /* bits 62-0: byte count; bit 63: static flag */
+    char data[];     /* NUL-terminated, starts at 8-byte boundary */
+} ZStr;</code></pre>
+<p>The <code>data</code> field starts at offset 8, on a 64-bit boundary. This is optimal
+for <code>memcpy</code>/<code>memcmp</code> with SSE/AVX and avoids cache line splits.</p>
+<p>Data is always NUL-terminated so it can be used directly as a C string
+via <code>z-&gt;data</code>. The NUL is not included in the size.</p>
+<h2 id="why-not"><a href="#why-not">2. Why <code>size</code> Not <code>len</code></a></h2>
+<p>The field is called <code>size</code> because it stores the *byte count* of the
+string data, not the character count. This matches C/POSIX convention
+(<code>size_t</code>, <code>sizeof</code>) and avoids ambiguity with encoding-dependent
+character length.</p>
+<p>The name <code>length</code> is reserved for a future user-facing API that returns
+the character count given encoding (e.g. UTF-8 codepoint count).</p>
+<h2 id="the-64-bit-header"><a href="#the-64-bit-header">3. The 64-bit Header</a></h2>
+<ul>
+<li>*Bit 63 (MSB):* static flag -- "don't free this ZStr"</li>
+<li>*Bits 62-0:* size in bytes -- supports strings as large as available memory</li>
+<li>*Unsigned:* sizes can't be negative</li>
+<li>*64-bit aligned:* data starts on a natural boundary</li>
+<li>*Flag bit in MSB:* clean separation from size, no masking for common path</li>
+</ul>
+<p>Accessor macros:</p>
+<pre><code class="language-c">#define ZSTR_STATIC_FLAG  0x8000000000000000ull
+#define ZSTR_SIZE(z)      ((z)-&gt;size &amp; ~ZSTR_STATIC_FLAG)
+#define ZSTR_IS_STATIC(z) ((z)-&gt;size &amp; ZSTR_STATIC_FLAG)</code></pre>
+<h2 id="content-agnostic"><a href="#content-agnostic">4. Content Agnostic</a></h2>
+<p>ZStr does not dictate content encoding. It can store UTF-8, binary data,
+or data with embedded NULs. The <code>size</code> field is the authoritative
+length; the trailing NUL is a convenience for C interop.</p>
+<h2 id="static-vs-heap-strings"><a href="#static-vs-heap-strings">5. Static vs Heap Strings</a></h2>
+<p>The static flag (bit 63) means *"immortal -- never free this pointer."*
+It applies to:</p>
+<ul>
+<li>String literals compiled into <code>.rodata</code> (via <code>ZSTR_STATIC</code> macro)</li>
+<li>Future: small strings on the stack (would be borrowed, not owned)</li>
+<li>Future: strings embedded inline in records/classes/lists (freed with parent)</li>
+</ul>
+<p>Static literal strings are always *owned* -- they live forever in rodata,
+so they can be stored anywhere, returned, put in lists. No copy-on-own needed.</p>
+<p>The <code>zstr_free</code> helper checks the static flag before freeing:</p>
+<pre><code class="language-c">static void zstr_free(ZStr* s) {
+    if (s &amp;&amp; !ZSTR_IS_STATIC(s)) free(s);
+}</code></pre>
+<p>The <code>ZSTR_STATIC</code> macro declares a fixed-size struct at file scope and
+casts to <code>ZStr*</code>. Standard C99, supported by all compilers.</p>
+<p>For example, <code>ZSTR_STATIC(_zs1, "hello")</code> expands to:</p>
+<pre><code class="language-c">static struct { uint64_t size; char data[sizeof("hello")]; }
+    _zs1_storage = { (sizeof("hello")-1) | ZSTR_STATIC_FLAG, "hello" };
+static ZStr* _zs1 = (ZStr*)&amp;_zs1_storage;</code></pre>
+<h2 id="comparison-with-other-implementations"><a href="#comparison-with-other-implementations">6. Comparison with Other Implementations</a></h2>
+<h3 id="cpython"><a href="#cpython">6.1. CPython</a></h3>
+<p><code>Py_ssize_t</code>length plus ~40 bytes of header. Interning is used for
+small/literal strings. The large header is needed for refcount, type
+pointer, hash cache, and encoding flags.</p>
+<h3 id="go"><a href="#go">6.2. Go</a></h3>
+<p>Two-word value <code>{pointer, length}</code>. No header on the string data
+itself. The garbage collector handles static/heap distinction
+transparently. Immutable slices into larger buffers are cheap.</p>
+<h3 id="swift"><a href="#swift">6.3. Swift</a></h3>
+<p>16-byte tagged value. Small string optimization stores up to 15 bytes
+inline (no heap allocation). Flags encode encoding, ownership, and
+whether the string is "small" or a heap pointer.</p>
+<h3 id="rust"><a href="#rust">6.4. Rust</a></h3>
+<p>Separate <code>&amp;str</code> (borrowed slice: pointer + length) and <code>String</code>
+(owned: pointer + length + capacity, three words). Lifetime system
+enforces borrow validity at compile time.</p>
+<h3 id="zstr"><a href="#zstr">6.5. ZStr</a></h3>
+<p>Single-word header (8 bytes) with inline flag bit. Static strings live
+in <code>.rodata</code> with zero runtime cost. Heap strings are
+<code>malloc</code>/<code>free</code> with no reference counting. Ownership is enforced
+by the compiler's ownership model (take/borrow/swap).</p>
+<h2 id="future-work"><a href="#future-work">7. Future Work</a></h2>
+<ul>
+<li>*Mutable/growable ZStrBuf:* separate type with capacity field for string building and mutation. Keeps ZStr simple and immutable.</li>
+<li>*Small string optimization:* strings up to ~15 bytes stored inline (no heap allocation). Would use the static flag to mark as non-freeable.</li>
+<li>*Stack/inline strings:* strings embedded in records or on the stack, marked as borrowed. The existing ownership model handles escape prevention.</li>
+</ul>
+</main>
+</body>
+</html>

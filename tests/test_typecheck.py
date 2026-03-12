@@ -1211,22 +1211,14 @@ class TestStringMigration:
     def test_string_take_invalidates(self):
         """After .take on a string variable, the source is invalidated."""
         errors = check_errors(
-            "main: function is {\n"
-            '  s: "hello"\n'
-            "  d: s.take\n"
-            "  e: s\n"
-            "}"
+            'main: function is {\n  s: "hello"\n  d: s.take\n  e: s\n}'
         )
         assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
 
     def test_string_borrow_locks(self):
         """Borrowing a string variable should lock the source."""
         errors = check_errors(
-            "main: function is {\n"
-            '  s: "hello"\n'
-            "  d: s.borrow\n"
-            "  e: s.borrow\n"
-            "}"
+            'main: function is {\n  s: "hello"\n  d: s.borrow\n  e: s.borrow\n}'
         )
         assert any(
             "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
@@ -1234,13 +1226,7 @@ class TestStringMigration:
 
     def test_string_swap_ok(self):
         """Swapping two string variables should work."""
-        check_ok(
-            "main: function is {\n"
-            '  a: "hello"\n'
-            '  b: "world"\n'
-            "  a swap b\n"
-            "}"
-        )
+        check_ok('main: function is {\n  a: "hello"\n  b: "world"\n  a swap b\n}')
 
     def test_string_aliasing_error(self):
         """Passing the same string twice to a call is an aliasing error."""
@@ -1275,8 +1261,7 @@ class TestUnionTypeResolution:
     def test_union_is_reftype(self):
         """Unions should be tagged as reftype (is_valtype=False)."""
         program = check_ok(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -1303,8 +1288,7 @@ class TestUnionTypeResolution:
     def test_union_tag_type_generated(self):
         """Union should have a :tag child with enum-like discriminators."""
         program = check_ok(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -1318,8 +1302,7 @@ class TestUnionTypeResolution:
     def test_union_null_subtype(self):
         """Null subtypes get a sentinel NULL type."""
         program = check_ok(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.b }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -1334,8 +1317,7 @@ class TestUnionConstruction:
     def test_union_subtype_construction_returns_union_type(self):
         """Calling union.subtype expr returns the union type."""
         program = check_ok(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -1345,14 +1327,13 @@ class TestUnionConstruction:
     def test_union_null_construction(self):
         """Calling union.nullsubtype (no args) creates a union instance."""
         check_ok(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.b }"
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
         )
 
     def test_union_string_construction(self):
         """Calling union.stringsubtype with string arg creates a union."""
         check_ok(
-            'myunion: union { a: string\n b: null }\n'
+            "myunion: union { a: string\n b: null }\n"
             'main: function is { x: myunion.a "hello" }'
         )
 
@@ -1476,6 +1457,6 @@ class TestUnionMatchExhaustiveness:
         )
         p = Parser(vfs, "unions")
         program = p.parse()
-        assert isinstance(program, zast.Program), f"Parse failed"
+        assert isinstance(program, zast.Program), "Parse failed"
         errors = typecheck(program)
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"

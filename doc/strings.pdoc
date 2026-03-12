@@ -1,0 +1,161 @@
+#doc.lang: en
+
+#//: Zerolang String Internals
+
+#doc.title: String Internals
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-03-13
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: String Internals
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: ZStr Memory Layout
+
+The runtime string type #~"ZStr" is a size-prefixed, NUL-terminated byte
+buffer with a flexible array member:
+
+#code language=c: """
+typedef struct {
+    uint64_t size;   /* bits 62-0: byte count; bit 63: static flag */
+    char data[];     /* NUL-terminated, starts at 8-byte boundary */
+} ZStr;
+"""
+
+The #~"data" field starts at offset 8, on a 64-bit boundary. This is optimal
+for #~"memcpy"/#~"memcmp" with SSE/AVX and avoids cache line splits.
+
+Data is always NUL-terminated so it can be used directly as a C string
+via #~"z->data". The NUL is not included in the size.
+
+
+#--: Why #~"size" Not #~"len"
+
+The field is called #~"size" because it stores the *byte count* of the
+string data, not the character count. This matches C/POSIX convention
+(#~"size_t", #~"sizeof") and avoids ambiguity with encoding-dependent
+character length.
+
+The name #~"length" is reserved for a future user-facing API that returns
+the character count given encoding (e.g. UTF-8 codepoint count).
+
+
+#--: The 64-bit Header
+
+#ul:
+  #*: *Bit 63 (MSB):* static flag -- "don't free this ZStr"
+  #*: *Bits 62-0:* size in bytes -- supports strings as large as available memory
+  #*: *Unsigned:* sizes can't be negative
+  #*: *64-bit aligned:* data starts on a natural boundary
+  #*: *Flag bit in MSB:* clean separation from size, no masking for common path
+
+Accessor macros:
+
+#code language=c: """
+#define ZSTR_STATIC_FLAG  0x8000000000000000ull
+#define ZSTR_SIZE(z)      ((z)->size & ~ZSTR_STATIC_FLAG)
+#define ZSTR_IS_STATIC(z) ((z)->size & ZSTR_STATIC_FLAG)
+"""
+
+
+#--: Content Agnostic
+
+ZStr does not dictate content encoding. It can store UTF-8, binary data,
+or data with embedded NULs. The #~"size" field is the authoritative
+length; the trailing NUL is a convenience for C interop.
+
+
+#--: Static vs Heap Strings
+
+The static flag (bit 63) means *"immortal -- never free this pointer."*
+It applies to:
+
+#ul:
+  #*: String literals compiled into #~".rodata" (via #~"ZSTR_STATIC" macro)
+  #*: Future: small strings on the stack (would be borrowed, not owned)
+  #*: Future: strings embedded inline in records/classes/lists (freed with parent)
+
+Static literal strings are always *owned* -- they live forever in rodata,
+so they can be stored anywhere, returned, put in lists. No copy-on-own needed.
+
+The #~"zstr_free" helper checks the static flag before freeing:
+
+#code language=c: """
+static void zstr_free(ZStr* s) {
+    if (s && !ZSTR_IS_STATIC(s)) free(s);
+}
+"""
+
+The #~"ZSTR_STATIC" macro declares a fixed-size struct at file scope and
+casts to #~"ZStr*". Standard C99, supported by all compilers.
+
+For example, #~"ZSTR_STATIC(_zs1, \"hello\")" expands to:
+
+#code language=c: """
+static struct { uint64_t size; char data[sizeof("hello")]; }
+    _zs1_storage = { (sizeof("hello")-1) | ZSTR_STATIC_FLAG, "hello" };
+static ZStr* _zs1 = (ZStr*)&_zs1_storage;
+"""
+
+
+#--: Comparison with Other Implementations
+
+#---: CPython
+
+#~"Py_ssize_t" length plus ~40 bytes of header. Interning is used for
+small/literal strings. The large header is needed for refcount, type
+pointer, hash cache, and encoding flags.
+
+#---: Go
+
+Two-word value #~"{pointer, length}". No header on the string data
+itself. The garbage collector handles static/heap distinction
+transparently. Immutable slices into larger buffers are cheap.
+
+#---: Swift
+
+16-byte tagged value. Small string optimization stores up to 15 bytes
+inline (no heap allocation). Flags encode encoding, ownership, and
+whether the string is "small" or a heap pointer.
+
+#---: Rust
+
+Separate #~"&str" (borrowed slice: pointer + length) and #~"String"
+(owned: pointer + length + capacity, three words). Lifetime system
+enforces borrow validity at compile time.
+
+#---: ZStr
+
+Single-word header (8 bytes) with inline flag bit. Static strings live
+in #~".rodata" with zero runtime cost. Heap strings are
+#~"malloc"/#~"free" with no reference counting. Ownership is enforced
+by the compiler's ownership model (take/borrow/swap).
+
+
+#--: Future Work
+
+#ul:
+  #*: *Mutable/growable ZStrBuf:* separate type with capacity field for string building and mutation. Keeps ZStr simple and immutable.
+  #*: *Small string optimization:* strings up to ~15 bytes stored inline (no heap allocation). Would use the static flag to mark as non-freeable.
+  #*: *Stack/inline strings:* strings embedded in records or on the stack, marked as borrowed. The existing ownership model handles escape prevention.

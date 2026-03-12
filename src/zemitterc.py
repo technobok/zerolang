@@ -139,12 +139,16 @@ class CEmitter:
         self._temp_counter: int = 0
         self._temp_decls: List[str] = []
         self._temp_frees: List[str] = []
+        self._temp_string_set: set[str] = set()  # temps that are ZStr*
         self._func_string_vars: List[str] = []
         self._func_class_vars: List[str] = []
         self._func_union_vars: List[str] = []
         self._union_var_types: Dict[str, str] = {}  # var_name -> union type name
         self._current_record_name: str = ""
         self._func_class_params: set[str] = set()
+        # static string literal deduplication
+        self._string_literals: Dict[str, str] = {}  # escaped C string → static var name
+        self._string_literal_counter: int = 0
 
     def _indent(self) -> str:
         return "    " * self.indent_level
@@ -156,6 +160,7 @@ class CEmitter:
         indent = self._indent()
         self._temp_decls.append(f"{indent}ZStr* {name} = {expr};\n")
         self._temp_frees.append(name)
+        self._temp_string_set.add(name)
         return name
 
     def _alloc_arg_temp(self, ctype: str, expr: str) -> str:
@@ -164,6 +169,15 @@ class CEmitter:
         name = f"_a{self._temp_counter}"
         indent = self._indent()
         self._temp_decls.append(f"{indent}{ctype} {name} = {expr};\n")
+        return name
+
+    def _static_string(self, escaped: str) -> str:
+        """Return the name of a static ZStr for this literal, deduplicating."""
+        if escaped in self._string_literals:
+            return self._string_literals[escaped]
+        self._string_literal_counter += 1
+        name = f"_zs{self._string_literal_counter}"
+        self._string_literals[escaped] = name
         return name
 
     def emit(self) -> str:
@@ -246,22 +260,29 @@ class CEmitter:
         if self.needs_string or self.needs_stdio:
             parts.append(
                 "typedef struct {\n"
-                "    int32_t len;\n"
-                "    char data[];\n"
+                "    uint64_t size;     /* bits 62-0: byte count; bit 63: static flag */\n"
+                "    char data[];       /* NUL-terminated, starts at 8-byte boundary */\n"
                 "} ZStr;\n\n"
+                "#define ZSTR_STATIC_FLAG  0x8000000000000000ull\n"
+                "#define ZSTR_SIZE(z)      ((z)->size & ~ZSTR_STATIC_FLAG)\n"
+                "#define ZSTR_IS_STATIC(z) ((z)->size & ZSTR_STATIC_FLAG)\n\n"
+                "#define ZSTR_STATIC(name, str) \\\n"
+                "    static struct { uint64_t size; char data[sizeof(str)]; } \\\n"
+                "    name##_storage = { (sizeof(str)-1) | ZSTR_STATIC_FLAG, str }; \\\n"
+                "    static ZStr* name = (ZStr*)&name##_storage\n\n"
                 "static ZStr* zstr_new(const char* s) {\n"
-                "    int32_t len = (int32_t)strlen(s);\n"
-                "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + len + 1);\n"
-                "    z->len = len;\n"
-                "    memcpy(z->data, s, len + 1);\n"
+                "    uint64_t size = (uint64_t)strlen(s);\n"
+                "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + size + 1);\n"
+                "    z->size = size;\n"
+                "    memcpy(z->data, s, size + 1);\n"
                 "    return z;\n"
                 "}\n\n"
                 "static ZStr* zstr_cat(ZStr* a, ZStr* b) {\n"
-                "    int32_t len = a->len + b->len;\n"
-                "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + len + 1);\n"
-                "    z->len = len;\n"
-                "    memcpy(z->data, a->data, a->len);\n"
-                "    memcpy(z->data + a->len, b->data, b->len + 1);\n"
+                "    uint64_t size = ZSTR_SIZE(a) + ZSTR_SIZE(b);\n"
+                "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + size + 1);\n"
+                "    z->size = size;\n"
+                "    memcpy(z->data, a->data, ZSTR_SIZE(a));\n"
+                "    memcpy(z->data + ZSTR_SIZE(a), b->data, ZSTR_SIZE(b) + 1);\n"
                 "    return z;\n"
                 "}\n\n"
                 "static ZStr* zstr_from_i64(int64_t n) {\n"
@@ -275,9 +296,18 @@ class CEmitter:
                 "    return zstr_new(buf);\n"
                 "}\n\n"
                 "static void zstr_print(ZStr* s) {\n"
-                '    printf("%.*s\\n", s->len, s->data);\n'
+                '    printf("%.*s\\n", (int)ZSTR_SIZE(s), s->data);\n'
+                "}\n\n"
+                "static void zstr_free(ZStr* s) {\n"
+                "    if (s && !ZSTR_IS_STATIC(s)) free(s);\n"
                 "}\n\n"
             )
+
+            # emit static string literals
+            for escaped, sname in self._string_literals.items():
+                parts.append(f'ZSTR_STATIC({sname}, "{escaped}");\n')
+            if self._string_literals:
+                parts.append("\n")
 
         for sd in self.struct_defs:
             parts.append(sd)
@@ -379,9 +409,11 @@ class CEmitter:
             else:
                 # check subtype: class subtypes need their own destroyer
                 stype_name = spath.name if isinstance(spath, zast.AtomId) else None
-                if stype_name and stype_name in self._class_names:
+                if stype_name and stype_name == "string":
+                    lines.append("            zstr_free((ZStr*)u->data);\n")
+                elif stype_name and stype_name in self._class_names:
                     lines.append(
-                        f"            free(u->data);  /* TODO: class destructor */\n"
+                        "            free(u->data);  /* TODO: class destructor */\n"
                     )
                 else:
                     lines.append("            free(u->data);\n")
@@ -535,7 +567,7 @@ class CEmitter:
             for sv in reversed(self._func_class_vars):
                 lines.append(f"{indent}if ({sv}) free({sv});\n")
             for sv in reversed(self._func_string_vars):
-                lines.append(f"{indent}if ({sv}) free({sv});\n")
+                lines.append(f"{indent}zstr_free({sv});\n")
 
         lines.append("}\n\n")
         self.func_defs.append("".join(lines))
@@ -559,8 +591,10 @@ class CEmitter:
         # save temp state for this statement
         saved_decls = self._temp_decls
         saved_frees = self._temp_frees
+        saved_string_set = self._temp_string_set
         self._temp_decls = []
         self._temp_frees = []
+        self._temp_string_set = set()
 
         inner = sline.statementline
         if isinstance(inner, zast.Assignment):
@@ -578,11 +612,15 @@ class CEmitter:
         result = "".join(self._temp_decls) + code
         indent = self._indent()
         for t in self._temp_frees:
-            result += f"{indent}free({t});\n"
+            if t in self._temp_string_set:
+                result += f"{indent}zstr_free({t});\n"
+            else:
+                result += f"{indent}free({t});\n"
 
         # restore temp state
         self._temp_decls = saved_decls
         self._temp_frees = saved_frees
+        self._temp_string_set = saved_string_set
         return result
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
@@ -630,7 +668,7 @@ class CEmitter:
         # check if this is a reftype reassignment — free old value first
         lhs_type = getattr(reassign.topath, "type", None)
         if lhs_type and lhs_type.name == "string":
-            result += f"{indent}free({lhs});\n"
+            result += f"{indent}zstr_free({lhs});\n"
             # the variable now owns the new value — remove from temp frees
             if rhs in self._temp_frees:
                 self._temp_frees.remove(rhs)
@@ -700,7 +738,7 @@ class CEmitter:
             if call.arguments:
                 arg = self._emit_operation_value(call.arguments[0].valtype)
                 return f"{indent}zstr_print({arg});\n"
-            t = self._alloc_temp('zstr_new("")')
+            t = self._static_string("")
             return f"{indent}zstr_print({t});\n"
 
         if callable_name == "return":
@@ -768,7 +806,10 @@ class CEmitter:
 
             # free remaining temps (intermediates) before return
             for t in self._temp_frees:
-                result += f"{indent}free({t});\n"
+                if t in self._temp_string_set:
+                    result += f"{indent}zstr_free({t});\n"
+                else:
+                    result += f"{indent}free({t});\n"
             self._temp_frees.clear()
 
             # free func union vars (except the return value)
@@ -786,7 +827,7 @@ class CEmitter:
             # free func string vars (except the return value)
             for sv in reversed(self._func_string_vars):
                 if sv != val:
-                    result += f"{indent}if ({sv}) free({sv});\n"
+                    result += f"{indent}zstr_free({sv});\n"
 
             result += f"{indent}return {val};\n"
             return result
@@ -802,7 +843,7 @@ class CEmitter:
         for sv in reversed(self._func_class_vars):
             result += f"{indent}if ({sv}) free({sv});\n"
         for sv in reversed(self._func_string_vars):
-            result += f"{indent}if ({sv}) free({sv});\n"
+            result += f"{indent}zstr_free({sv});\n"
         result += f"{indent}return;\n"
         return result
 
@@ -1117,9 +1158,15 @@ class CEmitter:
             val = self._emit_operation_value(call.arguments[0].valtype)
             # determine if the subtype is a valtype that needs boxing
             subtype_ctype = self._get_subtype_ctype(subtype_path)
-            if subtype_ctype and subtype_ctype in (
-                "ZStr*",
-            ) or (subtype_ctype and subtype_ctype.startswith("z_") and subtype_ctype.endswith("_t*")):
+            if (
+                subtype_ctype
+                and subtype_ctype in ("ZStr*",)
+                or (
+                    subtype_ctype
+                    and subtype_ctype.startswith("z_")
+                    and subtype_ctype.endswith("_t*")
+                )
+            ):
                 # reftype: store pointer directly
                 # remove from temp frees since union takes ownership
                 if val in self._temp_frees:
@@ -1190,7 +1237,7 @@ class CEmitter:
 
         if not has_interp:
             literal = self._collect_string_literal(atom.stringparts)
-            return self._alloc_temp(f'zstr_new("{literal}")')
+            return self._static_string(literal)
 
         parts: List[str] = []
         for p in atom.stringparts:
@@ -1218,10 +1265,10 @@ class CEmitter:
             else:
                 literal = self._escape_c_string(p.tokstr)
                 if literal:
-                    parts.append(self._alloc_temp(f'zstr_new("{literal}")'))
+                    parts.append(self._static_string(literal))
 
         if not parts:
-            return self._alloc_temp('zstr_new("")')
+            return self._static_string("")
         if len(parts) == 1:
             return parts[0]
         result = parts[0]
@@ -1347,8 +1394,10 @@ class CEmitter:
         # declared inside the block (not prepended to the outer statement)
         saved_decls = self._temp_decls
         saved_frees = self._temp_frees
+        saved_string_set = self._temp_string_set
         self._temp_decls = []
         self._temp_frees = []
+        self._temp_string_set = set()
 
         doexpr_code = self._emit_expression_stmt(withnode.doexpr)
 
@@ -1356,14 +1405,20 @@ class CEmitter:
         parts.append("".join(self._temp_decls))
         parts.append(doexpr_code)
         for t in self._temp_frees:
-            parts.append(f"{inner_indent}free({t});\n")
+            if t in self._temp_string_set:
+                parts.append(f"{inner_indent}zstr_free({t});\n")
+            else:
+                parts.append(f"{inner_indent}free({t});\n")
 
         self._temp_decls = saved_decls
         self._temp_frees = saved_frees
+        self._temp_string_set = saved_string_set
 
         if is_union and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
-        elif is_string or is_class:
+        elif is_string:
+            parts.append(f"{inner_indent}zstr_free({cname});\n")
+        elif is_class:
             parts.append(f"{inner_indent}free({cname});\n")
         self.indent_level -= 1
         parts.append(f"{indent}}}\n")
