@@ -167,6 +167,33 @@ class TestExpressions:
         func = body["f"]
         assert isinstance(func, zast.Function)
 
+    def test_paren_expr_preserves_eol(self):
+        """Regression: filtereol(True) inside parens must not eat the EOL after ')'.
+
+        Without the fix, _advance after ')' runs with filtereol=True and
+        permanently discards the EOL separating the two statement lines,
+        causing the parser to swallow the second line into the first.
+        """
+        source = (
+            "inc: function {n: i64} out i64 is { return n + 1 }\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "\n"
+            "main: function is {\n"
+            "    result: add a: (inc n: 1) b: (inc n: 2)\n"
+            '    print "\\{result}"\n'
+            "}"
+        )
+        result = parse_unit(source)
+        assert isinstance(result, zast.Program), f"Parse failed: {result!r}"
+        body = get_unit_body(result, "test")
+        func = body["main"]
+        assert isinstance(func, zast.Function)
+        stmts = func.body.statements
+        assert len(stmts) == 2, (
+            f"Expected 2 statements (assignment + print), got {len(stmts)}: "
+            f"{[type(s.statementline).__name__ for s in stmts]}"
+        )
+
 
 class TestStatements:
     def test_single_expression_statement(self):
