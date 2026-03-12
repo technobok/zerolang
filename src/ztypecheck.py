@@ -174,10 +174,7 @@ class TypeChecker:
         if isinstance(defn, zast.Enum):
             return self._resolve_enum_type(unitname, name, defn)
         if isinstance(defn, zast.Union):
-            shell = _make_type(name, ZTypeType.UNION)
-            shell.is_valtype = False  # unions are reference types
-            self._resolved[f"{unitname}.{name}"] = shell
-            return shell
+            return self._resolve_union_type(unitname, name, defn)
         if isinstance(defn, zast.Unit):
             return self.unit_types.get(name)
         # alias: DottedPath or AtomId reference
@@ -272,6 +269,43 @@ class TypeChecker:
 
         self._resolving.pop()
         return ctype
+
+    def _resolve_union_type(
+        self, unitname: str, name: str, union_defn: zast.Union
+    ) -> ZType:
+        key = f"{unitname}.{name}"
+        utype = _make_type(name, ZTypeType.UNION)
+        self._resolved[key] = utype  # early register for self-reference
+        self._resolving.append((key, utype))
+
+        utype.is_valtype = False  # unions are reference types
+
+        # resolve each subtype item
+        for sname, spath in union_defn.items.items():
+            if isinstance(spath, zast.AtomId) and spath.name == "null":
+                st = _make_type("null", ZTypeType.RECORD)
+                st.is_valtype = True
+            else:
+                st = self._resolve_typeref(spath)
+            if st:
+                utype.children[sname] = st
+
+        # auto-generate tag enum: each subtype gets an integer discriminator
+        tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+        for i, sname in enumerate(union_defn.items.keys()):
+            tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+        utype.children[":tag"] = tag_type
+
+        # resolve methods
+        for mname, mfunc in union_defn.functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            utype.children[mname] = mt
+        for mname, mfunc in union_defn.as_functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            utype.children[mname] = mt
+
+        self._resolving.pop()
+        return utype
 
     def _resolve_record_type(self, unitname: str, name: str, rec: zast.Record) -> ZType:
         key = f"{unitname}.{name}"
@@ -414,6 +448,13 @@ class TypeChecker:
             # .borrow returns the same type (borrowed reference)
             path.type = parent_type
             return parent_type
+        # for unions, store parent type on the path for construction detection
+        if parent_type.typetype == ZTypeType.UNION:
+            child = parent_type.children.get(child_name)
+            if child:
+                path.parent_union_type = parent_type
+                return child
+            return None
         # for records/enums, look up child in children
         child = parent_type.children.get(child_name)
         if child:
@@ -651,6 +692,11 @@ class TypeChecker:
         t = self._resolve_dotted_path(path)
         if t:
             path.type = t
+            # if this is a union subtype reference (null subtype used as value),
+            # the type should be the parent union type
+            if hasattr(path, "parent_union_type") and path.parent_union_type:
+                path.type = path.parent_union_type
+                return path.parent_union_type
         return t
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
@@ -683,6 +729,19 @@ class TypeChecker:
         if callee_type.name == "return" and callee_type.typetype == ZTypeType.FUNCTION:
             return self._check_return_call(call)
 
+        # handle union subtype construction: dotted path parent is a union
+        # (must be before record/class checks since subtypes may be records)
+        if (
+            isinstance(call.callable, zast.DottedPath)
+            and hasattr(call.callable, "parent_union_type")
+            and call.callable.parent_union_type
+        ):
+            parent_union = call.callable.parent_union_type
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            call.type = parent_union
+            return parent_union
+
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             for arg in call.arguments:
@@ -692,6 +751,13 @@ class TypeChecker:
 
         # handle class construction: calling a class type creates a new owned instance
         if callee_type.typetype == ZTypeType.CLASS:
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            call.type = callee_type
+            return callee_type
+
+        # handle union construction: union.subtype expr
+        if callee_type.typetype == ZTypeType.UNION:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
@@ -1040,6 +1106,24 @@ class TypeChecker:
                 err = self.symtab.try_lock(subject_name, ZLockState.EXCLUSIVE, holder)
                 if not err:
                     match_lock_info = (subject_name, holder)
+        # union exhaustiveness check
+        if subject_type and subject_type.typetype == ZTypeType.UNION:
+            # collect subtype names (exclude :tag and methods)
+            union_subtypes = {
+                k
+                for k, v in subject_type.children.items()
+                if not k.startswith(":") and v.typetype != ZTypeType.FUNCTION
+            }
+            covered = {clause.match.name for clause in casenode.clauses}
+            missing = union_subtypes - covered
+            if missing and not casenode.elseclause:
+                self._error(
+                    f"Non-exhaustive match on union '{subject_type.name}': "
+                    f"missing {', '.join(sorted(missing))}",
+                    loc=casenode.subject.start
+                    if hasattr(casenode.subject, "start")
+                    else None,
+                )
         for clause in casenode.clauses:
             self._check_statement(clause.statement)
         if casenode.elseclause:

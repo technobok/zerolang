@@ -60,6 +60,8 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return f"z_{name}_t"
     if ztype.typetype == ZTypeType.CLASS:
         return f"z_{name}_t*"
+    if ztype.typetype == ZTypeType.UNION:
+        return f"z_{name}_t*"
     return "void"
 
 
@@ -132,12 +134,15 @@ class CEmitter:
         self._const_names: set[str] = set()
         self._record_names: set[str] = set()
         self._class_names: set[str] = set()
+        self._union_names: set[str] = set()
         # temp variable infrastructure for string ownership
         self._temp_counter: int = 0
         self._temp_decls: List[str] = []
         self._temp_frees: List[str] = []
         self._func_string_vars: List[str] = []
         self._func_class_vars: List[str] = []
+        self._func_union_vars: List[str] = []
+        self._union_var_types: Dict[str, str] = {}  # var_name -> union type name
         self._current_record_name: str = ""
         self._func_class_params: set[str] = set()
 
@@ -174,6 +179,8 @@ class CEmitter:
                 self._record_names.add(name)
             elif isinstance(defn, zast.Class):
                 self._class_names.add(name)
+            elif isinstance(defn, zast.Union):
+                self._union_names.add(name)
             elif isinstance(defn, zast.Data):
                 self._data_names.add(name)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -196,6 +203,8 @@ class CEmitter:
                 self._emit_record(name, defn)
             elif isinstance(defn, zast.Class):
                 self._emit_class(name, defn)
+            elif isinstance(defn, zast.Union):
+                self._emit_union(name, defn)
             elif isinstance(defn, zast.Function) and defn.body:
                 self._emit_function(name, defn)
             elif isinstance(defn, zast.Data):
@@ -337,6 +346,60 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
+    def _emit_union(self, name: str, union_defn: zast.Union) -> None:
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        lines: List[str] = []
+
+        # emit tag enum
+        lines.append("typedef enum {\n")
+        tag_names = []
+        for sname in union_defn.items.keys():
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            tag_names.append(tag)
+            lines.append(f"    {tag},\n")
+        lines.append(f"}} z_{name}_tag_t;\n\n")
+
+        # emit union struct: always {tag, void*}
+        lines.append("typedef struct {\n")
+        lines.append(f"    z_{name}_tag_t tag;\n")
+        lines.append("    void* data;\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # emit destructor
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
+        lines.append("    if (!u) return;\n")
+        lines.append("    switch (u->tag) {\n")
+        for sname, spath in union_defn.items.items():
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            is_null = isinstance(spath, zast.AtomId) and spath.name == "null"
+            lines.append(f"        case {tag}:\n")
+            if is_null:
+                lines.append("            break;\n")
+            else:
+                # check subtype: class subtypes need their own destroyer
+                stype_name = spath.name if isinstance(spath, zast.AtomId) else None
+                if stype_name and stype_name in self._class_names:
+                    lines.append(
+                        f"            free(u->data);  /* TODO: class destructor */\n"
+                    )
+                else:
+                    lines.append("            free(u->data);\n")
+                lines.append("            break;\n")
+        lines.append("    }\n")
+        lines.append("    free(u);\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+        # emit methods
+        all_funcs = list(union_defn.functions.items()) + list(
+            union_defn.as_functions.items()
+        )
+        for mname, mfunc in all_funcs:
+            if mfunc.body:
+                self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+
     def _emit_data(self, name: str, data: zast.Data) -> None:
         self.needs_stdint = True
         values: List[str] = []
@@ -378,6 +441,8 @@ class CEmitter:
                 return f"z_{name}_t"
             if name in self._class_names:
                 return f"z_{name}_t*"
+            if name in self._union_names:
+                return f"z_{name}_t*"
         return "int64_t"
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
@@ -400,6 +465,9 @@ class CEmitter:
             if name in self._record_names:
                 return f"z_{name}_t"
             if name in self._class_names:
+                self.needs_stdlib = True
+                return f"z_{name}_t*"
+            if name in self._union_names:
                 self.needs_stdlib = True
                 return f"z_{name}_t*"
         return "void"
@@ -427,10 +495,14 @@ class CEmitter:
         # save/reset per-function state
         saved_string_vars = self._func_string_vars
         saved_class_vars = self._func_class_vars
+        saved_union_vars = self._func_union_vars
+        saved_union_var_types = self._union_var_types
         saved_temp_counter = self._temp_counter
         saved_record_name = self._current_record_name
         self._func_string_vars = []
         self._func_class_vars = []
+        self._func_union_vars = []
+        self._union_var_types = {}
         self._temp_counter = 0
         self._current_record_name = record_name
         saved_class_params = self._func_class_params
@@ -451,9 +523,15 @@ class CEmitter:
             body_code = self._emit_statement(func.body)
             lines.append(body_code)
 
-        # scope-exit cleanup for string/class vars (void functions / fall-through)
-        if self._func_string_vars or self._func_class_vars:
+        # scope-exit cleanup for string/class/union vars (void functions / fall-through)
+        if self._func_string_vars or self._func_class_vars or self._func_union_vars:
             indent = self._indent()
+            for sv in reversed(self._func_union_vars):
+                utype_name = self._union_var_type_name(sv)
+                if utype_name:
+                    lines.append(f"{indent}z_{utype_name}_destroy({sv});\n")
+                else:
+                    lines.append(f"{indent}if ({sv}) free({sv});\n")
             for sv in reversed(self._func_class_vars):
                 lines.append(f"{indent}if ({sv}) free({sv});\n")
             for sv in reversed(self._func_string_vars):
@@ -465,6 +543,8 @@ class CEmitter:
         # restore
         self._func_string_vars = saved_string_vars
         self._func_class_vars = saved_class_vars
+        self._func_union_vars = saved_union_vars
+        self._union_var_types = saved_union_var_types
         self._temp_counter = saved_temp_counter
         self._current_record_name = saved_record_name
         self._func_class_params = saved_class_params
@@ -521,10 +601,15 @@ class CEmitter:
             self._func_string_vars.append(cname)
         elif ctype.startswith("z_") and ctype.endswith("_t*"):
             self.needs_stdlib = True
-            # class pointer — the variable now owns it
+            # class/union pointer — the variable now owns it
             if val in self._temp_frees:
                 self._temp_frees.remove(val)
-            self._func_class_vars.append(cname)
+            # distinguish union from class for proper destruction
+            if assign.type and assign.type.typetype == ZTypeType.UNION:
+                self._func_union_vars.append(cname)
+                self._union_var_types[cname] = assign.type.name
+            else:
+                self._func_class_vars.append(cname)
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
@@ -551,6 +636,10 @@ class CEmitter:
                 self._temp_frees.remove(rhs)
         elif lhs_type and lhs_type.typetype == ZTypeType.CLASS:
             result += f"{indent}free({lhs});\n"
+            if rhs in self._temp_frees:
+                self._temp_frees.remove(rhs)
+        elif lhs_type and lhs_type.typetype == ZTypeType.UNION:
+            result += f"{indent}z_{lhs_type.name}_destroy({lhs});\n"
             if rhs in self._temp_frees:
                 self._temp_frees.remove(rhs)
         result += f"{indent}{lhs} = {rhs};\n"
@@ -682,6 +771,14 @@ class CEmitter:
                 result += f"{indent}free({t});\n"
             self._temp_frees.clear()
 
+            # free func union vars (except the return value)
+            for sv in reversed(self._func_union_vars):
+                if sv != val:
+                    utype_name = self._union_var_type_name(sv)
+                    if utype_name:
+                        result += f"{indent}z_{utype_name}_destroy({sv});\n"
+                    else:
+                        result += f"{indent}if ({sv}) free({sv});\n"
             # free func class vars (except the return value)
             for sv in reversed(self._func_class_vars):
                 if sv != val:
@@ -694,8 +791,14 @@ class CEmitter:
             result += f"{indent}return {val};\n"
             return result
 
-        # void return — free all func class/string vars
+        # void return — free all func union/class/string vars
         result = ""
+        for sv in reversed(self._func_union_vars):
+            utype_name = self._union_var_type_name(sv)
+            if utype_name:
+                result += f"{indent}z_{utype_name}_destroy({sv});\n"
+            else:
+                result += f"{indent}if ({sv}) free({sv});\n"
         for sv in reversed(self._func_class_vars):
             result += f"{indent}if ({sv}) free({sv});\n"
         for sv in reversed(self._func_string_vars):
@@ -799,6 +902,10 @@ class CEmitter:
                 return f"({ctype}){{{', '.join(fields)}}}"
             return f"({ctype}){{0}}"
 
+        # union construction: union.subtype expr
+        if self._is_union_construction(call):
+            return self._emit_union_construction(call)
+
         if call.callable.type and call.callable.type.typetype == ZTypeType.CLASS:
             cls_type = call.callable.type
             ctype = f"z_{cls_type.name}_t"
@@ -825,7 +932,7 @@ class CEmitter:
         if hasattr(call, "type") and call.type:
             if call.type.name == "string":
                 return self._alloc_temp(result)
-            if call.type.typetype == ZTypeType.CLASS:
+            if call.type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                 ctype = f"z_{call.type.name}_t"
                 self._temp_counter += 1
                 tmp = f"_c{self._temp_counter}"
@@ -912,6 +1019,9 @@ class CEmitter:
             # record_name.method or class_name.method — method call with no extra args
             if pname in self._record_names or pname in self._class_names:
                 return _mangle_func(f"{pname}.{child}")
+            # union_name.subtype — emit null subtype construction
+            if pname in self._union_names:
+                return self._emit_union_null_construction(pname, child)
             # data.index call
             if pname in self._data_names and child == "index":
                 return _mangle_func(pname)
@@ -934,21 +1044,142 @@ class CEmitter:
         return f"{parent}.{child}"
 
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
-        """Check if a path refers to a class pointer (for -> vs . dispatch)."""
+        """Check if a path refers to a class/union pointer (for -> vs . dispatch)."""
         # type annotation from type checker
         parent_type = getattr(path, "type", None)
-        if parent_type and parent_type.typetype == ZTypeType.CLASS:
+        if parent_type and parent_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
             return True
-        # local class variable
+        # local class/union variable
         if isinstance(path, zast.AtomId):
             cname = _mangle_var(path.name)
-            if cname in self._func_class_vars:
+            if cname in self._func_class_vars or cname in self._func_union_vars:
                 return True
             # class method parameter (this/type resolves to class pointer)
             if self._current_record_name in self._class_names:
                 if cname in self._func_class_params:
                     return True
         return False
+
+    def _union_var_type_name(self, var_name: str) -> Optional[str]:
+        """Get the union type name for a union variable."""
+        return self._union_var_types.get(var_name)
+
+    def _is_union_construction(self, call: zast.Call) -> bool:
+        """Check if a call is a union construction (union.subtype or bare union name)."""
+        if isinstance(call.callable, zast.DottedPath):
+            if isinstance(call.callable.parent, zast.AtomId):
+                if call.callable.parent.name in self._union_names:
+                    return True
+        if isinstance(call.callable, zast.AtomId):
+            if call.callable.name in self._union_names:
+                return True
+        return False
+
+    def _emit_union_construction(self, call: zast.Call) -> str:
+        """Emit C code for union construction."""
+        self.needs_stdlib = True
+        indent = self._indent()
+        self._temp_counter += 1
+        tmp = f"_c{self._temp_counter}"
+
+        if isinstance(call.callable, zast.DottedPath):
+            union_name = call.callable.parent.name
+            subtype_name = call.callable.child.name
+        else:
+            # bare union name — shouldn't happen for construction but handle gracefully
+            return "NULL"
+
+        ctype = f"z_{union_name}_t"
+        tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
+
+        self._temp_decls.append(
+            f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
+        )
+        self._temp_decls.append(f"{indent}{tmp}->tag = {tag};\n")
+
+        # determine subtype info from AST
+        # look up the union definition to find the subtype's type
+        mainunit = self.program.units.get(self.program.mainunitname)
+        union_defn = mainunit.body.get(union_name) if mainunit else None
+        subtype_path = None
+        if isinstance(union_defn, zast.Union):
+            subtype_path = union_defn.items.get(subtype_name)
+
+        is_null = (
+            subtype_path is not None
+            and isinstance(subtype_path, zast.AtomId)
+            and subtype_path.name == "null"
+        )
+
+        if is_null or not call.arguments:
+            self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
+        else:
+            val = self._emit_operation_value(call.arguments[0].valtype)
+            # determine if the subtype is a valtype that needs boxing
+            subtype_ctype = self._get_subtype_ctype(subtype_path)
+            if subtype_ctype and subtype_ctype in (
+                "ZStr*",
+            ) or (subtype_ctype and subtype_ctype.startswith("z_") and subtype_ctype.endswith("_t*")):
+                # reftype: store pointer directly
+                # remove from temp frees since union takes ownership
+                if val in self._temp_frees:
+                    self._temp_frees.remove(val)
+                self._temp_decls.append(f"{indent}{tmp}->data = {val};\n")
+            else:
+                # valtype: box it (malloc + copy)
+                box_ctype = subtype_ctype or "int64_t"
+                self._temp_counter += 1
+                box_tmp = f"_box{self._temp_counter}"
+                self._temp_decls.append(
+                    f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
+                )
+                self._temp_decls.append(f"{indent}*{box_tmp} = {val};\n")
+                self._temp_decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
+
+        self._temp_frees.append(tmp)
+        return tmp
+
+    def _get_subtype_ctype(self, subtype_path: Optional[zast.Path]) -> Optional[str]:
+        """Get the C type for a union subtype path."""
+        if not subtype_path:
+            return None
+        # use type annotation from type checker if available
+        if hasattr(subtype_path, "type") and subtype_path.type:
+            return _ctype(subtype_path.type)
+        if isinstance(subtype_path, zast.AtomId):
+            name = subtype_path.name
+            if name == "null":
+                return None
+            if name in TYPEMAP:
+                return TYPEMAP[name]
+            if name == "string":
+                return "ZStr*"
+            if name in self._record_names:
+                return f"z_{name}_t"
+            if name in self._class_names:
+                return f"z_{name}_t*"
+            if name in self._union_names:
+                return f"z_{name}_t*"
+        # DottedPath: resolve via last component name
+        if isinstance(subtype_path, zast.DottedPath):
+            return self._get_subtype_ctype(subtype_path.child)
+        return None
+
+    def _emit_union_null_construction(self, union_name: str, subtype_name: str) -> str:
+        """Emit construction for a null-subtype union (no data)."""
+        self.needs_stdlib = True
+        indent = self._indent()
+        self._temp_counter += 1
+        tmp = f"_c{self._temp_counter}"
+        ctype = f"z_{union_name}_t"
+        tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
+        self._temp_decls.append(
+            f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
+        )
+        self._temp_decls.append(f"{indent}{tmp}->tag = {tag};\n")
+        self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
+        self._temp_frees.append(tmp)
+        return tmp
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
         self.needs_string = True
@@ -1025,6 +1256,9 @@ class CEmitter:
     def _get_operation_type(self, op: zast.Operation) -> Optional[ZType]:
         if hasattr(op, "type") and op.type:
             return op.type
+        # look inside Expression wrapper
+        if isinstance(op, zast.Expression):
+            return self._get_expression_type(op)
         return None
 
     def _emit_if(self, ifnode: zast.If) -> str:
@@ -1097,6 +1331,7 @@ class CEmitter:
 
         is_string = ctype == "ZStr*"
         is_class = ctype.startswith("z_") and ctype.endswith("_t*")
+        is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
 
         # if value is a reftype temp, the with var now owns it
@@ -1126,7 +1361,9 @@ class CEmitter:
         self._temp_decls = saved_decls
         self._temp_frees = saved_frees
 
-        if is_string or is_class:
+        if is_union and val_type:
+            parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
+        elif is_string or is_class:
             parts.append(f"{inner_indent}free({cname});\n")
         self.indent_level -= 1
         parts.append(f"{indent}}}\n")
@@ -1135,6 +1372,11 @@ class CEmitter:
     def _emit_case(self, casenode: zast.Case) -> str:
         indent = self._indent()
         parts: List[str] = []
+
+        # check if subject is a union type
+        subject_type = self._get_operation_type(casenode.subject)
+        if subject_type and subject_type.typetype == ZTypeType.UNION:
+            return self._emit_union_case(casenode, subject_type)
 
         subject = self._emit_operation_value(casenode.subject)
 
@@ -1152,6 +1394,35 @@ class CEmitter:
             self.indent_level += 1
             parts.append(self._emit_statement(casenode.elseclause))
             self.indent_level -= 1
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
+        indent = self._indent()
+        parts: List[str] = []
+        union_name = union_type.name
+
+        subject = self._emit_operation_value(casenode.subject)
+
+        parts.append(f"{indent}switch ({subject}->tag) {{\n")
+        for clause in casenode.clauses:
+            sname = clause.match.name
+            tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
+            parts.append(f"{indent}    case {tag}: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_statement(clause.statement))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        if casenode.elseclause:
+            parts.append(f"{indent}    default: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_statement(casenode.elseclause))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
 
         parts.append(f"{indent}}}\n")
         return "".join(parts)

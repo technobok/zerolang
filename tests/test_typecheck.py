@@ -172,7 +172,7 @@ class TestTypeResolution:
             check_ok(f"f: function {{n: {t}}} is {{}}")
 
     def test_string_type_resolves(self):
-        check_ok("f: function {s: system.string} is {}")
+        check_ok("f: function {s: string} is {}")
 
     def test_bool_type_resolves(self):
         check_ok("f: function {b: system.bool} is {}")
@@ -420,6 +420,9 @@ class TestExamplePrograms:
 
     def test_classes(self):
         assert self._check_example("classes") == []
+
+    def test_unions(self):
+        assert self._check_example("unions") == []
 
 
 class TestReturnTypeChecking:
@@ -825,6 +828,9 @@ class TestExampleProgramsOwnership:
     def test_classes(self):
         assert self._check_example("classes") == []
 
+    def test_unions(self):
+        assert self._check_example("unions") == []
+
 
 # ---- Phase 4d: Lock Checking Tests ----
 
@@ -1025,6 +1031,9 @@ class TestLockCheckingExamplePrograms:
 
     def test_classes(self):
         assert self._check_example("classes") == []
+
+    def test_unions(self):
+        assert self._check_example("unions") == []
 
 
 # ---- Phase 4f: Class Type Checking Tests ----
@@ -1236,10 +1245,237 @@ class TestStringMigration:
     def test_string_aliasing_error(self):
         """Passing the same string twice to a call is an aliasing error."""
         errors = check_errors(
-            "f: function {a: system.string b: system.string} is {}\n"
+            "f: function {a: string b: string} is {}\n"
             "main: function is {\n"
             '  s: "hello"\n'
             "  f a: s b: s\n"
             "}"
         )
         assert any("aliasing" in e.msg.lower() for e in errors)
+
+
+# ---- Phase 4h: Union Type Checking Tests ----
+
+
+class TestUnionTypeResolution:
+    """Test that union types resolve correctly."""
+
+    def test_union_resolves_as_union_type(self):
+        """A union definition resolves to ZTypeType.UNION."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert ut is not None
+        assert ut.typetype == ZTypeType.UNION
+
+    def test_union_is_reftype(self):
+        """Unions should be tagged as reftype (is_valtype=False)."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert ut is not None
+        assert ut.is_valtype is False
+
+    def test_union_subtypes_stored_as_children(self):
+        """Union subtypes should be stored as children."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert "a" in ut.children
+        assert "b" in ut.children
+        assert "c" in ut.children
+        assert ut.children["a"].name == "i64"
+        assert ut.children["b"].name == "string"
+        assert ut.children["c"].name == "null"
+
+    def test_union_tag_type_generated(self):
+        """Union should have a :tag child with enum-like discriminators."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        tag = ut.children.get(":tag")
+        assert tag is not None
+        assert tag.typetype == ZTypeType.ENUM
+        assert "a" in tag.children
+        assert "b" in tag.children
+
+    def test_union_null_subtype(self):
+        """Null subtypes get a sentinel NULL type."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.b }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert ut.children["b"].name == "null"
+        assert ut.children["b"].is_valtype is True
+
+
+class TestUnionConstruction:
+    """Test union construction type checking."""
+
+    def test_union_subtype_construction_returns_union_type(self):
+        """Calling union.subtype expr returns the union type."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert ut is not None
+
+    def test_union_null_construction(self):
+        """Calling union.nullsubtype (no args) creates a union instance."""
+        check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.b }"
+        )
+
+    def test_union_string_construction(self):
+        """Calling union.stringsubtype with string arg creates a union."""
+        check_ok(
+            'myunion: union { a: string\n b: null }\n'
+            'main: function is { x: myunion.a "hello" }'
+        )
+
+
+class TestUnionOwnership:
+    """Test ownership rules for union instances."""
+
+    def test_union_take_invalidates(self):
+        """After .take on a union variable, the source is invalidated."""
+        errors = check_errors(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  y: x.take\n"
+            "  z: x\n"
+            "}"
+        )
+        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+
+    def test_union_borrow_locks(self):
+        """Borrowing a union variable locks the source."""
+        errors = check_errors(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  y: x.borrow\n"
+            "  z: x.borrow\n"
+            "}"
+        )
+        assert any(
+            "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+    def test_union_swap_ok(self):
+        """Swapping two union variables should work."""
+        check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  y: myunion.b\n"
+            "  x swap y\n"
+            "}"
+        )
+
+    def test_union_aliasing_error(self):
+        """Passing the same union twice to a call is an aliasing error."""
+        errors = check_errors(
+            "myunion: union { a: i64\n b: null }\n"
+            "f: function {x: myunion y: myunion} is {}\n"
+            "main: function is {\n"
+            "  u: myunion.a 1\n"
+            "  f x: u y: u\n"
+            "}"
+        )
+        assert any("aliasing" in e.msg.lower() for e in errors)
+
+
+class TestUnionMatchExhaustiveness:
+    """Test match exhaustiveness checking for unions."""
+
+    def test_exhaustive_match_ok(self):
+        """All subtypes covered is ok."""
+        check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            "  } case b then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}"
+        )
+
+    def test_missing_case_error(self):
+        """Missing case without else is an error."""
+        errors = check_errors(
+            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            "  }\n"
+            "}"
+        )
+        assert any(
+            "exhaustive" in e.msg.lower() or "missing" in e.msg.lower() for e in errors
+        )
+
+    def test_else_covers_remaining(self):
+        """Else clause covers remaining subtypes."""
+        check_ok(
+            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            '  } else print "other"\n'
+            "}"
+        )
+
+    def test_union_example_passes(self):
+        """The unions.z example program passes type checking."""
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        examples_dir = os.path.join(os.path.dirname(__file__), "..", "examples")
+        pmainid = vfs.register(FSProvider(rootpath=examples_dir, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "unions")
+        program = p.parse()
+        assert isinstance(program, zast.Program), f"Parse failed"
+        errors = typecheck(program)
+        assert errors == [], f"Type errors: {[e.msg for e in errors]}"

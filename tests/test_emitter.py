@@ -202,6 +202,14 @@ class TestEmitterExamples:
         assert "prime 0 = 2" in output
         assert "prime 9 = 29" in output
 
+    def test_unions(self):
+        csource = self._emit_example("unions")
+        output = compile_and_run(csource)
+        assert "a is ok" in output
+        assert "b is error" in output
+        assert "c is none" in output
+        assert "d is ok" in output
+
 
 def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
     """Compile C source with ASan and run, returning the CompletedProcess."""
@@ -721,3 +729,286 @@ class TestEmitterClassMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "initial = 10" in result.stdout
+
+
+# ---- Phase 4h: Union Emitter Tests ----
+
+
+class TestEmitterUnions:
+    """Tests for union C emission."""
+
+    def test_union_struct_emitted(self):
+        """Union should emit tag enum + struct."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        assert "Z_MYUNION_TAG_A" in csource
+        assert "Z_MYUNION_TAG_B" in csource
+        assert "z_myunion_tag_t" in csource
+        assert "z_myunion_t" in csource
+        assert "void* data;" in csource
+
+    def test_union_construction_emits_malloc(self):
+        """Union construction should emit malloc + tag + data."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 42 }"
+        )
+        assert "malloc(sizeof(z_myunion_t))" in csource
+        assert "Z_MYUNION_TAG_A" in csource
+
+    def test_union_null_construction(self):
+        """Null subtype construction emits tag + NULL data."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.b }"
+        )
+        assert "Z_MYUNION_TAG_B" in csource
+        assert "->data = NULL" in csource
+
+    def test_union_match_emits_switch(self):
+        """Match on union emits switch on tag."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            "  } case b then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}"
+        )
+        assert "switch (x->tag)" in csource
+        assert "case Z_MYUNION_TAG_A:" in csource
+        assert "case Z_MYUNION_TAG_B:" in csource
+
+    def test_union_scope_cleanup(self):
+        """Union variables destroyed at function exit."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        assert "z_myunion_destroy(x);" in csource
+
+    def test_union_take_nullifies(self):
+        """After .take, source variable should be nullified."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1\n y: x.take }"
+        )
+        assert "= NULL;" in csource
+
+    def test_union_destructor_emitted(self):
+        """Union destructor should be generated."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is { x: myunion.a 1 }"
+        )
+        assert "z_myunion_destroy" in csource
+        assert "switch (u->tag)" in csource
+        assert "free(u);" in csource
+
+
+class TestEmitterUnionIntegration:
+    """Integration tests: compile and run union programs."""
+
+    def test_union_basic(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            'main: function is { x: myunion.a 42\n print "ok" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_union_match(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "got a"\n'
+            "  } case b then {\n"
+            '    print "got b"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "got a"
+
+    def test_union_null_variant(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.b\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "got a"\n'
+            "  } case b then {\n"
+            '    print "got b"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "got b"
+
+    def test_union_string_variant(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: string\n c: null }\n"
+            'main: function is {\n'
+            '  x: myunion.b "hello"\n'
+            '  print "ok"\n'
+            '}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_union_take(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 42\n"
+            "  y: x.take\n"
+            '  print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_union_swap(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  y: myunion.b\n"
+            "  x swap y\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            "  } case b then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "b"
+
+    def test_union_function_param(self):
+        csource = emit_source(
+            "result: union { ok: i64\n err: string\n none: null }\n"
+            "describe: function {r: result} out string is {\n"
+            "  match (\n"
+            "    r\n"
+            "  ) case ok then {\n"
+            '    return "ok"\n'
+            "  } case err then {\n"
+            '    return "error"\n'
+            "  } case none then {\n"
+            '    return "none"\n'
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  a: result.ok 42\n"
+            '  print "a is \\{describe a}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "a is ok"
+
+    def test_example_unions(self):
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "unions")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+        csource = zemitterc.emit(program)
+        output = compile_and_run(csource)
+        assert "a is ok" in output
+        assert "b is error" in output
+        assert "c is none" in output
+        assert "d is ok" in output
+
+
+class TestEmitterUnionMemorySafety:
+    """Memory safety tests for unions using ASan."""
+
+    def test_union_no_leak(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            'main: function is { x: myunion.a 42\n print "ok" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_union_string_no_leak(self):
+        csource = emit_source(
+            'myunion: union { a: string\n b: null }\n'
+            'main: function is { x: myunion.a "hello"\n print "ok" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_union_take_no_double_free(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 42\n"
+            "  y: x.take\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_union_swap_no_leak(self):
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 1\n"
+            "  y: myunion.b\n"
+            "  x swap y\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_example_unions_asan(self):
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "unions")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == []
+        csource = zemitterc.emit(program)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "a is ok" in result.stdout
