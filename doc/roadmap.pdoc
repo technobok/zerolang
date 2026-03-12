@@ -785,13 +785,65 @@ integration tests for the full v2 feature set.
   #*: Verify all v2 example programs compile with gcc and produce
     correct output under ASan (address sanitizer).
 
-#---: Phase 5: Expand to v3 (Full Language)
+#---: Phase 5a: C Runtime Library
+
+Extract generated C helpers into a precompiled static library. Currently
+the emitter inlines string handling (#~"ZStr", #~"zstr_new",
+#~"zstr_cat", etc.) into every generated #~".c" file. This phase moves
+runtime support code into separate source files, compiles them into a
+static library (#~"libzrt.a"), and links it into the final executable.
+
+#ol:
+  #*: Create #~"runtime/" directory with #~"zrt_string.c" /
+    #~"zrt_string.h": move #~"ZStr" struct, #~"zstr_new",
+    #~"zstr_cat", #~"zstr_from_i64", #~"zstr_from_f64",
+    #~"zstr_print" out of emitted code.
+  #*: Create #~"runtime/zrt_memory.c" / #~"zrt_memory.h": wrapper
+    allocators (#~"zrt_malloc", #~"zrt_free") that can later be
+    swapped for arena or GC backends. Class construction and
+    scope-exit cleanup call these instead of raw #~"malloc"/#~"free".
+  #*: Build system: #~"Makefile" target to compile #~"runtime/*.c"
+    into #~"libzrt.a" (static archive via #~"ar rcs").
+  #*: Update #~"zemitterc.py": emit #~"#include \"zrt_string.h\""
+    and #~"#include \"zrt_memory.h\"" instead of inlining helpers.
+    Remove inline #~"ZStr" definitions from emitted code.
+  #*: Update compile/link step: #~"gcc -o prog prog.c -L. -lzrt"
+    (or pass #~"libzrt.a" directly).
+  #*: Update all tests: #~"compile_and_run" and
+    #~"compile_and_run_asan" helpers link against #~"libzrt.a".
+  #*: Verify all existing examples and tests still pass with the
+    library-based build.
+  #*: Future runtime candidates: format/print infrastructure, I/O,
+    union destructors, protocol vtable helpers, generic container
+    support.
+
+#---: Phase 5b: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
   #*: Compile-time evaluation.
   #*: Iterator protocol.
   #*: Full standard library.
+
+#---: Phase 5c: Developer Tools
+
+Language server, linter, and formatter to support editing zerolang
+source files in IDEs and editors.
+
+#ol:
+  #*: Language Server (LSP): implement a basic LSP server providing
+    diagnostics (type errors, ownership violations), go-to-definition,
+    hover (type info), and completion. Reuse #~"zparser",
+    #~"ztypecheck" as the analysis backend. Communicate via
+    JSON-RPC over stdio.
+  #*: Linter: standalone pass over parsed AST to flag style issues,
+    unused variables, unreachable code, and shadowed names. Output
+    in standard diagnostic format (file:line:col: message).
+  #*: Formatter: canonical source formatter that reads #~".z" files
+    and rewrites them with consistent indentation, spacing, and
+    line wrapping. Idempotent (running twice produces the same output).
+  #*: Editor integration: VS Code extension and/or tree-sitter grammar
+    for syntax highlighting. Wire LSP server into the extension.
 
 #---: Phase 6: Self-Hosting
 
