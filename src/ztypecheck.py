@@ -255,6 +255,8 @@ class TypeChecker:
         self._resolving.append((key, rtype))
 
         rtype.is_valtype = True  # records are value types
+        if name == "string":
+            rtype.is_valtype = False  # strings are reference types (heap-allocated)
 
         for fname, fpath in rec.items.items():
             ft = self._resolve_typeref(fpath)

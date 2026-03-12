@@ -2,6 +2,7 @@
 ZeroLang C code emitter
 
 Walks a type-checked AST and emits C source code.
+Includes ownership-based memory management for strings (ZStr*).
 """
 
 from typing import Optional, List, Dict
@@ -128,9 +129,23 @@ class CEmitter:
         self._data_names: set[str] = set()
         self._const_names: set[str] = set()
         self._record_names: set[str] = set()
+        # temp variable infrastructure for string ownership
+        self._temp_counter: int = 0
+        self._temp_decls: List[str] = []
+        self._temp_frees: List[str] = []
+        self._func_string_vars: List[str] = []
 
     def _indent(self) -> str:
         return "    " * self.indent_level
+
+    def _alloc_temp(self, expr: str) -> str:
+        """Allocate a temporary variable for a heap-allocated string expression."""
+        self._temp_counter += 1
+        name = f"_t{self._temp_counter}"
+        indent = self._indent()
+        self._temp_decls.append(f"{indent}ZStr* {name} = {expr};\n")
+        self._temp_frees.append(name)
+        return name
 
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
@@ -361,14 +376,31 @@ class CEmitter:
 
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
+        # save/reset per-function state
+        saved_string_vars = self._func_string_vars
+        saved_temp_counter = self._temp_counter
+        self._func_string_vars = []
+        self._temp_counter = 0
+
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
         self.indent_level = 1
         if func.body:
             body_code = self._emit_statement(func.body)
             lines.append(body_code)
+
+        # scope-exit cleanup for string vars (void functions / fall-through)
+        if self._func_string_vars:
+            indent = self._indent()
+            for sv in reversed(self._func_string_vars):
+                lines.append(f"{indent}if ({sv}) free({sv});\n")
+
         lines.append("}\n\n")
         self.func_defs.append("".join(lines))
+
+        # restore
+        self._func_string_vars = saved_string_vars
+        self._temp_counter = saved_temp_counter
 
     def _emit_statement(self, stmt: zast.Statement) -> str:
         parts: List[str] = []
@@ -377,16 +409,34 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_statement_line(self, sline: zast.StatementLine) -> str:
+        # save temp state for this statement
+        saved_decls = self._temp_decls
+        saved_frees = self._temp_frees
+        self._temp_decls = []
+        self._temp_frees = []
+
         inner = sline.statementline
         if isinstance(inner, zast.Assignment):
-            return self._emit_assignment(inner)
-        if isinstance(inner, zast.Reassignment):
-            return self._emit_reassignment(inner)
-        if isinstance(inner, zast.Swap):
-            return self._emit_swap(inner)
-        if isinstance(inner, zast.Expression):
-            return self._emit_expression_stmt(inner)
-        return ""
+            code = self._emit_assignment(inner)
+        elif isinstance(inner, zast.Reassignment):
+            code = self._emit_reassignment(inner)
+        elif isinstance(inner, zast.Swap):
+            code = self._emit_swap(inner)
+        elif isinstance(inner, zast.Expression):
+            code = self._emit_expression_stmt(inner)
+        else:
+            code = ""
+
+        # build result: temp decls + code + temp frees
+        result = "".join(self._temp_decls) + code
+        indent = self._indent()
+        for t in self._temp_frees:
+            result += f"{indent}free({t});\n"
+
+        # restore temp state
+        self._temp_decls = saved_decls
+        self._temp_frees = saved_frees
+        return result
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
@@ -398,6 +448,10 @@ class CEmitter:
         if ctype == "ZStr*":
             self.needs_string = True
             self.needs_stdlib = True
+            # the variable now owns the value — remove from temp frees
+            if val in self._temp_frees:
+                self._temp_frees.remove(val)
+            self._func_string_vars.append(cname)
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
@@ -409,7 +463,16 @@ class CEmitter:
         indent = self._indent()
         lhs = self._emit_path_value(reassign.topath)
         rhs = self._emit_expression_value(reassign.value)
-        return f"{indent}{lhs} = {rhs};\n"
+        result = ""
+        # check if this is a string reassignment — free old value first
+        lhs_type = getattr(reassign.topath, "type", None)
+        if lhs_type and lhs_type.name == "string":
+            result += f"{indent}free({lhs});\n"
+            # the variable now owns the new value — remove from temp frees
+            if rhs in self._temp_frees:
+                self._temp_frees.remove(rhs)
+        result += f"{indent}{lhs} = {rhs};\n"
+        return result
 
     def _emit_swap(self, swap: zast.Swap) -> str:
         indent = self._indent()
@@ -466,13 +529,11 @@ class CEmitter:
             if call.arguments:
                 arg = self._emit_operation_value(call.arguments[0].valtype)
                 return f"{indent}zstr_print({arg});\n"
-            return f'{indent}zstr_print(zstr_new(""));\n'
+            t = self._alloc_temp('zstr_new("")')
+            return f"{indent}zstr_print({t});\n"
 
         if callable_name == "return":
-            if call.arguments:
-                val = self._emit_operation_value(call.arguments[0].valtype)
-                return f"{indent}return {val};\n"
-            return f"{indent}return;\n"
+            return self._emit_return(call, indent)
 
         if callable_name == "break":
             return f"{indent}break;\n"
@@ -490,7 +551,54 @@ class CEmitter:
             return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
 
         args = self._emit_call_args(call)
-        return f"{indent}{_mangle_func(callable_name)}({args});\n"
+        code = f"{indent}{_mangle_func(callable_name)}({args});\n"
+
+        # if call takes a .take argument, nullify it after the call
+        for arg in call.arguments:
+            take_var = self._get_take_var(arg.valtype)
+            if take_var:
+                code += f"{indent}{take_var} = NULL;\n"
+
+        return code
+
+    def _emit_return(self, call: zast.Call, indent: str) -> str:
+        """Emit a return statement with proper string cleanup."""
+        if call.arguments:
+            val = self._emit_operation_value(call.arguments[0].valtype)
+            result = ""
+
+            # remove return value from temp frees (caller owns it)
+            if val in self._temp_frees:
+                self._temp_frees.remove(val)
+
+            # free remaining temps (intermediates) before return
+            for t in self._temp_frees:
+                result += f"{indent}free({t});\n"
+            self._temp_frees.clear()
+
+            # free func string vars (except the return value)
+            for sv in reversed(self._func_string_vars):
+                if sv != val:
+                    result += f"{indent}if ({sv}) free({sv});\n"
+
+            result += f"{indent}return {val};\n"
+            return result
+
+        # void return — free all func string vars
+        result = ""
+        for sv in reversed(self._func_string_vars):
+            result += f"{indent}if ({sv}) free({sv});\n"
+        result += f"{indent}return;\n"
+        return result
+
+    def _get_take_var(self, op: zast.Operation) -> Optional[str]:
+        """If op is a var.take expression, return the mangled variable name."""
+        if isinstance(op, zast.DottedPath):
+            if op.child.name == "take" and isinstance(op.parent, zast.AtomId):
+                name = op.parent.name
+                if not _is_numeric_id(name):
+                    return _mangle_var(name)
+        return None
 
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
@@ -542,7 +650,17 @@ class CEmitter:
             return f"({ctype}){{0}}"
 
         args = self._emit_call_args(call)
-        return f"{_mangle_func(callable_name)}({args})"
+        result = f"{_mangle_func(callable_name)}({args})"
+
+        # if call returns a string, wrap in temp for cleanup
+        if (
+            hasattr(call, "type")
+            and call.type
+            and call.type.name == "string"
+        ):
+            return self._alloc_temp(result)
+
+        return result
 
     def _emit_operation_value(self, op: zast.Operation) -> str:
         if isinstance(op, zast.BinOp):
@@ -596,6 +714,10 @@ class CEmitter:
     def _emit_dotted_path_value(self, path: zast.DottedPath) -> str:
         child = path.child.name
 
+        # .take emits just the variable value (nullification handled at call site)
+        if child == "take":
+            return self._emit_path_value(path.parent)
+
         if isinstance(path.parent, zast.AtomId):
             pname = path.parent.name
             # unit.name reference
@@ -631,7 +753,7 @@ class CEmitter:
 
         if not has_interp:
             literal = self._collect_string_literal(atom.stringparts)
-            return f'zstr_new("{literal}")'
+            return self._alloc_temp(f'zstr_new("{literal}")')
 
         parts: List[str] = []
         for p in atom.stringparts:
@@ -648,25 +770,32 @@ class CEmitter:
                     "u32",
                     "u64",
                 ):
-                    parts.append(f"zstr_from_i64((int64_t){val})")
+                    parts.append(
+                        self._alloc_temp(f"zstr_from_i64((int64_t){val})")
+                    )
                 elif val_type and val_type.name in ("f32", "f64"):
-                    parts.append(f"zstr_from_f64((double){val})")
+                    parts.append(
+                        self._alloc_temp(f"zstr_from_f64((double){val})")
+                    )
                 elif val_type and val_type.name == "string":
+                    # string variable reference — no temp needed
                     parts.append(val)
                 else:
-                    parts.append(f"zstr_from_i64((int64_t){val})")
+                    parts.append(
+                        self._alloc_temp(f"zstr_from_i64((int64_t){val})")
+                    )
             else:
                 literal = self._escape_c_string(p.tokstr)
                 if literal:
-                    parts.append(f'zstr_new("{literal}")')
+                    parts.append(self._alloc_temp(f'zstr_new("{literal}")'))
 
         if not parts:
-            return 'zstr_new("")'
+            return self._alloc_temp('zstr_new("")')
         if len(parts) == 1:
             return parts[0]
         result = parts[0]
         for p in parts[1:]:
-            result = f"zstr_cat({result}, {p})"
+            result = self._alloc_temp(f"zstr_cat({result}, {p})")
         return result
 
     def _collect_string_literal(self, parts: list) -> str:
@@ -766,11 +895,38 @@ class CEmitter:
         if val_type:
             ctype = _ctype(val_type)
 
+        is_string = ctype == "ZStr*"
+        cname = _mangle_var(withnode.name)
+
+        # if value is a string temp, the with var now owns it
+        if is_string and val in self._temp_frees:
+            self._temp_frees.remove(val)
+
         parts.append(f"{indent}{{\n")
         self.indent_level += 1
         inner_indent = self._indent()
-        parts.append(f"{inner_indent}{ctype} {_mangle_var(withnode.name)} = {val};\n")
-        parts.append(self._emit_expression_stmt(withnode.doexpr))
+        parts.append(f"{inner_indent}{ctype} {cname} = {val};\n")
+
+        # doexpr may reference the with variable, so its temps must be
+        # declared inside the block (not prepended to the outer statement)
+        saved_decls = self._temp_decls
+        saved_frees = self._temp_frees
+        self._temp_decls = []
+        self._temp_frees = []
+
+        doexpr_code = self._emit_expression_stmt(withnode.doexpr)
+
+        # emit doexpr temps inside the with block
+        parts.append("".join(self._temp_decls))
+        parts.append(doexpr_code)
+        for t in self._temp_frees:
+            parts.append(f"{inner_indent}free({t});\n")
+
+        self._temp_decls = saved_decls
+        self._temp_frees = saved_frees
+
+        if is_string:
+            parts.append(f"{inner_indent}free({cname});\n")
         self.indent_level -= 1
         parts.append(f"{indent}}}\n")
         return "".join(parts)

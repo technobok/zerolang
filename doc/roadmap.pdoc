@@ -447,24 +447,39 @@ pre-existing locks are untouched.
   (2 LockEntry, 10 SymbolTable locking, 3 borrow locking, 1 data exempt,
   1 scope exit, 11 example programs). Total: 297 tests passing.
 
-#---: Phase 4e: C Emitter Updates for Ownership
+#---: Phase 4e: C Emitter Updates for Ownership (Strings as Reftypes) \[COMPLETE\]
 
 Update #~"zemitterc.py" to emit correct C code for ownership semantics.
+Strings (#~"ZStr*") are the first reftype with correct ownership in emitted C.
 
 #ol:
-  #*: Emit destructor calls at scope exit for owned reftypes (currently all
-    heap allocations lack cleanup).
-  #*: Emit scope-exit cleanup in correct reverse order of declaration.
-  #*: Handle #~"take" semantics: after ownership transfer, do not free at
-    original scope exit.
-  #*: Handle #~"swap" for reftypes: emit temp-variable swap without freeing
-    either side.
-  #*: Handle borrowed references: emit as pointers without ownership transfer.
-  #*: Handle unnamed temporaries: emit cleanup after the statement completes.
-  #*: Note: locking is purely compile-time and requires NO runtime code.
-    The C emitter does not emit lock/unlock operations.
-  #*: Tests: verify emitted C compiles and runs correctly for ownership
-    examples.
+  #*: \[DONE\] Mark #~"string" as reftype (#~"is_valtype = False") in type checker.
+    NOTE: this is a temporary workaround -- #~"string" is currently defined as
+    #~"record" in #~"system.z" with a special case in #~"_resolve_record_type".
+    When classes are implemented (Phase 4f), #~"string" should be changed to
+    #~"class" in #~"system.z" and the special case removed.
+  #*: \[DONE\] Temp variable infrastructure: #~"_alloc_temp" generates unique temp
+    names, accumulates declarations and frees per statement.
+  #*: \[DONE\] Emit string allocations (#~"zstr_new", #~"zstr_cat", #~"zstr_from_i64",
+    #~"zstr_from_f64") via temps. Variable references are NOT wrapped.
+  #*: \[DONE\] Statement-level temp management: #~"_emit_statement_line" saves/restores
+    temp state, prepends declarations, appends frees.
+  #*: \[DONE\] Assignment: assigned temp removed from frees (variable owns it),
+    variable registered in #~"_func_string_vars" for scope-exit cleanup.
+  #*: \[DONE\] Reassignment: old value freed before new assignment.
+  #*: \[DONE\] Scope-exit cleanup: #~"if (var) free(var)" for each string variable
+    in reverse declaration order (NULL-safe for take semantics).
+  #*: \[DONE\] Return handling: free intermediate temps and func string vars
+    (except returned value) before #~"return".
+  #*: \[DONE\] With/do: scoped string variable freed at end of with block, doexpr
+    temps managed in own context (to avoid forward-reference issues).
+  #*: \[DONE\] Swap: pointer swap already correct (both sides retain valid pointers).
+  #*: \[DONE\] Take: #~".take" emits variable value; call site nullifies after call.
+  #*: \[DONE\] String-returning function calls wrapped in temps for cleanup.
+  #*: \[DONE\] Note: locking is purely compile-time and requires NO runtime code.
+  #*: \[DONE\] Tests: 7 correctness tests (scope cleanup, return, reassignment, swap,
+    temporaries, multiple vars, with/do) + 8 ASan memory safety tests.
+    Total: 312 tests passing.
 
 #---: Phase 4f: Classes, Unions, Protocols, Generics, Typedefs
 
@@ -473,6 +488,10 @@ Remaining v2 language features that build on the ownership model.
 #ol:
   #*: Add classes to parser/typechecker/emitter (product reftypes with heap
     allocation, constructors, finalizers).
+  #*: Change #~"string" from #~"record" to #~"class" in #~"system.z". Remove
+    the special-case #~"is_valtype = False" override in
+    #~"_resolve_record_type" -- classes are naturally reftypes, so #~"string"
+    will get correct ownership semantics without any workaround.
   #*: Add unions to parser/typechecker/emitter (sum reftypes).
   #*: Add protocols and facets (interface types, borrowed vs taken protocol
     instances).
