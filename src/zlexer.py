@@ -720,6 +720,11 @@ class Lexer:
 
         filtereol: True to filter (skip) EOL's. False to pass through (return)
             all EOL tokens.
+
+        IMPORTANT: _advance filters EOLs at read-time. Any token consumed while
+        filtereol=True is permanently lost. When transitioning from True to False
+        at a scope boundary, restore filtereol BEFORE the accept() call whose
+        _advance would read the first token in the outer scope.
         """
         self._filtereol = filtereol
         if filtereol and self._thistoken.toktype == TT.EOL:

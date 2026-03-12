@@ -245,12 +245,7 @@ class TestEmitterStringOwnership:
 
     def test_string_scope_cleanup(self):
         """String variables freed at function exit."""
-        csource = emit_source(
-            'main: function is {\n'
-            '  s: "hello"\n'
-            '  print s\n'
-            '}'
-        )
+        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
         assert "if (s) free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -258,13 +253,13 @@ class TestEmitterStringOwnership:
     def test_string_return(self):
         """Function returning a string; returned value usable, not double-freed."""
         csource = emit_source(
-            'greet: function {n: i64} out string is {\n'
+            "greet: function {n: i64} out string is {\n"
             '  return "Hello \\{n}!"\n'
-            '}\n'
-            'main: function is {\n'
-            '  msg: greet 42\n'
-            '  print msg\n'
-            '}'
+            "}\n"
+            "main: function is {\n"
+            "  msg: greet 42\n"
+            "  print msg\n"
+            "}"
         )
         output = compile_and_run(csource)
         assert output.strip() == "Hello 42!"
@@ -272,11 +267,7 @@ class TestEmitterStringOwnership:
     def test_string_reassignment(self):
         """Old value freed, new value assigned correctly."""
         csource = emit_source(
-            'main: function is {\n'
-            '  s: "hello"\n'
-            '  s = "world"\n'
-            '  print s\n'
-            '}'
+            'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
         )
         assert "free(s);" in csource
         output = compile_and_run(csource)
@@ -285,13 +276,13 @@ class TestEmitterStringOwnership:
     def test_string_swap(self):
         """Two strings swapped, both usable after swap."""
         csource = emit_source(
-            'main: function is {\n'
+            "main: function is {\n"
             '  a: "first"\n'
             '  b: "second"\n'
-            '  a swap b\n'
-            '  print a\n'
-            '  print b\n'
-            '}'
+            "  a swap b\n"
+            "  print a\n"
+            "  print b\n"
+            "}"
         )
         output = compile_and_run(csource)
         lines = output.strip().split("\n")
@@ -301,10 +292,7 @@ class TestEmitterStringOwnership:
     def test_string_temporaries(self):
         """Interpolation intermediates freed."""
         csource = emit_source(
-            'main: function is {\n'
-            '  name: "Zero"\n'
-            '  print "Hello, \\{name}!"\n'
-            '}'
+            'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
         # verify temps are freed (free(_t...) calls)
         assert "free(_t" in csource
@@ -314,14 +302,14 @@ class TestEmitterStringOwnership:
     def test_multiple_string_vars(self):
         """Several strings in one function, all freed correctly."""
         csource = emit_source(
-            'main: function is {\n'
+            "main: function is {\n"
             '  a: "hello"\n'
             '  b: "world"\n'
             '  c: "!"\n'
-            '  print a\n'
-            '  print b\n'
-            '  print c\n'
-            '}'
+            "  print a\n"
+            "  print b\n"
+            "  print c\n"
+            "}"
         )
         output = compile_and_run(csource)
         lines = output.strip().split("\n")
@@ -329,11 +317,7 @@ class TestEmitterStringOwnership:
 
     def test_string_in_with_do(self):
         """Scoped string variable freed at end of with block."""
-        csource = emit_source(
-            'main: function is {\n'
-            '  with s: "hello" do print s\n'
-            '}'
-        )
+        csource = emit_source('main: function is {\n  with s: "hello" do print s\n}')
         assert "free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -343,25 +327,20 @@ class TestEmitterMemorySafety:
     """Memory safety tests using AddressSanitizer."""
 
     def test_string_no_leak(self):
-        csource = emit_source(
-            'main: function is {\n'
-            '  s: "hello"\n'
-            '  print s\n'
-            '}'
-        )
+        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert result.stdout.strip() == "hello"
 
     def test_string_return_no_leak(self):
         csource = emit_source(
-            'greet: function {n: i64} out string is {\n'
+            "greet: function {n: i64} out string is {\n"
             '  return "Hello \\{n}!"\n'
-            '}\n'
-            'main: function is {\n'
-            '  msg: greet 42\n'
-            '  print msg\n'
-            '}'
+            "}\n"
+            "main: function is {\n"
+            "  msg: greet 42\n"
+            "  print msg\n"
+            "}"
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -369,11 +348,7 @@ class TestEmitterMemorySafety:
 
     def test_string_reassign_no_double_free(self):
         csource = emit_source(
-            'main: function is {\n'
-            '  s: "hello"\n'
-            '  s = "world"\n'
-            '  print s\n'
-            '}'
+            'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -381,24 +356,24 @@ class TestEmitterMemorySafety:
 
     def test_string_swap_no_double_free(self):
         csource = emit_source(
-            'main: function is {\n'
+            "main: function is {\n"
             '  a: "first"\n'
             '  b: "second"\n'
-            '  a swap b\n'
-            '  print a\n'
-            '  print b\n'
-            '}'
+            "  a swap b\n"
+            "  print a\n"
+            "  print b\n"
+            "}"
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
     def test_string_interp_no_leak(self):
         csource = emit_source(
-            'main: function is {\n'
+            "main: function is {\n"
             '  name: "Zero"\n'
-            '  ver: 1\n'
+            "  ver: 1\n"
             '  print "Welcome to \\{name} v\\{ver}"\n'
-            '}'
+            "}"
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -406,12 +381,7 @@ class TestEmitterMemorySafety:
 
     def test_string_multi_var_no_leak(self):
         csource = emit_source(
-            'main: function is {\n'
-            '  a: "hello"\n'
-            '  b: "world"\n'
-            '  print a\n'
-            '  print b\n'
-            '}'
+            'main: function is {\n  a: "hello"\n  b: "world"\n  print a\n  print b\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -459,3 +429,61 @@ class TestEmitterMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "Welcome to Zero v1" in result.stdout
+
+
+class TestCallArgOrder:
+    def test_call_arg_order_with_print(self):
+        """Two call-expression arguments must evaluate left-to-right."""
+        csource = emit_source(
+            "first: function {n: i64} out i64 is {\n"
+            '    print "first"\n'
+            "    return n\n"
+            "}\n"
+            "second: function {n: i64} out i64 is {\n"
+            '    print "second"\n'
+            "    return n\n"
+            "}\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "\n"
+            "main: function is {\n"
+            "    result: add a: (first n: 1) b: (second n: 2)\n"
+            '    print "\\{result}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "first"
+        assert lines[1] == "second"
+        assert lines[2] == "3"
+
+    def test_call_arg_hoisting_emitted(self):
+        """Call-expression args should be hoisted to temps in emitted C."""
+        csource = emit_source(
+            "inc: function {n: i64} out i64 is { return n + 1 }\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "\n"
+            "main: function is {\n"
+            "    result: add a: (inc n: 1) b: (inc n: 2)\n"
+            '    print "\\{result}"\n'
+            "}"
+        )
+        # The emitted code should contain arg temps (_a) for the call args
+        assert "int64_t _a" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "5"
+
+    def test_pure_args_not_temped(self):
+        """Pure arguments (variables, literals) should NOT generate arg temps."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "\n"
+            "main: function is {\n"
+            "    x: 10\n"
+            "    result: add a: x b: 20\n"
+            '    print "\\{result}"\n'
+            "}"
+        )
+        # No arg temps needed for pure args
+        assert "int64_t _a" not in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "30"

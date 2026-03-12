@@ -2170,6 +2170,11 @@ class Parser:
                 error = expr
                 break
 
+            # restore EOL filtering BEFORE consuming ')' so that _advance
+            # reads the token after ')' with the correct filtering state;
+            # otherwise the EOL after ')' gets silently skipped
+            lex.filtereol(prev_filtereol)
+
             if not lex.accept(TT.PARENCLOSE):
                 msg = "Expected closing parenthesis ')' after expression"
                 error = zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=lex.peek())
@@ -2177,7 +2182,7 @@ class Parser:
 
             break
 
-        lex.filtereol(prev_filtereol)  # restore previous state
+        lex.filtereol(prev_filtereol)  # restore (also covers error paths)
         if error:
             return error
 

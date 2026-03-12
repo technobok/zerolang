@@ -147,6 +147,14 @@ class CEmitter:
         self._temp_frees.append(name)
         return name
 
+    def _alloc_arg_temp(self, ctype: str, expr: str) -> str:
+        """Allocate a temporary for a non-string argument (not freed)."""
+        self._temp_counter += 1
+        name = f"_a{self._temp_counter}"
+        indent = self._indent()
+        self._temp_decls.append(f"{indent}{ctype} {name} = {expr};\n")
+        return name
+
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
         if not mainunit:
@@ -600,10 +608,38 @@ class CEmitter:
                     return _mangle_var(name)
         return None
 
+    def _has_call(self, op: zast.Operation) -> bool:
+        """Check if an operation contains a function call."""
+        if isinstance(op, zast.Expression):
+            inner = op.expression
+            if isinstance(inner, zast.Call):
+                return True
+            if isinstance(inner, zast.Operation):
+                return self._has_call(inner)
+        if isinstance(op, zast.BinOp):
+            return self._has_call(op.lhs) or self._has_call(op.rhs)
+        return False
+
+    def _get_param_ctypes(self, call: zast.Call) -> List[str]:
+        """Get C types for each parameter of the called function."""
+        if not hasattr(call.callable, "type") or not call.callable.type:
+            return []
+        ftype = call.callable.type
+        if ftype.typetype not in (ZTypeType.FUNCTION, ZTypeType.NULL):
+            return []
+        return [_ctype(v) for k, v in ftype.children.items() if not k.startswith(":")]
+
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
-        for arg in call.arguments:
-            parts.append(self._emit_operation_value(arg.valtype))
+        param_ctypes = self._get_param_ctypes(call)
+        for i, arg in enumerate(call.arguments):
+            val = self._emit_operation_value(arg.valtype)
+            if self._has_call(arg.valtype):
+                ctype = param_ctypes[i] if i < len(param_ctypes) else "int64_t"
+                # string-returning calls are already temped by _alloc_temp
+                if ctype != "ZStr*":
+                    val = self._alloc_arg_temp(ctype, val)
+            parts.append(val)
         return ", ".join(parts)
 
     def _get_callable_name(self, path: zast.Path) -> str:
@@ -653,11 +689,7 @@ class CEmitter:
         result = f"{_mangle_func(callable_name)}({args})"
 
         # if call returns a string, wrap in temp for cleanup
-        if (
-            hasattr(call, "type")
-            and call.type
-            and call.type.name == "string"
-        ):
+        if hasattr(call, "type") and call.type and call.type.name == "string":
             return self._alloc_temp(result)
 
         return result
@@ -770,20 +802,14 @@ class CEmitter:
                     "u32",
                     "u64",
                 ):
-                    parts.append(
-                        self._alloc_temp(f"zstr_from_i64((int64_t){val})")
-                    )
+                    parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
                 elif val_type and val_type.name in ("f32", "f64"):
-                    parts.append(
-                        self._alloc_temp(f"zstr_from_f64((double){val})")
-                    )
+                    parts.append(self._alloc_temp(f"zstr_from_f64((double){val})"))
                 elif val_type and val_type.name == "string":
                     # string variable reference — no temp needed
                     parts.append(val)
                 else:
-                    parts.append(
-                        self._alloc_temp(f"zstr_from_i64((int64_t){val})")
-                    )
+                    parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
             else:
                 literal = self._escape_c_string(p.tokstr)
                 if literal:
