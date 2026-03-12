@@ -2559,22 +2559,17 @@ myproto: myref.myprotocol # myproto is owned, myref ceases to be accessible</cod
 <h3 id="facet"><a href="#facet">5.11. facet</a></h3>
 <p>TODO: describe facet, also check above protocol section for overlap</p>
 <h3 id="union"><a href="#union">5.12. union</a></h3>
-<p>For controlling the discrimiator, see also the <a href="#tag">tag</a> type.</p>
-<p>TODO: all of this sections needs to be cleaned up.</p>
-<p>TODO: generics as well. And special note that generic params are shared by all
-subtypes as opposed to normal subtypes that are only used in that one 'arm'</p>
-<p>TODO: tag may be null for reftype that is optional.</p>
-<p>TODO: can define methods too, but the methods work on the top level union only.
-Once 'match' is used to dissect, then the method available are for the subobject
-only.</p>
-<p>TODO: size of all unions of a single type is size of the tag plus size of the
-largest element. For reftypes, size is just a reference. For valtypes, the
-value is copied inline (because union is a reftype itself, it takes a copy of
-underlying value when created)</p>
-<p>Unions are sum-types that can contain only one of it's child types at any given
-time. A descriminator is usually generated or set for each case. A union is a
-reference type, all member types may be reference types or value types.</p>
-<p>Arguments for both <code>union</code>:</p>
+<p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
+<p>Unions are sum-types that can hold exactly one of their child types at any
+given time. A discriminator (tag) is auto-generated for each subtype. A union
+is a reference type &#x2014; always heap-allocated with a uniform two-word layout:
+a tag and a <code>void*</code> data pointer. All member types may be reference types or
+value types. Valtype payloads are boxed (heap-allocated copy). Reftype payloads
+are stored as pointers directly.</p>
+<p>Methods can be defined on the union body. These methods operate on the union
+type itself. To access subtype-specific data, the union must first be narrowed
+via <code>match</code>.</p>
+<p>Arguments for <code>union</code>:</p>
 <table>
 <colgroup>
 <col style="width: 25%">
@@ -2592,78 +2587,84 @@ reference type, all member types may be reference types or value types.</p>
 providing a name and a type.</p>
 <p>If there is no associated type for a subtype, the type is specified with a
 <code>null</code>.</p>
-<p>There is an accessor for each case that returns an optional.</p>
 <pre><code class="language-zerolang">myunion: union {
     u1: null       # no user stored value. Discriminator only
     :u2            # no user stored value. Shortened syntax
     u3: u32
     u4: string
-    u5: myreftype       # a named record defined elsewhere with methods
+    u5: myclass    # a class defined elsewhere
+}</code></pre>
+<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.12.1. Constructing union instances</a></h4>
+<p>After a union type has been defined, instances are constructed using a
+per-subtype constructor accessed via dot notation: <code>myunion.subtype expr</code>.
+Each subtype automatically gets a constructor. Null subtypes take no argument.
+Valtype arguments are copied (boxed) into the union. Reftype arguments require
+ownership transfer via <code>.take</code> or by passing an anonymous/literal value.</p>
+<pre><code class="language-zerolang">result: union {
+    ok: i64
+    err: string
+    none: null
 }
 
-myvariant: variant {
-    v1: null       # no user stored value. Discriminator only
-    v2: u32
+a: result.ok 42                     # valtype: value is boxed
+b: result.err "something went wrong" # reftype: string literal, ownership taken
+c: result.none                      # null subtype: no argument
+
+# named argument form
+d: result.err from: mystr.take      # explicit .take transfers ownership</code></pre>
+<h4 id="ownership-2"><a href="#ownership-2">5.12.2. Ownership</a></h4>
+<p>Union instances are owned reference types. The same ownership rules that apply
+to classes also apply to unions:</p>
+<ul>
+<li><code>.take</code> transfers ownership of the union itself</li>
+<li><code>.borrow</code> borrows the union (locks it)</li>
+<li><code>swap</code> exchanges two union variables</li>
+<li>Aliasing prevention applies (same as classes)</li>
+<li>The union owns its payload &#x2014; destruction frees both the payload and the union instance</li>
+</ul>
+<p>The compiler generates a per-union destructor that switches on the tag to
+correctly free each subtype's payload: <code>free()</code> for boxed valtypes,
+the appropriate destructor for reftype payloads, and nothing for null subtypes.</p>
+<h4 id="match-on-unions"><a href="#match-on-unions">5.12.3. Match on unions</a></h4>
+<p>The <code>match</code> statement dispatches on the union's tag. All subtypes must be
+covered by case clauses, or an <code>else</code> clause must be present. Inside a case
+clause, the payload is accessed via dotted path on the union variable.</p>
+<pre><code class="language-zerolang">describe: function {r: result} out string is {
+    match r
+        case ok then {
+            # r.ok accesses the i64 payload (unboxed)
+            print "value = \{r.ok}"
+            return "ok"
+        }
+        case err then {
+            # r.err accesses the string payload (cast)
+            print "error = \{r.err}"
+            return "error"
+        }
+        case none then {
+            # no payload to access
+            return "none"
+        }
 }</code></pre>
-<p>After a sum-type type has been defined, instances of the type can be
-constructed. A constructor is created for each subtype. Reference types passed
-in are required to use 'give' to pass in the </p>
-<p>TODO: also a single constructor 'create' for all types that takes a single
-argument of that type? Will match the first type that matches from the sum
-type. Will fail if more than one type matches?</p>
-<pre><code class="language-zerolang">i1: myunion.u1                      # no argument
-i2: myunion.u2 0
-i5: myunion.u5 take areftype        # ownership is passed into the union. 
-                                    # named argument 'give' must be used
-                                    # areftype is no longer valid
-i5: myunion.u5 from: take areftype  # ... or named argument</code></pre>
-<p>Unions are also used to define generic types along with protocols. <code>any</code> is a
-system defined union that includes all possible types used in the current
-program. </p>
-<pre><code class="language-zerolang">smallint: union { i8: none u8: none }</code></pre>
-<p>TODO: examples Some/None unions (like option). Generics</p>
-<p>- TODO: destroying union reference types could be difficult. Need to apply the
-  correct destructor for each subtype. Use a <code>match</code> with <code>.take</code> on target
-- TODO: can a union instance be updated with a different subitem? Is this worth
-  the hassle or just create a new one? Would need arguments for each type on
-  the resulting union object?
-- TODO: access back to the tag via union.tag(myunion)
-- TODO: need a way to convert back to the tag name (string) via meta?</p>
-<pre><code class="language-zerolang"># REMOVE THIS. all subtypes must be named types. tag values cannot b specified.
-myunion: union {
-    t1: record { _TAG: 100 }     # descriminator only
-    t2: record { _TAG: 200 # ... 
-    }
-    t3: record { _TAG: 300 # ... 
-    }
-    t4: record { _TAG: 400 # ... 
-    }
-}</code></pre>
-<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.12.1. Creating sum-type instances</a></h4>
+<p>Accessing subtype data outside of a <code>match</code> clause is a compile error &#x2014;
+the union must be narrowed first.</p>
+<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.12.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
 <pre><code class="language-zerolang">myclass: class {a: u32 b: u32}
 
 myunion2: union {
     t1: null      # discriminator only
-    t2: u32     # an int in addition to the descriminator
+    t2: u32       # a valtype in addition to the discriminator
     t3: string
     t5: myclass
 }
 
-v1: myunion2.t1
-v2: myunion2.t2 0
-v3: myunion2.t3 "hello"             # will copy string?
-myclassi: (myclass a: 1 b: 2)
-v4: myunion2.t5 take myrecordi        # need #~"take" here, union needs ownership
-v5: myunion2.t5 (myclass a: 1 b: 2)    # no #~"take". Anonymous instance
-
-const_int: {
-    t: tag u8
-    a: 0
-    b: 1
-}
-
-# enum descriminator: TODO: still want this????
+v1: myunion2.t1                       # null subtype, no argument
+v2: myunion2.t2 0                     # valtype, boxed
+v3: myunion2.t3 "hello"              # string literal, ownership taken
+myclassi: myclass a: 1 b: 2
+v4: myunion2.t5 myclassi.take        # .take transfers ownership
+v5: myunion2.t5 (myclass a: 1 b: 2)  # anonymous instance, no .take needed
 
 myenum: variant {
     a: 0
@@ -2675,50 +2676,10 @@ myvariant: variant {
     a: u32
     b: f32
 }</code></pre>
-<p>TODO: show generic example:</p>
-<pre><code class="language-zerolang">option: union {
-    t: any.generic  # any type
-    some: t         # any is a value. In this case limited to type t
-    none: null      # no value will be stored but type of '~t' must be specified
-}
-
-# to create none type, need to specify any unspecified types...
-mynone: option.none u32     # t is only argument so argname may be omitted
-mynone: option.some 0       # each arm is a constructor
-
-# ... but, if reassigning (or returning when we know the return type), the type is 
-# already known so does not need to be specified (again)?
-# don't to this? Too magic?
-mynone = option.none    # ???
-return option.none</code></pre>
-<p>TODO: Anonymous unions? <code>if</code> functions could return anonymous unions....
-TODO: Type unions documentation. Used for generic type specifiers.
-Stores fully qualified type name (but what about anonymous types?
-Can't have? Must always be named?). User code can use short type name but the
-correct one will be looked up.</p>
-<pre><code class="language-zerolang"># identifiers are the same as the types
-# what about dotted identifiers? just the part after then dot as long as there 
-# are no collisions?
-numeric: union {
-    u8
-    u16
-    u32
-}
-
-numeric: union {
-    u8: none
-    u16: none
-    u32: none
-}</code></pre>
-<p>TODO: how to get a reference type back out of a union? Union needs to be
-destroyed? Would need to own the union. Would definitely need to do this for
-options so we can return the option if it exists. <code>final</code> method</p>
-<p>TODO: embedding unions. This should be allowed but embedded unions are
-flattened. No relationship to original union (ie. decriminators likely
-different). This is really just for categorisation eg. for type unions, could
-have numericsigned, numericunsigned and then embed both of these in a numeric
-type union. How to tell that you want to embed subtypes rather than the top
-level union itself? Maybe can't embed?</p>
+<p>Unions are also used to define generic types along with protocols. <code>any</code> is a
+system defined union that includes all possible types used in the current
+program.</p>
+<pre><code class="language-zerolang">smallint: union { i8: null u8: null }</code></pre>
 <h3 id="variant"><a href="#variant">5.13. variant</a></h3>
 <p>Variants are sum-types that can contain only one of it's child types at any
 given time. A descriminator is usually generated or set for each case. A
