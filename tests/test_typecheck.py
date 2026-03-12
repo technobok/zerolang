@@ -175,7 +175,7 @@ class TestTypeResolution:
         check_ok("f: function {s: string} is {}")
 
     def test_bool_type_resolves(self):
-        check_ok("f: function {b: system.bool} is {}")
+        check_ok("f: function {b: bool} is {}")
 
 
 class TestUnitResolution:
