@@ -487,3 +487,237 @@ class TestCallArgOrder:
         assert "int64_t _a" not in csource
         output = compile_and_run(csource)
         assert output.strip() == "30"
+
+
+# ---- Phase 4f: Class Emitter Tests ----
+
+
+class TestEmitterClasses:
+    """Tests for class C emission."""
+
+    def test_class_struct_emitted(self):
+        """Class should emit a typedef struct."""
+        csource = emit_source(
+            "myclass: class { x: i64\n y: f64 }\nmain: function is { c: myclass }"
+        )
+        assert "typedef struct {" in csource
+        assert "z_myclass_t" in csource
+        assert "int64_t x;" in csource
+        assert "double y;" in csource
+
+    def test_class_construction_emits_malloc(self):
+        """Class construction should emit malloc."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\nmain: function is { c: myclass x: 5 }"
+        )
+        assert "malloc(sizeof(z_myclass_t))" in csource
+
+    def test_class_field_access_uses_arrow(self):
+        """Class field access should use -> operator."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            'main: function is { c: myclass x: 5\n print "\\{c.x}" }'
+        )
+        assert "c->x" in csource
+
+    def test_class_scope_cleanup(self):
+        """Class variables freed at function exit."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\nmain: function is { c: myclass }"
+        )
+        assert "if (c) free(c);" in csource
+
+    def test_class_take_nullifies(self):
+        """After .take, source variable should be nullified."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\nmain: function is { c: myclass\n d: c.take }"
+        )
+        assert "= NULL;" in csource
+
+    def test_class_method_uses_pointer(self):
+        """Class methods should take pointer parameter."""
+        csource = emit_source(
+            "myclass: class { x: i64 } as {\n"
+            "  get: function {c: this} out i64 is { return c.x }\n"
+            "}\n"
+            "main: function is { c: myclass }"
+        )
+        assert "z_myclass_t*" in csource
+        assert "c->x" in csource
+
+    def test_class_swap_emits(self):
+        """Swap of class pointers should emit correctly."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  a: myclass x: 1\n"
+            "  b: myclass x: 2\n"
+            "  a swap b\n"
+            "}"
+        )
+        assert "z_myclass_t* _tmp" in csource
+
+
+class TestEmitterClassIntegration:
+    """Integration tests: compile and run class programs."""
+
+    def test_class_construction_and_field(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            'main: function is { c: myclass x: 42\n print "\\{c.x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_class_method_call(self):
+        csource = emit_source(
+            "counter: class { value: i64 } as {\n"
+            "  get: function {c: this} out i64 is { return c.value }\n"
+            "}\n"
+            'main: function is { c: counter value: 7\n print "\\{counter.get c}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_class_method_mutation(self):
+        csource = emit_source(
+            "counter: class { value: i64 } as {\n"
+            "  inc: function {c: this} is { c.value = c.value + 1 }\n"
+            "  get: function {c: this} out i64 is { return c.value }\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: counter value: 0\n"
+            "  counter.inc c\n"
+            "  counter.inc c\n"
+            '  print "\\{counter.get c}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_class_function_return(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "make: function {v: i64} out myclass is { return myclass x: v }\n"
+            'main: function is { c: make 99\n print "\\{c.x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "99"
+
+    def test_class_swap_runtime(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  a: myclass x: 1\n"
+            "  b: myclass x: 2\n"
+            "  a swap b\n"
+            '  print "\\{a.x} \\{b.x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2 1"
+
+    def test_class_take_runtime(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  a: myclass x: 42\n"
+            "  b: a.take\n"
+            '  print "\\{b.x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_example_classes(self):
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "classes")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+        csource = zemitterc.emit(program)
+        output = compile_and_run(csource)
+        assert "initial = 10" in output
+        assert "after 3 increments = 13" in output
+        assert "d.value = 13" in output
+        assert "e.value = 100" in output
+        assert "after swap: d=100 e=13" in output
+
+
+class TestEmitterClassMemorySafety:
+    """Memory safety tests for classes using ASan."""
+
+    def test_class_no_leak(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            'main: function is { c: myclass x: 42\n print "\\{c.x}" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_class_swap_no_leak(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  a: myclass x: 1\n"
+            "  b: myclass x: 2\n"
+            "  a swap b\n"
+            '  print "\\{a.x}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_class_take_no_double_free(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  a: myclass x: 42\n"
+            "  b: a.take\n"
+            '  print "\\{b.x}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_class_function_return_no_leak(self):
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "make: function {v: i64} out myclass is { return myclass x: v }\n"
+            'main: function is { c: make 99\n print "\\{c.x}" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_example_classes_asan(self):
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "classes")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == []
+        csource = zemitterc.emit(program)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "initial = 10" in result.stdout

@@ -169,6 +169,8 @@ class TypeChecker:
             return self._resolve_function_type(unitname, name, defn)
         if isinstance(defn, zast.Record):
             return self._resolve_record_type(unitname, name, defn)
+        if isinstance(defn, zast.Class):
+            return self._resolve_class_type(unitname, name, defn)
         if isinstance(defn, zast.Enum):
             return self._resolve_enum_type(unitname, name, defn)
         if isinstance(defn, zast.Union):
@@ -247,6 +249,29 @@ class TypeChecker:
                 "a borrowed return value must live in a locked parameter",
                 loc=func.start,
             )
+
+    def _resolve_class_type(self, unitname: str, name: str, cls: zast.Class) -> ZType:
+        key = f"{unitname}.{name}"
+        ctype = _make_type(name, ZTypeType.CLASS)
+        self._resolved[key] = ctype  # early register for self-reference
+        self._resolving.append((key, ctype))
+
+        ctype.is_valtype = False  # classes are reference types
+
+        for fname, fpath in cls.items.items():
+            ft = self._resolve_typeref(fpath)
+            if ft:
+                ctype.children[fname] = ft
+        for mname, mfunc in cls.functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            ctype.children[mname] = mt
+        # as_functions (methods defined in 'as' block)
+        for mname, mfunc in cls.as_functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            ctype.children[mname] = mt
+
+        self._resolving.pop()
+        return ctype
 
     def _resolve_record_type(self, unitname: str, name: str, rec: zast.Record) -> ZType:
         key = f"{unitname}.{name}"
@@ -618,6 +643,13 @@ class TypeChecker:
             return parent_type
 
         # regular dotted path resolution
+        # ensure parent type is set for emitter (needed for class -> vs . dispatch)
+        if isinstance(path.parent, zast.AtomId):
+            parent_type = self._resolve_name(path.parent.name)
+            if parent_type:
+                path.parent.type = parent_type
+        elif isinstance(path.parent, zast.DottedPath):
+            self._check_dotted_path(path.parent)
         t = self._resolve_dotted_path(path)
         if t:
             path.type = t
@@ -655,6 +687,13 @@ class TypeChecker:
 
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            call.type = callee_type
+            return callee_type
+
+        # handle class construction: calling a class type creates a new owned instance
+        if callee_type.typetype == ZTypeType.CLASS:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type

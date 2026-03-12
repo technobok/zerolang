@@ -418,6 +418,9 @@ class TestExamplePrograms:
     def test_control(self):
         assert self._check_example("control") == []
 
+    def test_classes(self):
+        assert self._check_example("classes") == []
+
 
 class TestReturnTypeChecking:
     def test_correct_return_type(self):
@@ -819,6 +822,9 @@ class TestExampleProgramsOwnership:
     def test_control(self):
         assert self._check_example("control") == []
 
+    def test_classes(self):
+        assert self._check_example("classes") == []
+
 
 # ---- Phase 4d: Lock Checking Tests ----
 
@@ -1016,3 +1022,157 @@ class TestLockCheckingExamplePrograms:
 
     def test_control(self):
         assert self._check_example("control") == []
+
+    def test_classes(self):
+        assert self._check_example("classes") == []
+
+
+# ---- Phase 4f: Class Type Checking Tests ----
+
+
+class TestClassTypeResolution:
+    """Test that class types resolve correctly."""
+
+    def test_class_resolves_as_class_type(self):
+        """A class definition resolves to ZTypeType.CLASS."""
+        program = check_ok(
+            "myclass: class { x: i64 }\nmain: function is { c: myclass }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ct = tc._resolved.get("test.myclass")
+        assert ct is not None
+        assert ct.typetype == ZTypeType.CLASS
+
+    def test_class_is_reftype(self):
+        """Classes should be tagged as reftype (is_valtype=False)."""
+        program = check_ok(
+            "myclass: class { x: i64 }\nmain: function is { c: myclass }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ct = tc._resolved.get("test.myclass")
+        assert ct is not None
+        assert ct.is_valtype is False
+
+    def test_class_fields_resolved(self):
+        """Class fields should be resolved as children of the class type."""
+        program = check_ok(
+            "myclass: class { x: i64\n y: f64 }\nmain: function is { c: myclass }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ct = tc._resolved.get("test.myclass")
+        assert "x" in ct.children
+        assert ct.children["x"].name == "i64"
+        assert "y" in ct.children
+        assert ct.children["y"].name == "f64"
+
+    def test_class_methods_resolved(self):
+        """Class methods should be resolved as children."""
+        program = check_ok(
+            "myclass: class { x: i64 } as {\n"
+            "  get: function {c: this} out i64 is { return c.x }\n"
+            "}\n"
+            "main: function is { c: myclass }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ct = tc._resolved.get("test.myclass")
+        assert "get" in ct.children
+        assert ct.children["get"].typetype == ZTypeType.FUNCTION
+
+    def test_class_this_resolves_to_class(self):
+        """The `this` keyword in class methods resolves to the class type."""
+        program = check_ok(
+            "myclass: class { x: i64 } as {\n"
+            "  get: function {c: this} out i64 is { return c.x }\n"
+            "}\n"
+            "main: function is { c: myclass }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ct = tc._resolved.get("test.myclass")
+        get_fn = ct.children["get"]
+        param_c = get_fn.children.get("c")
+        assert param_c is ct
+
+    def test_class_type_keyword(self):
+        """The `type` keyword in a class resolves to the class type."""
+        program = check_ok(
+            "myclass: class { x: i64 } as {\n"
+            "  clone: function {c: this} out type is { return c }\n"
+            "}\n"
+            "main: function is { c: myclass }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ct = tc._resolved.get("test.myclass")
+        clone_fn = ct.children["clone"]
+        ret = clone_fn.children.get(":return")
+        assert ret is ct
+
+
+class TestClassConstruction:
+    """Test class construction type checking."""
+
+    def test_class_construction_returns_class_type(self):
+        """Calling a class type creates an instance of that type."""
+        check_ok("myclass: class { x: i64 }\nmain: function is { c: myclass x: 5 }")
+
+    def test_class_bare_name_construction(self):
+        """A bare class name creates a zero-initialized instance."""
+        check_ok("myclass: class { x: i64 }\nmain: function is { c: myclass }")
+
+
+class TestClassOwnership:
+    """Test ownership rules for class instances."""
+
+    def test_class_take_invalidates(self):
+        """After .take on a class variable, the source is invalidated."""
+        errors = check_errors(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  c: myclass\n"
+            "  d: c.take\n"
+            "  e: c\n"
+            "}"
+        )
+        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+
+    def test_class_borrow_locks(self):
+        """Borrowing a class variable locks the source."""
+        errors = check_errors(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  c: myclass\n"
+            "  d: c.borrow\n"
+            "  e: c.borrow\n"
+            "}"
+        )
+        assert any(
+            "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+    def test_class_swap_ok(self):
+        """Swapping two class variables should work."""
+        check_ok(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  a: myclass\n"
+            "  b: myclass\n"
+            "  a swap b\n"
+            "}"
+        )
+
+    def test_class_aliasing_error(self):
+        """Passing the same class instance twice to a call is an aliasing error."""
+        errors = check_errors(
+            "myclass: class { x: i64 }\n"
+            "f: function {a: myclass b: myclass} is {}\n"
+            "main: function is {\n"
+            "  c: myclass\n"
+            "  f a: c b: c\n"
+            "}"
+        )
+        assert any("aliasing" in e.msg.lower() for e in errors)

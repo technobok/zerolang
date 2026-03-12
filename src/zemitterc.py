@@ -58,6 +58,8 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return "ZStr*"
     if ztype.typetype == ZTypeType.RECORD and name not in TYPEMAP:
         return f"z_{name}_t"
+    if ztype.typetype == ZTypeType.CLASS:
+        return f"z_{name}_t*"
     return "void"
 
 
@@ -129,11 +131,15 @@ class CEmitter:
         self._data_names: set[str] = set()
         self._const_names: set[str] = set()
         self._record_names: set[str] = set()
+        self._class_names: set[str] = set()
         # temp variable infrastructure for string ownership
         self._temp_counter: int = 0
         self._temp_decls: List[str] = []
         self._temp_frees: List[str] = []
         self._func_string_vars: List[str] = []
+        self._func_class_vars: List[str] = []
+        self._current_record_name: str = ""
+        self._func_class_params: set[str] = set()
 
     def _indent(self) -> str:
         return "    " * self.indent_level
@@ -166,6 +172,8 @@ class CEmitter:
                 self._func_names.add(name)
             elif isinstance(defn, zast.Record):
                 self._record_names.add(name)
+            elif isinstance(defn, zast.Class):
+                self._class_names.add(name)
             elif isinstance(defn, zast.Data):
                 self._data_names.add(name)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -186,6 +194,8 @@ class CEmitter:
         for name, defn in mainunit.body.items():
             if isinstance(defn, zast.Record):
                 self._emit_record(name, defn)
+            elif isinstance(defn, zast.Class):
+                self._emit_class(name, defn)
             elif isinstance(defn, zast.Function) and defn.body:
                 self._emit_function(name, defn)
             elif isinstance(defn, zast.Data):
@@ -308,6 +318,25 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
+    def _emit_class(self, name: str, cls: zast.Class) -> None:
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        lines: List[str] = []
+        lines.append("typedef struct {\n")
+        for fname, fpath in cls.items.items():
+            ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
+            if ftype == "void":
+                if isinstance(fpath, zast.AtomId):
+                    ftype = TYPEMAP.get(fpath.name, "int64_t")
+            lines.append(f"    {ftype} {fname};\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+        self.struct_defs.append("".join(lines))
+
+        all_funcs = list(cls.functions.items()) + list(cls.as_functions.items())
+        for mname, mfunc in all_funcs:
+            if mfunc.body:
+                self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+
     def _emit_data(self, name: str, data: zast.Data) -> None:
         self.needs_stdint = True
         values: List[str] = []
@@ -333,8 +362,12 @@ class CEmitter:
         if isinstance(ppath, zast.AtomId):
             name = ppath.name
             if name == "this" and record_name:
+                if record_name in self._class_names:
+                    return f"z_{record_name}_t*"
                 return f"z_{record_name}_t"
             if name == "type" and record_name:
+                if record_name in self._class_names:
+                    return f"z_{record_name}_t*"
                 return f"z_{record_name}_t"
             if name in TYPEMAP:
                 return TYPEMAP[name]
@@ -343,6 +376,8 @@ class CEmitter:
             # check if it's a record name defined in the main unit
             if name in self._record_names:
                 return f"z_{name}_t"
+            if name in self._class_names:
+                return f"z_{name}_t*"
         return "int64_t"
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
@@ -353,6 +388,8 @@ class CEmitter:
         if isinstance(func.returntype, zast.AtomId):
             name = func.returntype.name
             if name == "type" and record_name:
+                if record_name in self._class_names:
+                    return f"z_{record_name}_t*"
                 return f"z_{record_name}_t"
             if name in TYPEMAP:
                 return TYPEMAP[name]
@@ -362,6 +399,9 @@ class CEmitter:
                 return "ZStr*"
             if name in self._record_names:
                 return f"z_{name}_t"
+            if name in self._class_names:
+                self.needs_stdlib = True
+                return f"z_{name}_t*"
         return "void"
 
     def _emit_function(
@@ -386,9 +426,23 @@ class CEmitter:
 
         # save/reset per-function state
         saved_string_vars = self._func_string_vars
+        saved_class_vars = self._func_class_vars
         saved_temp_counter = self._temp_counter
+        saved_record_name = self._current_record_name
         self._func_string_vars = []
+        self._func_class_vars = []
         self._temp_counter = 0
+        self._current_record_name = record_name
+        saved_class_params = self._func_class_params
+        self._func_class_params = set()
+        # track parameters that are class pointers
+        if record_name in self._class_names:
+            for pname, ppath in func.parameters.items():
+                if pname.startswith(":"):
+                    continue
+                ptype_str = self._resolve_param_ctype(ppath, record_name)
+                if ptype_str.endswith("*") and ptype_str.startswith("z_"):
+                    self._func_class_params.add(_mangle_var(pname))
 
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
@@ -397,9 +451,11 @@ class CEmitter:
             body_code = self._emit_statement(func.body)
             lines.append(body_code)
 
-        # scope-exit cleanup for string vars (void functions / fall-through)
-        if self._func_string_vars:
+        # scope-exit cleanup for string/class vars (void functions / fall-through)
+        if self._func_string_vars or self._func_class_vars:
             indent = self._indent()
+            for sv in reversed(self._func_class_vars):
+                lines.append(f"{indent}if ({sv}) free({sv});\n")
             for sv in reversed(self._func_string_vars):
                 lines.append(f"{indent}if ({sv}) free({sv});\n")
 
@@ -408,7 +464,10 @@ class CEmitter:
 
         # restore
         self._func_string_vars = saved_string_vars
+        self._func_class_vars = saved_class_vars
         self._temp_counter = saved_temp_counter
+        self._current_record_name = saved_record_name
+        self._func_class_params = saved_class_params
 
     def _emit_statement(self, stmt: zast.Statement) -> str:
         parts: List[str] = []
@@ -460,23 +519,38 @@ class CEmitter:
             if val in self._temp_frees:
                 self._temp_frees.remove(val)
             self._func_string_vars.append(cname)
+        elif ctype.startswith("z_") and ctype.endswith("_t*"):
+            self.needs_stdlib = True
+            # class pointer — the variable now owns it
+            if val in self._temp_frees:
+                self._temp_frees.remove(val)
+            self._func_class_vars.append(cname)
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
             ctype = f"z_{inner.name}_t"
             val = f"({ctype}){{0}}"
-        return f"{indent}{ctype} {cname} = {val};\n"
+        result = f"{indent}{ctype} {cname} = {val};\n"
+        # nullify source on .take for class pointers
+        take_var = self._get_take_var_from_expr(assign.value)
+        if take_var:
+            result += f"{indent}{take_var} = NULL;\n"
+        return result
 
     def _emit_reassignment(self, reassign: zast.Reassignment) -> str:
         indent = self._indent()
         lhs = self._emit_path_value(reassign.topath)
         rhs = self._emit_expression_value(reassign.value)
         result = ""
-        # check if this is a string reassignment — free old value first
+        # check if this is a reftype reassignment — free old value first
         lhs_type = getattr(reassign.topath, "type", None)
         if lhs_type and lhs_type.name == "string":
             result += f"{indent}free({lhs});\n"
             # the variable now owns the new value — remove from temp frees
+            if rhs in self._temp_frees:
+                self._temp_frees.remove(rhs)
+        elif lhs_type and lhs_type.typetype == ZTypeType.CLASS:
+            result += f"{indent}free({lhs});\n"
             if rhs in self._temp_frees:
                 self._temp_frees.remove(rhs)
         result += f"{indent}{lhs} = {rhs};\n"
@@ -572,7 +646,31 @@ class CEmitter:
     def _emit_return(self, call: zast.Call, indent: str) -> str:
         """Emit a return statement with proper string cleanup."""
         if call.arguments:
-            val = self._emit_operation_value(call.arguments[0].valtype)
+            # check for inline class construction: return ClassName field: val ...
+            first_arg = call.arguments[0].valtype
+            if (
+                isinstance(first_arg, zast.AtomId)
+                and first_arg.name in self._class_names
+                and len(call.arguments) > 1
+            ):
+                # emit as class construction
+                ctype = f"z_{first_arg.name}_t"
+                self.needs_stdlib = True
+                self._temp_counter += 1
+                tmp = f"_c{self._temp_counter}"
+                self._temp_decls.append(
+                    f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
+                )
+                self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
+                for arg in call.arguments[1:]:
+                    if arg.name:
+                        fval = self._emit_operation_value(arg.valtype)
+                        self._temp_decls.append(
+                            f"{indent}{tmp}->{arg.name} = {fval};\n"
+                        )
+                val = tmp
+            else:
+                val = self._emit_operation_value(call.arguments[0].valtype)
             result = ""
 
             # remove return value from temp frees (caller owns it)
@@ -584,6 +682,10 @@ class CEmitter:
                 result += f"{indent}free({t});\n"
             self._temp_frees.clear()
 
+            # free func class vars (except the return value)
+            for sv in reversed(self._func_class_vars):
+                if sv != val:
+                    result += f"{indent}if ({sv}) free({sv});\n"
             # free func string vars (except the return value)
             for sv in reversed(self._func_string_vars):
                 if sv != val:
@@ -592,12 +694,24 @@ class CEmitter:
             result += f"{indent}return {val};\n"
             return result
 
-        # void return — free all func string vars
+        # void return — free all func class/string vars
         result = ""
+        for sv in reversed(self._func_class_vars):
+            result += f"{indent}if ({sv}) free({sv});\n"
         for sv in reversed(self._func_string_vars):
             result += f"{indent}if ({sv}) free({sv});\n"
         result += f"{indent}return;\n"
         return result
+
+    def _get_take_var_from_expr(self, expr: zast.Expression) -> Optional[str]:
+        """If expr is a var.take expression, return the mangled variable name."""
+        inner = expr.expression
+        if isinstance(inner, zast.DottedPath):
+            return self._get_take_var(inner)
+        if isinstance(inner, zast.Call):
+            # could be a call with .take arg
+            pass
+        return None
 
     def _get_take_var(self, op: zast.Operation) -> Optional[str]:
         """If op is a var.take expression, return the mangled variable name."""
@@ -685,12 +799,40 @@ class CEmitter:
                 return f"({ctype}){{{', '.join(fields)}}}"
             return f"({ctype}){{0}}"
 
+        if call.callable.type and call.callable.type.typetype == ZTypeType.CLASS:
+            cls_type = call.callable.type
+            ctype = f"z_{cls_type.name}_t"
+            self.needs_stdlib = True
+            self._temp_counter += 1
+            tmp = f"_c{self._temp_counter}"
+            indent = self._indent()
+            self._temp_decls.append(
+                f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
+            )
+            # zero-init then set named fields
+            self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
+            for arg in call.arguments:
+                if arg.name:
+                    val = self._emit_operation_value(arg.valtype)
+                    self._temp_decls.append(f"{indent}{tmp}->{arg.name} = {val};\n")
+            self._temp_frees.append(tmp)
+            return tmp
+
         args = self._emit_call_args(call)
         result = f"{_mangle_func(callable_name)}({args})"
 
-        # if call returns a string, wrap in temp for cleanup
-        if hasattr(call, "type") and call.type and call.type.name == "string":
-            return self._alloc_temp(result)
+        # if call returns a reftype, wrap in temp for cleanup
+        if hasattr(call, "type") and call.type:
+            if call.type.name == "string":
+                return self._alloc_temp(result)
+            if call.type.typetype == ZTypeType.CLASS:
+                ctype = f"z_{call.type.name}_t"
+                self._temp_counter += 1
+                tmp = f"_c{self._temp_counter}"
+                indent = self._indent()
+                self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+                self._temp_frees.append(tmp)
+                return tmp
 
         return result
 
@@ -732,6 +874,18 @@ class CEmitter:
             return _mangle_func(name)
         if name in self._record_names:
             return f"(z_{name}_t){{0}}"
+        if name in self._class_names:
+            self.needs_stdlib = True
+            self._temp_counter += 1
+            tmp = f"_c{self._temp_counter}"
+            ctype = f"z_{name}_t"
+            indent = self._indent()
+            self._temp_decls.append(
+                f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
+            )
+            self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
+            self._temp_frees.append(tmp)
+            return tmp
         return _mangle_var(name)
 
     def _emit_numeric_literal(self, name: str) -> str:
@@ -755,8 +909,8 @@ class CEmitter:
             # unit.name reference
             if pname in self.program.units and pname not in ("system", "core", "io"):
                 return _mangle_func(f"{pname}.{child}")
-            # record_name.method — method call with no extra args (implicit this)
-            if pname in self._record_names:
+            # record_name.method or class_name.method — method call with no extra args
+            if pname in self._record_names or pname in self._class_names:
                 return _mangle_func(f"{pname}.{child}")
             # data.index call
             if pname in self._data_names and child == "index":
@@ -774,7 +928,27 @@ class CEmitter:
             return f"{_mangle_func(func_name)}({parent})"
 
         parent = self._emit_path_value(path.parent)
+        # use -> for class instances (pointer types)
+        if self._is_class_pointer_path(path.parent):
+            return f"{parent}->{child}"
         return f"{parent}.{child}"
+
+    def _is_class_pointer_path(self, path: zast.Path) -> bool:
+        """Check if a path refers to a class pointer (for -> vs . dispatch)."""
+        # type annotation from type checker
+        parent_type = getattr(path, "type", None)
+        if parent_type and parent_type.typetype == ZTypeType.CLASS:
+            return True
+        # local class variable
+        if isinstance(path, zast.AtomId):
+            cname = _mangle_var(path.name)
+            if cname in self._func_class_vars:
+                return True
+            # class method parameter (this/type resolves to class pointer)
+            if self._current_record_name in self._class_names:
+                if cname in self._func_class_params:
+                    return True
+        return False
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
         self.needs_string = True
@@ -922,10 +1096,11 @@ class CEmitter:
             ctype = _ctype(val_type)
 
         is_string = ctype == "ZStr*"
+        is_class = ctype.startswith("z_") and ctype.endswith("_t*")
         cname = _mangle_var(withnode.name)
 
-        # if value is a string temp, the with var now owns it
-        if is_string and val in self._temp_frees:
+        # if value is a reftype temp, the with var now owns it
+        if (is_string or is_class) and val in self._temp_frees:
             self._temp_frees.remove(val)
 
         parts.append(f"{indent}{{\n")
@@ -951,7 +1126,7 @@ class CEmitter:
         self._temp_decls = saved_decls
         self._temp_frees = saved_frees
 
-        if is_string:
+        if is_string or is_class:
             parts.append(f"{inner_indent}free({cname});\n")
         self.indent_level -= 1
         parts.append(f"{indent}}}\n")
