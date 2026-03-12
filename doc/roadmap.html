@@ -129,7 +129,19 @@ Table of Contents</div>
 </li>
 <li><a href="#bugfix-parser-eol-filtering-c-emitter-argument-order-complete">Bugfix: Parser EOL Filtering + C Emitter Argument Order [COMPLETE]</a>
 </li>
-<li><a href="#phase-4f-classes-unions-protocols-generics-typedefs">Phase 4f: Classes, Unions, Protocols, Generics, Typedefs</a>
+<li><a href="#phase-4f-classes-product-reftypes">Phase 4f: Classes (Product Reftypes)</a>
+</li>
+<li><a href="#phase-4g-string-migration-record-to-class">Phase 4g: String Migration (Record to Class)</a>
+</li>
+<li><a href="#phase-4h-unions-sum-reftypes">Phase 4h: Unions (Sum Reftypes)</a>
+</li>
+<li><a href="#phase-4i-protocols-interface-types">Phase 4i: Protocols (Interface Types)</a>
+</li>
+<li><a href="#phase-4j-generics-type-parameters-and-monomorphization">Phase 4j: Generics (Type Parameters and Monomorphization)</a>
+</li>
+<li><a href="#phase-4k-typedefs-wrapper-types">Phase 4k: Typedefs (Wrapper Types)</a>
+</li>
+<li><a href="#phase-4l-v2-integration-examples">Phase 4l: v2 Integration Examples</a>
 </li>
 <li><a href="#phase-5-expand-to-v3-full-language">Phase 5: Expand to v3 (Full Language)</a>
 </li>
@@ -512,29 +524,204 @@ Strings (<code>ZStr*</code>) are the first reftype with correct ownership in emi
 <code>zemitterc.py</code>
 <li>[DONE] Tests: 3 new tests in <code>TestCallArgOrder</code> (runtime order</li>
 </ol>
-<h3 id="phase-4f-classes-unions-protocols-generics-typedefs"><a href="#phase-4f-classes-unions-protocols-generics-typedefs">5.11. Phase 4f: Classes, Unions, Protocols, Generics, Typedefs</a></h3>
-<p>Remaining v2 language features that build on the ownership model.</p>
+<h3 id="phase-4f-classes-product-reftypes"><a href="#phase-4f-classes-product-reftypes">5.11. Phase 4f: Classes (Product Reftypes)</a></h3>
+<p>Add class support across all compiler layers. Classes are product reference
+types: heap-allocated, pointer-based <code>this</code>, ownership-tracked. The parser
+and AST already handle classes (<code>_acceptclass</code> in <code>zparser.py</code>,
+<code>Class</code> node in <code>zast.py</code>). This phase adds type checking and C emission.</p>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code></p>
 <ol>
-<li>Add classes to parser/typechecker/emitter (product reftypes with heap</li>
-<li>Change <code>string</code> from <code>record</code> to <code>class</code> in <code>system.z</code>. Remove</li>
-<code>is_valtype = False</code>
+<li>Add <code>_resolve_class_type</code> in <code>ztypecheck.py</code>: mirror</li>
 <code>_resolve_record_type</code>
-<code>string</code>
-<li>Add unions to parser/typechecker/emitter (sum reftypes).</li>
-<li>Add protocols and facets (interface types, borrowed vs taken protocol</li>
-<li>Add generics (type parameters, monomorphization strategy).</li>
-<li>Add typedefs.</li>
-<li>Write v2 example programs exercising ownership, classes, unions,</li>
-<li>Expand test suite at each step.</li>
+<code>is_valtype = False</code>
+<code>ZTypeType.CLASS</code>
+<code>as</code>
+<code>_type_of_definition</code>
+<code>isinstance(defn, zast.Class)</code>
+<li>Verify <code>this</code> resolution for classes: <code>this</code> in class methods</li>
+<code>this</code>
+<li>Class construction in type checker: a bare class name used as an</li>
+<li>Class field access in type checker: dotted path <code>x.field</code> on a</li>
+<code>_check_dotted_path</code>
+<li>Class method calls in type checker: <code>x.method</code> resolves method</li>
+<code>this</code>
+<li>Ownership enforcement for classes: class instances are reftypes so</li>
+<li>Lock enforcement for classes: exclusive lock on class arguments,</li>
+<li>Emit C for class struct: <code>_emit_class</code> in <code>zemitterc.py</code>.</li>
+<code>typedef struct { ... } z_name_t;</code>
+<code>_class_names</code>
+<code>_record_names</code>
+<code>_ctype</code>
+<code>z_name_t*</code>
+<li>Emit C for class construction: emit <code>malloc(sizeof(z_name_t))</code></li>
+<code>_func_class_vars</code>
+<li>Emit C for class field access: <code>x-&gt;field</code> (arrow operator, not</li>
+<code>_emit_expression_value</code>
+<li>Emit C for class methods: emit method with <code>z_name_t*</code> as first</li>
+<li>Emit C for class ownership: free on scope exit, free on</li>
+<li>Write <code>examples/classes.z</code>: class definition, construction,</li>
+<li>Expand test suite: type resolution, construction, field access,</li>
 </ol>
-<h3 id="phase-5-expand-to-v3-full-language"><a href="#phase-5-expand-to-v3-full-language">5.12. Phase 5: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-4g-string-migration-record-to-class"><a href="#phase-4g-string-migration-record-to-class">5.12. Phase 4g: String Migration (Record to Class)</a></h3>
+<p>Change <code>string</code> from <code>record</code> to <code>class</code> in <code>system.z</code>. Remove the
+<code>is_valtype = False</code> workaround in <code>_resolve_record_type</code>. This
+validates that class infrastructure works end-to-end with the most-used
+reftype.</p>
+<p>Files: <code>src/system/system.z</code>, <code>src/ztypecheck.py</code>,
+<code>src/zemitterc.py</code>, <code>tests/test_typecheck.py</code>,
+<code>tests/test_emitter.py</code></p>
+<ol>
+<li>Change <code>string: record {}</code> to <code>string: class {}</code> in</li>
+<code>src/system/system.z</code>
+<li>Remove the <code>if name == "string": rtype.is_valtype = False</code></li>
+<code>_resolve_record_type</code>
+<code>ztypecheck.py</code>
+<code>_resolve_class_type</code>
+<code>is_valtype = False</code>
+<li>Verify <code>_ctype</code> in <code>zemitterc.py</code>: string is already handled</li>
+<code>ZStr*</code>
+<li>Verify class emit skips system types: <code>string</code> should not appear</li>
+<code>_class_names</code>
+<code>ZStr*</code>
+<li>Run all existing tests: verify zero regressions. All example</li>
+<li>Add explicit tests: <code>string</code> variable obeys class ownership</li>
+</ol>
+<h3 id="phase-4h-unions-sum-reftypes"><a href="#phase-4h-unions-sum-reftypes">5.13. Phase 4h: Unions (Sum Reftypes)</a></h3>
+<p>Add union support across all compiler layers. Unions are sum reference types
+with a tag discriminator. The parser and AST already handle unions.
+Type checker currently creates a shell <code>ZTypeType.UNION</code> with
+<code>is_valtype = False</code> but does not resolve subtypes or check construction.</p>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code></p>
+<ol>
+<li>Add <code>_resolve_union_type</code> in <code>ztypecheck.py</code>: resolve each</li>
+<code>null</code>
+<code>_type_of_definition</code>
+<li>Union construction in type checker: <code>myunion.subtype</code> as a</li>
+<code>myunion.subtype expr</code>
+<li>Union tag type: auto-generate an enum-like tag type for each</li>
+<code>:tag</code>
+<li>Union ownership: unions are reftypes. All ownership rules apply.</li>
+<code>take</code>
+<li>Match/case with union types: <code>match</code> on a union variable</li>
+<code>else</code>
+<code>case</code>
+<li>Union methods in type checker: methods defined on the union</li>
+<code>match</code>
+<li>Emit C for union struct: tagged union as C struct with enum tag</li>
+<code>typedef enum { ... } z_name_tag_t;</code>
+<code>typedef struct { z_name_tag_t tag; union { ... }; } z_name_t;</code>
+<li>Emit C for union construction: allocate union, set tag, set value</li>
+<li>Emit C for match/case on unions: emit <code>switch (x-&gt;tag)</code> with</li>
+<li>Emit C for union destruction: scope-exit cleanup frees reftype</li>
+<li>Emit C for union methods: same pattern as class methods with</li>
+<li>Write <code>examples/unions.z</code>: union definition, construction,</li>
+<li>Expand test suite: type resolution, construction, tag handling,</li>
+</ol>
+<h3 id="phase-4i-protocols-interface-types"><a href="#phase-4i-protocols-interface-types">5.14. Phase 4i: Protocols (Interface Types)</a></h3>
+<p>Add protocol support. Protocols define interfaces (function specs without
+bodies). Types implement protocols via <code>implements</code> clauses. Protocol
+instances use vtables for dynamic dispatch. The parser and AST already
+handle protocols.</p>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code></p>
+<ol>
+<li>Add <code>_resolve_protocol_type</code> in <code>ztypecheck.py</code>: resolve each</li>
+<code>includes</code>
+<li>Protocol conformance checking: when a record/class/union has an</li>
+<code>implements</code>
+<li>Protocol instance type: a variable of protocol type holds a</li>
+<code>is_valtype = False</code>
+<li>Protocol instance creation: <code>x.protocolname</code> on an implementing</li>
+<code>protocol.create(obj)</code>
+<li>Protocol method dispatch in type checker: calling a method on a</li>
+<li>Protocol ownership: protocol instances follow reftype ownership.</li>
+<li>Emit C for protocol vtable: generate a vtable struct with</li>
+<code>{ void* data; z_proto_vtable_t* vtable; }</code>
+<li>Emit C for protocol conformance: generate a static vtable</li>
+<li>Emit C for protocol instance creation: allocate protocol</li>
+<li>Emit C for protocol dispatch: method calls on protocol instances</li>
+<code>inst-&gt;vtable-&gt;method(inst-&gt;data, args)</code>
+<li>Emit C for protocol cleanup: free protocol instance on scope</li>
+<li>Write <code>examples/protocols.z</code>: protocol definition, conformance,</li>
+<li>Expand test suite: resolution, conformance, instance creation,</li>
+</ol>
+<h3 id="phase-4j-generics-type-parameters-and-monomorphization"><a href="#phase-4j-generics-type-parameters-and-monomorphization">5.15. Phase 4j: Generics (Type Parameters and Monomorphization)</a></h3>
+<p>Add generic type parameters with constraints. Strategy: monomorphization
+(generate specialised code for each concrete type used). The parser already
+handles <code>generic</code> fields. <code>ZType.isgeneric</code> exists but is unused.</p>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>src/ztypechecker.py</code>, <code>tests/test_typecheck.py</code>,
+<code>tests/test_emitter.py</code></p>
+<ol>
+<li>Resolve <code>generic</code> type parameters: when a field type is</li>
+<code>generic from: constraint</code>
+<code>any.generic</code>
+<code>isgeneric = True</code>
+<code>_resolve_typeref</code>
+<code>generic</code>
+<li>Generic type instantiation in type checker: when a generic</li>
+<li>Constraint checking: verify concrete type argument satisfies</li>
+<code>from</code>
+<li>Generic functions: functions with generic parameters. Infer</li>
+<li>Generic records/classes: type parameters on records and classes.</li>
+<li>Generic unions: type parameters shared across all subtypes</li>
+<code>option</code>
+<code>some: t</code>
+<code>none: null</code>
+<li>Update <code>_is_valtype</code> for generic types: a generic type's</li>
+<li>Emit C for monomorphised types: for each instantiation, emit</li>
+<code>z_option_i64_t</code>
+<li>Emit C for generic function calls: call site uses the</li>
+<li>Add <code>option</code> union to <code>system.z</code> as a generic union with</li>
+<code>some</code>
+<code>none</code>
+<li>Write <code>examples/generics.z</code>: generic container, generic</li>
+<li>Expand test suite: resolution, instantiation, constraints,</li>
+</ol>
+<h3 id="phase-4k-typedefs-wrapper-types"><a href="#phase-4k-typedefs-wrapper-types">5.16. Phase 4k: Typedefs (Wrapper Types)</a></h3>
+<p>Add typedef support. Typedefs wrap an underlying type with zero overhead.
+The typedef field is marked with the <code>typedef</code> keyword. Methods can be
+added; unshadowed methods of the underlying type are exposed.</p>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>src/ztypechecker.py</code>, <code>tests/test_typecheck.py</code>,
+<code>tests/test_emitter.py</code></p>
+<ol>
+<li>Resolve typedef field: when a field type is <code>typedef underlying</code>,</li>
+<code>is_typedef</code>
+<li>Typedef type identity: a typedef is a distinct type from the</li>
+<li>Typedef method resolution: methods defined on the typedef</li>
+<li>Typedef <code>create</code> constructor: compiler-generated constructor</li>
+<li>Typedef valtype/reftype: valtype typedef wraps a record, reftype</li>
+<code>is_valtype</code>
+<li>Typedef generic parameters: all generic params must appear in</li>
+<code>typedef</code>
+<li>Typedef ownership: follows underlying type's ownership rules.</li>
+<li>Emit C for typedef: no separate struct emitted. Typedef emits</li>
+<li>Emit C for typedef method calls: call sites use typedef method</li>
+<li>Write <code>examples/typedefs.z</code>: valtype and reftype typedefs</li>
+<li>Expand test suite: resolution, type identity, method shadowing,</li>
+</ol>
+<h3 id="phase-4l-v2-integration-examples"><a href="#phase-4l-v2-integration-examples">5.17. Phase 4l: v2 Integration Examples</a></h3>
+<p>Write comprehensive v2 example programs that exercise ownership, classes,
+unions, protocols, generics and typedefs together. These serve as
+integration tests for the full v2 feature set.</p>
+<ol>
+<li>Write <code>examples/ownership.z</code>: comprehensive ownership scenarios</li>
+<li>Write <code>examples/linkedlist.z</code>: generic linked list using classes</li>
+<li>Write <code>examples/result.z</code>: <code>result</code> union type (ok/error)</li>
+<li>Write <code>examples/iterator.z</code>: iterator protocol, demonstrating</li>
+<li>Verify all v2 example programs compile with gcc and produce</li>
+</ol>
+<h3 id="phase-5-expand-to-v3-full-language"><a href="#phase-5-expand-to-v3-full-language">5.18. Phase 5: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-6-self-hosting"><a href="#phase-6-self-hosting">5.13. Phase 6: Self-Hosting</a></h3>
+<h3 id="phase-6-self-hosting"><a href="#phase-6-self-hosting">5.19. Phase 6: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>
