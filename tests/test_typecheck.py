@@ -1176,3 +1176,70 @@ class TestClassOwnership:
             "}"
         )
         assert any("aliasing" in e.msg.lower() for e in errors)
+
+
+class TestStringMigration:
+    """Phase 4g: string resolves via class path, not record special-case."""
+
+    def test_string_resolves_as_class_type(self):
+        """string should now resolve as ZTypeType.CLASS."""
+        program = check_ok('main: function is { s: "hello" }')
+        tc = TypeChecker(program)
+        tc.check()
+        st = tc._resolved.get("system.string")
+        assert st is not None
+        assert st.typetype == ZTypeType.CLASS
+
+    def test_string_is_reftype(self):
+        """string should be tagged as reftype (is_valtype=False) via class path."""
+        program = check_ok('main: function is { s: "hello" }')
+        tc = TypeChecker(program)
+        tc.check()
+        st = tc._resolved.get("system.string")
+        assert st is not None
+        assert st.is_valtype is False
+
+    def test_string_take_invalidates(self):
+        """After .take on a string variable, the source is invalidated."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hello"\n'
+            "  d: s.take\n"
+            "  e: s\n"
+            "}"
+        )
+        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+
+    def test_string_borrow_locks(self):
+        """Borrowing a string variable should lock the source."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hello"\n'
+            "  d: s.borrow\n"
+            "  e: s.borrow\n"
+            "}"
+        )
+        assert any(
+            "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+    def test_string_swap_ok(self):
+        """Swapping two string variables should work."""
+        check_ok(
+            "main: function is {\n"
+            '  a: "hello"\n'
+            '  b: "world"\n'
+            "  a swap b\n"
+            "}"
+        )
+
+    def test_string_aliasing_error(self):
+        """Passing the same string twice to a call is an aliasing error."""
+        errors = check_errors(
+            "f: function {a: system.string b: system.string} is {}\n"
+            "main: function is {\n"
+            '  s: "hello"\n'
+            "  f a: s b: s\n"
+            "}"
+        )
+        assert any("aliasing" in e.msg.lower() for e in errors)
