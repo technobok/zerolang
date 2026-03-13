@@ -1983,7 +1983,8 @@ class Parser:
         if start.toktype == TT.LABELPRE:  # label value assignment
             lex.acceptany()
             lvx = self._make_label_value(start)
-            assignment = zast.Assignment(name=start.tokstr, value=lvx.node, start=start)
+            expr = zast.Expression(expression=lvx.node, start=start)
+            assignment = zast.Assignment(name=start.tokstr, value=expr, start=start)
             statementline = zast.StatementLine(statementline=assignment, start=start)
             return NodeX(node=statementline, extern=lvx.extern)
 
