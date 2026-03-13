@@ -706,9 +706,10 @@ Future work:
 #---: Phase 16: Label Value Shorthand (#~":x")
 
 Add support for the label value shorthand #~":x", equivalent to #~"x: x"
-where the definition does not bind to itself. The lexer already decomposes
-#~":x" (LABELPRE) into LABEL + REFID; this phase adds a #~"from_labelpre"
-flag to tokens and "don't bind to self" semantics in the type checker.
+where the definition does not bind to itself. The parser recognizes
+LABELPRE tokens directly and produces a dedicated #~"LabelValue(AtomId)"
+AST node. The type checker uses #~"isinstance" checks to apply
+"don't bind to self" semantics.
 
 Use cases: #~"union { :u8 :u16 :u32 }" (subtypes named after payload types),
 #~"foo :x :y" (pass locals as same-named call arguments),
@@ -716,16 +717,23 @@ Use cases: #~"union { :u8 :u16 :u32 }" (subtypes named after payload types),
 #~"record { :name :age }" (fields named after types).
 
 #ol:
-  #*: Add #~"from_labelpre" flag to Token dataclass; set on both LABEL and
-    REFID tokens during LABELPRE decomposition in the lexer.
-  #*: In the type checker, pass #~"skip_unit_def=(unitname, name)" to
-    #~"_resolve_name" when the definition's start token has #~"from_labelpre"
-    set. This skips the self-binding in the current unit body and falls
-    through to core/system resolution.
-  #*: No parser, AST, or emitter changes needed (transparent).
+  #*: Add #~"LABELVALUE = 83" to #~"NodeType" enum; add #~"LabelValue(AtomId)"
+    dataclass to #~"zast.py"; add to #~"TypeDefinition" union.
+  #*: Remove LABELPRE decomposition from #~"Lexer._advance()" — LABELPRE
+    tokens pass through to the parser unchanged. Remove #~"from_labelpre"
+    field from #~"Token".
+  #*: Add #~"_make_label_value" helper to parser; update 6 parser sites
+    (unit body, object body, function params, call args, data defs,
+    statements) to accept #~"TT.LABELPRE" and produce #~"LabelValue" nodes.
+  #*: In the type checker, add #~"isinstance(defn, zast.LabelValue)" check
+    before the #~"AtomId" check in #~"_type_of_definition", with
+    #~"skip_unit_def" always set. Remove #~"from_labelpre" conditional
+    from the #~"AtomId" branch.
+  #*: #~"LabelValue" extends #~"AtomId", so all existing #~"isinstance(x, AtomId)"
+    checks in the emitter continue to work — no emitter changes needed.
   #*: Fix spec.pdoc union example (#~":u2" means #~"u2: u2", not null).
-  #*: Add tests for lexer flag, parser in all contexts, type checker
-    resolution, and emitter end-to-end compilation.
+  #*: Add tests for parser in all contexts, type checker resolution,
+    and emitter end-to-end compilation.
   #*: Update #~"examples/unions.z" to demonstrate label value syntax.
 
 #---: Phase 17: Data as Union/Variant Tag
