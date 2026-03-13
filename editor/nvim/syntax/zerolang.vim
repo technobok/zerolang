@@ -47,7 +47,7 @@ syn match zerolangKeyword /\<\%(unit\|record\|class\|variant\|union\|facet\|prot
 syn match zerolangKeyword /\<\%(function\|in\|out\|is\|as\)\>/
 syn match zerolangKeyword /\<\%(if\|when\|then\|else\)\>/
 syn match zerolangKeyword /\<\%(for\|while\|loop\|with\|do\|on\)\>/
-syn match zerolangKeyword /\<\%(match\|case\|break\|continue\|yield\|return\|swap\)\>/
+syn match zerolangKeyword /\<\%(match\|case\|swap\)\>/
 syn match zerolangKeyword /\<=/
 
 " Reserved words (highlighted as errors)
@@ -65,6 +65,7 @@ syn match zerolangBuiltin /\<\%(public\|private\)\>/
 syn match zerolangBuiltin /\<\%(this\|meta\|error\)\>/
 syn match zerolangBuiltin /\<iterator\>/
 syn match zerolangBuiltin /\<\%(take\|borrow\|lock\|generic\)\>/
+syn match zerolangBuiltin /\<\%(return\|break\|continue\|yield\)\>/
 
 " Labels: word: and :word (defined after keywords — longer match wins)
 exe 'syn match zerolangLabel /' . s:W . '\+:/'

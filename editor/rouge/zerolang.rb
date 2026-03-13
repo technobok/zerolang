@@ -47,10 +47,6 @@ module Rouge
 
           match
           case
-          break
-          continue
-          yield
-          return
           swap
           =
         )
@@ -120,6 +116,11 @@ module Rouge
           borrow
           lock
           generic
+
+          return
+          break
+          continue
+          yield
         )
       end
 
