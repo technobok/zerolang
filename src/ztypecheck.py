@@ -185,14 +185,20 @@ class TypeChecker:
             t = self._resolve_dotted_path(defn)
             self._resolving.pop()
             return t
+        if isinstance(defn, zast.LabelValue):
+            key = f"{unitname}.{name}"
+            shell = _make_type(name, ZTypeType.NULL)
+            self._resolving.append((key, shell))
+            t = self._resolve_name(defn.name, skip_unit_def=(unitname, name))
+            self._resolving.pop()
+            return t
         if isinstance(defn, zast.AtomId):
             if _is_numeric_id(defn.name):
                 return self._resolve_numeric(defn.name, loc=defn.start)
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
             self._resolving.append((key, shell))
-            skip = (unitname, name) if defn.start.from_labelpre else None
-            t = self._resolve_name(defn.name, skip_unit_def=skip)
+            t = self._resolve_name(defn.name)
             self._resolving.pop()
             return t
         return None

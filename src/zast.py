@@ -168,6 +168,7 @@ class NodeType(IntEnum):
     # ATOMEXPR = 81
     # Expression is also an ATOM for AST due to AtomExpr
     ATOMID = 82  # a reference
+    LABELVALUE = 83  # label value (:x)
 
     ATOMSTRING = 84
 
@@ -248,6 +249,7 @@ TypeDefinition = typing.Union[
     "Facet",
     "Expression",
     "Operation",
+    "LabelValue",
 ]
 
 
@@ -682,6 +684,13 @@ class AtomId(Atom):
     nodetype: NodeType = field(default=NodeType.ATOMID, init=False)
     name: str  # this is also in the start token
     canbemoduleref: bool
+
+
+@dataclass
+class LabelValue(AtomId):
+    """Label value (:x) — shorthand for x: x where x doesn't bind to itself."""
+
+    nodetype: NodeType = field(default=NodeType.LABELVALUE, init=False)
 
 
 @dataclass

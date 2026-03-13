@@ -298,26 +298,13 @@ class TestLexerFiltering:
         types = [t.toktype for t in tokens]
         assert TT.COLON not in types
 
-    def test_labelpre_expanded(self):
-        """:name expands to LABEL + REFID in lexer"""
+    def test_labelpre_passes_through(self):
+        """:name passes through as LABELPRE token (no decomposition)"""
         tokens = collect_lexer_tokens(":name")
         types = [t.toktype for t in tokens]
-        assert TT.LABEL in types
-        assert TT.REFID in types
-
-    def test_labelpre_from_labelpre_flag(self):
-        """:name produces LABEL + REFID both with from_labelpre=True"""
-        tokens = collect_lexer_tokens(":name")
-        label_tok = [t for t in tokens if t.toktype == TT.LABEL][0]
-        refid_tok = [t for t in tokens if t.toktype == TT.REFID][0]
-        assert label_tok.from_labelpre is True
-        assert refid_tok.from_labelpre is True
-
-    def test_regular_label_no_labelpre_flag(self):
-        """name: produces LABEL without from_labelpre flag"""
-        tokens = collect_lexer_tokens("name: value")
-        label_tok = [t for t in tokens if t.toktype == TT.LABEL][0]
-        assert label_tok.from_labelpre is False
+        assert TT.LABELPRE in types
+        labelpre_tok = [t for t in tokens if t.toktype == TT.LABELPRE][0]
+        assert labelpre_tok.tokstr == "name"
 
 
 class TestIsValidUnitName:

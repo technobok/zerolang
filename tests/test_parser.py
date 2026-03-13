@@ -488,14 +488,13 @@ class TestLabelValueShorthand:
     """Test :x (label_value) parsing in various contexts."""
 
     def test_unit_level_label_value(self):
-        """:x at unit level produces name='x', value=AtomId('x') with from_labelpre."""
+        """:x at unit level produces name='x', value=LabelValue('x')."""
         result = parse_unit(":u8")
         body = get_unit_body(result)
         assert "u8" in body
         defn = body["u8"]
-        assert isinstance(defn, zast.AtomId)
+        assert isinstance(defn, zast.LabelValue)
         assert defn.name == "u8"
-        assert defn.start.from_labelpre is True
 
     def test_record_field_label_value(self):
         """:x in record fields."""

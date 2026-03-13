@@ -297,6 +297,12 @@ class Parser:
         # must have opened ok
         return openfile
 
+    @staticmethod
+    def _make_label_value(tok: Token) -> NodeX[zast.LabelValue]:
+        """Create a LabelValue node from a LABELPRE token."""
+        lv = zast.LabelValue(start=tok, name=tok.tokstr, canbemoduleref=True)
+        return NodeX(node=lv, extern={tok.tokstr: lv})
+
     def _acceptunitbody(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error]:
         """
         _acceptunitbody = accept the body of a unit. Used by unitfile and
@@ -327,25 +333,33 @@ class Parser:
                 continue
 
             label: Optional[Token] = lex.accept(TT.LABEL)
+            is_label_value = False
+            if not label:
+                label = lex.accept(TT.LABELPRE)
+                is_label_value = True
             if not label:
                 break  # no definition
 
-            lex.accept(TT.EOL)  # optional EOL after label
+            if is_label_value:
+                lvx = self._make_label_value(label)
+                typedefinitionx = NodeX(node=lvx.node, extern=lvx.extern)
+            else:
+                lex.accept(TT.EOL)  # optional EOL after label
 
-            t = lex.peek()
-            lex.filtereol(True)  # filter EOLs within definition value
-            typedefinitionx = self._accepttypedefinition(lex)
-            lex.filtereol(False)  # restore for next definition boundary
-            if typedefinitionx is None:
-                msg = (
-                    f"Expected TypeDefinition after Definition name, got '{t.tokstr}' "
-                    + repr(t)
-                )
-                error = zast.Error(err=ERR.EXPECTEDTYPEDEF, msg=msg, loc=t)
-                break
-            if isinstance(typedefinitionx, zast.Error):
-                error = typedefinitionx
-                break
+                t = lex.peek()
+                lex.filtereol(True)  # filter EOLs within definition value
+                typedefinitionx = self._accepttypedefinition(lex)
+                lex.filtereol(False)  # restore for next definition boundary
+                if typedefinitionx is None:
+                    msg = (
+                        f"Expected TypeDefinition after Definition name, got '{t.tokstr}' "
+                        + repr(t)
+                    )
+                    error = zast.Error(err=ERR.EXPECTEDTYPEDEF, msg=msg, loc=t)
+                    break
+                if isinstance(typedefinitionx, zast.Error):
+                    error = typedefinitionx
+                    break
 
             definition = typedefinitionx.node
             name = label.tokstr
@@ -535,7 +549,7 @@ class Parser:
         if not oplist:  # len(oplist) == 0
             return None
 
-        if (len(oplist) == 1 and lex.peek().toktype == TT.LABEL) or (
+        if (len(oplist) == 1 and lex.peek().toktype in (TT.LABEL, TT.LABELPRE)) or (
             len(oplist) % 2 == 0
         ):
             return self._acceptcall(lex=lex, paths=oplist)
@@ -678,6 +692,10 @@ class Parser:
         argnames: Set[str] = set()
         while True:
             label = lex.accept(TT.LABEL)
+            is_label_value = False
+            if not label:
+                label = lex.accept(TT.LABELPRE)
+                is_label_value = True
             if not label:
                 break
             if label.tokstr in argnames:
@@ -685,19 +703,27 @@ class Parser:
                 return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
             argnames.add(label.tokstr)
 
-            opx = self._acceptoperation(lex)
-            if isinstance(opx, zast.Error):
-                return opx  # propagate error
-            if opx:
-                opx = self._fixcalloperation(opx)  # correct single Id's
+            if is_label_value:
+                lvx = self._make_label_value(label)
                 namedop = zast.NamedOperation(
-                    name=label.tokstr, valtype=opx.node, start=label
+                    name=label.tokstr, valtype=lvx.node, start=label
                 )
                 arguments.append(namedop)
-                promoteexterns(addto=extern, addfrom=opx.extern)
+                promoteexterns(addto=extern, addfrom=lvx.extern)
             else:
-                msg = f"Expected an Operation after label: {label.tokstr}"
-                return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                opx = self._acceptoperation(lex)
+                if isinstance(opx, zast.Error):
+                    return opx  # propagate error
+                if opx:
+                    opx = self._fixcalloperation(opx)  # correct single Id's
+                    namedop = zast.NamedOperation(
+                        name=label.tokstr, valtype=opx.node, start=label
+                    )
+                    arguments.append(namedop)
+                    promoteexterns(addto=extern, addfrom=opx.extern)
+                else:
+                    msg = f"Expected an Operation after label: {label.tokstr}"
+                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
 
         # got a call
         call = zast.Call(
@@ -811,6 +837,18 @@ class Parser:
                     lex.accept(TT.EOL)  # optional newline
 
                     paramnametok = lex.peek()
+                    if paramnametok.toktype == TT.LABELPRE:
+                        lex.acceptany()
+                        paramname = paramnametok.tokstr
+                        if paramname in parameters:
+                            msg = f"Duplicate parameter name: {paramname}"
+                            return zast.Error(err=ERR.BADPARAMETER, msg=msg, loc=tok)
+                        lvx = self._make_label_value(paramnametok)
+                        parameters[paramname] = lvx.node
+                        promoteexterns(addto=externparam, addfrom=lvx.extern)
+                        localparam.add(paramname)
+                        continue
+
                     if paramnametok.toktype != TT.LABEL:
                         break
 
@@ -1218,37 +1256,46 @@ class Parser:
                 # add directly to extern.. these cannot refer locally
                 promoteexterns(addto=extern, addfrom=typerefx.extern)
 
-            elif tt == TT.LABEL:
+            elif tt in (TT.LABEL, TT.LABELPRE):
                 label = lex.acceptany()
-                lex.accept(TT.EOL)  # optional newline
-                # function
-                funcx = self._acceptfunction(lex)
-                if isinstance(funcx, zast.Error):
-                    return funcx  # propagate error
-                if funcx:
+                if tt == TT.LABELPRE:
                     if label.tokstr in items or label.tokstr in functions:
                         msg = f"Duplicate item name: {label.tokstr}"
                         return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
-                    functions[label.tokstr] = funcx.node
-                    # add directly to extern.. these cannot refer locally, except via 'this'
-                    promoteexterns(addto=extern, addfrom=funcx.extern, local=localthis)
+                    lvx = self._make_label_value(label)
+                    local.add(label.tokstr)
+                    items[label.tokstr] = lvx.node
+                    promoteexterns(addto=externitems, addfrom=lvx.extern)
                 else:
-                    # path/typeref/typeref_or_num
-                    pathx = self._acceptpath(lex)
-                    if isinstance(pathx, zast.Error):
-                        return pathx  # propagate error
-                    if pathx:
+                    lex.accept(TT.EOL)  # optional newline
+                    # function
+                    funcx = self._acceptfunction(lex)
+                    if isinstance(funcx, zast.Error):
+                        return funcx  # propagate error
+                    if funcx:
                         if label.tokstr in items or label.tokstr in functions:
                             msg = f"Duplicate item name: {label.tokstr}"
                             return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
-                        local.add(label.tokstr)
-                        items[label.tokstr] = pathx.node
-                        # promote to externitems (will be promoted to extern below, after locals)
-                        promoteexterns(addto=externitems, addfrom=pathx.extern)
+                        functions[label.tokstr] = funcx.node
+                        # add directly to extern.. these cannot refer locally, except via 'this'
+                        promoteexterns(addto=extern, addfrom=funcx.extern, local=localthis)
                     else:
-                        # error
-                        msg = f"Expected a function or expression for item: {label.tokstr}"
-                        return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
+                        # path/typeref/typeref_or_num
+                        pathx = self._acceptpath(lex)
+                        if isinstance(pathx, zast.Error):
+                            return pathx  # propagate error
+                        if pathx:
+                            if label.tokstr in items or label.tokstr in functions:
+                                msg = f"Duplicate item name: {label.tokstr}"
+                                return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
+                            local.add(label.tokstr)
+                            items[label.tokstr] = pathx.node
+                            # promote to externitems (will be promoted to extern below, after locals)
+                            promoteexterns(addto=externitems, addfrom=pathx.extern)
+                        else:
+                            # error
+                            msg = f"Expected a function or expression for item: {label.tokstr}"
+                            return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
 
             elif allowtag and tt == TT.TAG:
                 lex.acceptany()
@@ -1790,6 +1837,20 @@ class Parser:
 
         datanames: Set[str] = set()
         while True:
+            if lex.peek().toktype == TT.LABELPRE:
+                label = lex.acceptany()
+                if label.tokstr in datanames:
+                    msg = f"Duplicate data member name: {label.tokstr}"
+                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                datanames.add(label.tokstr)
+                lvx = self._make_label_value(label)
+                namedop = zast.NamedOperation(
+                    name=label.tokstr, valtype=lvx.node, start=label
+                )
+                data.append(namedop)
+                promoteexterns(addto=extern, addfrom=lvx.extern)
+                continue
+
             label: Optional[Token] = None
             if lex.peek().toktype == TT.LABEL:
                 label = lex.acceptany()
@@ -1950,6 +2011,15 @@ class Parser:
         # pylintxxx: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
         extern: Dict[str, zast.AtomId] = {}
         start = lex.peek()
+
+        if start.toktype == TT.LABELPRE:  # label value assignment
+            lex.acceptany()
+            lvx = self._make_label_value(start)
+            assignment = zast.Assignment(
+                name=start.tokstr, value=lvx.node, start=start
+            )
+            statementline = zast.StatementLine(statementline=assignment, start=start)
+            return NodeX(node=statementline, extern=lvx.extern)
 
         if start.toktype == TT.LABEL:  # an assignment to new var
             lex.acceptany()  # label
