@@ -210,6 +210,14 @@ class TestEmitterExamples:
         assert "c is none" in output
         assert "d is ok" in output
 
+    def test_constructors(self):
+        csource = self._emit_example("constructors")
+        output = compile_and_run(csource)
+        assert "c1 = 42" in output
+        assert "c2 = 99" in output
+        assert "p1 = (3, 7)" in output
+        assert "p2 = (0, 0)" in output
+
 
 def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
     """Compile C source with ASan and run, returning the CompletedProcess."""
@@ -594,12 +602,12 @@ class TestEmitterClasses:
         assert "int64_t x;" in csource
         assert "double y;" in csource
 
-    def test_class_construction_emits_malloc(self):
-        """Class construction should emit malloc."""
+    def test_class_construction_calls_create(self):
+        """Class construction should call create instead of inline malloc."""
         csource = emit_source(
             "myclass: class { x: i64 }\nmain: function is { c: myclass x: 5 }"
         )
-        assert "malloc(sizeof(z_myclass_t))" in csource
+        assert "z_myclass_create(5)" in csource
 
     def test_class_field_access_uses_arrow(self):
         """Class field access should use -> operator."""
@@ -1360,3 +1368,144 @@ class TestReturnPathTake:
             "}"
         )
         assert "s = NULL;" in csource
+
+
+# ---- Phase 4h.2: Constructor Infrastructure (meta.create) ----
+
+
+class TestEmitterConstructors:
+    """Tests for compiler-generated meta.create constructors."""
+
+    def test_class_meta_create_emitted(self):
+        """Class should emit both meta.create and create functions."""
+        csource = emit_source(
+            "counter: class { value: i64 }\nmain: function is { c: counter }"
+        )
+        assert "z_counter_meta_create" in csource
+        assert "z_counter_create" in csource
+        assert "z_counter_t* _this" in csource
+        assert "malloc(sizeof(z_counter_t))" in csource
+        assert "_this->value = value;" in csource
+
+    def test_record_meta_create_emitted(self):
+        """Record should emit both meta.create and create functions."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\n"
+            "main: function is { p: point x: 1 y: 2 }"
+        )
+        assert "z_point_meta_create" in csource
+        assert "z_point_create" in csource
+        assert "z_point_t _this" in csource
+        assert "_this.x = x;" in csource
+        assert "_this.y = y;" in csource
+
+    def test_class_construction_calls_create(self):
+        """Class construction should call .create."""
+        csource = emit_source(
+            "counter: class { value: i64 }\n"
+            'main: function is { c: counter value: 10\n print "\\{c.value}" }'
+        )
+        assert "z_counter_create(10)" in csource
+
+    def test_record_construction_calls_create(self):
+        """Record construction should call .create."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\n"
+            "main: function is { p: point x: 1 y: 2 }"
+        )
+        assert "z_point_create(1, 2)" in csource
+
+    def test_class_return_calls_create(self):
+        """Return with class construction should call .create."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "make: function {v: i64} out myclass is { return myclass x: v }\n"
+            "main: function is { c: make 99 }"
+        )
+        assert "z_myclass_create(v)" in csource
+
+    def test_bare_class_calls_create(self):
+        """Bare class name should call .create with zeros."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\nmain: function is { c: myclass }"
+        )
+        assert "z_myclass_create(0)" in csource
+
+    def test_bare_record_calls_create(self):
+        """Bare record name should call .create with zeros."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\nmain: function is { p: point }"
+        )
+        assert "z_point_create(0, 0)" in csource
+
+    def test_out_this_return_type(self):
+        """Method with 'out this' return type should resolve correctly."""
+        csource = emit_source(
+            "myclass: class { x: i64 } as {\n"
+            "  make: function {v: i64} out this is { return myclass x: v }\n"
+            "}\n"
+            "main: function is { c: myclass }"
+        )
+        assert "z_myclass_t* z_myclass_make" in csource
+
+
+class TestEmitterConstructorIntegration:
+    """Integration tests: compile and run constructor programs."""
+
+    def test_class_meta_create_runtime(self):
+        """Class meta.create: construct and access field."""
+        csource = emit_source(
+            "counter: class { value: i64 }\n"
+            'main: function is { c: counter value: 42\n print "\\{c.value}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_record_meta_create_runtime(self):
+        """Record meta.create: construct and access field."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\n"
+            'main: function is { p: point x: 3 y: 7\n print "\\{p.x} \\{p.y}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3 7"
+
+    def test_class_string_field_take(self):
+        """Class with string field: take semantics work via meta.create."""
+        csource = emit_source(
+            "myclass: class { name: string }\n"
+            'main: function is {\n  c: myclass name: "hello"\n  print "\\{c.name}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
+
+class TestEmitterConstructorMemorySafety:
+    """Memory safety tests for constructors using ASan."""
+
+    def test_class_meta_create_no_leak(self):
+        """Class meta.create: no leak under ASan."""
+        csource = emit_source(
+            "counter: class { value: i64 }\n"
+            'main: function is { c: counter value: 42\n print "\\{c.value}" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_class_string_field_no_leak(self):
+        """Class with string field: no leak under ASan."""
+        csource = emit_source(
+            "myclass: class { name: string }\n"
+            'main: function is {\n  c: myclass name: "hello"\n  print "\\{c.name}"\n}'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_record_meta_create_no_leak(self):
+        """Record meta.create: no leak under ASan."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\n"
+            'main: function is { p: point x: 3 y: 7\n print "\\{p.x} \\{p.y}" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"

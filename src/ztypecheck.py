@@ -267,6 +267,12 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             ctype.children[mname] = mt
 
+        # generate meta.create constructor type
+        create_type = self._make_meta_create_type(name, ctype)
+        ctype.children[":meta.create"] = create_type
+        if "create" not in ctype.children:
+            ctype.children["create"] = create_type
+
         self._resolving.pop()
         return ctype
 
@@ -327,8 +333,27 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
 
+        # generate meta.create constructor type
+        create_type = self._make_meta_create_type(name, rtype)
+        rtype.children[":meta.create"] = create_type
+        if "create" not in rtype.children:
+            rtype.children["create"] = create_type
+
         self._resolving.pop()
         return rtype
+
+    def _make_meta_create_type(self, name: str, parent_type: ZType) -> ZType:
+        """Build a FUNCTION ZType for the compiler-generated meta.create constructor."""
+        ftype = _make_type(f"{name}.create", ZTypeType.FUNCTION)
+        ftype.children[":return"] = parent_type
+        for fname, ft in parent_type.children.items():
+            if fname.startswith(":") or ft.typetype == ZTypeType.FUNCTION:
+                continue
+            ftype.children[fname] = ft
+            # reftype fields need .take ownership
+            if not _is_valtype(ft):
+                ftype.param_ownership[fname] = ZParamOwnership.TAKE
+        return ftype
 
     def _resolve_enum_type(self, unitname: str, name: str, enum: zast.Enum) -> ZType:
         key = f"{unitname}.{name}"

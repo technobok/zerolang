@@ -135,6 +135,9 @@ class CEmitter:
         self._record_names: set[str] = set()
         self._class_names: set[str] = set()
         self._union_names: set[str] = set()
+        # field info per type name (for meta.create calls)
+        self._type_field_ctypes: Dict[str, List[str]] = {}
+        self._type_field_names: Dict[str, List[str]] = {}
         # temp variable infrastructure for string ownership
         self._temp_counter: int = 0
         self._temp_decls: List[str] = []
@@ -354,6 +357,9 @@ class CEmitter:
         lines.append(f"}} z_{name}_t;\n\n")
         self.struct_defs.append("".join(lines))
 
+        # emit meta.create constructor
+        self._emit_meta_create_record(name, rec)
+
         all_funcs = list(rec.functions.items()) + list(rec.as_functions.items())
         for mname, mfunc in all_funcs:
             if mfunc.body:
@@ -374,6 +380,75 @@ class CEmitter:
                 return f"z_{fname}_t"
             return TYPEMAP.get(fname, "int64_t")
         return ftype
+
+    def _emit_meta_create_record(self, name: str, rec: zast.Record) -> None:
+        """Emit a meta.create constructor function for a record type."""
+        ctype = f"z_{name}_t"
+        params: List[str] = []
+        field_names: List[str] = []
+        field_ctypes: List[str] = []
+        for fname, fpath in rec.items.items():
+            fct = self._resolve_field_ctype(fpath)
+            params.append(f"{fct} {fname}")
+            field_names.append(fname)
+            field_ctypes.append(fct)
+        self._type_field_ctypes[name] = field_ctypes
+        self._type_field_names[name] = field_names
+        param_str = ", ".join(params) if params else "void"
+        arg_str = ", ".join(field_names) if field_names else ""
+        lines: List[str] = []
+        func_name = f"z_{name}_meta_create"
+        lines.append(f"static {ctype} {func_name}({param_str});\n")
+        lines.append(f"static {ctype} {func_name}({param_str}) {{\n")
+        lines.append(f"    {ctype} _this = {{0}};\n")
+        for fname in field_names:
+            lines.append(f"    _this.{fname} = {fname};\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+        # emit z_{name}_create forwarding function if user didn't define create
+        has_user_create = "create" in rec.functions or "create" in rec.as_functions
+        if not has_user_create:
+            create_name = f"z_{name}_create"
+            lines.append(f"static {ctype} {create_name}({param_str});\n")
+            lines.append(f"static {ctype} {create_name}({param_str}) {{\n")
+            lines.append(f"    return {func_name}({arg_str});\n")
+            lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _emit_meta_create_class(
+        self, name: str, cls: zast.Class, lines: List[str]
+    ) -> None:
+        """Emit a meta.create constructor function for a class type."""
+        ctype = f"z_{name}_t"
+        params: List[str] = []
+        field_names: List[str] = []
+        field_ctypes: List[str] = []
+        for fname, fpath in cls.items.items():
+            fct = self._resolve_field_ctype(fpath)
+            params.append(f"{fct} {fname}")
+            field_names.append(fname)
+            field_ctypes.append(fct)
+        self._type_field_ctypes[name] = field_ctypes
+        self._type_field_names[name] = field_names
+        param_str = ", ".join(params) if params else "void"
+        arg_str = ", ".join(field_names) if field_names else ""
+        func_name = f"z_{name}_meta_create"
+        lines.append(f"static {ctype}* {func_name}({param_str});\n")
+        lines.append(f"static {ctype}* {func_name}({param_str}) {{\n")
+        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+        lines.append(f"    *_this = ({ctype}){{0}};\n")
+        for fname in field_names:
+            lines.append(f"    _this->{fname} = {fname};\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+        # emit z_{name}_create forwarding function if user didn't define create
+        has_user_create = "create" in cls.functions or "create" in cls.as_functions
+        if not has_user_create:
+            create_name = f"z_{name}_create"
+            lines.append(f"static {ctype}* {create_name}({param_str});\n")
+            lines.append(f"static {ctype}* {create_name}({param_str}) {{\n")
+            lines.append(f"    return {func_name}({arg_str});\n")
+            lines.append("}\n\n")
 
     def _emit_class(self, name: str, cls: zast.Class) -> None:
         self.needs_stdint = True
@@ -409,6 +484,9 @@ class CEmitter:
                 lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
         lines.append("    free(p);\n")
         lines.append("}\n\n")
+
+        # emit meta.create constructor
+        self._emit_meta_create_class(name, cls, lines)
 
         self.struct_defs.append("".join(lines))
 
@@ -525,7 +603,7 @@ class CEmitter:
             return _ctype(func.returntype.type)
         if isinstance(func.returntype, zast.AtomId):
             name = func.returntype.name
-            if name == "type" and record_name:
+            if name in ("type", "this") and record_name:
                 if record_name in self._class_names:
                     return f"z_{record_name}_t*"
                 return f"z_{record_name}_t"
@@ -710,7 +788,6 @@ class CEmitter:
         inner = assign.value.expression
         if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
             ctype = f"z_{inner.name}_t"
-            val = f"({ctype}){{0}}"
         result = f"{indent}{ctype} {cname} = {val};\n"
         # nullify source on .take for class pointers
         take_var = self._get_take_var_from_expr(assign.value)
@@ -870,25 +947,19 @@ class CEmitter:
                 and first_arg.name in self._class_names
                 and len(call.arguments) > 1
             ):
-                # emit as class construction
-                ctype = f"z_{first_arg.name}_t"
+                # emit as meta.create call
                 self.needs_stdlib = True
+                args_str, take_vars = self._build_meta_create_args(
+                    first_arg.name, call.arguments, skip_first=1
+                )
+                result_expr = f"z_{first_arg.name}_create({args_str})"
+                ctype = f"z_{first_arg.name}_t"
                 self._temp_counter += 1
                 tmp = f"_c{self._temp_counter}"
-                self._temp_decls.append(
-                    f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
-                )
-                self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
-                for arg in call.arguments[1:]:
-                    if arg.name:
-                        fval = self._emit_operation_value(arg.valtype)
-                        self._temp_decls.append(
-                            f"{indent}{tmp}->{arg.name} = {fval};\n"
-                        )
-                        # handle .take nullification
-                        take_var = self._get_take_var(arg.valtype)
-                        if take_var:
-                            self._temp_decls.append(f"{indent}{take_var} = NULL;\n")
+                self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
+                for fname, tv in take_vars.items():
+                    if tv:
+                        self._temp_decls.append(f"{indent}{tv} = NULL;\n")
                 val = tmp
             else:
                 val = self._emit_operation_value(call.arguments[0].valtype)
@@ -1017,6 +1088,52 @@ class CEmitter:
             parts.append(val)
         return ", ".join(parts)
 
+    def _zero_args_for_ctypes(self, type_name: str) -> str:
+        """Build zero-value argument list using stored field C types."""
+        field_ctypes = self._type_field_ctypes.get(type_name, [])
+        parts: List[str] = []
+        for fct in field_ctypes:
+            if fct.endswith("*"):
+                parts.append("NULL")
+            else:
+                parts.append("0")
+        return ", ".join(parts)
+
+    def _build_meta_create_args(
+        self, type_name: str, arguments: list, skip_first: int = 0
+    ) -> tuple:
+        """Build ordered argument list for meta.create call.
+
+        Maps named call arguments to field declaration order.
+        Missing fields get zero values.
+        """
+        field_names = self._type_field_names.get(type_name, [])
+        field_ctypes = self._type_field_ctypes.get(type_name, [])
+
+        # build dict from call arguments
+        arg_map: Dict[str, str] = {}
+        take_vars: Dict[str, Optional[str]] = {}
+        for arg in arguments[skip_first:]:
+            if arg.name:
+                val = self._emit_operation_value(arg.valtype)
+                arg_map[arg.name] = val
+                take_vars[arg.name] = self._get_take_var(arg.valtype)
+
+        # build ordered args
+        parts: List[str] = []
+        for i, fname in enumerate(field_names):
+            if fname in arg_map:
+                parts.append(arg_map[fname])
+            else:
+                # zero value based on C type
+                fct = field_ctypes[i] if i < len(field_ctypes) else "int64_t"
+                if fct.endswith("*"):
+                    parts.append("NULL")
+                else:
+                    parts.append("0")
+
+        return ", ".join(parts), take_vars
+
     def _get_callable_name(self, path: zast.Path) -> str:
         if isinstance(path, zast.AtomId):
             return path.name
@@ -1053,15 +1170,16 @@ class CEmitter:
 
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
             rec_type = call.callable.type
-            ctype = f"z_{rec_type.name}_t"
-            fields: List[str] = []
-            for arg in call.arguments:
-                if arg.name:
-                    val = self._emit_operation_value(arg.valtype)
-                    fields.append(f".{arg.name} = {val}")
-            if fields:
-                return f"({ctype}){{{', '.join(fields)}}}"
-            return f"({ctype}){{0}}"
+            args_str, take_vars = self._build_meta_create_args(
+                rec_type.name, call.arguments
+            )
+            result = f"z_{rec_type.name}_create({args_str})"
+            # handle .take nullification
+            for fname, tv in take_vars.items():
+                if tv:
+                    indent = self._indent()
+                    self._temp_decls.append(f"{indent}{tv} = NULL;\n")
+            return result
 
         # union construction: union.subtype expr
         if self._is_union_construction(call):
@@ -1071,22 +1189,18 @@ class CEmitter:
             cls_type = call.callable.type
             ctype = f"z_{cls_type.name}_t"
             self.needs_stdlib = True
+            args_str, take_vars = self._build_meta_create_args(
+                cls_type.name, call.arguments
+            )
+            result = f"z_{cls_type.name}_create({args_str})"
             self._temp_counter += 1
             tmp = f"_c{self._temp_counter}"
             indent = self._indent()
-            self._temp_decls.append(
-                f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
-            )
-            # zero-init then set named fields
-            self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
-            for arg in call.arguments:
-                if arg.name:
-                    val = self._emit_operation_value(arg.valtype)
-                    self._temp_decls.append(f"{indent}{tmp}->{arg.name} = {val};\n")
-                    # handle .take nullification
-                    take_var = self._get_take_var(arg.valtype)
-                    if take_var:
-                        self._temp_decls.append(f"{indent}{take_var} = NULL;\n")
+            self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+            # handle .take nullification
+            for fname, tv in take_vars.items():
+                if tv:
+                    self._temp_decls.append(f"{indent}{tv} = NULL;\n")
             self._temp_frees.append(tmp)
             self._temp_class_set[tmp] = cls_type.name
             return tmp
@@ -1155,17 +1269,18 @@ class CEmitter:
         ):
             return _mangle_func(name)
         if name in self._record_names:
-            return f"(z_{name}_t){{0}}"
+            zero_args = self._zero_args_for_ctypes(name)
+            return f"z_{name}_create({zero_args})"
         if name in self._class_names:
             self.needs_stdlib = True
+            ctype = f"z_{name}_t"
+            zero_args = self._zero_args_for_ctypes(name)
             self._temp_counter += 1
             tmp = f"_c{self._temp_counter}"
-            ctype = f"z_{name}_t"
             indent = self._indent()
             self._temp_decls.append(
-                f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
+                f"{indent}{ctype}* {tmp} = z_{name}_create({zero_args});\n"
             )
-            self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
             self._temp_frees.append(tmp)
             self._temp_class_set[tmp] = name
             return tmp
