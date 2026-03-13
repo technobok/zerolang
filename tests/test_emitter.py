@@ -610,11 +610,11 @@ class TestEmitterClasses:
         assert "c->x" in csource
 
     def test_class_scope_cleanup(self):
-        """Class variables freed at function exit."""
+        """Class variables destroyed at function exit."""
         csource = emit_source(
             "myclass: class { x: i64 }\nmain: function is { c: myclass }"
         )
-        assert "if (c) free(c);" in csource
+        assert "z_myclass_destroy(c);" in csource
 
     def test_class_take_nullifies(self):
         """After .take, source variable should be nullified."""
@@ -810,6 +810,157 @@ class TestEmitterClassMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "initial = 10" in result.stdout
+
+
+# ---- Phase 4h.1: Class Destructor Tests ----
+
+
+class TestEmitterClassDestructors:
+    """Tests for class destructor generation and usage."""
+
+    def test_class_destructor_with_string_field(self):
+        """Class with string field: destructor frees string."""
+        csource = emit_source(
+            "myclass: class { name: string\n x: i64 }\nmain: function is { c: myclass }"
+        )
+        assert "z_myclass_destroy" in csource
+        assert "zstr_free(p->name);" in csource
+
+    def test_class_destructor_with_class_field(self):
+        """Class with class field: destructor recurses."""
+        csource = emit_source(
+            "inner: class { x: i64 }\n"
+            "outer: class { child: inner }\n"
+            "main: function is { o: outer }"
+        )
+        assert "z_inner_destroy(p->child);" in csource
+
+    def test_class_destructor_with_union_field(self):
+        """Class with union field: destructor calls union destroy."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "myclass: class { data: myunion }\n"
+            "main: function is { c: myclass }"
+        )
+        assert "z_myunion_destroy(p->data);" in csource
+
+    def test_class_destructor_valtype_only(self):
+        """Class with only valtype fields: just NULL check + free."""
+        csource = emit_source(
+            "myclass: class { x: i64\n y: f64 }\nmain: function is { c: myclass }"
+        )
+        assert "z_myclass_destroy" in csource
+        # destructor should NOT contain zstr_free or z_*_destroy for fields
+        # find the destructor body
+        idx = csource.index("z_myclass_destroy(z_myclass_t* p)")
+        body = csource[idx : csource.index("}\n", idx) + 2]
+        assert "zstr_free" not in body
+        assert "z_" not in body.replace("z_myclass_destroy", "").replace(
+            "z_myclass_t", ""
+        )
+
+    def test_scope_exit_calls_destructor(self):
+        """Scope-exit cleanup calls z_{name}_destroy."""
+        csource = emit_source(
+            "myclass: class { name: string }\nmain: function is { c: myclass }"
+        )
+        # should call destructor, not bare free
+        assert "z_myclass_destroy(c);" in csource
+        assert "if (c) free(c);" not in csource
+
+    def test_reassignment_calls_destructor(self):
+        """Reassignment calls destructor on old value."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  c: myclass x: 1\n"
+            "  c = myclass x: 2\n"
+            "}"
+        )
+        assert "z_myclass_destroy(c);" in csource
+
+    def test_with_block_calls_destructor(self):
+        """With-block scope exit calls destructor."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            'main: function is { with c: myclass x: 1 do print "ok" }'
+        )
+        assert "z_myclass_destroy(c);" in csource
+
+    def test_union_class_subtype_destructor(self):
+        """Union with class subtype calls class destructor in union destructor."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "myunion: union { a: myclass\n b: null }\n"
+            "main: function is { u: myunion.b }"
+        )
+        assert "z_myclass_destroy((z_myclass_t*)u->data);" in csource
+
+
+class TestEmitterClassDestructorIntegration:
+    """Integration tests for class destructors using ASan."""
+
+    def test_class_string_field_asan(self):
+        """Class with string field: no leak under ASan."""
+        csource = emit_source(
+            "myclass: class { name: string\n x: i64 }\n"
+            'main: function is {\n  c: myclass name: "hello" x: 42\n  print "\\{c.name}"\n}'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip() == "hello"
+
+    def test_class_nested_class_field_asan(self):
+        """Nested class field: no leak under ASan."""
+        csource = emit_source(
+            "inner: class { x: i64 }\n"
+            "outer: class { child: inner\n y: i64 }\n"
+            "main: function is {\n"
+            "  i: inner x: 10\n"
+            "  o: outer child: i.take y: 20\n"
+            '  print "\\{o.child.x} \\{o.y}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip() == "10 20"
+
+    def test_class_union_field_asan(self):
+        """Class with union field: no leak under ASan."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "myclass: class { data: myunion\n x: i64 }\n"
+            "main: function is {\n"
+            "  u: myunion.a 42\n"
+            "  c: myclass data: u.take x: 1\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_example_classes_with_named(self):
+        """Updated classes example with named class."""
+        from zvfs import ZVfs, FSProvider, BindType
+
+        vfs = ZVfs()
+        systemdir = os.path.join(SRC_DIR, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "classes")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+        csource = zemitterc.emit(program)
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "named: test=42" in result.stdout
 
 
 # ---- Phase 4h: Union Emitter Tests ----

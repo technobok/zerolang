@@ -144,6 +144,8 @@ class CEmitter:
         self._func_class_vars: List[str] = []
         self._func_union_vars: List[str] = []
         self._union_var_types: Dict[str, str] = {}  # var_name -> union type name
+        self._class_var_types: Dict[str, str] = {}  # var_name -> class type name
+        self._temp_class_set: Dict[str, str] = {}  # temp_name -> class type name
         self._current_record_name: str = ""
         self._func_class_params: set[str] = set()
         # static string literal deduplication
@@ -357,18 +359,57 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
+    def _resolve_field_ctype(self, fpath: zast.Path) -> str:
+        """Resolve the C type for a struct/class field."""
+        ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
+        if ftype == "void" and isinstance(fpath, zast.AtomId):
+            fname = fpath.name
+            if fname == "string":
+                return "ZStr*"
+            if fname in self._class_names:
+                return f"z_{fname}_t*"
+            if fname in self._union_names:
+                return f"z_{fname}_t*"
+            if fname in self._record_names:
+                return f"z_{fname}_t"
+            return TYPEMAP.get(fname, "int64_t")
+        return ftype
+
     def _emit_class(self, name: str, cls: zast.Class) -> None:
         self.needs_stdint = True
         self.needs_stdlib = True
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in cls.items.items():
-            ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
-            if ftype == "void":
-                if isinstance(fpath, zast.AtomId):
-                    ftype = TYPEMAP.get(fpath.name, "int64_t")
+            ftype = self._resolve_field_ctype(fpath)
             lines.append(f"    {ftype} {fname};\n")
         lines.append(f"}} z_{name}_t;\n\n")
+
+        # emit destructor
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
+        lines.append("    if (!p) return;\n")
+        for fname, fpath in cls.items.items():
+            ftype_name = None
+            ftype_type = None
+            if hasattr(fpath, "type") and fpath.type:
+                ftype_name = fpath.type.name
+                ftype_type = fpath.type.typetype
+            elif isinstance(fpath, zast.AtomId):
+                ftype_name = fpath.name
+            if ftype_name == "string":
+                lines.append(f"    zstr_free(p->{fname});\n")
+            elif ftype_type == ZTypeType.CLASS or (
+                ftype_name and ftype_name in self._class_names
+            ):
+                lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
+            elif ftype_type == ZTypeType.UNION or (
+                ftype_name and ftype_name in self._union_names
+            ):
+                lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
+        lines.append("    free(p);\n")
+        lines.append("}\n\n")
+
         self.struct_defs.append("".join(lines))
 
         all_funcs = list(cls.functions.items()) + list(cls.as_functions.items())
@@ -413,7 +454,7 @@ class CEmitter:
                     lines.append("            zstr_free((ZStr*)u->data);\n")
                 elif stype_name and stype_name in self._class_names:
                     lines.append(
-                        "            free(u->data);  /* TODO: class destructor */\n"
+                        f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
                     )
                 else:
                     lines.append("            free(u->data);\n")
@@ -529,12 +570,16 @@ class CEmitter:
         saved_class_vars = self._func_class_vars
         saved_union_vars = self._func_union_vars
         saved_union_var_types = self._union_var_types
+        saved_class_var_types = self._class_var_types
+        saved_temp_class_set = self._temp_class_set
         saved_temp_counter = self._temp_counter
         saved_record_name = self._current_record_name
         self._func_string_vars = []
         self._func_class_vars = []
         self._func_union_vars = []
         self._union_var_types = {}
+        self._class_var_types = {}
+        self._temp_class_set = {}
         self._temp_counter = 0
         self._current_record_name = record_name
         saved_class_params = self._func_class_params
@@ -565,7 +610,9 @@ class CEmitter:
                 else:
                     lines.append(f"{indent}if ({sv}) free({sv});\n")
             for sv in reversed(self._func_class_vars):
-                lines.append(f"{indent}if ({sv}) free({sv});\n")
+                lines.append(
+                    f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
+                )
             for sv in reversed(self._func_string_vars):
                 lines.append(f"{indent}zstr_free({sv});\n")
 
@@ -577,6 +624,8 @@ class CEmitter:
         self._func_class_vars = saved_class_vars
         self._func_union_vars = saved_union_vars
         self._union_var_types = saved_union_var_types
+        self._class_var_types = saved_class_var_types
+        self._temp_class_set = saved_temp_class_set
         self._temp_counter = saved_temp_counter
         self._current_record_name = saved_record_name
         self._func_class_params = saved_class_params
@@ -592,9 +641,11 @@ class CEmitter:
         saved_decls = self._temp_decls
         saved_frees = self._temp_frees
         saved_string_set = self._temp_string_set
+        saved_class_set = self._temp_class_set
         self._temp_decls = []
         self._temp_frees = []
         self._temp_string_set = set()
+        self._temp_class_set = {}
 
         inner = sline.statementline
         if isinstance(inner, zast.Assignment):
@@ -614,6 +665,10 @@ class CEmitter:
         for t in self._temp_frees:
             if t in self._temp_string_set:
                 result += f"{indent}zstr_free({t});\n"
+            elif t in self._temp_class_set:
+                result += (
+                    f"{indent}{self._emit_class_free(t, self._temp_class_set[t])}\n"
+                )
             else:
                 result += f"{indent}free({t});\n"
 
@@ -621,6 +676,7 @@ class CEmitter:
         self._temp_decls = saved_decls
         self._temp_frees = saved_frees
         self._temp_string_set = saved_string_set
+        self._temp_class_set = saved_class_set
         return result
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
@@ -648,6 +704,8 @@ class CEmitter:
                 self._union_var_types[cname] = assign.type.name
             else:
                 self._func_class_vars.append(cname)
+                if assign.type:
+                    self._class_var_types[cname] = assign.type.name
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
@@ -673,7 +731,7 @@ class CEmitter:
             if rhs in self._temp_frees:
                 self._temp_frees.remove(rhs)
         elif lhs_type and lhs_type.typetype == ZTypeType.CLASS:
-            result += f"{indent}free({lhs});\n"
+            result += f"{indent}z_{lhs_type.name}_destroy({lhs});\n"
             if rhs in self._temp_frees:
                 self._temp_frees.remove(rhs)
         elif lhs_type and lhs_type.typetype == ZTypeType.UNION:
@@ -808,6 +866,10 @@ class CEmitter:
             for t in self._temp_frees:
                 if t in self._temp_string_set:
                     result += f"{indent}zstr_free({t});\n"
+                elif t in self._temp_class_set:
+                    result += (
+                        f"{indent}{self._emit_class_free(t, self._temp_class_set[t])}\n"
+                    )
                 else:
                     result += f"{indent}free({t});\n"
             self._temp_frees.clear()
@@ -823,7 +885,7 @@ class CEmitter:
             # free func class vars (except the return value)
             for sv in reversed(self._func_class_vars):
                 if sv != val:
-                    result += f"{indent}if ({sv}) free({sv});\n"
+                    result += f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
             # free func string vars (except the return value)
             for sv in reversed(self._func_string_vars):
                 if sv != val:
@@ -841,7 +903,9 @@ class CEmitter:
             else:
                 result += f"{indent}if ({sv}) free({sv});\n"
         for sv in reversed(self._func_class_vars):
-            result += f"{indent}if ({sv}) free({sv});\n"
+            result += (
+                f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
+            )
         for sv in reversed(self._func_string_vars):
             result += f"{indent}zstr_free({sv});\n"
         result += f"{indent}return;\n"
@@ -963,7 +1027,12 @@ class CEmitter:
                 if arg.name:
                     val = self._emit_operation_value(arg.valtype)
                     self._temp_decls.append(f"{indent}{tmp}->{arg.name} = {val};\n")
+                    # handle .take nullification
+                    take_var = self._get_take_var(arg.valtype)
+                    if take_var:
+                        self._temp_decls.append(f"{indent}{take_var} = NULL;\n")
             self._temp_frees.append(tmp)
+            self._temp_class_set[tmp] = cls_type.name
             return tmp
 
         args = self._emit_call_args(call)
@@ -973,7 +1042,16 @@ class CEmitter:
         if hasattr(call, "type") and call.type:
             if call.type.name == "string":
                 return self._alloc_temp(result)
-            if call.type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
+            if call.type.typetype == ZTypeType.CLASS:
+                ctype = f"z_{call.type.name}_t"
+                self._temp_counter += 1
+                tmp = f"_c{self._temp_counter}"
+                indent = self._indent()
+                self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+                self._temp_frees.append(tmp)
+                self._temp_class_set[tmp] = call.type.name
+                return tmp
+            if call.type.typetype == ZTypeType.UNION:
                 ctype = f"z_{call.type.name}_t"
                 self._temp_counter += 1
                 tmp = f"_c{self._temp_counter}"
@@ -1033,6 +1111,7 @@ class CEmitter:
             )
             self._temp_decls.append(f"{indent}*{tmp} = ({ctype}){{0}};\n")
             self._temp_frees.append(tmp)
+            self._temp_class_set[tmp] = name
             return tmp
         return _mangle_var(name)
 
@@ -1104,6 +1183,16 @@ class CEmitter:
     def _union_var_type_name(self, var_name: str) -> Optional[str]:
         """Get the union type name for a union variable."""
         return self._union_var_types.get(var_name)
+
+    def _class_var_type_name(self, var_name: str) -> Optional[str]:
+        """Get the class type name for a class variable."""
+        return self._class_var_types.get(var_name)
+
+    def _emit_class_free(self, var: str, type_name: Optional[str]) -> str:
+        """Emit the right destroy call for a class variable."""
+        if type_name:
+            return f"z_{type_name}_destroy({var});"
+        return f"if ({var}) free({var});"
 
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
@@ -1395,9 +1484,11 @@ class CEmitter:
         saved_decls = self._temp_decls
         saved_frees = self._temp_frees
         saved_string_set = self._temp_string_set
+        saved_class_set = self._temp_class_set
         self._temp_decls = []
         self._temp_frees = []
         self._temp_string_set = set()
+        self._temp_class_set = {}
 
         doexpr_code = self._emit_expression_stmt(withnode.doexpr)
 
@@ -1407,19 +1498,26 @@ class CEmitter:
         for t in self._temp_frees:
             if t in self._temp_string_set:
                 parts.append(f"{inner_indent}zstr_free({t});\n")
+            elif t in self._temp_class_set:
+                parts.append(
+                    f"{inner_indent}{self._emit_class_free(t, self._temp_class_set[t])}\n"
+                )
             else:
                 parts.append(f"{inner_indent}free({t});\n")
 
         self._temp_decls = saved_decls
         self._temp_frees = saved_frees
         self._temp_string_set = saved_string_set
+        self._temp_class_set = saved_class_set
 
         if is_union and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
         elif is_string:
             parts.append(f"{inner_indent}zstr_free({cname});\n")
+        elif is_class and val_type:
+            parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
         elif is_class:
-            parts.append(f"{inner_indent}free({cname});\n")
+            parts.append(f"{inner_indent}if ({cname}) free({cname});\n")
         self.indent_level -= 1
         parts.append(f"{indent}}}\n")
         return "".join(parts)
