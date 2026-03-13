@@ -305,6 +305,20 @@ class TestLexerFiltering:
         assert TT.LABEL in types
         assert TT.REFID in types
 
+    def test_labelpre_from_labelpre_flag(self):
+        """:name produces LABEL + REFID both with from_labelpre=True"""
+        tokens = collect_lexer_tokens(":name")
+        label_tok = [t for t in tokens if t.toktype == TT.LABEL][0]
+        refid_tok = [t for t in tokens if t.toktype == TT.REFID][0]
+        assert label_tok.from_labelpre is True
+        assert refid_tok.from_labelpre is True
+
+    def test_regular_label_no_labelpre_flag(self):
+        """name: produces LABEL without from_labelpre flag"""
+        tokens = collect_lexer_tokens("name: value")
+        label_tok = [t for t in tokens if t.toktype == TT.LABEL][0]
+        assert label_tok.from_labelpre is False
+
 
 class TestIsValidUnitName:
     def test_valid_simple(self):

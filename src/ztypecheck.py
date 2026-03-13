@@ -191,7 +191,8 @@ class TypeChecker:
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
             self._resolving.append((key, shell))
-            t = self._resolve_name(defn.name)
+            skip = (unitname, name) if defn.start.from_labelpre else None
+            t = self._resolve_name(defn.name, skip_unit_def=skip)
             self._resolving.pop()
             return t
         return None
@@ -380,8 +381,12 @@ class TypeChecker:
 
     # ---- Name resolution (local -> unit body -> core -> system) ----
 
-    def _resolve_name(self, name: str) -> Optional[ZType]:
-        """Resolve a name using the scoping order: local, current unit, core, system."""
+    def _resolve_name(self, name: str, skip_unit_def=None) -> Optional[ZType]:
+        """Resolve a name using the scoping order: local, current unit, core, system.
+
+        skip_unit_def: optional (unitname, defname) tuple. When set, skip that
+        specific definition during unit body lookup (label_value :x semantics).
+        """
         # 1. local scope (symtab)
         t = self.symtab.lookup(name)
         if t:
@@ -390,9 +395,12 @@ class TypeChecker:
         # 2. current unit body (main unit)
         mainunit = self.program.units.get(self.program.mainunitname)
         if mainunit and name in mainunit.body:
-            t = self._resolve_unit_name(self.program.mainunitname, name)
-            if t:
-                return t
+            if skip_unit_def == (self.program.mainunitname, name):
+                pass  # label_value: skip self-binding
+            else:
+                t = self._resolve_unit_name(self.program.mainunitname, name)
+                if t:
+                    return t
 
         # 3. core unit body
         core = self.program.units.get("core")

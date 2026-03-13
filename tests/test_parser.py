@@ -484,6 +484,65 @@ class TestAsClause:
         assert "y" in u.as_items
 
 
+class TestLabelValueShorthand:
+    """Test :x (label_value) parsing in various contexts."""
+
+    def test_unit_level_label_value(self):
+        """:x at unit level produces name='x', value=AtomId('x') with from_labelpre."""
+        result = parse_unit(":u8")
+        body = get_unit_body(result)
+        assert "u8" in body
+        defn = body["u8"]
+        assert isinstance(defn, zast.AtomId)
+        assert defn.name == "u8"
+        assert defn.start.from_labelpre is True
+
+    def test_record_field_label_value(self):
+        """:x in record fields."""
+        result = parse_unit("r: record { :i64\n :string }")
+        body = get_unit_body(result)
+        rec = body["r"]
+        assert isinstance(rec, zast.Record)
+        assert "i64" in rec.items
+        assert "string" in rec.items
+
+    def test_union_field_label_value(self):
+        """:x in union subtypes."""
+        result = parse_unit("u: union { :u8\n :u16\n :u32 }")
+        body = get_unit_body(result)
+        u = body["u"]
+        assert isinstance(u, zast.Union)
+        assert "u8" in u.items
+        assert "u16" in u.items
+        assert "u32" in u.items
+
+    def test_function_param_label_value(self):
+        """:x in function parameters."""
+        result = parse_unit("f: function {:i64} out i64 is { i64 }")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert "i64" in func.parameters
+
+    def test_call_arg_label_value(self):
+        """:x in call arguments."""
+        result = parse_unit(
+            "f: function {n: i64} out i64 is { n }\n"
+            "main: function is { x: 42\n f :x }"
+        )
+        body = get_unit_body(result)
+        assert isinstance(body["f"], zast.Function)
+        assert isinstance(body["main"], zast.Function)
+
+    def test_statement_label_value(self):
+        """:x as a labeled statement in function body."""
+        result = parse_unit(
+            "f: function {x: i64} out i64 is { y: x\n y }"
+        )
+        body = get_unit_body(result)
+        assert isinstance(body["f"], zast.Function)
+
+
 def parse_example(unitname: str) -> zast.Program | zast.Error:
     """Parse an example .z file using the same VFS setup as zc.py."""
     systemdir = os.path.join(SRC_DIR, "system")

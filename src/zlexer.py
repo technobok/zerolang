@@ -30,6 +30,7 @@ class Token:
     fsno: DEntryID  # unit number in Program / ParserState
     lineno: int
     colno: int
+    from_labelpre: bool = False
 
 
 class ITokenizer(Protocol):
@@ -577,11 +578,13 @@ class Lexer:
             if tt == TT.LABELPRE:
                 # unpack a LABELPRE -> LABEL: REFID
                 self._nexttoken = Token(
-                    TT.REFID, token.tokstr, token.fsno, token.lineno, token.colno
+                    TT.REFID, token.tokstr, token.fsno, token.lineno, token.colno,
+                    from_labelpre=True,
                 )
                 # set token to this instead...
                 token = Token(
-                    TT.LABEL, token.tokstr, token.fsno, token.lineno, token.colno
+                    TT.LABEL, token.tokstr, token.fsno, token.lineno, token.colno,
+                    from_labelpre=True,
                 )
 
             break  # store this token

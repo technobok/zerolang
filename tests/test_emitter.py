@@ -1509,3 +1509,48 @@ class TestEmitterConstructorMemorySafety:
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+
+class TestEmitterLabelValueShorthand:
+    """Tests for :x (label_value) C emission."""
+
+    def test_union_with_label_value_subtypes(self):
+        """Union with :x subtypes emits correct tag enum + struct."""
+        csource = emit_source(
+            "myunion: union { :u8\n :u16\n :u32 }\n"
+            "main: function is { x: myunion.u8 42 }"
+        )
+        assert "Z_MYUNION_TAG_U8" in csource
+        assert "Z_MYUNION_TAG_U16" in csource
+        assert "Z_MYUNION_TAG_U32" in csource
+        assert "z_myunion_t" in csource
+
+    def test_call_with_label_value_arg(self):
+        """Call with :x argument emits correctly."""
+        csource = emit_source(
+            "f: function {x: i64} out i64 is { x }\n"
+            "main: function is { x: 42\n f :x }"
+        )
+        assert "z_f(" in csource
+
+
+class TestEmitterLabelValueIntegration:
+    """Integration: compile and run programs using :x syntax."""
+
+    def test_union_label_value_basic(self):
+        """Compile and run union with :x subtypes."""
+        csource = emit_source(
+            "myunion: union { :u8\n :string }\n"
+            'main: function is { x: myunion.u8 42\n print "ok" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_call_label_value_arg(self):
+        """Compile and run call with :x argument."""
+        csource = emit_source(
+            'f: function {x: i64} is { print "\\{x}" }\n'
+            "main: function is { x: 99\n f :x }"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "99"

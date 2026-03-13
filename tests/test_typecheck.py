@@ -1460,3 +1460,86 @@ class TestUnionMatchExhaustiveness:
         assert isinstance(program, zast.Program), "Parse failed"
         errors = typecheck(program)
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+
+
+class TestLabelValueShorthand:
+    """Test :x (label_value) type checking — 'don't bind to self' semantics."""
+
+    def test_label_value_unit_level_resolves_core_type(self):
+        """:u8 at unit level resolves to core u8, not circular error."""
+        program = check_ok(
+            ":u8\nmain: function is { x: u8 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.u8")
+        assert ut is not None
+        assert ut.name == "u8"
+
+    def test_label_value_core_type_resolves(self):
+        """:x where x exists in core resolves correctly."""
+        program = check_ok(
+            ":i64\nmain: function is { x: i64 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.i64")
+        assert ut is not None
+        assert ut.name == "i64"
+
+    def test_label_value_unknown_name_error(self):
+        """:x where x doesn't exist anywhere produces an error, not circular."""
+        errors = check_errors(
+            ":nonexistent\nmain: function is { x: nonexistent }"
+        )
+        msgs = [e.msg for e in errors]
+        # Should be an unresolved name, not a circular alias
+        assert not any("ircular" in m for m in msgs)
+
+    def test_union_with_label_value_subtypes(self):
+        """union { :u8 :u16 :u32 } type checks correctly."""
+        program = check_ok(
+            "myunion: union { :u8\n :u16\n :u32 }\n"
+            "main: function is { x: myunion.u8 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert ut is not None
+        assert ut.typetype == ZTypeType.UNION
+        assert "u8" in ut.children
+        assert "u16" in ut.children
+        assert "u32" in ut.children
+
+    def test_union_label_value_subtype_names(self):
+        """Label value union subtypes resolve to their payload types."""
+        program = check_ok(
+            "myunion: union { :u8\n :string }\n"
+            "main: function is { x: myunion.u8 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert ut.children["u8"].name == "u8"
+        assert ut.children["string"].name == "string"
+
+    def test_function_with_label_value_param(self):
+        """Function with :i64 parameter type checks."""
+        check_ok(
+            "f: function {:i64} out i64 is { i64 }\n"
+            "main: function is { f 42 }"
+        )
+
+    def test_call_with_label_value_arg(self):
+        """Call with :x argument type checks."""
+        check_ok(
+            "f: function {x: i64} out i64 is { x }\n"
+            "main: function is { x: 42\n f :x }"
+        )
+
+    def test_statement_label_value_in_body(self):
+        """Statement with label value in function body type checks."""
+        check_ok(
+            "f: function {x: i64} out i64 is { y: x\n y }\n"
+            "main: function is { f 42 }"
+        )
