@@ -38,7 +38,12 @@ def _is_valtype(ztype: ZType) -> bool:
         return ztype.is_valtype
     # types without explicit classification: assume valtype for safety
     # (numerics, strings, bools are all records tagged as valtype)
-    return ztype.typetype in (ZTypeType.RECORD, ZTypeType.ENUM, ZTypeType.DATA)
+    return ztype.typetype in (
+        ZTypeType.RECORD,
+        ZTypeType.ENUM,
+        ZTypeType.DATA,
+        ZTypeType.VARIANT,
+    )
 
 
 # Sentinel for definitions currently being resolved
@@ -191,10 +196,10 @@ class TypeChecker:
             return self._resolve_record_type(unitname, name, defn)
         if isinstance(defn, zast.Class):
             return self._resolve_class_type(unitname, name, defn)
-        if isinstance(defn, zast.Enum):
-            return self._resolve_enum_type(unitname, name, defn)
         if isinstance(defn, zast.Union):
             return self._resolve_union_type(unitname, name, defn)
+        if isinstance(defn, zast.Variant):
+            return self._resolve_variant_type(unitname, name, defn)
         if isinstance(defn, zast.Unit):
             return self._resolve_inline_unit_type(unitname, name, defn)
         # alias: DottedPath or AtomId reference
@@ -452,6 +457,167 @@ class TypeChecker:
         self._resolving.pop()
         return utype
 
+    def _resolve_variant_type(
+        self, unitname: str, name: str, variant_defn: zast.Variant
+    ) -> ZType:
+        """Resolve a variant definition into a VARIANT ZType.
+
+        Variants are value types (stack-allocated, copy semantics).
+        All subtypes must also be value types.
+        """
+        key = f"{unitname}.{name}"
+        vtype = _make_type(name, ZTypeType.VARIANT)
+        self._resolved[key] = vtype
+        self._resolving.append((key, vtype))
+
+        vtype.is_valtype = True  # variants are value types
+
+        # resolve each subtype item
+        subtype_names = list(variant_defn.items.keys())
+        for sname, spath in variant_defn.items.items():
+            if isinstance(spath, zast.AtomId) and spath.name == "null":
+                st = _make_type("null", ZTypeType.RECORD)
+                st.is_valtype = True
+            else:
+                st = self._resolve_typeref(spath)
+                # reject non-valtypes
+                if st and st.is_valtype is not None and not st.is_valtype:
+                    self._error(
+                        f"Variant '{name}' subtype '{sname}' must be a value type",
+                        loc=variant_defn.start,
+                    )
+                elif st and st.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
+                    self._error(
+                        f"Variant '{name}' subtype '{sname}' must be a value type",
+                        loc=variant_defn.start,
+                    )
+                elif st and st.name == "string":
+                    self._error(
+                        f"Variant '{name}' subtype '{sname}' must be a value type",
+                        loc=variant_defn.start,
+                    )
+            if st:
+                vtype.children[sname] = st
+
+        # resolve tag from as_items
+        custom_tag_data = None
+        tag_count = 0
+
+        for as_name, as_path in variant_defn.as_items.items():
+            as_type = (
+                self._resolve_dotted_path(as_path)
+                if isinstance(as_path, zast.DottedPath)
+                else self._resolve_typeref(as_path)
+            )
+            if as_type and as_type.typetype == ZTypeType.TAG:
+                tag_count += 1
+                if tag_count > 1:
+                    self._error(
+                        f"Variant '{name}' has multiple .tag items in 'as' block",
+                        loc=variant_defn.start,
+                    )
+                    break
+                custom_tag_data = as_type.parent
+
+        if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
+            # validate: data labels must match variant subtypes 1:1
+            data_labels = [
+                k
+                for k in custom_tag_data.children
+                if not k.startswith(":") and k != "tag"
+            ]
+            if sorted(data_labels) != sorted(subtype_names):
+                missing_in_data = set(subtype_names) - set(data_labels)
+                missing_in_variant = set(data_labels) - set(subtype_names)
+                msg_parts = []
+                if missing_in_data:
+                    msg_parts.append(
+                        f"missing in data: {', '.join(sorted(missing_in_data))}"
+                    )
+                if missing_in_variant:
+                    msg_parts.append(
+                        f"missing in variant: {', '.join(sorted(missing_in_variant))}"
+                    )
+                self._error(
+                    f"Variant '{name}' tag data labels do not match subtypes: "
+                    + "; ".join(msg_parts),
+                    loc=variant_defn.start,
+                )
+            # validate: data values must be unique
+            seen_values: dict = {}
+            for dl in data_labels:
+                child = custom_tag_data.children[dl]
+                val = child.name if child else None
+                if val in seen_values:
+                    self._error(
+                        f"Variant '{name}' tag data has duplicate value "
+                        f"'{val}' for labels '{seen_values[val]}' and '{dl}'",
+                        loc=variant_defn.start,
+                    )
+                seen_values[val] = dl
+
+            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+            for sname in subtype_names:
+                child = custom_tag_data.children.get(sname)
+                val = child.name if child else str(subtype_names.index(sname))
+                tag_type.children[sname] = _make_type(val, ZTypeType.RECORD)
+            vtype.children[":tag"] = tag_type
+            vtype.children["tag"] = custom_tag_data
+
+        elif custom_tag_data and custom_tag_data.typetype == ZTypeType.RECORD:
+            num_subtypes = len(subtype_names)
+            if custom_tag_data.name == "u8" and num_subtypes > 256:
+                self._error(
+                    f"Variant '{name}' has {num_subtypes} subtypes, "
+                    f"exceeds u8 tag capacity (max 256)",
+                    loc=variant_defn.start,
+                )
+            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+            for i, sname in enumerate(subtype_names):
+                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            vtype.children[":tag"] = tag_type
+            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
+            gen_data.is_valtype = False
+            for i, sname in enumerate(subtype_names):
+                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            gen_tag = _make_type(f"{name}:tag:data:tag", ZTypeType.TAG, parent=gen_data)
+            gen_tag.is_valtype = True
+            gen_data.children["tag"] = gen_tag
+            vtype.children["tag"] = gen_data
+
+        else:
+            num_subtypes = len(subtype_names)
+            if num_subtypes > 256:
+                self._error(
+                    f"Variant '{name}' has {num_subtypes} subtypes, "
+                    f"exceeds default u8 tag capacity (max 256). "
+                    f"Specify a custom tag type via 'as' block",
+                    loc=variant_defn.start,
+                )
+            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+            for i, sname in enumerate(subtype_names):
+                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            vtype.children[":tag"] = tag_type
+            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
+            gen_data.is_valtype = False
+            for i, sname in enumerate(subtype_names):
+                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            gen_tag = _make_type(f"{name}:tag:data:tag", ZTypeType.TAG, parent=gen_data)
+            gen_tag.is_valtype = True
+            gen_data.children["tag"] = gen_tag
+            vtype.children["tag"] = gen_data
+
+        # resolve methods
+        for mname, mfunc in variant_defn.functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            vtype.children[mname] = mt
+        for mname, mfunc in variant_defn.as_functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            vtype.children[mname] = mt
+
+        self._resolving.pop()
+        return vtype
+
     def _resolve_data_type(
         self, unitname: str, name: str, data_defn: zast.Data
     ) -> ZType:
@@ -551,29 +717,6 @@ class TypeChecker:
             if not _is_valtype(ft):
                 ftype.param_ownership[fname] = ZParamOwnership.TAKE
         return ftype
-
-    def _resolve_enum_type(self, unitname: str, name: str, enum: zast.Enum) -> ZType:
-        key = f"{unitname}.{name}"
-        etype = _make_type(name, ZTypeType.ENUM)
-        etype.is_valtype = True  # enums are value types
-        self._resolved[key] = etype
-        self._resolving.append((key, etype))
-
-        for vname, vpath in enum.items.items():
-            # resolve variant value type if specified
-            if vpath:
-                self._resolve_typeref(vpath)
-                # variant still has the enum type, but store value type info
-                etype.children[vname] = etype
-            else:
-                etype.children[vname] = etype
-
-        for mname, mfunc in enum.functions.items():
-            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
-            etype.children[mname] = mt
-
-        self._resolving.pop()
-        return etype
 
     def _resolve_inline_unit_type(
         self, unitname: str, name: str, unit: zast.Unit
@@ -733,17 +876,17 @@ class TypeChecker:
             # .borrow returns the same type (borrowed reference)
             path.type = parent_type
             return parent_type
-        # for unions, store parent type on the path for construction detection
-        if parent_type.typetype == ZTypeType.UNION:
+        # for unions/variants, store parent type on the path for construction detection
+        if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
             child = parent_type.children.get(child_name)
             if child:
                 # non-subtype children (tag, :tag, methods) should not be
-                # treated as union subtype construction
+                # treated as union/variant subtype construction
                 if (
                     child_name not in ("tag", ":tag")
                     and child.typetype != ZTypeType.FUNCTION
                 ):
-                    path.parent_union_type = parent_type
+                    path.parent_tagged_type = parent_type
                 return child
             return None
         # for records/enums, look up child in children
@@ -985,9 +1128,9 @@ class TypeChecker:
             path.type = t
             # if this is a union subtype reference (null subtype used as value),
             # the type should be the parent union type
-            if path.parent_union_type:
-                path.type = path.parent_union_type
-                return path.parent_union_type
+            if path.parent_tagged_type:
+                path.type = path.parent_tagged_type
+                return path.parent_tagged_type
         return t
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
@@ -1020,17 +1163,17 @@ class TypeChecker:
         if callee_type.name == "return" and callee_type.typetype == ZTypeType.FUNCTION:
             return self._check_return_call(call)
 
-        # handle union subtype construction: dotted path parent is a union
+        # handle union/variant subtype construction: dotted path parent is a tagged type
         # (must be before record/class checks since subtypes may be records)
         if (
             isinstance(call.callable, zast.DottedPath)
-            and call.callable.parent_union_type
+            and call.callable.parent_tagged_type
         ):
-            parent_union = call.callable.parent_union_type
+            parent_tagged = call.callable.parent_tagged_type
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            call.type = parent_union
-            return parent_union
+            call.type = parent_tagged
+            return parent_tagged
 
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
@@ -1396,10 +1539,14 @@ class TypeChecker:
                 err = self.symtab.try_lock(subject_name, ZLockState.EXCLUSIVE, holder)
                 if not err:
                     match_lock_info = (subject_name, holder)
-        # union exhaustiveness check
-        if subject_type and subject_type.typetype == ZTypeType.UNION:
+        # union/variant exhaustiveness check
+        if subject_type and subject_type.typetype in (
+            ZTypeType.UNION,
+            ZTypeType.VARIANT,
+        ):
+            kind = "union" if subject_type.typetype == ZTypeType.UNION else "variant"
             # collect subtype names (exclude :tag, tag data, and methods)
-            union_subtypes = {
+            subtypes = {
                 k
                 for k, v in subject_type.children.items()
                 if not k.startswith(":")
@@ -1412,10 +1559,10 @@ class TypeChecker:
                 )
             }
             covered = {clause.match.name for clause in casenode.clauses}
-            missing = union_subtypes - covered
+            missing = subtypes - covered
             if missing and not casenode.elseclause:
                 self._error(
-                    f"Non-exhaustive match on union '{subject_type.name}': "
+                    f"Non-exhaustive match on {kind} '{subject_type.name}': "
                     f"missing {', '.join(sorted(missing))}",
                     loc=casenode.subject.start
                     if hasattr(casenode.subject, "start")

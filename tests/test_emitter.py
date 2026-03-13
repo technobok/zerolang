@@ -1635,3 +1635,156 @@ class TestInlineUnits:
         )
         output = compile_and_run(csource)
         assert output.strip() == "10 9"
+
+
+class TestEmitterVariant:
+    """Tests for variant C emission."""
+
+    def test_variant_struct(self):
+        """Variant should emit tag enum + struct with inline union."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
+        )
+        assert "Z_MYVAR_TAG_A" in csource
+        assert "Z_MYVAR_TAG_B" in csource
+        assert "z_myvar_tag_t" in csource
+        assert "z_myvar_t" in csource
+        assert "union {" in csource
+
+    def test_variant_no_malloc(self):
+        """Variant construction should not use malloc."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 42 }"
+        )
+        # there should be no malloc for the variant construction
+        # (malloc may exist for string infrastructure but not for variant)
+        lines = csource.split("\n")
+        variant_lines = [ln for ln in lines if "myvar" in ln.lower() or "_c1" in ln]
+        assert not any("malloc" in ln for ln in variant_lines)
+
+    def test_variant_direct_assign(self):
+        """Variant construction should use direct .data.subname assignment."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 42 }"
+        )
+        assert ".data.a = " in csource
+
+    def test_variant_null_construction(self):
+        """Null subtype construction emits tag only."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.b }"
+        )
+        assert "Z_MYVAR_TAG_B" in csource
+
+    def test_variant_no_destructor(self):
+        """Variant should not have a destroy function."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
+        )
+        assert "myvar_destroy" not in csource
+
+    def test_variant_match_dot_access(self):
+        """Match on variant emits switch with dot (not arrow) access."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myvar.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            "  } case b then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}"
+        )
+        assert "switch (x.tag)" in csource
+        assert "case Z_MYVAR_TAG_A:" in csource
+        assert "case Z_MYVAR_TAG_B:" in csource
+
+    def test_variant_enum_only_tag(self):
+        """All-null variant should have just tag, no union data member."""
+        csource = emit_source(
+            "mode: variant { READ: null\n WRITE: null }\n"
+            "main: function is { x: mode.READ }"
+        )
+        # the struct should have tag but no 'union {' for data
+        struct_section = csource.split("typedef struct")[1].split("z_mode_t;")[0]
+        assert "union" not in struct_section
+
+    def test_variant_equality(self):
+        """Variant should have z_name_eq equality function."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
+        )
+        assert "z_myvar_eq" in csource
+        assert "a.tag != b.tag" in csource
+
+    def test_variant_basic_run(self):
+        """Compile and run: construct and match variant."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myvar.a 42\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "got a"\n'
+            "  } case b then {\n"
+            '    print "got b"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "got a"
+
+    def test_variant_with_record_run(self):
+        """Compile and run: variant containing record."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\n"
+            "shape: variant { pt: point\n none: null }\n"
+            "main: function is {\n"
+            "  s: shape.pt (point x: 10 y: 20)\n"
+            "  match (\n"
+            "    s\n"
+            "  ) case pt then {\n"
+            '    print "point"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "point"
+
+    def test_variant_in_record_run(self):
+        """Compile and run: record with variant field."""
+        csource = emit_source(
+            "color: variant { red: null\n blue: null\n green: null }\n"
+            "item: record { name: i64\n c: color }\n"
+            "main: function is {\n"
+            "  clr: color.red\n"
+            "  x: item name: 1 c: clr\n"
+            '  print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_variant_payload_access_run(self):
+        """Compile and run: access payload inside match case."""
+        csource = emit_source(
+            "myvar: variant { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myvar.a 42\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "\\{x.a}"\n'
+            "  } case b then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"

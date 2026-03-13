@@ -62,6 +62,8 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return f"z_{name}_t*"
     if ztype.typetype == ZTypeType.UNION:
         return f"z_{name}_t*"
+    if ztype.typetype == ZTypeType.VARIANT:
+        return f"z_{name}_t"
     return "void"
 
 
@@ -123,6 +125,7 @@ class CEmitter:
         self.needs_stdio = False
         self.needs_stdint = False
         self.needs_stdlib = False
+        self.needs_stdbool = False
         self.needs_string = False
         self.forward_decls: List[str] = []
         self.struct_defs: List[str] = []
@@ -135,6 +138,7 @@ class CEmitter:
         self._record_names: set[str] = set()
         self._class_names: set[str] = set()
         self._union_names: set[str] = set()
+        self._variant_names: set[str] = set()
         self._unit_names: set[str] = set()
         # field info per type name (for meta.create calls)
         self._type_field_ctypes: Dict[str, List[str]] = {}
@@ -204,6 +208,8 @@ class CEmitter:
                 self._class_names.add(qname)
             elif isinstance(defn, zast.Union):
                 self._union_names.add(qname)
+            elif isinstance(defn, zast.Variant):
+                self._variant_names.add(qname)
             elif isinstance(defn, zast.Data):
                 self._data_names.add(qname)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -225,6 +231,8 @@ class CEmitter:
                 self._emit_class(qname, defn)
             elif isinstance(defn, zast.Union):
                 self._emit_union(qname, defn)
+            elif isinstance(defn, zast.Variant):
+                self._emit_variant(qname, defn)
             elif isinstance(defn, zast.Function) and defn.body:
                 self._emit_function(qname, defn)
             elif isinstance(defn, zast.Data):
@@ -271,12 +279,15 @@ class CEmitter:
             parts.append("#include <stdint.h>\n")
         if self.needs_stdlib:
             parts.append("#include <stdlib.h>\n")
+        if self.needs_stdbool:
+            parts.append("#include <stdbool.h>\n")
         if self.needs_string:
             parts.append("#include <string.h>\n")
         if (
             self.needs_stdio
             or self.needs_stdint
             or self.needs_stdlib
+            or self.needs_stdbool
             or self.needs_string
         ):
             parts.append("\n")
@@ -368,10 +379,7 @@ class CEmitter:
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in rec.items.items():
-            ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
-            if ftype == "void":
-                if isinstance(fpath, zast.AtomId):
-                    ftype = TYPEMAP.get(fpath.name, "int64_t")
+            ftype = self._resolve_field_ctype(fpath)
             lines.append(f"    {ftype} {fname};\n")
         lines.append(f"}} z_{name}_t;\n\n")
         self.struct_defs.append("".join(lines))
@@ -395,6 +403,8 @@ class CEmitter:
                 return f"z_{fname}_t*"
             if fname in self._union_names:
                 return f"z_{fname}_t*"
+            if fname in self._variant_names:
+                return f"z_{fname}_t"
             if fname in self._record_names:
                 return f"z_{fname}_t"
             return TYPEMAP.get(fname, "int64_t")
@@ -514,7 +524,9 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
-    def _resolve_tag_values(self, union_defn: zast.Union) -> Optional[Dict[str, int]]:
+    def _resolve_tag_values(
+        self, union_defn: "zast.Union | zast.Variant"
+    ) -> Optional[Dict[str, int]]:
         """Resolve custom tag values from as_items if a .tag reference exists."""
         for as_name, as_path in union_defn.as_items.items():
             if isinstance(as_path, zast.DottedPath) and as_path.child.name == "tag":
@@ -613,6 +625,90 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
+    def _emit_variant(self, name: str, variant_defn: zast.Variant) -> None:
+        self.needs_stdint = True
+        self.needs_stdbool = True
+        lines: List[str] = []
+
+        # resolve custom tag values from as_items
+        custom_tag_values = self._resolve_tag_values(variant_defn)
+
+        # emit tag enum
+        lines.append("typedef enum {\n")
+        for sname in variant_defn.items.keys():
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            if custom_tag_values and sname in custom_tag_values:
+                lines.append(f"    {tag} = {custom_tag_values[sname]},\n")
+            else:
+                lines.append(f"    {tag},\n")
+        lines.append(f"}} z_{name}_tag_t;\n\n")
+
+        # check if all subtypes are null (enum pattern)
+        all_null = all(
+            isinstance(spath, zast.AtomId) and spath.name == "null"
+            for spath in variant_defn.items.values()
+        )
+
+        # emit variant struct with inline union
+        lines.append("typedef struct {\n")
+        lines.append(f"    z_{name}_tag_t tag;\n")
+        if not all_null:
+            lines.append("    union {\n")
+            for sname, spath in variant_defn.items.items():
+                is_null = isinstance(spath, zast.AtomId) and spath.name == "null"
+                if not is_null:
+                    sub_ctype = self._get_subtype_ctype(spath)
+                    if sub_ctype:
+                        lines.append(f"        {sub_ctype} {sname};\n")
+            lines.append("    } data;\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # emit equality function
+        lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
+        lines.append("    if (a.tag != b.tag) return false;\n")
+        lines.append("    switch (a.tag) {\n")
+        for sname, spath in variant_defn.items.items():
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            is_null = isinstance(spath, zast.AtomId) and spath.name == "null"
+            lines.append(f"        case {tag}:")
+            if is_null:
+                lines.append(" return true;\n")
+            else:
+                sub_ctype = self._get_subtype_ctype(spath)
+                if (
+                    sub_ctype
+                    and sub_ctype.startswith("z_")
+                    and sub_ctype.endswith("_t")
+                ):
+                    sub_name = sub_ctype[2:-2]  # z_foo_t -> foo
+                    if sub_name in self._variant_names:
+                        # variant subtype: use its eq function
+                        lines.append(
+                            f" return z_{sub_name}_eq(a.data.{sname}, b.data.{sname});\n"
+                        )
+                    else:
+                        # record subtype: compare with memcmp
+                        lines.append(
+                            f" return memcmp(&a.data.{sname}, &b.data.{sname}, sizeof({sub_ctype})) == 0;\n"
+                        )
+                        self.needs_string = True  # memcmp is in string.h
+                else:
+                    lines.append(f" return a.data.{sname} == b.data.{sname};\n")
+        lines.append("    }\n")
+        lines.append("    return false;\n")
+        lines.append("}\n\n")
+
+        # NO destructor — value type
+        self.struct_defs.append("".join(lines))
+
+        # emit methods
+        all_funcs = list(variant_defn.functions.items()) + list(
+            variant_defn.as_functions.items()
+        )
+        for mname, mfunc in all_funcs:
+            if mfunc.body:
+                self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+
     def _emit_data(self, name: str, data: zast.Data) -> None:
         self.needs_stdint = True
         values: List[str] = []
@@ -656,6 +752,8 @@ class CEmitter:
                 return f"z_{name}_t*"
             if name in self._union_names:
                 return f"z_{name}_t*"
+            if name in self._variant_names:
+                return f"z_{name}_t"
         return "int64_t"
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
@@ -683,6 +781,8 @@ class CEmitter:
             if name in self._union_names:
                 self.needs_stdlib = True
                 return f"z_{name}_t*"
+            if name in self._variant_names:
+                return f"z_{name}_t"
         return "void"
 
     def _emit_function(
@@ -1247,6 +1347,10 @@ class CEmitter:
         if self._is_union_construction(call):
             return self._emit_union_construction(call)
 
+        # variant construction: variant.subtype expr
+        if self._is_variant_construction(call):
+            return self._emit_variant_construction(call)
+
         if call.callable.type and call.callable.type.typetype == ZTypeType.CLASS:
             cls_type = call.callable.type
             ctype = f"z_{cls_type.name}_t"
@@ -1397,6 +1501,9 @@ class CEmitter:
             # union_name.subtype — emit null subtype construction
             if pname in self._union_names:
                 return self._emit_union_null_construction(pname, child)
+            # variant_name.subtype — emit null subtype construction
+            if pname in self._variant_names:
+                return self._emit_variant_null_construction(pname, child)
             # data.index call
             if pname in self._data_names and child == "index":
                 return _mangle_func(pname)
@@ -1421,6 +1528,13 @@ class CEmitter:
         # use -> for class instances (pointer types)
         if self._is_class_pointer_path(path.parent):
             return f"{parent}->{child}"
+        # variant payload access: v.subname → v.data.subname
+        parent_type = getattr(path.parent, "type", None)
+        if parent_type and parent_type.typetype == ZTypeType.VARIANT:
+            # check if child is a subtype name (not a method)
+            child_type = parent_type.children.get(child)
+            if child_type and child_type.typetype != ZTypeType.FUNCTION:
+                return f"{parent}.data.{child}"
         return f"{parent}.{child}"
 
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
@@ -1558,6 +1672,8 @@ class CEmitter:
                 return f"z_{name}_t*"
             if name in self._union_names:
                 return f"z_{name}_t*"
+            if name in self._variant_names:
+                return f"z_{name}_t"
         # DottedPath: resolve via last component name
         if isinstance(subtype_path, zast.DottedPath):
             return self._get_subtype_ctype(subtype_path.child)
@@ -1577,6 +1693,70 @@ class CEmitter:
         self._temp_decls.append(f"{indent}{tmp}->tag = {tag};\n")
         self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
         self._temp_frees.append(tmp)
+        return tmp
+
+    def _is_variant_construction(self, call: zast.Call) -> bool:
+        """Check if a call is a variant construction (variant.subtype expr)."""
+        if isinstance(call.callable, zast.DottedPath):
+            if isinstance(call.callable.parent, zast.AtomId):
+                if call.callable.parent.name in self._variant_names:
+                    return True
+        if isinstance(call.callable, zast.AtomId):
+            if call.callable.name in self._variant_names:
+                return True
+        return False
+
+    def _emit_variant_construction(self, call: zast.Call) -> str:
+        """Emit C code for variant construction (stack-allocated, no malloc)."""
+        indent = self._indent()
+        self._temp_counter += 1
+        tmp = f"_c{self._temp_counter}"
+
+        if isinstance(call.callable, zast.DottedPath) and isinstance(
+            call.callable.parent, zast.AtomId
+        ):
+            variant_name = call.callable.parent.name
+            subtype_name = call.callable.child.name
+        else:
+            return "(z_unknown_t){0}"
+
+        ctype = f"z_{variant_name}_t"
+        tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
+
+        self._temp_decls.append(f"{indent}{ctype} {tmp};\n")
+        self._temp_decls.append(f"{indent}{tmp}.tag = {tag};\n")
+
+        # determine if this is a null subtype
+        mainunit = self.program.units.get(self.program.mainunitname)
+        variant_defn = mainunit.body.get(variant_name) if mainunit else None
+        subtype_path = None
+        if isinstance(variant_defn, zast.Variant):
+            subtype_path = variant_defn.items.get(subtype_name)
+
+        is_null = (
+            subtype_path is not None
+            and isinstance(subtype_path, zast.AtomId)
+            and subtype_path.name == "null"
+        )
+
+        if not is_null and call.arguments:
+            val = self._emit_operation_value(call.arguments[0].valtype)
+            self._temp_decls.append(f"{indent}{tmp}.data.{subtype_name} = {val};\n")
+
+        # no temp_frees — value type, no cleanup needed
+        return tmp
+
+    def _emit_variant_null_construction(
+        self, variant_name: str, subtype_name: str
+    ) -> str:
+        """Emit construction for a null-subtype variant (tag only, no data)."""
+        indent = self._indent()
+        self._temp_counter += 1
+        tmp = f"_c{self._temp_counter}"
+        ctype = f"z_{variant_name}_t"
+        tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
+        self._temp_decls.append(f"{indent}{ctype} {tmp};\n")
+        self._temp_decls.append(f"{indent}{tmp}.tag = {tag};\n")
         return tmp
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
@@ -1788,10 +1968,12 @@ class CEmitter:
         indent = self._indent()
         parts: List[str] = []
 
-        # check if subject is a union type
+        # check if subject is a union or variant type
         subject_type = self._get_operation_type(casenode.subject)
         if subject_type and subject_type.typetype == ZTypeType.UNION:
             return self._emit_union_case(casenode, subject_type)
+        if subject_type and subject_type.typetype == ZTypeType.VARIANT:
+            return self._emit_variant_case(casenode, subject_type)
 
         subject = self._emit_operation_value(casenode.subject)
 
@@ -1824,6 +2006,35 @@ class CEmitter:
         for clause in casenode.clauses:
             sname = clause.match.name
             tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
+            parts.append(f"{indent}    case {tag}: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_statement(clause.statement))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        if casenode.elseclause:
+            parts.append(f"{indent}    default: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_statement(casenode.elseclause))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_variant_case(self, casenode: zast.Case, variant_type: ZType) -> str:
+        indent = self._indent()
+        parts: List[str] = []
+        variant_name = variant_type.name
+
+        subject = self._emit_operation_value(casenode.subject)
+
+        parts.append(f"{indent}switch ({subject}.tag) {{\n")
+        for clause in casenode.clauses:
+            sname = clause.match.name
+            tag = f"Z_{variant_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
             parts.append(self._emit_statement(clause.statement))

@@ -1841,3 +1841,158 @@ class TestInlineUnits:
         bt = tc.unit_types.get("a.b")
         assert bt is not None
         assert "Y" in bt.children
+
+
+class TestVariantTypeResolution:
+    """Test that variant types resolve correctly."""
+
+    def test_variant_resolves(self):
+        """A variant definition resolves to ZTypeType.VARIANT."""
+        program = check_ok(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vt = tc._resolved.get("test.myvar")
+        assert vt is not None
+        assert vt.typetype == ZTypeType.VARIANT
+
+    def test_variant_is_valtype(self):
+        """Variants should be tagged as valtype (is_valtype=True)."""
+        program = check_ok(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vt = tc._resolved.get("test.myvar")
+        assert vt is not None
+        assert vt.is_valtype is True
+
+    def test_variant_subtypes(self):
+        """Variant subtypes should be stored as children."""
+        program = check_ok(
+            "myvar: variant { a: i64\n b: u8\n c: null }\n"
+            "main: function is { x: myvar.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vt = tc._resolved.get("test.myvar")
+        assert "a" in vt.children
+        assert "b" in vt.children
+        assert "c" in vt.children
+        assert vt.children["a"].name == "i64"
+        assert vt.children["b"].name == "u8"
+        assert vt.children["c"].name == "null"
+
+    def test_variant_tag_generated(self):
+        """Variant should have a :tag child with enum-like discriminators."""
+        program = check_ok(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vt = tc._resolved.get("test.myvar")
+        tag = vt.children.get(":tag")
+        assert tag is not None
+        assert tag.typetype == ZTypeType.ENUM
+        assert "a" in tag.children
+        assert "b" in tag.children
+
+    def test_variant_null_subtype(self):
+        """Null subtypes are fine in variants."""
+        program = check_ok(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.b }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vt = tc._resolved.get("test.myvar")
+        assert vt.children["b"].name == "null"
+        assert vt.children["b"].is_valtype is True
+
+    def test_variant_rejects_string(self):
+        """Variant subtypes that are reftypes (string) should be rejected."""
+        errors = check_errors(
+            "myvar: variant { a: string\n b: null }\nmain: function is { x: myvar.b }"
+        )
+        assert any("value type" in e.msg.lower() for e in errors)
+
+    def test_variant_rejects_union(self):
+        """Variant subtypes that are unions (reftype) should be rejected."""
+        errors = check_errors(
+            "myunion: union { x: i64\n y: null }\n"
+            "myvar: variant { a: myunion\n b: null }\n"
+            "main: function is { x: myvar.b }"
+        )
+        assert any("value type" in e.msg.lower() for e in errors)
+
+    def test_variant_allows_record(self):
+        """Variant subtypes that are records (valtype) should be allowed."""
+        check_ok(
+            "point: record { x: i64\n y: i64 }\n"
+            "myvar: variant { a: point\n b: null }\n"
+            "main: function is { x: myvar.a (point x: 1 y: 2) }"
+        )
+
+    def test_variant_custom_data_tag(self):
+        """Variant with custom data tag should resolve without errors."""
+        check_ok(
+            "pv: data { A: 10 B: 20 }\n"
+            "myvar: variant { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: myvar.A }"
+        )
+
+    def test_variant_construction_type(self):
+        """Constructing a variant returns the variant type."""
+        program = check_ok(
+            "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        vt = tc._resolved.get("test.myvar")
+        assert vt is not None
+
+    def test_variant_match_exhaustiveness(self):
+        """Missing case without else is an error for variants."""
+        errors = check_errors(
+            "myvar: variant { a: i64\n b: u8\n c: null }\n"
+            "main: function is {\n"
+            "  x: myvar.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            "  }\n"
+            "}"
+        )
+        assert any(
+            "exhaustive" in e.msg.lower() or "missing" in e.msg.lower() for e in errors
+        )
+
+    def test_variant_match_with_else(self):
+        """Else clause covers remaining subtypes for variants."""
+        check_ok(
+            "myvar: variant { a: i64\n b: u8\n c: null }\n"
+            "main: function is {\n"
+            "  x: myvar.a 1\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case a then {\n"
+            '    print "a"\n'
+            '  } else print "other"\n'
+            "}"
+        )
+
+    def test_variant_in_variant(self):
+        """Nested variant (both valtypes) should be allowed."""
+        check_ok(
+            "inner: variant { x: i64\n y: null }\n"
+            "outer: variant { a: inner\n b: null }\n"
+            "main: function is { x: outer.b }"
+        )
+
+    def test_variant_enum_pattern(self):
+        """All-null subtypes (enum pattern) should work."""
+        check_ok(
+            "mode: variant { READ: null\n WRITE: null\n EXEC: null }\n"
+            "main: function is { x: mode.READ }"
+        )

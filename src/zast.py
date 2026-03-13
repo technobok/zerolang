@@ -666,7 +666,7 @@ class DottedPath(Path):
     nodetype: NodeType = field(default=NodeType.DOTTEDPATH, init=False)
     parent: "Path"
     child: "AtomId"
-    parent_union_type: "Optional[ZType]" = field(default=None, init=False)
+    parent_tagged_type: "Optional[ZType]" = field(default=None, init=False)
 
 
 @dataclass
