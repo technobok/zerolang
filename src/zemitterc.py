@@ -8,7 +8,7 @@ Includes ownership-based memory management for strings (ZStr*).
 from typing import Optional, List, Dict
 
 import zast
-from ztypechecker import ZType, ZTypeType, parse_number
+from ztypechecker import ZType, ZTypeType, parse_number, ZParamOwnership
 
 TYPEMAP: Dict[str, str] = {
     "i8": "int8_t",
@@ -771,6 +771,18 @@ class CEmitter:
             return self._emit_with(inner)
         if isinstance(inner, zast.Case):
             return self._emit_case(inner)
+        if isinstance(inner, zast.DottedPath) and inner.child.name == "take":
+            var = self._emit_path_value(inner.parent)
+            var_type = getattr(inner, "type", None)
+            result = ""
+            if var_type and var_type.name == "string":
+                result += f"{indent}zstr_free({var});\n"
+            elif var_type and var_type.typetype == ZTypeType.CLASS:
+                result += f"{indent}z_{var_type.name}_destroy({var});\n"
+            elif var_type and var_type.typetype == ZTypeType.UNION:
+                result += f"{indent}z_{var_type.name}_destroy({var});\n"
+            result += f"{indent}{var} = NULL;\n"
+            return result
         if isinstance(inner, zast.Operation):
             val = self._emit_operation_value(inner)
             return f"{indent}{val};\n"
@@ -826,6 +838,23 @@ class CEmitter:
             if take_var:
                 code += f"{indent}{take_var} = NULL;\n"
 
+        # implicit take: nullify args passed to .take parameters
+        ftype = getattr(call.callable, "type", None)
+        if ftype and ftype.param_ownership:
+            params = [
+                (k, v) for k, v in ftype.children.items() if not k.startswith(":")
+            ]
+            for i, arg in enumerate(call.arguments):
+                if i < len(params):
+                    pname, _ = params[i]
+                    if ftype.param_ownership.get(pname) == ZParamOwnership.TAKE:
+                        # skip if already nullified by explicit .take
+                        take_var = self._get_take_var(arg.valtype)
+                        if not take_var:
+                            root = self._get_implicit_take_var(arg.valtype)
+                            if root:
+                                code += f"{indent}{root} = NULL;\n"
+
         return code
 
     def _emit_return(self, call: zast.Call, indent: str) -> str:
@@ -853,6 +882,10 @@ class CEmitter:
                         self._temp_decls.append(
                             f"{indent}{tmp}->{arg.name} = {fval};\n"
                         )
+                        # handle .take nullification
+                        take_var = self._get_take_var(arg.valtype)
+                        if take_var:
+                            self._temp_decls.append(f"{indent}{take_var} = NULL;\n")
                 val = tmp
             else:
                 val = self._emit_operation_value(call.arguments[0].valtype)
@@ -928,6 +961,21 @@ class CEmitter:
                 name = op.parent.name
                 if not _is_numeric_id(name):
                     return _mangle_var(name)
+        return None
+
+    def _get_implicit_take_var(self, op: zast.Operation) -> Optional[str]:
+        """Get the variable name for implicit take (plain variable reference)."""
+        if isinstance(op, zast.AtomId):
+            name = op.name
+            if (
+                not _is_numeric_id(name)
+                and name not in self._func_names
+                and name not in self._data_names
+                and name not in self._const_names
+            ):
+                return _mangle_var(name)
+        if isinstance(op, zast.Expression):
+            return self._get_implicit_take_var(op.expression)
         return None
 
     def _has_call(self, op: zast.Operation) -> bool:

@@ -1239,3 +1239,124 @@ class TestEmitterUnionMemorySafety:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "a is ok" in result.stdout
+
+
+class TestStandaloneTake:
+    """Tests for standalone .take (as expression statement, not in assignment)."""
+
+    def test_standalone_take_class(self):
+        """x.take as statement on class → destroy + NULL."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  c: myclass x: 42\n"
+            "  c.take\n"
+            "}"
+        )
+        assert "z_myclass_destroy(c);" in csource
+        assert "c = NULL;" in csource
+
+    def test_standalone_take_union(self):
+        """x.take as statement on union → destroy + NULL."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "  x: myunion.a 42\n"
+            "  x.take\n"
+            "}"
+        )
+        assert "z_myunion_destroy(x);" in csource
+        assert "x = NULL;" in csource
+
+    def test_standalone_take_string(self):
+        """s.take as statement on string → free + NULL."""
+        csource = emit_source('main: function is {\n  s: "hello"\n  s.take\n}')
+        assert "zstr_free(s);" in csource
+        assert "s = NULL;" in csource
+
+    def test_standalone_take_class_asan(self):
+        """Standalone .take on class with string field → no leak, no double-free."""
+        csource = emit_source(
+            "myclass: class { name: string }\n"
+            "main: function is {\n"
+            '  c: myclass name: "hello"\n'
+            "  c.take\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "ok" in result.stdout
+
+
+class TestImplicitTake:
+    """Tests for implicit take (function parameter declared .take)."""
+
+    def test_implicit_take_nullifies(self):
+        """Function with .take param → caller's variable nullified after call."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            'consume: function {p: myclass.take} is { print "consumed" }\n'
+            "main: function is {\n"
+            "  c: myclass x: 42\n"
+            "  consume c\n"
+            "}"
+        )
+        # after the call, c should be nullified
+        lines = csource.split("\n")
+        found_call = False
+        found_null = False
+        for line in lines:
+            if "z_consume(c)" in line:
+                found_call = True
+            elif found_call and "c = NULL;" in line:
+                found_null = True
+                break
+        assert found_call, "Expected call to z_consume"
+        assert found_null, "Expected c = NULL after implicit take call"
+
+    def test_implicit_take_no_double_null(self):
+        """Explicit .take with implicit take param → only one NULL."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            'consume: function {p: myclass.take} is { print "consumed" }\n'
+            "main: function is {\n"
+            "  c: myclass x: 42\n"
+            "  consume c.take\n"
+            "}"
+        )
+        # should have exactly one c = NULL (from explicit .take, not doubled)
+        assert csource.count("c = NULL;") == 1
+
+    def test_implicit_take_asan(self):
+        """Implicit take with class → no double-free."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "consume: function {p: myclass.take} is { p.take }\n"
+            "main: function is {\n"
+            "  c: myclass x: 42\n"
+            "  consume c\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "ok" in result.stdout
+
+
+class TestReturnPathTake:
+    """Tests for .take in return-path class construction."""
+
+    def test_return_class_construction_take(self):
+        """Return with class construction using .take → source nullified."""
+        csource = emit_source(
+            "myclass: class { name: string }\n"
+            "wrap: function {s: string} out myclass is {\n"
+            "  return myclass name: s.take\n"
+            "}\n"
+            "main: function is {\n"
+            '  c: wrap "hello"\n'
+            '  print "ok"\n'
+            "}"
+        )
+        assert "s = NULL;" in csource
