@@ -809,7 +809,7 @@ Changes implemented:
   myunion: union { a: i64  b: null } as { tag: u16.tag }
   """
 
-#---: Phase 18a: Variant Type Checker
+#---: Phase 19: Variant Type Checker
 
 Add variant type resolution to the type checker (#~"_resolve_variant_type").
 Currently variants are parsed and AST nodes exist but the type checker has
@@ -822,7 +822,52 @@ no #~"isinstance(defn, zast.Variant)" handler. This phase adds:
   #*: Exhaustive match checking for variants.
   #*: Tests for variant type resolution, variant custom tags.
 
-#---: Phase 18b: Generic Tag Type
+#---: Phase 20: Generics (Type Parameters and Monomorphization)
+
+Add generic type parameters with constraints. Strategy: monomorphization
+(generate specialised code for each concrete type used). The parser already
+handles #~"generic" fields. #~"ZType.isgeneric" exists but is unused.
+
+Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
+#~"src/ztypechecker.py", #~"tests/test_typecheck.py",
+#~"tests/test_emitter.py"
+
+#ol:
+  #*: Resolve #~"generic" type parameters: when a field type is
+    #~"generic from: constraint" or #~"any.generic", create a ZType
+    with #~"isgeneric = True" and store the constraint type. Update
+    #~"_resolve_typeref" to handle the #~"generic" keyword.
+  #*: Generic type instantiation in type checker: when a generic
+    type is used with concrete type arguments, create a specialised
+    copy of the ZType with generic params replaced. Use a cache
+    keyed by (base_type, concrete_args) to avoid duplicates.
+  #*: Constraint checking: verify concrete type argument satisfies
+    the #~"from" constraint (is a member of the constraining union,
+    or implements the constraining protocol).
+  #*: Generic functions: functions with generic parameters. Infer
+    concrete types from arguments at call site. Monomorphize: create
+    a specialised function type for each unique set of concrete args.
+  #*: Generic records/classes: type parameters on records and classes.
+    Field types resolved after substitution. Methods see the
+    specialised type.
+  #*: Generic unions: type parameters shared across all subtypes
+    (per spec). #~"option" union pattern: #~"some: t" / #~"none: null".
+  #*: Update #~"_is_valtype" for generic types: a generic type's
+    valtype status depends on the constraint and concrete instantiation.
+  #*: Emit C for monomorphised types: for each instantiation, emit
+    a specialised struct/function with mangled name including type
+    args (e.g., #~"z_option_i64_t").
+  #*: Emit C for generic function calls: call site uses the
+    monomorphised function name.
+  #*: Add #~"option" union to #~"system.z" as a generic union with
+    #~"some" and #~"none" subtypes. This is the standard optional type.
+  #*: Write #~"examples/generics.z": generic container, generic
+    function, option usage. Must compile and run.
+  #*: Expand test suite: resolution, instantiation, constraints,
+    monomorphization, C emission, integration.
+
+
+#---: Phase 21: Generic Tag Type
 
 After generics are implemented, replace the current #~"tag" placeholder
 record with a proper generic type. The #~"tag" type should be parameterized
@@ -835,7 +880,7 @@ syntax inside an #~"is" block can also be supported at that time.
   #*: #~"u16.tag" returns #~"tag(u16)".
   #*: Remove placeholder hack in type checker.
 
-#---: Phase 19: Protocols (Interface Types)
+#---: Phase 22: Protocols (Interface Types)
 
 Add protocol support. Protocols define interfaces (function specs without
 bodies). Types implement protocols via #~"implements" clauses. Protocol
@@ -883,51 +928,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
   #*: Expand test suite: resolution, conformance, instance creation,
     dispatch, ownership, C emission, integration.
 
-#---: Phase 20: Generics (Type Parameters and Monomorphization)
-
-Add generic type parameters with constraints. Strategy: monomorphization
-(generate specialised code for each concrete type used). The parser already
-handles #~"generic" fields. #~"ZType.isgeneric" exists but is unused.
-
-Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
-#~"src/ztypechecker.py", #~"tests/test_typecheck.py",
-#~"tests/test_emitter.py"
-
-#ol:
-  #*: Resolve #~"generic" type parameters: when a field type is
-    #~"generic from: constraint" or #~"any.generic", create a ZType
-    with #~"isgeneric = True" and store the constraint type. Update
-    #~"_resolve_typeref" to handle the #~"generic" keyword.
-  #*: Generic type instantiation in type checker: when a generic
-    type is used with concrete type arguments, create a specialised
-    copy of the ZType with generic params replaced. Use a cache
-    keyed by (base_type, concrete_args) to avoid duplicates.
-  #*: Constraint checking: verify concrete type argument satisfies
-    the #~"from" constraint (is a member of the constraining union,
-    or implements the constraining protocol).
-  #*: Generic functions: functions with generic parameters. Infer
-    concrete types from arguments at call site. Monomorphize: create
-    a specialised function type for each unique set of concrete args.
-  #*: Generic records/classes: type parameters on records and classes.
-    Field types resolved after substitution. Methods see the
-    specialised type.
-  #*: Generic unions: type parameters shared across all subtypes
-    (per spec). #~"option" union pattern: #~"some: t" / #~"none: null".
-  #*: Update #~"_is_valtype" for generic types: a generic type's
-    valtype status depends on the constraint and concrete instantiation.
-  #*: Emit C for monomorphised types: for each instantiation, emit
-    a specialised struct/function with mangled name including type
-    args (e.g., #~"z_option_i64_t").
-  #*: Emit C for generic function calls: call site uses the
-    monomorphised function name.
-  #*: Add #~"option" union to #~"system.z" as a generic union with
-    #~"some" and #~"none" subtypes. This is the standard optional type.
-  #*: Write #~"examples/generics.z": generic container, generic
-    function, option usage. Must compile and run.
-  #*: Expand test suite: resolution, instantiation, constraints,
-    monomorphization, C emission, integration.
-
-#---: Phase 21: Typedefs (Wrapper Types)
+#---: Phase 23: Typedefs (Wrapper Types)
 
 Add typedef support. Typedefs wrap an underlying type with zero overhead.
 The typedef field is marked with the #~"typedef" keyword. Methods can be
@@ -967,7 +968,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
   #*: Expand test suite: resolution, type identity, method shadowing,
     constructors, ownership, C emission, integration.
 
-#---: Phase 22: v2 Integration Examples
+#---: Phase 24: v2 Integration Examples
 
 Write comprehensive v2 example programs that exercise ownership, classes,
 unions, protocols, generics and typedefs together. These serve as
@@ -985,37 +986,37 @@ integration tests for the full v2 feature set.
   #*: Verify all v2 example programs compile with gcc and produce
     correct output under ASan (address sanitizer).
 
-#---: Phase 23: Static String Literals + ZStr Header Modernization
+#---: Phase 25: Static String Literals + ZStr Header Modernization \[COMPLETE\]
 
 Modernize the #~"ZStr" layout to a 64-bit header and add static string
 support so string literals are never heap-allocated.
 
 #ol:
-  #*: Replace #~"int32_t len" with #~"uint64_t size" (byte count, not
+  #*: #+ Replace #~"int32_t len" with #~"uint64_t size" (byte count, not
     character count). Bit 63 is the static flag; bits 62-0 store size.
     Data starts at 8-byte boundary for optimal alignment.
-  #*: Add #~"ZSTR_STATIC" macro for compile-time string literal
+  #*: #+ Add #~"ZSTR_STATIC" macro for compile-time string literal
     declaration. Static strings live in #~".rodata" and are never freed.
-  #*: Add #~"ZSTR_SIZE", #~"ZSTR_IS_STATIC" accessor macros.
-  #*: Add #~"zstr_free" helper that checks the static flag before
+  #*: #+ Add #~"ZSTR_SIZE", #~"ZSTR_IS_STATIC" accessor macros.
+  #*: #+ Add #~"zstr_free" helper that checks the static flag before
     calling #~"free".
-  #*: Update emitter to collect and deduplicate string literals,
+  #*: #+ Update emitter to collect and deduplicate string literals,
     emitting #~"ZSTR_STATIC" declarations at file scope.
-  #*: Plain string literals emit static references instead of
+  #*: #+ Plain string literals emit static references instead of
     #~"zstr_new" calls. Interpolation fragments also use static strings.
-  #*: Replace all #~"free(stringvar)" with #~"zstr_free(stringvar)" in
+  #*: #+ Replace all #~"free(stringvar)" with #~"zstr_free(stringvar)" in
     scope cleanup, return paths, reassignment, and with-blocks.
-  #*: Update union destructor to use #~"zstr_free" for string subtypes.
-  #*: Create #~"doc/strings.pdoc" documenting ZStr layout, static flag
+  #*: #+ Update union destructor to use #~"zstr_free" for string subtypes.
+  #*: #+ Create #~"doc/strings.pdoc" documenting ZStr layout, static flag
     semantics, and comparison with other implementations.
-  #*: Update tests: assertions for #~"zstr_free" instead of #~"free",
+  #*: #+ Update tests: assertions for #~"zstr_free" instead of #~"free",
     new tests for static string deduplication, interpolation fragments,
     and ASan verification.
 
 Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
 #~"doc/strings.pdoc", #~"doc/roadmap.pdoc"
 
-#---: Phase 24: C Runtime Library
+#---: Phase 26: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (#~"ZStr", #~"zstr_new",
@@ -1047,7 +1048,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
     union destructors, protocol vtable helpers, generic container
     support.
 
-#---: Phase 25: Expand to v3 (Full Language)
+#---: Phase 27: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
@@ -1055,7 +1056,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
   #*: Iterator protocol.
   #*: Full standard library.
 
-#---: Phase 26: Developer Tools
+#---: Phase 28: Developer Tools
 
 Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.
@@ -1075,7 +1076,7 @@ source files in IDEs and editors.
   #*: Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.
 
-#---: Phase 27: Self-Hosting
+#---: Phase 29: Self-Hosting
 
 #ol:
   #*: Write the zerolang compiler in zerolang.
