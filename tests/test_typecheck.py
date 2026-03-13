@@ -1467,9 +1467,7 @@ class TestLabelValueShorthand:
 
     def test_label_value_unit_level_resolves_core_type(self):
         """:u8 at unit level resolves to core u8, not circular error."""
-        program = check_ok(
-            ":u8\nmain: function is { x: u8 42 }"
-        )
+        program = check_ok(":u8\nmain: function is { x: u8 42 }")
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.u8")
@@ -1478,9 +1476,7 @@ class TestLabelValueShorthand:
 
     def test_label_value_core_type_resolves(self):
         """:x where x exists in core resolves correctly."""
-        program = check_ok(
-            ":i64\nmain: function is { x: i64 1 }"
-        )
+        program = check_ok(":i64\nmain: function is { x: i64 1 }")
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.i64")
@@ -1489,9 +1485,7 @@ class TestLabelValueShorthand:
 
     def test_label_value_unknown_name_error(self):
         """:x where x doesn't exist anywhere produces an error, not circular."""
-        errors = check_errors(
-            ":nonexistent\nmain: function is { x: nonexistent }"
-        )
+        errors = check_errors(":nonexistent\nmain: function is { x: nonexistent }")
         msgs = [e.msg for e in errors]
         # Should be an unresolved name, not a circular alias
         assert not any("ircular" in m for m in msgs)
@@ -1514,8 +1508,7 @@ class TestLabelValueShorthand:
     def test_union_label_value_subtype_names(self):
         """Label value union subtypes resolve to their payload types."""
         program = check_ok(
-            "myunion: union { :u8\n :string }\n"
-            "main: function is { x: myunion.u8 42 }"
+            "myunion: union { :u8\n :string }\nmain: function is { x: myunion.u8 42 }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -1525,21 +1518,104 @@ class TestLabelValueShorthand:
 
     def test_function_with_label_value_param(self):
         """Function with :i64 parameter type checks."""
-        check_ok(
-            "f: function {:i64} out i64 is { i64 }\n"
-            "main: function is { f 42 }"
-        )
+        check_ok("f: function {:i64} out i64 is { i64 }\nmain: function is { f 42 }")
 
     def test_call_with_label_value_arg(self):
         """Call with :x argument type checks."""
         check_ok(
-            "f: function {x: i64} out i64 is { x }\n"
-            "main: function is { x: 42\n f :x }"
+            "f: function {x: i64} out i64 is { x }\nmain: function is { x: 42\n f :x }"
         )
 
     def test_statement_label_value_in_body(self):
         """Statement with label value in function body type checks."""
         check_ok(
-            "f: function {x: i64} out i64 is { y: x\n y }\n"
-            "main: function is { f 42 }"
+            "f: function {x: i64} out i64 is { y: x\n y }\nmain: function is { f 42 }"
         )
+
+
+class TestInlineUnits:
+    def test_inline_unit_with_constant(self):
+        """Inline unit with a constant resolves as UNIT type."""
+        prog = check_ok("m: unit { X: 42 }\nmain: function is {}")
+        tc = TypeChecker(prog)
+        tc.check()
+        assert "m" in tc.unit_types
+        assert tc.unit_types["m"].typetype == ZTypeType.UNIT
+
+    def test_dotted_access_constant(self):
+        """Dotted access to inline unit constant resolves correctly."""
+        check_ok("m: unit { X: 42 }\nY: m.X\nmain: function is {}")
+
+    def test_inline_unit_with_function(self):
+        """Inline unit containing a function resolves the function type."""
+        prog = check_ok(
+            'm: unit { greet: function is { print "hi" } }\n'
+            "main: function is { m.greet }"
+        )
+        tc = TypeChecker(prog)
+        tc.check()
+        ft = tc.unit_types["m"].children.get("greet")
+        assert ft is not None
+        assert ft.typetype == ZTypeType.FUNCTION
+
+    def test_nested_units(self):
+        """Nested inline units: a.b.X resolves correctly."""
+        check_ok("a: unit { b: unit { X: 1 } }\nY: a.b.X\nmain: function is {}")
+
+    def test_name_resolution_upward(self):
+        """Inline unit body can reference definitions from parent unit."""
+        check_ok("X: 10\nm: unit { Y: X }\nmain: function is {}")
+
+    def test_forward_reference_between_inline_units(self):
+        """Inline unit A references inline unit B defined later in same parent."""
+        check_ok("a: unit { Y: b.X }\nb: unit { X: 42 }\nmain: function is {}")
+
+    def test_inline_unit_with_record(self):
+        """Inline unit containing a record definition."""
+        prog = check_ok(
+            "m: unit { pt: record { x: i64  y: i64 } }\nmain: function is {}"
+        )
+        tc = TypeChecker(prog)
+        tc.check()
+        pt = tc.unit_types["m"].children.get("pt")
+        assert pt is not None
+        assert pt.typetype == ZTypeType.RECORD
+
+    def test_inline_unit_function_body_checking(self):
+        """Function bodies inside inline units are type-checked."""
+        prog = check_ok(
+            'm: unit { f: function {x: i64} is { print "\\{x}" } }\n'
+            "main: function is { m.f 42 }"
+        )
+        # if body checking failed, we would have errors
+        assert isinstance(prog, zast.Program)
+
+    def test_3level_nesting(self):
+        """3-level nesting resolves correctly via dotted access."""
+        prog = check_ok(
+            "a: unit { b: unit { c: unit { X: 99 } } }\n"
+            "Y: a.b.c.X\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(prog)
+        tc.check()
+        # nested units are stored with qualified names
+        at = tc.unit_types.get("a")
+        assert at is not None
+        assert "b" in at.children
+
+    def test_inline_unit_upward_reference(self):
+        """Inline unit body can reference definitions from parent unit."""
+        check_ok("X: 42\nm: unit { Y: X }\nmain: function is {}")
+
+    def test_nesting_shadow(self):
+        """Nested unit shadows parent definition via unit context stack."""
+        prog = check_ok(
+            "a: unit { X: 10\n b: unit { X: 20\n Y: X } }\nmain: function is {}"
+        )
+        tc = TypeChecker(prog)
+        tc.check()
+        # b is stored under qualified name "a.b"
+        bt = tc.unit_types.get("a.b")
+        assert bt is not None
+        assert "Y" in bt.children

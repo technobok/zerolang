@@ -82,6 +82,10 @@ class TypeChecker:
         # pending borrow lock: set by .borrow, consumed by _check_assignment
         self._pending_borrow_lock: Optional[str] = None
 
+        # inline unit context stack: tracks nesting during resolution
+        # each entry is (unitname, zast.Unit) for name lookup chain
+        self._unit_context: List[Tuple[str, zast.Unit]] = []
+
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
 
@@ -103,11 +107,13 @@ class TypeChecker:
             self._resolve_unit_name(self.program.mainunitname, "main")
             self._check_function_body("main", main_func)
 
-        # also check other functions in the main unit that have bodies
+        # also check other definitions in the main unit
         for name, defn in mainunit.body.items():
             if name == "main":
                 continue
-            if isinstance(defn, zast.Function) and defn.body:
+            if isinstance(defn, zast.Unit):
+                self._resolve_unit_name(self.program.mainunitname, name)
+            elif isinstance(defn, zast.Function) and defn.body:
                 self._resolve_unit_name(self.program.mainunitname, name)
                 self._check_function_body(name, defn)
 
@@ -150,7 +156,20 @@ class TypeChecker:
         unit = self.program.units.get(unitname)
         if not unit:
             return None
+
+        # handle dotted names for inline units (e.g., "m.X" -> unit m, def X)
         defn = unit.body.get(name)
+        if defn is None and "." in name:
+            parts = name.split(".")
+            # walk into nested inline units
+            current_body = unit.body
+            for i, part in enumerate(parts[:-1]):
+                inner = current_body.get(part)
+                if isinstance(inner, zast.Unit):
+                    current_body = inner.body
+                else:
+                    return None
+            defn = current_body.get(parts[-1])
         if defn is None:
             return None
 
@@ -158,7 +177,8 @@ class TypeChecker:
         if t:
             self._resolved[key] = t
             # also populate unit_types for dotted path access
-            self.unit_types[unitname].children[name] = t
+            if unitname in self.unit_types:
+                self.unit_types[unitname].children[name] = t
         return t
 
     def _type_of_definition(
@@ -176,7 +196,7 @@ class TypeChecker:
         if isinstance(defn, zast.Union):
             return self._resolve_union_type(unitname, name, defn)
         if isinstance(defn, zast.Unit):
-            return self.unit_types.get(name)
+            return self._resolve_inline_unit_type(unitname, name, defn)
         # alias: DottedPath or AtomId reference
         if isinstance(defn, zast.DottedPath):
             key = f"{unitname}.{name}"
@@ -385,6 +405,35 @@ class TypeChecker:
         self._resolving.pop()
         return etype
 
+    def _resolve_inline_unit_type(
+        self, unitname: str, name: str, unit: zast.Unit
+    ) -> ZType:
+        """Resolve an inline unit definition, recursively processing its body."""
+        key = f"{unitname}.{name}"
+        utype = _make_type(name, ZTypeType.UNIT)
+        self._resolved[key] = utype
+        self.unit_types[name] = utype
+
+        # push this unit onto the context stack for name resolution
+        self._unit_context.append((name, unit))
+
+        # resolve each definition in the inline unit's body
+        for dname, ddefn in unit.body.items():
+            dkey = f"{unitname}.{name}.{dname}"
+            if dkey in self._resolved:
+                utype.children[dname] = self._resolved[dkey]
+                continue
+            t = self._type_of_definition(unitname, f"{name}.{dname}", ddefn)
+            if t:
+                self._resolved[dkey] = t
+                utype.children[dname] = t
+            # check function bodies inside inline units
+            if isinstance(ddefn, zast.Function) and ddefn.body:
+                self._check_function_body(f"{name}.{dname}", ddefn)
+
+        self._unit_context.pop()
+        return utype
+
     # ---- Name resolution (local -> unit body -> core -> system) ----
 
     def _resolve_name(self, name: str, skip_unit_def=None) -> Optional[ZType]:
@@ -398,7 +447,24 @@ class TypeChecker:
         if t:
             return t
 
-        # 2. current unit body (main unit)
+        # 2. inline unit context stack (innermost first)
+        for uname, unode in reversed(self._unit_context):
+            if name in unode.body:
+                # resolve this definition from the inline unit
+                qname = f"{self.program.mainunitname}.{uname}.{name}"
+                if qname in self._resolved:
+                    return self._resolved[qname]
+                t = self._type_of_definition(
+                    self.program.mainunitname, f"{uname}.{name}", unode.body[name]
+                )
+                if t:
+                    self._resolved[qname] = t
+                    ut = self.unit_types.get(uname)
+                    if ut:
+                        ut.children[name] = t
+                    return t
+
+        # 3. current unit body (main unit)
         mainunit = self.program.units.get(self.program.mainunitname)
         if mainunit and name in mainunit.body:
             if skip_unit_def == (self.program.mainunitname, name):
@@ -460,7 +526,7 @@ class TypeChecker:
         parent_type: Optional[ZType] = None
         if isinstance(path.parent, zast.AtomId):
             pname = path.parent.name
-            # check if it's a unit name first
+            # check if it's a unit name first (file-level units)
             if pname in self.program.units:
                 # resolve the child from that unit on demand
                 t = self._resolve_unit_name(pname, path.child.name)
@@ -470,6 +536,16 @@ class TypeChecker:
                 parent_type = self.unit_types.get(pname)
                 if parent_type:
                     return parent_type.children.get(path.child.name)
+                return None
+            # check if it's an inline unit name
+            if (
+                pname in self.unit_types
+                and self.unit_types[pname].typetype == ZTypeType.UNIT
+            ):
+                parent_type = self.unit_types[pname]
+                child = parent_type.children.get(path.child.name)
+                if child:
+                    return child
                 return None
             # otherwise resolve parent as a name
             parent_type = self._resolve_name(pname)

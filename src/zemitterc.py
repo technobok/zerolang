@@ -135,6 +135,7 @@ class CEmitter:
         self._record_names: set[str] = set()
         self._class_names: set[str] = set()
         self._union_names: set[str] = set()
+        self._unit_names: set[str] = set()
         # field info per type name (for meta.create calls)
         self._type_field_ctypes: Dict[str, List[str]] = {}
         self._type_field_names: Dict[str, List[str]] = {}
@@ -185,29 +186,63 @@ class CEmitter:
         self._string_literals[escaped] = name
         return name
 
+    def _qualify(self, prefix: str, name: str) -> str:
+        return f"{prefix}.{name}" if prefix else name
+
+    def _collect_unit_names(self, prefix: str, body: dict) -> None:
+        """Recursively collect definition names from a unit body."""
+        for name, defn in body.items():
+            qname = self._qualify(prefix, name)
+            if isinstance(defn, zast.Unit):
+                self._unit_names.add(qname)
+                self._collect_unit_names(qname, defn.body)
+            elif isinstance(defn, zast.Function) and defn.body:
+                self._func_names.add(qname)
+            elif isinstance(defn, zast.Record):
+                self._record_names.add(qname)
+            elif isinstance(defn, zast.Class):
+                self._class_names.add(qname)
+            elif isinstance(defn, zast.Union):
+                self._union_names.add(qname)
+            elif isinstance(defn, zast.Data):
+                self._data_names.add(qname)
+            elif isinstance(defn, zast.Expression) and isinstance(
+                defn.expression, zast.Data
+            ):
+                self._data_names.add(qname)
+            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
+                self._const_names.add(qname)
+
+    def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
+        """Recursively emit definitions from a unit body."""
+        for name, defn in body.items():
+            qname = self._qualify(prefix, name)
+            if isinstance(defn, zast.Unit):
+                self._emit_unit_definitions(qname, defn.body)
+            elif isinstance(defn, zast.Record):
+                self._emit_record(qname, defn)
+            elif isinstance(defn, zast.Class):
+                self._emit_class(qname, defn)
+            elif isinstance(defn, zast.Union):
+                self._emit_union(qname, defn)
+            elif isinstance(defn, zast.Function) and defn.body:
+                self._emit_function(qname, defn)
+            elif isinstance(defn, zast.Data):
+                self._emit_data(qname, defn)
+            elif isinstance(defn, zast.Expression) and isinstance(
+                defn.expression, zast.Data
+            ):
+                self._emit_data(qname, defn.expression)
+            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
+                self._emit_constant(qname, defn)
+
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
         if not mainunit:
             return "/* empty program */\n"
 
-        # first pass: collect all unit-level definition names
-        for name, defn in mainunit.body.items():
-            if isinstance(defn, zast.Function) and defn.body:
-                self._func_names.add(name)
-            elif isinstance(defn, zast.Record):
-                self._record_names.add(name)
-            elif isinstance(defn, zast.Class):
-                self._class_names.add(name)
-            elif isinstance(defn, zast.Union):
-                self._union_names.add(name)
-            elif isinstance(defn, zast.Data):
-                self._data_names.add(name)
-            elif isinstance(defn, zast.Expression) and isinstance(
-                defn.expression, zast.Data
-            ):
-                self._data_names.add(name)
-            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
-                self._const_names.add(name)
+        # first pass: collect all unit-level definition names (recursing into inline units)
+        self._collect_unit_names("", mainunit.body)
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", self.program.mainunitname):
@@ -216,24 +251,8 @@ class CEmitter:
                 if isinstance(defn, zast.Function) and defn.body:
                     self._func_names.add(f"{unitname}.{name}")
 
-        # second pass: emit definitions
-        for name, defn in mainunit.body.items():
-            if isinstance(defn, zast.Record):
-                self._emit_record(name, defn)
-            elif isinstance(defn, zast.Class):
-                self._emit_class(name, defn)
-            elif isinstance(defn, zast.Union):
-                self._emit_union(name, defn)
-            elif isinstance(defn, zast.Function) and defn.body:
-                self._emit_function(name, defn)
-            elif isinstance(defn, zast.Data):
-                self._emit_data(name, defn)
-            elif isinstance(defn, zast.Expression) and isinstance(
-                defn.expression, zast.Data
-            ):
-                self._emit_data(name, defn.expression)
-            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
-                self._emit_constant(name, defn)
+        # second pass: emit definitions (recursing into inline units)
+        self._emit_unit_definitions("", mainunit.body)
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", self.program.mainunitname):
@@ -1295,6 +1314,20 @@ class CEmitter:
             return str(value)
         return str(int(value))
 
+    def _extract_unit_path(self, path: zast.Path) -> Optional[str]:
+        """If path resolves to an inline unit, return its dotted name. Otherwise None."""
+        if isinstance(path, zast.AtomId):
+            if path.name in self._unit_names:
+                return path.name
+            return None
+        if isinstance(path, zast.DottedPath):
+            parent_path = self._extract_unit_path(path.parent)
+            if parent_path is not None:
+                qname = f"{parent_path}.{path.child.name}"
+                if qname in self._unit_names:
+                    return qname
+        return None
+
     def _emit_dotted_path_value(self, path: zast.DottedPath) -> str:
         child = path.child.name
 
@@ -1304,9 +1337,17 @@ class CEmitter:
 
         if isinstance(path.parent, zast.AtomId):
             pname = path.parent.name
-            # unit.name reference
+            # unit.name reference (file-level units)
             if pname in self.program.units and pname not in ("system", "core", "io"):
                 return _mangle_func(f"{pname}.{child}")
+            # inline unit.name reference
+            if pname in self._unit_names:
+                qname = f"{pname}.{child}"
+                # check if the child is itself a unit (nested)
+                if qname in self._unit_names:
+                    # will be resolved by further dotted path traversal
+                    return _mangle_func(qname)
+                return _mangle_func(qname)
             # record_name.method or class_name.method — method call with no extra args
             if pname in self._record_names or pname in self._class_names:
                 return _mangle_func(f"{pname}.{child}")
@@ -1316,6 +1357,11 @@ class CEmitter:
             # data.index call
             if pname in self._data_names and child == "index":
                 return _mangle_func(pname)
+
+        # check if parent resolves to a nested inline unit path
+        unit_path = self._extract_unit_path(path.parent)
+        if unit_path is not None:
+            return _mangle_func(f"{unit_path}.{child}")
 
         # check if the dotted path resolves to a function (method call)
         if (

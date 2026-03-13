@@ -375,10 +375,21 @@ class Parser:
                 addto=extern, addfrom=typedefinitionx.extern, local=localdefs
             )
             definitions[name] = definition
+            localdefs.add(name)
 
         lex.filtereol(prev_filtereol)  # restore previous state
         if error:
             return error
+
+        # resolve forward references: remove externs that match body definitions
+        # LabelValue (:x) externs must NOT resolve against themselves at this
+        # level — they need to resolve at a parent level instead
+        for dname in definitions:
+            if dname in extern:
+                # only remove if the extern didn't originate as a LabelValue
+                # at THIS level (i.e., the definition itself is :x)
+                if not isinstance(definitions[dname], zast.LabelValue):
+                    del extern[dname]
 
         return NodeX(node=zast.Unit(start=start, body=definitions), extern=extern)
 
@@ -1278,7 +1289,9 @@ class Parser:
                             return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
                         functions[label.tokstr] = funcx.node
                         # add directly to extern.. these cannot refer locally, except via 'this'
-                        promoteexterns(addto=extern, addfrom=funcx.extern, local=localthis)
+                        promoteexterns(
+                            addto=extern, addfrom=funcx.extern, local=localthis
+                        )
                     else:
                         # path/typeref/typeref_or_num
                         pathx = self._acceptpath(lex)
@@ -1295,7 +1308,9 @@ class Parser:
                         else:
                             # error
                             msg = f"Expected a function or expression for item: {label.tokstr}"
-                            return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
+                            return zast.Error(
+                                err=ERR.BADITEM, msg=msg, loc=lex.acceptany()
+                            )
 
             elif allowtag and tt == TT.TAG:
                 lex.acceptany()
@@ -2015,9 +2030,7 @@ class Parser:
         if start.toktype == TT.LABELPRE:  # label value assignment
             lex.acceptany()
             lvx = self._make_label_value(start)
-            assignment = zast.Assignment(
-                name=start.tokstr, value=lvx.node, start=start
-            )
+            assignment = zast.Assignment(name=start.tokstr, value=lvx.node, start=start)
             statementline = zast.StatementLine(statementline=assignment, start=start)
             return NodeX(node=statementline, extern=lvx.extern)
 

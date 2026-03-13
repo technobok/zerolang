@@ -526,8 +526,7 @@ class TestLabelValueShorthand:
     def test_call_arg_label_value(self):
         """:x in call arguments."""
         result = parse_unit(
-            "f: function {n: i64} out i64 is { n }\n"
-            "main: function is { x: 42\n f :x }"
+            "f: function {n: i64} out i64 is { n }\nmain: function is { x: 42\n f :x }"
         )
         body = get_unit_body(result)
         assert isinstance(body["f"], zast.Function)
@@ -535,9 +534,7 @@ class TestLabelValueShorthand:
 
     def test_statement_label_value(self):
         """:x as a labeled statement in function body."""
-        result = parse_unit(
-            "f: function {x: i64} out i64 is { y: x\n y }"
-        )
+        result = parse_unit("f: function {x: i64} out i64 is { y: x\n y }")
         body = get_unit_body(result)
         assert isinstance(body["f"], zast.Function)
 

@@ -1528,8 +1528,7 @@ class TestEmitterLabelValueShorthand:
     def test_call_with_label_value_arg(self):
         """Call with :x argument emits correctly."""
         csource = emit_source(
-            "f: function {x: i64} out i64 is { x }\n"
-            "main: function is { x: 42\n f :x }"
+            "f: function {x: i64} out i64 is { x }\nmain: function is { x: 42\n f :x }"
         )
         assert "z_f(" in csource
 
@@ -1554,3 +1553,44 @@ class TestEmitterLabelValueIntegration:
         )
         output = compile_and_run(csource)
         assert output.strip() == "99"
+
+
+class TestInlineUnits:
+    def test_inline_unit_function_emits(self):
+        """Inline unit function emits correctly mangled C function."""
+        csource = emit_source(
+            "m: unit { f: function {x: i64} out i64 is { return x } }\n"
+            'main: function is { print "\\{m.f 5}" }'
+        )
+        assert "z_m_f" in csource
+
+    def test_inline_unit_constant(self):
+        """Inline unit constant accessible via dotted path."""
+        csource = emit_source(
+            'm: unit { X: 42 }\nmain: function is { print "\\{m.X}" }'
+        )
+        assert "z_m_X" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_nested_inline_unit_function(self):
+        """Nested inline unit function emits with full path mangling."""
+        csource = emit_source(
+            "a: unit { b: unit { f: function {x: i64} out i64 is { return x } } }\n"
+            'main: function is { print "\\{a.b.f 7}" }'
+        )
+        assert "z_a_b_f" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_inline_unit_integration(self):
+        """Integration test: compile + run program using inline units."""
+        csource = emit_source(
+            "math: unit {\n"
+            "  double: function {x: i64} out i64 is { return x + x }\n"
+            "  triple: function {x: i64} out i64 is { return x + x + x }\n"
+            "}\n"
+            'main: function is { print "\\{math.double 5} \\{math.triple 3}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10 9"
