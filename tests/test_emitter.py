@@ -13,13 +13,13 @@ import zemitterc
 import zast
 
 
-SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src")
+LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 
 def emit_source(source: str, unitname: str = "test") -> str:
     """Parse, type-check, and emit C source for a zerolang program."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=SRC_DIR)
+    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
     p = Parser(vfs, name)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
@@ -134,7 +134,7 @@ class TestEmitterExamples:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -487,7 +487,7 @@ class TestEmitterMemorySafety:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -509,7 +509,7 @@ class TestEmitterMemorySafety:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -730,7 +730,7 @@ class TestEmitterClassIntegration:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -801,7 +801,7 @@ class TestEmitterClassMemorySafety:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -952,7 +952,7 @@ class TestEmitterClassDestructorIntegration:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -1202,7 +1202,7 @@ class TestEmitterUnionIntegration:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -1271,7 +1271,7 @@ class TestEmitterUnionMemorySafety:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()

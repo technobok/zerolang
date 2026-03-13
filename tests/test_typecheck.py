@@ -20,12 +20,12 @@ from ztypechecker import (
 import zast
 
 
-SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src")
+LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def parse_and_check(source: str, unitname: str = "test"):
     """Parse source, run type checker, return (program, errors)."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=SRC_DIR)
+    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
     p = Parser(vfs, name)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
@@ -371,7 +371,7 @@ class TestExamplePrograms:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -664,7 +664,7 @@ class TestValTypeTagging:
         vfs, name = make_parser_vfs(
             "color: enum { red\n green\n blue }\nmain: function is { c: color.red }",
             unitname="test",
-            src_dir=SRC_DIR,
+            src_dir=LIB_DIR,
         )
         p = Parser(vfs, name)
         result = p.parse()
@@ -778,7 +778,7 @@ class TestExampleProgramsOwnership:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -982,7 +982,7 @@ class TestLockCheckingExamplePrograms:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
         rootid = vfs.walk()
@@ -1446,7 +1446,7 @@ class TestUnionMatchExhaustiveness:
         from zvfs import ZVfs, FSProvider, BindType
 
         vfs = ZVfs()
-        systemdir = os.path.join(SRC_DIR, "system")
+        systemdir = os.path.join(LIB_DIR, "system")
         psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
         examples_dir = os.path.join(os.path.dirname(__file__), "..", "examples")
         pmainid = vfs.register(FSProvider(rootpath=examples_dir, parentpath=""))

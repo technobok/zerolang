@@ -118,7 +118,7 @@ gcc -Wall -Wno-unused-function -o hello hello.c
 From anywhere, specify source and system directories:
 
 ```bash
-uv run python src/zc.py hello --src examples/ --system src/system/
+uv run python src/zc.py hello --src examples/ --system lib/system/
 gcc -Wall -Wno-unused-function -o hello hello.c
 ```
 
@@ -128,7 +128,7 @@ gcc -Wall -Wno-unused-function -o hello hello.c
 usage: zc.py [-h] [--system SYSTEM] [--src SRC] [--full-typecheck] unitname
 
   unitname          Name of the unit to compile
-  --system SYSTEM   Path to the system directory (default: <script_dir>/system)
+  --system SYSTEM   Path to the system directory (default: <project_root>/lib/system)
   --src SRC         Path to the user source directory (default: current directory)
   --full-typecheck  Type-check all definitions, not just those reachable from main
 ```
@@ -166,6 +166,7 @@ src/
   zast.py         # AST node definitions
   ztypecheck.py   # Type checker
   zemitterc.py    # C code emitter
+lib/
   system/         # System library (system.z, core.z, io.z)
 doc/
   spec.pdoc       # Language specification

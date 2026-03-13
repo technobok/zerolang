@@ -12,13 +12,13 @@ import zast
 from zast import ERR
 
 
-SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src")
+LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 
 def parse_unit(source: str, unitname: str = "test") -> zast.Program | zast.Error:
     """Parse a source string as a unit, returning Program or Error."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=SRC_DIR)
+    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
     p = Parser(vfs, name)
     return p.parse()
 
@@ -564,7 +564,7 @@ class TestLabelValueShorthand:
 
 def parse_example(unitname: str) -> zast.Program | zast.Error:
     """Parse an example .z file using the same VFS setup as zc.py."""
-    systemdir = os.path.join(SRC_DIR, "system")
+    systemdir = os.path.join(LIB_DIR, "system")
     vfs = ZVfs()
     psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
     pmainid = vfs.register(FSProvider(rootpath=EXAMPLES_DIR, parentpath=""))

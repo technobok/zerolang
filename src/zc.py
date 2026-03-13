@@ -24,7 +24,7 @@ def main() -> None:
     parser.add_argument(
         "--system",
         default=None,
-        help="Path to the system directory (default: <script_dir>/system)",
+        help="Path to the system directory (default: <project_root>/lib)",
     )
     parser.add_argument(
         "--src",
@@ -51,9 +51,9 @@ def main() -> None:
     if args.system:
         systemdir = args.system
     else:
-        # default: system/ directory next to this script
+        # default: lib/ directory next to src/
         scriptdir = os.path.dirname(os.path.abspath(__file__))
-        systemdir = os.path.join(scriptdir, "system")
+        systemdir = os.path.join(scriptdir, "..", "lib", "system")
 
     vfs: ZVfs = ZVfs()
     psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))

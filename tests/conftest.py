@@ -50,9 +50,9 @@ def collect_lexer_tokens(source: str) -> list:
 
 
 @pytest.fixture
-def src_dir():
-    """Return the path to the src directory."""
-    return os.path.join(os.path.dirname(__file__), "..", "src")
+def lib_dir():
+    """Return the path to the lib directory."""
+    return os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def make_parser_vfs(source: str, unitname: str = "test", src_dir: str | None = None):
@@ -61,7 +61,7 @@ def make_parser_vfs(source: str, unitname: str = "test", src_dir: str | None = N
     Returns (vfs, unitname) suitable for Parser.
     """
     if src_dir is None:
-        src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
+        src_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
 
     vfs = ZVfs()
     psystemid = vfs.register(FSProvider(rootpath=src_dir, parentpath="system"))
