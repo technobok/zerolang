@@ -694,7 +694,7 @@ class TypeChecker:
             path.type = t
             # if this is a union subtype reference (null subtype used as value),
             # the type should be the parent union type
-            if hasattr(path, "parent_union_type") and path.parent_union_type:
+            if path.parent_union_type:
                 path.type = path.parent_union_type
                 return path.parent_union_type
         return t
@@ -733,7 +733,6 @@ class TypeChecker:
         # (must be before record/class checks since subtypes may be records)
         if (
             isinstance(call.callable, zast.DottedPath)
-            and hasattr(call.callable, "parent_union_type")
             and call.callable.parent_union_type
         ):
             parent_union = call.callable.parent_union_type

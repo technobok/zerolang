@@ -820,7 +820,10 @@ class CEmitter:
             return f"{indent}continue;\n"
 
         # data.index call -> array access
-        if self._is_data_index_call(call):
+        if self._is_data_index_call(call) and isinstance(
+            call.callable, zast.DottedPath
+        ):
+            assert isinstance(call.callable.parent, zast.AtomId)
             data_name = call.callable.parent.name
             idx = (
                 self._emit_operation_value(call.arguments[0].valtype)
@@ -974,7 +977,9 @@ class CEmitter:
                 and name not in self._const_names
             ):
                 return _mangle_var(name)
-        if isinstance(op, zast.Expression):
+        if isinstance(op, zast.Expression) and isinstance(
+            op.expression, zast.Operation
+        ):
             return self._get_implicit_take_var(op.expression)
         return None
 
@@ -1034,7 +1039,10 @@ class CEmitter:
         callable_name = self._get_callable_name(call.callable)
 
         # data.index call -> array access
-        if self._is_data_index_call(call):
+        if self._is_data_index_call(call) and isinstance(
+            call.callable, zast.DottedPath
+        ):
+            assert isinstance(call.callable.parent, zast.AtomId)
             data_name = call.callable.parent.name
             idx = (
                 self._emit_operation_value(call.arguments[0].valtype)
@@ -1260,7 +1268,9 @@ class CEmitter:
         self._temp_counter += 1
         tmp = f"_c{self._temp_counter}"
 
-        if isinstance(call.callable, zast.DottedPath):
+        if isinstance(call.callable, zast.DottedPath) and isinstance(
+            call.callable.parent, zast.AtomId
+        ):
             union_name = call.callable.parent.name
             subtype_name = call.callable.child.name
         else:
