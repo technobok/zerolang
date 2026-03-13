@@ -659,16 +659,16 @@ class TestValTypeTagging:
         assert any_type is not None
         assert any_type.is_valtype is False
 
-    def test_enum_is_valtype(self):
-        """Enums should be tagged as valtype."""
-        program = check_ok(
-            "color: enum { red\n green\n blue }\nmain: function is { c: color.red }"
+    def test_enum_is_reserved(self):
+        """Enum keyword is reserved and should produce a parse error."""
+        vfs, name = make_parser_vfs(
+            "color: enum { red\n green\n blue }\nmain: function is { c: color.red }",
+            unitname="test",
+            src_dir=SRC_DIR,
         )
-        tc = TypeChecker(program)
-        tc.check()
-        color = tc._resolved.get("test.color")
-        assert color is not None
-        assert color.is_valtype is True
+        p = Parser(vfs, name)
+        result = p.parse()
+        assert isinstance(result, zast.Error)
 
     def test_function_type_valtype_is_none(self):
         """Function types don't have a valtype classification."""
@@ -962,7 +962,7 @@ class TestLockCheckingDataExempt:
 
     def test_data_item_no_lock(self):
         """Data items are immutable and should not require locks."""
-        check_ok("primes: data { 2 3 5 7 }\nmain: function is { print primes.0 }")
+        check_ok("primes: data { 2 3 5 7 }\nmain: function is { x: primes.0 }")
 
 
 class TestLockCheckingScopeExit:
@@ -1460,6 +1460,228 @@ class TestUnionMatchExhaustiveness:
         assert isinstance(program, zast.Program), "Parse failed"
         errors = typecheck(program)
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+
+
+class TestDataTypeResolution:
+    """Test data type resolution in the type checker."""
+
+    def test_data_resolves_as_data_type(self):
+        """Data definitions should resolve to DATA ZType."""
+        program = check_ok(
+            "mydata: data { 10 20 30 }\nmain: function is { x: mydata.0 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        assert dt is not None
+        assert dt.typetype == ZTypeType.DATA
+
+    def test_data_ordinal_identifiers(self):
+        """Unnamed data elements get ordinal identifiers 0, 1, 2..."""
+        program = check_ok(
+            "mydata: data { 10 20 30 }\nmain: function is { x: mydata.0 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        assert "0" in dt.children
+        assert "1" in dt.children
+        assert "2" in dt.children
+
+    def test_data_named_elements(self):
+        """Named data elements use their labels."""
+        program = check_ok(
+            "mydata: data { LOW: 0 HIGH: 10 }\nmain: function is { x: mydata.LOW }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        assert "LOW" in dt.children
+        assert "HIGH" in dt.children
+
+    def test_data_has_tag_subtype(self):
+        """All data types should have a .tag subtype of TAG type."""
+        program = check_ok("mydata: data { 1 2 3 }\nmain: function is { x: mydata.0 }")
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        assert "tag" in dt.children
+        assert dt.children["tag"].typetype == ZTypeType.TAG
+
+    def test_data_tag_parent_is_data(self):
+        """The .tag type's parent should point back to its data type."""
+        program = check_ok(
+            "mydata: data { LOW: 0 HIGH: 1 }\nmain: function is { x: mydata.LOW }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        tag = dt.children["tag"]
+        assert tag.parent is dt
+
+    def test_data_mixed_named_unnamed(self):
+        """Data with mixed named and unnamed elements."""
+        program = check_ok(
+            "mydata: data { 10 MIDDLE: 20 30 }\nmain: function is { x: mydata.0 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        assert "0" in dt.children
+        assert "MIDDLE" in dt.children
+        assert "2" in dt.children
+
+
+class TestUnionCustomTag:
+    """Test union custom tag via as block (Phase 18)."""
+
+    def test_custom_data_tag(self):
+        """Union with custom data tag should resolve without errors."""
+        check_ok(
+            "pv: data { LOW: 0 HIGH: 1 }\n"
+            "priority: union {\n"
+            "    LOW: null\n"
+            "    HIGH: null\n"
+            "} as {\n"
+            "    tag: pv.tag\n"
+            "}\n"
+            "main: function is { x: priority.LOW }"
+        )
+
+    def test_custom_tag_values_in_tag_enum(self):
+        """Custom data values should appear in the :tag enum."""
+        program = check_ok(
+            "pv: data { A: 10 B: 20 }\n"
+            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        tag = ut.children.get(":tag")
+        assert tag is not None
+        # check that the discriminator values match the data
+        assert tag.children["A"].name == "10"
+        assert tag.children["B"].name == "20"
+
+    def test_custom_tag_mismatched_labels_error(self):
+        """Data labels not matching union subtypes should error."""
+        errors = check_errors(
+            "pv: data { X: 0 Y: 1 }\n"
+            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        assert any("do not match" in e.msg for e in errors)
+
+    def test_custom_tag_duplicate_values_error(self):
+        """Data with duplicate values used as tag should error."""
+        errors = check_errors(
+            "pv: data { A: 5 B: 5 }\n"
+            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        assert any("duplicate" in e.msg.lower() for e in errors)
+
+    def test_custom_tag_sparse_values(self):
+        """Custom tag with non-sequential values."""
+        program = check_ok(
+            "pv: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }\n"
+            "priority: union {\n"
+            "    LOW: null\n"
+            "    MEDIUM: null\n"
+            "    HIGH: null\n"
+            "    CRITICAL: null\n"
+            "} as {\n"
+            "    tag: pv.tag\n"
+            "}\n"
+            "main: function is { x: priority.LOW }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.priority")
+        tag = ut.children.get(":tag")
+        assert tag.children["CRITICAL"].name == "10"
+
+    def test_multiple_tag_items_error(self):
+        """Multiple .tag items in as block should error."""
+        errors = check_errors(
+            "pv1: data { A: 0 B: 1 }\n"
+            "pv2: data { A: 0 B: 1 }\n"
+            "myunion: union { A: null\n B: null } as { t1: pv1.tag\n t2: pv2.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        assert any("multiple" in e.msg.lower() for e in errors)
+
+    def test_default_auto_tag_u8(self):
+        """Union without custom tag gets auto-generated u8 tag."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        tag = ut.children.get(":tag")
+        assert tag is not None
+        assert tag.children["a"].name == "0"
+        assert tag.children["b"].name == "1"
+
+    def test_union_has_tag_data_child(self):
+        """Union should have a 'tag' child (data type) for MyUnion.tag access."""
+        program = check_ok(
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert "tag" in ut.children
+        assert ut.children["tag"].typetype == ZTypeType.DATA
+
+    def test_custom_tag_union_has_data_child(self):
+        """Union with custom tag should have the data instance as 'tag' child."""
+        program = check_ok(
+            "pv: data { A: 0 B: 1 }\n"
+            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myunion")
+        assert "tag" in ut.children
+        tag_data = ut.children["tag"]
+        assert tag_data.typetype == ZTypeType.DATA
+        assert tag_data.name == "pv"
+
+    def test_custom_tag_name_convention_only(self):
+        """The as block label name can be anything, not just 'tag'."""
+        check_ok(
+            "pv: data { A: 0 B: 1 }\n"
+            "myunion: union { A: null\n B: null } as { discriminator: pv.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+
+    def test_union_match_with_custom_tag(self):
+        """Match on union with custom tag should work."""
+        check_ok(
+            "pv: data { A: 0 B: 1 }\n"
+            "myunion: union { A: i64\n B: null } as { tag: pv.tag }\n"
+            "main: function is {\n"
+            "  x: myunion.A 42\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case A then {\n"
+            '    print "a"\n'
+            "  } case B then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}"
+        )
+
+    def test_numeric_type_tag(self):
+        """Using u16.tag should auto-generate sequential values with u16 storage."""
+        check_ok(
+            "myunion: union { A: null\n B: null } as { tag: u16.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
 
 
 class TestLabelValueShorthand:

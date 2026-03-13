@@ -1048,6 +1048,47 @@ class TestEmitterUnions:
         assert "free(u);" in csource
 
 
+class TestEmitterUnionCustomTag:
+    """Tests for union custom tag C emission (Phase 18)."""
+
+    def test_custom_tag_values_emitted(self):
+        """Custom data tag values should appear as explicit enum values."""
+        csource = emit_source(
+            "pv: data { A: 10 B: 20 }\n"
+            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        assert "Z_MYUNION_TAG_A = 10" in csource
+        assert "Z_MYUNION_TAG_B = 20" in csource
+
+    def test_custom_tag_sparse_values_emitted(self):
+        """Sparse custom tag values should be emitted correctly."""
+        csource = emit_source(
+            "pv: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }\n"
+            "priority: union {\n"
+            "    LOW: null\n"
+            "    MEDIUM: null\n"
+            "    HIGH: null\n"
+            "    CRITICAL: null\n"
+            "} as {\n"
+            "    tag: pv.tag\n"
+            "}\n"
+            "main: function is { x: priority.LOW }"
+        )
+        assert "Z_PRIORITY_TAG_LOW = 0" in csource
+        assert "Z_PRIORITY_TAG_CRITICAL = 10" in csource
+
+    def test_default_tag_uses_sequential_values(self):
+        """Without custom tag, enum values should be sequential (auto-increment)."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+        )
+        # sequential values don't need explicit = N, just comma separation
+        assert "Z_MYUNION_TAG_A," in csource
+        assert "Z_MYUNION_TAG_B," in csource
+        assert "= " not in csource.split("typedef enum")[1].split("}")[0]
+
+
 class TestEmitterUnionIntegration:
     """Integration tests: compile and run union programs."""
 

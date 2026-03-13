@@ -514,10 +514,50 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
+    def _resolve_tag_values(self, union_defn: zast.Union) -> Optional[Dict[str, int]]:
+        """Resolve custom tag values from as_items if a .tag reference exists."""
+        for as_name, as_path in union_defn.as_items.items():
+            if isinstance(as_path, zast.DottedPath) and as_path.child.name == "tag":
+                # find the data definition name from the parent
+                data_name = None
+                if isinstance(as_path.parent, zast.AtomId):
+                    data_name = as_path.parent.name
+                if not data_name:
+                    continue
+                # look up the data definition in the program
+                for unitname, unit in self.program.units.items():
+                    defn = unit.body.get(data_name)
+                    if defn is None:
+                        continue
+                    data_defn = None
+                    if isinstance(defn, zast.Data):
+                        data_defn = defn
+                    elif isinstance(defn, zast.Expression) and isinstance(
+                        defn.expression, zast.Data
+                    ):
+                        data_defn = defn.expression
+                    if data_defn:
+                        values: Dict[str, int] = {}
+                        ordinal = 0
+                        for item in data_defn.data:
+                            ename = item.name if item.name is not None else str(ordinal)
+                            ordinal += 1
+                            if isinstance(item.valtype, zast.AtomId) and _is_numeric_id(
+                                item.valtype.name
+                            ):
+                                _, val, err = parse_number(item.valtype.name)
+                                if not err:
+                                    values[ename] = int(val)
+                        return values
+        return None
+
     def _emit_union(self, name: str, union_defn: zast.Union) -> None:
         self.needs_stdint = True
         self.needs_stdlib = True
         lines: List[str] = []
+
+        # resolve custom tag values from as_items
+        custom_tag_values = self._resolve_tag_values(union_defn)
 
         # emit tag enum
         lines.append("typedef enum {\n")
@@ -525,7 +565,10 @@ class CEmitter:
         for sname in union_defn.items.keys():
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
             tag_names.append(tag)
-            lines.append(f"    {tag},\n")
+            if custom_tag_values and sname in custom_tag_values:
+                lines.append(f"    {tag} = {custom_tag_values[sname]},\n")
+            else:
+                lines.append(f"    {tag},\n")
         lines.append(f"}} z_{name}_tag_t;\n\n")
 
         # emit union struct: always {tag, void*}

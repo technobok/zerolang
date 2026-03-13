@@ -32,6 +32,7 @@ class ZTypeType(IntEnum):
     PROTOCOL = 57
 
     DATA = 60  # constant array data
+    TAG = 61  # tag discriminator type (placeholder until generics)
 
 
 @unique

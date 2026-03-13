@@ -762,22 +762,39 @@ name-resolved (with arbitrary nesting), and emitted as C code.
   #*: #+ Tests: inline unit resolution, nesting, shadowing, dotted access,
     C emission, compile-and-run integration.
 
-#---: Phase 18: Data as Union/Variant Tag
+#---: Phase 18: Data as Union/Variant Tag #_*"(COMPLETE)"
 
-Add support for using #~"data" with text keys as a custom discriminator for
-unions and variants. Currently, tag values are auto-generated integers.
-This phase allows specifying a #~"data" item as the tag source, giving
-explicit control over discriminator values.
+Add support for using #~"data" as a custom discriminator for unions. The
+#~"tag" predefined identifier (not a keyword) provides the #~".tag" type on
+data and numeric types. Tag specification goes in the #~"as" block only.
+
+Changes implemented:
 
 #ol:
-  #*: Parse the #~"as { tag: mydata.tag }" clause on union and variant
-    definitions (parser may already handle this via #~"as_items").
-  #*: Type checker: validate that the #~"data" item exists, has text keys
-    matching the union/variant subtype names, and that all values are
-    distinct and fit the tag type.
-  #*: Emitter: use the #~"data" values as the enum discriminator constants
-    instead of auto-generated sequential integers.
-  #*: Tests: custom tag values, tag value collisions, mismatched keys.
+  #*: Fixed #~"tag" from keyword to predefined identifier (matching spec).
+  #*: Fixed #~"enum" from keyword to reserved word (matching spec).
+  #*: Removed #~"block", #~"of", #~"_" from keyword list (matching spec).
+  #*: Added #~"break", #~"continue", #~"yield", #~"return" to predefined
+    identifiers in spec (were incorrectly listed as keywords).
+  #*: Added data type resolution to the type checker (#~"_resolve_data_type").
+    All data elements get ordinal identifiers (0, 1, 2...) for unnamed
+    elements. Named elements use their text labels.
+  #*: Compiler generates #~".tag" subtype on all #~"data" types (TAG ZType
+    with parent pointer back to the data).
+  #*: Added #~"tag" record type and #~".tag" field to all numeric types in
+    #~"system.z".
+  #*: Type checker: #~"as" block items with TAG type specify the tag source.
+    Validates data labels match union subtypes 1:1, values are unique,
+    only one .tag allowed per union/variant.
+  #*: When no custom tag: auto-generates data type with sequential u8 values.
+    Error if >256 subtypes without custom tag.
+  #*: #~"MyUnion.tag" returns the data instance (custom or generated).
+  #*: Emitter: uses custom data values for C enum discriminator constants
+    (#~"= N" syntax) instead of sequential auto-increment.
+  #*: Numeric type tags (#~"u16.tag"): auto-generate sequential values using
+    the specified numeric type for storage.
+  #*: 24 new tests covering data resolution, custom tags, validation errors,
+    and C emission.
 
 #code language=zerolang: """
   priority_values: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }
@@ -787,7 +804,36 @@ explicit control over discriminator values.
   } as {
       tag: priority_values.tag
   }
+
+  # using numeric type tag (auto-generate from 0):
+  myunion: union { a: i64  b: null } as { tag: u16.tag }
   """
+
+#---: Phase 18a: Variant Type Checker
+
+Add variant type resolution to the type checker (#~"_resolve_variant_type").
+Currently variants are parsed and AST nodes exist but the type checker has
+no #~"isinstance(defn, zast.Variant)" handler. This phase adds:
+
+#ol:
+  #*: #~"_resolve_variant_type" in #~"ztypecheck.py": similar to union but
+    #~"is_valtype = True". Variants are value types (stack-allocated).
+  #*: Custom tag support via #~"as" block (same mechanism as unions).
+  #*: Exhaustive match checking for variants.
+  #*: Tests for variant type resolution, variant custom tags.
+
+#---: Phase 18b: Generic Tag Type
+
+After generics are implemented, replace the current #~"tag" placeholder
+record with a proper generic type. The #~"tag" type should be parameterized
+by the discriminator storage type (e.g. #~"tag(u16)"). The #~"x: tag myenum"
+syntax inside an #~"is" block can also be supported at that time.
+
+#ol:
+  #*: Define #~"tag" as a generic type in #~"system.z".
+  #*: #~"data.tag" returns #~"tag(element_type)".
+  #*: #~"u16.tag" returns #~"tag(u16)".
+  #*: Remove placeholder hack in type checker.
 
 #---: Phase 19: Protocols (Interface Types)
 

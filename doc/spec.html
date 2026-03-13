@@ -307,12 +307,14 @@ true false
 
 public private
 
-take borrow lock generic 
+take borrow lock generic
 
 this
 meta
 
 error
+
+return break continue yield
 
 iterator</code></pre>
 <h4 id="integer-identifiers"><a href="#integer-identifiers">2.7.2. Integer Identifiers</a></h4>
@@ -453,12 +455,12 @@ whitespace.</p>
 keywords:</p>
 <pre><code class="language-zerolang">unit            function        else            match
 record          in              for             case
-class           out             while           break
-variant         is              loop            continue
-union           as              with            yield
-facet           if              do              return
-protocol        when            swap            =
-data            then            on</code></pre>
+class           out             while           on
+variant         is              loop            =
+union           as              with
+facet           if              do
+protocol        when            swap
+data            then</code></pre>
 <h3 id="reserved-words"><a href="#reserved-words">2.10. Reserved Words</a></h3>
 <p>Reserved words are syntax errors. The following are reserved:</p>
 <pre><code class="language-zerolang">macro           flag            view
@@ -1724,46 +1726,43 @@ another variable of the same or underlying type. Both variables retain their
 type after the swap (?).  The underlying variable must be owned to be used in a
 swap, as usual.</p>
 <h4 id="tag"><a href="#tag">5.3.11. tag</a></h4>
-<p>A predefined generic type for specifying the descriminator in <a href="#union">unions</a>
-and <a href="#variant">variants</a>.</p>
-<table>
-<colgroup>
-<col style="width: 20%">
-<col style="width: 20%">
-<col style="width: 20%">
-<col style="width: 40%">
-</colgroup>
-<thead>
-<tr><th style="text-align: left">Argument</th><th style="text-align: left">Type</th><th style="text-align: left">Default</th><th style="text-align: left">Value/Description</th></tr>
-</thead>
-<tbody>
-<tr><td>of</td><td>any</td><td>Yes</td><td>tag discriminator type</td></tr>
-</tbody>
-</table>
-<p><code>tag</code>can be specified as a field type within a <code>variant</code> or <code>union</code> definition
-only. At most, only one field can be of type <code>tag</code>. If not specified, the tag
-is <code>u8</code>.</p>
-<p>The tag type argument may be:</p>
-<p>- any numeric type (including the character types)
-- an enumeration
-- null</p>
-<p>If an 'enum' (variant/union) tag type is specified, the containing sum-type
-must have a matching type for each member of the enum.</p>
+<p>A predefined generic type for specifying the discriminator in <a href="#union">unions</a>
+and <a href="#variant">variants</a>. <code>tag</code> is a predefined identifier, not a keyword.</p>
+<p>The compiler automatically generates a <code>.tag</code> subtype on all <code>data</code> types and
+all numeric types. This <code>.tag</code> is used to specify the discriminator source in
+a union or variant's <code>as</code> block.</p>
+<p>The tag specification must appear in the <code>as</code> block (not the <code>is</code> block). At
+most one <code>.tag</code> type is allowed per union/variant. The label name in the
+<code>as</code> block is convention only (commonly <code>tag</code>, but any name is valid).</p>
+<p>When a <code>data</code> item is used as a tag source:</p>
+<p>- the data labels must exactly match the union/variant subtype names (one-for-one)
+- all data values must be unique
+- the data values are used as the discriminator constants</p>
+<p>When a numeric type's <code>.tag</code> is used (e.g. <code>u16.tag</code>):</p>
+<p>- the compiler auto-generates sequential values starting from 0
+- the specified numeric type is used for discriminator storage</p>
+<p>If no tag is specified, the compiler uses <code>u8</code> by default with sequential
+values starting from 0. If the union/variant has more than 256 subtypes, a
+custom tag must be specified.</p>
 <p><code>tag</code>may be <code>null</code> only if all of these criteria apply:</p>
 <p>- in a union (not a variant)
 - there are only two subitems
 - one of the subitems <em><strong>must not</strong></em> have data associated with it (<code>null</code> member),
   the other <em><strong>must</strong></em> have data associated with it</p>
-<p>In that case, no underlying descriminator is needed.</p>
-<p>For unions/variants with only distinct numeric values that fit within the <code>tag</code>
-type then the value is stored directly within the tag. These are effectively
-'enumeration' types.</p>
-<p>The named tag may be accessed from the containing variant or union as a
-readonly field shared by all sub-instance types.</p>
-<pre><code class="language-zerolang">myunion: union {
-    mytag: tag u32
-    # ... other fields
-}</code></pre>
+<p>In that case, no underlying discriminator is needed.</p>
+<p>On an instance, <code>.tag</code> returns the current discriminator value (as the
+underlying numeric type). On the type itself, <code>MyUnion.tag</code> returns the
+data instance (the discriminator's constant array).</p>
+<pre><code class="language-zerolang">priority_values: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }
+
+priority: union {
+    LOW: null  MEDIUM: null  HIGH: null  CRITICAL: null
+} as {
+    tag: priority_values.tag
+}
+
+# using a numeric type tag (auto-generate sequential values):
+myunion: union { a: i64  b: null } as { tag: u16.tag }</code></pre>
 <h4 id="break"><a href="#break">5.3.12. break</a></h4>
 <p>The builtin break function. Breaks out of the innermost <a href="#for">for</a> loop or block
 expression. Syntax error if not within a <code>for</code> or block expression. (TODO: only
@@ -2024,8 +2023,8 @@ mydata_sparse: data { 1 2 4: 4 }
 mydata_key: data { FIRST: 1 SECOND: 2 THIRD: 3 }
 # which can be used as a tag in a sum-type, using these values for 
 #  the descriminator
-myvariant: variant { 
-    FIRST: none SECOND: none THIRD: none
+myvariant: variant {
+    FIRST: null SECOND: null THIRD: null
 } as {
     tag: mydata_key.tag
 }
@@ -2591,6 +2590,7 @@ via <code>match</code>.</p>
 </thead>
 <tbody>
 <tr><td>is</td><td>Yes</td><td>Block of independent subtypes, generic parameters and associated methods</td></tr>
+<tr><td>as</td><td></td><td>Optional block for tag specification and shared attributes</td></tr>
 </tbody>
 </table>
 <p>A sum-type definition is a block listing one definition for each subtype,
@@ -2675,15 +2675,13 @@ myclassi: myclass a: 1 b: 2
 v4: myunion2.t5 myclassi.take        # .take transfers ownership
 v5: myunion2.t5 (myclass a: 1 b: 2)  # anonymous instance, no .take needed
 
-myenum: variant {
-    a: 0
-    b: 1
-}
+myenum_vals: data { a: 0 b: 1 }
 
 myvariant: variant {
-    x: tag myenum
     a: u32
     b: f32
+} as {
+    tag: myenum_vals.tag
 }</code></pre>
 <p>Unions are also used to define generic types along with protocols. <code>any</code> is a
 system defined union that includes all possible types used in the current
@@ -2706,6 +2704,7 @@ always as large as its largest containing type plus the descriminator.</p>
 </thead>
 <tbody>
 <tr><td>is</td><td>Yes</td><td>Block of independent subtypes, generic parameters and associated methods</td></tr>
+<tr><td>as</td><td></td><td>Optional block for tag specification and shared attributes</td></tr>
 </tbody>
 </table>
 <p>See also the <a href="#union">union</a> section. Other than variants being a value type, all
@@ -2736,14 +2735,14 @@ myenum: variant {
 }
 
 # can specify unique values if required. Subsequent unspecified members will be
-# 1 higher than the largest previous member. tag can specify another numeric
-# type for the tag.
+# 1 higher than the largest previous member. A different numeric type for the
+# tag can be specified in the 'as' block.
 
-myenum2: variant {     
+myenum2: variant {
     FIRST: 1
     SECOND: 2
     :THIRD
-} tag u16
+} as { tag: u16.tag }
 
 # can be out of order but is usually poor style
 myenum3: variant {     

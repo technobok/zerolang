@@ -427,8 +427,6 @@ class Parser:
             return self._acceptvariant(lex)
         if tt == TT.UNION:
             return self._acceptunion(lex)
-        if tt == TT.ENUM:
-            return self._acceptenum(lex)
         if tt == TT.PROTOCOL:
             return self._acceptprotocol(lex)
         if tt == TT.FACET:
@@ -1065,36 +1063,6 @@ class Parser:
         )
         return NodeX(node=protocol, extern=b.extern)
 
-    def _acceptenum(self, lex: Lexer) -> Union[NodeX[zast.Enum], zast.Error, None]:
-        """
-        accept an enum
-
-            enum
-                "enum" [ "is" ] "{" { enumitem | newline } "}"
-
-        Returns an Enum or Error or None (if no 'enum' keyword)
-        """
-        start = lex.peek()
-        if not lex.accept(TT.ENUM):
-            return None
-
-        is_body, as_body, extern, err = self._acceptitembodies(
-            lex, allowtag=True, unlabelledpath=False, unlabelledid=True
-        )
-        if err:
-            return err
-
-        enum = zast.Enum(
-            items=is_body.items,
-            implements=is_body.islist,
-            functions=is_body.functions,
-            tag=is_body.tag,
-            as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
-            start=start,
-        )
-        return NodeX(node=enum, extern=extern)
-
     def _acceptfacet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
         """
         accept a facet
@@ -1311,23 +1279,6 @@ class Parser:
                             return zast.Error(
                                 err=ERR.BADITEM, msg=msg, loc=lex.acceptany()
                             )
-
-            elif allowtag and tt == TT.TAG:
-                lex.acceptany()
-                if tag:
-                    msg = "Duplicate 'tag' definition"
-                    return zast.Error(err=ERR.BADITEM, msg=msg, loc=t)
-
-                typerefx = self._acceptpath(lex)
-                if isinstance(typerefx, zast.Error):
-                    return typerefx  # propagate error
-                if typerefx:
-                    tag = typerefx.node
-                    promoteexterns(addto=externitems, addfrom=typerefx.extern)
-                else:
-                    # error
-                    msg = "Expected a typeref for 'tag'"
-                    return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
 
             elif unlabelledpath:
                 # try an unnamed path - path can only have an refid at the root...
@@ -1759,7 +1710,9 @@ class Parser:
 
         extern: Dict[str, zast.AtomId] = {}
 
-        lex.accept(TT.BLOCK)  # optional 'block'
+        # optional 'block' identifier (not a keyword)
+        if lex.peek().toktype == TT.REFID and lex.peek().tokstr == "block":
+            lex.acceptany()
 
         statementx = self._acceptstatement(lex)
         if isinstance(statementx, zast.Error):

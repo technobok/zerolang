@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 import zchar
 from zcharclass import CHARFLAGS, Charflag
-from ztokentype import TT, TTKWMAP
+from ztokentype import TT, TTKWMAP, TTRESERVED
 from zvfs import DEntryID, ZVfsOpenFile
 
 
@@ -328,10 +328,12 @@ class Tokenizer(ITokenizer):
             return tok
 
         if ttkw:
-            # KEYWORD: eg function, for, while, return
+            # KEYWORD: eg function, for, while
             return Token(ttkw, tstr, self.fsno, lineno, colno)
 
-        # LABEL
+        if tstr in TTRESERVED:
+            return Token(TT.ERR, tstr, self.fsno, lineno, colno)
+
         return Token(TT.REFID, tstr, self.fsno, lineno, colno)
 
     def acceptstringtoken(self) -> Token:

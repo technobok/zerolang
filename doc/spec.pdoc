@@ -188,12 +188,14 @@ Other predefined identifiers:
 
   public private
 
-  take borrow lock generic 
+  take borrow lock generic
 
   this
   meta
 
   error
+
+  return break continue yield
 
   iterator
   """
@@ -342,12 +344,12 @@ keywords:
 #code language=zerolang:
   unit            function        else            match
   record          in              for             case
-  class           out             while           break
-  variant         is              loop            continue
-  union           as              with            yield
-  facet           if              do              return
-  protocol        when            swap            =
-  data            then            on
+  class           out             while           on
+  variant         is              loop            =
+  union           as              with
+  facet           if              do
+  protocol        when            swap
+  data            then
 
 #---: Reserved Words
 
@@ -1882,25 +1884,31 @@ swap, as usual.
 
 #----: tag
 
-A predefined generic type for specifying the descriminator in [#> to=union: unions]
-and [#> to=variant: variants].
+A predefined generic type for specifying the discriminator in [#> to=union: unions]
+and [#> to=variant: variants]. #~"tag" is a predefined identifier, not a keyword.
 
-#table cols="2 2 2 4":
-  Argument  |Type     |Default |Value/Description
-  of        |any      |Yes     |tag discriminator type
+The compiler automatically generates a #~".tag" subtype on all #~"data" types and
+all numeric types. This #~".tag" is used to specify the discriminator source in
+a union or variant's #~"as" block.
 
-#~"tag" can be specified as a field type within a #~"variant" or #~"union" definition
-only. At most, only one field can be of type #~"tag". If not specified, the tag
-is #~"u8".
+The tag specification must appear in the #~"as" block (not the #~"is" block). At
+most one #~".tag" type is allowed per union/variant. The label name in the
+#~"as" block is convention only (commonly #~"tag", but any name is valid).
 
-The tag type argument may be:
+When a #~"data" item is used as a tag source:
 
-- any numeric type (including the character types)
-- an enumeration
-- null
+- the data labels must exactly match the union/variant subtype names (one-for-one)
+- all data values must be unique
+- the data values are used as the discriminator constants
 
-If an 'enum' (variant/union) tag type is specified, the containing sum-type
-must have a matching type for each member of the enum.
+When a numeric type's #~".tag" is used (e.g. #~"u16.tag"):
+
+- the compiler auto-generates sequential values starting from 0
+- the specified numeric type is used for discriminator storage
+
+If no tag is specified, the compiler uses #~"u8" by default with sequential
+values starting from 0. If the union/variant has more than 256 subtypes, a
+custom tag must be specified.
 
 #~"tag" may be #~"null" only if all of these criteria apply:
 
@@ -1909,20 +1917,23 @@ must have a matching type for each member of the enum.
 - one of the subitems #_*"must not" have data associated with it (#~"null" member),
   the other #_*"must" have data associated with it
 
-In that case, no underlying descriminator is needed.
+In that case, no underlying discriminator is needed.
 
-For unions/variants with only distinct numeric values that fit within the #~"tag"
-type then the value is stored directly within the tag. These are effectively
-'enumeration' types.
-
-The named tag may be accessed from the containing variant or union as a
-readonly field shared by all sub-instance types.
+On an instance, #~".tag" returns the current discriminator value (as the
+underlying numeric type). On the type itself, #~"MyUnion.tag" returns the
+data instance (the discriminator's constant array).
 
 #code language=zerolang: """
-  myunion: union {
-      mytag: tag u32
-      # ... other fields
+  priority_values: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }
+
+  priority: union {
+      LOW: null  MEDIUM: null  HIGH: null  CRITICAL: null
+  } as {
+      tag: priority_values.tag
   }
+
+  # using a numeric type tag (auto-generate sequential values):
+  myunion: union { a: i64  b: null } as { tag: u16.tag }
   """
 
 #----: break
@@ -2238,8 +2249,8 @@ except that it is readonly.
   mydata_key: data { FIRST: 1 SECOND: 2 THIRD: 3 }
   # which can be used as a tag in a sum-type, using these values for 
   #  the descriminator
-  myvariant: variant { 
-      FIRST: none SECOND: none THIRD: none
+  myvariant: variant {
+      FIRST: null SECOND: null THIRD: null
   } as {
       tag: mydata_key.tag
   }
@@ -2921,6 +2932,7 @@ Arguments for #~"union":
 #table cols="2 2 4":
   Argument  |Default |Description
   is        |Yes     |Block of independent subtypes, generic parameters and associated methods
+  as        |        |Optional block for tag specification and shared attributes
 
 A sum-type definition is a block listing one definition for each subtype,
 providing a name and a type.
@@ -3026,15 +3038,13 @@ Creating/setting a union value:
   v4: myunion2.t5 myclassi.take        # .take transfers ownership
   v5: myunion2.t5 (myclass a: 1 b: 2)  # anonymous instance, no .take needed
 
-  myenum: variant {
-      a: 0
-      b: 1
-  }
+  myenum_vals: data { a: 0 b: 1 }
 
   myvariant: variant {
-      x: tag myenum
       a: u32
       b: f32
+  } as {
+      tag: myenum_vals.tag
   }
   """
 
@@ -3057,6 +3067,7 @@ Arguments for #~"variant":
 #table cols="2 2 4":
   Argument  |Default |Description
   is        |Yes     |Block of independent subtypes, generic parameters and associated methods
+  as        |        |Optional block for tag specification and shared attributes
 
 See also the #>"union" section. Other than variants being a value type, all
 other instructions for a union also apply to a variant.
@@ -3094,14 +3105,14 @@ will cause a compilation error.
   }
 
   # can specify unique values if required. Subsequent unspecified members will be
-  # 1 higher than the largest previous member. tag can specify another numeric
-  # type for the tag.
+  # 1 higher than the largest previous member. A different numeric type for the
+  # tag can be specified in the 'as' block.
 
-  myenum2: variant {     
+  myenum2: variant {
       FIRST: 1
       SECOND: 2
       :THIRD
-  } tag u16
+  } as { tag: u16.tag }
 
   # can be out of order but is usually poor style
   myenum3: variant {     

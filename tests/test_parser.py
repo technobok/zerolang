@@ -314,13 +314,11 @@ class TestFunctionInKeyword:
         assert "n" in func.parameters
 
 
-class TestEnumDefinition:
-    def test_simple_enum(self):
-        """enum definition should work (was broken with TT.RECORD bug)"""
+class TestEnumReserved:
+    def test_enum_is_reserved_word(self):
+        """enum is a reserved word and should produce an error"""
         result = parse_unit("color: enum { red\n green\n blue }")
-        body = get_unit_body(result)
-        assert "color" in body
-        assert isinstance(body["color"], zast.Enum)
+        assert isinstance(result, zast.Error)
 
 
 class TestErrorCases:
@@ -456,14 +454,10 @@ class TestAsClause:
         assert "x" in cls.items
         assert "y" in cls.as_items
 
-    def test_enum_with_as(self):
-        """enum with as clause"""
+    def test_enum_with_as_is_reserved(self):
+        """enum is reserved, even with as clause"""
         result = parse_unit("c: enum { red\n green } as { x: f64 }")
-        body = get_unit_body(result)
-        e = body["c"]
-        assert isinstance(e, zast.Enum)
-        assert "red" in e.items
-        assert "x" in e.as_items
+        assert isinstance(result, zast.Error)
 
     def test_variant_with_as(self):
         """variant with as clause"""
@@ -482,6 +476,35 @@ class TestAsClause:
         assert isinstance(u, zast.Union)
         assert "x" in u.items
         assert "y" in u.as_items
+
+
+class TestDataAsTagParsing:
+    """Test parsing data as tag source (Phase 18)."""
+
+    def test_union_as_tag_dotted_path(self):
+        """union with as { tag: mydata.tag } should parse."""
+        result = parse_unit(
+            "mydata: data { A: 0 B: 1 }\n"
+            "u: union { A: null\n B: null } as { tag: mydata.tag }"
+        )
+        body = get_unit_body(result)
+        u = body["u"]
+        assert isinstance(u, zast.Union)
+        assert "tag" in u.as_items
+        as_tag = u.as_items["tag"]
+        assert isinstance(as_tag, zast.DottedPath)
+        assert as_tag.child.name == "tag"
+
+    def test_tag_is_not_keyword(self):
+        """tag should be a regular identifier, not a keyword."""
+        result = parse_unit("tag: 42")
+        body = get_unit_body(result)
+        assert "tag" in body
+
+    def test_enum_is_reserved(self):
+        """enum should be rejected as reserved word."""
+        result = parse_unit("x: enum { a\n b }")
+        assert isinstance(result, zast.Error)
 
 
 class TestLabelValueShorthand:

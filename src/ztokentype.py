@@ -50,19 +50,15 @@ class TT(IntEnum):
     LOOP = 109
     WHILE = 110
     DO = 111
-    BLOCK = 112
     CASE = 113
     IN = 116
-    OF = 117
     SWAP = 121
     UNIT = 122
     RECORD = 123
     CLASS = 124
     UNION = 125
     VARIANT = 126
-    ENUM = 127
     PROTOCOL = 128
-    TAG = 131
     DATA = 132
     IS = 133
     AS = 134
@@ -72,7 +68,6 @@ class TT(IntEnum):
     WITH = 138
     FACET = 139
     EQUALS = 135
-    UNDERSCORE = 136
 
     LABEL = 200  # Identifier/Number followed by a ':'
     LABELPRE = 201  # Identifier/Number preceded by a ':'
@@ -80,7 +75,6 @@ class TT(IntEnum):
 
 TTKWMAP = {
     "=": TT.EQUALS,
-    "_": TT.UNDERSCORE,
     "function": TT.FUNCTION,
     "if": TT.IF,
     "when": TT.WHEN,
@@ -90,25 +84,36 @@ TTKWMAP = {
     "loop": TT.LOOP,
     "while": TT.WHILE,
     "do": TT.DO,
-    "block": TT.BLOCK,
     "case": TT.CASE,
     "match": TT.MATCH,
     "on": TT.ON,
     "out": TT.OUT,
     "in": TT.IN,
-    "of": TT.OF,
     "swap": TT.SWAP,
     "unit": TT.UNIT,
     "record": TT.RECORD,
     "class": TT.CLASS,
     "union": TT.UNION,
     "variant": TT.VARIANT,
-    "enum": TT.ENUM,
     "protocol": TT.PROTOCOL,
-    "tag": TT.TAG,
     "data": TT.DATA,
     "is": TT.IS,
     "as": TT.AS,
     "with": TT.WITH,
     "facet": TT.FACET,
+}
+
+# Reserved words — syntax error if used as identifiers
+TTRESERVED = {
+    "enum",
+    "macro",
+    "flag",
+    "view",
+    "goto",
+    "cell",
+    "unsafe",
+    "repeat",
+    "pragma",
+    "switch",
+    "until",
 }
