@@ -2127,3 +2127,114 @@ class TestSpecs:
         assert create_t is not None
         assert "x" in create_t.children
         assert "helper" not in create_t.children
+
+
+class TestDefaults:
+    def test_numeric_default_resolves_i64(self):
+        """Numeric default '0' resolves to i64 type."""
+        program = check_ok(
+            "greet: function {a: 0} out i64 is { return a }\n"
+            "main: function is { greet }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "greet")
+        assert t is not None
+        assert "a" in t.children
+        assert t.children["a"].name == "i64"
+
+    def test_numeric_default_42(self):
+        """Numeric default '42' resolves to i64 type."""
+        program = check_ok(
+            "greet: function {a: 42} out i64 is { return a }\n"
+            "main: function is { greet }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "greet")
+        assert t is not None
+        assert t.children["a"].name == "i64"
+
+    def test_param_defaults_populated_numeric(self):
+        """param_defaults populated for numeric defaults."""
+        program = check_ok(
+            "greet: function {a: 0 b: 42} out i64 is { return a + b }\n"
+            "main: function is { greet }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "greet")
+        assert t is not None
+        assert t.param_defaults == {"a": "0", "b": "42"}
+
+    def test_function_ref_default_detected(self):
+        """Function reference default detected (function with body)."""
+        program = check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "apply: function {f: add} out i64 is {\n"
+            "  result: f a: 1 b: 2\n"
+            "  return result\n"
+            "}\n"
+            "main: function is { apply }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "apply")
+        assert t is not None
+        assert "f" in t.param_defaults
+        assert t.param_defaults["f"] == "add"
+
+    def test_spec_no_default(self):
+        """Spec (function without body) does NOT produce a default."""
+        program = check_ok(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            "main: function is { apply f: add.take a: 1 b: 2 }\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "apply")
+        assert t is not None
+        assert "f" not in t.param_defaults
+
+    def test_call_with_missing_defaulted_arg_no_error(self):
+        """Call omitting an arg that has a default produces no type error."""
+        check_ok(
+            "greet: function {a: 0} out i64 is { return a }\n"
+            "main: function is { greet }"
+        )
+
+    def test_record_with_numeric_default_field(self):
+        """Record field with numeric default stores it on the type."""
+        program = check_ok(
+            "myrec: record {\n"
+            "    x: i64\n"
+            "    y: 0\n"
+            "}\n"
+            "main: function is { r: myrec x: 5 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "myrec")
+        assert t is not None
+        assert t.param_defaults == {"y": "0"}
+        # defaults propagate to constructor
+        create_t = t.children.get(":meta.create")
+        assert create_t is not None
+        assert create_t.param_defaults == {"y": "0"}
+
+    def test_type_name_no_default(self):
+        """A type name like 'i64' does NOT produce a default."""
+        program = check_ok(
+            "greet: function {a: i64} out i64 is { return a }\n"
+            "main: function is { greet a: 5 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "greet")
+        assert t is not None
+        assert "a" not in t.param_defaults

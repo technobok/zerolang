@@ -250,6 +250,15 @@ class TypeChecker:
             pt = self._resolve_typeref(ppath)
             if pt:
                 ftype.children[pname] = pt
+                # detect defaults
+                if isinstance(ppath, zast.AtomId) and _is_numeric_id(ppath.name):
+                    _, val, err = parse_number(ppath.name)
+                    if not err:
+                        ftype.param_defaults[pname] = str(int(val))
+                elif isinstance(ppath, zast.AtomId):
+                    defn = self._lookup_definition(ppath.name)
+                    if isinstance(defn, zast.Function) and defn.body is not None:
+                        ftype.param_defaults[pname] = ppath.name
 
         # propagate ownership annotations from AST to ZType
         if func.param_ownership:
@@ -297,6 +306,15 @@ class TypeChecker:
             ft = self._resolve_typeref(fpath)
             if ft:
                 ctype.children[fname] = ft
+                # detect field defaults
+                if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
+                    _, val, err = parse_number(fpath.name)
+                    if not err:
+                        ctype.param_defaults[fname] = str(int(val))
+                elif isinstance(fpath, zast.AtomId):
+                    defn = self._lookup_definition(fpath.name)
+                    if isinstance(defn, zast.Function) and defn.body is not None:
+                        ctype.param_defaults[fname] = fpath.name
         for mname, mfunc in cls.functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             ctype.children[mname] = mt
@@ -693,6 +711,15 @@ class TypeChecker:
             ft = self._resolve_typeref(fpath)
             if ft:
                 rtype.children[fname] = ft
+                # detect field defaults
+                if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
+                    _, val, err = parse_number(fpath.name)
+                    if not err:
+                        rtype.param_defaults[fname] = str(int(val))
+                elif isinstance(fpath, zast.AtomId):
+                    defn = self._lookup_definition(fpath.name)
+                    if isinstance(defn, zast.Function) and defn.body is not None:
+                        rtype.param_defaults[fname] = fpath.name
         for mname, mfunc in rec.functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
@@ -731,8 +758,13 @@ class TypeChecker:
                 # only include function-typed children from the 'is' section
                 if is_func_names and fname in is_func_names:
                     ftype.children[fname] = ft
+                    if fname in parent_type.param_defaults:
+                        ftype.param_defaults[fname] = parent_type.param_defaults[fname]
                 continue
             ftype.children[fname] = ft
+            # propagate field defaults to constructor
+            if fname in parent_type.param_defaults:
+                ftype.param_defaults[fname] = parent_type.param_defaults[fname]
             # reftype fields need .take ownership
             if not _is_valtype(ft):
                 ftype.param_ownership[fname] = ZParamOwnership.TAKE
@@ -827,6 +859,8 @@ class TypeChecker:
         """Resolve a type reference (used in parameter types, return types, fields)."""
         if isinstance(path, zast.AtomId):
             name = path.name
+            if _is_numeric_id(name):
+                return self._resolve_numeric(name, loc=path.start)
             if name == "type":
                 return self._resolve_type_keyword()
             if name == "this":

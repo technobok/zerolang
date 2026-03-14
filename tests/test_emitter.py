@@ -218,6 +218,13 @@ class TestEmitterExamples:
         assert "p1 = (3, 7)" in output
         assert "p2 = (0, 0)" in output
 
+    def test_defaults(self):
+        csource = self._emit_example("defaults")
+        output = compile_and_run(csource)
+        assert "31" in output  # calc 1 -> 1+10+20
+        assert "13" in output  # apply a:10 b:3 -> add(10,3)
+        assert "5 0 0" in output  # point x:5
+
 
 def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
     """Compile C source with ASan and run, returning the CompletedProcess."""
@@ -1895,3 +1902,113 @@ class TestSpecs:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0
         assert result.stdout.strip() == "7"
+
+
+class TestDefaults:
+    def test_function_all_defaults_omitted(self):
+        """Function call omitting all default args (bare function name = call)."""
+        csource = emit_source(
+            "greet: function {a: 42} out i64 is { return a }\n"
+            'main: function is { print "\\{greet}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_function_numeric_default_provided(self):
+        """Function call providing value overrides default."""
+        csource = emit_source(
+            "greet: function {a: 42} out i64 is { return a }\n"
+            'main: function is { print "\\{greet a: 99}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "99"
+
+    def test_function_zero_default(self):
+        """Function with default=0 works correctly."""
+        csource = emit_source(
+            "inc: function {a: 0} out i64 is { return a + 1 }\n"
+            'main: function is { print "\\{inc}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1"
+
+    def test_function_trailing_default_omitted(self):
+        """Function call omitting trailing default arg."""
+        csource = emit_source(
+            "calc: function {a: i64 b: 42} out i64 is { return a + b }\n"
+            'main: function is { print "\\{calc 1}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "43"
+
+    def test_record_numeric_default_field(self):
+        """Record construction omitting a defaulted field uses default."""
+        csource = emit_source(
+            "myrec: record {\n"
+            "    x: i64\n"
+            "    y: 10\n"
+            "}\n"
+            "main: function is {\n"
+            "  r: myrec x: 5\n"
+            '  print "\\{r.y}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10"
+
+    def test_record_default_field_overridden(self):
+        """Record construction providing a defaulted field overrides it."""
+        csource = emit_source(
+            "myrec: record {\n"
+            "    x: i64\n"
+            "    y: 10\n"
+            "}\n"
+            "main: function is {\n"
+            "  r: myrec x: 5 y: 99\n"
+            '  print "\\{r.y}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "99"
+
+    def test_function_ref_default(self):
+        """Function reference default: omitted arg uses function ref."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "apply: function {a: i64 b: i64 f: add} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            'main: function is { print "\\{apply a: 3 b: 4}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_multiple_defaults_mix(self):
+        """Mix of provided and omitted default params."""
+        csource = emit_source(
+            "calc: function {a: i64 b: 10 c: 20} out i64 is { return a + b + c }\n"
+            'main: function is { print "\\{calc 1}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "31"
+
+    def test_defaults_asan(self):
+        """No memory issues with defaults (ASan)."""
+        csource = emit_source(
+            "inc: function {a: 0} out i64 is { return a + 1 }\n"
+            "myrec: record {\n"
+            "    x: i64\n"
+            "    y: 10\n"
+            "}\n"
+            "main: function is {\n"
+            '  print "\\{inc}"\n'
+            "  r: myrec x: 5\n"
+            '  print "\\{r.y}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        lines = result.stdout.strip().split("\n")
+        assert lines[0] == "1"
+        assert lines[1] == "10"

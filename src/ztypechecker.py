@@ -135,6 +135,9 @@ class ZType:
     # value type vs reference type classification
     is_valtype: Optional[bool] = field(default=None, init=False)
 
+    # default values for parameters/fields: name → C-level default expression
+    param_defaults: "dict[str, str]" = field(default_factory=dict, init=False)
+
 
 # a typesafe variable id
 VariableID = NewType("VariableID", int)

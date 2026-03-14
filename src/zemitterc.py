@@ -180,6 +180,7 @@ class CEmitter:
         # field info per type name (for meta.create calls)
         self._type_field_ctypes: Dict[str, List[str]] = {}
         self._type_field_names: Dict[str, List[str]] = {}
+        self._type_field_defaults: Dict[str, Dict[str, str]] = {}
         # temp variable infrastructure for string ownership
         self._temp_counter: int = 0
         self._temp_decls: List[str] = []
@@ -530,6 +531,8 @@ class CEmitter:
         ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
         if ftype == "void" and isinstance(fpath, zast.AtomId):
             fname = fpath.name
+            if _is_numeric_id(fname):
+                return "int64_t"
             if fname == "string":
                 return "ZStr*"
             if fname in self._class_names:
@@ -572,6 +575,17 @@ class CEmitter:
             field_ctypes.append(fp_ctype)
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
+        # extract field defaults
+        field_defaults: Dict[str, str] = {}
+        for fname, fpath in rec.items.items():
+            if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
+                field_defaults[fname] = self._emit_numeric_literal(fpath.name)
+            elif isinstance(fpath, zast.AtomId) and fpath.name in self._func_names:
+                field_defaults[fname] = _mangle_func(fpath.name)
+        for mname, mfunc in rec.functions.items():
+            if mfunc.body is not None:
+                field_defaults[mname] = _mangle_func(f"{name}.{mname}")
+        self._type_field_defaults[name] = field_defaults
         param_str = ", ".join(params) if params else "void"
         arg_str = ", ".join(field_names) if field_names else ""
         lines: List[str] = []
@@ -621,6 +635,17 @@ class CEmitter:
             field_ctypes.append(fp_ctype)
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
+        # extract field defaults
+        field_defaults: Dict[str, str] = {}
+        for fname, fpath in cls.items.items():
+            if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
+                field_defaults[fname] = self._emit_numeric_literal(fpath.name)
+            elif isinstance(fpath, zast.AtomId) and fpath.name in self._func_names:
+                field_defaults[fname] = _mangle_func(fpath.name)
+        for mname, mfunc in cls.functions.items():
+            if mfunc.body is not None:
+                field_defaults[mname] = _mangle_func(f"{name}.{mname}")
+        self._type_field_defaults[name] = field_defaults
         param_str = ", ".join(params) if params else "void"
         arg_str = ", ".join(field_names) if field_names else ""
         func_name = f"z_{name}_meta_create"
@@ -903,6 +928,8 @@ class CEmitter:
             return _ctype(ppath.type)
         if isinstance(ppath, zast.AtomId):
             name = ppath.name
+            if _is_numeric_id(name):
+                return "int64_t"
             if name == "this" and record_name:
                 if record_name in self._class_names:
                     return f"z_{record_name}_t*"
@@ -1439,6 +1466,21 @@ class CEmitter:
                 if ctype != "ZStr*":
                     val = self._alloc_arg_temp(ctype, val)
             parts.append(val)
+
+        # fill defaults for missing trailing params
+        ftype = call.callable.type if hasattr(call.callable, "type") else None
+        if ftype and ftype.param_defaults:
+            params = [
+                (k, v) for k, v in ftype.children.items() if not k.startswith(":")
+            ]
+            for i in range(len(call.arguments), len(params)):
+                pname, _ = params[i]
+                if pname in ftype.param_defaults:
+                    default = ftype.param_defaults[pname]
+                    if default in self._func_names:
+                        default = _mangle_func(default)
+                    parts.append(default)
+
         return ", ".join(parts)
 
     def _zero_args_for_ctypes(self, type_name: str) -> str:
@@ -1462,6 +1504,7 @@ class CEmitter:
         """
         field_names = self._type_field_names.get(type_name, [])
         field_ctypes = self._type_field_ctypes.get(type_name, [])
+        field_defaults = self._type_field_defaults.get(type_name, {})
 
         # build dict from call arguments
         arg_map: Dict[str, str] = {}
@@ -1477,6 +1520,8 @@ class CEmitter:
         for i, fname in enumerate(field_names):
             if fname in arg_map:
                 parts.append(arg_map[fname])
+            elif fname in field_defaults:
+                parts.append(field_defaults[fname])
             else:
                 # zero value based on C type
                 fct = field_ctypes[i] if i < len(field_ctypes) else "int64_t"
@@ -1500,6 +1545,21 @@ class CEmitter:
         if isinstance(inner, zast.Call):
             return self._emit_call_value(inner)
         if isinstance(inner, zast.Operation):
+            # bare function name = call with all-default args
+            if isinstance(inner, zast.AtomId) and inner.name in self._func_names:
+                ftype = inner.type if hasattr(inner, "type") else None
+                if ftype and ftype.param_defaults:
+                    cname = _mangle_func(inner.name)
+                    defaults: List[str] = []
+                    for pname, _ in ftype.children.items():
+                        if pname.startswith(":"):
+                            continue
+                        if pname in ftype.param_defaults:
+                            d = ftype.param_defaults[pname]
+                            if d in self._func_names:
+                                d = _mangle_func(d)
+                            defaults.append(d)
+                    return f"{cname}({', '.join(defaults)})"
             return self._emit_operation_value(inner)
         if isinstance(inner, zast.With):
             return self._emit_expression_value(inner.doexpr)
