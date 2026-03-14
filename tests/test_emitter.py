@@ -2012,3 +2012,95 @@ class TestDefaults:
         lines = result.stdout.strip().split("\n")
         assert lines[0] == "1"
         assert lines[1] == "10"
+
+
+class TestNumericCasting:
+    def test_dotted_numeric_emits_cast(self):
+        """x: 42.u32 emits ((uint32_t)42) in C."""
+        csource = emit_source("main: function is { x: 42.u32 }")
+        assert "((uint32_t)42)" in csource
+
+    def test_dotted_numeric_runtime(self):
+        """Function using 42.i8 produces correct value."""
+        csource = emit_source('main: function is {\n  x: 42.i8\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_dotted_default_param_runtime(self):
+        """Function {a: i64 b: 10.u32} with trailing default."""
+        csource = emit_source(
+            "calc: function {a: i64 b: 10.u32} out i64 is { return a + b }\n"
+            'main: function is { print "\\{calc 5}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_record_dotted_default_field(self):
+        """Record with y: 10.u32 field default."""
+        csource = emit_source(
+            "myrec: record {\n"
+            "    x: i64\n"
+            "    y: 10.u32\n"
+            "}\n"
+            "main: function is {\n"
+            "  r: myrec x: 5\n"
+            '  print "\\{r.y}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10"
+
+    def test_runtime_variable_cast(self):
+        """Variable x: i64 then y: x.u32 produces correct value."""
+        csource = emit_source(
+            'main: function is {\n  x: 42\n  y: x.u32\n  print "\\{y}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_runtime_cast_overflow_panics(self):
+        """Variable cast that overflows exits with error."""
+        csource = emit_source(
+            'main: function is {\n  x: 2000\n  y: x.i8\n  print "\\{y}"\n}'
+        )
+        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+            f.write(csource)
+            cpath = f.name
+        outpath = cpath.replace(".c", "")
+        try:
+            result = subprocess.run(
+                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode == 0, f"gcc failed: {result.stderr}"
+            result = subprocess.run(
+                [outpath],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            assert result.returncode != 0
+            assert "overflow" in result.stderr
+        finally:
+            for p in (cpath, outpath):
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_numeric_cast_asan(self):
+        """ASan clean for numeric casting."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: 42.u32\n"
+            "  y: 10\n"
+            "  z: y.u32\n"
+            '  print "\\{x}"\n'
+            '  print "\\{z}"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        lines = result.stdout.strip().split("\n")
+        assert lines[0] == "42"
+        assert lines[1] == "10"

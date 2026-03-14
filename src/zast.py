@@ -673,17 +673,10 @@ class DottedPath(Path):
 class AtomId(Atom):
     """
     AtomId Node
-
-    canbemoduleref is True by default but for single Id's used as call values -
-    these cannot be module references (because modules are not first class
-    values). This prevents the parser from attempting to find a module of this
-    name.
-
     """
 
     nodetype: NodeType = field(default=NodeType.ATOMID, init=False)
     name: str  # this is also in the start token
-    canbemoduleref: bool
 
 
 @dataclass

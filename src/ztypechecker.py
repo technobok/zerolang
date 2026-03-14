@@ -7,7 +7,7 @@ Type definitions and type checking pass for the AST.
 import threading
 from enum import IntEnum, unique
 from dataclasses import dataclass, field
-from typing import Optional, List, NewType, cast, Callable, Tuple
+from typing import Dict, Optional, List, NewType, cast, Callable, Tuple
 from collections import OrderedDict
 from itertools import count
 
@@ -197,6 +197,22 @@ class TypeTable:
         return self._append(t)
 
 
+NUMERIC_RANGES: Dict[str, Tuple[int, int]] = {
+    "i8": (-128, 127),
+    "i16": (-32768, 32767),
+    "i32": (-2147483648, 2147483647),
+    "i64": (-9223372036854775808, 9223372036854775807),
+    "i128": (-(2**127), 2**127 - 1),
+    "u8": (0, 255),
+    "u16": (0, 65535),
+    "u32": (0, 4294967295),
+    "u64": (0, 18446744073709551615),
+    "u128": (0, 2**128 - 1),
+    "c8": (0, 255),
+    "c32": (0, 4294967295),
+}
+
+
 def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
     """
     Parse a number identifier returning (type_name, value, error).
@@ -209,12 +225,12 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
         rest = rest[:-4]
     if numtype is None:
         t = rest[-3:]
-        if t in ("i16", "i32", "i64", "u16", "u32", "u64", "f32", "f64"):
+        if t in ("i16", "i32", "i64", "u16", "u32", "u64", "f32", "f64", "c32"):
             numtype = t
             rest = rest[:-3]
     if numtype is None:
         t = rest[-2:]
-        if t in ("i8", "u8"):
+        if t in ("i8", "u8", "c8"):
             numtype = t
             rest = rest[:-2]
 
@@ -250,4 +266,8 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
         return numtype, f, None
 
     i = int(rest, base=base)
+    if numtype in NUMERIC_RANGES:
+        lo, hi = NUMERIC_RANGES[numtype]
+        if i < lo or i > hi:
+            return (numtype, i, f"Value {i} out of range for {numtype} ({lo}..{hi})")
     return numtype, i, None

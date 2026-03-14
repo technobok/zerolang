@@ -2238,3 +2238,65 @@ class TestDefaults:
         t = tc._resolve_unit_name("test", "greet")
         assert t is not None
         assert "a" not in t.param_defaults
+
+
+class TestNumericCasting:
+    def test_dotted_numeric_u32(self):
+        """x: 0.u32 resolves, type is u32."""
+        program = check_ok("main: function is { x: 0.u32 }")
+        tc = TypeChecker(program)
+        tc.check()
+
+    def test_dotted_numeric_i8(self):
+        """x: 42.i8 resolves, type is i8."""
+        program = check_ok("main: function is { x: 42.i8 }")
+        tc = TypeChecker(program)
+        tc.check()
+
+    def test_dotted_numeric_hex(self):
+        """x: 0xff.u16 resolves, type is u16."""
+        program = check_ok("main: function is { x: 0xff.u16 }")
+        tc = TypeChecker(program)
+        tc.check()
+
+    def test_range_error_i8(self):
+        """2000.i8 produces error."""
+        errors = check_errors("main: function is { x: 2000.i8 }")
+        assert any("out of range" in e.msg for e in errors)
+
+    def test_concat_range_error(self):
+        """2000i8 (concatenated) also errors."""
+        errors = check_errors("main: function is { x: 2000i8 }")
+        assert any("out of range" in e.msg for e in errors)
+
+    def test_overflow_decimal_i64(self):
+        """18446744073709551615 (no cast) errors: out of range for i64."""
+        errors = check_errors("main: function is { x: 18446744073709551615 }")
+        assert any("out of range" in e.msg for e in errors)
+
+    def test_dotted_default_param(self):
+        """a: 0.u32 as function default: type=u32, default='0'."""
+        program = check_ok(
+            "greet: function {a: 0.u32} out u32 is { return a }\n"
+            "main: function is { greet }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "greet")
+        assert t is not None
+        assert t.param_defaults == {"a": "0"}
+
+    def test_dotted_default_record_field(self):
+        """Record with x: 0.u32 field default."""
+        program = check_ok(
+            "myrec: record {\n"
+            "    x: i64\n"
+            "    y: 0.u32\n"
+            "}\n"
+            "main: function is { r: myrec x: 5 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "myrec")
+        assert t is not None
+        assert t.param_defaults == {"y": "0"}

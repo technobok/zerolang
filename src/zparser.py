@@ -234,11 +234,13 @@ class Parser:
                 continue
             if core and refname in core.body:  # found in core
                 continue
-            if not refid.canbemoduleref:
-                # this reference is local only, cannot be a module
-                # assume it is a reference against an argument type
+            # numeric literals and type names won't resolve as modules
+            c0 = refname[0] if refname else ""
+            is_numeric = c0.isdigit() or (
+                c0 in ("+", "-") and len(refname) > 1 and refname[1].isdigit()
+            )
+            if is_numeric:
                 continue
-
             if hassubunitdir:  # look for subunit
                 # could have sub-extern references too...
                 start: Optional[Token] = None
@@ -300,7 +302,7 @@ class Parser:
     @staticmethod
     def _make_label_value(tok: Token) -> NodeX[zast.LabelValue]:
         """Create a LabelValue node from a LABELPRE token."""
-        lv = zast.LabelValue(start=tok, name=tok.tokstr, canbemoduleref=True)
+        lv = zast.LabelValue(start=tok, name=tok.tokstr)
         return NodeX(node=lv, extern={tok.tokstr: lv})
 
     def _acceptunitbody(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error]:
@@ -1878,15 +1880,6 @@ class Parser:
         Used for call arguments.
 
         """
-        if isinstance(opx.node, zast.AtomId):
-            atomid = opx.node
-            newid = zast.AtomId(
-                name=atomid.name, canbemoduleref=False, start=atomid.start
-            )
-            newextern: Dict[str, zast.AtomId] = {}
-            newextern[newid.name] = newid
-            return NodeX(node=newid, extern=newextern)
-
         return opx
 
     def _acceptstatement(
@@ -2110,7 +2103,7 @@ class Parser:
         while lex.accept(TT.DOT):
             t = lex.accept(TT.REFID)
             if t:
-                c = zast.AtomId(start=t, name=t.tokstr, canbemoduleref=False)
+                c = zast.AtomId(start=t, name=t.tokstr)
                 path = zast.DottedPath(parent=path, child=c, start=start)
             else:
                 # error
@@ -2160,20 +2153,10 @@ class Parser:
         if not start:
             return None
 
-        # numeric literals (starting with digit or sign+digit) are predeclared
-        # identifiers — not external references and not module refs
         name = start.tokstr
-        c0 = name[0]
-        is_numeric = c0.isdigit() or (
-            c0 in ("+", "-") and len(name) > 1 and name[1].isdigit()
-        )
-
-        atomid: zast.AtomId = zast.AtomId(
-            start=start, name=name, canbemoduleref=not is_numeric
-        )
+        atomid: zast.AtomId = zast.AtomId(start=start, name=name)
         extern: Dict[str, zast.AtomId] = {}
-        if not is_numeric:
-            extern[name] = atomid  # atom itself is an external reference
+        extern[name] = atomid  # atom itself is an external reference
         return NodeX(node=atomid, extern=extern)
 
     def _acceptatomexpr(

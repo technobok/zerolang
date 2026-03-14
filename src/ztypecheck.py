@@ -19,6 +19,7 @@ from ztypechecker import (
     ZNaming,
     ZVariable,
     ZLockState,
+    NUMERIC_RANGES,
     parse_number,
 )
 
@@ -157,7 +158,18 @@ class TypeChecker:
                     ZTypeType.CLASS,
                 ):
                     return rtype  # valid self-reference via `type`
-                # circular alias
+                # NULL shell (alias) — check if the chain contains a concrete
+                # type that this alias will eventually resolve to
+                for _, rt in self._resolving[i + 1 :]:
+                    if rt.typetype in (
+                        ZTypeType.RECORD,
+                        ZTypeType.ENUM,
+                        ZTypeType.UNION,
+                        ZTypeType.FUNCTION,
+                        ZTypeType.CLASS,
+                    ):
+                        return rt
+                # circular alias with no concrete type in chain
                 chain = " -> ".join(rk for rk, _ in self._resolving[i:])
                 self._error(f"Circular type alias: {chain} -> {key}")
                 return None
@@ -255,6 +267,14 @@ class TypeChecker:
                     _, val, err = parse_number(ppath.name)
                     if not err:
                         ftype.param_defaults[pname] = str(int(val))
+                elif isinstance(ppath, zast.DottedPath):
+                    if isinstance(ppath.parent, zast.AtomId) and _is_numeric_id(
+                        ppath.parent.name
+                    ):
+                        child_name = ppath.child.name
+                        _, val, err = parse_number(ppath.parent.name + child_name)
+                        if not err:
+                            ftype.param_defaults[pname] = str(int(val))
                 elif isinstance(ppath, zast.AtomId):
                     defn = self._lookup_definition(ppath.name)
                     if isinstance(defn, zast.Function) and defn.body is not None:
@@ -311,6 +331,14 @@ class TypeChecker:
                     _, val, err = parse_number(fpath.name)
                     if not err:
                         ctype.param_defaults[fname] = str(int(val))
+                elif isinstance(fpath, zast.DottedPath):
+                    if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
+                        fpath.parent.name
+                    ):
+                        child_name = fpath.child.name
+                        _, val, err = parse_number(fpath.parent.name + child_name)
+                        if not err:
+                            ctype.param_defaults[fname] = str(int(val))
                 elif isinstance(fpath, zast.AtomId):
                     defn = self._lookup_definition(fpath.name)
                     if isinstance(defn, zast.Function) and defn.body is not None:
@@ -716,6 +744,14 @@ class TypeChecker:
                     _, val, err = parse_number(fpath.name)
                     if not err:
                         rtype.param_defaults[fname] = str(int(val))
+                elif isinstance(fpath, zast.DottedPath):
+                    if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
+                        fpath.parent.name
+                    ):
+                        child_name = fpath.child.name
+                        _, val, err = parse_number(fpath.parent.name + child_name)
+                        if not err:
+                            rtype.param_defaults[fname] = str(int(val))
                 elif isinstance(fpath, zast.AtomId):
                     defn = self._lookup_definition(fpath.name)
                     if isinstance(defn, zast.Function) and defn.body is not None:
@@ -801,8 +837,20 @@ class TypeChecker:
 
     # ---- Name resolution (local -> unit body -> core -> system) ----
 
+    def _current_unit_name(self) -> str:
+        """Return the unit name we're currently resolving inside."""
+        if self._resolving:
+            return self._resolving[-1][0].split(".")[0]
+        return self.program.mainunitname
+
     def _resolve_name(self, name: str, skip_unit_def=None) -> Optional[ZType]:
-        """Resolve a name using the scoping order: local, current unit, core, system.
+        """Resolve a name: local scope, current unit, core.
+
+        Resolution order:
+        1. Local scope (symtab — runtime variables)
+        2. Inline unit context stack
+        3. Current unit (the unit we're resolving inside)
+        4. Core (which re-exports system types)
 
         skip_unit_def: optional (unitname, defname) tuple. When set, skip that
         specific definition during unit body lookup (label_value :x semantics).
@@ -829,27 +877,21 @@ class TypeChecker:
                         ut.children[name] = t
                     return t
 
-        # 3. current unit body (main unit)
-        mainunit = self.program.units.get(self.program.mainunitname)
-        if mainunit and name in mainunit.body:
-            if skip_unit_def == (self.program.mainunitname, name):
+        # 3. current unit (the unit we're resolving inside)
+        current = self._current_unit_name()
+        cunit = self.program.units.get(current)
+        if cunit and name in cunit.body:
+            if skip_unit_def == (current, name):
                 pass  # label_value: skip self-binding
             else:
-                t = self._resolve_unit_name(self.program.mainunitname, name)
+                t = self._resolve_unit_name(current, name)
                 if t:
                     return t
 
-        # 3. core unit body
+        # 4. core unit (re-exports system types)
         core = self.program.units.get("core")
         if core and name in core.body:
             t = self._resolve_unit_name("core", name)
-            if t:
-                return t
-
-        # 4. system unit body
-        system = self.program.units.get("system")
-        if system and name in system.body:
-            t = self._resolve_unit_name("system", name)
             if t:
                 return t
 
@@ -893,6 +935,17 @@ class TypeChecker:
         parent_type: Optional[ZType] = None
         if isinstance(path.parent, zast.AtomId):
             pname = path.parent.name
+            # numeric dotted path: 0.u32, 42.i8, 0xff.u16
+            if _is_numeric_id(pname):
+                child_name = path.child.name
+                _, _, err = parse_number(pname + child_name)
+                if err:
+                    self._error(
+                        f"Invalid numeric cast {pname}.{child_name}: {err}",
+                        loc=path.start,
+                    )
+                    return None
+                return self._resolve_name(child_name)
             # check if it's a unit name first (file-level units)
             if pname in self.program.units:
                 # resolve the child from that unit on demand
@@ -930,6 +983,13 @@ class TypeChecker:
             # .borrow returns the same type (borrowed reference)
             path.type = parent_type
             return parent_type
+        # numeric type casting: x.u32 where x is a numeric type
+        _NUMERIC_NAMES = set(NUMERIC_RANGES) | {"f32", "f64", "f128"}
+        if child_name in _NUMERIC_NAMES and parent_type.name in _NUMERIC_NAMES:
+            target_type = self._resolve_name(child_name)
+            if target_type:
+                path.type = target_type
+                return target_type
         # for unions/variants, store parent type on the path for construction detection
         if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
             child = parent_type.children.get(child_name)
@@ -1228,6 +1288,21 @@ class TypeChecker:
                     self._pending_borrow_lock = receiver_name
                 path.type = parent_type
             return parent_type
+
+        # numeric dotted path: 0.u32, 42.i8, 0xff.u16
+        if isinstance(path.parent, zast.AtomId) and _is_numeric_id(path.parent.name):
+            child_name = path.child.name
+            pname = path.parent.name
+            _, _, err = parse_number(pname + child_name)
+            if err:
+                self._error(
+                    f"Invalid numeric cast {pname}.{child_name}: {err}", loc=path.start
+                )
+                return None
+            t = self._resolve_name(child_name)
+            if t:
+                path.type = t
+            return t
 
         # regular dotted path resolution
         # ensure parent type is set for emitter (needed for class -> vs . dispatch)

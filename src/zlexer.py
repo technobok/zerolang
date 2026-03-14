@@ -275,22 +275,11 @@ class Tokenizer(ITokenizer):
                     tokparts.append(chr(c))
                     c = self._accept()
             else:
-                # not more number, but we have consumed the dot. self.colno!!!
-                # add the already consumed dot (could be more to come)
-                tokparts2: List[str] = [chr(c)]
-                colno = self.colno - 1  # back to location of first dot
-                while c == zchar.DOT:
-                    tokparts2.append(chr(c))
-                    self._accept()
-                if len(tokparts2) == 1:
-                    self.nexttoken = Token(TT.DOT, chr(c), self.fsno, lineno, colno)
-                if len(tokparts2) == 3:
-                    self.nexttoken = Token(
-                        TT.DOTDOTDOT, "".join(tokparts2), self.fsno, lineno, colno
-                    )
-                self.nexttoken = Token(
-                    TT.ERR, "".join(tokparts2), self.fsno, lineno, colno
-                )
+                # not more number, but we have consumed the dot
+                # stash a DOT token; the char after the dot (c) is already
+                # in self.atchar and will be read on the next token() call
+                dot_colno = self.colno - 1
+                self.nexttoken = Token(TT.DOT, ".", self.fsno, lineno, dot_colno)
 
         if not tokparts:
             # didn't consume anything, error

@@ -8,7 +8,7 @@ Includes ownership-based memory management for strings (ZStr*).
 from typing import Optional, List, Dict
 
 import zast
-from ztypechecker import ZType, ZTypeType, parse_number, ZParamOwnership
+from ztypechecker import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
 
 TYPEMAP: Dict[str, str] = {
     "i8": "int8_t",
@@ -24,10 +24,14 @@ TYPEMAP: Dict[str, str] = {
     "f32": "float",
     "f64": "double",
     "f128": "long double",
+    "c8": "uint8_t",
+    "c32": "uint32_t",
     "null": "void",
     "bool": "int",
     "never": "void",
 }
+
+NUMERIC_CAST_TYPES = set(TYPEMAP.keys()) - {"null", "bool", "never"}
 
 C_OPS: Dict[str, str] = {
     "+": "+",
@@ -529,6 +533,11 @@ class CEmitter:
     def _resolve_field_ctype(self, fpath: zast.Path) -> str:
         """Resolve the C type for a struct/class field."""
         ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
+        if ftype == "void" and isinstance(fpath, zast.DottedPath):
+            if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
+                fpath.parent.name
+            ):
+                return TYPEMAP.get(fpath.child.name, "int64_t")
         if ftype == "void" and isinstance(fpath, zast.AtomId):
             fname = fpath.name
             if _is_numeric_id(fname):
@@ -580,6 +589,18 @@ class CEmitter:
         for fname, fpath in rec.items.items():
             if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
                 field_defaults[fname] = self._emit_numeric_literal(fpath.name)
+            elif isinstance(fpath, zast.DottedPath):
+                if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
+                    fpath.parent.name
+                ):
+                    child_name = fpath.child.name
+                    dct = TYPEMAP.get(child_name, "int64_t")
+                    typename, value, err = parse_number(fpath.parent.name + child_name)
+                    if not err:
+                        if typename.startswith("f"):
+                            field_defaults[fname] = f"(({dct}){value})"
+                        else:
+                            field_defaults[fname] = f"(({dct}){int(value)})"
             elif isinstance(fpath, zast.AtomId) and fpath.name in self._func_names:
                 field_defaults[fname] = _mangle_func(fpath.name)
         for mname, mfunc in rec.functions.items():
@@ -640,6 +661,18 @@ class CEmitter:
         for fname, fpath in cls.items.items():
             if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
                 field_defaults[fname] = self._emit_numeric_literal(fpath.name)
+            elif isinstance(fpath, zast.DottedPath):
+                if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
+                    fpath.parent.name
+                ):
+                    child_name = fpath.child.name
+                    dct = TYPEMAP.get(child_name, "int64_t")
+                    typename, value, err = parse_number(fpath.parent.name + child_name)
+                    if not err:
+                        if typename.startswith("f"):
+                            field_defaults[fname] = f"(({dct}){value})"
+                        else:
+                            field_defaults[fname] = f"(({dct}){int(value)})"
             elif isinstance(fpath, zast.AtomId) and fpath.name in self._func_names:
                 field_defaults[fname] = _mangle_func(fpath.name)
         for mname, mfunc in cls.functions.items():
@@ -926,6 +959,11 @@ class CEmitter:
     def _resolve_param_ctype(self, ppath: zast.Path, record_name: str = "") -> str:
         if hasattr(ppath, "type") and ppath.type:
             return _ctype(ppath.type)
+        if isinstance(ppath, zast.DottedPath):
+            if isinstance(ppath.parent, zast.AtomId) and _is_numeric_id(
+                ppath.parent.name
+            ):
+                return TYPEMAP.get(ppath.child.name, "int64_t")
         if isinstance(ppath, zast.AtomId):
             name = ppath.name
             if _is_numeric_id(name):
@@ -1708,8 +1746,30 @@ class CEmitter:
             return "0"
         self.needs_stdint = True
         if typename.startswith("f"):
+            if typename != "f64":
+                ctype = TYPEMAP.get(typename, "double")
+                return f"(({ctype}){value})"
             return str(value)
-        return str(int(value))
+        raw = str(int(value))
+        if typename == "i64":
+            return raw
+        ctype = TYPEMAP.get(typename, "int64_t")
+        return f"(({ctype}){raw})"
+
+    def _emit_numeric_cast(self, val: str, src_type: str, dst_type: str) -> str:
+        src_ctype = TYPEMAP.get(src_type, "int64_t")
+        dst_ctype = TYPEMAP.get(dst_type, "int64_t")
+        self.needs_stdint = True
+        self.needs_stdio = True
+        self.needs_stdlib = True
+        if dst_type in NUMERIC_RANGES:
+            lo, hi = NUMERIC_RANGES[dst_type]
+            return (
+                f"({{ {src_ctype} _v = {val}; "
+                f'if (_v < {lo} || _v > {hi}) {{ fprintf(stderr, "numeric cast overflow: {src_type} to {dst_type}\\n"); exit(1); }} '
+                f"({dst_ctype})_v; }})"
+            )
+        return f"(({dst_ctype}){val})"
 
     def _extract_unit_path(self, path: zast.Path) -> Optional[str]:
         """If path resolves to an inline unit, return its dotted name. Otherwise None."""
@@ -1734,6 +1794,17 @@ class CEmitter:
 
         if isinstance(path.parent, zast.AtomId):
             pname = path.parent.name
+            # numeric dotted path: 0.u32, 42.i8, 0xff.u16
+            if _is_numeric_id(pname):
+                child_name = path.child.name
+                ctype = TYPEMAP.get(child_name, "int64_t")
+                self.needs_stdint = True
+                typename, value, err = parse_number(pname + child_name)
+                if err:
+                    return "0"
+                if typename.startswith("f"):
+                    return f"(({ctype}){value})"
+                return f"(({ctype}){int(value)})"
             # unit.name reference (file-level units)
             if pname in self.program.units and pname not in ("system", "core", "io"):
                 return _mangle_func(f"{pname}.{child}")
@@ -1779,6 +1850,13 @@ class CEmitter:
             # regular methods (from 'as' section) → method call
             parent = self._emit_path_value(path.parent)
             return f"{_mangle_func(func_name)}({parent})"
+
+        # runtime numeric cast: x.u32 where x is a numeric variable
+        if child in NUMERIC_CAST_TYPES:
+            parent_type = getattr(path.parent, "type", None)
+            if parent_type and parent_type.name in TYPEMAP:
+                parent_val = self._emit_path_value(path.parent)
+                return self._emit_numeric_cast(parent_val, parent_type.name, child)
 
         parent = self._emit_path_value(path.parent)
         # use -> for class instances (pointer types)
