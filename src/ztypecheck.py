@@ -93,6 +93,9 @@ class TypeChecker:
         # each entry is (unitname, zast.Unit) for name lookup chain
         self._unit_context: List[Tuple[str, zast.Unit]] = []
 
+        # maps implementor type name -> list of (label, protocol ZType)
+        self._protocol_labels: dict[str, list[tuple[str, ZType]]] = {}
+
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
 
@@ -156,6 +159,7 @@ class TypeChecker:
                     ZTypeType.UNION,
                     ZTypeType.FUNCTION,
                     ZTypeType.CLASS,
+                    ZTypeType.PROTOCOL,
                 ):
                     return rtype  # valid self-reference via `type`
                 # NULL shell (alias) — check if the chain contains a concrete
@@ -167,6 +171,7 @@ class TypeChecker:
                         ZTypeType.UNION,
                         ZTypeType.FUNCTION,
                         ZTypeType.CLASS,
+                        ZTypeType.PROTOCOL,
                     ):
                         return rt
                 # circular alias with no concrete type in chain
@@ -216,6 +221,8 @@ class TypeChecker:
             return self._resolve_union_type(unitname, name, defn)
         if isinstance(defn, zast.Variant):
             return self._resolve_variant_type(unitname, name, defn)
+        if isinstance(defn, zast.Protocol):
+            return self._resolve_protocol_type(unitname, name, defn)
         if isinstance(defn, zast.Unit):
             return self._resolve_inline_unit_type(unitname, name, defn)
         # alias: DottedPath or AtomId reference
@@ -350,6 +357,9 @@ class TypeChecker:
         for mname, mfunc in cls.as_functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             ctype.children[mname] = mt
+
+        # as_items: protocol satisfaction
+        self._process_as_items_protocols(name, ctype, cls.as_items, cls.start)
 
         # generate meta.create constructor type
         is_func_names = set(cls.functions.keys())
@@ -764,6 +774,9 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
 
+        # as_items: protocol satisfaction
+        self._process_as_items_protocols(name, rtype, rec.as_items, rec.start)
+
         # generate meta.create constructor type
         is_func_names = set(rec.functions.keys())
         create_type = self._make_meta_create_type(name, rtype, is_func_names)
@@ -773,6 +786,47 @@ class TypeChecker:
 
         self._resolving.pop()
         return rtype
+
+    def _process_as_items_protocols(
+        self, name: str, rtype: ZType, as_items: dict, start: Token
+    ) -> None:
+        """Process as_items for protocol satisfaction (labeled protocol refs)."""
+        for label, apath in as_items.items():
+            at = self._resolve_typeref(apath)
+            if at and at.typetype == ZTypeType.PROTOCOL:
+                # conformance check: implementor must have all spec methods
+                for spec_name in at.children:
+                    if spec_name.startswith(":"):
+                        continue
+                    method = rtype.children.get(spec_name)
+                    if not method:
+                        self._error(
+                            f"'{name}' satisfies '{at.name}' but missing method '{spec_name}'",
+                            loc=start,
+                        )
+                # register: label becomes a child of type PROTOCOL
+                rtype.children[label] = at
+                self._protocol_labels.setdefault(name, []).append((label, at))
+            else:
+                # non-protocol as_item (existing behavior: tag refs, etc.)
+                if at:
+                    rtype.children[label] = at
+
+    def _resolve_protocol_type(
+        self, unitname: str, name: str, proto: zast.Protocol
+    ) -> ZType:
+        key = f"{unitname}.{name}"
+        ptype = _make_type(name, ZTypeType.PROTOCOL)
+        self._resolved[key] = ptype
+        self._resolving.append((key, ptype))
+        ptype.is_valtype = False  # protocol instances are reference types
+
+        for sname, sfunc in proto.specs.items():
+            st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
+            ptype.children[sname] = st
+
+        self._resolving.pop()
+        return ptype
 
     def _make_meta_create_type(
         self,

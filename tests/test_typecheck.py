@@ -2300,3 +2300,105 @@ class TestNumericCasting:
         t = tc._resolve_unit_name("test", "myrec")
         assert t is not None
         assert t.param_defaults == {"y": "0"}
+
+
+class TestProtocols:
+    def test_protocol_resolves(self):
+        """Protocol definition creates PROTOCOL ZType with spec children."""
+        program = check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "reader")
+        assert t is not None
+        assert t.typetype == ZTypeType.PROTOCOL
+        assert t.is_valtype is False
+        assert "read" in t.children
+        assert t.children["read"].typetype == ZTypeType.FUNCTION
+
+    def test_protocol_conformance_ok(self):
+        """Record with correct methods passes conformance check."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is { f: myfile fd: 1 }"
+        )
+
+    def test_protocol_conformance_missing(self):
+        """Record missing a spec method errors."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "}\n"
+            "main: function is { f: myfile fd: 1 }"
+        )
+        assert any("missing method 'read'" in e.msg for e in errors)
+
+    def test_protocol_as_param_type(self):
+        """Function accepting protocol type resolves correctly."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n"
+            "    return result\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_protocol_instance_via_dotted_path(self):
+        """f.myreader resolves to PROTOCOL type."""
+        program = check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            "}\n"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "myfile")
+        assert t is not None
+        assert "myreader" in t.children
+        assert t.children["myreader"].typetype == ZTypeType.PROTOCOL
+
+    def test_protocol_is_field(self):
+        """Protocol in 'is' block becomes instance field."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "wrapper: record {\n"
+            "    r: reader\n"
+            "}\n"
+            "main: function is {}"
+        )

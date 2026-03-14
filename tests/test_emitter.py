@@ -2192,3 +2192,96 @@ class TestStringWhitespace:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0
         assert result.stdout.rstrip("\n") == "hello\nworld"
+
+
+class TestProtocols:
+    PROTO_SOURCE = (
+        "reader: protocol {\n"
+        "    read: function {:this b: i64} out i64\n"
+        "}\n"
+        "myfile: record {\n"
+        "    fd: i64\n"
+        "} as {\n"
+        "    myreader: reader\n"
+        "    read: function {f: this b: i64} out i64 is {\n"
+        "        return f.fd + b\n"
+        "    }\n"
+        "}\n"
+    )
+
+    def test_protocol_vtable_struct(self):
+        """C output contains vtable and instance struct."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "main: function is { f: myfile fd: 1 }"
+        )
+        assert "z_reader_vtable_t" in csource
+        assert "z_reader_t" in csource
+        assert "void* data;" in csource
+        assert "z_reader_vtable_t* vtable;" in csource
+        assert "void (*destroy)(void*);" in csource
+
+    def test_protocol_impl_wrapper(self):
+        """C output contains wrapper function and static vtable."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "main: function is { f: myfile fd: 1 }"
+        )
+        assert "z_myfile_myreader_read_wrapper" in csource
+        assert "z_myfile_myreader_vtable" in csource
+        assert "z_myfile_myreader_create" in csource
+
+    def test_protocol_dispatch_runtime(self):
+        """End-to-end: create record, create protocol instance, call method, verify output."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            '    print "\\{use_reader r}"\n'
+            "}\n"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_protocol_with_class(self):
+        """Protocol dispatch with class (pointer semantics)."""
+        csource = emit_source(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myobj: class {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {o: this b: i64} out i64 is {\n"
+            "        return o.fd + b\n"
+            "    }\n"
+            "}\n"
+            "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 7\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    o: myobj fd: 20\n"
+            "    r: o.myreader\n"
+            '    print "\\{use_reader r}"\n'
+            "}\n"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "27"
+
+    def test_protocol_asan(self):
+        """ASan clean: no memory leaks or errors with protocol instances."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            '    print "\\{use_reader r}"\n'
+            "}\n"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "15"

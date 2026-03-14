@@ -2522,26 +2522,27 @@ writer: protocol {
     write: function {:this b: buffer} out boolean
 }
 
-readerwriter: protocol {
-    reader: as reader
-    writer: as writer
-
-    read: function {:this b: buffer} out boolean
-    write: function {:this b: buffer} out boolean
-}</code></pre>
+# (v1b: protocol composition/inheritance deferred)
+# readerwriter: protocol {
+#     reader: as reader
+#     writer: as writer
+#     read: function {:this b: buffer} out boolean
+#     write: function {:this b: buffer} out boolean
+# }</code></pre>
 <h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.10.1. Protocol Instance Creation</a></h4>
 <p>Fields, variables and parameters can be declared to be instances of a named
 protocol. Protocol instances can then be assigned to those fields, variables or
 call arguments.</p>
 <p>Protocol instances can be created by accessing the named protocol member in the
 'as' clause of an object that implements a protocol.</p>
-<p>Protocol instances are reference types. They have an external reference to the
-underlying type and a reference to a record containing a reference to each
-method in protocol order. Note that underlying value types require two
-allocations when creating an explicit protocol object: one to store a copy of
-the value type on the heap and one to store the protocol instance. For
-underlying reference types, the protocol object will take ownership. It is not
-possible to extract the underlying type back out of a protocol instance.</p>
+<p>Protocol instances are reference types. They contain a pointer to the original
+data, a pointer to a vtable with function pointers for each spec, and a
+destructor pointer (NULL for borrowed instances).</p>
+<p>In v1, protocol instances are always borrowed: they hold a pointer to the
+original data without taking ownership. For value types, the address of the
+original is stored; for reference types, the existing pointer is stored.
+The protocol instance struct is heap-allocated and freed when it goes out of
+scope, but the underlying data is not affected.</p>
 <p>Accessing a named object's protocol in a named context (ie. assigning to a new
 variable; in a 'give' argument; in a swap statement), will cause the original
 name to be inaccessible from that point. The new named context will have the
@@ -2550,40 +2551,29 @@ same ownership as the original name.</p>
 passing as a standard loaned argument) then after that scope, the created
 protocol object is destroyed and the underlying variable is again available for
 use. </p>
-<pre><code class="language-zerolang">myfunc1: function {arg: myprotocol} is {
-  # ...
+<pre><code class="language-zerolang">reader: protocol {
+    read: function {:this b: i64} out i64
 }
 
-somecode1: function is {
-    myref: #... # myref type implements protocol with label 'myprotocol'
-
-    # myref is converted to myprotocol object and used as a standard 
-    # argument (no 'give')
-    myfunc1 myref.myprotocol
-
-    # myref can be used in subsequent code
-
-    print myref
+myfile: record {
+    fd: i64
+} as {
+    myreader: reader
+    read: function {f: this b: i64} out i64 is {
+        return f.fd + b
+    }
 }
 
-myfunc2: function {from: take myprotocol} is {
-  # ...
+use_reader: function {r: reader} out i64 is {
+    result: r.read b: 5
+    return result
 }
 
-somecode2: function is {
-    myref: #... # myref type implements myprotocol
-
-    # myref is converted to myprotocol object and passed to function...
-    myfunc2 from: take myref.myprotocol
-    # myref is no longer valid...
-}
-
-myref: #... # myref type implements protocol with label 'myprotocol'
-do {
-  myproto: myref.myprotocol # myproto is borrowed
-} # myproto destroyed here
-print myref   # myref is again accessible (as it's original type)
-myproto: myref.myprotocol # myproto is owned, myref ceases to be accessible</code></pre>
+main: function is {
+    f: myfile fd: 10
+    r: f.myreader        # r is a borrowed protocol instance
+    print "\{use_reader r}"  # prints 15
+}</code></pre>
 <h3 id="facet"><a href="#facet">5.11. facet</a></h3>
 <p>TODO: describe facet, also check above protocol section for overlap</p>
 <h3 id="union"><a href="#union">5.12. union</a></h3>

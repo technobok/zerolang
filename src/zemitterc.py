@@ -71,6 +71,8 @@ def _ctype(ztype: Optional[ZType]) -> str:
     if ztype.typetype == ZTypeType.FUNCTION:
         cname = name.replace(".", "_")
         return f"z_{cname}_ft"
+    if ztype.typetype == ZTypeType.PROTOCOL:
+        return f"z_{name}_t*"
     return "void"
 
 
@@ -150,6 +152,7 @@ def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
         or name in emitter._data_names
         or name in emitter._const_names
         or name in emitter._unit_names
+        or name in emitter._protocol_names
     )
 
 
@@ -177,6 +180,8 @@ class CEmitter:
         self._variant_names: set[str] = set()
         self._unit_names: set[str] = set()
         self._spec_names: set[str] = set()
+        self._protocol_names: set[str] = set()
+        self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
         # qualified names like "calculator.op" for func pointer fields in 'is' sections
         self._is_func_fields: set[str] = set()
         self.spec_typedefs: List[str] = []
@@ -193,8 +198,10 @@ class CEmitter:
         self._func_string_vars: List[str] = []
         self._func_class_vars: List[str] = []
         self._func_union_vars: List[str] = []
+        self._func_protocol_vars: List[str] = []
         self._union_var_types: Dict[str, str] = {}  # var_name -> union type name
         self._class_var_types: Dict[str, str] = {}  # var_name -> class type name
+        self._protocol_var_types: Dict[str, str] = {}  # var_name -> protocol type name
         self._temp_class_set: Dict[str, str] = {}  # temp_name -> class type name
         self._current_record_name: str = ""
         self._func_class_params: set[str] = set()
@@ -282,6 +289,9 @@ class CEmitter:
                 self._union_names.add(qname)
             elif isinstance(defn, zast.Variant):
                 self._variant_names.add(qname)
+            elif isinstance(defn, zast.Protocol):
+                self._protocol_names.add(qname)
+                self._protocol_defs[qname] = defn
             elif isinstance(defn, zast.Data):
                 self._data_names.add(qname)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -305,6 +315,8 @@ class CEmitter:
                 self._emit_union(qname, defn)
             elif isinstance(defn, zast.Variant):
                 self._emit_variant(qname, defn)
+            elif isinstance(defn, zast.Protocol):
+                self._emit_protocol(qname, defn)
             elif isinstance(defn, zast.Function) and defn.body:
                 self._emit_func_typedef(qname, defn)
                 self._emit_function(qname, defn)
@@ -489,6 +501,131 @@ class CEmitter:
         else:
             self.data_defs.append(f"static const {ctype} {cname} = {int(value)};\n")
 
+    def _emit_protocol(self, name: str, proto: zast.Protocol) -> None:
+        """Emit vtable struct, instance struct, and destroy function for a protocol."""
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        lines: List[str] = []
+
+        # vtable struct — function pointers with void* as first param
+        lines.append("typedef struct {\n")
+        for sname, sfunc in proto.specs.items():
+            ret_ctype = self._resolve_return_ctype(sfunc)
+            params: List[str] = ["void*"]
+            for pname, ppath in sfunc.parameters.items():
+                if pname.startswith(":") or pname == "this":
+                    continue
+                params.append(self._resolve_param_ctype(ppath))
+            param_str = ", ".join(params)
+            lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
+        lines.append(f"}} z_{name}_vtable_t;\n\n")
+
+        # instance struct — data pointer + vtable pointer + destructor
+        lines.append("typedef struct {\n")
+        lines.append("    void* data;\n")
+        lines.append(f"    z_{name}_vtable_t* vtable;\n")
+        lines.append("    void (*destroy)(void*);\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # destroy function
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto);\n")
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
+        lines.append("    if (!proto) return;\n")
+        lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
+        lines.append("    free(proto);\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_protocol_impl(
+        self,
+        impl_name: str,
+        label: str,
+        proto_name: str,
+        impl_defn: "zast.Record | zast.Class",
+    ) -> None:
+        """Emit wrapper functions, static vtable, and create function for a protocol implementation."""
+        proto = self._protocol_defs.get(proto_name)
+        if not proto:
+            return
+        is_class = isinstance(impl_defn, zast.Class)
+        impl_ctype = f"z_{impl_name}_t"
+
+        lines: List[str] = []
+
+        # forward declarations for methods called by wrappers
+        all_methods = dict(impl_defn.as_functions)
+        all_methods.update(impl_defn.functions)
+        for sname in proto.specs:
+            mfunc = all_methods.get(sname)
+            if mfunc and mfunc.body:
+                ret_ctype = self._resolve_return_ctype(mfunc, record_name=impl_name)
+                params: List[str] = []
+                for pname, ppath in mfunc.parameters.items():
+                    if pname.startswith(":"):
+                        continue
+                    ptype_str = self._resolve_param_ctype(ppath, record_name=impl_name)
+                    params.append(f"{ptype_str} {_mangle_var(pname)}")
+                param_str = ", ".join(params) if params else "void"
+                method_cname = _mangle_func(f"{impl_name}.{sname}")
+                lines.append(f"static {ret_ctype} {method_cname}({param_str});\n")
+        lines.append("\n")
+
+        # wrapper functions for each spec
+        for sname, sfunc in proto.specs.items():
+            ret_ctype = self._resolve_return_ctype(sfunc)
+            # wrapper params: void* _data, then remaining non-this params
+            wrapper_params: List[str] = ["void* _data"]
+            call_args: List[str] = []
+            for pname, ppath in sfunc.parameters.items():
+                if pname.startswith(":") or pname == "this":
+                    continue
+                pctype = self._resolve_param_ctype(ppath)
+                wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
+                call_args.append(_mangle_var(pname))
+
+            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
+            param_str = ", ".join(wrapper_params)
+            lines.append(f"static {ret_ctype} {wrapper_name}({param_str}) {{\n")
+            lines.append(f"    {impl_ctype}* _self = ({impl_ctype}*)_data;\n")
+
+            # build the method call: dereference for value types, pointer for ref types
+            method_cname = _mangle_func(f"{impl_name}.{sname}")
+            if is_class:
+                this_arg = "_self"
+            else:
+                this_arg = "*_self"
+            all_args = [this_arg] + call_args
+            call_expr = f"{method_cname}({', '.join(all_args)})"
+            if ret_ctype == "void":
+                lines.append(f"    {call_expr};\n")
+            else:
+                lines.append(f"    return {call_expr};\n")
+            lines.append("}\n\n")
+
+        # static vtable instance
+        vtable_name = f"z_{impl_name}_{label}_vtable"
+        lines.append(f"static z_{proto_name}_vtable_t {vtable_name} = {{\n")
+        for sname in proto.specs:
+            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
+            lines.append(f"    .{sname} = {wrapper_name},\n")
+        lines.append("};\n\n")
+
+        # create function (borrowed — pointer to original, no copy)
+        create_name = f"z_{impl_name}_{label}_create"
+        lines.append(f"static z_{proto_name}_t* {create_name}({impl_ctype}* val);\n")
+        lines.append(f"static z_{proto_name}_t* {create_name}({impl_ctype}* val) {{\n")
+        lines.append(
+            f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
+        )
+        lines.append("    proto->data = val;\n")
+        lines.append(f"    proto->vtable = &{vtable_name};\n")
+        lines.append("    proto->destroy = NULL;\n")
+        lines.append("    return proto;\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
     def _emit_record(self, name: str, rec: zast.Record) -> None:
         self.needs_stdint = True
         lines: List[str] = []
@@ -514,6 +651,11 @@ class CEmitter:
         for mname, mfunc in rec.as_functions.items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+        # emit protocol implementations
+        for label, apath in rec.as_items.items():
+            proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+            if proto_name and proto_name in self._protocol_names:
+                self._emit_protocol_impl(name, label, proto_name, rec)
 
     def _func_pointer_field_decl(
         self, parent_name: str, mname: str, mfunc: zast.Function
@@ -555,6 +697,8 @@ class CEmitter:
             if fname in self._spec_names:
                 cname = fname.replace(".", "_")
                 return f"z_{cname}_ft"
+            if fname in self._protocol_names:
+                return f"z_{fname}_t*"
             return TYPEMAP.get(fname, "int64_t")
         return ftype
 
@@ -751,6 +895,11 @@ class CEmitter:
         for mname, mfunc in cls.as_functions.items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+        # emit protocol implementations
+        for label, apath in cls.as_items.items():
+            proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+            if proto_name and proto_name in self._protocol_names:
+                self._emit_protocol_impl(name, label, proto_name, cls)
 
     def _resolve_tag_values(
         self, union_defn: "zast.Union | zast.Variant"
@@ -995,6 +1144,8 @@ class CEmitter:
             if name in self._func_names:
                 cname = name.replace(".", "_")
                 return f"z_{cname}_ft"
+            if name in self._protocol_names:
+                return f"z_{name}_t*"
         return "int64_t"
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
@@ -1030,6 +1181,8 @@ class CEmitter:
             if name in self._func_names:
                 cname = name.replace(".", "_")
                 return f"z_{cname}_ft"
+            if name in self._protocol_names:
+                return f"z_{name}_t*"
         return "void"
 
     def _emit_function(
@@ -1058,14 +1211,18 @@ class CEmitter:
         saved_union_vars = self._func_union_vars
         saved_union_var_types = self._union_var_types
         saved_class_var_types = self._class_var_types
+        saved_protocol_vars = self._func_protocol_vars
+        saved_protocol_var_types = self._protocol_var_types
         saved_temp_class_set = self._temp_class_set
         saved_temp_counter = self._temp_counter
         saved_record_name = self._current_record_name
         self._func_string_vars = []
         self._func_class_vars = []
         self._func_union_vars = []
+        self._func_protocol_vars = []
         self._union_var_types = {}
         self._class_var_types = {}
+        self._protocol_var_types = {}
         self._temp_class_set = {}
         self._temp_counter = 0
         self._current_record_name = record_name
@@ -1087,9 +1244,20 @@ class CEmitter:
             body_code = self._emit_statement(func.body)
             lines.append(body_code)
 
-        # scope-exit cleanup for string/class/union vars (void functions / fall-through)
-        if self._func_string_vars or self._func_class_vars or self._func_union_vars:
+        # scope-exit cleanup for string/class/union/protocol vars (void functions / fall-through)
+        if (
+            self._func_string_vars
+            or self._func_class_vars
+            or self._func_union_vars
+            or self._func_protocol_vars
+        ):
             indent = self._indent()
+            for sv in reversed(self._func_protocol_vars):
+                ptype_name = self._protocol_var_types.get(sv)
+                if ptype_name:
+                    lines.append(f"{indent}z_{ptype_name}_destroy({sv});\n")
+                else:
+                    lines.append(f"{indent}free({sv});\n")
             for sv in reversed(self._func_union_vars):
                 utype_name = self._union_var_type_name(sv)
                 if utype_name:
@@ -1112,6 +1280,8 @@ class CEmitter:
         self._func_union_vars = saved_union_vars
         self._union_var_types = saved_union_var_types
         self._class_var_types = saved_class_var_types
+        self._func_protocol_vars = saved_protocol_vars
+        self._protocol_var_types = saved_protocol_var_types
         self._temp_class_set = saved_temp_class_set
         self._temp_counter = saved_temp_counter
         self._current_record_name = saved_record_name
@@ -1153,9 +1323,12 @@ class CEmitter:
             if t in self._temp_string_set:
                 result += f"{indent}zstr_free({t});\n"
             elif t in self._temp_class_set:
-                result += (
-                    f"{indent}{self._emit_class_free(t, self._temp_class_set[t])}\n"
-                )
+                tname = self._temp_class_set[t]
+                if tname.startswith(":proto:"):
+                    proto_name = tname[7:]  # strip ":proto:" prefix
+                    result += f"{indent}z_{proto_name}_destroy({t});\n"
+                else:
+                    result += f"{indent}{self._emit_class_free(t, tname)}\n"
             else:
                 result += f"{indent}free({t});\n"
 
@@ -1185,10 +1358,13 @@ class CEmitter:
             # class/union pointer — the variable now owns it
             if val in self._temp_frees:
                 self._temp_frees.remove(val)
-            # distinguish union from class for proper destruction
+            # distinguish union/class/protocol for proper destruction
             if assign.type and assign.type.typetype == ZTypeType.UNION:
                 self._func_union_vars.append(cname)
                 self._union_var_types[cname] = assign.type.name
+            elif assign.type and assign.type.typetype == ZTypeType.PROTOCOL:
+                self._func_protocol_vars.append(cname)
+                self._protocol_var_types[cname] = assign.type.name
             else:
                 self._func_class_vars.append(cname)
                 if assign.type:
@@ -1289,7 +1465,26 @@ class CEmitter:
                     return True
         return False
 
+    def _emit_protocol_dispatch(self, call: zast.Call) -> Optional[str]:
+        """If call is a protocol method dispatch, return the C expression. Otherwise None."""
+        if not isinstance(call.callable, zast.DottedPath):
+            return None
+        parent_type = getattr(call.callable.parent, "type", None)
+        if not parent_type or parent_type.typetype != ZTypeType.PROTOCOL:
+            return None
+        parent_val = self._emit_path_value(call.callable.parent)
+        method = call.callable.child.name
+        args = [f"{parent_val}->data"]
+        for arg in call.arguments:
+            args.append(self._emit_operation_value(arg.valtype))
+        return f"{parent_val}->vtable->{method}({', '.join(args)})"
+
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
+        # protocol method dispatch
+        proto_expr = self._emit_protocol_dispatch(call)
+        if proto_expr is not None:
+            return f"{indent}{proto_expr};\n"
+
         callable_name = self._get_callable_name(call.callable)
 
         if callable_name == "print":
@@ -1389,13 +1584,24 @@ class CEmitter:
                 if t in self._temp_string_set:
                     result += f"{indent}zstr_free({t});\n"
                 elif t in self._temp_class_set:
-                    result += (
-                        f"{indent}{self._emit_class_free(t, self._temp_class_set[t])}\n"
-                    )
+                    tname = self._temp_class_set[t]
+                    if tname.startswith(":proto:"):
+                        proto_name = tname[7:]
+                        result += f"{indent}z_{proto_name}_destroy({t});\n"
+                    else:
+                        result += f"{indent}{self._emit_class_free(t, tname)}\n"
                 else:
                     result += f"{indent}free({t});\n"
             self._temp_frees.clear()
 
+            # free func protocol vars (except the return value)
+            for sv in reversed(self._func_protocol_vars):
+                if sv != val:
+                    ptype_name = self._protocol_var_types.get(sv)
+                    if ptype_name:
+                        result += f"{indent}z_{ptype_name}_destroy({sv});\n"
+                    else:
+                        result += f"{indent}free({sv});\n"
             # free func union vars (except the return value)
             for sv in reversed(self._func_union_vars):
                 if sv != val:
@@ -1416,8 +1622,14 @@ class CEmitter:
             result += f"{indent}return {val};\n"
             return result
 
-        # void return — free all func union/class/string vars
+        # void return — free all func protocol/union/class/string vars
         result = ""
+        for sv in reversed(self._func_protocol_vars):
+            ptype_name = self._protocol_var_types.get(sv)
+            if ptype_name:
+                result += f"{indent}z_{ptype_name}_destroy({sv});\n"
+            else:
+                result += f"{indent}free({sv});\n"
         for sv in reversed(self._func_union_vars):
             utype_name = self._union_var_type_name(sv)
             if utype_name:
@@ -1604,6 +1816,11 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
+        # protocol method dispatch
+        proto_expr = self._emit_protocol_dispatch(call)
+        if proto_expr is not None:
+            return proto_expr
+
         # data.index call -> array access
         if self._is_data_index_call(call) and isinstance(
             call.callable, zast.DottedPath
@@ -1851,6 +2068,36 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             return f"{_mangle_func(func_name)}({parent})"
 
+        # protocol instance creation: obj.label where label maps to a protocol
+        if (
+            hasattr(path, "type")
+            and path.type
+            and path.type.typetype == ZTypeType.PROTOCOL
+        ):
+            parent_type = getattr(path.parent, "type", None)
+            if parent_type and parent_type.typetype in (
+                ZTypeType.RECORD,
+                ZTypeType.CLASS,
+            ):
+                self.needs_stdlib = True
+                parent_val = self._emit_path_value(path.parent)
+                create_name = f"z_{parent_type.name}_{child}_create"
+                if parent_type.is_valtype:
+                    arg = f"&{parent_val}"
+                else:
+                    arg = parent_val
+                # allocate temp for the protocol instance
+                self._temp_counter += 1
+                tmp = f"_p{self._temp_counter}"
+                indent = self._indent()
+                proto_ctype = f"z_{path.type.name}_t"
+                self._temp_decls.append(
+                    f"{indent}{proto_ctype}* {tmp} = {create_name}({arg});\n"
+                )
+                self._temp_frees.append(tmp)
+                self._temp_class_set[tmp] = f":proto:{path.type.name}"
+                return tmp
+
         # runtime numeric cast: x.u32 where x is a numeric variable
         if child in NUMERIC_CAST_TYPES:
             parent_type = getattr(path.parent, "type", None)
@@ -1872,15 +2119,23 @@ class CEmitter:
         return f"{parent}.{child}"
 
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
-        """Check if a path refers to a class/union pointer (for -> vs . dispatch)."""
+        """Check if a path refers to a class/union/protocol pointer (for -> vs . dispatch)."""
         # type annotation from type checker
         parent_type = getattr(path, "type", None)
-        if parent_type and parent_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
+        if parent_type and parent_type.typetype in (
+            ZTypeType.CLASS,
+            ZTypeType.UNION,
+            ZTypeType.PROTOCOL,
+        ):
             return True
         # local class/union variable
         if isinstance(path, zast.AtomId):
             cname = _mangle_var(path.name)
-            if cname in self._func_class_vars or cname in self._func_union_vars:
+            if (
+                cname in self._func_class_vars
+                or cname in self._func_union_vars
+                or cname in self._func_protocol_vars
+            ):
                 return True
             # class method parameter (this/type resolves to class pointer)
             if self._current_record_name in self._class_names:

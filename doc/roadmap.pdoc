@@ -935,53 +935,50 @@ the Zerolang compiler.
   #*: #+ Preserves interpolation expressions within strings.
   #*: #+ 10 new tests (string whitespace handling). Total: 590 tests passing.
 
-#---: Phase 24: Protocols (Interface Types)
+#---: Phase 24: Protocols (Interface Types) \[COMPLETE\]
 
-Add protocol support. Protocols define interfaces (function specs without
-bodies). Types implement protocols via #~"implements" clauses. Protocol
-instances use vtables for dynamic dispatch. The parser and AST already
-handle protocols.
+Add protocol support (v1: flat borrowed protocols). Protocols define interfaces
+(function specs without bodies). Types satisfy protocols via labeled #~"as"
+block items. Protocol instances use vtables for dynamic dispatch.
 
 Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
-#~"tests/test_typecheck.py", #~"tests/test_emitter.py"
+#~"tests/test_typecheck.py", #~"tests/test_emitter.py",
+#~"examples/protocols.z", #~"doc/spec.pdoc"
 
 #ol:
-  #*: Add #~"_resolve_protocol_type" in #~"ztypecheck.py": resolve each
-    spec (function signature without body). Store specs as children
-    on the protocol ZType. Handle #~"includes" (protocol inheritance).
-  #*: Protocol conformance checking: when a record/class/union has an
-    #~"implements" clause naming a protocol, verify all specs are
-    implemented as methods with matching signatures. Error on missing
-    or mismatched methods.
-  #*: Protocol instance type: a variable of protocol type holds a
-    vtable pointer and a data pointer. #~"is_valtype = False". Protocol
-    instances are reftypes with ownership.
-  #*: Protocol instance creation: #~"x.protocolname" on an implementing
-    object creates a borrowed protocol instance. #~"protocol.create(obj)"
-    creates a taken (owned) instance.
-  #*: Protocol method dispatch in type checker: calling a method on a
-    protocol instance resolves to the spec signature. Actual dispatch
-    is via vtable at runtime.
-  #*: Protocol ownership: protocol instances follow reftype ownership.
-    Borrowed instances cannot be stored or returned. Taken instances
-    transfer ownership of the underlying object.
-  #*: Emit C for protocol vtable: generate a vtable struct with
-    function pointers for each spec. Generate a protocol instance
-    struct: #~"{ void* data; z_proto_vtable_t* vtable; }".
-  #*: Emit C for protocol conformance: generate a static vtable
-    instance for each type+protocol pair, populated with function
-    pointers to the implementing methods.
-  #*: Emit C for protocol instance creation: allocate protocol
-    instance, set data pointer and vtable pointer. For valtype
-    underlying types, heap-copy the value.
-  #*: Emit C for protocol dispatch: method calls on protocol instances
-    go through vtable: #~"inst->vtable->method(inst->data, args)".
-  #*: Emit C for protocol cleanup: free protocol instance on scope
-    exit. If owned, also free/cleanup underlying data.
-  #*: Write #~"examples/protocols.z": protocol definition, conformance,
-    instance creation, method dispatch. Must compile and run.
-  #*: Expand test suite: resolution, conformance, instance creation,
-    dispatch, ownership, C emission, integration.
+  #*: #+ Type checker: #~"_resolve_protocol_type" resolves protocol definitions
+    to PROTOCOL ZType with spec children. #~"is_valtype = False".
+  #*: #+ Type checker: #~"_process_as_items_protocols" checks conformance when
+    a record/class has a labeled protocol ref in its #~"as" block. Errors on
+    missing methods.
+  #*: #+ Type checker: protocol labels registered as children of the implementing
+    type, enabling #~"obj.label" dotted path resolution.
+  #*: #+ Emitter: #~"_emit_protocol" generates vtable struct (function pointers
+    with #~"void*" first param), instance struct (#~"data", #~"vtable",
+    #~"destroy" fields), and destroy function.
+  #*: #+ Emitter: #~"_emit_protocol_impl" generates wrapper functions (adapt
+    #~"void*" to typed #~"this"), static vtable instances, and create functions
+    for each type+protocol pair.
+  #*: #+ Emitter: protocol instance creation via #~"obj.label" in dotted path
+    emission. For value types passes #~"&obj"; for reference types passes the
+    pointer directly. Instances tracked for cleanup.
+  #*: #+ Emitter: protocol method dispatch: #~"r.method args" emits
+    #~"r->vtable->method(r->data, args)".
+  #*: #+ Emitter: protocol instance cleanup in function epilogue and return
+    paths via #~"z_{proto}_destroy".
+  #*: #+ New #~"examples/protocols.z": protocol definition, record conformance,
+    instance creation, method dispatch. Compiles and runs (output: 15).
+  #*: #+ 11 new tests (6 typecheck, 5 emitter including ASan). Total: 602 tests.
+  #*: #+ Updated #~"doc/spec.pdoc" protocol sections for v1 design.
+
+Deferred to Phase 24b (Protocol Extensions):
+
+#ul:
+  #*: Protocol composition/inheritance (#~"is reader" inside protocol body).
+  #*: Owned protocol creation (#~"protocol.create take obj") with boxing.
+  #*: Signature matching in conformance check (param types, return type).
+  #*: Stack-allocated borrowed instances (optimization).
+  #*: Locking semantics for borrowed instances.
 
 #---: Phase 25: Typedefs (Wrapper Types)
 
