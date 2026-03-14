@@ -73,6 +73,143 @@ class ObjectBody:
     extern: Dict[str, zast.AtomId]
 
 
+def _is_ws_only(s: str) -> bool:
+    """Check if string contains only spaces and tabs."""
+    return all(c in (" ", "\t") for c in s)
+
+
+def _strip_string_whitespace(
+    parts: List[Union[Token, "zast.Expression"]],
+) -> List[Union[Token, "zast.Expression"]]:
+    """Apply string newline/whitespace handling rules from the spec.
+
+    1. If the first line is blank (whitespace only), exclude it + its newline.
+    2. If the last line is blank (whitespace only), exclude the final newline
+       and whitespace, and use that whitespace as a common prefix to strip.
+    3. Strip the common prefix from every non-blank line.
+    """
+    if not parts:
+        return parts
+
+    # Step 1: strip blank first line (whitespace-only tokens followed by EOL)
+    first_eol = -1
+    for i, p in enumerate(parts):
+        if isinstance(p, zast.Expression):
+            break
+        if p.toktype == TT.EOL:
+            first_eol = i
+            break
+        if p.toktype == TT.STRMID and _is_ws_only(p.tokstr):
+            continue
+        if p.toktype == TT.STRCHR:
+            break
+        break
+    if first_eol >= 0:
+        # first line is blank — remove everything up to and including the EOL
+        parts = parts[first_eol + 1 :]
+
+    if not parts:
+        return parts
+
+    # Step 2: check for blank last line — find the last EOL and check if
+    # everything after it is whitespace-only
+    last_eol = -1
+    for i in range(len(parts) - 1, -1, -1):
+        p = parts[i]
+        if isinstance(p, zast.Expression):
+            break
+        if p.toktype == TT.EOL:
+            last_eol = i
+            break
+        if p.toktype == TT.STRMID and _is_ws_only(p.tokstr):
+            continue
+        if p.toktype == TT.STRCHR:
+            break
+        break
+
+    prefix = ""
+    if last_eol >= 0:
+        # everything after last_eol should be whitespace-only
+        trailing = parts[last_eol + 1 :]
+        all_ws = all(
+            not isinstance(p, zast.Expression)
+            and p.toktype == TT.STRMID
+            and _is_ws_only(p.tokstr)
+            for p in trailing
+        )
+        if all_ws or not trailing:
+            # extract the whitespace prefix from the last line
+            prefix = "".join(
+                p.tokstr for p in trailing if not isinstance(p, zast.Expression)
+            )
+            # remove the trailing EOL and whitespace
+            parts = parts[:last_eol]
+
+    if not parts:
+        return parts
+
+    # Step 3: strip common prefix from each line
+    if not prefix:
+        return parts
+
+    # verify all non-blank lines start with the prefix
+    can_strip = True
+    at_line_start = True
+    for p in parts:
+        if isinstance(p, zast.Expression):
+            at_line_start = False
+            continue
+        if p.toktype == TT.EOL:
+            at_line_start = True
+            continue
+        if at_line_start and p.toktype == TT.STRMID:
+            # check if this starts a blank line (just whitespace before next EOL)
+            if not _is_ws_only(p.tokstr) and not p.tokstr.startswith(prefix):
+                can_strip = False
+                break
+            at_line_start = False
+        else:
+            at_line_start = False
+
+    if not can_strip:
+        return parts
+
+    # apply the stripping
+    result: List[Union[Token, zast.Expression]] = []
+    at_line_start = True
+    prefix_len = len(prefix)
+    for p in parts:
+        if isinstance(p, zast.Expression):
+            result.append(p)
+            at_line_start = False
+            continue
+        if p.toktype == TT.EOL:
+            result.append(p)
+            at_line_start = True
+            continue
+        if at_line_start and p.toktype == TT.STRMID:
+            if _is_ws_only(p.tokstr):
+                # blank line content — keep as-is
+                result.append(p)
+            elif p.tokstr.startswith(prefix):
+                stripped = p.tokstr[prefix_len:]
+                if stripped:
+                    result.append(
+                        Token(
+                            p.toktype, stripped, p.fsno, p.lineno, p.colno + prefix_len
+                        )
+                    )
+                # else: the token was exactly the prefix, drop it
+            else:
+                result.append(p)
+            at_line_start = False
+        else:
+            result.append(p)
+            at_line_start = False
+
+    return result
+
+
 class Parser:
     """
     Parser
@@ -2270,5 +2407,6 @@ class Parser:
                 msg = "Unexpected token in string literal"
                 return zast.Error(err=ERR.BADSTRING, msg=msg, loc=t)
 
+        stringparts = _strip_string_whitespace(stringparts)
         atomstring = zast.AtomString(stringparts=stringparts, start=firsttoken)
         return NodeX(node=atomstring, extern=extern)

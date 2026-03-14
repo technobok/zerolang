@@ -2104,3 +2104,91 @@ class TestNumericCasting:
         lines = result.stdout.strip().split("\n")
         assert lines[0] == "42"
         assert lines[1] == "10"
+
+
+class TestStringWhitespace:
+    def test_leading_blank_line_stripped(self):
+        """Leading blank line after opening quote is stripped."""
+        csource = emit_source('main: function is {\n  x: "\n  hello"\n  print x\n}')
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "  hello"
+
+    def test_trailing_blank_line_stripped(self):
+        """Trailing blank line before closing quote is stripped."""
+        csource = emit_source('main: function is {\n  x: "hello\n  "\n  print x\n}')
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "hello"
+
+    def test_leading_and_trailing_stripped(self):
+        """Both leading and trailing blank lines stripped."""
+        csource = emit_source('main: function is {\n  x: "\n  hello\n  "\n  print x\n}')
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "hello"
+
+    def test_whitespace_prefix_stripped(self):
+        """Whitespace prefix from closing delimiter line is stripped."""
+        csource = emit_source(
+            'main: function is {\n  x: "\n    hello\n    world\n    "\n  print x\n}'
+        )
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "hello\nworld"
+
+    def test_indented_line_keeps_extra(self):
+        """Line with more indent than prefix keeps the extra."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  x: "\n'
+            "    hello\n"
+            "      indented\n"
+            '    "\n'
+            "  print x\n"
+            "}"
+        )
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "hello\n  indented"
+
+    def test_closing_hard_left_no_strip(self):
+        """Closing delimiter hard left means no whitespace stripping."""
+        csource = emit_source(
+            'main: function is {\n  x: "\n    hello\n    world\n  "\n  print x\n}'
+        )
+        output = compile_and_run(csource).rstrip("\n")
+        # closing " is at indent 2, content at indent 4 -> strip 2 -> "  hello"
+        assert output == "  hello\n  world"
+
+    def test_simple_string_unchanged(self):
+        """Simple single-line string is not affected."""
+        csource = emit_source('main: function is { print "hello" }')
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "hello"
+
+    def test_raw_string_whitespace(self):
+        """Raw strings also get whitespace handling."""
+        csource = emit_source(
+            'main: function is {\n  x: """\n    hello\n    world\n    """\n  print x\n}'
+        )
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "hello\nworld"
+
+    def test_interpolation_with_whitespace(self):
+        """String interpolation works with whitespace stripping."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  n: 42\n"
+            '  x: "\n'
+            "    value: \\{n}\n"
+            '    "\n'
+            "  print x\n"
+            "}"
+        )
+        output = compile_and_run(csource).rstrip("\n")
+        assert output == "value: 42"
+
+    def test_string_whitespace_asan(self):
+        """No memory issues with whitespace-stripped strings (ASan)."""
+        csource = emit_source(
+            'main: function is {\n  x: "\n    hello\n    world\n    "\n  print x\n}'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.rstrip("\n") == "hello\nworld"
