@@ -826,65 +826,49 @@ no #~"isinstance(defn, zast.Variant)" handler. This phase adds:
   #*: #+ Rename #~"parent_union_type" to #~"parent_tagged_type" on DottedPath.
   #*: #+ Example: #~"examples/variants.z".
 
-#---: Phase 20: Generics (Type Parameters and Monomorphization)
+#---: Phase 20: Specs (function 'pointer' types)
 
-Add generic type parameters with constraints. Strategy: monomorphization
-(generate specialised code for each concrete type used). The parser already
-handles #~"generic" fields. #~"ZType.isgeneric" exists but is unused.
+Add 'specs' to the compiler. Specs are function definitions that do not have a
+body. They are used for function 'pointers' in function parameters, local
+variables and fields and also will be required for protocols when they are
+added to the compiler.
 
-Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
-#~"src/ztypechecker.py", #~"tests/test_typecheck.py",
-#~"tests/test_emitter.py"
+#ul:
+  #*: see 'Function References' in the spec
+  [#*: see the 'address' section in the spec but note that this may be obsolete
+  now. Need to decide if we use .address or overload .take on a function name
+  or variable to prevent execution of the function but instead take the
+  function 'value' (address) to allow it to be assigned to a spec type in an
+  argument, field, local variable.]
+  [#*: functions/specs are structurally equivalent (in general, Zerolang
+  prefers nominal. functions/specs are one of the few exceptions). ie. if a
+  function requires the same arguments of the same types and returns the same
+  type, the spec and function(s) have the same type and a function that matches
+  in that way can be assigned to that spec. When comparing, the first argument
+  of both the spec and the function must be the same. The other arguments must
+  be present with the same name and types but differing order does not matter
+  for equivalence.]
 
-#ol:
-  #*: Resolve #~"generic" type parameters: when a field type is
-    #~"generic from: constraint" or #~"any.generic", create a ZType
-    with #~"isgeneric = True" and store the constraint type. Update
-    #~"_resolve_typeref" to handle the #~"generic" keyword.
-  #*: Generic type instantiation in type checker: when a generic
-    type is used with concrete type arguments, create a specialised
-    copy of the ZType with generic params replaced. Use a cache
-    keyed by (base_type, concrete_args) to avoid duplicates.
-  #*: Constraint checking: verify concrete type argument satisfies
-    the #~"from" constraint (is a member of the constraining union,
-    or implements the constraining protocol).
-  #*: Generic functions: functions with generic parameters. Infer
-    concrete types from arguments at call site. Monomorphize: create
-    a specialised function type for each unique set of concrete args.
-  #*: Generic records/classes: type parameters on records and classes.
-    Field types resolved after substitution. Methods see the
-    specialised type.
-  #*: Generic unions: type parameters shared across all subtypes
-    (per spec). #~"option" union pattern: #~"some: t" / #~"none: null".
-  #*: Update #~"_is_valtype" for generic types: a generic type's
-    valtype status depends on the constraint and concrete instantiation.
-  #*: Emit C for monomorphised types: for each instantiation, emit
-    a specialised struct/function with mangled name including type
-    args (e.g., #~"z_option_i64_t").
-  #*: Emit C for generic function calls: call site uses the
-    monomorphised function name.
-  #*: Add #~"option" union to #~"system.z" as a generic union with
-    #~"some" and #~"none" subtypes. This is the standard optional type.
-  #*: Write #~"examples/generics.z": generic container, generic
-    function, option usage. Must compile and run.
-  #*: Expand test suite: resolution, instantiation, constraints,
-    monomorphization, C emission, integration.
+#---: Phase 21: Default values
 
+Add default values to the compiler. Default values are used in fields and
+parameter definitions. Default values in fields flow through to the meta.create
+constructor. Default values can only be simple valtypes (numeric types and
+function references) that can be passed without requiring construction.
 
-#---: Phase 21: Generic Tag Type
+#ul:
+  [#*: see "Default Values" section in the Design-OPEN document]
+  [#*: the spec will need additional documentation about default values similar
+  to the Design-OPEN section]
 
-After generics are implemented, replace the current #~"tag" placeholder
-record with a proper generic type. The #~"tag" type should be parameterized
-by the discriminator storage type (e.g. #~"tag(u16)"). The #~"x: tag myenum"
-syntax inside an #~"is" block can also be supported at that time.
+#---: Phase 22: String literal improvements
 
-#ol:
-  #*: Define #~"tag" as a generic type in #~"system.z".
-  #*: #~"data.tag" returns #~"tag(element_type)".
-  #*: #~"u16.tag" returns #~"tag(u16)".
-  #*: Remove placeholder hack in type checker.
+See in the spec "String Newline and Whitespace Handling". The compiler does not
+yet apply that section. Update the implementation to follow the spec. The
+PicoDoc markup compiler has similar implementation and may be used to apply to
+the Zerolang compiler.
 
-#---: Phase 22: Protocols (Interface Types)
+#---: Phase 23: Protocols (Interface Types)
 
 Add protocol support. Protocols define interfaces (function specs without
 bodies). Types implement protocols via #~"implements" clauses. Protocol
@@ -932,7 +916,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
   #*: Expand test suite: resolution, conformance, instance creation,
     dispatch, ownership, C emission, integration.
 
-#---: Phase 23: Typedefs (Wrapper Types)
+#---: Phase 24: Typedefs (Wrapper Types)
 
 Add typedef support. Typedefs wrap an underlying type with zero overhead.
 The typedef field is marked with the #~"typedef" keyword. Methods can be
@@ -972,7 +956,77 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
   #*: Expand test suite: resolution, type identity, method shadowing,
     constructors, ownership, C emission, integration.
 
-#---: Phase 24: v2 Integration Examples
+
+#---: Phase 25: Generics (Type Parameters and Monomorphization)
+
+Add generic type parameters with constraints. Strategy: monomorphization
+(generate specialised code for each concrete type used). The parser already
+handles #~"generic" fields. #~"ZType.isgeneric" exists but is unused.
+
+Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
+#~"src/ztypechecker.py", #~"tests/test_typecheck.py",
+#~"tests/test_emitter.py"
+
+#ol:
+  #*: Resolve #~"generic" type parameters: when a field type is
+    #~"generic from: constraint" or #~"any.generic", create a ZType
+    with #~"isgeneric = True" and store the constraint type. Update
+    #~"_resolve_typeref" to handle the #~"generic" keyword.
+  #*: Generic type instantiation in type checker: when a generic
+    type is used with concrete type arguments, create a specialised
+    copy of the ZType with generic params replaced. Use a cache
+    keyed by (base_type, concrete_args) to avoid duplicates.
+  #*: Constraint checking: verify concrete type argument satisfies
+    the #~"from" constraint (is a member of the constraining union,
+    or implements the constraining protocol).
+  #*: Generic functions: functions with generic parameters. Infer
+    concrete types from arguments at call site. Monomorphize: create
+    a specialised function type for each unique set of concrete args.
+  #*: Generic records/classes: type parameters on records and classes.
+    Field types resolved after substitution. Methods see the
+    specialised type.
+  #*: Generic unions: type parameters shared across all subtypes
+    (per spec). #~"option" union pattern: #~"some: t" / #~"none: null".
+  #*: Update #~"_is_valtype" for generic types: a generic type's
+    valtype status depends on the constraint and concrete instantiation.
+  #*: Emit C for monomorphised types: for each instantiation, emit
+    a specialised struct/function with mangled name including type
+    args (e.g., #~"z_option_i64_t").
+  #*: Emit C for generic function calls: call site uses the
+    monomorphised function name.
+  #*: Add #~"option" union to #~"system.z" as a generic union with
+    #~"some" and #~"none" subtypes. This is the standard optional type.
+  #*: Write #~"examples/generics.z": generic container, generic
+    function, option usage. Must compile and run.
+  #*: Expand test suite: resolution, instantiation, constraints,
+    monomorphization, C emission, integration.
+
+
+#---: Phase 26: Generic Tag Type
+
+After generics are implemented, replace the current #~"tag" placeholder
+record with a proper generic type. The #~"tag" type should be parameterized
+by the discriminator storage type (e.g. #~"tag(u16)"). The #~"x: tag myenum"
+syntax inside an #~"is" block can also be supported at that time.
+
+#ol:
+  #*: Define #~"tag" as a generic type in #~"system.z".
+  #*: #~"data.tag" returns #~"tag(element_type)".
+  #*: #~"u16.tag" returns #~"tag(u16)".
+  #*: Remove placeholder hack in type checker.
+
+#---: Phase 27: A string valtype
+
+#ul:
+  [#*: fixed length]
+  [#*: can be used in records and variants]
+  [#*: passed on the stack as usual for a valtype]
+  [#*: the size is part of the type (different lengths are different types?, need
+    generic functions to provide common methods?)]
+  [#*: can error or truncate on copy?]
+  [#*: need to be able to pass to standard string functions...]
+
+#---: Phase 28: v2 Integration Examples
 
 Write comprehensive v2 example programs that exercise ownership, classes,
 unions, protocols, generics and typedefs together. These serve as
@@ -990,7 +1044,7 @@ integration tests for the full v2 feature set.
   #*: Verify all v2 example programs compile with gcc and produce
     correct output under ASan (address sanitizer).
 
-#---: Phase 25: Static String Literals + ZStr Header Modernization \[COMPLETE\]
+#---: Phase 29: Static String Literals + ZStr Header Modernization \[COMPLETE\]
 
 Modernize the #~"ZStr" layout to a 64-bit header and add static string
 support so string literals are never heap-allocated.
@@ -1020,7 +1074,7 @@ support so string literals are never heap-allocated.
 Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
 #~"doc/strings.pdoc", #~"doc/roadmap.pdoc"
 
-#---: Phase 26: C Runtime Library
+#---: Phase 30: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (#~"ZStr", #~"zstr_new",
@@ -1052,7 +1106,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
     union destructors, protocol vtable helpers, generic container
     support.
 
-#---: Phase 27: Expand to v3 (Full Language)
+#---: Phase 31: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
@@ -1060,7 +1114,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
   #*: Iterator protocol.
   #*: Full standard library.
 
-#---: Phase 28: Developer Tools
+#---: Phase 32: Developer Tools
 
 Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.
@@ -1080,7 +1134,7 @@ source files in IDEs and editors.
   #*: Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.
 
-#---: Phase 29: Self-Hosting
+#---: Phase 33: Self-Hosting
 
 #ol:
   #*: Write the zerolang compiler in zerolang.
