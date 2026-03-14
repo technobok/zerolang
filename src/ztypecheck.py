@@ -43,6 +43,7 @@ def _is_valtype(ztype: ZType) -> bool:
         ZTypeType.ENUM,
         ZTypeType.DATA,
         ZTypeType.VARIANT,
+        ZTypeType.FUNCTION,
     )
 
 
@@ -121,6 +122,9 @@ class TypeChecker:
             elif isinstance(defn, zast.Function) and defn.body:
                 self._resolve_unit_name(self.program.mainunitname, name)
                 self._check_function_body(name, defn)
+            elif isinstance(defn, zast.Function) and defn.body is None:
+                # spec (function without body) — resolve type
+                self._resolve_unit_name(self.program.mainunitname, name)
 
         if full:
             for unitname, unit in self.program.units.items():
@@ -302,7 +306,8 @@ class TypeChecker:
             ctype.children[mname] = mt
 
         # generate meta.create constructor type
-        create_type = self._make_meta_create_type(name, ctype)
+        is_func_names = set(cls.functions.keys())
+        create_type = self._make_meta_create_type(name, ctype, is_func_names)
         ctype.children[":meta.create"] = create_type
         if "create" not in ctype.children:
             ctype.children["create"] = create_type
@@ -697,7 +702,8 @@ class TypeChecker:
             rtype.children[mname] = mt
 
         # generate meta.create constructor type
-        create_type = self._make_meta_create_type(name, rtype)
+        is_func_names = set(rec.functions.keys())
+        create_type = self._make_meta_create_type(name, rtype, is_func_names)
         rtype.children[":meta.create"] = create_type
         if "create" not in rtype.children:
             rtype.children["create"] = create_type
@@ -705,12 +711,26 @@ class TypeChecker:
         self._resolving.pop()
         return rtype
 
-    def _make_meta_create_type(self, name: str, parent_type: ZType) -> ZType:
-        """Build a FUNCTION ZType for the compiler-generated meta.create constructor."""
+    def _make_meta_create_type(
+        self,
+        name: str,
+        parent_type: ZType,
+        is_func_names: Optional[set] = None,
+    ) -> ZType:
+        """Build a FUNCTION ZType for the compiler-generated meta.create constructor.
+
+        is_func_names: set of function names from the 'is' section that should
+        be included as constructor parameters (function pointer fields).
+        """
         ftype = _make_type(f"{name}.create", ZTypeType.FUNCTION)
         ftype.children[":return"] = parent_type
         for fname, ft in parent_type.children.items():
-            if fname.startswith(":") or ft.typetype == ZTypeType.FUNCTION:
+            if fname.startswith(":"):
+                continue
+            if ft.typetype == ZTypeType.FUNCTION:
+                # only include function-typed children from the 'is' section
+                if is_func_names and fname in is_func_names:
+                    ftype.children[fname] = ft
                 continue
             ftype.children[fname] = ft
             # reftype fields need .take ownership
@@ -904,6 +924,48 @@ class TypeChecker:
             return None
         return self._resolve_name(typename)
 
+    def _lookup_definition(self, name: str) -> Optional[zast.TypeDefinition]:
+        """Look up a unit-level definition by name (inline units then main unit)."""
+        # inline unit context stack (innermost first)
+        for uname, unode in reversed(self._unit_context):
+            defn = unode.body.get(name)
+            if defn is not None:
+                return defn
+        # main unit body
+        mainunit = self.program.units.get(self.program.mainunitname)
+        if mainunit:
+            defn = mainunit.body.get(name)
+            if defn is not None:
+                return defn
+        return None
+
+    def _types_compatible(self, a: ZType, b: ZType) -> bool:
+        """Check if two types are compatible (identity, name match, or structural equiv for functions)."""
+        if a is b:
+            return True
+        if a.name == b.name:
+            return True
+        if a.typetype == ZTypeType.FUNCTION and b.typetype == ZTypeType.FUNCTION:
+            return self._function_types_equivalent(a, b)
+        return False
+
+    def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
+        """Check structural equivalence of two function types (same params + return)."""
+        a_ret = a.children.get(":return")
+        b_ret = b.children.get(":return")
+        if (a_ret is None) != (b_ret is None):
+            return False
+        if a_ret and b_ret and a_ret.name != b_ret.name:
+            return False
+        a_params = [(k, v) for k, v in a.children.items() if not k.startswith(":")]
+        b_params = [(k, v) for k, v in b.children.items() if not k.startswith(":")]
+        if len(a_params) != len(b_params):
+            return False
+        for (ak, av), (bk, bv) in zip(a_params, b_params):
+            if ak != bk or av.name != bv.name:
+                return False
+        return True
+
     # ---- Function body type checking ----
 
     def _check_function_body(self, name: str, func: zast.Function) -> None:
@@ -987,7 +1049,7 @@ class TypeChecker:
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
         existing = self._check_path(reassign.topath)
         new_t = self._check_expression(reassign.value)
-        if existing and new_t and existing.name != new_t.name:
+        if existing and new_t and not self._types_compatible(existing, new_t):
             self._error(
                 f"Cannot assign {new_t.name} to variable of type {existing.name}",
                 loc=reassign.start,
@@ -1086,7 +1148,25 @@ class TypeChecker:
         if child_name == "take":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                # .take invalidates the source name
+                # check if parent is a unit-level definition (function or spec)
+                if parent_type.typetype == ZTypeType.FUNCTION and isinstance(
+                    path.parent, zast.AtomId
+                ):
+                    defn = self._lookup_definition(path.parent.name)
+                    if isinstance(defn, zast.Function):
+                        if defn.body is None:
+                            # spec — no value to take
+                            self._error(
+                                f"Cannot take spec '{path.parent.name}': "
+                                f"specs have no value; use a function name",
+                                loc=path.start,
+                            )
+                            return parent_type
+                        # real function — immutable program text, no invalidation
+                        path.type = parent_type
+                        return parent_type
+
+                # .take invalidates the source name (variable)
                 if isinstance(path.parent, zast.AtomId):
                     var = self.symtab.lookup_var(path.parent.name)
                     if var and var.ownership == ZOwnership.BORROWED:
@@ -1239,7 +1319,7 @@ class TypeChecker:
                         matched = ptype
                         break
                 if matched:
-                    if arg_type is not matched and arg_type.name != matched.name:
+                    if not self._types_compatible(arg_type, matched):
                         self._error(
                             f"Argument '{arg.name}' type mismatch: expected "
                             f"{matched.name}, got {arg_type.name}",
@@ -1249,7 +1329,7 @@ class TypeChecker:
             elif arg_type and i < len(params):
                 # positional argument
                 _, ptype = params[i]
-                if arg_type is not ptype and arg_type.name != ptype.name:
+                if not self._types_compatible(arg_type, ptype):
                     self._error(
                         f"Argument type mismatch: expected {ptype.name}, "
                         f"got {arg_type.name}",
@@ -1428,10 +1508,7 @@ class TypeChecker:
             ret_type = self._check_operation(call.arguments[0].valtype)
 
         if self._current_return_type and ret_type:
-            if (
-                ret_type is not self._current_return_type
-                and ret_type.name != self._current_return_type.name
-            ):
+            if not self._types_compatible(ret_type, self._current_return_type):
                 self._error(
                     f"Return type mismatch: function expects {self._current_return_type.name}, "
                     f"got {ret_type.name}",

@@ -1996,3 +1996,134 @@ class TestVariantTypeResolution:
             "mode: variant { READ: null\n WRITE: null\n EXEC: null }\n"
             "main: function is { x: mode.READ }"
         )
+
+
+class TestSpecs:
+    """Tests for specs (function pointer types) — Phase 20."""
+
+    def test_spec_resolves_to_function_type(self):
+        """A spec (function without body) resolves to a FUNCTION type."""
+        program = check_ok(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { print "\\{add a: 1 b: 2}" }'
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "binop")
+        assert t is not None
+        assert t.typetype == ZTypeType.FUNCTION
+
+    def test_take_on_function_succeeds(self):
+        """Taking a function name produces a function reference."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is { cb: add.take }"
+        )
+
+    def test_take_on_spec_is_error(self):
+        """Taking a spec name is an error (specs are types, not values)."""
+        errors = check_errors(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "main: function is { cb: binop.take }"
+        )
+        assert any("spec" in e.msg.lower() for e in errors)
+
+    def test_function_ref_is_valtype(self):
+        """Function references are value types — .take doesn't invalidate."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is {\n"
+            "  cb1: add.take\n"
+            "  cb2: add.take\n"
+            "}"
+        )
+
+    def test_structural_equivalence(self):
+        """Different-named functions with same signature are compatible with a spec."""
+        check_ok(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            "main: function is { apply f: add.take a: 3 b: 4 }"
+        )
+
+    def test_incompatible_signatures_error(self):
+        """Mismatched function signatures produce type errors."""
+        errors = check_errors(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "negate: function {x: i64} out i64 is { return 0 - x }\n"
+            "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            "main: function is { apply f: negate.take a: 3 b: 4 }"
+        )
+        assert any("mismatch" in e.msg.lower() for e in errors)
+
+    def test_function_ref_as_parameter(self):
+        """Pass a function reference as a callback parameter."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "apply: function {f: add a: i64 b: i64} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            "main: function is { apply f: add.take a: 3 b: 4 }"
+        )
+
+    def test_function_ref_local_variable(self):
+        """Assign a function reference to a local variable."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is {\n"
+            "  cb: add.take\n"
+            "  cb a: 1 b: 2\n"
+            "}"
+        )
+
+    def test_function_ref_reassignment(self):
+        """Reassign a local function reference variable."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "sub: function {a: i64 b: i64} out i64 is { return a - b }\n"
+            "main: function is {\n"
+            "  cb: add.take\n"
+            "  cb = sub.take\n"
+            "}"
+        )
+
+    def test_record_with_spec_field_in_is(self):
+        """Record with spec (function without body) in 'is' section becomes a field."""
+        check_ok(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "calculator: record {\n"
+            "    x: i64\n"
+            "    callback: function {a: i64 b: i64} out i64\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: calculator x: 5 callback: add.take\n"
+            "}"
+        )
+
+    def test_record_with_function_in_as(self):
+        """Record with function in 'as' section does NOT create a field."""
+        program = check_ok(
+            "myrec: record {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    helper: function {a: i64} out i64 is { return a + 1 }\n"
+            "}\n"
+            "main: function is { r: myrec x: 5 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "myrec")
+        assert t is not None
+        create_t = t.children.get(":meta.create")
+        assert create_t is not None
+        assert "x" in create_t.children
+        assert "helper" not in create_t.children

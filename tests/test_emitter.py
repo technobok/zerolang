@@ -1788,3 +1788,110 @@ class TestEmitterVariant:
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
+
+
+class TestSpecs:
+    """Tests for specs (function pointer types) — Phase 20."""
+
+    def test_spec_generates_typedef(self):
+        """A spec definition generates a typedef in C output."""
+        csource = emit_source(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is { add a: 1 b: 2 }"
+        )
+        assert "typedef" in csource
+        assert "z_binop_ft" in csource
+
+    def test_callback_parameter(self):
+        """Pass function reference via .take, call through it."""
+        csource = emit_source(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            'main: function is { print "\\{apply f: add.take a: 3 b: 4}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_local_function_reference(self):
+        """Assign function ref with .take, call through local variable."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "main: function is {\n"
+            "  cb: add.take\n"
+            '  print "\\{cb a: 10 b: 20}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "30"
+
+    def test_reassignment_of_function_ref(self):
+        """Reassign a function reference variable."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "sub: function {a: i64 b: i64} out i64 is { return a - b }\n"
+            "main: function is {\n"
+            "  cb: add.take\n"
+            '  print "\\{cb a: 10 b: 3}"\n'
+            "  cb = sub.take\n"
+            '  print "\\{cb a: 10 b: 3}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "13"
+        assert lines[1] == "7"
+
+    def test_multiple_specs(self):
+        """Multiple specs with different signatures."""
+        csource = emit_source(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "unaryop: function {x: i64} out i64\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "negate: function {x: i64} out i64 is { return 0 - x }\n"
+            "main: function is {\n"
+            "  f1: add.take\n"
+            "  f2: negate.take\n"
+            '  print "\\{f1 a: 3 b: 4}"\n'
+            '  print "\\{f2 x: 5}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "7"
+        assert lines[1] == "-5"
+
+    def test_record_with_func_pointer_field(self):
+        """Record with function pointer field (spec in 'is' section)."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "calculator: record {\n"
+            "    x: i64\n"
+            "    op: function {a: i64 b: i64} out i64\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: calculator x: 10 op: add.take\n"
+            '  print "\\{c.op a: 3 b: 4}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_spec_asan(self):
+        """No memory issues with function references (ASan)."""
+        csource = emit_source(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
+            "  result: f a: a b: b\n"
+            "  return result\n"
+            "}\n"
+            'main: function is { print "\\{apply f: add.take a: 3 b: 4}" }'
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "7"

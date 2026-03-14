@@ -601,7 +601,6 @@ is expected at runtime (right hand side of assignments, #~"if" conditions etc.)
   #*: [#>"for"]
   #*: [#>"with"]
   #*: [#>"match"]
-  #*: [#>"address"]
   #*: [#>"break"]
   #*: [#>"continue"]
   #*: [#>"yield"]
@@ -642,7 +641,8 @@ an expression, the entire call may be surrounded by parentheses for grouping or
 precedence purposes.
 
 A function call without arguments is still a function call (not a function
-pointer). Use an [#> to=address: address expression] to retrieve a function reference.
+pointer). Use [#> to=take-on-function-names: .take] on the function name to
+retrieve a function reference.
 
 #----: Call Arguments
 
@@ -1114,23 +1114,21 @@ values of the #~"loop" statement.
   }
   """
 
-#---: address
+#---: .take on Function Names
 
-TODO: remove this... use #~"take" or #~"borrow" now
+To obtain a function reference value (rather than calling the function), use
+the #~".take" dotted operator on the function name. This is consistent with
+the existing #~".take" semantics for value types.
 
-Return the function address rather than calling a function. Since all usual
-references to a function definition result in a call, the address expression is
-required when the function value itself is required. The result of an #~"address"
-expression can be assigned to [#> to=function-references: function references].
+#code language=zerolang: """
+  myfunc: function {a: i64} to i64 is { return a }
 
-#~"address" in this way can only be used in code blocks (in function bodies) and
-in function parameters.
+  # obtain a function reference without calling the function
+  ref: myfunc.take
+  """
 
-#table cols="2 2 4":
-  Argument  |Default |Value/Description
-  is        |Yes     |Constant Path to a function or method
-
-Note that the #~"is" argument will not be evaluated (called).
+#~".take" on a spec name is a compiler error because specs have no value —
+they are types only. Use #~".take" on a function name that matches the spec.
 
 
 #--: Type System
@@ -2439,8 +2437,8 @@ function argument label), can be:
 
 Function argument types can NOT be:
 
-- a bare function name (MUST have the #~"address" keyword before a function to
-  make a #~"spec" argument with a default value)
+- a bare function name (use #~".take" on the function name to obtain a function
+  reference for a #~"spec" argument)
 
 
 #----: Specs
@@ -2451,10 +2449,18 @@ A 'spec' is the type of a function. When defining a complete function (with an
 If the function definition has no body (#~"is" argument) then only the spec
 (function type) is being defined.
 
-A spec (without body) #_*"must" be defined at the unit level or within a protocol;
-they cannot be defined in code or directly in field definitions. Whereas
-complete functions can be defined at the unit level #_*"or" as member functions in
-a record/class/variant/union/enum.
+A spec (without body) #_*"must" be defined at the unit level, within a protocol,
+or within a record/class #~"is" section (as a function pointer field). They
+cannot be defined in code blocks (function bodies).
+
+Specs and functions use #_*"structural equivalence": if two function definitions
+have the same parameter names and types, and the same return type, they are
+considered type-compatible. This is one of the few exceptions to Zerolang's
+general preference for nominal typing.
+
+Function references are #_*"valtypes" — small, copyable pointers to immutable
+program text. They can be freely copied and do not participate in ownership
+tracking beyond simple value semantics.
 
 It is not possible to specify a method spec without a function value.
 
@@ -2642,49 +2648,59 @@ Is there any point in having destructors?
 
 #----: Function References
 
-A function reference is a variable that stores the address of a function. It may
+A function reference is a variable that stores a pointer to a function. It may
 be called with the same syntax as used when calling a standard function. It may
-be reassigned to the address of an equivalent function. It must always have a
-valid function as a value.
+be reassigned to a reference to an equivalent function (one with the same
+parameter names, types, and return type). It must always have a valid function
+as a value.
 
 A function reference variable cannot be defined at the unit level (unit level
 declarations are immutable).
 
-To retrieve a function reference value at run time (within a function body), use
-an #>"address" expression. TODO: this is obsolete, no "address" keyword or function...
+To obtain a function reference value at run time (within a function body), use
+#~".take" on the function name.
 
-Function references can be used as: 
+Function references can be used as:
 
 #ul:
-  #*: local variables 
-  #*: fields of an object
-  #*: function parameters 
+  #*: local variables
+  #*: fields of an object (in the #~"is" section)
+  #*: function parameters
   #*: function return values
 
-For local variable function references, declare, assign and reassign to an
-#>"address" expression.
+For local variable function references, declare and assign using #~".take":
 
-For field function references:
+#code language=zerolang: """
+  myspec: function {a: i64 b: i64} to i64
+  add: function {a: i64 b: i64} to i64 is { return a + b }
+
+  main: function is {
+    ref: add.take                # local function reference
+    result: ref a: 1 b: 2       # call through reference
+    ref = subtract.take          # reassign to another compatible function
+  }
+  """
+
+For field function references in record/class #~"is" sections:
 
 #ul:
-  [#*: define a complete function either at the unit level or within the object (a
-    class method, no #~"this")]
-  [#*: #_*"OR" define a spec at the unit level]
-  [#*: use the name of that function or spec as the RHS of a field]
-  [#*: if a function name is used, that function becomes the default value for that
-    field (same as a default numeric field)]
-  [#*: if a spec name is used, there is no default value and the address of a
-    function #_*"must" be passed to the constructor of this object (using
-    #>"address").]
+  [#*: define a function in the #~"is" section — it becomes a per-instance
+    function pointer field with that function as the default value]
+  [#*: #_*"OR" define a spec (no body) in the #~"is" section — it becomes a
+    per-instance function pointer field with no default; a function reference
+    #_*"must" be passed to #~"meta.create" using #~".take"]
   [#*: the function reference can be reassigned to an equivalent function at any
-    time (with #>"address").]
+    time using #~".take"]
+
+Functions in the #~"as" section are shared methods on the type, not per-instance
+fields.
 
 To create a function reference as a function return value:
 
 #ul:
   #*: define a function spec at unit level
   #*: in the function definition, use the name of the spec as the return type
-  #*: in the body of the function, return an equivalent function reference 
+  #*: in the body of the function, return an equivalent function reference
 
 The above applies to standard function references (non-method pointers; no
 #~"this" parameter). Method pointers have additional restrictions:
@@ -2697,7 +2713,7 @@ The above applies to standard function references (non-method pointers; no
     method pointer spec)]
   [#*: method pointers can only be replaced by another equivalent method within the
     object]
-  [#*: method pointers cannot be function return values (thay can never escape the
+  [#*: method pointers cannot be function return values (they can never escape the
     object)]
 
 

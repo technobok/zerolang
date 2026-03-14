@@ -64,7 +64,24 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return f"z_{name}_t*"
     if ztype.typetype == ZTypeType.VARIANT:
         return f"z_{name}_t"
+    if ztype.typetype == ZTypeType.FUNCTION:
+        cname = name.replace(".", "_")
+        return f"z_{cname}_ft"
     return "void"
+
+
+def _ctype_func_inline(ztype: ZType) -> str:
+    """Generate an inline C function pointer type for a FUNCTION ZType.
+    Returns e.g. 'int64_t (*)(int64_t, int64_t)'.
+    """
+    ret = ztype.children.get(":return")
+    ret_ctype = _ctype(ret) if ret else "void"
+    params: List[str] = []
+    for k, v in ztype.children.items():
+        if not k.startswith(":"):
+            params.append(_ctype(v))
+    param_str = ", ".join(params) if params else "void"
+    return f"{ret_ctype} (*)({param_str})"
 
 
 def _mangle_func(name: str) -> str:
@@ -117,6 +134,21 @@ def _mangle_var(name: str) -> str:
     return name
 
 
+def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
+    """Check if a name refers to a unit-level definition."""
+    return (
+        name in emitter._func_names
+        or name in emitter._spec_names
+        or name in emitter._record_names
+        or name in emitter._class_names
+        or name in emitter._union_names
+        or name in emitter._variant_names
+        or name in emitter._data_names
+        or name in emitter._const_names
+        or name in emitter._unit_names
+    )
+
+
 class CEmitter:
     def __init__(self, program: zast.Program) -> None:
         self.program = program
@@ -140,6 +172,11 @@ class CEmitter:
         self._union_names: set[str] = set()
         self._variant_names: set[str] = set()
         self._unit_names: set[str] = set()
+        self._spec_names: set[str] = set()
+        # qualified names like "calculator.op" for func pointer fields in 'is' sections
+        self._is_func_fields: set[str] = set()
+        self.spec_typedefs: List[str] = []
+        self.func_typedefs: List[str] = []  # typedefs for functions (after struct defs)
         # field info per type name (for meta.create calls)
         self._type_field_ctypes: Dict[str, List[str]] = {}
         self._type_field_names: Dict[str, List[str]] = {}
@@ -190,6 +227,30 @@ class CEmitter:
         self._string_literals[escaped] = name
         return name
 
+    def _mangle_callable(self, name: str) -> str:
+        """Mangle a callable name: unit-level definitions use _mangle_func, locals use _mangle_var."""
+        # dotted names are always definition references (unit.func, record.method)
+        if "." in name:
+            return _mangle_func(name)
+        if _is_definition_name(name, self):
+            return _mangle_func(name)
+        return _mangle_var(name)
+
+    def _emit_callable_expr(self, call: zast.Call) -> str:
+        """Emit the callable expression for a function call.
+
+        Handles function pointer fields (struct field access) vs regular functions.
+        """
+        # check if this is a function pointer field call (e.g. c.op)
+        if isinstance(call.callable, zast.DottedPath):
+            ftype = getattr(call.callable, "type", None)
+            if ftype and ftype.typetype == ZTypeType.FUNCTION:
+                func_name = ftype.name
+                if func_name in self._is_func_fields:
+                    return self._emit_dotted_path_value(call.callable)
+        callable_name = self._get_callable_name(call.callable)
+        return self._mangle_callable(callable_name)
+
     def _qualify(self, prefix: str, name: str) -> str:
         return f"{prefix}.{name}" if prefix else name
 
@@ -202,10 +263,16 @@ class CEmitter:
                 self._collect_unit_names(qname, defn.body)
             elif isinstance(defn, zast.Function) and defn.body:
                 self._func_names.add(qname)
+            elif isinstance(defn, zast.Function) and defn.body is None:
+                self._spec_names.add(qname)
             elif isinstance(defn, zast.Record):
                 self._record_names.add(qname)
+                for mname in defn.functions:
+                    self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Class):
                 self._class_names.add(qname)
+                for mname in defn.functions:
+                    self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Union):
                 self._union_names.add(qname)
             elif isinstance(defn, zast.Variant):
@@ -234,7 +301,10 @@ class CEmitter:
             elif isinstance(defn, zast.Variant):
                 self._emit_variant(qname, defn)
             elif isinstance(defn, zast.Function) and defn.body:
+                self._emit_func_typedef(qname, defn)
                 self._emit_function(qname, defn)
+            elif isinstance(defn, zast.Function) and defn.body is None:
+                self._emit_spec_typedef(qname, defn)
             elif isinstance(defn, zast.Data):
                 self._emit_data(qname, defn)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -344,8 +414,16 @@ class CEmitter:
             if self._string_literals:
                 parts.append("\n")
 
+        for st in self.spec_typedefs:
+            parts.append(st)
+        if self.spec_typedefs:
+            parts.append("\n")
         for sd in self.struct_defs:
             parts.append(sd)
+        for ft in self.func_typedefs:
+            parts.append(ft)
+        if self.func_typedefs:
+            parts.append("\n")
         for fd in self.forward_decls:
             parts.append(fd)
         if self.forward_decls:
@@ -361,6 +439,38 @@ class CEmitter:
         parts.append("}\n")
 
         return "".join(parts)
+
+    def _emit_func_typedef(self, name: str, func: zast.Function) -> None:
+        """Emit a C typedef for a function (placed after struct defs)."""
+        self.needs_stdint = True
+        ret_ctype = self._resolve_return_ctype(func)
+        params: List[str] = []
+        for pname, ppath in func.parameters.items():
+            if pname.startswith(":"):
+                continue
+            ptype_str = self._resolve_param_ctype(ppath)
+            params.append(ptype_str)
+        param_str = ", ".join(params) if params else "void"
+        cname = name.replace(".", "_")
+        self.func_typedefs.append(
+            f"typedef {ret_ctype} (*z_{cname}_ft)({param_str});\n"
+        )
+
+    def _emit_spec_typedef(self, name: str, func: zast.Function) -> None:
+        """Emit a C typedef for a spec (function pointer type)."""
+        self.needs_stdint = True
+        ret_ctype = self._resolve_return_ctype(func)
+        params: List[str] = []
+        for pname, ppath in func.parameters.items():
+            if pname.startswith(":"):
+                continue
+            ptype_str = self._resolve_param_ctype(ppath)
+            params.append(ptype_str)
+        param_str = ", ".join(params) if params else "void"
+        cname = name.replace(".", "_")
+        self.spec_typedefs.append(
+            f"typedef {ret_ctype} (*z_{cname}_ft)({param_str});\n"
+        )
 
     def _emit_constant(self, name: str, atom: zast.AtomId) -> None:
         typename, value, err = parse_number(atom.name)
@@ -381,16 +491,39 @@ class CEmitter:
         for fname, fpath in rec.items.items():
             ftype = self._resolve_field_ctype(fpath)
             lines.append(f"    {ftype} {fname};\n")
+        # emit function pointer fields from 'is' section
+        for mname, mfunc in rec.functions.items():
+            decl = self._func_pointer_field_decl(name, mname, mfunc)
+            lines.append(f"    {decl};\n")
         lines.append(f"}} z_{name}_t;\n\n")
         self.struct_defs.append("".join(lines))
 
         # emit meta.create constructor
         self._emit_meta_create_record(name, rec)
 
-        all_funcs = list(rec.functions.items()) + list(rec.as_functions.items())
-        for mname, mfunc in all_funcs:
+        # emit 'is' functions with body as regular C functions (for default values)
+        for mname, mfunc in rec.functions.items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+        # emit 'as' functions as methods
+        for mname, mfunc in rec.as_functions.items():
+            if mfunc.body:
+                self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+
+    def _func_pointer_field_decl(
+        self, parent_name: str, mname: str, mfunc: zast.Function
+    ) -> str:
+        """Get the full C struct field declaration for a function pointer in an 'is' section.
+        Returns e.g. 'int64_t (*callback)(int64_t, int64_t)'"""
+        ret_ctype = self._resolve_return_ctype(mfunc, record_name=parent_name)
+        params: List[str] = []
+        for pname, ppath in mfunc.parameters.items():
+            if pname.startswith(":"):
+                continue
+            ptype_str = self._resolve_param_ctype(ppath, record_name=parent_name)
+            params.append(ptype_str)
+        param_str = ", ".join(params) if params else "void"
+        return f"{ret_ctype} (*{mname})({param_str})"
 
     def _resolve_field_ctype(self, fpath: zast.Path) -> str:
         """Resolve the C type for a struct/class field."""
@@ -407,6 +540,9 @@ class CEmitter:
                 return f"z_{fname}_t"
             if fname in self._record_names:
                 return f"z_{fname}_t"
+            if fname in self._spec_names:
+                cname = fname.replace(".", "_")
+                return f"z_{cname}_ft"
             return TYPEMAP.get(fname, "int64_t")
         return ftype
 
@@ -421,6 +557,19 @@ class CEmitter:
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
+        # include function pointer fields from 'is' section
+        for mname, mfunc in rec.functions.items():
+            ret_ctype = self._resolve_return_ctype(mfunc, record_name=name)
+            fp_params: List[str] = []
+            for pname, ppath in mfunc.parameters.items():
+                if pname.startswith(":"):
+                    continue
+                fp_params.append(self._resolve_param_ctype(ppath, record_name=name))
+            fp_param_str = ", ".join(fp_params) if fp_params else "void"
+            fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
+            params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
+            field_names.append(mname)
+            field_ctypes.append(fp_ctype)
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
         param_str = ", ".join(params) if params else "void"
@@ -457,6 +606,19 @@ class CEmitter:
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
+        # include function pointer fields from 'is' section
+        for mname, mfunc in cls.functions.items():
+            ret_ctype = self._resolve_return_ctype(mfunc, record_name=name)
+            fp_params: List[str] = []
+            for pname, ppath in mfunc.parameters.items():
+                if pname.startswith(":"):
+                    continue
+                fp_params.append(self._resolve_param_ctype(ppath, record_name=name))
+            fp_param_str = ", ".join(fp_params) if fp_params else "void"
+            fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
+            params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
+            field_names.append(mname)
+            field_ctypes.append(fp_ctype)
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
         param_str = ", ".join(params) if params else "void"
@@ -487,6 +649,10 @@ class CEmitter:
         for fname, fpath in cls.items.items():
             ftype = self._resolve_field_ctype(fpath)
             lines.append(f"    {ftype} {fname};\n")
+        # emit function pointer fields from 'is' section
+        for mname, mfunc in cls.functions.items():
+            decl = self._func_pointer_field_decl(name, mname, mfunc)
+            lines.append(f"    {decl};\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
         # emit destructor
@@ -519,8 +685,12 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
-        all_funcs = list(cls.functions.items()) + list(cls.as_functions.items())
-        for mname, mfunc in all_funcs:
+        # emit 'is' functions with body as regular C functions (for default values)
+        for mname, mfunc in cls.functions.items():
+            if mfunc.body:
+                self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+        # emit 'as' functions as methods
+        for mname, mfunc in cls.as_functions.items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
@@ -754,6 +924,12 @@ class CEmitter:
                 return f"z_{name}_t*"
             if name in self._variant_names:
                 return f"z_{name}_t"
+            if name in self._spec_names:
+                cname = name.replace(".", "_")
+                return f"z_{cname}_ft"
+            if name in self._func_names:
+                cname = name.replace(".", "_")
+                return f"z_{cname}_ft"
         return "int64_t"
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
@@ -783,6 +959,12 @@ class CEmitter:
                 return f"z_{name}_t*"
             if name in self._variant_names:
                 return f"z_{name}_t"
+            if name in self._spec_names:
+                cname = name.replace(".", "_")
+                return f"z_{cname}_ft"
+            if name in self._func_names:
+                cname = name.replace(".", "_")
+                return f"z_{cname}_ft"
         return "void"
 
     def _emit_function(
@@ -1011,6 +1193,11 @@ class CEmitter:
         if isinstance(inner, zast.Case):
             return self._emit_case(inner)
         if isinstance(inner, zast.DottedPath) and inner.child.name == "take":
+            # function definitions are immutable — .take as statement is a no-op
+            if isinstance(inner.parent, zast.AtomId) and _is_definition_name(
+                inner.parent.name, self
+            ):
+                return ""
             var = self._emit_path_value(inner.parent)
             var_type = getattr(inner, "type", None)
             result = ""
@@ -1072,7 +1259,8 @@ class CEmitter:
             return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
 
         args = self._emit_call_args(call)
-        code = f"{indent}{_mangle_func(callable_name)}({args});\n"
+        cname = self._emit_callable_expr(call)
+        code = f"{indent}{cname}({args});\n"
 
         # if call takes a .take argument, nullify it after the call
         for arg in call.arguments:
@@ -1196,6 +1384,9 @@ class CEmitter:
             if op.child.name == "take" and isinstance(op.parent, zast.AtomId):
                 name = op.parent.name
                 if not _is_numeric_id(name):
+                    # don't nullify function/spec definitions (immutable program text)
+                    if _is_definition_name(name, self):
+                        return None
                     return _mangle_var(name)
         return None
 
@@ -1315,8 +1506,6 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
-        callable_name = self._get_callable_name(call.callable)
-
         # data.index call -> array access
         if self._is_data_index_call(call) and isinstance(
             call.callable, zast.DottedPath
@@ -1372,7 +1561,8 @@ class CEmitter:
             return tmp
 
         args = self._emit_call_args(call)
-        result = f"{_mangle_func(callable_name)}({args})"
+        cname = self._emit_callable_expr(call)
+        result = f"{cname}({args})"
 
         # if call returns a reftype, wrap in temp for cleanup
         if hasattr(call, "type") and call.type:
@@ -1513,15 +1703,21 @@ class CEmitter:
         if unit_path is not None:
             return _mangle_func(f"{unit_path}.{child}")
 
-        # check if the dotted path resolves to a function (method call)
+        # check if the dotted path resolves to a function (method call or field access)
         if (
             hasattr(path, "type")
             and path.type
             and path.type.typetype == ZTypeType.FUNCTION
         ):
+            func_name = path.type.name  # e.g. "calculator.op" or "point.distance"
+            # function pointer fields (from 'is' section) → struct field access
+            if func_name in self._is_func_fields:
+                parent = self._emit_path_value(path.parent)
+                if self._is_class_pointer_path(path.parent):
+                    return f"{parent}->{child}"
+                return f"{parent}.{child}"
+            # regular methods (from 'as' section) → method call
             parent = self._emit_path_value(path.parent)
-            # determine the record type name from the function name
-            func_name = path.type.name  # e.g. "point.distance"
             return f"{_mangle_func(func_name)}({parent})"
 
         parent = self._emit_path_value(path.parent)
