@@ -2285,3 +2285,63 @@ class TestProtocols:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0
         assert result.stdout.strip() == "15"
+
+    def test_protocol_temp_no_malloc(self):
+        """Temp protocol instances use stack allocation, not malloc."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            '    print "\\{use_reader f.myreader}"\n'
+            "}\n"
+        )
+        # temp path should have stack alloc pattern, not create() call
+        assert "_ps" in csource
+        # the temp should not appear in any free() call
+        assert "z_reader_destroy(_p" not in csource
+
+    def test_protocol_temp_runtime(self):
+        """Stack-allocated temp protocol instance works at runtime."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            '    print "\\{use_reader f.myreader}"\n'
+            "}\n"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_protocol_temp_asan(self):
+        """ASan clean with stack-allocated temp protocol instances."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            '    print "\\{use_reader f.myreader}"\n'
+            "}\n"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "15"
+
+    def test_protocol_named_var_still_heap(self):
+        """Named protocol variables still use heap allocation."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            '    print "\\{use_reader r}"\n'
+            "}\n"
+        )
+        # named var should still use create function (heap alloc)
+        assert "z_myfile_myreader_create" in csource

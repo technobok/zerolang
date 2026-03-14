@@ -2402,3 +2402,164 @@ class TestProtocols:
             "}\n"
             "main: function is {}"
         )
+
+    def test_protocol_signature_matching_ok(self):
+        """Matching signatures pass conformance check."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is { f: myfile fd: 1 }"
+        )
+
+    def test_protocol_signature_param_count_mismatch(self):
+        """Error when impl has different param count than spec."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this} out i64 is {\n"
+            "        return f.fd\n"
+            "    }\n"
+            "}\n"
+            "main: function is { f: myfile fd: 1 }"
+        )
+        assert any("0 param" in e.msg and "expects 1" in e.msg for e in errors)
+
+    def test_protocol_signature_param_type_mismatch(self):
+        """Error when impl param type differs from spec."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: bool} out i64 is {\n"
+            "        return f.fd\n"
+            "    }\n"
+            "}\n"
+            "main: function is { f: myfile fd: 1 }"
+        )
+        assert any(
+            "'b'" in e.msg and "'bool'" in e.msg and "'i64'" in e.msg for e in errors
+        )
+
+    def test_protocol_signature_return_type_mismatch(self):
+        """Error when impl return type differs from spec."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out bool is {\n"
+            "        return 0.bool\n"
+            "    }\n"
+            "}\n"
+            "main: function is { f: myfile fd: 1 }"
+        )
+        assert any("returns 'bool'" in e.msg and "'i64'" in e.msg for e in errors)
+
+    def test_protocol_signature_no_return_both_ok(self):
+        """Both spec and impl with no return type is fine."""
+        check_ok(
+            "worker: protocol {\n"
+            "    work: function {:this}\n"
+            "}\n"
+            "myworker: record {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    w: worker\n"
+            "    work: function {w: this} is {}\n"
+            "}\n"
+            "main: function is { w: myworker x: 1 }"
+        )
+
+    def test_protocol_borrow_lock_source(self):
+        """Source is locked after protocol borrow — second borrow errors."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            "    b: f.borrow\n"
+            "}\n"
+        )
+        assert any(
+            "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+    def test_protocol_double_borrow_error(self):
+        """Double protocol borrow of same source errors."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r1: f.myreader\n"
+            "    r2: f.myreader\n"
+            "}\n"
+        )
+        assert any(
+            "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+    def test_protocol_temp_no_lock(self):
+        """Temp protocol usage (f.myreader passed directly) doesn't lock source."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n"
+            "    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    x: use_reader r: f.myreader\n"
+            "    y: use_reader r: f.myreader\n"
+            "}\n"
+        )

@@ -795,7 +795,7 @@ class TypeChecker:
             at = self._resolve_typeref(apath)
             if at and at.typetype == ZTypeType.PROTOCOL:
                 # conformance check: implementor must have all spec methods
-                for spec_name in at.children:
+                for spec_name, spec_func in at.children.items():
                     if spec_name.startswith(":"):
                         continue
                     method = rtype.children.get(spec_name)
@@ -804,6 +804,13 @@ class TypeChecker:
                             f"'{name}' satisfies '{at.name}' but missing method '{spec_name}'",
                             loc=start,
                         )
+                    elif (
+                        method.typetype == ZTypeType.FUNCTION
+                        and spec_func.typetype == ZTypeType.FUNCTION
+                    ):
+                        self._check_protocol_signature(
+                            name, spec_name, spec_func, method, at.name, start
+                        )
                 # register: label becomes a child of type PROTOCOL
                 rtype.children[label] = at
                 self._protocol_labels.setdefault(name, []).append((label, at))
@@ -811,6 +818,73 @@ class TypeChecker:
                 # non-protocol as_item (existing behavior: tag refs, etc.)
                 if at:
                     rtype.children[label] = at
+
+    def _check_protocol_signature(
+        self,
+        impl_name: str,
+        spec_name: str,
+        spec_func: ZType,
+        impl_func: ZType,
+        proto_name: str,
+        loc: Token,
+    ) -> None:
+        """Check that impl method signature matches protocol spec signature."""
+        # extract non-receiver, non-return params
+        # "this" is the receiver in both spec and impl; skip it along with ":return"
+        spec_params = [
+            (k, v)
+            for k, v in spec_func.children.items()
+            if k != "this" and k != ":return"
+        ]
+        impl_params = [
+            (k, v)
+            for k, v in impl_func.children.items()
+            if k != "this" and k != ":return" and v.name != impl_name
+        ]
+
+        if len(spec_params) != len(impl_params):
+            self._error(
+                f"'{impl_name}.{spec_name}' has {len(impl_params)} param(s) "
+                f"but protocol '{proto_name}' expects {len(spec_params)}",
+                loc=loc,
+            )
+            return
+
+        for (sp_name, sp_type), (im_name, im_type) in zip(spec_params, impl_params):
+            if sp_name != im_name:
+                self._error(
+                    f"'{impl_name}.{spec_name}' param '{im_name}' "
+                    f"does not match protocol '{proto_name}' expected '{sp_name}'",
+                    loc=loc,
+                )
+            elif sp_type.name != im_type.name:
+                self._error(
+                    f"'{impl_name}.{spec_name}' param '{sp_name}' has type '{im_type.name}' "
+                    f"but protocol '{proto_name}' expects '{sp_type.name}'",
+                    loc=loc,
+                )
+
+        spec_ret = spec_func.children.get(":return")
+        impl_ret = impl_func.children.get(":return")
+        if spec_ret and impl_ret:
+            if spec_ret.name != impl_ret.name:
+                self._error(
+                    f"'{impl_name}.{spec_name}' returns '{impl_ret.name}' "
+                    f"but protocol '{proto_name}' expects '{spec_ret.name}'",
+                    loc=loc,
+                )
+        elif spec_ret and not impl_ret:
+            self._error(
+                f"'{impl_name}.{spec_name}' has no return type "
+                f"but protocol '{proto_name}' expects '{spec_ret.name}'",
+                loc=loc,
+            )
+        elif not spec_ret and impl_ret:
+            self._error(
+                f"'{impl_name}.{spec_name}' returns '{impl_ret.name}' "
+                f"but protocol '{proto_name}' expects no return",
+                loc=loc,
+            )
 
     def _resolve_protocol_type(
         self, unitname: str, name: str, proto: zast.Protocol
@@ -1369,6 +1443,11 @@ class TypeChecker:
         t = self._resolve_dotted_path(path)
         if t:
             path.type = t
+            # protocol borrow: lock the source variable
+            if t.typetype == ZTypeType.PROTOCOL and isinstance(
+                path.parent, zast.AtomId
+            ):
+                self._pending_borrow_lock = path.parent.name
             # if this is a union subtype reference (null subtype used as value),
             # the type should be the parent union type
             if path.parent_tagged_type:
@@ -1460,6 +1539,7 @@ class TypeChecker:
 
         for i, arg in enumerate(call.arguments):
             arg_type = self._check_operation(arg.valtype)
+            self._pending_borrow_lock = None  # clear protocol borrow for call args
 
             # reftype aliasing check
             if arg_type and not _is_valtype(arg_type):

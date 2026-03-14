@@ -975,10 +975,21 @@ Deferred to Phase 24b (Protocol Extensions):
 
 #ul:
   #*: Protocol composition/inheritance (#~"is reader" inside protocol body).
-  #*: Owned protocol creation (#~"protocol.create take obj") with boxing.
-  #*: Signature matching in conformance check (param types, return type).
-  #*: Stack-allocated borrowed instances (optimization).
-  #*: Locking semantics for borrowed instances.
+  #*: Owned protocol creation — deferred to post-generics (see Phase 26b below).
+  #*: #+ Signature matching in conformance check (param names, param types, return type).
+  #*: #+ Stack-allocated borrowed instances for temps (named vars remain heap).
+  #*: #+ Locking semantics for borrowed instances (reuses existing borrow lock mechanism).
+
+Phase 24b results:
+
+#ul:
+  #*: #+ Signature matching: conformance check now validates param names, param types,
+    and return type between spec and impl. The receiver (this) is excluded from comparison.
+  #*: #+ Borrow locking: assigning a protocol instance (#~"r: f.myreader") takes an
+    exclusive lock on the source variable. Temp usage (inline args) does not lock.
+  #*: #+ Stack temps: temp protocol instances are stack-allocated (no malloc/free).
+    Named protocol variables remain heap-allocated via the create function.
+  #*: #+ 12 new tests (8 typecheck, 4 emitter including ASan). Total: 453 tests.
 
 #---: Phase 25: Typedefs (Wrapper Types)
 
@@ -1064,6 +1075,29 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
     function, option usage. Must compile and run.
   #*: Expand test suite: resolution, instantiation, constraints,
     monomorphization, C emission, integration.
+
+
+#---: Phase 26b: Owned Protocol Creation (Post-Generics)
+
+Add owned protocol instances via #~"myprotocol.create from: obj.take". The
+#~"from:" parameter accepts any type that has declared conformance to the
+protocol. Uses generics: the #~"create" function is generic over
+#~"T from: myprotocol" (constrained by protocol conformance). The compiler
+generates monomorphized #~"create" variants per conforming type. Each variant
+boxes the data (copies for records, takes pointer for classes), sets the
+appropriate vtable and destroy function.
+
+#ol:
+  #*: Define #~"create" as a generic method on protocol metatypes:
+    #~"create: function {from: T} out myprotocol" where #~"T" is constrained
+    by conformance to the protocol.
+  #*: Monomorphize: for each conforming type, generate a specialised
+    #~"create" that allocates, copies/takes the data, and sets vtable + destroy.
+  #*: Ownership: #~"from:" accepts #~".take" (owned transfer). The protocol
+    instance owns the boxed data and frees it via the destroy function pointer.
+  #*: Emit C: each monomorphized #~"create" allocates
+    #~"sizeof(z_proto_t) + sizeof(T_t)", stores data inline, sets vtable
+    and destroy. The destroy function frees the entire allocation.
 
 
 #---: Phase 27: Generic Tag Type

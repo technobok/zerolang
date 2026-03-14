@@ -203,6 +203,7 @@ class CEmitter:
         self._class_var_types: Dict[str, str] = {}  # var_name -> class type name
         self._protocol_var_types: Dict[str, str] = {}  # var_name -> protocol type name
         self._temp_class_set: Dict[str, str] = {}  # temp_name -> class type name
+        self._in_named_assignment: bool = False  # set during _emit_assignment
         self._current_record_name: str = ""
         self._func_class_params: set[str] = set()
         # static string literal deduplication
@@ -1345,7 +1346,9 @@ class CEmitter:
         if assign.type:
             ctype = _ctype(assign.type)
         cname = _mangle_var(assign.name)
+        self._in_named_assignment = True
         val = self._emit_expression_value(assign.value)
+        self._in_named_assignment = False
         if ctype == "ZStr*":
             self.needs_string = True
             self.needs_stdlib = True
@@ -2086,16 +2089,28 @@ class CEmitter:
                     arg = f"&{parent_val}"
                 else:
                     arg = parent_val
-                # allocate temp for the protocol instance
                 self._temp_counter += 1
                 tmp = f"_p{self._temp_counter}"
                 indent = self._indent()
                 proto_ctype = f"z_{path.type.name}_t"
-                self._temp_decls.append(
-                    f"{indent}{proto_ctype}* {tmp} = {create_name}({arg});\n"
-                )
-                self._temp_frees.append(tmp)
-                self._temp_class_set[tmp] = f":proto:{path.type.name}"
+                if self._in_named_assignment:
+                    # named var: heap-allocate via create function
+                    self._temp_decls.append(
+                        f"{indent}{proto_ctype}* {tmp} = {create_name}({arg});\n"
+                    )
+                    self._temp_frees.append(tmp)
+                    self._temp_class_set[tmp] = f":proto:{path.type.name}"
+                else:
+                    # temp: stack-allocate (no malloc/free needed)
+                    stk = f"_ps{self._temp_counter}"
+                    vtable_name = f"z_{parent_type.name}_{child}_vtable"
+                    self._temp_decls.append(
+                        f"{indent}{proto_ctype} {stk};\n"
+                        f"{indent}{stk}.data = {arg};\n"
+                        f"{indent}{stk}.vtable = &{vtable_name};\n"
+                        f"{indent}{stk}.destroy = NULL;\n"
+                        f"{indent}{proto_ctype}* {tmp} = &{stk};\n"
+                    )
                 return tmp
 
         # runtime numeric cast: x.u32 where x is a numeric variable
