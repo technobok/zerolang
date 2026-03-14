@@ -971,7 +971,9 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
   #*: #+ 11 new tests (6 typecheck, 5 emitter including ASan). Total: 602 tests.
   #*: #+ Updated #~"doc/spec.pdoc" protocol sections for v1 design.
 
-Deferred to Phase 24b (Protocol Extensions):
+#---: Phase 25: Protocol Extensions:
+
+(Deferred from phase 24)
 
 #ul:
   #*: Protocol composition/inheritance (#~"is reader" inside protocol body).
@@ -980,7 +982,7 @@ Deferred to Phase 24b (Protocol Extensions):
   #*: #+ Stack-allocated borrowed instances for temps (named vars remain heap).
   #*: #+ Locking semantics for borrowed instances (reuses existing borrow lock mechanism).
 
-Phase 24b results:
+Results:
 
 #ul:
   #*: #+ Signature matching: conformance check now validates param names, param types,
@@ -990,47 +992,6 @@ Phase 24b results:
   #*: #+ Stack temps: temp protocol instances are stack-allocated (no malloc/free).
     Named protocol variables remain heap-allocated via the create function.
   #*: #+ 12 new tests (8 typecheck, 4 emitter including ASan). Total: 453 tests.
-
-#---: Phase 25: Typedefs (Wrapper Types)
-
-Add typedef support. Typedefs wrap an underlying type with zero overhead.
-The typedef field is marked with the #~"typedef" keyword. Methods can be
-added; unshadowed methods of the underlying type are exposed.
-
-Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
-#~"src/ztypechecker.py", #~"tests/test_typecheck.py",
-#~"tests/test_emitter.py"
-
-#ol:
-  #*: Resolve typedef field: when a field type is #~"typedef underlying",
-    record the underlying type on the parent record/class ZType. Mark
-    the type as a typedef (add #~"is_typedef" flag or similar on ZType).
-  #*: Typedef type identity: a typedef is a distinct type from the
-    underlying type. Values of the underlying type cannot be passed
-    where the typedef is expected without wrapping. The reverse is
-    allowed (typedef can be used where underlying is expected).
-  #*: Typedef method resolution: methods defined on the typedef
-    shadow underlying methods. Unshadowed methods of the underlying
-    type are accessible on the typedef.
-  #*: Typedef #~"create" constructor: compiler-generated constructor
-    that wraps an instance of the underlying type.
-  #*: Typedef valtype/reftype: valtype typedef wraps a record, reftype
-    typedef wraps a class/union. #~"is_valtype" matches underlying.
-  #*: Typedef generic parameters: all generic params must appear in
-    the #~"typedef" field definition. Error on unused generic param.
-  #*: Typedef ownership: follows underlying type's ownership rules.
-    Reftype typedefs have take/borrow/swap. Valtype typedefs are
-    copied.
-  #*: Emit C for typedef: no separate struct emitted. Typedef emits
-    as the underlying C type (zero overhead). Methods emit with the
-    typedef-mangled name.
-  #*: Emit C for typedef method calls: call sites use typedef method
-    name. Unshadowed methods redirect to underlying type's method.
-  #*: Write #~"examples/typedefs.z": valtype and reftype typedefs
-    with methods. Must compile and run.
-  #*: Expand test suite: resolution, type identity, method shadowing,
-    constructors, ownership, C emission, integration.
-
 
 #---: Phase 26: Generics (Type Parameters and Monomorphization)
 
@@ -1077,7 +1038,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
     monomorphization, C emission, integration.
 
 
-#---: Phase 26b: Owned Protocol Creation (Post-Generics)
+#---: Phase 27: Owned Protocol Creation (Post-Generics)
 
 Add owned protocol instances via #~"myprotocol.create from: obj.take". The
 #~"from:" parameter accepts any type that has declared conformance to the
@@ -1099,8 +1060,7 @@ appropriate vtable and destroy function.
     #~"sizeof(z_proto_t) + sizeof(T_t)", stores data inline, sets vtable
     and destroy. The destroy function frees the entire allocation.
 
-
-#---: Phase 27: Generic Tag Type
+#---: Phase 28: Generic Tag Type
 
 After generics are implemented, replace the current #~"tag" placeholder
 record with a proper generic type. The #~"tag" type should be parameterized
@@ -1113,7 +1073,59 @@ syntax inside an #~"is" block can also be supported at that time.
   #*: #~"u16.tag" returns #~"tag(u16)".
   #*: Remove placeholder hack in type checker.
 
-#---: Phase 28: A string valtype
+#---: Phase 29: Typedefs (Wrapper Types)
+
+Add typedef support. Typedefs wrap an underlying type with zero overhead. A
+typedef is create by using a standard object definition (class, record, union,
+variant, protocol, facet) but in the 'is' section there is no braces, only a
+(potentially dotted) reference to an existing object definition.
+
+There is older documentation that refers to a 'typedef' keyword that is
+obsolete, remove that. Ensure that all documentation is consistent and complete
+as the feature is described here.
+
+Needs generics? typedef is predeclared and takes a generic parameter (type
+any)?
+
+Other details:
+
+#ul:
+  [#*: a typedef is a typesystem modification only, it does not affect the
+  original object definition]
+  [#*: compiler returns error if the typedef object type is not the same as the
+  object type specified in 'is' (eg typdef type is class but 'is' type is
+  record]
+  [#*: the typedef is a new type that is backwards compatible but not forwards
+  compatible ie. the new type can be passed to existing functions that expect
+  the old type but functions that require the new typedef'd type cannot be
+  passed the underlying type]
+  [#*: new methods can be added in the typedefs 'as' section. The new methods
+  may shadow/replace existing method on the underlying object.]
+  [#*: all new methods plus all unshadowed methods are exposed to the user of
+  the new typedef'd item]
+  [#*: how to allow the typedef to access the original underlying method if we
+  a shadowing one?]
+  [#*: how to create/convert? need both a borrowed conversion and and owned
+  conversion. Compiler creates constructor?]
+  [#*: Typedef #~"create" constructor: compiler-generated constructor that
+  wraps an instance of the underlying type.]
+  [#*: Typedef valtype/reftype: valtype typedef wraps a record, reftype typedef
+  wraps a class/union. #~"is_valtype" matches underlying.]
+  [#*: Typedef generic parameters: all generic params must appear in the
+  #~"typedef" field definition. Error on unused generic param.]
+  [#*: Typedef ownership: follows underlying type's ownership rules. Reftype
+  typedefs have take/borrow/swap. Valtype typedefs are copied.]
+  [#*: Emit C for typedef: no separate struct emitted. Typedef emits as the
+  underlying C type (zero overhead). Methods emit with the typedef-mangled
+  name.]
+  [#*: Emit C for typedef method calls: call sites use typedef method name.
+  Unshadowed methods redirect to underlying type's method.]
+  [#*: Write #~"examples/typedefs.z": valtype and reftype typedefs with
+  methods. Must compile and run.]
+  [#*: Expand test suite: resolution, type identity, method shadowing,
+  constructors, ownership, C emission, integration.]
+
+#---: Phase 30: A string valtype
 
 #ul:
   [#*: fixed length]
@@ -1124,7 +1136,7 @@ syntax inside an #~"is" block can also be supported at that time.
   [#*: can error or truncate on copy?]
   [#*: need to be able to pass to standard string functions...]
 
-#---: Phase 29: v2 Integration Examples
+#---: Phase 31: v2 Integration Examples
 
 Write comprehensive v2 example programs that exercise ownership, classes,
 unions, protocols, generics and typedefs together. These serve as
@@ -1142,7 +1154,7 @@ integration tests for the full v2 feature set.
   #*: Verify all v2 example programs compile with gcc and produce
     correct output under ASan (address sanitizer).
 
-#---: Phase 30: Static String Literals + ZStr Header Modernization \[COMPLETE\]
+#---: Phase 32: Static String Literals + ZStr Header Modernization \[COMPLETE\]
 
 Modernize the #~"ZStr" layout to a 64-bit header and add static string
 support so string literals are never heap-allocated.
@@ -1172,7 +1184,7 @@ support so string literals are never heap-allocated.
 Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
 #~"doc/strings.pdoc", #~"doc/roadmap.pdoc"
 
-#---: Phase 31: C Runtime Library
+#---: Phase 33: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (#~"ZStr", #~"zstr_new",
@@ -1204,7 +1216,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
     union destructors, protocol vtable helpers, generic container
     support.
 
-#---: Phase 32: Expand to v3 (Full Language)
+#---: Phase 34: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
@@ -1212,7 +1224,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
   #*: Iterator protocol.
   #*: Full standard library.
 
-#---: Phase 33: Developer Tools
+#---: Phase 35: Developer Tools
 
 Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.
@@ -1232,7 +1244,7 @@ source files in IDEs and editors.
   #*: Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.
 
-#---: Phase 34: Self-Hosting
+#---: Phase 36: Self-Hosting
 
 #ol:
   #*: Write the zerolang compiler in zerolang.
