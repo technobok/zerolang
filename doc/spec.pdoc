@@ -1242,12 +1242,19 @@ specify [#> to=generic-types: generic parameter] constraints.
 
 #----: Generic types
 
-[#> to=class: Classes], [#> to=record: records], [#> to=union: unions],
-[#> to=variant: variants], [#> to=protocol: protocols], [#> to=facet: facets],
-[#> to=unit: units] and [#> to=function: functions] can be generic types.
+[#> to=class: Classes], [#> to=record: records], [#> to=union: unions], [#>
+to=variant: variants], [#> to=protocol: protocols], [#> to=facet: facets], [#>
+to=unit: units] and [#> to=function: functions/specs] can be generic types.
 
-Generic types have one or more generic parameters or fields. These are created
-by using the [#> to=generic: generic] built-in type.
+All defined unions, variants, protocols, facets and numeric types have a
+compiler generated 'generic' method, that allows that defined object to be used
+as a generic constraint when used as a type in a field or parameter. Also,
+'generic' is a predeclared type that takes a 'from' parameter of type 'any'
+that can be used to specify generic fields or parameters.
+
+Any object (unit, function/spec, union, variant, class, object, protocol,
+facet) that has one or more such generic fields or parameters is a generic
+type.
 
 Generic types do not exist at runtime. Top level code must define concrete
 types for all generic parameters (explicitly or implicitly). At that point, a
@@ -1255,12 +1262,14 @@ specialised implementation is created, using the generic type as a template.
 This specialisation will be shared by other client locations that use this
 definition with the same type parameters.
 
-Integer generic parameters are parameterised by the integer #_*"value". The
-top level code must provide a constant submember to make the generic type
-concrete. Unlike the other generic types which are parameterised by a
-#_*"type". Note that when passing a generic argument, the type itself is
-passed to the generic parameter - an instance is not created; #~"create" is not
-automatically called is would be done for non-generic arguments.
+Numeric generic parameters are parameterised by the numeric #_*"value". The top
+level code must provide a constant submember to make the generic type concrete.
+Unlike the other generic types which are parameterised by a #_*"type". Note
+that when passing a generic argument, the type itself is passed to the generic
+parameter - an instance is not created; #~"create" is not automatically called
+is would be done for non-generic arguments. To make this optionally obvious at
+the call site, the [#> to=generic-method: generic method] can be 'called' on
+the argument.
 
 A generic parameter may have a default type. The call site may override this
 default type. In all other cases, the call site #_*"must" specify the types of
@@ -1268,25 +1277,27 @@ all generic parameters being used in that type by either:
 
 #ul:
   [#*: explicitly providing the generic argument with a concrete type that is a
-    member of the declared union, interface etc.]
-  [#*: explicitly providing the generic argument with a generic type reference at
-    the call (when used in a caller which is itself generic)]
-  [#*: implicitly, by providing a concrete value to another argument/field that has
-    been defined to be an instance of this generic parameter/field. The compiler
-    can then infer the type of the generic parameter from that value.]
+  member of the declared union, interface etc.]
+  [#*: explicitly providing the generic argument with a generic type reference
+  at the call (when used in a caller which is itself generic)]
+  [#*: implicitly, by providing a concrete value to another argument/field that
+  has been defined to be an instance of this generic parameter/field. The
+  compiler can then infer the type of the generic parameter from that value.
+  This is the preferred syntax where possible]
 
 Note that attempting to store a reference type into a value type via a generic
 type will fail to compile.
 
 The #~"any" type is a compiler defined union of all possible types declared in
-the current program that can #_*"ONLY" be used for generic definitions.
+the current program. #~"any" can #_*"ONLY" be used for generic definitions, not
+for creating fields or parameters.
 
 Examples:
 
 #code language=zerolang: """
   # an option type
   option: union {
-      t: generic any
+      t: any.generic
       some: t
       none: null
   }
@@ -1313,14 +1324,14 @@ Embedding a generic type in another type:
   # Given:
 
   generic_rec: record {
-      a: generic any
-      b: generic any
+      a: any.generic
+      b: any.generic
   }
 
   # Embed: 
 
   generic_rec2: record {
-      aa: generic any
+      aa: any.generic
 
       # when creating a type reference for generic_rec, the generic parameter
       # types must be specified
@@ -1335,7 +1346,7 @@ Example generic protocol:
 
 #code language=zerolang: """
   generic_factory: protocol {
-      t: generic any
+      t: any.generic
       next: function { :this } out t
   }
   """
@@ -1343,10 +1354,10 @@ Example generic protocol:
 Example generic record based on an enum generic parameter:
 
 #code language=zerolang: """
-  myenum: variant {:A :B}
+  myenum: variant {A: null B: null}
 
   myrec: record {
-      t: generic myenum
+      t: myenum.generic
 
       x: t   # always A or B
 
@@ -1354,7 +1365,7 @@ Example generic record based on an enum generic parameter:
           # generic field... test is done at compile time...
           if this.x.A {
               # ...
-          } if this.x.B {
+          } when this.x.B {
               # ...
           }
 
@@ -1371,7 +1382,7 @@ Example generic record based on an enum generic parameter:
 Example generic function accepting an instance that implements a protocol:
 
 #code language=zerolang: """
-  myfunc: function {t: generic myprotocol arg: t} is: {
+  myfunc: function {t: myprotocol.generic arg: t} is: {
     # ...
   }
 
@@ -1763,8 +1774,8 @@ take any union/variant/protocol/numerictype/enum as an argument. See also
 
 #table cols="2 2 2 4":
   Argument  |Type         |Default |Value/Description
-  from      |generic any  |Yes     |Generic field constraint
-  default   |generic any  |No      |Default subtype (must be member of 'from')
+  from      |any.generic  |Yes     |Generic field constraint
+  default   |any.generic  |No      |Default subtype (must be member of 'from')
 
 The #~"from" argument itself is a generic argument and takes a named type of a
 union, variant, protocol, facet or integer type. The generic parameter created

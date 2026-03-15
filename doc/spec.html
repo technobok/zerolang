@@ -1206,42 +1206,50 @@ type.</p>
 <p>Interface types are used for polymorphism at runtime but can also be used to
 specify <a href="#generic-types">generic parameter</a> constraints.</p>
 <h4 id="generic-types"><a href="#generic-types">5.1.6. Generic types</a></h4>
-<p><a href="#class">Classes</a>, <a href="#record">records</a>, <a href="#union">unions</a>,
-<a href="#variant">variants</a>, <a href="#protocol">protocols</a>, <a href="#facet">facets</a>,
-<a href="#unit">units</a> and <a href="#function">functions</a> can be generic types.</p>
-<p>Generic types have one or more generic parameters or fields. These are created
-by using the <a href="#generic">generic</a> built-in type.</p>
+<p><a href="#class">Classes</a>, <a href="#record">records</a>, <a href="#union">unions</a>, <a href="#variant">variants</a>, <a href="#protocol">protocols</a>, <a href="#facet">facets</a>, <a href="#unit">units</a> and <a href="#function">functions/specs</a> can be generic types.</p>
+<p>All defined unions, variants, protocols, facets and numeric types have a
+compiler generated 'generic' method, that allows that defined object to be used
+as a generic constraint when used as a type in a field or parameter. Also,
+'generic' is a predeclared type that takes a 'from' parameter of type 'any'
+that can be used to specify generic fields or parameters.</p>
+<p>Any object (unit, function/spec, union, variant, class, object, protocol,
+facet) that has one or more such generic fields or parameters is a generic
+type.</p>
 <p>Generic types do not exist at runtime. Top level code must define concrete
 types for all generic parameters (explicitly or implicitly). At that point, a
 specialised implementation is created, using the generic type as a template.
 This specialisation will be shared by other client locations that use this
 definition with the same type parameters.</p>
-<p>Integer generic parameters are parameterised by the integer <em><strong>value</strong></em>. The
-top level code must provide a constant submember to make the generic type
-concrete. Unlike the other generic types which are parameterised by a
-<em><strong>type</strong></em>. Note that when passing a generic argument, the type itself is
-passed to the generic parameter - an instance is not created; <code>create</code> is not
-automatically called is would be done for non-generic arguments.</p>
+<p>Numeric generic parameters are parameterised by the numeric <em><strong>value</strong></em>. The top
+level code must provide a constant submember to make the generic type concrete.
+Unlike the other generic types which are parameterised by a <em><strong>type</strong></em>. Note
+that when passing a generic argument, the type itself is passed to the generic
+parameter - an instance is not created; <code>create</code> is not automatically called
+is would be done for non-generic arguments. To make this optionally obvious at
+the call site, the <a href="#generic-method">generic method</a> can be 'called' on
+the argument.</p>
 <p>A generic parameter may have a default type. The call site may override this
 default type. In all other cases, the call site <em><strong>must</strong></em> specify the types of
 all generic parameters being used in that type by either:</p>
 <ul>
 <li>explicitly providing the generic argument with a concrete type that is a
-    member of the declared union, interface etc.</li>
-<li>explicitly providing the generic argument with a generic type reference at
-    the call (when used in a caller which is itself generic)</li>
-<li>implicitly, by providing a concrete value to another argument/field that has
-    been defined to be an instance of this generic parameter/field. The compiler
-    can then infer the type of the generic parameter from that value.</li>
+  member of the declared union, interface etc.</li>
+<li>explicitly providing the generic argument with a generic type reference
+  at the call (when used in a caller which is itself generic)</li>
+<li>implicitly, by providing a concrete value to another argument/field that
+  has been defined to be an instance of this generic parameter/field. The
+  compiler can then infer the type of the generic parameter from that value.
+  This is the preferred syntax where possible</li>
 </ul>
 <p>Note that attempting to store a reference type into a value type via a generic
 type will fail to compile.</p>
 <p>The <code>any</code> type is a compiler defined union of all possible types declared in
-the current program that can <em><strong>ONLY</strong></em> be used for generic definitions.</p>
+the current program. <code>any</code> can <em><strong>ONLY</strong></em> be used for generic definitions, not
+for creating fields or parameters.</p>
 <p>Examples:</p>
 <pre><code class="language-zerolang"># an option type
 option: union {
-    t: generic any
+    t: any.generic
     some: t
     none: null
 }
@@ -1264,14 +1272,14 @@ x3: option.none i32</code></pre>
 <pre><code class="language-zerolang"># Given:
 
 generic_rec: record {
-    a: generic any
-    b: generic any
+    a: any.generic
+    b: any.generic
 }
 
 # Embed: 
 
 generic_rec2: record {
-    aa: generic any
+    aa: any.generic
 
     # when creating a type reference for generic_rec, the generic parameter
     # types must be specified
@@ -1282,14 +1290,14 @@ generic_rec2: record {
 }</code></pre>
 <p>Example generic protocol:</p>
 <pre><code class="language-zerolang">generic_factory: protocol {
-    t: generic any
+    t: any.generic
     next: function { :this } out t
 }</code></pre>
 <p>Example generic record based on an enum generic parameter:</p>
-<pre><code class="language-zerolang">myenum: variant {:A :B}
+<pre><code class="language-zerolang">myenum: variant {A: null B: null}
 
 myrec: record {
-    t: generic myenum
+    t: myenum.generic
 
     x: t   # always A or B
 
@@ -1297,7 +1305,7 @@ myrec: record {
         # generic field... test is done at compile time...
         if this.x.A {
             # ...
-        } if this.x.B {
+        } when this.x.B {
             # ...
         }
 
@@ -1310,7 +1318,7 @@ myrec: record {
     }
 }</code></pre>
 <p>Example generic function accepting an instance that implements a protocol:</p>
-<pre><code class="language-zerolang">myfunc: function {t: generic myprotocol arg: t} is: {
+<pre><code class="language-zerolang">myfunc: function {t: myprotocol.generic arg: t} is: {
   # ...
 }
 
@@ -1624,8 +1632,8 @@ take any union/variant/protocol/numerictype/enum as an argument. See also
 <tr><th style="text-align: left">Argument</th><th style="text-align: left">Type</th><th style="text-align: left">Default</th><th style="text-align: left">Value/Description</th></tr>
 </thead>
 <tbody>
-<tr><td>from</td><td>generic any</td><td>Yes</td><td>Generic field constraint</td></tr>
-<tr><td>default</td><td>generic any</td><td>No</td><td>Default subtype (must be member of 'from')</td></tr>
+<tr><td>from</td><td>any.generic</td><td>Yes</td><td>Generic field constraint</td></tr>
+<tr><td>default</td><td>any.generic</td><td>No</td><td>Default subtype (must be member of 'from')</td></tr>
 </tbody>
 </table>
 <p>The <code>from</code> argument itself is a generic argument and takes a named type of a
