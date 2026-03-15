@@ -2732,3 +2732,74 @@ class TestGenerics:
         assert some_type is not None
         assert some_type.name == "i64"
         assert some_type.typetype != ZTypeType.GENERIC_PARAM
+
+    def test_error_generic_union_no_args(self):
+        """Using generic union subtype with no inferrable args emits error."""
+        errors = check_errors(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some }"
+        )
+        assert any("Cannot infer type arguments" in e.msg for e in errors)
+
+    def test_error_generic_union_none_no_args(self):
+        """Using generic union null subtype with no type arg emits error."""
+        errors = check_errors(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.none }"
+        )
+        assert any("Cannot infer type arguments" in e.msg for e in errors)
+
+    def test_error_generic_record_no_args(self):
+        """Using generic record with no args emits error."""
+        errors = check_errors(
+            "myrec: record { t: any.generic\n x: t }\nmain: function is { r: myrec }"
+        )
+        assert any("Cannot infer type arguments" in e.msg for e in errors)
+
+    def test_error_generic_record_no_inferrable_args(self):
+        """Using generic record with args that don't cover generic params emits error."""
+        errors = check_errors(
+            "myrec: record { t: any.generic\n x: t\n y: i64 }\n"
+            "main: function is { r: myrec y: 42 }"
+        )
+        assert any("Cannot infer" in e.msg for e in errors)
+
+    def test_generic_record_infer_from_value(self):
+        """myrec x: 42 infers t=i64 from field type."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "main: function is { r: myrec x: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+        assert mono.children["x"].name == "i64"
+
+    def test_generic_record_explicit_and_value(self):
+        """myrec t: i64 x: 42 — both explicit type arg and value, compatible."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "main: function is { r: myrec t: i64 x: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+
+    def test_generic_record_conflict_error(self):
+        """myrec t: i32 x: "hello" — conflicting types for t emits error."""
+        errors = check_errors(
+            "myrec: record { t: any.generic\n x: t }\n"
+            'main: function is { r: myrec t: i32 x: "hello" }'
+        )
+        assert any("Conflicting types" in e.msg for e in errors)
+
+    def test_generic_record_multi_param_infer(self):
+        """pair x: 42 y: "hi" infers a=i64, b=string."""
+        program = check_ok(
+            "mypair: record { a: any.generic\n b: any.generic\n x: a\n y: b }\n"
+            'main: function is { p: mypair x: 42 y: "hi" }'
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert mono.children["x"].name == "i64"
+        assert mono.children["y"].name == "string"

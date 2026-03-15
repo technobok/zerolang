@@ -1461,9 +1461,11 @@ class TypeChecker:
                 self._check_operation(arg.valtype)
 
         if not generic_args:
-            # couldn't infer — check all args and return None
-            for arg in call.arguments:
-                self._check_operation(arg.valtype)
+            self._error(
+                f"Cannot infer type arguments for generic type "
+                f"'{template.name}.{subtype_name}'",
+                loc=call.start,
+            )
             return None
 
         # fill in any remaining generic params that weren't inferred
@@ -1502,25 +1504,66 @@ class TypeChecker:
         """Infer generic args for record construction and monomorphize."""
         generic_args: dict[str, ZType] = {}
 
-        # named arguments matching generic param names are type args
+        # build field_to_gparam: field_name -> generic_param_name
+        field_to_gparam: dict[str, str] = {}
+        field_names: list[str] = []
+        for child_name, child_type in template.children.items():
+            if child_name.startswith(":"):
+                continue
+            if child_type.typetype == ZTypeType.GENERIC_PARAM:
+                field_to_gparam[child_name] = child_type.name
+            field_names.append(child_name)
+
+        positional_idx = 0
         for arg in call.arguments:
+            # explicit type arg: named arg matching a generic param
             if arg.name and arg.name in template.generic_params:
                 arg_type = self._resolve_typeref_from_operation(arg.valtype)
                 if arg_type:
                     generic_args[arg.name] = arg_type
                 continue
-            self._check_operation(arg.valtype)
+
+            # value arg — determine which field it maps to
+            if arg.name:
+                field_name = arg.name
+            else:
+                if positional_idx < len(field_names):
+                    field_name = field_names[positional_idx]
+                    positional_idx += 1
+                else:
+                    field_name = None
+
+            val_type = self._check_operation(arg.valtype)
+
+            # infer generic param from field type
+            if field_name and field_name in field_to_gparam and val_type:
+                gparam = field_to_gparam[field_name]
+                if gparam in generic_args:
+                    # verify compatibility
+                    if generic_args[gparam].name != val_type.name:
+                        self._error(
+                            f"Conflicting types for generic parameter '{gparam}' "
+                            f"in '{template.name}': "
+                            f"'{generic_args[gparam].name}' vs '{val_type.name}'",
+                            loc=call.start,
+                        )
+                        return None
+                else:
+                    generic_args[gparam] = val_type
 
         if not generic_args:
-            for arg in call.arguments:
-                self._check_operation(arg.valtype)
+            self._error(
+                f"Cannot infer type arguments for generic type '{template.name}'",
+                loc=call.start,
+            )
             return None
 
         for param_name in template.generic_params:
             if param_name not in generic_args:
                 self._error(
                     f"Cannot infer generic parameter '{param_name}' for "
-                    f"'{template.name}'"
+                    f"'{template.name}'",
+                    loc=call.start,
                 )
                 return None
 
@@ -1687,7 +1730,26 @@ class TypeChecker:
         if isinstance(op, zast.BinOp):
             return self._check_binop(op)
         if isinstance(op, zast.Path):
-            return self._check_path(op)
+            t = self._check_path(op)
+            if (
+                t
+                and t.isgeneric
+                and t.typetype
+                in (
+                    ZTypeType.RECORD,
+                    ZTypeType.CLASS,
+                    ZTypeType.UNION,
+                )
+            ):
+                type_desc = t.name
+                if isinstance(op, zast.DottedPath):
+                    type_desc = f"{t.name}.{op.child.name}"
+                self._error(
+                    f"Cannot infer type arguments for generic type '{type_desc}'",
+                    loc=op.start,
+                )
+                return None
+            return t
         return None
 
     def _check_path(self, path: zast.Path) -> Optional[ZType]:
@@ -1842,6 +1904,7 @@ class TypeChecker:
                     # update the parent_tagged_type to point to the monomorphized type
                     call.callable.parent_tagged_type = mono_type
                     return mono_type
+                return None  # error already emitted in inference method
 
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
@@ -1857,6 +1920,7 @@ class TypeChecker:
                     call.type = mono_type
                     call.callable.type = mono_type
                     return mono_type
+                return None  # error already emitted
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
