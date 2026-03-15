@@ -1095,7 +1095,6 @@ class TestEmitterUnionCustomTag:
         assert "Z_MYUNION_TAG_B," in csource
         assert "= " not in csource.split("typedef enum")[1].split("}")[0]
 
-
     def test_numeric_tag_compiles(self):
         """Union with u16.tag compiles correctly."""
         csource = emit_source(
@@ -2372,7 +2371,6 @@ class TestProtocols:
         # named var should still use create function (heap alloc)
         assert "z_myfile_myreader_create" in csource
 
-
     def test_owned_protocol_create_record(self):
         """Owned protocol create from record compiles and runs."""
         csource = emit_source(
@@ -2455,7 +2453,7 @@ class TestGenericsEmission:
     def test_generic_union_template_not_emitted(self):
         """Generic union template should not produce C struct."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         # template should NOT be emitted
@@ -2465,7 +2463,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_emitted(self):
         """Monomorphized union emits tag enum + struct + destructor."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         assert "z_myopt_i64_tag_t" in csource
@@ -2477,7 +2475,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_construction_compiles(self):
         """Generic union construction compiles and runs."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             '    print "ok"\n'
@@ -2489,7 +2487,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_match(self):
         """Match on monomorphized union works."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "  x: myopt.some 42\n"
             "  match (\n"
@@ -2507,7 +2505,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_scope_cleanup(self):
         """Monomorphized union destroyed at function exit."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         assert "z_myopt_i64_destroy(x);" in csource
@@ -2515,7 +2513,7 @@ class TestGenericsEmission:
     def test_two_different_instantiations(self):
         """Two different instantiations produce two distinct types."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.some 3.14\n"
@@ -2537,7 +2535,7 @@ class TestGenericsEmission:
     def test_generic_union_asan(self):
         """Monomorphized union passes AddressSanitizer."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.none i32\n"
@@ -2551,7 +2549,7 @@ class TestGenericsEmission:
     def test_generic_union_from_compiles(self):
         """Generic union construction with from: compiles and runs."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             '    print "ok"\n'
@@ -2563,7 +2561,7 @@ class TestGenericsEmission:
     def test_generic_union_explicit_type_and_from_compiles(self):
         """Generic union with explicit type param and from: compiles and runs."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some t: i64 from: 42\n"
             '    print "ok"\n'
@@ -2575,7 +2573,7 @@ class TestGenericsEmission:
     def test_generic_union_from_emits_correct_type(self):
         """from: syntax produces same monomorphized type as positional."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some from: 42 }"
         )
         assert "z_myopt_i64_t" in csource
@@ -2584,7 +2582,7 @@ class TestGenericsEmission:
     def test_generic_union_from_asan(self):
         """Generic union from: passes AddressSanitizer."""
         csource = emit_source(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             "    y: myopt.none i32\n"
@@ -2618,7 +2616,7 @@ class TestGenericsEmission:
     def test_valtype_constraint_record_compiles(self):
         """Record with any.valtype constraint compiles and runs."""
         csource = emit_source(
-            "myrec: record { t: any.valtype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.valtype }\n"
             'main: function is {\n    r: myrec x: 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
@@ -2627,7 +2625,7 @@ class TestGenericsEmission:
     def test_valtype_constraint_union_compiles(self):
         """Union with any.valtype constraint compiles and runs."""
         csource = emit_source(
-            "myopt: union { t: any.valtype\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.valtype }\n"
             'main: function is {\n    x: myopt.some 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
@@ -2637,7 +2635,7 @@ class TestGenericsEmission:
         """Record with any.reftype constraint compiles and runs with class."""
         csource = emit_source(
             "mycls: class { v: i64 }\n"
-            "holder: record { t: any.reftype\n ref: t }\n"
+            "holder: record { ref: t } as { t: any.reftype }\n"
             "main: function is {\n"
             "    c: mycls v: 10\n"
             "    h: holder ref: c\n"
@@ -2652,7 +2650,7 @@ class TestGenericsEmission:
     def test_generic_class_template_not_emitted(self):
         """Generic class template should not produce C struct."""
         csource = emit_source(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         assert "z_mycls_t " not in csource or "z_mycls_i64_t" in csource
@@ -2662,7 +2660,7 @@ class TestGenericsEmission:
     def test_generic_class_compiles(self):
         """Generic class construction compiles and runs."""
         csource = emit_source(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: mycls val: 42\n"
             '    print "ok"\n'
@@ -2674,7 +2672,7 @@ class TestGenericsEmission:
     def test_generic_class_asan(self):
         """Monomorphized class passes AddressSanitizer."""
         csource = emit_source(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: mycls val: 42\n"
             "}"
@@ -2685,7 +2683,8 @@ class TestGenericsEmission:
     def test_generic_class_methods(self):
         """Generic class with as-methods compiles."""
         csource = emit_source(
-            "mycls: class { t: any.generic\n val: t } as {\n"
+            "mycls: class { val: t } as {\n"
+            "  t: any.generic\n"
             "  getval: function {c: this} out i64 is { return c.val }\n"
             "}\n"
             "main: function is {\n"
@@ -2699,7 +2698,7 @@ class TestGenericsEmission:
     def test_generic_class_destructor(self):
         """Monomorphized class has destructor call at scope exit."""
         csource = emit_source(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         assert "z_mycls_i64_destroy(x);" in csource

@@ -1700,8 +1700,7 @@ class TestUnionCustomTag:
     def test_data_tag_returns_monomorphized_tag(self):
         """data.tag returns tag__element_type with generic_origin='tag'."""
         program = check_ok(
-            "mydata: data { A: 0 B: 1 }\n"
-            "main: function is { x: mydata.A }"
+            "mydata: data { A: 0 B: 1 }\nmain: function is { x: mydata.A }"
         )
         tc = TypeChecker(program)
         tc.check()
@@ -2606,7 +2605,6 @@ class TestProtocols:
             "}\n"
         )
 
-
     def test_protocol_has_create(self):
         """Protocol type has `create` child (FUNCTION)."""
         program = check_ok(
@@ -2700,7 +2698,7 @@ class TestGenerics:
     def test_generic_record_resolution(self):
         """Record with t: any.generic puts t in generic_params, not children."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: i64 }\nmain: function is {}"
+            "myrec: record { x: i64 } as { t: any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -2714,7 +2712,7 @@ class TestGenerics:
     def test_generic_record_with_generic_field_ref(self):
         """Record field referencing generic param: x: t resolves to GENERIC_PARAM."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: t }\nmain: function is {}"
+            "myrec: record { x: t } as { t: any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -2727,7 +2725,7 @@ class TestGenerics:
     def test_generic_union_resolution(self):
         """Union with t: any.generic detects generic params correctly."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -2743,7 +2741,7 @@ class TestGenerics:
     def test_generic_union_subtype_is_generic_param_ref(self):
         """Union subtype referencing generic param: some: t is GENERIC_PARAM."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -2755,7 +2753,7 @@ class TestGenerics:
     def test_multiple_generic_params(self):
         """Record with multiple generic params."""
         program = check_ok(
-            "mypair: record { a: any.generic\n b: any.generic\n x: a\n y: b }\n"
+            "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -2785,7 +2783,7 @@ class TestGenerics:
     def test_option_some_infers_i64(self):
         """option.some 42 infers t=i64."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -2796,7 +2794,7 @@ class TestGenerics:
     def test_option_none_explicit_type_arg(self):
         """option.none i32 with explicit type argument."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.none i32 }"
         )
         assert len(program.mono_types) >= 1
@@ -2806,7 +2804,7 @@ class TestGenerics:
     def test_same_generic_different_types(self):
         """Same generic instantiated with different types creates different monomorphizations."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.some 3.14\n"
@@ -2820,7 +2818,7 @@ class TestGenerics:
     def test_duplicate_instantiation_cached(self):
         """Duplicate instantiation with same type returns cached type."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 1\n"
             "    y: myopt.some 2\n"
@@ -2840,7 +2838,7 @@ class TestGenerics:
     def test_monomorphized_union_has_tag(self):
         """Monomorphized union has proper :tag enum."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         mono, _ = program.mono_types[0]
@@ -2853,7 +2851,7 @@ class TestGenerics:
     def test_monomorphized_union_concrete_subtypes(self):
         """Monomorphized union replaces generic param with concrete type."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         mono, _ = program.mono_types[0]
@@ -2865,7 +2863,7 @@ class TestGenerics:
     def test_error_generic_union_no_args(self):
         """Using generic union subtype with no inferrable args emits error."""
         errors = check_errors(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some }"
         )
         assert any("Cannot infer type arguments" in e.msg for e in errors)
@@ -2873,7 +2871,7 @@ class TestGenerics:
     def test_error_generic_union_none_no_args(self):
         """Using generic union null subtype with no type arg emits error."""
         errors = check_errors(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.none }"
         )
         assert any("Cannot infer type arguments" in e.msg for e in errors)
@@ -2881,7 +2879,7 @@ class TestGenerics:
     def test_generic_union_from_infers_type(self):
         """option.some from: 42 infers t=i64 via from: syntax."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some from: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -2892,7 +2890,7 @@ class TestGenerics:
     def test_generic_union_explicit_type_and_from(self):
         """option.some t: i64 from: 42 with explicit generic param and from: value."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some t: i64 from: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -2902,7 +2900,7 @@ class TestGenerics:
     def test_generic_union_from_with_different_types(self):
         """from: syntax with different types creates different monomorphizations."""
         program = check_ok(
-            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             "    y: myopt.some from: 3.14\n"
@@ -2923,14 +2921,14 @@ class TestGenerics:
     def test_error_generic_record_no_args(self):
         """Using generic record with no args emits error."""
         errors = check_errors(
-            "myrec: record { t: any.generic\n x: t }\nmain: function is { r: myrec }"
+            "myrec: record { x: t } as { t: any.generic }\nmain: function is { r: myrec }"
         )
         assert any("Cannot infer type arguments" in e.msg for e in errors)
 
     def test_error_generic_record_no_inferrable_args(self):
         """Using generic record with args that don't cover generic params emits error."""
         errors = check_errors(
-            "myrec: record { t: any.generic\n x: t\n y: i64 }\n"
+            "myrec: record { x: t\n y: i64 } as { t: any.generic }\n"
             "main: function is { r: myrec y: 42 }"
         )
         assert any("Cannot infer" in e.msg for e in errors)
@@ -2938,7 +2936,7 @@ class TestGenerics:
     def test_generic_record_infer_from_value(self):
         """myrec x: 42 infers t=i64 from field type."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: t }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
             "main: function is { r: myrec x: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -2949,7 +2947,7 @@ class TestGenerics:
     def test_generic_record_explicit_and_value(self):
         """myrec t: i64 x: 42 — both explicit type arg and value, compatible."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: t }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
             "main: function is { r: myrec t: i64 x: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -2959,7 +2957,7 @@ class TestGenerics:
     def test_generic_record_conflict_error(self):
         """myrec t: i32 x: "hello" — conflicting types for t emits error."""
         errors = check_errors(
-            "myrec: record { t: any.generic\n x: t }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
             'main: function is { r: myrec t: i32 x: "hello" }'
         )
         assert any("Conflicting types" in e.msg for e in errors)
@@ -2967,7 +2965,7 @@ class TestGenerics:
     def test_generic_record_multi_param_infer(self):
         """pair x: 42 y: "hi" infers a=i64, b=string."""
         program = check_ok(
-            "mypair: record { a: any.generic\n b: any.generic\n x: a\n y: b }\n"
+            "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
             'main: function is { p: mypair x: 42 y: "hi" }'
         )
         assert len(program.mono_types) >= 1
@@ -2978,7 +2976,7 @@ class TestGenerics:
     def test_generic_type_in_type_position_concrete(self):
         """(myrec t: i64) in field type position produces concrete monomorphization."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: t }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
             "wrapper: record { inner: (myrec t: i64) }\n"
             "main: function is {}"
         )
@@ -2995,8 +2993,8 @@ class TestGenerics:
     def test_generic_type_in_type_position_partial(self):
         """(myrec t: u) in field type position produces partial instantiation."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: t }\n"
-            "wrapper: record { u: any.generic\n inner: (myrec t: u) }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
+            "wrapper: record { inner: (myrec t: u) } as { u: any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -3012,8 +3010,8 @@ class TestGenerics:
     def test_partial_instantiation_full_monomorphize(self):
         """Wrapper with (myrec t: u) fully resolves inner when monomorphized."""
         program = check_ok(
-            "myrec: record { t: any.generic\n x: t }\n"
-            "wrapper: record { u: any.generic\n inner: (myrec t: u) }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
+            "wrapper: record { inner: (myrec t: u) } as { u: any.generic }\n"
             "main: function is { w: wrapper u: i64 inner: (myrec x: 42) }"
         )
         monos = {m.name: m for m, _ in program.mono_types}
@@ -3027,7 +3025,7 @@ class TestGenerics:
     def test_error_bare_generic_in_type_position(self):
         """Using bare generic type in field position emits error."""
         errors = check_errors(
-            "myrec: record { t: any.generic\n x: t }\n"
+            "myrec: record { x: t } as { t: any.generic }\n"
             "wrapper: record { inner: myrec }\n"
             "main: function is { w: wrapper inner: (myrec x: 42) }"
         )
@@ -3036,18 +3034,29 @@ class TestGenerics:
     def test_error_missing_type_arg_in_type_position(self):
         """Missing type arg in (myrec) call emits error."""
         errors = check_errors(
-            "mypair: record { a: any.generic\n b: any.generic\n x: a\n y: b }\n"
+            "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
             "wrapper: record { inner: (mypair a: i64) }\n"
             'main: function is { w: wrapper inner: (mypair x: 1 y: "a") }'
         )
         assert any("Missing type argument" in e.msg for e in errors)
+
+    def test_generic_param_in_is_error(self):
+        """Generic params in is-section should error for record/union/class."""
+        errors = check_errors(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "main: function is { r: myrec x: 42 }"
+        )
+        assert any(
+            "generic parameters must be declared in the 'as' section" in e.msg.lower()
+            for e in errors
+        )
 
     # ---- Generic Classes ----
 
     def test_generic_class_resolution(self):
         """Class with t: any.generic puts t in generic_params, not children."""
         program = check_ok(
-            "mycls: class { t: any.generic\n x: i64 }\nmain: function is {}"
+            "mycls: class { x: i64 } as { t: any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -3061,7 +3070,7 @@ class TestGenerics:
     def test_generic_class_field_uses_param(self):
         """Class field referencing generic param: val: t resolves to GENERIC_PARAM."""
         program = check_ok(
-            "mycls: class { t: any.generic\n val: t }\nmain: function is {}"
+            "mycls: class { val: t } as { t: any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -3074,7 +3083,7 @@ class TestGenerics:
     def test_generic_class_construction_infers(self):
         """mycls val: 42 infers t=i64 and produces monomorphized type."""
         program = check_ok(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -3088,7 +3097,7 @@ class TestGenerics:
     def test_generic_class_explicit_type_arg(self):
         """mycls t: i64 val: 42 with explicit type arg."""
         program = check_ok(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls t: i64 val: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -3099,7 +3108,7 @@ class TestGenerics:
     def test_generic_class_is_reftype(self):
         """Monomorphized generic class is still a reference type."""
         program = check_ok(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -3109,7 +3118,7 @@ class TestGenerics:
     def test_generic_class_has_create(self):
         """Monomorphized class has :meta.create constructor."""
         program = check_ok(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         assert len(program.mono_types) >= 1
@@ -3120,7 +3129,7 @@ class TestGenerics:
     def test_error_generic_class_no_args(self):
         """Bare generic class name in expression is an error."""
         errors = check_errors(
-            "mycls: class { t: any.generic\n val: t }\n"
+            "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls }"
         )
         assert any("generic" in e.msg.lower() for e in errors)
@@ -3177,7 +3186,7 @@ class TestGenerics:
     def test_valtype_constraint_record_ok(self):
         """Record with t: any.valtype accepts record types."""
         check_ok(
-            "myrec: record { t: any.valtype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.valtype }\n"
             "inner: record { v: i64 }\n"
             "main: function is { r: myrec x: (inner v: 1) }"
         )
@@ -3185,7 +3194,7 @@ class TestGenerics:
     def test_valtype_constraint_i64_ok(self):
         """Record with t: any.valtype accepts numeric types."""
         check_ok(
-            "myrec: record { t: any.valtype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.valtype }\n"
             "main: function is { r: myrec x: 42 }"
         )
 
@@ -3193,7 +3202,7 @@ class TestGenerics:
         """Record with t: any.valtype rejects class types."""
         errors = check_errors(
             "mycls: class { v: i64 }\n"
-            "myrec: record { t: any.valtype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.valtype }\n"
             "main: function is {\n"
             "    c: mycls v: 1\n"
             "    r: myrec x: c\n"
@@ -3205,7 +3214,7 @@ class TestGenerics:
         """Record with t: any.valtype rejects union types."""
         errors = check_errors(
             "myunion: union { a: i64\n b: null }\n"
-            "myrec: record { t: any.valtype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.valtype }\n"
             "main: function is {\n"
             "    u: myunion.a 1\n"
             "    r: myrec x: u\n"
@@ -3217,7 +3226,7 @@ class TestGenerics:
         """Record with t: any.reftype accepts class types."""
         check_ok(
             "mycls: class { v: i64 }\n"
-            "myrec: record { t: any.reftype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.reftype }\n"
             "main: function is {\n"
             "    c: mycls v: 1\n"
             "    r: myrec x: c\n"
@@ -3228,7 +3237,7 @@ class TestGenerics:
         """Record with t: any.reftype accepts union types."""
         check_ok(
             "myunion: union { a: i64\n b: null }\n"
-            "myrec: record { t: any.reftype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.reftype }\n"
             "main: function is {\n"
             "    u: myunion.a 1\n"
             "    r: myrec x: u\n"
@@ -3239,7 +3248,7 @@ class TestGenerics:
         """Record with t: any.reftype rejects record types."""
         errors = check_errors(
             "inner: record { v: i64 }\n"
-            "myrec: record { t: any.reftype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.reftype }\n"
             "main: function is { r: myrec x: (inner v: 1) }"
         )
         assert any("not a reference type" in e.msg for e in errors)
@@ -3247,7 +3256,7 @@ class TestGenerics:
     def test_reftype_constraint_i64_error(self):
         """Record with t: any.reftype rejects numeric types."""
         errors = check_errors(
-            "myrec: record { t: any.reftype\n x: t }\n"
+            "myrec: record { x: t } as { t: any.reftype }\n"
             "main: function is { r: myrec x: 42 }"
         )
         assert any("not a reference type" in e.msg for e in errors)
@@ -3255,7 +3264,7 @@ class TestGenerics:
     def test_valtype_constraint_in_generic_params(self):
         """any.valtype constraint stored correctly in generic_params."""
         program = check_ok(
-            "myrec: record { t: any.valtype\n x: t }\nmain: function is {}"
+            "myrec: record { x: t } as { t: any.valtype }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -3268,7 +3277,7 @@ class TestGenerics:
     def test_reftype_constraint_in_generic_params(self):
         """any.reftype constraint stored correctly in generic_params."""
         program = check_ok(
-            "myrec: record { t: any.reftype\n x: t }\nmain: function is {}"
+            "myrec: record { x: t } as { t: any.reftype }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -3281,7 +3290,7 @@ class TestGenerics:
     def test_valtype_union_subtype_ok(self):
         """Union with t: any.valtype accepts valtypes for subtype construction."""
         check_ok(
-            "myopt: union { t: any.valtype\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.valtype }\n"
             "main: function is { x: myopt.some 42 }"
         )
 
@@ -3289,7 +3298,7 @@ class TestGenerics:
         """Union with t: any.valtype rejects class type in subtype construction."""
         errors = check_errors(
             "mycls: class { v: i64 }\n"
-            "myopt: union { t: any.valtype\n some: t\n none: null }\n"
+            "myopt: union { some: t\n none: null } as { t: any.valtype }\n"
             "main: function is {\n"
             "    c: mycls v: 1\n"
             "    x: myopt.some c\n"

@@ -359,9 +359,9 @@ class TypeChecker:
 
         ctype.is_valtype = False  # classes are reference types
 
-        # pass 1: detect generic params
+        # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for fname, fpath in cls.items.items():
+        for fname, fpath in cls.as_items.items():
             ft = self._resolve_typeref(fpath)
             if (
                 ft
@@ -372,16 +372,22 @@ class TypeChecker:
                 ctype.generic_params[fname] = constraint
                 ctype.isgeneric = True
                 generic_ctx[fname] = constraint
-            elif ft:
-                pass  # handled in pass 2
 
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         for fname, fpath in cls.items.items():
-            if fname in ctype.generic_params:
-                continue  # skip generic params
             ft = self._resolve_typeref(fpath)
+            if (
+                ft
+                and ft.typetype == ZTypeType.GENERIC_PARAM
+                and ft.name == "__generic_param"
+            ):
+                self._error(
+                    f"Generic parameters must be declared in the 'as' section, not 'is': '{fname}'",
+                    loc=cls.start,
+                )
+                continue
             if ft:
                 ctype.children[fname] = ft
                 # detect field defaults
@@ -437,11 +443,9 @@ class TypeChecker:
 
         utype.is_valtype = False  # unions are reference types
 
-        # pass 1: detect generic params
+        # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for sname, spath in union_defn.items.items():
-            if isinstance(spath, zast.AtomId) and spath.name == "null":
-                continue
+        for sname, spath in union_defn.as_items.items():
             st = self._resolve_typeref(spath)
             if (
                 st
@@ -453,17 +457,22 @@ class TypeChecker:
                 utype.isgeneric = True
                 generic_ctx[sname] = constraint
 
-        # pass 2: resolve non-generic subtype items with generic context
+        # pass 2: resolve subtype items with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        subtype_names = [
-            sname
-            for sname in union_defn.items.keys()
-            if sname not in utype.generic_params
-        ]
+        subtype_names = list(union_defn.items.keys())
         for sname, spath in union_defn.items.items():
-            if sname in utype.generic_params:
-                continue  # skip generic params
+            st_check = self._resolve_typeref(spath)
+            if (
+                st_check
+                and st_check.typetype == ZTypeType.GENERIC_PARAM
+                and st_check.name == "__generic_param"
+            ):
+                self._error(
+                    f"Generic parameters must be declared in the 'as' section, not 'is': '{sname}'",
+                    loc=union_defn.start,
+                )
+                continue
             if isinstance(spath, zast.AtomId) and spath.name == "null":
                 st = _make_type("null", ZTypeType.RECORD)
                 st.is_valtype = True
@@ -511,9 +520,8 @@ class TypeChecker:
                     break
                 if as_type.parent:
                     custom_tag_data = as_type.parent
-                elif (
-                    isinstance(as_path, zast.DottedPath)
-                    and isinstance(as_path.parent, zast.AtomId)
+                elif isinstance(as_path, zast.DottedPath) and isinstance(
+                    as_path.parent, zast.AtomId
                 ):
                     # generic tag from numeric type: u16.tag → parent is u16
                     custom_tag_data = getattr(as_path.parent, "type", None)
@@ -695,9 +703,8 @@ class TypeChecker:
                     break
                 if as_type.parent:
                     custom_tag_data = as_type.parent
-                elif (
-                    isinstance(as_path, zast.DottedPath)
-                    and isinstance(as_path.parent, zast.AtomId)
+                elif isinstance(as_path, zast.DottedPath) and isinstance(
+                    as_path.parent, zast.AtomId
                 ):
                     custom_tag_data = getattr(as_path.parent, "type", None)
                     if not custom_tag_data:
@@ -872,9 +879,9 @@ class TypeChecker:
 
         rtype.is_valtype = True  # records are value types
 
-        # pass 1: detect generic params
+        # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for fname, fpath in rec.items.items():
+        for fname, fpath in rec.as_items.items():
             ft = self._resolve_typeref(fpath)
             if (
                 ft
@@ -885,16 +892,22 @@ class TypeChecker:
                 rtype.generic_params[fname] = constraint
                 rtype.isgeneric = True
                 generic_ctx[fname] = constraint
-            elif ft:
-                pass  # handled in pass 2
 
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         for fname, fpath in rec.items.items():
-            if fname in rtype.generic_params:
-                continue  # skip generic params
             ft = self._resolve_typeref(fpath)
+            if (
+                ft
+                and ft.typetype == ZTypeType.GENERIC_PARAM
+                and ft.name == "__generic_param"
+            ):
+                self._error(
+                    f"Generic parameters must be declared in the 'as' section, not 'is': '{fname}'",
+                    loc=rec.start,
+                )
+                continue
             if ft:
                 rtype.children[fname] = ft
                 # detect field defaults
@@ -943,6 +956,12 @@ class TypeChecker:
         """Process as_items for protocol satisfaction (labeled protocol refs)."""
         for label, apath in as_items.items():
             at = self._resolve_typeref(apath)
+            if (
+                at
+                and at.typetype == ZTypeType.GENERIC_PARAM
+                and at.name == "__generic_param"
+            ):
+                continue  # generic params handled in pass 1
             if at and at.typetype == ZTypeType.PROTOCOL:
                 # conformance check: implementor must have all spec methods
                 for spec_name, spec_func in at.children.items():
@@ -1666,7 +1685,9 @@ class TypeChecker:
                 positional_args.append(arg)
 
         # determine the value argument (from: takes priority over positional)
-        value_arg = from_arg if from_arg else (positional_args[0] if positional_args else None)
+        value_arg = (
+            from_arg if from_arg else (positional_args[0] if positional_args else None)
+        )
 
         if is_null_subtype and not from_arg:
             # option.none i32 — explicit type argument (positional)
@@ -2430,9 +2451,7 @@ class TypeChecker:
                 from_arg = arg
                 break
         if not from_arg:
-            self._error(
-                "protocol.create requires 'from:' argument", loc=call.start
-            )
+            self._error("protocol.create requires 'from:' argument", loc=call.start)
             return None
 
         # type-check the from: argument

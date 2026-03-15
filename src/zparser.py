@@ -1308,6 +1308,13 @@ class Parser:
                 zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.peek()),
             )
 
+        # remove is-body externs that are defined in as-body (e.g. generic params)
+        if as_body:
+            as_locals = set(as_body.items.keys())
+            for k in list(extern.keys()):
+                if k in as_locals:
+                    del extern[k]
+
         return is_body, as_body, extern, None
 
     def _getobjectbody(

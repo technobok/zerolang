@@ -270,10 +270,10 @@ class CEmitter:
         return f"{prefix}.{name}" if prefix else name
 
     def _is_generic_template(self, defn: zast.TypeDefinition) -> bool:
-        """Check if a definition is a generic template (has .generic in items)."""
+        """Check if a definition is a generic template (has .generic in items/as_items)."""
         items = None
         if isinstance(defn, (zast.Record, zast.Union, zast.Variant, zast.Class)):
-            items = defn.items
+            items = defn.as_items
         elif isinstance(defn, zast.Function):
             items = defn.parameters
         elif isinstance(defn, zast.Protocol):
@@ -337,7 +337,9 @@ class CEmitter:
             elif isinstance(defn, (zast.Record, zast.Class)):
                 if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
-                        proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+                        proto_name = (
+                            apath.name if isinstance(apath, zast.AtomId) else None
+                        )
                         if proto_name and proto_name in self._protocol_names:
                             self._proto_conformance[(qname, proto_name)] = label
 
@@ -1331,9 +1333,7 @@ class CEmitter:
         if isinstance(template_defn, zast.Class):
             for mname, mfunc in template_defn.as_functions.items():
                 if mfunc.body:
-                    self._emit_function(
-                        f"{name}.{mname}", mfunc, record_name=name
-                    )
+                    self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
 
     def _emit_mono_class_create(
         self,
@@ -1360,9 +1360,7 @@ class CEmitter:
         func_name = f"z_{name}_meta_create"
         lines.append(f"static {ctype}* {func_name}({param_str});\n")
         lines.append(f"static {ctype}* {func_name}({param_str}) {{\n")
-        lines.append(
-            f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n"
-        )
+        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         for fname in field_names:
             lines.append(f"    _this->{fname} = {fname};\n")
@@ -1400,9 +1398,7 @@ class CEmitter:
                 if pname.startswith(":") or pname == "this":
                     continue
                 params.append(_ctype(ptype))
-            lines.append(
-                f"    {ret_ctype} (*{sname})({', '.join(params)});\n"
-            )
+            lines.append(f"    {ret_ctype} (*{sname})({', '.join(params)});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
 
         # instance struct
@@ -1414,13 +1410,9 @@ class CEmitter:
 
         # destroy function
         lines.append(f"static void z_{name}_destroy(z_{name}_t* proto);\n")
-        lines.append(
-            f"static void z_{name}_destroy(z_{name}_t* proto) {{\n"
-        )
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
         lines.append("    if (!proto) return;\n")
-        lines.append(
-            "    if (proto->destroy) proto->destroy(proto->data);\n"
-        )
+        lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
         lines.append("    free(proto);\n")
         lines.append("}\n\n")
 
