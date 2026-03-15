@@ -971,7 +971,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
   #*: #+ 11 new tests (6 typecheck, 5 emitter including ASan). Total: 602 tests.
   #*: #+ Updated #~"doc/spec.pdoc" protocol sections for v1 design.
 
-#---: Phase 25: Protocol Extensions:
+#---: Phase 25: Protocol Extensions \[COMPLETE\]
 
 (Deferred from phase 24)
 
@@ -993,7 +993,7 @@ Results:
     Named protocol variables remain heap-allocated via the create function.
   #*: #+ 12 new tests (8 typecheck, 4 emitter including ASan). Total: 453 tests.
 
-#---: Phase 26: Generics (Type Parameters and Monomorphization) ~~DONE~~
+#---: Phase 26: Generics (Type Parameters and Monomorphization) \[COMPLETE\]
 
 Added generic type parameters with constraints for records, unions, and
 functions. Strategy: monomorphization (generate specialised code for each
@@ -1001,35 +1001,61 @@ concrete type used). Scope: records, unions, and functions only; classes and
 protocols with generics are deferred to later phases.
 
 #ol:
-  #*: ~~DONE~~ Resolve #~"generic" type parameters: #~".generic" in
+  #*: #+ Resolve #~"generic" type parameters: #~".generic" in
     #~"_resolve_dotted_path" creates #~"GENERIC_PARAM" marker types.
     Two-pass field resolution separates generic params from concrete
     fields. Added #~"generic_params", #~"generic_origin", #~"generic_args"
     to #~"ZType". Added #~"GENERIC_PARAM = 3" to #~"ZTypeType".
-  #*: ~~DONE~~ Monomorphization engine: #~"_monomorphize" creates
+  #*: #+ Monomorphization engine: #~"_monomorphize" creates
     specialised copies of generic types with concrete args. Cache
     keyed by (template_name, concrete_args) avoids duplicates.
     Monomorphized types stored in #~"program.mono_types" for emitter.
-  #*: ~~DONE~~ Constraint checking: concrete type verified against
+  #*: #+ Constraint checking: concrete type verified against
     union constraint (subtypes must match).
-  #*: ~~DONE~~ Generic unions: type parameters detected in pass 1,
+  #*: #+ Generic unions: type parameters detected in pass 1,
     subtypes resolved in pass 2 with generic context. Tag generation
     deferred to monomorphization time.
-  #*: ~~DONE~~ Generic records: two-pass resolution for generic
+  #*: #+ Generic records: two-pass resolution for generic
     fields. Construction with explicit type args supported.
-  #*: ~~DONE~~ Generic functions: generic params detected in
+  #*: #+ Generic functions: generic params detected in
     parameters. Resolution and return type handled in generic context.
-  #*: ~~DONE~~ Call-site inference: #~"option.some 42" infers t=i64.
+  #*: #+ Call-site inference: #~"option.some 42" infers t=i64.
     #~"option.none i32" uses explicit type arg for null subtypes.
-  #*: ~~DONE~~ Emit C for monomorphised types: generic templates
+  #*: #+ Emit C for monomorphised types: generic templates
     skipped; monomorphized types emit tag enum + struct + destructor
     with mangled names (e.g., #~"z_option_i64_t").
-  #*: ~~DONE~~ Added #~"option" union to #~"system.z" as a generic
+  #*: #+ Added #~"option" union to #~"system.z" as a generic
     union with #~"some: t" and #~"none: null" subtypes.
-  #*: ~~DONE~~ Written #~"examples/generics.z": generic union usage,
+  #*: #+ Written #~"examples/generics.z": generic union usage,
     match on generic types, system option type.
-  #*: ~~DONE~~ Test suite: 13 typechecker tests + 8 emitter tests
+  #*: #+ Test suite: 13 typechecker tests + 8 emitter tests
     covering resolution, instantiation, caching, emission, ASan.
+
+Phase 26b: Generic inference gaps and partial instantiation:
+
+#ol:
+  #*: #+ Error on unmonomorphized generic use: using a generic type
+    without type args in a value context (#~"_check_operation") now emits
+    #~"Cannot infer type arguments" error instead of silently producing
+    invalid types. Covers zero-arg records, classes, and union subtypes.
+  #*: #+ Inference from value args: #~"_infer_generic_record_construction"
+    rewritten with field-to-generic-param mapping. Infers generic params from
+    value arg types (e.g. #~"myrec x: 42" infers #~"t=i64"). Detects
+    conflicts between explicit and inferred types.
+  #*: #+ Error on fallthrough: #~"_check_call" returns #~"None" after
+    failed generic inference instead of falling through to non-generic path.
+  #*: #+ Generic type references in type position: call syntax
+    #~"(myrec t: i64)" in field type positions resolves via new
+    #~"_resolve_typeref_call". Error on bare generic type names.
+  #*: #+ Partial instantiation: #~"(myrec t: u)" where #~"u" is an
+    enclosing generic param produces a new generic template (#~"myrec_u"
+    with #~"isgeneric=True"). #~"_monomorphize" detects #~"GENERIC_PARAM"
+    args and preserves genericity. Partial types are not registered for
+    emission.
+  #*: #+ Recursive child monomorphization: when a parent type is fully
+    monomorphized, partially-instantiated children are recursively resolved
+    (e.g. #~"wrapper_i64.inner" becomes #~"myrec_i64").
+  #*: #+ 13 new tests (8 inference, 5 partial instantiation). Total: 649 tests.
 
 Deferred to future phases:
 
