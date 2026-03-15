@@ -2701,7 +2701,19 @@ class CEmitter:
             if not is_null and subtype_path:
                 subtype_ctype_resolved = self._get_subtype_ctype(subtype_path)
 
-        if is_null or not call.arguments:
+        # find the value arg: from: takes priority, then first positional arg
+        value_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                value_arg = arg
+                break
+        if value_arg is None:
+            for arg in call.arguments:
+                if not arg.name:
+                    value_arg = arg
+                    break
+
+        if is_null or value_arg is None:
             self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
         else:
             # for monomorphized null subtype with explicit type arg, skip the arg
@@ -2709,7 +2721,7 @@ class CEmitter:
             if call_type and call_type.generic_origin and is_null:
                 self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
             else:
-                val = self._emit_operation_value(call.arguments[0].valtype)
+                val = self._emit_operation_value(value_arg.valtype)
                 subtype_ctype = subtype_ctype_resolved
                 if (
                     subtype_ctype

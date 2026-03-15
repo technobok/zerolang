@@ -2878,6 +2878,48 @@ class TestGenerics:
         )
         assert any("Cannot infer type arguments" in e.msg for e in errors)
 
+    def test_generic_union_from_infers_type(self):
+        """option.some from: 42 infers t=i64 via from: syntax."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some from: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+        assert mono.generic_origin is not None
+
+    def test_generic_union_explicit_type_and_from(self):
+        """option.some t: i64 from: 42 with explicit generic param and from: value."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some t: i64 from: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+
+    def test_generic_union_from_with_different_types(self):
+        """from: syntax with different types creates different monomorphizations."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some from: 42\n"
+            "    y: myopt.some from: 3.14\n"
+            "}"
+        )
+        assert len(program.mono_types) >= 2
+        names = {m.name for m, _ in program.mono_types}
+        assert any("i64" in n for n in names)
+        assert any("f64" in n for n in names)
+
+    def test_system_option_from_syntax(self):
+        """System option type works with from: syntax."""
+        program = check_ok("main: function is { x: option.some from: 42 }")
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert mono.generic_origin is not None
+
     def test_error_generic_record_no_args(self):
         """Using generic record with no args emits error."""
         errors = check_errors(

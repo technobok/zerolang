@@ -1628,31 +1628,50 @@ class TypeChecker:
             and subtype_child.name == "null"
         )
 
-        if is_null_subtype and call.arguments:
-            # option.none i32 — explicit type argument
-            # the argument is a type name, not a value
-            arg = call.arguments[0]
-            arg_type = self._resolve_typeref_from_operation(arg.valtype)
-            if arg_type:
-                # map the first (only?) generic param to this type
-                for param_name in template.generic_params:
-                    generic_args[param_name] = arg_type
-                    break
-        elif subtype_child and subtype_child.typetype == ZTypeType.GENERIC_PARAM:
-            # option.some 42 — infer from argument type
-            if call.arguments:
-                arg_type = self._check_operation(call.arguments[0].valtype)
+        # separate named args: explicit generic type args vs from: value vs positional
+        from_arg = None
+        positional_args = []
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+            elif arg.name and arg.name in template.generic_params:
+                # explicit generic type arg: t: i64
+                arg_type = self._resolve_typeref_from_operation(arg.valtype)
                 if arg_type:
-                    # the subtype references a generic param by name
+                    generic_args[arg.name] = arg_type
+            else:
+                positional_args.append(arg)
+
+        # determine the value argument (from: takes priority over positional)
+        value_arg = from_arg if from_arg else (positional_args[0] if positional_args else None)
+
+        if is_null_subtype and not from_arg:
+            # option.none i32 — explicit type argument (positional)
+            if value_arg and not generic_args:
+                arg_type = self._resolve_typeref_from_operation(value_arg.valtype)
+                if arg_type:
+                    for param_name in template.generic_params:
+                        generic_args[param_name] = arg_type
+                        break
+        elif subtype_child and subtype_child.typetype == ZTypeType.GENERIC_PARAM:
+            # option.some 42 or option.some from: 42 — infer from argument type
+            if value_arg:
+                arg_type = self._check_operation(value_arg.valtype)
+                if arg_type:
                     param_ref_name = subtype_child.name
-                    generic_args[param_ref_name] = arg_type
-                    # also check for remaining args
-                    for arg in call.arguments[1:]:
+                    if param_ref_name not in generic_args:
+                        generic_args[param_ref_name] = arg_type
+                    # also check remaining positional args
+                    remaining = positional_args[1:] if not from_arg else positional_args
+                    for arg in remaining:
                         self._check_operation(arg.valtype)
         else:
             # non-generic subtype — just typecheck args
-            for arg in call.arguments:
-                self._check_operation(arg.valtype)
+            if value_arg:
+                self._check_operation(value_arg.valtype)
+            for arg in positional_args:
+                if arg is not value_arg:
+                    self._check_operation(arg.valtype)
 
         if not generic_args:
             self._error(

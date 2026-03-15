@@ -2546,6 +2546,73 @@ class TestGenericsEmission:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan failure: {result.stderr}"
 
+    # ---- Generic from: call syntax ----
+
+    def test_generic_union_from_compiles(self):
+        """Generic union construction with from: compiles and runs."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some from: 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_generic_union_explicit_type_and_from_compiles(self):
+        """Generic union with explicit type param and from: compiles and runs."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some t: i64 from: 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_generic_union_from_emits_correct_type(self):
+        """from: syntax produces same monomorphized type as positional."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some from: 42 }"
+        )
+        assert "z_myopt_i64_t" in csource
+        assert "Z_MYOPT_I64_TAG_SOME" in csource
+
+    def test_generic_union_from_asan(self):
+        """Generic union from: passes AddressSanitizer."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some from: 42\n"
+            "    y: myopt.none i32\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan failure: {result.stderr}"
+
+    def test_system_option_from_compiles(self):
+        """System option type with from: compiles and runs."""
+        csource = emit_source(
+            'main: function is {\n    x: option.some from: 42\n    print "ok"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_nongeneric_union_from_compiles(self):
+        """Non-generic union construction with from: compiles and runs."""
+        csource = emit_source(
+            "myunion: union { a: i64\n b: null }\n"
+            "main: function is {\n"
+            "    x: myunion.a from: 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
     # ---- Generic Classes ----
 
     def test_generic_class_template_not_emitted(self):
