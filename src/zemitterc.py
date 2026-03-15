@@ -284,7 +284,7 @@ class CEmitter:
             if isinstance(fpath, zast.DottedPath) and isinstance(
                 fpath.child, zast.AtomId
             ):
-                if fpath.child.name == "generic":
+                if fpath.child.name in ("generic", "valtype", "reftype"):
                     return True
         return False
 
@@ -397,6 +397,19 @@ class CEmitter:
                 self._union_names.add(mono_type.name)
             elif mono_type.typetype == ZTypeType.RECORD:
                 self._record_names.add(mono_type.name)
+                # pre-register field info so _build_meta_create_args works
+                # during function body emission (before mono type emission)
+                name = mono_type.name
+                field_names_r: List[str] = []
+                field_ctypes_r: List[str] = []
+                for fn, ft in mono_type.children.items():
+                    if fn.startswith(":") or ft.typetype == ZTypeType.FUNCTION:
+                        continue
+                    field_names_r.append(fn)
+                    field_ctypes_r.append(_ctype(ft))
+                self._type_field_names[name] = field_names_r
+                self._type_field_ctypes[name] = field_ctypes_r
+                self._type_field_defaults[name] = {}
             elif mono_type.typetype == ZTypeType.CLASS:
                 self._class_names.add(mono_type.name)
                 # pre-register field info so _build_meta_create_args works
@@ -1233,8 +1246,10 @@ class CEmitter:
         """Emit a monomorphized record type."""
         self.needs_stdint = True
         name = mono_type.name
+        ctype = f"z_{name}_t"
         lines: List[str] = []
         lines.append("typedef struct {\n")
+        field_items: list = []
         for fname, ftype in mono_type.children.items():
             if fname.startswith(":"):
                 continue
@@ -1242,7 +1257,32 @@ class CEmitter:
                 continue
             ct = _ctype(ftype)
             lines.append(f"    {ct} {fname};\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+            field_items.append((fname, ct))
+        lines.append(f"}} {ctype};\n\n")
+
+        # emit meta.create and create functions
+        params = [f"{ct} {fn}" for fn, ct in field_items]
+        field_names = [fn for fn, _ in field_items]
+        param_str = ", ".join(params) if params else "void"
+        arg_str = ", ".join(field_names) if field_names else ""
+        func_name = f"z_{name}_meta_create"
+        lines.append(f"static {ctype} {func_name}({param_str});\n")
+        lines.append(f"static {ctype} {func_name}({param_str}) {{\n")
+        lines.append(f"    {ctype} _this = {{0}};\n")
+        for fn in field_names:
+            lines.append(f"    _this.{fn} = {fn};\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+        create_name = f"z_{name}_create"
+        lines.append(f"static {ctype} {create_name}({param_str});\n")
+        lines.append(f"static {ctype} {create_name}({param_str}) {{\n")
+        lines.append(f"    return {func_name}({arg_str});\n")
+        lines.append("}\n\n")
+
+        # register field info for call emission
+        self._type_field_ctypes[name] = [ct for _, ct in field_items]
+        self._type_field_names[name] = field_names
+
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_class(

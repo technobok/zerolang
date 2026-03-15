@@ -1340,12 +1340,18 @@ class TypeChecker:
             parent_type = self._resolve_dotted_path(path.parent)
         if not parent_type:
             return None
-        # check for .generic — creates a generic type parameter marker
+        # check for .generic / .valtype / .reftype — creates a generic type parameter marker
         child_name = path.child.name
-        if child_name == "generic":
-            # parent is the constraint type (e.g., any -> empty union)
+        if child_name in ("generic", "valtype", "reftype"):
+            if child_name == "generic":
+                constraint = parent_type
+            else:
+                # any.valtype / any.reftype — create a sentinel constraint
+                constraint = _make_type(
+                    f"{parent_type.name}.{child_name}", parent_type.typetype
+                )
             gp = _make_type("__generic_param", ZTypeType.GENERIC_PARAM)
-            gp.parent = parent_type  # constraint
+            gp.parent = constraint
             path.type = gp
             return gp
         if child_name == "take":
@@ -1464,7 +1470,24 @@ class TypeChecker:
             if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
                 continue
             constraint = template_type.generic_params.get(param_name)
-            if constraint and constraint.name != "any":
+            if not constraint:
+                continue
+            # any.valtype / any.reftype constraints
+            if constraint.name == "any.valtype":
+                if not _is_valtype(concrete_type):
+                    self._error(
+                        f"Type '{concrete_type.name}' is not a value type; "
+                        f"generic parameter '{param_name}' requires any.valtype"
+                    )
+                continue
+            if constraint.name == "any.reftype":
+                if _is_valtype(concrete_type):
+                    self._error(
+                        f"Type '{concrete_type.name}' is not a reference type; "
+                        f"generic parameter '{param_name}' requires any.reftype"
+                    )
+                continue
+            if constraint.name != "any":
                 # constraint is a union: check concrete type matches a subtype
                 if constraint.typetype == ZTypeType.UNION:
                     subtype_names = {

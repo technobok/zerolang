@@ -2613,6 +2613,40 @@ class TestGenericsEmission:
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
+    # ---- any.valtype / any.reftype constraints ----
+
+    def test_valtype_constraint_record_compiles(self):
+        """Record with any.valtype constraint compiles and runs."""
+        csource = emit_source(
+            "myrec: record { t: any.valtype\n x: t }\n"
+            'main: function is {\n    r: myrec x: 42\n    print "ok"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_valtype_constraint_union_compiles(self):
+        """Union with any.valtype constraint compiles and runs."""
+        csource = emit_source(
+            "myopt: union { t: any.valtype\n some: t\n none: null }\n"
+            'main: function is {\n    x: myopt.some 42\n    print "ok"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_reftype_constraint_class_compiles(self):
+        """Record with any.reftype constraint compiles and runs with class."""
+        csource = emit_source(
+            "mycls: class { v: i64 }\n"
+            "holder: record { t: any.reftype\n ref: t }\n"
+            "main: function is {\n"
+            "    c: mycls v: 10\n"
+            "    h: holder ref: c\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
     # ---- Generic Classes ----
 
     def test_generic_class_template_not_emitted(self):

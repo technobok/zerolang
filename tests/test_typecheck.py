@@ -3171,3 +3171,128 @@ class TestGenerics:
             "main: function is { r: myrec x: 1\n v: r.p }"
         )
         assert any("generic" in e.msg.lower() for e in errors)
+
+    # ---- any.valtype / any.reftype constraint subtypes ----
+
+    def test_valtype_constraint_record_ok(self):
+        """Record with t: any.valtype accepts record types."""
+        check_ok(
+            "myrec: record { t: any.valtype\n x: t }\n"
+            "inner: record { v: i64 }\n"
+            "main: function is { r: myrec x: (inner v: 1) }"
+        )
+
+    def test_valtype_constraint_i64_ok(self):
+        """Record with t: any.valtype accepts numeric types."""
+        check_ok(
+            "myrec: record { t: any.valtype\n x: t }\n"
+            "main: function is { r: myrec x: 42 }"
+        )
+
+    def test_valtype_constraint_class_error(self):
+        """Record with t: any.valtype rejects class types."""
+        errors = check_errors(
+            "mycls: class { v: i64 }\n"
+            "myrec: record { t: any.valtype\n x: t }\n"
+            "main: function is {\n"
+            "    c: mycls v: 1\n"
+            "    r: myrec x: c\n"
+            "}"
+        )
+        assert any("not a value type" in e.msg for e in errors)
+
+    def test_valtype_constraint_union_error(self):
+        """Record with t: any.valtype rejects union types."""
+        errors = check_errors(
+            "myunion: union { a: i64\n b: null }\n"
+            "myrec: record { t: any.valtype\n x: t }\n"
+            "main: function is {\n"
+            "    u: myunion.a 1\n"
+            "    r: myrec x: u\n"
+            "}"
+        )
+        assert any("not a value type" in e.msg for e in errors)
+
+    def test_reftype_constraint_class_ok(self):
+        """Record with t: any.reftype accepts class types."""
+        check_ok(
+            "mycls: class { v: i64 }\n"
+            "myrec: record { t: any.reftype\n x: t }\n"
+            "main: function is {\n"
+            "    c: mycls v: 1\n"
+            "    r: myrec x: c\n"
+            "}"
+        )
+
+    def test_reftype_constraint_union_ok(self):
+        """Record with t: any.reftype accepts union types."""
+        check_ok(
+            "myunion: union { a: i64\n b: null }\n"
+            "myrec: record { t: any.reftype\n x: t }\n"
+            "main: function is {\n"
+            "    u: myunion.a 1\n"
+            "    r: myrec x: u\n"
+            "}"
+        )
+
+    def test_reftype_constraint_record_error(self):
+        """Record with t: any.reftype rejects record types."""
+        errors = check_errors(
+            "inner: record { v: i64 }\n"
+            "myrec: record { t: any.reftype\n x: t }\n"
+            "main: function is { r: myrec x: (inner v: 1) }"
+        )
+        assert any("not a reference type" in e.msg for e in errors)
+
+    def test_reftype_constraint_i64_error(self):
+        """Record with t: any.reftype rejects numeric types."""
+        errors = check_errors(
+            "myrec: record { t: any.reftype\n x: t }\n"
+            "main: function is { r: myrec x: 42 }"
+        )
+        assert any("not a reference type" in e.msg for e in errors)
+
+    def test_valtype_constraint_in_generic_params(self):
+        """any.valtype constraint stored correctly in generic_params."""
+        program = check_ok(
+            "myrec: record { t: any.valtype\n x: t }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myrec = tc._resolved.get("test.myrec")
+        assert myrec is not None
+        assert myrec.isgeneric
+        assert "t" in myrec.generic_params
+        assert myrec.generic_params["t"].name == "any.valtype"
+
+    def test_reftype_constraint_in_generic_params(self):
+        """any.reftype constraint stored correctly in generic_params."""
+        program = check_ok(
+            "myrec: record { t: any.reftype\n x: t }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myrec = tc._resolved.get("test.myrec")
+        assert myrec is not None
+        assert myrec.isgeneric
+        assert "t" in myrec.generic_params
+        assert myrec.generic_params["t"].name == "any.reftype"
+
+    def test_valtype_union_subtype_ok(self):
+        """Union with t: any.valtype accepts valtypes for subtype construction."""
+        check_ok(
+            "myopt: union { t: any.valtype\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+
+    def test_valtype_union_subtype_class_error(self):
+        """Union with t: any.valtype rejects class type in subtype construction."""
+        errors = check_errors(
+            "mycls: class { v: i64 }\n"
+            "myopt: union { t: any.valtype\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    c: mycls v: 1\n"
+            "    x: myopt.some c\n"
+            "}"
+        )
+        assert any("not a value type" in e.msg for e in errors)
