@@ -1134,10 +1134,60 @@ class TypeChecker:
                 return self._resolve_type_keyword()
             if name == "this":
                 return self._resolve_this_keyword()
-            return self._resolve_name(name)
+            t = self._resolve_name(name)
+            if t and t.isgeneric:
+                self._error(
+                    f"Generic type '{name}' requires type arguments, "
+                    f"e.g. ({name} t: i64)",
+                    loc=path.start,
+                )
+                return None
+            return t
         if isinstance(path, zast.DottedPath):
             return self._resolve_dotted_path(path)
+        if isinstance(path, zast.Expression):
+            inner = path.expression
+            if isinstance(inner, zast.Call):
+                return self._resolve_typeref_call(inner)
         return None
+
+    def _resolve_typeref_call(self, call: zast.Call) -> Optional[ZType]:
+        """Resolve a Call in type position: (myrec t: i64) or (myrec t: u)."""
+        if not isinstance(call.callable, zast.AtomId):
+            return None
+        template = self._resolve_name(call.callable.name)
+        if not template or not template.isgeneric:
+            return None
+
+        generic_args: dict[str, ZType] = {}
+        has_unresolved = False
+        for arg in call.arguments:
+            if not arg.name or arg.name not in template.generic_params:
+                continue
+            # resolve the type arg — could be a concrete type or a generic param
+            if not isinstance(arg.valtype, zast.Path):
+                continue
+            arg_type = self._resolve_typeref(arg.valtype)
+            if arg_type:
+                generic_args[arg.name] = arg_type
+            else:
+                has_unresolved = True
+
+        for param_name in template.generic_params:
+            if param_name not in generic_args:
+                if has_unresolved:
+                    return None  # arg provided but not yet resolvable (pass 1)
+                self._error(
+                    f"Missing type argument '{param_name}' for "
+                    f"generic type '{template.name}'",
+                    loc=call.start,
+                )
+                return None
+
+        defn = self._find_generic_defn(template)
+        if not defn:
+            return None
+        return self._monomorphize(template, generic_args, defn)
 
     def _resolve_type_keyword(self) -> Optional[ZType]:
         """Resolve `type` to the nearest enclosing concrete type on the resolving stack."""
@@ -1314,8 +1364,15 @@ class TypeChecker:
         if cache_key in self._mono_cache:
             return self._mono_cache[cache_key]
 
-        # constraint checking
+        # check if this is a partial instantiation (some args are GENERIC_PARAM)
+        is_partial = any(
+            v.typetype == ZTypeType.GENERIC_PARAM for v in generic_args.values()
+        )
+
+        # constraint checking (skip for generic param args — checked at final instantiation)
         for param_name, concrete_type in generic_args.items():
+            if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
+                continue
             constraint = template_type.generic_params.get(param_name)
             if constraint and constraint.name != "any":
                 # constraint is a union: check concrete type matches a subtype
@@ -1346,6 +1403,15 @@ class TypeChecker:
         mono.generic_args = OrderedDict(generic_args)
         mono.is_valtype = template_type.is_valtype
 
+        # partial instantiation: result is still generic
+        if is_partial:
+            mono.isgeneric = True
+            for param_name, arg_type in generic_args.items():
+                if arg_type.typetype == ZTypeType.GENERIC_PARAM:
+                    mono.generic_params[arg_type.name] = (
+                        arg_type.parent if arg_type.parent else self.t_null
+                    )
+
         # substitute generic params in children
         for child_name, child_type in template_type.children.items():
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
@@ -1354,6 +1420,28 @@ class TypeChecker:
                 concrete = generic_args.get(param_ref_name)
                 if concrete:
                     mono.children[child_name] = concrete
+                else:
+                    mono.children[child_name] = child_type
+            elif (
+                child_type.isgeneric
+                and child_type.generic_origin is not None
+                and not is_partial
+            ):
+                # partially-instantiated child — resolve remaining generic params
+                child_args: dict[str, ZType] = {}
+                for gp_name, gp_arg in child_type.generic_args.items():
+                    if (
+                        gp_arg.typetype == ZTypeType.GENERIC_PARAM
+                        and gp_arg.name in generic_args
+                    ):
+                        child_args[gp_name] = generic_args[gp_arg.name]
+                    else:
+                        child_args[gp_name] = gp_arg
+                child_defn = self._find_generic_defn(child_type.generic_origin)
+                if child_defn:
+                    mono.children[child_name] = self._monomorphize(
+                        child_type.generic_origin, child_args, child_defn
+                    )
                 else:
                     mono.children[child_name] = child_type
             else:
@@ -1395,12 +1483,13 @@ class TypeChecker:
 
         # cache and register
         self._mono_cache[cache_key] = mono
-        self._mono_types.append((mono, defn))
-        # register in _resolved so the emitter can find it
-        for unitname in self.program.units:
-            key = f"{unitname}.{mangled}"
-            self._resolved[key] = mono
-            break
+        if not is_partial:
+            self._mono_types.append((mono, defn))
+            # register in _resolved so the emitter can find it
+            for unitname in self.program.units:
+                key = f"{unitname}.{mangled}"
+                self._resolved[key] = mono
+                break
 
         return mono
 

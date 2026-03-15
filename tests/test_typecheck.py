@@ -2803,3 +2803,70 @@ class TestGenerics:
         mono, _ = program.mono_types[0]
         assert mono.children["x"].name == "i64"
         assert mono.children["y"].name == "string"
+
+    def test_generic_type_in_type_position_concrete(self):
+        """(myrec t: i64) in field type position produces concrete monomorphization."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "wrapper: record { inner: (myrec t: i64) }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        wrapper = tc._resolved.get("test.wrapper")
+        assert wrapper is not None
+        inner = wrapper.children.get("inner")
+        assert inner is not None
+        assert inner.name == "myrec_i64"
+        assert inner.isgeneric is False
+        assert inner.children["x"].name == "i64"
+
+    def test_generic_type_in_type_position_partial(self):
+        """(myrec t: u) in field type position produces partial instantiation."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "wrapper: record { u: any.generic\n inner: (myrec t: u) }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        wrapper = tc._resolved.get("test.wrapper")
+        assert wrapper is not None
+        inner = wrapper.children.get("inner")
+        assert inner is not None
+        assert inner.name == "myrec_u"
+        assert inner.isgeneric is True
+        assert "u" in inner.generic_params
+
+    def test_partial_instantiation_full_monomorphize(self):
+        """Wrapper with (myrec t: u) fully resolves inner when monomorphized."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "wrapper: record { u: any.generic\n inner: (myrec t: u) }\n"
+            "main: function is { w: wrapper u: i64 inner: (myrec x: 42) }"
+        )
+        monos = {m.name: m for m, _ in program.mono_types}
+        assert "wrapper_i64" in monos
+        wrapper_mono = monos["wrapper_i64"]
+        inner = wrapper_mono.children.get("inner")
+        assert inner is not None
+        assert inner.name == "myrec_i64"
+        assert inner.isgeneric is False
+
+    def test_error_bare_generic_in_type_position(self):
+        """Using bare generic type in field position emits error."""
+        errors = check_errors(
+            "myrec: record { t: any.generic\n x: t }\n"
+            "wrapper: record { inner: myrec }\n"
+            "main: function is { w: wrapper inner: (myrec x: 42) }"
+        )
+        assert any("requires type arguments" in e.msg for e in errors)
+
+    def test_error_missing_type_arg_in_type_position(self):
+        """Missing type arg in (myrec) call emits error."""
+        errors = check_errors(
+            "mypair: record { a: any.generic\n b: any.generic\n x: a\n y: b }\n"
+            "wrapper: record { inner: (mypair a: i64) }\n"
+            'main: function is { w: wrapper inner: (mypair x: 1 y: "a") }'
+        )
+        assert any("Missing type argument" in e.msg for e in errors)
