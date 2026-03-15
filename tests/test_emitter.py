@@ -2347,6 +2347,82 @@ class TestProtocols:
         assert "z_myfile_myreader_create" in csource
 
 
+    def test_owned_protocol_create_record(self):
+        """Owned protocol create from record compiles and runs."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create from: f.take\n"
+            '    print "\\{r.read b: 5}"\n'
+            "}\n"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_owned_protocol_create_class(self):
+        """Owned protocol create from class compiles and runs."""
+        csource = emit_source(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myobj: class {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {o: this b: i64} out i64 is {\n"
+            "        return o.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    o: myobj fd: 20\n"
+            "    r: reader.create from: o.take\n"
+            '    print "\\{r.read b: 7}"\n'
+            "}\n"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "27"
+
+    def test_owned_protocol_create_asan(self):
+        """ASan-clean: no leaks or use-after-free with owned protocol."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create from: f.take\n"
+            '    print "\\{r.read b: 5}"\n'
+            "}\n"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "15"
+
+    def test_owned_protocol_dispatch(self):
+        """Method dispatch on owned protocol works via use_reader."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            "    result: r.read b: 5\n    return result\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create from: f.take\n"
+            '    print "\\{use_reader r}"\n'
+            "}\n"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_owned_protocol_destroy_emitted(self):
+        """Owned create sets destroy function pointer (not NULL)."""
+        csource = emit_source(
+            self.PROTO_SOURCE + "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create from: f.take\n"
+            '    print "\\{r.read b: 5}"\n'
+            "}\n"
+        )
+        assert "create_owned" in csource
+        assert "boxed_destroy" in csource
+
+
 class TestGenericsEmission:
     """Tests for generic type emission."""
 

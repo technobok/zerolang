@@ -913,7 +913,7 @@ class TypeChecker:
             if at and at.typetype == ZTypeType.PROTOCOL:
                 # conformance check: implementor must have all spec methods
                 for spec_name, spec_func in at.children.items():
-                    if spec_name.startswith(":"):
+                    if spec_name.startswith(":") or spec_name == "create":
                         continue
                     method = rtype.children.get(spec_name)
                     if not method:
@@ -1034,6 +1034,15 @@ class TypeChecker:
             ptype.children[sname] = st
         if generic_ctx:
             self._generic_context.pop()
+
+        # owned create: protocol.create from: expr
+        if not ptype.isgeneric:
+            create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
+            create_type.children[":return"] = ptype
+            # from: parameter — placeholder type (conformance checked in _check_call)
+            create_type.children["from"] = self.t_null
+            create_type.param_ownership["from"] = ZParamOwnership.TAKE
+            ptype.children["create"] = create_type
 
         self._resolving.pop()
         return ptype
@@ -2103,6 +2112,16 @@ class TypeChecker:
             )
             return None
 
+        # protocol.create from: expr
+        if (
+            callee_type.typetype == ZTypeType.FUNCTION
+            and isinstance(call.callable, zast.DottedPath)
+            and call.callable.child.name == "create"
+        ):
+            parent_type = getattr(call.callable.parent, "type", None)
+            if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
+                return self._check_protocol_create(parent_type, call)
+
         # parameter types (skip :return and special entries)
         params = [
             (k, v) for k, v in callee_type.children.items() if not k.startswith(":")
@@ -2320,6 +2339,45 @@ class TypeChecker:
             if isinstance(inner, zast.Operation):
                 return self._get_arg_root_name(inner)
         return None
+
+    def _check_protocol_create(
+        self, proto_type: ZType, call: zast.Call
+    ) -> Optional[ZType]:
+        """Check protocol.create from: expr — owned protocol creation."""
+        # find the from: argument
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        if not from_arg:
+            self._error(
+                "protocol.create requires 'from:' argument", loc=call.start
+            )
+            return None
+
+        # type-check the from: argument
+        arg_type = self._check_operation(from_arg.valtype)
+        if not arg_type:
+            return None
+
+        # verify conformance: arg_type must conform to this protocol
+        labels = self._protocol_labels.get(arg_type.name, [])
+        found_label = None
+        for label, pt in labels:
+            if pt.name == proto_type.name:
+                found_label = label
+                break
+        if not found_label:
+            self._error(
+                f"Type '{arg_type.name}' does not conform to protocol "
+                f"'{proto_type.name}'",
+                loc=call.start,
+            )
+            return None
+
+        call.type = proto_type
+        return proto_type
 
     def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
         """Check a return statement: verify return value matches function return type."""

@@ -2565,6 +2565,93 @@ class TestProtocols:
         )
 
 
+    def test_protocol_has_create(self):
+        """Protocol type has `create` child (FUNCTION)."""
+        program = check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "reader")
+        assert t is not None
+        assert "create" in t.children
+        assert t.children["create"].typetype == ZTypeType.FUNCTION
+
+    def test_protocol_create_typechecks(self):
+        """reader.create from: f.take type-checks, result is PROTOCOL."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create from: f.take\n"
+            "}\n"
+        )
+
+    def test_protocol_create_nonconforming_error(self):
+        """from: with non-conforming type errors."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "other: record { x: i64 }\n"
+            "main: function is {\n"
+            "    o: other x: 1\n"
+            "    r: reader.create from: o.take\n"
+            "}\n"
+        )
+        assert any("does not conform" in e.msg for e in errors)
+
+    def test_protocol_create_missing_from_error(self):
+        """reader.create with wrong arg name errors."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create x: f.take\n"
+            "}\n"
+        )
+        assert any("requires 'from:'" in e.msg for e in errors)
+
+    def test_generic_protocol_no_create(self):
+        """Generic (unmonomorphized) protocol has no `create`."""
+        program = check_ok(
+            "myproto: protocol {\n"
+            "    t: any.generic\n"
+            "    get: function {:this} out t\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        t = tc._resolved.get("test.myproto")
+        assert t is not None
+        assert t.isgeneric is True
+        assert "create" not in t.children
+
+
 class TestGenerics:
     """Tests for generic type resolution and monomorphization."""
 

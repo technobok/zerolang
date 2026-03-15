@@ -182,6 +182,8 @@ class CEmitter:
         self._spec_names: set[str] = set()
         self._protocol_names: set[str] = set()
         self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
+        # (impl_type, proto_name) -> label for owned protocol create
+        self._proto_conformance: Dict[tuple, str] = {}
         # qualified names like "calculator.op" for func pointer fields in 'is' sections
         self._is_func_fields: set[str] = set()
         self.spec_typedefs: List[str] = []
@@ -326,6 +328,19 @@ class CEmitter:
             elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
                 self._const_names.add(qname)
 
+    def _collect_proto_conformance(self, prefix: str, body: dict) -> None:
+        """Build (impl_type, proto_name) -> label mapping for owned protocol create."""
+        for name, defn in body.items():
+            qname = self._qualify(prefix, name)
+            if isinstance(defn, zast.Unit):
+                self._collect_proto_conformance(qname, defn.body)
+            elif isinstance(defn, (zast.Record, zast.Class)):
+                if not self._is_generic_template(defn):
+                    for label, apath in defn.as_items.items():
+                        proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+                        if proto_name and proto_name in self._protocol_names:
+                            self._proto_conformance[(qname, proto_name)] = label
+
     def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
         """Recursively emit definitions from a unit body."""
         for name, defn in body.items():
@@ -365,6 +380,9 @@ class CEmitter:
 
         # first pass: collect all unit-level definition names (recursing into inline units)
         self._collect_unit_names("", mainunit.body)
+
+        # build protocol conformance map for owned create
+        self._collect_proto_conformance("", mainunit.body)
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", self.program.mainunitname):
@@ -678,6 +696,76 @@ class CEmitter:
         lines.append("    proto->destroy = NULL;\n")
         lines.append("    return proto;\n")
         lines.append("}\n\n")
+
+        # owned create + destroy wrapper
+        if is_class:
+            # class: destroy calls the class destructor
+            destroy_name = f"z_{impl_name}_{label}_owned_destroy"
+            lines.append(f"static void {destroy_name}(void* p) {{\n")
+            lines.append(f"    z_{impl_name}_destroy(({impl_ctype}*)p);\n")
+            lines.append("}\n\n")
+
+            owned_create = f"z_{impl_name}_{label}_create_owned"
+            lines.append(
+                f"static z_{proto_name}_t* {owned_create}({impl_ctype}* val);\n"
+            )
+            lines.append(
+                f"static z_{proto_name}_t* {owned_create}({impl_ctype}* val) {{\n"
+            )
+            lines.append(
+                f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
+            )
+            lines.append("    proto->data = val;\n")
+            lines.append(f"    proto->vtable = &{vtable_name};\n")
+            lines.append(f"    proto->destroy = {destroy_name};\n")
+            lines.append("    return proto;\n")
+            lines.append("}\n\n")
+        else:
+            # record: destroy frees boxed record (+ reftype fields)
+            destroy_name = f"z_{impl_name}_{label}_boxed_destroy"
+            lines.append(f"static void {destroy_name}(void* p) {{\n")
+            lines.append(f"    {impl_ctype}* r = ({impl_ctype}*)p;\n")
+            # cleanup reftype fields
+            for fname, fpath in impl_defn.items.items():
+                ftype_name = None
+                ftype_type = None
+                if hasattr(fpath, "type") and fpath.type:
+                    ftype_name = fpath.type.name
+                    ftype_type = fpath.type.typetype
+                elif isinstance(fpath, zast.AtomId):
+                    ftype_name = fpath.name
+                if ftype_name == "string":
+                    lines.append(f"    zstr_free(r->{fname});\n")
+                elif ftype_type == ZTypeType.CLASS or (
+                    ftype_name and ftype_name in self._class_names
+                ):
+                    lines.append(f"    z_{ftype_name}_destroy(r->{fname});\n")
+                elif ftype_type == ZTypeType.UNION or (
+                    ftype_name and ftype_name in self._union_names
+                ):
+                    lines.append(f"    z_{ftype_name}_destroy(r->{fname});\n")
+            lines.append("    free(r);\n")
+            lines.append("}\n\n")
+
+            owned_create = f"z_{impl_name}_{label}_create_owned"
+            lines.append(
+                f"static z_{proto_name}_t* {owned_create}({impl_ctype} val);\n"
+            )
+            lines.append(
+                f"static z_{proto_name}_t* {owned_create}({impl_ctype} val) {{\n"
+            )
+            lines.append(
+                f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
+            )
+            lines.append(
+                f"    {impl_ctype}* boxed = ({impl_ctype}*)malloc(sizeof({impl_ctype}));\n"
+            )
+            lines.append("    *boxed = val;\n")
+            lines.append("    proto->data = boxed;\n")
+            lines.append(f"    proto->vtable = &{vtable_name};\n")
+            lines.append(f"    proto->destroy = {destroy_name};\n")
+            lines.append("    return proto;\n")
+            lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
 
@@ -1761,6 +1849,61 @@ class CEmitter:
                     return True
         return False
 
+    def _is_protocol_create(self, call: zast.Call) -> bool:
+        """Check if call is protocol.create from: expr."""
+        if not isinstance(call.callable, zast.DottedPath):
+            return False
+        if call.callable.child.name != "create":
+            return False
+        parent_type = getattr(call.callable.parent, "type", None)
+        return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
+
+    def _emit_protocol_create_call(self, call: zast.Call) -> str:
+        """Emit owned protocol create: protocol.create from: expr."""
+        proto_type = call.callable.parent.type
+        proto_name = proto_type.name
+
+        # find the from: argument
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        assert from_arg is not None
+
+        # emit the from: value
+        arg_val = self._emit_operation_value(from_arg.valtype)
+
+        # get impl type name from the argument's resolved type
+        arg_type = getattr(from_arg.valtype, "type", None)
+        if not arg_type:
+            # try parent for dotted paths like f.take
+            if isinstance(from_arg.valtype, zast.DottedPath):
+                arg_type = getattr(from_arg.valtype.parent, "type", None)
+        impl_name = arg_type.name if arg_type else ""
+
+        # look up label
+        label = self._proto_conformance.get((impl_name, proto_name), "")
+        owned_create = f"z_{impl_name}_{label}_create_owned"
+
+        # allocate temp and track as protocol var
+        self._temp_counter += 1
+        tmp = f"_c{self._temp_counter}"
+        indent = self._indent()
+        self._temp_decls.append(
+            f"{indent}z_{proto_name}_t* {tmp} = {owned_create}({arg_val});\n"
+        )
+        self._temp_frees.append(tmp)
+        self._temp_class_set[tmp] = f":proto:{proto_name}"
+
+        # handle .take nullification for class (reftype) arguments only
+        if arg_type and arg_type.typetype == ZTypeType.CLASS:
+            take_var = self._get_take_var(from_arg.valtype)
+            if take_var:
+                self._temp_decls.append(f"{indent}{take_var} = NULL;\n")
+
+        return tmp
+
     def _emit_protocol_dispatch(self, call: zast.Call) -> Optional[str]:
         """If call is a protocol method dispatch, return the C expression. Otherwise None."""
         if not isinstance(call.callable, zast.DottedPath):
@@ -1776,6 +1919,11 @@ class CEmitter:
         return f"{parent_val}->vtable->{method}({', '.join(args)})"
 
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
+        # protocol.create from: expr (owned protocol creation)
+        if self._is_protocol_create(call):
+            val = self._emit_protocol_create_call(call)
+            return f"{indent}{val};\n"
+
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
         if proto_expr is not None:
@@ -2112,6 +2260,10 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
+        # protocol.create from: expr (owned protocol creation)
+        if self._is_protocol_create(call):
+            return self._emit_protocol_create_call(call)
+
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
         if proto_expr is not None:
