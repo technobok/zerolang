@@ -2345,3 +2345,101 @@ class TestProtocols:
         )
         # named var should still use create function (heap alloc)
         assert "z_myfile_myreader_create" in csource
+
+
+class TestGenericsEmission:
+    """Tests for generic type emission."""
+
+    def test_generic_union_template_not_emitted(self):
+        """Generic union template should not produce C struct."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+        # template should NOT be emitted
+        assert "z_myopt_tag_t" not in csource
+        assert "z_myopt_t" not in csource
+
+    def test_monomorphized_union_emitted(self):
+        """Monomorphized union emits tag enum + struct + destructor."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+        assert "z_myopt_i64_tag_t" in csource
+        assert "z_myopt_i64_t" in csource
+        assert "Z_MYOPT_I64_TAG_SOME" in csource
+        assert "Z_MYOPT_I64_TAG_NONE" in csource
+        assert "z_myopt_i64_destroy" in csource
+
+    def test_monomorphized_union_construction_compiles(self):
+        """Generic union construction compiles and runs."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_monomorphized_union_match(self):
+        """Match on monomorphized union works."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "  x: myopt.some 42\n"
+            "  match (\n"
+            "    x\n"
+            "  ) case some then {\n"
+            '    print "found"\n'
+            "  } case none then {\n"
+            '    print "empty"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "found"
+
+    def test_monomorphized_union_scope_cleanup(self):
+        """Monomorphized union destroyed at function exit."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+        assert "z_myopt_i64_destroy(x);" in csource
+
+    def test_two_different_instantiations(self):
+        """Two different instantiations produce two distinct types."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some 42\n"
+            "    y: myopt.some 3.14\n"
+            "}"
+        )
+        assert "z_myopt_i64_t" in csource
+        assert "z_myopt_f64_t" in csource
+        assert "z_myopt_i64_destroy" in csource
+        assert "z_myopt_f64_destroy" in csource
+
+    def test_system_option_compiles(self):
+        """System option type compiles and runs."""
+        csource = emit_source(
+            'main: function is {\n    x: option.some 42\n    print "ok"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_generic_union_asan(self):
+        """Monomorphized union passes AddressSanitizer."""
+        csource = emit_source(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some 42\n"
+            "    y: myopt.none i32\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan failure: {result.stderr}"

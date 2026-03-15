@@ -6,6 +6,7 @@ Includes ownership checking (Phase 4c).
 """
 
 from typing import Optional, List, Tuple
+from collections import OrderedDict
 
 import zast
 from zast import ERR
@@ -95,6 +96,14 @@ class TypeChecker:
 
         # maps implementor type name -> list of (label, protocol ZType)
         self._protocol_labels: dict[str, list[tuple[str, ZType]]] = {}
+
+        # monomorphization cache: (template_name, (arg1_name, ...)) -> ZType
+        self._mono_cache: dict[tuple, ZType] = {}
+        # ordered list of (monomorphized ZType, original AST node) for emitter
+        self._mono_types: list[tuple[ZType, zast.TypeDefinition]] = []
+
+        # generic context stack: list of dicts mapping generic param name -> ZType
+        self._generic_context: list[dict[str, ZType]] = []
 
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
@@ -261,11 +270,30 @@ class TypeChecker:
         self._resolved[key] = ftype  # early register for self-reference
         self._resolving.append((key, ftype))
 
+        # pass 1: detect generic params in parameters
+        generic_ctx: dict[str, ZType] = {}
+        for pname, ppath in func.parameters.items():
+            pt = self._resolve_typeref(ppath)
+            if (
+                pt
+                and pt.typetype == ZTypeType.GENERIC_PARAM
+                and pt.name == "__generic_param"
+            ):
+                constraint = pt.parent if pt.parent else self.t_null
+                ftype.generic_params[pname] = constraint
+                ftype.isgeneric = True
+                generic_ctx[pname] = constraint
+
+        # pass 2: resolve non-generic params with generic context
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
         if func.returntype:
             rt = self._resolve_typeref(func.returntype)
             if rt:
                 ftype.children[":return"] = rt
         for pname, ppath in func.parameters.items():
+            if pname in ftype.generic_params:
+                continue  # skip generic params
             pt = self._resolve_typeref(ppath)
             if pt:
                 ftype.children[pname] = pt
@@ -286,6 +314,8 @@ class TypeChecker:
                     defn = self._lookup_definition(ppath.name)
                     if isinstance(defn, zast.Function) and defn.body is not None:
                         ftype.param_defaults[pname] = ppath.name
+        if generic_ctx:
+            self._generic_context.pop()
 
         # propagate ownership annotations from AST to ZType
         if func.param_ownership:
@@ -381,9 +411,33 @@ class TypeChecker:
 
         utype.is_valtype = False  # unions are reference types
 
-        # resolve each subtype item
-        subtype_names = list(union_defn.items.keys())
+        # pass 1: detect generic params
+        generic_ctx: dict[str, ZType] = {}
         for sname, spath in union_defn.items.items():
+            if isinstance(spath, zast.AtomId) and spath.name == "null":
+                continue
+            st = self._resolve_typeref(spath)
+            if (
+                st
+                and st.typetype == ZTypeType.GENERIC_PARAM
+                and st.name == "__generic_param"
+            ):
+                constraint = st.parent if st.parent else self.t_null
+                utype.generic_params[sname] = constraint
+                utype.isgeneric = True
+                generic_ctx[sname] = constraint
+
+        # pass 2: resolve non-generic subtype items with generic context
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
+        subtype_names = [
+            sname
+            for sname in union_defn.items.keys()
+            if sname not in utype.generic_params
+        ]
+        for sname, spath in union_defn.items.items():
+            if sname in utype.generic_params:
+                continue  # skip generic params
             if isinstance(spath, zast.AtomId) and spath.name == "null":
                 st = _make_type("null", ZTypeType.RECORD)
                 st.is_valtype = True
@@ -391,6 +445,20 @@ class TypeChecker:
                 st = self._resolve_typeref(spath)
             if st:
                 utype.children[sname] = st
+        if generic_ctx:
+            self._generic_context.pop()
+
+        # for generic unions, skip tag generation (done at monomorphization time)
+        if utype.isgeneric:
+            # resolve methods
+            for mname, mfunc in union_defn.functions.items():
+                mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+                utype.children[mname] = mt
+            for mname, mfunc in union_defn.as_functions.items():
+                mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+                utype.children[mname] = mt
+            self._resolving.pop()
+            return utype
 
         # resolve tag from as_items: look for any item that resolves to a TAG type
         custom_tag_data = None  # the parent DATA type of the .tag
@@ -745,7 +813,28 @@ class TypeChecker:
 
         rtype.is_valtype = True  # records are value types
 
+        # pass 1: detect generic params
+        generic_ctx: dict[str, ZType] = {}
         for fname, fpath in rec.items.items():
+            ft = self._resolve_typeref(fpath)
+            if (
+                ft
+                and ft.typetype == ZTypeType.GENERIC_PARAM
+                and ft.name == "__generic_param"
+            ):
+                constraint = ft.parent if ft.parent else self.t_null
+                rtype.generic_params[fname] = constraint
+                rtype.isgeneric = True
+                generic_ctx[fname] = constraint
+            elif ft:
+                pass  # handled in pass 2
+
+        # pass 2: resolve non-generic fields with generic context
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
+        for fname, fpath in rec.items.items():
+            if fname in rtype.generic_params:
+                continue  # skip generic params
             ft = self._resolve_typeref(fpath)
             if ft:
                 rtype.children[fname] = ft
@@ -766,6 +855,8 @@ class TypeChecker:
                     defn = self._lookup_definition(fpath.name)
                     if isinstance(defn, zast.Function) and defn.body is not None:
                         rtype.param_defaults[fname] = fpath.name
+        if generic_ctx:
+            self._generic_context.pop()
         for mname, mfunc in rec.functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
@@ -1027,6 +1118,14 @@ class TypeChecker:
 
     def _resolve_typeref(self, path: zast.Path) -> Optional[ZType]:
         """Resolve a type reference (used in parameter types, return types, fields)."""
+        # check generic context first for simple names
+        if isinstance(path, zast.AtomId) and self._generic_context:
+            for ctx in reversed(self._generic_context):
+                if path.name in ctx:
+                    gp_ref = _make_type(path.name, ZTypeType.GENERIC_PARAM)
+                    gp_ref.parent = ctx[path.name]  # constraint
+                    path.type = gp_ref
+                    return gp_ref
         if isinstance(path, zast.AtomId):
             name = path.name
             if _is_numeric_id(name):
@@ -1101,8 +1200,14 @@ class TypeChecker:
             parent_type = self._resolve_dotted_path(path.parent)
         if not parent_type:
             return None
-        # check for compiler methods: .take and .borrow
+        # check for .generic — creates a generic type parameter marker
         child_name = path.child.name
+        if child_name == "generic":
+            # parent is the constraint type (e.g., any -> empty union)
+            gp = _make_type("__generic_param", ZTypeType.GENERIC_PARAM)
+            gp.parent = parent_type  # constraint
+            path.type = gp
+            return gp
         if child_name == "take":
             # .take returns the same type (ownership transfer)
             path.type = parent_type
@@ -1187,6 +1292,242 @@ class TypeChecker:
             if ak != bk or av.name != bv.name:
                 return False
         return True
+
+    # ---- Monomorphization ----
+
+    def _monomorphize(
+        self,
+        template_type: ZType,
+        generic_args: dict[str, ZType],
+        defn: zast.TypeDefinition,
+    ) -> ZType:
+        """Monomorphize a generic type with concrete type arguments.
+
+        Returns a cached or newly created concrete type with all generic
+        parameters replaced by concrete types.
+        """
+        # build cache key
+        cache_key = (
+            template_type.name,
+            tuple(sorted((k, v.name) for k, v in generic_args.items())),
+        )
+        if cache_key in self._mono_cache:
+            return self._mono_cache[cache_key]
+
+        # constraint checking
+        for param_name, concrete_type in generic_args.items():
+            constraint = template_type.generic_params.get(param_name)
+            if constraint and constraint.name != "any":
+                # constraint is a union: check concrete type matches a subtype
+                if constraint.typetype == ZTypeType.UNION:
+                    subtype_names = {
+                        k
+                        for k, v in constraint.children.items()
+                        if not k.startswith(":")
+                        and k != "tag"
+                        and v.typetype != ZTypeType.FUNCTION
+                        and v.typetype != ZTypeType.DATA
+                        and v.typetype != ZTypeType.TAG
+                        and v.typetype != ZTypeType.ENUM
+                    }
+                    if concrete_type.name not in subtype_names:
+                        self._error(
+                            f"Type '{concrete_type.name}' does not satisfy constraint "
+                            f"'{constraint.name}' for generic parameter '{param_name}'"
+                        )
+
+        # build mangled name
+        arg_names = [generic_args[k].name for k in template_type.generic_params]
+        mangled = f"{template_type.name}_{'_'.join(arg_names)}"
+
+        # create monomorphized type
+        mono = _make_type(mangled, template_type.typetype)
+        mono.generic_origin = template_type
+        mono.generic_args = OrderedDict(generic_args)
+        mono.is_valtype = template_type.is_valtype
+
+        # substitute generic params in children
+        for child_name, child_type in template_type.children.items():
+            if child_type.typetype == ZTypeType.GENERIC_PARAM:
+                # replace with concrete type
+                param_ref_name = child_type.name
+                concrete = generic_args.get(param_ref_name)
+                if concrete:
+                    mono.children[child_name] = concrete
+                else:
+                    mono.children[child_name] = child_type
+            else:
+                mono.children[child_name] = child_type
+
+        # recompute is_valtype based on concrete types
+        if template_type.typetype == ZTypeType.UNION:
+            mono.is_valtype = False
+        elif template_type.typetype == ZTypeType.RECORD:
+            mono.is_valtype = True
+
+        # for unions: rebuild tag enum with the monomorphized name
+        if template_type.typetype == ZTypeType.UNION:
+            subtype_names = [
+                k
+                for k in mono.children
+                if not k.startswith(":")
+                and k != "tag"
+                and mono.children[k].typetype != ZTypeType.FUNCTION
+                and mono.children[k].typetype != ZTypeType.DATA
+                and mono.children[k].typetype != ZTypeType.TAG
+                and mono.children[k].typetype != ZTypeType.ENUM
+            ]
+            tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
+            for i, sname in enumerate(subtype_names):
+                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            mono.children[":tag"] = tag_type
+            # generate data type for .tag access
+            gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
+            gen_data.is_valtype = False
+            for i, sname in enumerate(subtype_names):
+                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            gen_tag = _make_type(
+                f"{mangled}:tag:data:tag", ZTypeType.TAG, parent=gen_data
+            )
+            gen_tag.is_valtype = True
+            gen_data.children["tag"] = gen_tag
+            mono.children["tag"] = gen_data
+
+        # cache and register
+        self._mono_cache[cache_key] = mono
+        self._mono_types.append((mono, defn))
+        # register in _resolved so the emitter can find it
+        for unitname in self.program.units:
+            key = f"{unitname}.{mangled}"
+            self._resolved[key] = mono
+            break
+
+        return mono
+
+    def _find_generic_defn(self, template_type: ZType) -> Optional[zast.TypeDefinition]:
+        """Find the AST definition node for a generic template type."""
+        for unitname, unit in self.program.units.items():
+            defn = unit.body.get(template_type.name)
+            if defn is not None:
+                return defn
+        return None
+
+    def _infer_generic_union_construction(
+        self, template: ZType, call: zast.Call
+    ) -> Optional[ZType]:
+        """Infer generic args for union subtype construction and monomorphize."""
+        subtype_name = (
+            call.callable.child.name
+            if isinstance(call.callable, zast.DottedPath)
+            else None
+        )
+        if not subtype_name:
+            return None
+
+        generic_args: dict[str, ZType] = {}
+
+        # check if this is a null subtype with explicit type arg
+        subtype_child = template.children.get(subtype_name)
+        is_null_subtype = (
+            subtype_child is not None
+            and subtype_child.typetype == ZTypeType.RECORD
+            and subtype_child.name == "null"
+        )
+
+        if is_null_subtype and call.arguments:
+            # option.none i32 — explicit type argument
+            # the argument is a type name, not a value
+            arg = call.arguments[0]
+            arg_type = self._resolve_typeref_from_operation(arg.valtype)
+            if arg_type:
+                # map the first (only?) generic param to this type
+                for param_name in template.generic_params:
+                    generic_args[param_name] = arg_type
+                    break
+        elif subtype_child and subtype_child.typetype == ZTypeType.GENERIC_PARAM:
+            # option.some 42 — infer from argument type
+            if call.arguments:
+                arg_type = self._check_operation(call.arguments[0].valtype)
+                if arg_type:
+                    # the subtype references a generic param by name
+                    param_ref_name = subtype_child.name
+                    generic_args[param_ref_name] = arg_type
+                    # also check for remaining args
+                    for arg in call.arguments[1:]:
+                        self._check_operation(arg.valtype)
+        else:
+            # non-generic subtype — just typecheck args
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+
+        if not generic_args:
+            # couldn't infer — check all args and return None
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            return None
+
+        # fill in any remaining generic params that weren't inferred
+        for param_name in template.generic_params:
+            if param_name not in generic_args:
+                self._error(
+                    f"Cannot infer generic parameter '{param_name}' for "
+                    f"'{template.name}.{subtype_name}'"
+                )
+                return None
+
+        defn = self._find_generic_defn(template)
+        if not defn:
+            return None
+        return self._monomorphize(template, generic_args, defn)
+
+    def _resolve_typeref_from_operation(self, op: zast.Operation) -> Optional[ZType]:
+        """Try to resolve an operation as a type reference (for explicit type args)."""
+        if isinstance(op, zast.AtomId):
+            name = op.name
+            if not _is_numeric_id(name):
+                t = self._resolve_name(name)
+                if t and t.typetype in (
+                    ZTypeType.RECORD,
+                    ZTypeType.UNION,
+                    ZTypeType.CLASS,
+                    ZTypeType.VARIANT,
+                    ZTypeType.ENUM,
+                ):
+                    return t
+        return None
+
+    def _infer_generic_record_construction(
+        self, template: ZType, call: zast.Call
+    ) -> Optional[ZType]:
+        """Infer generic args for record construction and monomorphize."""
+        generic_args: dict[str, ZType] = {}
+
+        # named arguments matching generic param names are type args
+        for arg in call.arguments:
+            if arg.name and arg.name in template.generic_params:
+                arg_type = self._resolve_typeref_from_operation(arg.valtype)
+                if arg_type:
+                    generic_args[arg.name] = arg_type
+                continue
+            self._check_operation(arg.valtype)
+
+        if not generic_args:
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            return None
+
+        for param_name in template.generic_params:
+            if param_name not in generic_args:
+                self._error(
+                    f"Cannot infer generic parameter '{param_name}' for "
+                    f"'{template.name}'"
+                )
+                return None
+
+        defn = self._find_generic_defn(template)
+        if not defn:
+            return None
+        return self._monomorphize(template, generic_args, defn)
 
     # ---- Function body type checking ----
 
@@ -1492,6 +1833,16 @@ class TypeChecker:
             and call.callable.parent_tagged_type
         ):
             parent_tagged = call.callable.parent_tagged_type
+
+            # generic union subtype construction
+            if parent_tagged.isgeneric and parent_tagged.typetype == ZTypeType.UNION:
+                mono_type = self._infer_generic_union_construction(parent_tagged, call)
+                if mono_type:
+                    call.type = mono_type
+                    # update the parent_tagged_type to point to the monomorphized type
+                    call.callable.parent_tagged_type = mono_type
+                    return mono_type
+
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = parent_tagged
@@ -1499,6 +1850,13 @@ class TypeChecker:
 
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
+            # generic record construction
+            if callee_type.isgeneric:
+                mono_type = self._infer_generic_record_construction(callee_type, call)
+                if mono_type:
+                    call.type = mono_type
+                    call.callable.type = mono_type
+                    return mono_type
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
@@ -1902,4 +2260,6 @@ class TypeChecker:
 def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     """Top-level entry point: type-check a parsed program."""
     tc = TypeChecker(program)
-    return tc.check(full=full)
+    errors = tc.check(full=full)
+    program.mono_types = tc._mono_types
+    return errors

@@ -20,6 +20,7 @@ class ZTypeType(IntEnum):
 
     NULL = 0  # function that returns nothing
     GENERIC_CALL = 2
+    GENERIC_PARAM = 3  # a generic type parameter (e.g., t in t: any.generic)
 
     # user defined types
     UNIT = 50
@@ -137,6 +138,19 @@ class ZType:
 
     # default values for parameters/fields: name → C-level default expression
     param_defaults: "dict[str, str]" = field(default_factory=dict, init=False)
+
+    # generic type parameters: param name → constraint ZType (for template types)
+    generic_params: "OrderedDict[str, ZType]" = field(
+        default_factory=OrderedDict, init=False
+    )
+
+    # for monomorphized types: points to the original template type
+    generic_origin: "Optional[ZType]" = field(default=None, init=False)
+
+    # for monomorphized types: maps param name → concrete ZType
+    generic_args: "OrderedDict[str, ZType]" = field(
+        default_factory=OrderedDict, init=False
+    )
 
 
 # a typesafe variable id

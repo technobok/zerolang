@@ -210,6 +210,10 @@ class Program:
     ]  # TODO: change this into a single top level unit (not a dict)
     mainunitname: str
 
+    # monomorphized generic types: list of (mono_ztype, original_ast_node) tuples
+    # populated by the type checker after monomorphization
+    mono_types: typing.List = field(default_factory=list)
+
 
 # a typesafe node id
 NodeID = NewType("NodeID", int)

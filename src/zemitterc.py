@@ -267,6 +267,23 @@ class CEmitter:
     def _qualify(self, prefix: str, name: str) -> str:
         return f"{prefix}.{name}" if prefix else name
 
+    def _is_generic_template(self, defn: zast.TypeDefinition) -> bool:
+        """Check if a definition is a generic template (has .generic in items)."""
+        items = None
+        if isinstance(defn, (zast.Record, zast.Union, zast.Variant)):
+            items = defn.items
+        elif isinstance(defn, zast.Function):
+            items = defn.parameters
+        if items is None:
+            return False
+        for fpath in items.values():
+            if isinstance(fpath, zast.DottedPath) and isinstance(
+                fpath.child, zast.AtomId
+            ):
+                if fpath.child.name == "generic":
+                    return True
+        return False
+
     def _collect_unit_names(self, prefix: str, body: dict) -> None:
         """Recursively collect definition names from a unit body."""
         for name, defn in body.items():
@@ -275,19 +292,22 @@ class CEmitter:
                 self._unit_names.add(qname)
                 self._collect_unit_names(qname, defn.body)
             elif isinstance(defn, zast.Function) and defn.body:
-                self._func_names.add(qname)
+                if not self._is_generic_template(defn):
+                    self._func_names.add(qname)
             elif isinstance(defn, zast.Function) and defn.body is None:
                 self._spec_names.add(qname)
             elif isinstance(defn, zast.Record):
-                self._record_names.add(qname)
-                for mname in defn.functions:
-                    self._is_func_fields.add(f"{qname}.{mname}")
+                if not self._is_generic_template(defn):
+                    self._record_names.add(qname)
+                    for mname in defn.functions:
+                        self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Class):
                 self._class_names.add(qname)
                 for mname in defn.functions:
                     self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Union):
-                self._union_names.add(qname)
+                if not self._is_generic_template(defn):
+                    self._union_names.add(qname)
             elif isinstance(defn, zast.Variant):
                 self._variant_names.add(qname)
             elif isinstance(defn, zast.Protocol):
@@ -306,6 +326,8 @@ class CEmitter:
         """Recursively emit definitions from a unit body."""
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
+            if self._is_generic_template(defn):
+                continue  # skip generic templates
             if isinstance(defn, zast.Unit):
                 self._emit_unit_definitions(qname, defn.body)
             elif isinstance(defn, zast.Record):
@@ -347,8 +369,19 @@ class CEmitter:
                 if isinstance(defn, zast.Function) and defn.body:
                     self._func_names.add(f"{unitname}.{name}")
 
+        # register monomorphized type names before emission
+        for mono_type, _ in getattr(self.program, "mono_types", []):
+            if mono_type.typetype == ZTypeType.UNION:
+                self._union_names.add(mono_type.name)
+            elif mono_type.typetype == ZTypeType.RECORD:
+                self._record_names.add(mono_type.name)
+
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
+
+        # emit monomorphized types
+        for mono_type, template_defn in getattr(self.program, "mono_types", []):
+            self._emit_mono_type(mono_type, template_defn)
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", self.program.mainunitname):
@@ -1002,6 +1035,100 @@ class CEmitter:
         for mname, mfunc in all_funcs:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+
+    def _emit_mono_type(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized type (union or record)."""
+        if mono_type.typetype == ZTypeType.UNION:
+            self._emit_mono_union(mono_type, template_defn)
+        elif mono_type.typetype == ZTypeType.RECORD:
+            self._emit_mono_record(mono_type, template_defn)
+
+    def _emit_mono_union(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized union type."""
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        name = mono_type.name
+        lines: List[str] = []
+
+        # collect subtypes (non-special children)
+        subtype_items: list[tuple[str, ZType]] = []
+        for sname, stype in mono_type.children.items():
+            if sname.startswith(":") or sname == "tag":
+                continue
+            if stype.typetype in (
+                ZTypeType.FUNCTION,
+                ZTypeType.DATA,
+                ZTypeType.TAG,
+                ZTypeType.ENUM,
+            ):
+                continue
+            subtype_items.append((sname, stype))
+
+        # emit tag enum
+        lines.append("typedef enum {\n")
+        for sname, _ in subtype_items:
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            lines.append(f"    {tag},\n")
+        lines.append(f"}} z_{name}_tag_t;\n\n")
+
+        # emit union struct
+        lines.append("typedef struct {\n")
+        lines.append(f"    z_{name}_tag_t tag;\n")
+        lines.append("    void* data;\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # emit destructor
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
+        lines.append("    if (!u) return;\n")
+        lines.append("    switch (u->tag) {\n")
+        for sname, stype in subtype_items:
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            is_null = stype.name == "null" and stype.typetype == ZTypeType.RECORD
+            lines.append(f"        case {tag}:\n")
+            if is_null:
+                lines.append("            break;\n")
+            else:
+                stype_name = stype.name
+                if stype_name == "string":
+                    lines.append("            zstr_free((ZStr*)u->data);\n")
+                elif stype_name in self._class_names:
+                    lines.append(
+                        f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
+                    )
+                elif stype_name in self._union_names:
+                    lines.append(
+                        f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
+                    )
+                else:
+                    lines.append("            free(u->data);\n")
+                lines.append("            break;\n")
+        lines.append("    }\n")
+        lines.append("    free(u);\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_record(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized record type."""
+        self.needs_stdint = True
+        name = mono_type.name
+        lines: List[str] = []
+        lines.append("typedef struct {\n")
+        for fname, ftype in mono_type.children.items():
+            if fname.startswith(":"):
+                continue
+            if ftype.typetype == ZTypeType.FUNCTION:
+                continue
+            ct = _ctype(ftype)
+            lines.append(f"    {ct} {fname};\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+        self.struct_defs.append("".join(lines))
 
     def _emit_variant(self, name: str, variant_defn: zast.Variant) -> None:
         self.needs_stdint = True
@@ -2174,6 +2301,14 @@ class CEmitter:
 
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
+        # check type annotation for monomorphized union types
+        call_type = getattr(call, "type", None)
+        if (
+            call_type
+            and call_type.typetype == ZTypeType.UNION
+            and call_type.generic_origin
+        ):
+            return True
         if isinstance(call.callable, zast.DottedPath):
             if isinstance(call.callable.parent, zast.AtomId):
                 if call.callable.parent.name in self._union_names:
@@ -2193,10 +2328,22 @@ class CEmitter:
         if isinstance(call.callable, zast.DottedPath) and isinstance(
             call.callable.parent, zast.AtomId
         ):
-            union_name = call.callable.parent.name
             subtype_name = call.callable.child.name
         else:
             # bare union name — shouldn't happen for construction but handle gracefully
+            return "NULL"
+
+        # check for monomorphized union type (from type annotation)
+        call_type = getattr(call, "type", None)
+        if (
+            call_type
+            and call_type.typetype == ZTypeType.UNION
+            and call_type.generic_origin
+        ):
+            union_name = call_type.name
+        elif isinstance(call.callable.parent, zast.AtomId):
+            union_name = call.callable.parent.name
+        else:
             return "NULL"
 
         ctype = f"z_{union_name}_t"
@@ -2207,50 +2354,66 @@ class CEmitter:
         )
         self._temp_decls.append(f"{indent}{tmp}->tag = {tag};\n")
 
-        # determine subtype info from AST
-        # look up the union definition to find the subtype's type
-        mainunit = self.program.units.get(self.program.mainunitname)
-        union_defn = mainunit.body.get(union_name) if mainunit else None
-        subtype_path = None
-        if isinstance(union_defn, zast.Union):
-            subtype_path = union_defn.items.get(subtype_name)
-
-        is_null = (
-            subtype_path is not None
-            and isinstance(subtype_path, zast.AtomId)
-            and subtype_path.name == "null"
-        )
+        # determine subtype info — check monomorphized type first
+        is_null = False
+        subtype_ctype_resolved = None
+        if call_type and call_type.generic_origin:
+            # monomorphized: look up subtype from the mono ZType
+            sub_ztype = call_type.children.get(subtype_name)
+            if sub_ztype:
+                is_null = (
+                    sub_ztype.name == "null" and sub_ztype.typetype == ZTypeType.RECORD
+                )
+                if not is_null:
+                    subtype_ctype_resolved = _ctype(sub_ztype)
+        else:
+            # non-generic: look up from AST
+            mainunit = self.program.units.get(self.program.mainunitname)
+            union_defn = mainunit.body.get(union_name) if mainunit else None
+            subtype_path = None
+            if isinstance(union_defn, zast.Union):
+                subtype_path = union_defn.items.get(subtype_name)
+            is_null = (
+                subtype_path is not None
+                and isinstance(subtype_path, zast.AtomId)
+                and subtype_path.name == "null"
+            )
+            if not is_null and subtype_path:
+                subtype_ctype_resolved = self._get_subtype_ctype(subtype_path)
 
         if is_null or not call.arguments:
             self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
         else:
-            val = self._emit_operation_value(call.arguments[0].valtype)
-            # determine if the subtype is a valtype that needs boxing
-            subtype_ctype = self._get_subtype_ctype(subtype_path)
-            if (
-                subtype_ctype
-                and subtype_ctype in ("ZStr*",)
-                or (
-                    subtype_ctype
-                    and subtype_ctype.startswith("z_")
-                    and subtype_ctype.endswith("_t*")
-                )
-            ):
-                # reftype: store pointer directly
-                # remove from temp frees since union takes ownership
-                if val in self._temp_frees:
-                    self._temp_frees.remove(val)
-                self._temp_decls.append(f"{indent}{tmp}->data = {val};\n")
+            # for monomorphized null subtype with explicit type arg, skip the arg
+            # (it's a type name, not a value)
+            if call_type and call_type.generic_origin and is_null:
+                self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
             else:
-                # valtype: box it (malloc + copy)
-                box_ctype = subtype_ctype or "int64_t"
-                self._temp_counter += 1
-                box_tmp = f"_box{self._temp_counter}"
-                self._temp_decls.append(
-                    f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
-                )
-                self._temp_decls.append(f"{indent}*{box_tmp} = {val};\n")
-                self._temp_decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
+                val = self._emit_operation_value(call.arguments[0].valtype)
+                subtype_ctype = subtype_ctype_resolved
+                if (
+                    subtype_ctype
+                    and subtype_ctype in ("ZStr*",)
+                    or (
+                        subtype_ctype
+                        and subtype_ctype.startswith("z_")
+                        and subtype_ctype.endswith("_t*")
+                    )
+                ):
+                    # reftype: store pointer directly
+                    if val in self._temp_frees:
+                        self._temp_frees.remove(val)
+                    self._temp_decls.append(f"{indent}{tmp}->data = {val};\n")
+                else:
+                    # valtype: box it (malloc + copy)
+                    box_ctype = subtype_ctype or "int64_t"
+                    self._temp_counter += 1
+                    box_tmp = f"_box{self._temp_counter}"
+                    self._temp_decls.append(
+                        f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
+                    )
+                    self._temp_decls.append(f"{indent}*{box_tmp} = {val};\n")
+                    self._temp_decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
 
         self._temp_frees.append(tmp)
         return tmp

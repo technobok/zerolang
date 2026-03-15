@@ -2563,3 +2563,172 @@ class TestProtocols:
             "    y: use_reader r: f.myreader\n"
             "}\n"
         )
+
+
+class TestGenerics:
+    """Tests for generic type resolution and monomorphization."""
+
+    def test_generic_record_resolution(self):
+        """Record with t: any.generic puts t in generic_params, not children."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: i64 }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myrec = tc._resolved.get("test.myrec")
+        assert myrec is not None
+        assert myrec.isgeneric is True
+        assert "t" in myrec.generic_params
+        assert "t" not in myrec.children
+        assert "x" in myrec.children
+
+    def test_generic_record_with_generic_field_ref(self):
+        """Record field referencing generic param: x: t resolves to GENERIC_PARAM."""
+        program = check_ok(
+            "myrec: record { t: any.generic\n x: t }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myrec = tc._resolved.get("test.myrec")
+        assert myrec is not None
+        assert myrec.isgeneric
+        assert "x" in myrec.children
+        assert myrec.children["x"].typetype == ZTypeType.GENERIC_PARAM
+
+    def test_generic_union_resolution(self):
+        """Union with t: any.generic detects generic params correctly."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myopt = tc._resolved.get("test.myopt")
+        assert myopt is not None
+        assert myopt.isgeneric is True
+        assert "t" in myopt.generic_params
+        assert "some" in myopt.children
+        assert "none" in myopt.children
+        assert "t" not in myopt.children
+
+    def test_generic_union_subtype_is_generic_param_ref(self):
+        """Union subtype referencing generic param: some: t is GENERIC_PARAM."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myopt = tc._resolved.get("test.myopt")
+        assert myopt is not None
+        assert myopt.children["some"].typetype == ZTypeType.GENERIC_PARAM
+
+    def test_multiple_generic_params(self):
+        """Record with multiple generic params."""
+        program = check_ok(
+            "mypair: record { a: any.generic\n b: any.generic\n x: a\n y: b }\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        pair = tc._resolved.get("test.mypair")
+        assert pair is not None
+        assert pair.isgeneric
+        assert "a" in pair.generic_params
+        assert "b" in pair.generic_params
+        assert "x" in pair.children
+        assert "y" in pair.children
+
+    def test_generic_function_resolution(self):
+        """Function with generic param: t: any.generic."""
+        program = check_ok(
+            "myfn: function { t: any.generic\n x: t } out t\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myfn = tc._resolved.get("test.myfn")
+        assert myfn is not None
+        assert myfn.isgeneric is True
+        assert "t" in myfn.generic_params
+        assert "x" in myfn.children
+        assert myfn.children["x"].typetype == ZTypeType.GENERIC_PARAM
+
+    def test_option_some_infers_i64(self):
+        """option.some 42 infers t=i64."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+        assert mono.generic_origin is not None
+
+    def test_option_none_explicit_type_arg(self):
+        """option.none i32 with explicit type argument."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.none i32 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i32" in mono.name
+
+    def test_same_generic_different_types(self):
+        """Same generic instantiated with different types creates different monomorphizations."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some 42\n"
+            "    y: myopt.some 3.14\n"
+            "}"
+        )
+        assert len(program.mono_types) >= 2
+        names = {m.name for m, _ in program.mono_types}
+        assert any("i64" in n for n in names)
+        assert any("f64" in n for n in names)
+
+    def test_duplicate_instantiation_cached(self):
+        """Duplicate instantiation with same type returns cached type."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is {\n"
+            "    x: myopt.some 1\n"
+            "    y: myopt.some 2\n"
+            "}"
+        )
+        # should produce only one monomorphization for i64
+        i64_monos = [m for m, _ in program.mono_types if "i64" in m.name]
+        assert len(i64_monos) == 1
+
+    def test_system_option_available(self):
+        """System option type is available via core."""
+        program = check_ok("main: function is { x: option.some 42 }")
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert mono.generic_origin is not None
+
+    def test_monomorphized_union_has_tag(self):
+        """Monomorphized union has proper :tag enum."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+        mono, _ = program.mono_types[0]
+        assert ":tag" in mono.children
+        tag_type = mono.children[":tag"]
+        assert tag_type.typetype == ZTypeType.ENUM
+        assert "some" in tag_type.children
+        assert "none" in tag_type.children
+
+    def test_monomorphized_union_concrete_subtypes(self):
+        """Monomorphized union replaces generic param with concrete type."""
+        program = check_ok(
+            "myopt: union { t: any.generic\n some: t\n none: null }\n"
+            "main: function is { x: myopt.some 42 }"
+        )
+        mono, _ = program.mono_types[0]
+        some_type = mono.children.get("some")
+        assert some_type is not None
+        assert some_type.name == "i64"
+        assert some_type.typetype != ZTypeType.GENERIC_PARAM
