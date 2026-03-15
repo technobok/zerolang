@@ -1500,13 +1500,16 @@ class TestDataTypeResolution:
         assert "HIGH" in dt.children
 
     def test_data_has_tag_subtype(self):
-        """All data types should have a .tag subtype of TAG type."""
+        """All data types should have a .tag subtype (monomorphized tag record)."""
         program = check_ok("mydata: data { 1 2 3 }\nmain: function is { x: mydata.0 }")
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
         assert "tag" in dt.children
-        assert dt.children["tag"].typetype == ZTypeType.TAG
+        tag = dt.children["tag"]
+        assert tag.typetype == ZTypeType.RECORD
+        assert tag.generic_origin == "tag"
+        assert tag.name == "tag__i64"
 
     def test_data_tag_parent_is_data(self):
         """The .tag type's parent should point back to its data type."""
@@ -1681,6 +1684,45 @@ class TestUnionCustomTag:
         check_ok(
             "myunion: union { A: null\n B: null } as { tag: u16.tag }\n"
             "main: function is { x: myunion.A }"
+        )
+
+    def test_tag_is_generic_record(self):
+        """The system 'tag' type is a generic record."""
+        program = check_ok("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check()
+        tag = tc._resolve_unit_name("system", "tag")
+        assert tag is not None
+        assert tag.typetype == ZTypeType.RECORD
+        assert tag.isgeneric is True
+        assert "t" in tag.generic_params
+
+    def test_data_tag_returns_monomorphized_tag(self):
+        """data.tag returns tag__element_type with generic_origin='tag'."""
+        program = check_ok(
+            "mydata: data { A: 0 B: 1 }\n"
+            "main: function is { x: mydata.A }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        dt = tc._resolved.get("test.mydata")
+        tag = dt.children["tag"]
+        assert tag.generic_origin == "tag"
+        assert tag.name == "tag__i64"
+        assert tag.parent is dt
+
+    def test_u16_tag_resolves_for_union(self):
+        """u16.tag resolves and works in union as block."""
+        check_ok(
+            "myunion: union { X: i64\n Y: null } as { tag: u16.tag }\n"
+            "main: function is {\n"
+            "  v: myunion.X 10\n"
+            "  match (v) case X then {\n"
+            '    print "x"\n'
+            "  } case Y then {\n"
+            '    print "y"\n'
+            "  }\n"
+            "}"
         )
 
 

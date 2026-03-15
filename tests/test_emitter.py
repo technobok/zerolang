@@ -1096,6 +1096,32 @@ class TestEmitterUnionCustomTag:
         assert "= " not in csource.split("typedef enum")[1].split("}")[0]
 
 
+    def test_numeric_tag_compiles(self):
+        """Union with u16.tag compiles correctly."""
+        csource = emit_source(
+            "myunion: union { A: null\n B: null } as { tag: u16.tag }\n"
+            "main: function is { x: myunion.A }"
+        )
+        assert "z_myunion_tag_t" in csource
+
+    def test_data_tag_runtime(self):
+        """Custom data tag still works at runtime after generic tag change."""
+        csource = emit_source(
+            "pv: data { A: 10 B: 20 }\n"
+            "myunion: union { A: i64\n B: null } as { tag: pv.tag }\n"
+            "main: function is {\n"
+            "  x: myunion.A 42\n"
+            "  match (x) case A then {\n"
+            '    print "a"\n'
+            "  } case B then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "a"
+
+
 class TestEmitterUnionIntegration:
     """Integration tests: compile and run union programs."""
 

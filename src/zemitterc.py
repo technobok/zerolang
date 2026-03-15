@@ -1179,6 +1179,8 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
+            if getattr(stype, "generic_origin", None) == "tag":
+                continue
             subtype_items.append((sname, stype))
 
         # emit tag enum

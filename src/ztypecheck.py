@@ -486,8 +486,8 @@ class TypeChecker:
             self._resolving.pop()
             return utype
 
-        # resolve tag from as_items: look for any item that resolves to a TAG type
-        custom_tag_data = None  # the parent DATA type of the .tag
+        # resolve tag from as_items: look for tag type (monomorphized or generic)
+        custom_tag_data = None  # the parent DATA/RECORD type of the .tag
         tag_count = 0
 
         for as_name, as_path in union_defn.as_items.items():
@@ -496,7 +496,12 @@ class TypeChecker:
                 if isinstance(as_path, zast.DottedPath)
                 else self._resolve_typeref(as_path)
             )
-            if as_type and as_type.typetype == ZTypeType.TAG:
+            is_tag = (
+                (as_type and as_type.typetype == ZTypeType.TAG)
+                or (as_type and getattr(as_type, "generic_origin", None) == "tag")
+                or (as_type and as_type.isgeneric and as_type.name == "tag")
+            )
+            if is_tag:
                 tag_count += 1
                 if tag_count > 1:
                     self._error(
@@ -504,7 +509,16 @@ class TypeChecker:
                         loc=union_defn.start,
                     )
                     break
-                custom_tag_data = as_type.parent  # the DATA type that owns .tag
+                if as_type.parent:
+                    custom_tag_data = as_type.parent
+                elif (
+                    isinstance(as_path, zast.DottedPath)
+                    and isinstance(as_path.parent, zast.AtomId)
+                ):
+                    # generic tag from numeric type: u16.tag → parent is u16
+                    custom_tag_data = getattr(as_path.parent, "type", None)
+                    if not custom_tag_data:
+                        custom_tag_data = self._resolve_name(as_path.parent.name)
 
         if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
             # validate: data labels must match union subtypes 1:1
@@ -572,8 +586,9 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type(f"{name}:tag:data:tag", ZTypeType.TAG, parent=gen_data)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
+            gen_tag.generic_origin = "tag"
             gen_data.children["tag"] = gen_tag
             utype.children["tag"] = gen_data
 
@@ -596,8 +611,9 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type(f"{name}:tag:data:tag", ZTypeType.TAG, parent=gen_data)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
+            gen_tag.generic_origin = "tag"
             gen_data.children["tag"] = gen_tag
             utype.children["tag"] = gen_data
 
@@ -664,7 +680,12 @@ class TypeChecker:
                 if isinstance(as_path, zast.DottedPath)
                 else self._resolve_typeref(as_path)
             )
-            if as_type and as_type.typetype == ZTypeType.TAG:
+            is_tag = (
+                (as_type and as_type.typetype == ZTypeType.TAG)
+                or (as_type and getattr(as_type, "generic_origin", None) == "tag")
+                or (as_type and as_type.isgeneric and as_type.name == "tag")
+            )
+            if is_tag:
                 tag_count += 1
                 if tag_count > 1:
                     self._error(
@@ -672,7 +693,15 @@ class TypeChecker:
                         loc=variant_defn.start,
                     )
                     break
-                custom_tag_data = as_type.parent
+                if as_type.parent:
+                    custom_tag_data = as_type.parent
+                elif (
+                    isinstance(as_path, zast.DottedPath)
+                    and isinstance(as_path.parent, zast.AtomId)
+                ):
+                    custom_tag_data = getattr(as_path.parent, "type", None)
+                    if not custom_tag_data:
+                        custom_tag_data = self._resolve_name(as_path.parent.name)
 
         if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
             # validate: data labels must match variant subtypes 1:1
@@ -735,8 +764,9 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type(f"{name}:tag:data:tag", ZTypeType.TAG, parent=gen_data)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
+            gen_tag.generic_origin = "tag"
             gen_data.children["tag"] = gen_tag
             vtype.children["tag"] = gen_data
 
@@ -757,8 +787,9 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type(f"{name}:tag:data:tag", ZTypeType.TAG, parent=gen_data)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
+            gen_tag.generic_origin = "tag"
             gen_data.children["tag"] = gen_tag
             vtype.children["tag"] = gen_data
 
@@ -823,9 +854,11 @@ class TypeChecker:
         if element_type:
             dtype.children[":element_type"] = element_type
 
-        # Generate .tag subtype — a TAG type that refers back to this data
-        tag_type = _make_type(f"{name}:tag", ZTypeType.TAG, parent=dtype)
+        # Generate .tag subtype — monomorphized tag(element_type) with parent=data
+        et_name = element_type.name if element_type else "i64"
+        tag_type = _make_type(f"tag__{et_name}", ZTypeType.RECORD, parent=dtype)
         tag_type.is_valtype = True
+        tag_type.generic_origin = "tag"
         dtype.children["tag"] = tag_type
 
         self._resolving.pop()
@@ -1190,6 +1223,9 @@ class TypeChecker:
                 return self._resolve_this_keyword()
             t = self._resolve_name(name)
             if t and t.isgeneric:
+                # allow bare generic 'tag' as field type (monomorphized on use)
+                if name == "tag":
+                    return t
                 self._error(
                     f"Generic type '{name}' requires type arguments, "
                     f"e.g. ({name} t: i64)",
@@ -1440,6 +1476,7 @@ class TypeChecker:
                         and v.typetype != ZTypeType.DATA
                         and v.typetype != ZTypeType.TAG
                         and v.typetype != ZTypeType.ENUM
+                        and getattr(v, "generic_origin", None) != "tag"
                     }
                     if concrete_type.name not in subtype_names:
                         self._error(
@@ -1522,6 +1559,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
+                and getattr(mono.children[k], "generic_origin", None) != "tag"
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -1532,10 +1570,9 @@ class TypeChecker:
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type(
-                f"{mangled}:tag:data:tag", ZTypeType.TAG, parent=gen_data
-            )
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
+            gen_tag.generic_origin = "tag"
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
 
@@ -2513,6 +2550,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
+                and getattr(v, "generic_origin", None) != "tag"
             }
             covered = {clause.match.name for clause in casenode.clauses}
             missing = subtypes - covered
