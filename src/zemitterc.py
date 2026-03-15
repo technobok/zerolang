@@ -1894,7 +1894,9 @@ class CEmitter:
 
     def _emit_protocol_create_call(self, call: zast.Call) -> str:
         """Emit owned protocol create: protocol.create from: expr."""
+        assert isinstance(call.callable, zast.DottedPath)
         proto_type = call.callable.parent.type
+        assert proto_type is not None
         proto_name = proto_type.name
 
         # find the from: argument

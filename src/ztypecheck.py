@@ -511,6 +511,7 @@ class TypeChecker:
                 or (as_type and as_type.isgeneric and as_type.name == "tag")
             )
             if is_tag:
+                assert as_type is not None
                 tag_count += 1
                 if tag_count > 1:
                     self._error(
@@ -694,6 +695,7 @@ class TypeChecker:
                 or (as_type and as_type.isgeneric and as_type.name == "tag")
             )
             if is_tag:
+                assert as_type is not None
                 tag_count += 1
                 if tag_count > 1:
                     self._error(
@@ -1557,7 +1559,7 @@ class TypeChecker:
                     mono.children[child_name] = child_type
             elif (
                 child_type.isgeneric
-                and child_type.generic_origin is not None
+                and isinstance(child_type.generic_origin, ZType)
                 and not is_partial
             ):
                 # partially-instantiated child — resolve remaining generic params

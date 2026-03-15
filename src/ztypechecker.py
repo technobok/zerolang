@@ -144,8 +144,8 @@ class ZType:
         default_factory=OrderedDict, init=False
     )
 
-    # for monomorphized types: points to the original template type
-    generic_origin: "Optional[ZType]" = field(default=None, init=False)
+    # for monomorphized types: points to the original template type (or "tag" sentinel)
+    generic_origin: "Optional[ZType | str]" = field(default=None, init=False)
 
     # for monomorphized types: maps param name → concrete ZType
     generic_args: "OrderedDict[str, ZType]" = field(
