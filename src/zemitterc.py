@@ -270,9 +270,11 @@ class CEmitter:
     def _is_generic_template(self, defn: zast.TypeDefinition) -> bool:
         """Check if a definition is a generic template (has .generic in items)."""
         items = None
-        if isinstance(defn, (zast.Record, zast.Union, zast.Variant)):
+        if isinstance(defn, (zast.Record, zast.Union, zast.Variant, zast.Class)):
             items = defn.items
         elif isinstance(defn, zast.Function):
+            items = defn.parameters
+        elif isinstance(defn, zast.Protocol):
             items = defn.parameters
         if items is None:
             return False
@@ -302,17 +304,19 @@ class CEmitter:
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Class):
-                self._class_names.add(qname)
-                for mname in defn.functions:
-                    self._is_func_fields.add(f"{qname}.{mname}")
+                if not self._is_generic_template(defn):
+                    self._class_names.add(qname)
+                    for mname in defn.functions:
+                        self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Union):
                 if not self._is_generic_template(defn):
                     self._union_names.add(qname)
             elif isinstance(defn, zast.Variant):
                 self._variant_names.add(qname)
             elif isinstance(defn, zast.Protocol):
-                self._protocol_names.add(qname)
-                self._protocol_defs[qname] = defn
+                if not self._is_generic_template(defn):
+                    self._protocol_names.add(qname)
+                    self._protocol_defs[qname] = defn
             elif isinstance(defn, zast.Data):
                 self._data_names.add(qname)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -375,6 +379,23 @@ class CEmitter:
                 self._union_names.add(mono_type.name)
             elif mono_type.typetype == ZTypeType.RECORD:
                 self._record_names.add(mono_type.name)
+            elif mono_type.typetype == ZTypeType.CLASS:
+                self._class_names.add(mono_type.name)
+                # pre-register field info so _build_meta_create_args works
+                # during function body emission (before mono type emission)
+                name = mono_type.name
+                field_names: List[str] = []
+                field_ctypes_list: List[str] = []
+                for fn, ft in mono_type.children.items():
+                    if fn.startswith(":") or ft.typetype == ZTypeType.FUNCTION:
+                        continue
+                    field_names.append(fn)
+                    field_ctypes_list.append(_ctype(ft))
+                self._type_field_names[name] = field_names
+                self._type_field_ctypes[name] = field_ctypes_list
+                self._type_field_defaults[name] = {}
+            elif mono_type.typetype == ZTypeType.PROTOCOL:
+                self._protocol_names.add(mono_type.name)
 
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
@@ -1039,11 +1060,15 @@ class CEmitter:
     def _emit_mono_type(
         self, mono_type: ZType, template_defn: zast.TypeDefinition
     ) -> None:
-        """Emit a monomorphized type (union or record)."""
+        """Emit a monomorphized type (union, record, class, or protocol)."""
         if mono_type.typetype == ZTypeType.UNION:
             self._emit_mono_union(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.RECORD:
             self._emit_mono_record(mono_type, template_defn)
+        elif mono_type.typetype == ZTypeType.CLASS:
+            self._emit_mono_class(mono_type, template_defn)
+        elif mono_type.typetype == ZTypeType.PROTOCOL:
+            self._emit_mono_protocol(mono_type, template_defn)
 
     def _emit_mono_union(
         self, mono_type: ZType, template_defn: zast.TypeDefinition
@@ -1128,6 +1153,147 @@ class CEmitter:
             ct = _ctype(ftype)
             lines.append(f"    {ct} {fname};\n")
         lines.append(f"}} z_{name}_t;\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_class(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized class type."""
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        name = mono_type.name
+        lines: List[str] = []
+
+        # collect fields (non-special, non-function children)
+        field_items = [
+            (fn, ft)
+            for fn, ft in mono_type.children.items()
+            if not fn.startswith(":") and ft.typetype != ZTypeType.FUNCTION
+        ]
+
+        # struct typedef
+        lines.append("typedef struct {\n")
+        for fname, ftype in field_items:
+            ct = _ctype(ftype)
+            lines.append(f"    {ct} {fname};\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # destructor
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
+        lines.append("    if (!p) return;\n")
+        for fname, ftype in field_items:
+            if ftype.name == "string":
+                lines.append(f"    zstr_free(p->{fname});\n")
+            elif ftype.name in self._class_names:
+                lines.append(f"    z_{ftype.name}_destroy(p->{fname});\n")
+            elif ftype.name in self._union_names:
+                lines.append(f"    z_{ftype.name}_destroy(p->{fname});\n")
+        lines.append("    free(p);\n")
+        lines.append("}\n\n")
+
+        # meta.create constructor
+        self._emit_mono_class_create(name, mono_type, field_items, lines)
+
+        self.struct_defs.append("".join(lines))
+
+        # emit methods from template_defn with mangled names
+        if isinstance(template_defn, zast.Class):
+            for mname, mfunc in template_defn.as_functions.items():
+                if mfunc.body:
+                    self._emit_function(
+                        f"{name}.{mname}", mfunc, record_name=name
+                    )
+
+    def _emit_mono_class_create(
+        self,
+        name: str,
+        mono_type: ZType,
+        field_items: list,
+        lines: List[str],
+    ) -> None:
+        """Emit meta.create and create functions for a monomorphized class."""
+        ctype = f"z_{name}_t"
+        params: List[str] = []
+        field_names: List[str] = []
+        field_ctypes_list: List[str] = []
+        for fname, ftype in field_items:
+            ct = _ctype(ftype)
+            params.append(f"{ct} {fname}")
+            field_names.append(fname)
+            field_ctypes_list.append(ct)
+        self._type_field_ctypes[name] = field_ctypes_list
+        self._type_field_names[name] = field_names
+        self._type_field_defaults[name] = {}
+        param_str = ", ".join(params) if params else "void"
+        arg_str = ", ".join(field_names)
+        func_name = f"z_{name}_meta_create"
+        lines.append(f"static {ctype}* {func_name}({param_str});\n")
+        lines.append(f"static {ctype}* {func_name}({param_str}) {{\n")
+        lines.append(
+            f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n"
+        )
+        lines.append(f"    *_this = ({ctype}){{0}};\n")
+        for fname in field_names:
+            lines.append(f"    _this->{fname} = {fname};\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+        create_name = f"z_{name}_create"
+        lines.append(f"static {ctype}* {create_name}({param_str});\n")
+        lines.append(f"static {ctype}* {create_name}({param_str}) {{\n")
+        lines.append(f"    return {func_name}({arg_str});\n")
+        lines.append("}\n\n")
+
+    def _emit_mono_protocol(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized protocol type."""
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        name = mono_type.name
+        lines: List[str] = []
+
+        # collect spec functions from mono_type.children
+        specs = [
+            (sn, st)
+            for sn, st in mono_type.children.items()
+            if not sn.startswith(":") and st.typetype == ZTypeType.FUNCTION
+        ]
+
+        # vtable struct
+        lines.append("typedef struct {\n")
+        for sname, stype in specs:
+            ret_type = stype.children.get(":return")
+            ret_ctype = _ctype(ret_type) if ret_type else "void"
+            params = ["void*"]
+            for pname, ptype in stype.children.items():
+                if pname.startswith(":") or pname == "this":
+                    continue
+                params.append(_ctype(ptype))
+            lines.append(
+                f"    {ret_ctype} (*{sname})({', '.join(params)});\n"
+            )
+        lines.append(f"}} z_{name}_vtable_t;\n\n")
+
+        # instance struct
+        lines.append("typedef struct {\n")
+        lines.append("    void* data;\n")
+        lines.append(f"    z_{name}_vtable_t* vtable;\n")
+        lines.append("    void (*destroy)(void*);\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # destroy function
+        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto);\n")
+        lines.append(
+            f"static void z_{name}_destroy(z_{name}_t* proto) {{\n"
+        )
+        lines.append("    if (!proto) return;\n")
+        lines.append(
+            "    if (proto->destroy) proto->destroy(proto->data);\n"
+        )
+        lines.append("    free(proto);\n")
+        lines.append("}\n\n")
+
         self.struct_defs.append("".join(lines))
 
     def _emit_variant(self, name: str, variant_defn: zast.Variant) -> None:

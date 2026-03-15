@@ -359,7 +359,28 @@ class TypeChecker:
 
         ctype.is_valtype = False  # classes are reference types
 
+        # pass 1: detect generic params
+        generic_ctx: dict[str, ZType] = {}
         for fname, fpath in cls.items.items():
+            ft = self._resolve_typeref(fpath)
+            if (
+                ft
+                and ft.typetype == ZTypeType.GENERIC_PARAM
+                and ft.name == "__generic_param"
+            ):
+                constraint = ft.parent if ft.parent else self.t_null
+                ctype.generic_params[fname] = constraint
+                ctype.isgeneric = True
+                generic_ctx[fname] = constraint
+            elif ft:
+                pass  # handled in pass 2
+
+        # pass 2: resolve non-generic fields with generic context
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
+        for fname, fpath in cls.items.items():
+            if fname in ctype.generic_params:
+                continue  # skip generic params
             ft = self._resolve_typeref(fpath)
             if ft:
                 ctype.children[fname] = ft
@@ -380,23 +401,28 @@ class TypeChecker:
                     defn = self._lookup_definition(fpath.name)
                     if isinstance(defn, zast.Function) and defn.body is not None:
                         ctype.param_defaults[fname] = fpath.name
-        for mname, mfunc in cls.functions.items():
-            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
-            ctype.children[mname] = mt
-        # as_functions (methods defined in 'as' block)
-        for mname, mfunc in cls.as_functions.items():
-            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
-            ctype.children[mname] = mt
+        if generic_ctx:
+            self._generic_context.pop()
 
-        # as_items: protocol satisfaction
-        self._process_as_items_protocols(name, ctype, cls.as_items, cls.start)
+        # for generic classes, defer method resolution and meta.create to monomorphization
+        if not ctype.isgeneric:
+            for mname, mfunc in cls.functions.items():
+                mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+                ctype.children[mname] = mt
+            # as_functions (methods defined in 'as' block)
+            for mname, mfunc in cls.as_functions.items():
+                mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+                ctype.children[mname] = mt
 
-        # generate meta.create constructor type
-        is_func_names = set(cls.functions.keys())
-        create_type = self._make_meta_create_type(name, ctype, is_func_names)
-        ctype.children[":meta.create"] = create_type
-        if "create" not in ctype.children:
-            ctype.children["create"] = create_type
+            # as_items: protocol satisfaction
+            self._process_as_items_protocols(name, ctype, cls.as_items, cls.start)
+
+            # generate meta.create constructor type
+            is_func_names = set(cls.functions.keys())
+            create_type = self._make_meta_create_type(name, ctype, is_func_names)
+            ctype.children[":meta.create"] = create_type
+            if "create" not in ctype.children:
+                ctype.children["create"] = create_type
 
         self._resolving.pop()
         return ctype
@@ -986,9 +1012,28 @@ class TypeChecker:
         self._resolving.append((key, ptype))
         ptype.is_valtype = False  # protocol instances are reference types
 
+        # pass 1: detect generic params from protocol parameters
+        generic_ctx: dict[str, ZType] = {}
+        for pname, ppath in proto.parameters.items():
+            pt = self._resolve_typeref(ppath)
+            if (
+                pt
+                and pt.typetype == ZTypeType.GENERIC_PARAM
+                and pt.name == "__generic_param"
+            ):
+                constraint = pt.parent if pt.parent else self.t_null
+                ptype.generic_params[pname] = constraint
+                ptype.isgeneric = True
+                generic_ctx[pname] = constraint
+
+        # pass 2: resolve specs with generic context
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
         for sname, sfunc in proto.specs.items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ptype.children[sname] = st
+        if generic_ctx:
+            self._generic_context.pop()
 
         self._resolving.pop()
         return ptype
@@ -1452,6 +1497,10 @@ class TypeChecker:
             mono.is_valtype = False
         elif template_type.typetype == ZTypeType.RECORD:
             mono.is_valtype = True
+        elif template_type.typetype == ZTypeType.CLASS:
+            mono.is_valtype = False
+        elif template_type.typetype == ZTypeType.PROTOCOL:
+            mono.is_valtype = False
 
         # for unions: rebuild tag enum with the monomorphized name
         if template_type.typetype == ZTypeType.UNION:
@@ -1480,6 +1529,16 @@ class TypeChecker:
             gen_tag.is_valtype = True
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
+
+        # for classes: rebuild meta.create for the monomorphized class
+        if template_type.typetype == ZTypeType.CLASS:
+            is_func_names = set()
+            if isinstance(defn, zast.Class):
+                is_func_names = set(defn.functions.keys())
+            create_type = self._make_meta_create_type(mangled, mono, is_func_names)
+            mono.children[":meta.create"] = create_type
+            if "create" not in mono.children:
+                mono.children["create"] = create_type
 
         # cache and register
         self._mono_cache[cache_key] = mono
@@ -1828,6 +1887,7 @@ class TypeChecker:
                     ZTypeType.RECORD,
                     ZTypeType.CLASS,
                     ZTypeType.UNION,
+                    ZTypeType.PROTOCOL,
                 )
             ):
                 type_desc = t.name
@@ -2017,6 +2077,13 @@ class TypeChecker:
 
         # handle class construction: calling a class type creates a new owned instance
         if callee_type.typetype == ZTypeType.CLASS:
+            if callee_type.isgeneric:
+                mono_type = self._infer_generic_record_construction(callee_type, call)
+                if mono_type:
+                    call.type = mono_type
+                    call.callable.type = mono_type
+                    return mono_type
+                return None
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type

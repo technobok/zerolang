@@ -2870,3 +2870,133 @@ class TestGenerics:
             'main: function is { w: wrapper inner: (mypair x: 1 y: "a") }'
         )
         assert any("Missing type argument" in e.msg for e in errors)
+
+    # ---- Generic Classes ----
+
+    def test_generic_class_resolution(self):
+        """Class with t: any.generic puts t in generic_params, not children."""
+        program = check_ok(
+            "mycls: class { t: any.generic\n x: i64 }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        mycls = tc._resolved.get("test.mycls")
+        assert mycls is not None
+        assert mycls.isgeneric is True
+        assert "t" in mycls.generic_params
+        assert "t" not in mycls.children
+        assert "x" in mycls.children
+
+    def test_generic_class_field_uses_param(self):
+        """Class field referencing generic param: val: t resolves to GENERIC_PARAM."""
+        program = check_ok(
+            "mycls: class { t: any.generic\n val: t }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        mycls = tc._resolved.get("test.mycls")
+        assert mycls is not None
+        assert mycls.isgeneric
+        assert "val" in mycls.children
+        assert mycls.children["val"].typetype == ZTypeType.GENERIC_PARAM
+
+    def test_generic_class_construction_infers(self):
+        """mycls val: 42 infers t=i64 and produces monomorphized type."""
+        program = check_ok(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls val: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+        assert mono.typetype == ZTypeType.CLASS
+        assert mono.isgeneric is False
+        assert "val" in mono.children
+        assert mono.children["val"].name == "i64"
+
+    def test_generic_class_explicit_type_arg(self):
+        """mycls t: i64 val: 42 with explicit type arg."""
+        program = check_ok(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls t: i64 val: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+        assert mono.typetype == ZTypeType.CLASS
+
+    def test_generic_class_is_reftype(self):
+        """Monomorphized generic class is still a reference type."""
+        program = check_ok(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls val: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert mono.is_valtype is False
+
+    def test_generic_class_has_create(self):
+        """Monomorphized class has :meta.create constructor."""
+        program = check_ok(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls val: 42 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert ":meta.create" in mono.children
+        assert mono.children[":meta.create"].typetype == ZTypeType.FUNCTION
+
+    def test_error_generic_class_no_args(self):
+        """Bare generic class name in expression is an error."""
+        errors = check_errors(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls }"
+        )
+        assert any("generic" in e.msg.lower() for e in errors)
+
+    # ---- Generic Protocols ----
+
+    def test_generic_protocol_resolution(self):
+        """Protocol with t: any.generic param is generic."""
+        program = check_ok(
+            "myproto: protocol {\n"
+            "  t: any.generic\n"
+            "  get: function {:this} out t\n"
+            "}\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myproto = tc._resolved.get("test.myproto")
+        assert myproto is not None
+        assert myproto.isgeneric is True
+        assert "t" in myproto.generic_params
+
+    def test_generic_protocol_spec_uses_param(self):
+        """Spec function uses generic param type."""
+        program = check_ok(
+            "myproto: protocol {\n"
+            "  t: any.generic\n"
+            "  get: function {:this} out t\n"
+            "}\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myproto = tc._resolved.get("test.myproto")
+        assert myproto is not None
+        get_fn = myproto.children.get("get")
+        assert get_fn is not None
+        ret = get_fn.children.get(":return")
+        assert ret is not None
+        assert ret.typetype == ZTypeType.GENERIC_PARAM
+
+    def test_error_generic_protocol_no_args(self):
+        """Bare generic protocol name in expression is an error."""
+        errors = check_errors(
+            "myproto: protocol {\n"
+            "  t: any.generic\n"
+            "  get: function {:this} out t\n"
+            "}\n"
+            "myrec: record { x: i64 } as { p: myproto }\n"
+            "main: function is { r: myrec x: 1\n v: r.p }"
+        )
+        assert any("generic" in e.msg.lower() for e in errors)

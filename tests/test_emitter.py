@@ -2443,3 +2443,77 @@ class TestGenericsEmission:
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan failure: {result.stderr}"
+
+    # ---- Generic Classes ----
+
+    def test_generic_class_template_not_emitted(self):
+        """Generic class template should not produce C struct."""
+        csource = emit_source(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls val: 42 }"
+        )
+        assert "z_mycls_t " not in csource or "z_mycls_i64_t" in csource
+        # template should not be emitted; only the monomorphized version
+        assert "z_mycls_i64_t" in csource
+
+    def test_generic_class_compiles(self):
+        """Generic class construction compiles and runs."""
+        csource = emit_source(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is {\n"
+            "    x: mycls val: 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_generic_class_asan(self):
+        """Monomorphized class passes AddressSanitizer."""
+        csource = emit_source(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is {\n"
+            "    x: mycls val: 42\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan failure: {result.stderr}"
+
+    def test_generic_class_methods(self):
+        """Generic class with as-methods compiles."""
+        csource = emit_source(
+            "mycls: class { t: any.generic\n val: t } as {\n"
+            "  getval: function {c: this} out i64 is { return c.val }\n"
+            "}\n"
+            "main: function is {\n"
+            "    x: mycls val: 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_generic_class_destructor(self):
+        """Monomorphized class has destructor call at scope exit."""
+        csource = emit_source(
+            "mycls: class { t: any.generic\n val: t }\n"
+            "main: function is { x: mycls val: 42 }"
+        )
+        assert "z_mycls_i64_destroy(x);" in csource
+
+    # ---- Generic Protocols ----
+
+    def test_generic_protocol_compiles(self):
+        """Generic protocol definition compiles (template skipped)."""
+        csource = emit_source(
+            "myproto: protocol {\n"
+            "  t: any.generic\n"
+            "  get: function {:this} out t\n"
+            "}\n"
+            'main: function is { print "ok" }'
+        )
+        # generic template should NOT produce a struct
+        assert "z_myproto_vtable_t" not in csource
+        assert "z_myproto_t" not in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
