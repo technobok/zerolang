@@ -2691,6 +2691,181 @@ class TestProtocols:
         assert t.isgeneric is True
         assert "create" not in t.children
 
+    def test_protocol_has_take(self):
+        """Protocol type has `take` child (FUNCTION)."""
+        program = check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "reader")
+        assert t is not None
+        assert "take" in t.children
+        assert t.children["take"].typetype == ZTypeType.FUNCTION
+
+    def test_protocol_take_typechecks(self):
+        """reader.take from: f.take type-checks, result is PROTOCOL."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.take from: f.take\n"
+            "}\n"
+        )
+
+    def test_protocol_take_nonconforming_error(self):
+        """from: with non-conforming type errors for take."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "other: record { x: i64 }\n"
+            "main: function is {\n"
+            "    o: other x: 1\n"
+            "    r: reader.take from: o.take\n"
+            "}\n"
+        )
+        assert any("does not conform" in e.msg for e in errors)
+
+    def test_protocol_has_borrow(self):
+        """Protocol type has `borrow` child (FUNCTION)."""
+        program = check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "reader")
+        assert t is not None
+        assert "borrow" in t.children
+        assert t.children["borrow"].typetype == ZTypeType.FUNCTION
+
+    def test_protocol_borrow_typechecks(self):
+        """reader.borrow from: f.lock type-checks, result is PROTOCOL."""
+        check_ok(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.borrow from: f.lock\n"
+            "}\n"
+        )
+
+    def test_protocol_borrow_nonconforming_error(self):
+        """from: with non-conforming type errors for borrow."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "other: record { x: i64 }\n"
+            "main: function is {\n"
+            "    o: other x: 1\n"
+            "    r: reader.borrow from: o.lock\n"
+            "}\n"
+        )
+        assert any("does not conform" in e.msg for e in errors)
+
+    def test_protocol_borrow_missing_from_error(self):
+        """reader.borrow with wrong arg name errors."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.borrow x: f.lock\n"
+            "}\n"
+        )
+        assert any("requires 'from:'" in e.msg for e in errors)
+
+    def test_protocol_borrow_locks_source(self):
+        """Source is locked after borrow — second borrow errors (like obj.label)."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.borrow from: f.lock\n"
+            "    b: f.borrow\n"
+            "}\n"
+        )
+        assert any(
+            "locked" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
+        )
+
+    def test_generic_protocol_no_take(self):
+        """Generic (unmonomorphized) protocol has no `take`."""
+        program = check_ok(
+            "myproto: protocol {\n"
+            "    t: any.generic\n"
+            "    get: function {:this} out t\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        t = tc._resolved.get("test.myproto")
+        assert t is not None
+        assert t.isgeneric is True
+        assert "take" not in t.children
+
+    def test_generic_protocol_no_borrow(self):
+        """Generic (unmonomorphized) protocol has no `borrow`."""
+        program = check_ok(
+            "myproto: protocol {\n"
+            "    t: any.generic\n"
+            "    get: function {:this} out t\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        t = tc._resolved.get("test.myproto")
+        assert t is not None
+        assert t.isgeneric is True
+        assert "borrow" not in t.children
+
 
 class TestGenerics:
     """Tests for generic type resolution and monomorphization."""

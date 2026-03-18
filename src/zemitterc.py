@@ -1884,10 +1884,19 @@ class CEmitter:
         return False
 
     def _is_protocol_create(self, call: zast.Call) -> bool:
-        """Check if call is protocol.create from: expr."""
+        """Check if call is protocol.create/take from: expr."""
         if not isinstance(call.callable, zast.DottedPath):
             return False
-        if call.callable.child.name != "create":
+        if call.callable.child.name not in ("create", "take"):
+            return False
+        parent_type = getattr(call.callable.parent, "type", None)
+        return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
+
+    def _is_protocol_borrow(self, call: zast.Call) -> bool:
+        """Check if call is protocol.borrow from: expr."""
+        if not isinstance(call.callable, zast.DottedPath):
+            return False
+        if call.callable.child.name != "borrow":
             return False
         parent_type = getattr(call.callable.parent, "type", None)
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
@@ -1940,6 +1949,56 @@ class CEmitter:
 
         return tmp
 
+    def _emit_protocol_borrow_call(self, call: zast.Call) -> str:
+        """Emit borrowed protocol create: protocol.borrow from: expr."""
+        assert isinstance(call.callable, zast.DottedPath)
+        proto_type = call.callable.parent.type
+        assert proto_type is not None
+        proto_name = proto_type.name
+
+        # find the from: argument
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        assert from_arg is not None
+
+        # emit the from: value
+        arg_val = self._emit_operation_value(from_arg.valtype)
+
+        # get impl type name from the argument's resolved type
+        arg_type = getattr(from_arg.valtype, "type", None)
+        if not arg_type:
+            if isinstance(from_arg.valtype, zast.DottedPath):
+                arg_type = getattr(from_arg.valtype.parent, "type", None)
+        impl_name = arg_type.name if arg_type else ""
+
+        # look up label
+        label = self._proto_conformance.get((impl_name, proto_name), "")
+        create_name = f"z_{impl_name}_{label}_create"
+
+        # for value types (records): pass address; for reference types: pass directly
+        if arg_type and arg_type.is_valtype:
+            arg_expr = f"&{arg_val}"
+        else:
+            arg_expr = arg_val
+
+        self.needs_stdlib = True
+
+        # allocate temp and track as protocol var (borrowed: no destroy)
+        self._temp_counter += 1
+        tmp = f"_p{self._temp_counter}"
+        indent = self._indent()
+        proto_ctype = f"z_{proto_name}_t"
+        self._temp_decls.append(
+            f"{indent}{proto_ctype}* {tmp} = {create_name}({arg_expr});\n"
+        )
+        self._temp_frees.append(tmp)
+        self._temp_class_set[tmp] = f":proto:{proto_name}"
+
+        return tmp
+
     def _emit_protocol_dispatch(self, call: zast.Call) -> Optional[str]:
         """If call is a protocol method dispatch, return the C expression. Otherwise None."""
         if not isinstance(call.callable, zast.DottedPath):
@@ -1955,9 +2014,14 @@ class CEmitter:
         return f"{parent_val}->vtable->{method}({', '.join(args)})"
 
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
-        # protocol.create from: expr (owned protocol creation)
+        # protocol.create/take from: expr (owned protocol creation)
         if self._is_protocol_create(call):
             val = self._emit_protocol_create_call(call)
+            return f"{indent}{val};\n"
+
+        # protocol.borrow from: expr (borrowed protocol creation)
+        if self._is_protocol_borrow(call):
+            val = self._emit_protocol_borrow_call(call)
             return f"{indent}{val};\n"
 
         # protocol method dispatch
@@ -2296,9 +2360,13 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
-        # protocol.create from: expr (owned protocol creation)
+        # protocol.create/take from: expr (owned protocol creation)
         if self._is_protocol_create(call):
             return self._emit_protocol_create_call(call)
+
+        # protocol.borrow from: expr (borrowed protocol creation)
+        if self._is_protocol_borrow(call):
+            return self._emit_protocol_borrow_call(call)
 
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
@@ -2491,6 +2559,10 @@ class CEmitter:
 
         # .take emits just the variable value (nullification handled at call site)
         if child == "take":
+            return self._emit_path_value(path.parent)
+
+        # .lock emits just the variable value (locking handled at type-check time)
+        if child == "lock":
             return self._emit_path_value(path.parent)
 
         if isinstance(path.parent, zast.AtomId):

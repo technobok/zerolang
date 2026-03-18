@@ -967,7 +967,11 @@ class TypeChecker:
             if at and at.typetype == ZTypeType.PROTOCOL:
                 # conformance check: implementor must have all spec methods
                 for spec_name, spec_func in at.children.items():
-                    if spec_name.startswith(":") or spec_name == "create":
+                    if spec_name.startswith(":") or spec_name in (
+                        "create",
+                        "take",
+                        "borrow",
+                    ):
                         continue
                     method = rtype.children.get(spec_name)
                     if not method:
@@ -1097,6 +1101,20 @@ class TypeChecker:
             create_type.children["from"] = self.t_null
             create_type.param_ownership["from"] = ZParamOwnership.TAKE
             ptype.children["create"] = create_type
+
+            # take: alias for create
+            take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
+            take_type.children[":return"] = ptype
+            take_type.children["from"] = self.t_null
+            take_type.param_ownership["from"] = ZParamOwnership.TAKE
+            ptype.children["take"] = take_type
+
+            # borrow: borrowed protocol creation
+            borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
+            borrow_type.children[":return"] = ptype
+            borrow_type.children["from"] = self.t_null
+            borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
+            ptype.children["borrow"] = borrow_type
 
         self._resolving.pop()
         return ptype
@@ -1375,12 +1393,16 @@ class TypeChecker:
             gp.parent = constraint
             path.type = gp
             return gp
-        if child_name == "take":
+        if child_name == "take" and parent_type.typetype != ZTypeType.PROTOCOL:
             # .take returns the same type (ownership transfer)
             path.type = parent_type
             return parent_type
-        if child_name == "borrow":
+        if child_name == "borrow" and parent_type.typetype != ZTypeType.PROTOCOL:
             # .borrow returns the same type (borrowed reference)
+            path.type = parent_type
+            return parent_type
+        if child_name == "lock":
+            # .lock is an alias for .borrow (borrowed reference / explicit lock)
             path.type = parent_type
             return parent_type
         # numeric type casting: x.u32 where x is a numeric type
@@ -2029,54 +2051,71 @@ class TypeChecker:
         """Check a dotted path, handling .take and .borrow compiler methods."""
         child_name = path.child.name
 
-        # handle .take compiler method
+        # handle .take compiler method (but not protocol.take constructor)
         if child_name == "take":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                # check if parent is a unit-level definition (function or spec)
-                if parent_type.typetype == ZTypeType.FUNCTION and isinstance(
-                    path.parent, zast.AtomId
-                ):
-                    defn = self._lookup_definition(path.parent.name)
-                    if isinstance(defn, zast.Function):
-                        if defn.body is None:
-                            # spec — no value to take
+                # protocol.take is a constructor, not ownership transfer
+                if parent_type.typetype == ZTypeType.PROTOCOL:
+                    pass  # fall through to normal child lookup below
+                else:
+                    # check if parent is a unit-level definition (function or spec)
+                    if parent_type.typetype == ZTypeType.FUNCTION and isinstance(
+                        path.parent, zast.AtomId
+                    ):
+                        defn = self._lookup_definition(path.parent.name)
+                        if isinstance(defn, zast.Function):
+                            if defn.body is None:
+                                # spec — no value to take
+                                self._error(
+                                    f"Cannot take spec '{path.parent.name}': "
+                                    f"specs have no value; use a function name",
+                                    loc=path.start,
+                                )
+                                return parent_type
+                            # real function — immutable program text, no invalidation
+                            path.type = parent_type
+                            return parent_type
+
+                    # .take invalidates the source name (variable)
+                    if isinstance(path.parent, zast.AtomId):
+                        var = self.symtab.lookup_var(path.parent.name)
+                        if var and var.ownership == ZOwnership.BORROWED:
                             self._error(
-                                f"Cannot take spec '{path.parent.name}': "
-                                f"specs have no value; use a function name",
+                                f"Cannot take ownership of borrowed variable "
+                                f"'{path.parent.name}'",
                                 loc=path.start,
                             )
-                            return parent_type
-                        # real function — immutable program text, no invalidation
-                        path.type = parent_type
-                        return parent_type
+                        else:
+                            # release any locks held by this variable before invalidating
+                            self.symtab.release_held_locks(path.parent.name)
+                            self.symtab.invalidate(path.parent.name)
+                    path.type = parent_type
+                    return parent_type
 
-                # .take invalidates the source name (variable)
-                if isinstance(path.parent, zast.AtomId):
-                    var = self.symtab.lookup_var(path.parent.name)
-                    if var and var.ownership == ZOwnership.BORROWED:
-                        self._error(
-                            f"Cannot take ownership of borrowed variable "
-                            f"'{path.parent.name}'",
-                            loc=path.start,
-                        )
-                    else:
-                        # release any locks held by this variable before invalidating
-                        self.symtab.release_held_locks(path.parent.name)
-                        self.symtab.invalidate(path.parent.name)
-                path.type = parent_type
-            return parent_type
-
-        # handle .borrow compiler method
+        # handle .borrow compiler method (but not protocol.borrow constructor)
         if child_name == "borrow":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                # .borrow takes an exclusive lock on the receiver
+                # protocol.borrow is a constructor, not ownership borrow
+                if parent_type.typetype == ZTypeType.PROTOCOL:
+                    pass  # fall through to normal child lookup below
+                else:
+                    # .borrow takes an exclusive lock on the receiver
+                    if isinstance(path.parent, zast.AtomId):
+                        receiver_name = path.parent.name
+                        # the borrow result will be assigned to a name by _check_assignment;
+                        # for now, use a placeholder holder that will be updated
+                        self._pending_borrow_lock = receiver_name
+                    path.type = parent_type
+                    return parent_type
+
+        # handle .lock compiler method (alias for .borrow)
+        if child_name == "lock":
+            parent_type = self._check_path(path.parent)
+            if parent_type:
                 if isinstance(path.parent, zast.AtomId):
-                    receiver_name = path.parent.name
-                    # the borrow result will be assigned to a name by _check_assignment;
-                    # for now, use a placeholder holder that will be updated
-                    self._pending_borrow_lock = receiver_name
+                    self._pending_borrow_lock = path.parent.name
                 path.type = parent_type
             return parent_type
 
@@ -2214,14 +2253,16 @@ class TypeChecker:
             )
             return None
 
-        # protocol.create from: expr
+        # protocol.create/take/borrow from: expr
         if (
             callee_type.typetype == ZTypeType.FUNCTION
             and isinstance(call.callable, zast.DottedPath)
-            and call.callable.child.name == "create"
+            and call.callable.child.name in ("create", "take", "borrow")
         ):
             parent_type = getattr(call.callable.parent, "type", None)
             if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
+                if call.callable.child.name == "borrow":
+                    return self._check_protocol_borrow(parent_type, call)
                 return self._check_protocol_create(parent_type, call)
 
         # parameter types (skip :return and special entries)
@@ -2475,6 +2516,48 @@ class TypeChecker:
                 loc=call.start,
             )
             return None
+
+        call.type = proto_type
+        return proto_type
+
+    def _check_protocol_borrow(
+        self, proto_type: ZType, call: zast.Call
+    ) -> Optional[ZType]:
+        """Check protocol.borrow from: expr — borrowed protocol creation."""
+        # find the from: argument
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        if not from_arg:
+            self._error("protocol.borrow requires 'from:' argument", loc=call.start)
+            return None
+
+        # type-check the from: argument
+        arg_type = self._check_operation(from_arg.valtype)
+        if not arg_type:
+            return None
+
+        # verify conformance: arg_type must conform to this protocol
+        labels = self._protocol_labels.get(arg_type.name, [])
+        found_label = None
+        for label, pt in labels:
+            if pt.name == proto_type.name:
+                found_label = label
+                break
+        if not found_label:
+            self._error(
+                f"Type '{arg_type.name}' does not conform to protocol "
+                f"'{proto_type.name}'",
+                loc=call.start,
+            )
+            return None
+
+        # set borrow lock on the source variable (same as obj.label path)
+        root_name = self._get_arg_root_name(from_arg.valtype)
+        if root_name:
+            self._pending_borrow_lock = root_name
 
         call.type = proto_type
         return proto_type
