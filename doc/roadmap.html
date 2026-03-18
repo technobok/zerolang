@@ -179,15 +179,17 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-35-v2-integration-examples">Phase 35: v2 Integration Examples</a>
 </li>
-<li><a href="#phase-36-static-string-literals-zstr-header-modernization-complete">Phase 36: Static String Literals + ZStr Header Modernization [COMPLETE]</a>
+<li><a href="#phase-36-sql-compiler-output">Phase 36: SQL Compiler output</a>
 </li>
-<li><a href="#phase-37-c-runtime-library">Phase 37: C Runtime Library</a>
+<li><a href="#phase-37-static-string-literals-zstr-header-modernization-complete">Phase 37: Static String Literals + ZStr Header Modernization [COMPLETE]</a>
 </li>
-<li><a href="#phase-38-expand-to-v3-full-language">Phase 38: Expand to v3 (Full Language)</a>
+<li><a href="#phase-38-c-runtime-library">Phase 38: C Runtime Library</a>
 </li>
-<li><a href="#phase-39-developer-tools">Phase 39: Developer Tools</a>
+<li><a href="#phase-39-expand-to-v3-full-language">Phase 39: Expand to v3 (Full Language)</a>
 </li>
-<li><a href="#phase-40-self-hosting">Phase 40: Self-Hosting</a>
+<li><a href="#phase-40-developer-tools">Phase 40: Developer Tools</a>
+</li>
+<li><a href="#phase-41-self-hosting">Phase 41: Self-Hosting</a>
 </li>
 </ul>
 </li>
@@ -1019,11 +1021,22 @@ boxes the data (copies for records, takes pointer for classes), sets the
 appropriate vtable and destroy function.</p>
 <ol>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Define <code>create</code> as a synthetic method on protocol types:</li>
-<code>create: function {from: T} out myprotocol</code>
+<code>create: function {from: T.take} out myprotocol</code>
 <code>T</code>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Generate per-conforming-type <code>create_owned</code> that allocates,</li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Ownership: <code>from:</code> accepts <code>.take</code> (owned transfer). The protocol</li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emit C: each <code>create_owned</code> allocates protocol instance + boxed data,</li>
+</ol>
+<p>Phase 27b: add 'take' and 'borrow' as compiler generated methods on the created
+protocol instance.</p>
+<ol>
+<li><code>take</code> is essentially an alias fo the already implemented <code>create</code>
+method. It has the same signature "take: function {from: T.take} out myprotocol"</li>
+<li><code>borrow</code> has the same signature as the method on the object that
+implements this protocol (that was given a user defined name in the 'as'
+section). It takes a lock over the item being converted and returns a
+borrowed protocol instance: 
+"borrow: function {from T.lock} out myprotocol.borrow"</li>
 </ol>
 <h3 id="phase-28-generic-tag-type"><a href="#phase-28-generic-tag-type">5.28. Phase 28: Generic Tag Type</a></h3>
 <p>Depends on Phase 26 (generics): <code>tag</code> becomes generic parameterized by
@@ -1040,44 +1053,59 @@ syntax inside an <code>is</code> block can also be supported at that time.</p>
 <code>generic_origin = "tag"</code>
 </ol>
 <h3 id="phase-29-typedefs-wrapper-types"><a href="#phase-29-typedefs-wrapper-types">5.29. Phase 29: Typedefs (Wrapper Types)</a></h3>
-<p>May depend on Phase 26 (generics): generic parameters in typedef field
-definitions.</p>
+<p>The grammar has been changed: an item_definition can no longer take a bare
+operation, it must always take a series of child definitions in braces.</p>
 <p>Add typedef support. Typedefs wrap an underlying type with zero overhead. A
-typedef is create by using a standard object definition (class, record, union,
-variant, protocol, facet) but in the 'is' section there is no braces, only a
-(potentially dotted) reference to an existing object definition.</p>
-<p>There is older documentation that refers to a 'typedef' keyword that is
-obsolete, remove that. Ensure that all documentation is consistent and complete
-as the feature is described here.</p>
-<p>Needs generics? typedef is predeclared and takes a generic parameter (type
-any)?</p>
+typedef is created by using a standard object definition (class, record, union,
+variant, protocol, facet). In the 'is' section is a single named item that
+refers to the 'typedef' of the underlying type. eg. "mybase: basetype.typedef".
+'mybase' can be any name provided by the user.</p>
+<p>'typedef' is a synthetic member that the compiler adds to all types to signify
+that this is a typedef. It can only be used in the definition of a typdef item.</p>
+<p>Similar to other features (such as 'tag'), 'typedef' is also a top level
+predefined type that takes a generic 'any' parameter called 'from'. So the
+definition could also have been 'mybase: typedef basetype'.</p>
+<p>On the resulting typedef created by the compiler, 2 compiler generated
+constructor methods are created. </p>
+<p>1. 'take' and 'create' are aliases for the same constructor that will take
+ownership of the item of the basetype. signature is 
+<code>take: function {from: T.take} out typedeftype</code></p>
+<p>2. 'borrow' is a constructor that will return a borrowed typedeftype while
+taking a lock over the underlying basetype. Signature: 
+<code>borrow: function {from: T.lock} out typedeftype.borrow</code></p>
+<p>There is older documentation that refers to a different way of creating
+typedefs but it is obsolete, remove that. Ensure that all documentation is
+consistent and complete as the feature is described here.</p>
 <p>Other details:</p>
 <ul>
 <li>a typedef is a typesystem modification only, it does not affect the
-  original object definition</li>
-<li>compiler returns error if the typedef object type is not the same as the
-  object type specified in 'is' (eg typdef type is class but 'is' type is
+  original object definition and is zero overhead at runtime</li>
+<li>compiler returns an error if the typedef object type is not the same as the
+  object type specified in 'is' (eg typdef type is class but 'is' basetype is
   record</li>
 <li>the typedef is a new type that is backwards compatible but not forwards
   compatible ie. the new type can be passed to existing functions that expect
   the old type but functions that require the new typedef'd type cannot be
   passed the underlying type</li>
+<li>there can only be 1 ".typedef" included in the 'is' section (in fact,
+  only 1 definition in 'is' of any type for a typedef) else error</li>
 <li>new methods can be added in the typedefs 'as' section. The new methods
   may shadow/replace existing method on the underlying object.</li>
-<li>all new methods plus all unshadowed methods are exposed to the user of
-  the new typedef'd item</li>
-<li>how to allow the typedef to access the original underlying method if we
-  a shadowing one?</li>
-<li>how to create/convert? need both a borrowed conversion and and owned
-  conversion. Compiler creates constructor?</li>
-<li>Typedef <code>create</code> constructor: compiler-generated constructor that
-  wraps an instance of the underlying type.</li>
-<li>Typedef valtype/reftype: valtype typedef wraps a record, reftype typedef
-  wraps a class/union. <code>is_valtype</code> matches underlying.</li>
-<li>Typedef generic parameters: all generic params must appear in the
-  <code>typedef</code> field definition. Error on unused generic param.</li>
-<li>Typedef ownership: follows underlying type's ownership rules. Reftype
-  typedefs have take/borrow/swap. Valtype typedefs are copied.</li>
+<li>if access is required to the old methods that are being shadowed, this
+  can be done by accessing the methods on the named base type from the 'is'
+  section ('mybase' in the example above). Or they could be accessed on the
+  type of the mybase type itself, with the 'this' argument passed in as the
+  first argument</li>
+<li>all new methods plus all unshadowed methods of the base object are
+  exposed to the user of the new typedef'd item</li>
+<li>the name given to the typedef in the 'is' section becomes allows access
+  to all methods on the underlying type as usual (and none of the new methods)</li>
+<li>Typedef generic parameters: all generic params of the underlying type
+  must appear in the <code>typedef</code> field definition. They must also be redeclared
+  in the 'as' section of the typedef type. There can be no additional generic
+  types beyond those used in the underlying basetype, as there would be nowhere
+  to specify them, since the compiler controls generation of the constructors
+  and handles conversion from the underlying type</li>
 <li>Emit C for typedef: no separate struct emitted. Typedef emits as the
   underlying C type (zero overhead). Methods emit with the typedef-mangled
   name.</li>
@@ -1145,7 +1173,18 @@ integration tests for the full v2 feature set.</p>
 <li>Write <code>examples/iterator.z</code>: iterator protocol, demonstrating</li>
 <li>Verify all v2 example programs compile with gcc and produce</li>
 </ol>
-<h3 id="phase-36-static-string-literals-zstr-header-modernization-complete"><a href="#phase-36-static-string-literals-zstr-header-modernization-complete">5.36. Phase 36: Static String Literals + ZStr Header Modernization [COMPLETE]</a></h3>
+<h3 id="phase-36-sql-compiler-output"><a href="#phase-36-sql-compiler-output">5.36. Phase 36: SQL Compiler output</a></h3>
+<p>Have an alternate output format to create an sql file that will create tables
+and dump details from the current compiler run into them with appropriate
+indexes.</p>
+<p>The sql format should be compatible with SQLite.</p>
+<p>Output should include: VFS details (the files used to compile and the relative
+structure parent/child). All tokens returned from the lexer, linked back to the
+files they came from. The AST. The typechecker. The expected output. The
+compiler needs to maintain or be able to generate lists of each of these
+elements with numeric id's to allow references between them. The compiler may
+need to be restructured to use formats friendly to sql dumping.</p>
+<h3 id="phase-37-static-string-literals-zstr-header-modernization-complete"><a href="#phase-37-static-string-literals-zstr-header-modernization-complete">5.37. Phase 37: Static String Literals + ZStr Header Modernization [COMPLETE]</a></h3>
 <p>Modernize the <code>ZStr</code> layout to a 64-bit header and add static string
 support so string literals are never heap-allocated.</p>
 <ol>
@@ -1166,7 +1205,7 @@ support so string literals are never heap-allocated.</p>
 </ol>
 <p>Files: <code>src/zemitterc.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/strings.pdoc</code>, <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-37-c-runtime-library"><a href="#phase-37-c-runtime-library">5.37. Phase 37: C Runtime Library</a></h3>
+<h3 id="phase-38-c-runtime-library"><a href="#phase-38-c-runtime-library">5.38. Phase 38: C Runtime Library</a></h3>
 <p>Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (<code>ZStr</code>, <code>zstr_new</code>,
 <code>zstr_cat</code>, etc.) into every generated <code>.c</code> file. This phase moves
@@ -1200,14 +1239,14 @@ static library (<code>libzrt.a</code>), and links it into the final executable.<
 <li>Verify all existing examples and tests still pass with the</li>
 <li>Future runtime candidates: format/print infrastructure, I/O,</li>
 </ol>
-<h3 id="phase-38-expand-to-v3-full-language"><a href="#phase-38-expand-to-v3-full-language">5.38. Phase 38: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-39-expand-to-v3-full-language"><a href="#phase-39-expand-to-v3-full-language">5.39. Phase 39: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-39-developer-tools"><a href="#phase-39-developer-tools">5.39. Phase 39: Developer Tools</a></h3>
+<h3 id="phase-40-developer-tools"><a href="#phase-40-developer-tools">5.40. Phase 40: Developer Tools</a></h3>
 <p>Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.</p>
 <ol>
@@ -1218,7 +1257,7 @@ source files in IDEs and editors.</p>
 <li>Formatter: canonical source formatter that reads <code>.z</code> files</li>
 <li>Editor integration: VS Code extension and/or tree-sitter grammar</li>
 </ol>
-<h3 id="phase-40-self-hosting"><a href="#phase-40-self-hosting">5.40. Phase 40: Self-Hosting</a></h3>
+<h3 id="phase-41-self-hosting"><a href="#phase-41-self-hosting">5.41. Phase 41: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>

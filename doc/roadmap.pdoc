@@ -1079,7 +1079,7 @@ appropriate vtable and destroy function.
 
 #ol:
   #*: #+ Define #~"create" as a synthetic method on protocol types:
-    #~"create: function {from: T} out myprotocol" where #~"T" is checked for
+    #~"create: function {from: T.take} out myprotocol" where #~"T" is checked for
     conformance to the protocol.
   #*: #+ Generate per-conforming-type #~"create_owned" that allocates,
     copies/takes the data, and sets vtable + destroy.
@@ -1087,6 +1087,18 @@ appropriate vtable and destroy function.
     instance owns the boxed data and frees it via the destroy function pointer.
   #*: #+ Emit C: each #~"create_owned" allocates protocol instance + boxed data,
     sets vtable and destroy. The destroy function frees the allocation.
+
+Phase 27b: add 'take' and 'borrow' as compiler generated methods on the created
+protocol instance.
+
+#ol:
+  [#*: #~"take" is essentially an alias fo the already implemented #~"create"
+  method. It has the same signature "take: function {from: T.take} out myprotocol"]
+  [#*: #~"borrow" has the same signature as the method on the object that
+  implements this protocol (that was given a user defined name in the 'as'
+  section). It takes a lock over the item being converted and returns a
+  borrowed protocol instance: 
+  "borrow: function {from T.lock} out myprotocol.borrow"]
 
 #---: Phase 28: Generic Tag Type
 
@@ -1107,49 +1119,68 @@ syntax inside an #~"is" block can also be supported at that time.
 
 #---: Phase 29: Typedefs (Wrapper Types)
 
-May depend on Phase 26 (generics): generic parameters in typedef field
-definitions.
+The grammar has been changed: an item_definition can no longer take a bare
+operation, it must always take a series of child definitions in braces.
 
 Add typedef support. Typedefs wrap an underlying type with zero overhead. A
-typedef is create by using a standard object definition (class, record, union,
-variant, protocol, facet) but in the 'is' section there is no braces, only a
-(potentially dotted) reference to an existing object definition.
+typedef is created by using a standard object definition (class, record, union,
+variant, protocol, facet). In the 'is' section is a single named item that
+refers to the 'typedef' of the underlying type. eg. "mybase: basetype.typedef".
+'mybase' can be any name provided by the user.
 
-There is older documentation that refers to a 'typedef' keyword that is
-obsolete, remove that. Ensure that all documentation is consistent and complete
-as the feature is described here.
+'typedef' is a synthetic member that the compiler adds to all types to signify
+that this is a typedef. It can only be used in the definition of a typdef item.
 
-Needs generics? typedef is predeclared and takes a generic parameter (type
-any)?
+Similar to other features (such as 'tag'), 'typedef' is also a top level
+predefined type that takes a generic 'any' parameter called 'from'. So the
+definition could also have been 'mybase: typedef basetype'.
+
+On the resulting typedef created by the compiler, 2 compiler generated
+constructor methods are created. 
+
+1. 'take' and 'create' are aliases for the same constructor that will take
+ownership of the item of the basetype. signature is 
+#~"take: function {from: T.take} out typedeftype"
+
+2. 'borrow' is a constructor that will return a borrowed typedeftype while
+taking a lock over the underlying basetype. Signature: 
+#~"borrow: function {from: T.lock} out typedeftype.borrow"
+
+There is older documentation that refers to a different way of creating
+typedefs but it is obsolete, remove that. Ensure that all documentation is
+consistent and complete as the feature is described here.
 
 Other details:
 
 #ul:
   [#*: a typedef is a typesystem modification only, it does not affect the
-  original object definition]
-  [#*: compiler returns error if the typedef object type is not the same as the
-  object type specified in 'is' (eg typdef type is class but 'is' type is
+  original object definition and is zero overhead at runtime]
+  [#*: compiler returns an error if the typedef object type is not the same as the
+  object type specified in 'is' (eg typdef type is class but 'is' basetype is
   record]
   [#*: the typedef is a new type that is backwards compatible but not forwards
   compatible ie. the new type can be passed to existing functions that expect
   the old type but functions that require the new typedef'd type cannot be
   passed the underlying type]
+  [#*: there can only be 1 ".typedef" included in the 'is' section (in fact,
+  only 1 definition in 'is' of any type for a typedef) else error]
   [#*: new methods can be added in the typedefs 'as' section. The new methods
   may shadow/replace existing method on the underlying object.]
-  [#*: all new methods plus all unshadowed methods are exposed to the user of
-  the new typedef'd item]
-  [#*: how to allow the typedef to access the original underlying method if we
-  a shadowing one?]
-  [#*: how to create/convert? need both a borrowed conversion and and owned
-  conversion. Compiler creates constructor?]
-  [#*: Typedef #~"create" constructor: compiler-generated constructor that
-  wraps an instance of the underlying type.]
-  [#*: Typedef valtype/reftype: valtype typedef wraps a record, reftype typedef
-  wraps a class/union. #~"is_valtype" matches underlying.]
-  [#*: Typedef generic parameters: all generic params must appear in the
-  #~"typedef" field definition. Error on unused generic param.]
-  [#*: Typedef ownership: follows underlying type's ownership rules. Reftype
-  typedefs have take/borrow/swap. Valtype typedefs are copied.]
+  [#*: if access is required to the old methods that are being shadowed, this
+  can be done by accessing the methods on the named base type from the 'is'
+  section ('mybase' in the example above). Or they could be accessed on the
+  type of the mybase type itself, with the 'this' argument passed in as the
+  first argument]
+  [#*: all new methods plus all unshadowed methods of the base object are
+  exposed to the user of the new typedef'd item]
+  [#*: the name given to the typedef in the 'is' section becomes allows access
+  to all methods on the underlying type as usual (and none of the new methods)]
+  [#*: Typedef generic parameters: all generic params of the underlying type
+  must appear in the #~"typedef" field definition. They must also be redeclared
+  in the 'as' section of the typedef type. There can be no additional generic
+  types beyond those used in the underlying basetype, as there would be nowhere
+  to specify them, since the compiler controls generation of the constructors
+  and handles conversion from the underlying type]
   [#*: Emit C for typedef: no separate struct emitted. Typedef emits as the
   underlying C type (zero overhead). Methods emit with the typedef-mangled
   name.]
@@ -1242,7 +1273,22 @@ integration tests for the full v2 feature set.
   #*: Verify all v2 example programs compile with gcc and produce
     correct output under ASan (address sanitizer).
 
-#---: Phase 36: Static String Literals + ZStr Header Modernization \[COMPLETE\]
+#---: Phase 36: SQL Compiler output
+
+Have an alternate output format to create an sql file that will create tables
+and dump details from the current compiler run into them with appropriate
+indexes.
+
+The sql format should be compatible with SQLite.
+
+Output should include: VFS details (the files used to compile and the relative
+structure parent/child). All tokens returned from the lexer, linked back to the
+files they came from. The AST. The typechecker. The expected output. The
+compiler needs to maintain or be able to generate lists of each of these
+elements with numeric id's to allow references between them. The compiler may
+need to be restructured to use formats friendly to sql dumping.
+
+#---: Phase 37: Static String Literals + ZStr Header Modernization \[COMPLETE\]
 
 Modernize the #~"ZStr" layout to a 64-bit header and add static string
 support so string literals are never heap-allocated.
@@ -1272,7 +1318,7 @@ support so string literals are never heap-allocated.
 Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
 #~"doc/strings.pdoc", #~"doc/roadmap.pdoc"
 
-#---: Phase 37: C Runtime Library
+#---: Phase 38: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (#~"ZStr", #~"zstr_new",
@@ -1304,7 +1350,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
     union destructors, protocol vtable helpers, generic container
     support.
 
-#---: Phase 38: Expand to v3 (Full Language)
+#---: Phase 39: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
@@ -1312,7 +1358,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
   #*: Iterator protocol.
   #*: Full standard library.
 
-#---: Phase 39: Developer Tools
+#---: Phase 40: Developer Tools
 
 Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.
@@ -1332,7 +1378,7 @@ source files in IDEs and editors.
   #*: Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.
 
-#---: Phase 40: Self-Hosting
+#---: Phase 41: Self-Hosting
 
 #ol:
   #*: Write the zerolang compiler in zerolang.
