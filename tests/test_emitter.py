@@ -2830,3 +2830,75 @@ class TestGenericsEmission:
         assert "z_myproto_t" not in csource
         output = compile_and_run(csource)
         assert output.strip() == "ok"
+
+
+# ---- Phase 29: Typedef Emitter Tests ----
+
+
+class TestEmitterTypedefs:
+    """Tests for typedef C emission (zero overhead — no struct, just aliases)."""
+
+    def test_typedef_no_struct(self):
+        """A record typedef should not emit its own struct."""
+        csource = emit_source(
+            "meters: record { val: i64.typedef } as {}\n"
+            "main: function is { m: meters.create from: 42\n"
+            '  print "\\{m}" }'
+        )
+        # no separate struct for meters
+        assert "z_meters_t" not in csource
+        assert "z_meters_create" not in csource
+
+    def test_typedef_create_is_identity(self):
+        """Typedef create/take is an identity operation — just the value."""
+        csource = emit_source(
+            "meters: record { val: i64.typedef } as {}\n"
+            "main: function is { m: meters.create from: 42\n"
+            '  print "\\{m}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_typedef_backward_compatible(self):
+        """Typedef value can be passed where base type is expected."""
+        csource = emit_source(
+            "meters: record { val: i64.typedef } as {}\n"
+            "show: function {x: i64} out i64 is { return x + 1 }\n"
+            "main: function is {\n"
+            "    m: meters.create from: 10\n"
+            "    r: show m\n"
+            '    print "\\{r}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "11"
+
+    def test_typedef_with_shadow_method(self):
+        """Typedef with a shadowed method emits the method as a function."""
+        csource = emit_source(
+            "meters: record { val: i64.typedef } as {\n"
+            "    double: function {self: meters} out i64 is { return self * 2 }\n"
+            "}\n"
+            "main: function is {\n"
+            "    m: meters.create from: 5\n"
+            "    d: m.double\n"
+            '    print "\\{d}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10"
+
+    def test_typedef_chained(self):
+        """Chained typedefs compile and run correctly."""
+        csource = emit_source(
+            "meters: record { val: i64.typedef } as {}\n"
+            "height: record { h: meters.typedef } as {}\n"
+            "show: function {x: i64} out i64 is { return x + 1 }\n"
+            "main: function is {\n"
+            "    h: height.create from: (meters.create from: 10)\n"
+            "    y: show h\n"
+            '    print "\\{y}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "11"

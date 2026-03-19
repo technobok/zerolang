@@ -55,6 +55,8 @@ def _is_numeric_id(name: str) -> bool:
 def _ctype(ztype: Optional[ZType]) -> str:
     if not ztype:
         return "void"
+    if ztype.typedef_base is not None:
+        return _ctype(ztype.typedef_base)
     name = ztype.name
     if name in TYPEMAP:
         return TYPEMAP[name]
@@ -182,6 +184,8 @@ class CEmitter:
         self._spec_names: set[str] = set()
         self._protocol_names: set[str] = set()
         self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
+        self._typedef_names: set[str] = set()  # names that are typedefs (no struct)
+        self._typedef_base: dict[str, str] = {}  # typedef name -> base type name
         # (impl_type, proto_name) -> label for owned protocol create
         self._proto_conformance: Dict[tuple, str] = {}
         # qualified names like "calculator.op" for func pointer fields in 'is' sections
@@ -288,6 +292,45 @@ class CEmitter:
                     return True
         return False
 
+    def _is_typedef_defn(self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant") -> bool:
+        """Check if a type definition is a typedef (single .typedef item)."""
+        items = defn.items
+        if len(items) != 1:
+            return False
+        fpath = next(iter(items.values()))
+        return (
+            isinstance(fpath, zast.DottedPath)
+            and isinstance(fpath.child, zast.AtomId)
+            and fpath.child.name == "typedef"
+        )
+
+    def _typedef_base_name(self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant") -> str:
+        """Extract the base type name from a typedef definition."""
+        fpath = next(iter(defn.items.values()))
+        assert isinstance(fpath, zast.DottedPath)
+        parent = fpath.parent
+        if isinstance(parent, zast.AtomId):
+            return parent.name
+        return ""
+
+    def _resolve_typedef_ctype(self, name: str) -> str:
+        """Resolve a typedef name to its ultimate C type, following chains."""
+        while name in self._typedef_base:
+            name = self._typedef_base[name]
+        if name in TYPEMAP:
+            return TYPEMAP[name]
+        if name == "string":
+            return "ZStr*"
+        if name in self._record_names:
+            return f"z_{name}_t"
+        if name in self._class_names:
+            return f"z_{name}_t*"
+        if name in self._union_names:
+            return f"z_{name}_t*"
+        if name in self._variant_names:
+            return f"z_{name}_t"
+        return "int64_t"
+
     def _collect_unit_names(self, prefix: str, body: dict) -> None:
         """Recursively collect definition names from a unit body."""
         for name, defn in body.items():
@@ -302,11 +345,17 @@ class CEmitter:
                 self._spec_names.add(qname)
             elif isinstance(defn, zast.Record):
                 if not self._is_generic_template(defn):
+                    if self._is_typedef_defn(defn):
+                        self._typedef_names.add(qname)
+                        self._typedef_base[qname] = self._typedef_base_name(defn)
                     self._record_names.add(qname)
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
             elif isinstance(defn, zast.Class):
                 if not self._is_generic_template(defn):
+                    if self._is_typedef_defn(defn):
+                        self._typedef_names.add(qname)
+                        self._typedef_base[qname] = self._typedef_base_name(defn)
                     self._class_names.add(qname)
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
@@ -785,6 +834,18 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _emit_record(self, name: str, rec: zast.Record) -> None:
+        if name in self._typedef_names:
+            # Typedef: no struct, no meta.create — just emit as/is functions
+            for mname, mfunc in rec.as_functions.items():
+                if mfunc.body:
+                    self._emit_func_typedef(f"{name}.{mname}", mfunc)
+                    self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+            for label, apath in rec.as_items.items():
+                proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+                if proto_name and proto_name in self._protocol_names:
+                    self._emit_protocol_impl(name, label, proto_name, rec)
+            return
+
         self.needs_stdint = True
         lines: List[str] = []
         lines.append("typedef struct {\n")
@@ -1002,6 +1063,18 @@ class CEmitter:
             lines.append("}\n\n")
 
     def _emit_class(self, name: str, cls: zast.Class) -> None:
+        if name in self._typedef_names:
+            # Typedef: no struct, no destructor, no meta.create — just emit as/is functions
+            for mname, mfunc in cls.as_functions.items():
+                if mfunc.body:
+                    self._emit_func_typedef(f"{name}.{mname}", mfunc)
+                    self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+            for label, apath in cls.as_items.items():
+                proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+                if proto_name and proto_name in self._protocol_names:
+                    self._emit_protocol_impl(name, label, proto_name, cls)
+            return
+
         self.needs_stdint = True
         self.needs_stdlib = True
         lines: List[str] = []
@@ -1545,6 +1618,9 @@ class CEmitter:
                 return TYPEMAP[name]
             if name == "string":
                 return "ZStr*"
+            # typedef: resolve to base type
+            if name in self._typedef_names:
+                return self._resolve_typedef_ctype(name)
             # check if it's a record name defined in the main unit
             if name in self._record_names:
                 return f"z_{name}_t"
@@ -1581,6 +1657,9 @@ class CEmitter:
                 self.needs_string = True
                 self.needs_stdlib = True
                 return "ZStr*"
+            # typedef: resolve to base type
+            if name in self._typedef_names:
+                return self._resolve_typedef_ctype(name)
             if name in self._record_names:
                 return f"z_{name}_t"
             if name in self._class_names:
@@ -2385,6 +2464,12 @@ class CEmitter:
                 else "0"
             )
             return f"{_mangle_func(data_name)}[{idx}]"
+
+        # typedef create/take/borrow: identity — just emit the from: argument
+        if call.type and call.type.typedef_base is not None:
+            if call.arguments:
+                return self._emit_operation_value(call.arguments[0].valtype)
+            return "0"
 
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
             rec_type = call.callable.type

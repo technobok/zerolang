@@ -376,8 +376,8 @@ class TypeChecker:
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(cls.items, cls.start)
         if typedef_base_type is not None:
-            if typedef_base_type.is_valtype:
-                self._error(f"Class typedef must wrap a reference type, not '{typedef_base_type.name}'", loc=cls.start)
+            if typedef_base_type.typetype not in (ZTypeType.CLASS, ZTypeType.PROTOCOL):
+                self._error(f"Class typedef must wrap a class or protocol type, not '{typedef_base_type.name}'", loc=cls.start)
             return self._finalize_typedef(unitname, name, ctype, typedef_base_type, typedef_field,
                                           cls.as_items, cls.as_functions, cls.functions, cls.start, generic_ctx)
 
@@ -922,8 +922,8 @@ class TypeChecker:
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(rec.items, rec.start)
         if typedef_base_type is not None:
-            if not _is_valtype(typedef_base_type):
-                self._error(f"Record typedef must wrap a value type, not '{typedef_base_type.name}'", loc=rec.start)
+            if typedef_base_type.typetype not in (ZTypeType.RECORD,):
+                self._error(f"Record typedef must wrap a record type, not '{typedef_base_type.name}'", loc=rec.start)
             return self._finalize_typedef(unitname, name, rtype, typedef_base_type, typedef_field,
                                           rec.as_items, rec.as_functions, rec.functions, rec.start, generic_ctx)
 

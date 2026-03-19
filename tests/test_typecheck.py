@@ -3580,7 +3580,35 @@ class TestTypedefs:
             "bad: record { base: mycls.typedef } as {}\n"
             "main: function is { x: bad.create from: (mycls v: 1) }"
         )
-        assert any("value type" in e.msg.lower() for e in errors)
+        assert any("record type" in e.msg.lower() for e in errors)
+
+    def test_class_typedef_wrapping_protocol(self):
+        """Class typedef wrapping a protocol type should pass."""
+        check_ok(
+            "showable: protocol {\n"
+            "    show: function {:this b: i64} out i64\n"
+            "}\n"
+            "myshow: class { base: showable.typedef } as {}\n"
+            "main: function is { }"
+        )
+
+    def test_class_typedef_wrapping_union_error(self):
+        """Class typedef wrapping a union type should error (strict kind)."""
+        errors = check_errors(
+            "myunion: union { a: i64\n b: f64 }\n"
+            "bad: class { base: myunion.typedef } as {}\n"
+            "main: function is { x: bad }"
+        )
+        assert any("class or protocol" in e.msg.lower() for e in errors)
+
+    def test_record_typedef_wrapping_variant_error(self):
+        """Record typedef wrapping a variant type should error (strict kind)."""
+        errors = check_errors(
+            "myvar: variant { a: i64\n b: f64 }\n"
+            "bad: record { base: myvar.typedef } as {}\n"
+            "main: function is { x: bad }"
+        )
+        assert any("record type" in e.msg.lower() for e in errors)
 
     def test_typedef_has_constructors(self):
         """take/create/borrow are synthesized for typedefs."""
