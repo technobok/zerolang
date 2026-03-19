@@ -287,6 +287,8 @@ class TypeChecker:
                 ftype.generic_params[pname] = constraint
                 ftype.isgeneric = True
                 generic_ctx[pname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    ftype.numeric_generic_params.add(pname)
 
         # pass 2: resolve non-generic params with generic context
         if generic_ctx:
@@ -376,6 +378,8 @@ class TypeChecker:
                 ctype.generic_params[fname] = constraint
                 ctype.isgeneric = True
                 generic_ctx[fname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    ctype.numeric_generic_params.add(fname)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(cls.items, cls.start)
@@ -481,6 +485,8 @@ class TypeChecker:
                 utype.generic_params[sname] = constraint
                 utype.isgeneric = True
                 generic_ctx[sname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    utype.numeric_generic_params.add(sname)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -965,6 +971,8 @@ class TypeChecker:
                 rtype.generic_params[fname] = constraint
                 rtype.isgeneric = True
                 generic_ctx[fname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    rtype.numeric_generic_params.add(fname)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(rec.items, rec.start)
@@ -1266,6 +1274,8 @@ class TypeChecker:
                 ptype.generic_params[pname] = constraint
                 ptype.isgeneric = True
                 generic_ctx[pname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    ptype.numeric_generic_params.add(pname)
 
         # pass 2: resolve specs with generic context
         if generic_ctx:
@@ -1322,6 +1332,8 @@ class TypeChecker:
                 ftype.generic_params[pname] = constraint
                 ftype.isgeneric = True
                 generic_ctx[pname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    ftype.numeric_generic_params.add(pname)
 
         # pass 2: resolve specs with generic context
         if generic_ctx:
@@ -1517,6 +1529,60 @@ class TypeChecker:
                 return self._resolve_typeref_call(inner)
         return None
 
+    def _resolve_numeric_generic_arg(
+        self, op: zast.Operation, constraint_name: str, loc: Optional[zast.Token] = None
+    ) -> Optional[ZType]:
+        """Resolve a numeric generic argument from an AST value expression.
+
+        Parses as numeric literal, validates against constraint range,
+        returns a ZType with numeric_value set.
+        """
+        # extract the numeric string from the operation (negative numbers are AtomId("-5"))
+        if not isinstance(op, zast.AtomId):
+            self._error(
+                "Numeric generic argument must be a numeric literal",
+                loc=loc,
+            )
+            return None
+        numstr = op.name
+
+        if not _is_numeric_id(numstr):
+            self._error(
+                f"Numeric generic argument must be a numeric literal, got '{numstr}'",
+                loc=loc,
+            )
+            return None
+
+        # parse and validate range
+        typename, value, err = parse_number(numstr)
+        if err:
+            self._error(
+                f"Invalid numeric generic value '{numstr}': {err}",
+                loc=loc,
+            )
+            return None
+
+        int_value = int(value)
+        lo, hi = NUMERIC_RANGES[constraint_name]
+        if int_value < lo or int_value > hi:
+            self._error(
+                f"Numeric generic value {int_value} out of range for "
+                f"{constraint_name} ({lo}..{hi})",
+                loc=loc,
+            )
+            return None
+
+        # build name for mangling: negative values use "neg" prefix
+        if int_value < 0:
+            mangled_name = f"neg{abs(int_value)}"
+        else:
+            mangled_name = str(int_value)
+
+        zt = _make_type(mangled_name, ZTypeType.RECORD)
+        zt.numeric_value = int_value
+        zt.is_valtype = True
+        return zt
+
     def _resolve_typeref_call(self, call: zast.Call) -> Optional[ZType]:
         """Resolve a Call in type position: (myrec t: i64) or (myrec t: u)."""
         if not isinstance(call.callable, zast.AtomId):
@@ -1529,6 +1595,16 @@ class TypeChecker:
         has_unresolved = False
         for arg in call.arguments:
             if not arg.name or arg.name not in template.generic_params:
+                continue
+            # numeric generic param: resolve as numeric value
+            if arg.name in template.numeric_generic_params:
+                arg_type = self._resolve_numeric_generic_arg(
+                    arg.valtype, template.generic_params[arg.name].name, loc=call.start
+                )
+                if arg_type:
+                    generic_args[arg.name] = arg_type
+                else:
+                    has_unresolved = True
                 continue
             # resolve the type arg — could be a concrete type or a generic param
             if not isinstance(arg.valtype, zast.Path):
@@ -1785,6 +1861,9 @@ class TypeChecker:
         for param_name, concrete_type in generic_args.items():
             if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
                 continue
+            # numeric generic params already validated in _resolve_numeric_generic_arg
+            if param_name in template_type.numeric_generic_params:
+                continue
             constraint = template_type.generic_params.get(param_name)
             if not constraint:
                 continue
@@ -1833,6 +1912,9 @@ class TypeChecker:
         mono.generic_args = OrderedDict(generic_args)
         mono.is_valtype = template_type.is_valtype
 
+        # propagate numeric_generic_params for partial instantiation
+        mono.numeric_generic_params = set(template_type.numeric_generic_params)
+
         # partial instantiation: result is still generic
         if is_partial:
             mono.isgeneric = True
@@ -1841,6 +1923,12 @@ class TypeChecker:
                     mono.generic_params[arg_type.name] = (
                         arg_type.parent if arg_type.parent else self.t_null
                     )
+                    # propagate numeric-ness
+                    if param_name in template_type.numeric_generic_params:
+                        mono.numeric_generic_params.add(arg_type.name)
+
+        # track which numeric params are referenced by children
+        numeric_params_referenced: set[str] = set()
 
         # substitute generic params in children
         for child_name, child_type in template_type.children.items():
@@ -1849,7 +1937,21 @@ class TypeChecker:
                 param_ref_name = child_type.name
                 concrete = generic_args.get(param_ref_name)
                 if concrete:
-                    mono.children[child_name] = concrete
+                    # numeric generic param: replace with constraint type, set default
+                    if (
+                        param_ref_name in template_type.numeric_generic_params
+                        and concrete.numeric_value is not None
+                    ):
+                        numeric_params_referenced.add(param_ref_name)
+                        constraint = template_type.generic_params[param_ref_name]
+                        resolved_constraint = self._resolve_name(constraint.name)
+                        if resolved_constraint:
+                            mono.children[child_name] = resolved_constraint
+                        else:
+                            mono.children[child_name] = constraint
+                        mono.param_defaults[child_name] = str(concrete.numeric_value)
+                    else:
+                        mono.children[child_name] = concrete
                 else:
                     mono.children[child_name] = child_type
             elif (
@@ -1876,6 +1978,20 @@ class TypeChecker:
                     mono.children[child_name] = child_type
             else:
                 mono.children[child_name] = child_type
+
+        # auto-synthesize fields for numeric params not referenced by any child
+        if not is_partial:
+            for nparam in template_type.numeric_generic_params:
+                if nparam not in numeric_params_referenced:
+                    concrete = generic_args.get(nparam)
+                    if concrete and concrete.numeric_value is not None:
+                        constraint = template_type.generic_params[nparam]
+                        resolved_constraint = self._resolve_name(constraint.name)
+                        if resolved_constraint:
+                            mono.children[nparam] = resolved_constraint
+                        else:
+                            mono.children[nparam] = constraint
+                        mono.param_defaults[nparam] = str(concrete.numeric_value)
 
         # recompute is_valtype based on concrete types
         if template_type.typetype == ZTypeType.UNION:
@@ -1976,8 +2092,15 @@ class TypeChecker:
             if arg.name == "from":
                 from_arg = arg
             elif arg.name and arg.name in template.generic_params:
-                # explicit generic type arg: t: i64
-                arg_type = self._resolve_typeref_from_operation(arg.valtype)
+                # explicit generic arg
+                if arg.name in template.numeric_generic_params:
+                    arg_type = self._resolve_numeric_generic_arg(
+                        arg.valtype,
+                        template.generic_params[arg.name].name,
+                        loc=call.start,
+                    )
+                else:
+                    arg_type = self._resolve_typeref_from_operation(arg.valtype)
                 if arg_type:
                     generic_args[arg.name] = arg_type
             else:
@@ -2072,9 +2195,17 @@ class TypeChecker:
 
         positional_idx = 0
         for arg in call.arguments:
-            # explicit type arg: named arg matching a generic param
+            # explicit generic arg: named arg matching a generic param
             if arg.name and arg.name in template.generic_params:
-                arg_type = self._resolve_typeref_from_operation(arg.valtype)
+                if arg.name in template.numeric_generic_params:
+                    # numeric generic param: resolve as numeric value
+                    arg_type = self._resolve_numeric_generic_arg(
+                        arg.valtype,
+                        template.generic_params[arg.name].name,
+                        loc=call.start,
+                    )
+                else:
+                    arg_type = self._resolve_typeref_from_operation(arg.valtype)
                 if arg_type:
                     generic_args[arg.name] = arg_type
                 continue
@@ -2312,7 +2443,10 @@ class TypeChecker:
 
     def _check_path(self, path: zast.Path) -> Optional[ZType]:
         if isinstance(path, zast.Expression):
-            return self._check_expression(path)
+            result = self._check_expression(path)
+            if result and not path.type:
+                path.type = result
+            return result
         if isinstance(path, zast.AtomString):
             self._check_string_interpolation(path)
             path.type = self._resolve_name("string")

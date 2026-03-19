@@ -153,6 +153,12 @@ class ZType:
         default_factory=OrderedDict, init=False
     )
 
+    # names of generic params that are numeric (constraint is a numeric type)
+    numeric_generic_params: "set[str]" = field(default_factory=set, init=False)
+
+    # for numeric generic value-carrying ZTypes: the constant integer value
+    numeric_value: "Optional[int]" = field(default=None, init=False)
+
     # for typedef types: points to the immediate base type being wrapped
     typedef_base: "Optional[ZType]" = field(default=None, init=False)
 

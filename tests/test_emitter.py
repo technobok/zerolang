@@ -3005,3 +3005,40 @@ class TestEmitterFacets:
         lines = output.strip().split("\n")
         assert lines[0] == "15"  # 5 + 10
         assert lines[1] == "30"  # 3 * 10
+
+
+class TestNumericGenericsEmission:
+    """Tests for numeric generic type emission."""
+
+    def test_numeric_generic_record_struct(self):
+        """C struct has the numeric field with correct type."""
+        csource = emit_source(
+            "myrec: record { x: i64 } as { n: u64.generic }\n"
+            "main: function is { a: (myrec n: 10) x: 5 }"
+        )
+        assert "uint64_t n;" in csource
+        assert "z_myrec_10_t" in csource
+
+    def test_numeric_generic_create_has_param(self):
+        """Constructor takes numeric field as parameter."""
+        csource = emit_source(
+            "myrec: record { x: i64 } as { n: u64.generic }\n"
+            "main: function is { a: (myrec n: 10) x: 5 }"
+        )
+        assert "z_myrec_10_meta_create" in csource
+        assert "uint64_t n" in csource
+
+    def test_numeric_generic_compiles(self):
+        """Full compile + run with numeric generic record."""
+        csource = emit_source(
+            "myrec: record { x: i64 } as { n: u64.generic }\n"
+            "main: function is {\n"
+            "    a: (myrec n: 10) x: 42\n"
+            '    print "\\{a.x}"\n'
+            '    print "\\{a.n}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "42"
+        assert lines[1] == "10"

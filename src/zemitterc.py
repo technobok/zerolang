@@ -502,7 +502,16 @@ class CEmitter:
                     field_ctypes_r.append(_ctype(ft))
                 self._type_field_names[name] = field_names_r
                 self._type_field_ctypes[name] = field_ctypes_r
-                self._type_field_defaults[name] = {}
+                defaults_r: Dict[str, str] = {}
+                for fn, default_val in mono_type.param_defaults.items():
+                    idx = field_names_r.index(fn) if fn in field_names_r else -1
+                    if idx >= 0:
+                        ct = field_ctypes_r[idx]
+                        if ct == "int64_t":
+                            defaults_r[fn] = default_val
+                        else:
+                            defaults_r[fn] = f"(({ct}){default_val})"
+                self._type_field_defaults[name] = defaults_r
             elif mono_type.typetype == ZTypeType.CLASS:
                 self._class_names.add(mono_type.name)
                 # pre-register field info so _build_meta_create_args works
@@ -517,7 +526,16 @@ class CEmitter:
                     field_ctypes_list.append(_ctype(ft))
                 self._type_field_names[name] = field_names
                 self._type_field_ctypes[name] = field_ctypes_list
-                self._type_field_defaults[name] = {}
+                defaults_c: Dict[str, str] = {}
+                for fn, default_val in mono_type.param_defaults.items():
+                    idx = field_names.index(fn) if fn in field_names else -1
+                    if idx >= 0:
+                        ct = field_ctypes_list[idx]
+                        if ct == "int64_t":
+                            defaults_c[fn] = default_val
+                        else:
+                            defaults_c[fn] = f"(({ct}){default_val})"
+                self._type_field_defaults[name] = defaults_c
             elif mono_type.typetype == ZTypeType.PROTOCOL:
                 self._protocol_names.add(mono_type.name)
 
@@ -1588,7 +1606,8 @@ class CEmitter:
             field_ctypes_list.append(ct)
         self._type_field_ctypes[name] = field_ctypes_list
         self._type_field_names[name] = field_names
-        self._type_field_defaults[name] = {}
+        if name not in self._type_field_defaults:
+            self._type_field_defaults[name] = {}
         param_str = ", ".join(params) if params else "void"
         arg_str = ", ".join(field_names)
         func_name = f"z_{name}_meta_create"

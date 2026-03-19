@@ -3780,3 +3780,127 @@ class TestFacets:
             "}\n"
             "main: function is {}"
         )
+
+
+class TestNumericGenerics:
+    """Tests for numeric generic type parameters."""
+
+    def test_numeric_generic_record_detection(self):
+        """size: u64.generic detected as numeric generic param."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { size: u64.generic }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myrec = tc._resolved.get("test.myrec")
+        assert myrec is not None
+        assert myrec.isgeneric is True
+        assert "size" in myrec.generic_params
+        assert "size" in myrec.numeric_generic_params
+
+    def test_numeric_generic_in_generic_params(self):
+        """Constraint for numeric generic is the numeric type itself."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { size: u64.generic }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myrec = tc._resolved.get("test.myrec")
+        assert myrec is not None
+        assert myrec.generic_params["size"].name == "u64"
+
+    def test_numeric_generic_monomorphization(self):
+        """(myrec size: 10) creates myrec_10 with u64 field."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { size: u64.generic }\n"
+            "main: function is { a: (myrec size: 10) x: 5 }"
+        )
+        mono, _ = program.mono_types[0]
+        assert mono.name == "myrec_10"
+        assert mono.generic_origin is not None
+        # auto-synthesized field
+        assert "size" in mono.children
+        assert mono.children["size"].name == "u64"
+        assert mono.param_defaults["size"] == "10"
+
+    def test_numeric_generic_range_check(self):
+        """Value 300 for u8 constraint produces error."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as { size: u8.generic }\n"
+            "main: function is { a: (myrec size: 300) x: 5 }"
+        )
+        assert any("out of range" in e.msg for e in errors)
+
+    def test_mixed_type_and_numeric_generics(self):
+        """(myarray t: i64 size: 10) creates myarray_i64_10."""
+        program = check_ok(
+            "myarray: record { data: t } as { t: any.generic\n size: u64.generic }\n"
+            "main: function is { a: (myarray t: i64 size: 10) data: 42 }"
+        )
+        monos = [m for m, _ in program.mono_types if m.name == "myarray_i64_10"]
+        assert len(monos) == 1
+        mono = monos[0]
+        assert "data" in mono.children
+        assert mono.children["data"].name == "i64"
+        assert "size" in mono.children
+        assert mono.children["size"].name == "u64"
+        assert mono.param_defaults["size"] == "10"
+
+    def test_numeric_generic_different_values(self):
+        """size 10 vs 20 produce different types."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { size: u64.generic }\n"
+            "main: function is {\n"
+            "    a: (myrec size: 10) x: 1\n"
+            "    b: (myrec size: 20) x: 2\n"
+            "}"
+        )
+        names = [m.name for m, _ in program.mono_types]
+        assert "myrec_10" in names
+        assert "myrec_20" in names
+
+    def test_numeric_generic_same_value_cached(self):
+        """Same value produces same type (cache hit)."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { size: u64.generic }\n"
+            "main: function is {\n"
+            "    a: (myrec size: 10) x: 1\n"
+            "    b: (myrec size: 10) x: 2\n"
+            "}"
+        )
+        mono_names = [
+            m.name for m, _ in program.mono_types if m.name.startswith("myrec_")
+        ]
+        assert mono_names.count("myrec_10") == 1
+
+    def test_numeric_generic_must_be_explicit(self):
+        """Numeric params cannot be inferred from field values."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as { size: u64.generic }\n"
+            "main: function is { a: myrec x: 5 }"
+        )
+        assert len(errors) > 0
+
+    def test_numeric_generic_negative_value(self):
+        """Negative value produces neg prefix in mangled name."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { off: i32.generic }\n"
+            "main: function is { a: (myrec off: -5) x: 1 }"
+        )
+        monos = [m for m, _ in program.mono_types if m.name == "myrec_neg5"]
+        assert len(monos) == 1
+        mono = monos[0]
+        assert mono.param_defaults["off"] == "-5"
+
+    def test_numeric_generic_auto_field(self):
+        """Numeric param auto-creates field when not referenced by any child."""
+        program = check_ok(
+            "myrec: record { x: i64 } as { n: u32.generic }\n"
+            "main: function is { a: (myrec n: 42) x: 1 }"
+        )
+        monos = [m for m, _ in program.mono_types if m.name == "myrec_42"]
+        assert len(monos) == 1
+        mono = monos[0]
+        assert "n" in mono.children
+        assert mono.children["n"].name == "u32"
+        assert mono.param_defaults["n"] == "42"
