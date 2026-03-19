@@ -3480,3 +3480,130 @@ class TestGenerics:
             "}"
         )
         assert any("not a value type" in e.msg for e in errors)
+
+
+class TestTypedefs:
+    def test_record_typedef_resolves(self):
+        """Record typedef with .typedef resolves and sets typedef_base."""
+        program = check_ok(
+            "meters: record { val: i64.typedef } as {}\n"
+            "main: function is { m: meters.create from: 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        mt = tc._resolved.get("test.meters")
+        assert mt is not None
+        assert mt.typedef_base is not None
+        assert mt.typedef_base.name == "i64"
+        assert mt.is_valtype is True
+
+    def test_typedef_has_base_methods(self):
+        """Unshadowed base methods are accessible on typedef types."""
+        check_ok(
+            "meters: record { val: i64.typedef } as {}\n"
+            "main: function is {\n"
+            "    m: meters.create from: 42\n"
+            "    x: m.val + 1\n"
+            "}"
+        )
+
+    def test_typedef_method_shadow(self):
+        """New method in 'as' shadows base method."""
+        program = check_ok(
+            "meters: record { val: i64.typedef } as {\n"
+            "    double: function {a: this} out meters is {\n"
+            "        return meters.create from: (a.val + a.val)\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    m: meters.create from: 5\n"
+            "    d: m.double\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        mt = tc._resolved.get("test.meters")
+        assert mt is not None
+        assert "double" in mt.children
+
+    def test_typedef_null_hides_method(self):
+        """Setting a method to null in 'as' hides it from the typedef."""
+        errors = check_errors(
+            "mypoint: record { x: i64 y: i64 } as {\n"
+            "    sum: function {p: this} out i64 is { return p.x + p.y }\n"
+            "}\n"
+            "restricted: record { base: mypoint.typedef } as {\n"
+            "    sum: null\n"
+            "}\n"
+            "main: function is {\n"
+            "    r: restricted.create from: (mypoint x: 1 y: 2)\n"
+            "    s: r.sum\n"
+            "}"
+        )
+        assert any("not available" in e.msg for e in errors)
+
+    def test_typedef_backward_compatible(self):
+        """Typedef type is accepted where base type is expected."""
+        check_ok(
+            "meters: record { val: i64.typedef } as {}\n"
+            "show: function {x: i64} out i64 is { return x + 1 }\n"
+            "main: function is {\n"
+            "    m: meters.create from: 42\n"
+            "    y: show m\n"
+            "}"
+        )
+
+    def test_typedef_not_forward_compatible(self):
+        """Base type is NOT accepted where typedef is expected."""
+        errors = check_errors(
+            "meters: record { val: i64.typedef } as {}\n"
+            "measure: function {m: meters} out i64 is { return m.val }\n"
+            "main: function is {\n"
+            "    x: 42\n"
+            "    measure x\n"
+            "}"
+        )
+        assert any("mismatch" in e.msg.lower() for e in errors)
+
+    def test_typedef_multiple_fields_error(self):
+        """>1 field in 'is' section is an error for typedefs."""
+        errors = check_errors(
+            "bad: record { a: i64.typedef b: i64 } as {}\n"
+            "main: function is { x: bad.create from: 1 }"
+        )
+        assert any("Additional fields" in e.msg or "forbidden" in e.msg for e in errors)
+
+    def test_typedef_kind_mismatch_error(self):
+        """Record wrapping a class type gives an error."""
+        errors = check_errors(
+            "mycls: class { v: i64 }\n"
+            "bad: record { base: mycls.typedef } as {}\n"
+            "main: function is { x: bad.create from: (mycls v: 1) }"
+        )
+        assert any("value type" in e.msg.lower() for e in errors)
+
+    def test_typedef_has_constructors(self):
+        """take/create/borrow are synthesized for typedefs."""
+        program = check_ok(
+            "meters: record { val: i64.typedef } as {}\n"
+            "main: function is { m: meters.create from: 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        mt = tc._resolved.get("test.meters")
+        assert mt is not None
+        assert "take" in mt.children
+        assert "create" in mt.children
+        assert "borrow" in mt.children
+
+    def test_typedef_of_typedef(self):
+        """Chained typedefs, compatibility walks stack."""
+        check_ok(
+            "meters: record { val: i64.typedef } as {}\n"
+            "height: record { h: meters.typedef } as {}\n"
+            "show: function {x: i64} out i64 is { return x + 1 }\n"
+            "main: function is {\n"
+            "    h: height.create from: (meters.create from: 10)\n"
+            "    y: show h\n"
+            "}"
+        )

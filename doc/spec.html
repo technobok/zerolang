@@ -1680,61 +1680,73 @@ return value.</p>
 <p>A typedef wraps an underlying type to provide a new type. The new type has no
 run-time overhead beyond the underlying type, it is simply a compile time
 construct.</p>
-<p>To define a new typedef, define a class or record with a single concrete field
-of type <code>typedef</code> with a subtype (argument) of the underlying type. The typedef
-may also have generic parameters and functions/methods that operate on the new
-type. It may satisfy protocols (with <code>as</code>) using a combination of methods
+<p>To define a new typedef, define a class or record with a single field whose
+type uses the <code>.typedef</code> accessor on the underlying type. The typedef
+may also have generic parameters and methods that operate on the new type.
+It may satisfy protocols (with <code>as</code>) using a combination of methods
 defined on the new type and on the underlying type.</p>
-<p><code>typedef</code> is a predefined type that takes a single generic argument of type
-<code>any</code>.</p>
-<p>A typedef must not have any constructor methods and all typedef methods can not
-call the one true constructor. Wrapping is handled by the compiler and type
-system and there is no way to intervene. </p>
+<p>A typedef definition must have exactly one field in the <code>is</code> section. That
+field uses <code>.typedef</code> on the base type. Additional fields are forbidden and
+produce a compiler error.</p>
+<p>A typedef must not have any user-defined constructor methods. Wrapping is
+handled by the compiler and type system and there is no way to intervene.</p>
 <p>All generic parameters in the typedef <em><strong>MUST</strong></em> be used in the <code>this</code>
 definition line. That is, only generic parts of the underlying type may be
 referenced. Any generic parameters must be able to be automatically derived
 from the source item.</p>
-<p>Any methods defined will override methods of the same name on the underlying
-type. All unshadowed methods of the underlying type will be exposed on the
-typedef.</p>
+<p>Any methods defined in the <code>as</code> section will override methods of the same
+name on the underlying type. All unshadowed methods of the underlying type
+will be exposed on the typedef. A method can be hidden by setting it to
+<code>null</code> in the <code>as</code> section.</p>
 <p>The typedef may only use public methods and fields of the underlying type.</p>
 <p>To create a reftype typedef use a class or a union. The underlying type
-<em><strong>must</strong></em> be a reftype. </p>
+<em><strong>must</strong></em> be a reftype.</p>
 <p>Create a valtype typedef using a record or a variant. The underlying type
 <em><strong>must</strong></em> be a valtype.</p>
-<p>The typedef has a compiler generated constructor called <code>create</code> that will
-return a borrowed instance of the typedef.</p>
+<p>The compiler generates three constructors for non-generic typedefs:</p>
+<ul>
+<li><code>create</code> and <code>take</code> are aliases that take ownership of a value of the
+base type and return an owned typedef instance.
+Signature: <code>take: function {from: basetype.take} out typedeftype</code></li>
+<li><code>borrow</code> takes a lock on a value of the base type and returns a
+borrowed typedef instance.
+Signature: <code>borrow: function {from: basetype.lock} out typedeftype.borrow</code></li>
+</ul>
 <p>The typedef retains the underlying type and so can continue to be passed to
-functions that expect the underlying type as is. But the opposite is not true -
-a function expecting the new typedef must explicitly be given the wrapped type.</p>
-<p>TODO: how to create an owned typdef instance?</p>
-<pre><code class="language-zerolang">mytype: record {
-    target: typedef i32
+functions that expect the underlying type as is (backward compatible). But the
+opposite is not true - a function expecting the new typedef must explicitly be
+given the wrapped type (not forward compatible).</p>
+<p>Typedefs can be chained: a typedef of a typedef is permitted. The compatibility
+chain is walked, so a typedef-of-typedef is accepted where the original base
+type is expected.</p>
+<pre><code class="language-zerolang"># valtype typedef: meters wrapping i64
+meters: record { val: i64.typedef } as {}
 
-    add: function {:this x: i32} out type is {
-        return this.target + x
-    }
+main: function is {
+    # create an owned typedef instance
+    m: meters.create from: 42
+
+    # access base type methods
+    x: m.val + 1
+
+    # backward compatible: meters accepted where i64 expected
+    show x
 }
 
-# wrapped dictionary type
-mydict: class {
-    target: typedef (dict :k :v)
+show: function {x: i64} is { print x }
 
-    # generic parameters can be used in new methods
-    access: function {:this :k} out v {
-        # ...
-    }
+# reftype typedef with method shadowing
+mydict: class {
+    base: (dict k: str v: i64).typedef
 } as {
     k: any.generic
     v: any.generic
-}
-
-# TODO: show usage as orig type and as new type</code></pre>
+}</code></pre>
 <p>Reassigning and swapping to a typedef is permitted. For a valtype, the same
-(typedef'ed) or the underlying type may be assigned the the typdef'ed valtype.
+(typedef'ed) or the underlying type may be assigned to the typedef'ed valtype.
 For a reftype, <code>swap</code> may be used to swap the current typedef'ed reftype with
 another variable of the same or underlying type. Both variables retain their
-type after the swap (?).  The underlying variable must be owned to be used in a
+type after the swap. The underlying variable must be owned to be used in a
 swap, as usual.</p>
 <h4 id="tag"><a href="#tag">5.3.11. tag</a></h4>
 <p>A predefined generic type for specifying the discriminator in <a href="#union">unions</a>
@@ -2003,7 +2015,10 @@ arguments.</p>
 <h4 id="tag-method"><a href="#tag-method">5.4.5. tag (method)</a></h4>
 <p>TODO:</p>
 <h4 id="typedef-method"><a href="#typedef-method">5.4.6. typedef (method)</a></h4>
-<p>TODO:</p>
+<p>The <code>.typedef</code> accessor is a synthetic member available on all types. It is
+used exclusively in type definitions to mark that the enclosing type is a
+typedef wrapping the accessed type. See the typedef section above for full
+details.</p>
 <h3 id="data"><a href="#data">5.5. data</a></h3>
 <p>Creates a constant list of embedded data. It is a reftype. All components must
 be numeric valtypes.</p>

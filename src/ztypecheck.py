@@ -373,6 +373,14 @@ class TypeChecker:
                 ctype.isgeneric = True
                 generic_ctx[fname] = constraint
 
+        # typedef detection: single item with .typedef type
+        typedef_base_type, typedef_field = self._detect_typedef(cls.items, cls.start)
+        if typedef_base_type is not None:
+            if typedef_base_type.is_valtype:
+                self._error(f"Class typedef must wrap a reference type, not '{typedef_base_type.name}'", loc=cls.start)
+            return self._finalize_typedef(unitname, name, ctype, typedef_base_type, typedef_field,
+                                          cls.as_items, cls.as_functions, cls.functions, cls.start, generic_ctx)
+
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
@@ -456,6 +464,14 @@ class TypeChecker:
                 utype.generic_params[sname] = constraint
                 utype.isgeneric = True
                 generic_ctx[sname] = constraint
+
+        # typedef detection: single item with .typedef type
+        typedef_base_type, typedef_field = self._detect_typedef(union_defn.items, union_defn.start)
+        if typedef_base_type is not None:
+            if typedef_base_type.typetype != ZTypeType.UNION:
+                self._error(f"Union typedef must wrap a union type, not '{typedef_base_type.name}'", loc=union_defn.start)
+            return self._finalize_typedef(unitname, name, utype, typedef_base_type, typedef_field,
+                                          union_defn.as_items, union_defn.as_functions, union_defn.functions, union_defn.start, generic_ctx)
 
         # pass 2: resolve subtype items with generic context
         if generic_ctx:
@@ -651,6 +667,14 @@ class TypeChecker:
         self._resolving.append((key, vtype))
 
         vtype.is_valtype = True  # variants are value types
+
+        # typedef detection: single item with .typedef type
+        typedef_base_type, typedef_field = self._detect_typedef(variant_defn.items, variant_defn.start)
+        if typedef_base_type is not None:
+            if typedef_base_type.typetype != ZTypeType.VARIANT:
+                self._error(f"Variant typedef must wrap a variant type, not '{typedef_base_type.name}'", loc=variant_defn.start)
+            return self._finalize_typedef(unitname, name, vtype, typedef_base_type, typedef_field,
+                                          variant_defn.as_items, variant_defn.as_functions, variant_defn.functions, variant_defn.start, {})
 
         # resolve each subtype item
         subtype_names = list(variant_defn.items.keys())
@@ -895,6 +919,14 @@ class TypeChecker:
                 rtype.isgeneric = True
                 generic_ctx[fname] = constraint
 
+        # typedef detection: single item with .typedef type
+        typedef_base_type, typedef_field = self._detect_typedef(rec.items, rec.start)
+        if typedef_base_type is not None:
+            if not _is_valtype(typedef_base_type):
+                self._error(f"Record typedef must wrap a value type, not '{typedef_base_type.name}'", loc=rec.start)
+            return self._finalize_typedef(unitname, name, rtype, typedef_base_type, typedef_field,
+                                          rec.as_items, rec.as_functions, rec.functions, rec.start, generic_ctx)
+
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
@@ -948,6 +980,72 @@ class TypeChecker:
         rtype.children[":meta.create"] = create_type
         if "create" not in rtype.children:
             rtype.children["create"] = create_type
+
+        self._resolving.pop()
+        return rtype
+
+    def _detect_typedef(self, items: dict, start: Token) -> tuple:
+        """Check if items contain a single .typedef field. Returns (base_type, field_name) or (None, None)."""
+        typedef_base = None
+        typedef_field = None
+        for fname, fpath in items.items():
+            ft = self._resolve_typeref(fpath)
+            if ft and ft.typetype == ZTypeType.GENERIC_PARAM and ft.name == "__typedef_marker":
+                typedef_base = ft.parent
+                typedef_field = fname
+        if typedef_base is not None and len(items) > 1:
+            self._error("Additional fields on typedef objects are forbidden", loc=start)
+            return (None, None)
+        return (typedef_base, typedef_field)
+
+    def _finalize_typedef(self, unitname: str, name: str, rtype: ZType, base_type: ZType,
+                          field_name: str, as_items: dict, as_functions: dict,
+                          is_functions: dict, start: Token, generic_ctx: dict) -> ZType:
+        """Build a typedef ZType wrapping base_type."""
+        rtype.typedef_base = base_type
+        rtype.is_valtype = base_type.is_valtype
+
+        # No function pointer fields allowed in typedef is-section
+        if is_functions:
+            self._error("Additional fields on typedef objects are forbidden", loc=start)
+
+        # Process as_functions: new/shadowed methods
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
+        for mname, mfunc in as_functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            rtype.children[mname] = mt
+
+        # Process as_items: null hiding, protocol satisfaction, generic params
+        for label, apath in as_items.items():
+            at = self._resolve_typeref(apath)
+            if at and at.typetype == ZTypeType.GENERIC_PARAM and at.name == "__generic_param":
+                continue  # generic params already handled in pass 1
+            if at and at.name == "null":
+                null_type = _make_type("null", ZTypeType.NULL)
+                rtype.children[label] = null_type  # marks method as hidden
+                continue
+            # protocol satisfaction
+            if at and at.typetype == ZTypeType.PROTOCOL:
+                self._process_as_items_protocols(name, rtype, {label: apath}, start)
+        if generic_ctx:
+            self._generic_context.pop()
+
+        # Synthesize constructors: take/create and borrow
+        if not rtype.isgeneric:
+            take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
+            take_type.children[":return"] = rtype
+            take_type.children["from"] = base_type
+            take_type.param_ownership["from"] = ZParamOwnership.TAKE
+            rtype.children["take"] = take_type
+            rtype.children["create"] = take_type
+            rtype.children[":meta.create"] = take_type
+
+            borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
+            borrow_type.children[":return"] = rtype
+            borrow_type.children["from"] = base_type
+            borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
+            rtype.children["borrow"] = borrow_type
 
         self._resolving.pop()
         return rtype
@@ -1379,8 +1477,14 @@ class TypeChecker:
             parent_type = self._resolve_dotted_path(path.parent)
         if not parent_type:
             return None
-        # check for .generic / .valtype / .reftype — creates a generic type parameter marker
+        # check for .typedef — creates a marker detected by type resolvers
         child_name = path.child.name
+        if child_name == "typedef":
+            marker = _make_type("__typedef_marker", ZTypeType.GENERIC_PARAM)
+            marker.parent = parent_type  # the base type being wrapped
+            path.type = marker
+            return marker
+        # check for .generic / .valtype / .reftype — creates a generic type parameter marker
         if child_name in ("generic", "valtype", "reftype"):
             if child_name == "generic":
                 constraint = parent_type
@@ -1428,7 +1532,18 @@ class TypeChecker:
         # for records/enums, look up child in children
         child = parent_type.children.get(child_name)
         if child:
+            # null-hidden methods on typedefs
+            if parent_type.typedef_base and child.typetype == ZTypeType.NULL and child.name == "null":
+                self._error(f"Method '{child_name}' is not available on type '{parent_type.name}'", loc=path.start)
+                return None
             return child
+        # Typedef fall-through: walk base chain for unshadowed methods
+        base = parent_type.typedef_base
+        while base is not None:
+            child = base.children.get(child_name)
+            if child:
+                return child
+            base = base.typedef_base
         return None
 
     def _resolve_numeric(
@@ -1463,6 +1578,12 @@ class TypeChecker:
             return True
         if a.typetype == ZTypeType.FUNCTION and b.typetype == ZTypeType.FUNCTION:
             return self._function_types_equivalent(a, b)
+        # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
+        base = a.typedef_base
+        while base is not None:
+            if base is b or base.name == b.name:
+                return True
+            base = base.typedef_base
         return False
 
     def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
@@ -2051,12 +2172,14 @@ class TypeChecker:
         """Check a dotted path, handling .take and .borrow compiler methods."""
         child_name = path.child.name
 
-        # handle .take compiler method (but not protocol.take constructor)
+        # handle .take compiler method (but not protocol/typedef.take constructor)
         if child_name == "take":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                # protocol.take is a constructor, not ownership transfer
+                # protocol/typedef.take is a constructor, not ownership transfer
                 if parent_type.typetype == ZTypeType.PROTOCOL:
+                    pass  # fall through to normal child lookup below
+                elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
                 else:
                     # check if parent is a unit-level definition (function or spec)
@@ -2093,12 +2216,14 @@ class TypeChecker:
                     path.type = parent_type
                     return parent_type
 
-        # handle .borrow compiler method (but not protocol.borrow constructor)
+        # handle .borrow compiler method (but not protocol/typedef.borrow constructor)
         if child_name == "borrow":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                # protocol.borrow is a constructor, not ownership borrow
+                # protocol/typedef.borrow is a constructor, not ownership borrow
                 if parent_type.typetype == ZTypeType.PROTOCOL:
+                    pass  # fall through to normal child lookup below
+                elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
                 else:
                     # .borrow takes an exclusive lock on the receiver
@@ -2253,7 +2378,7 @@ class TypeChecker:
             )
             return None
 
-        # protocol.create/take/borrow from: expr
+        # protocol/typedef .create/take/borrow from: expr
         if (
             callee_type.typetype == ZTypeType.FUNCTION
             and isinstance(call.callable, zast.DottedPath)
@@ -2264,6 +2389,10 @@ class TypeChecker:
                 if call.callable.child.name == "borrow":
                     return self._check_protocol_borrow(parent_type, call)
                 return self._check_protocol_create(parent_type, call)
+            if parent_type and parent_type.typedef_base is not None:
+                if call.callable.child.name == "borrow":
+                    return self._check_typedef_borrow(parent_type, call)
+                return self._check_typedef_create(parent_type, call)
 
         # parameter types (skip :return and special entries)
         params = [
@@ -2561,6 +2690,76 @@ class TypeChecker:
 
         call.type = proto_type
         return proto_type
+
+    def _check_typedef_create(
+        self, typedef_type: ZType, call: zast.Call
+    ) -> Optional[ZType]:
+        """Check typedef.create/take from: expr — owned typedef creation."""
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        if not from_arg:
+            # positional argument
+            if call.arguments:
+                from_arg = call.arguments[0]
+        if not from_arg:
+            self._error("typedef.create requires 'from:' argument", loc=call.start)
+            return None
+
+        arg_type = self._check_operation(from_arg.valtype)
+        if not arg_type:
+            return None
+
+        # verify: arg_type must be compatible with the typedef's base type
+        base = typedef_type.typedef_base
+        if base and not self._types_compatible(base, arg_type):
+            self._error(
+                f"Type '{arg_type.name}' is not compatible with typedef base type "
+                f"'{base.name}'",
+                loc=call.start,
+            )
+            return None
+
+        call.type = typedef_type
+        return typedef_type
+
+    def _check_typedef_borrow(
+        self, typedef_type: ZType, call: zast.Call
+    ) -> Optional[ZType]:
+        """Check typedef.borrow from: expr — borrowed typedef creation."""
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        if not from_arg:
+            if call.arguments:
+                from_arg = call.arguments[0]
+        if not from_arg:
+            self._error("typedef.borrow requires 'from:' argument", loc=call.start)
+            return None
+
+        arg_type = self._check_operation(from_arg.valtype)
+        if not arg_type:
+            return None
+
+        base = typedef_type.typedef_base
+        if base and not self._types_compatible(base, arg_type):
+            self._error(
+                f"Type '{arg_type.name}' is not compatible with typedef base type "
+                f"'{base.name}'",
+                loc=call.start,
+            )
+            return None
+
+        root_name = self._get_arg_root_name(from_arg.valtype)
+        if root_name:
+            self._pending_borrow_lock = root_name
+
+        call.type = typedef_type
+        return typedef_type
 
     def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
         """Check a return statement: verify return value matches function return type."""

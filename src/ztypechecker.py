@@ -152,6 +152,9 @@ class ZType:
         default_factory=OrderedDict, init=False
     )
 
+    # for typedef types: points to the immediate base type being wrapped
+    typedef_base: "Optional[ZType]" = field(default=None, init=False)
+
 
 # a typesafe variable id
 VariableID = NewType("VariableID", int)
