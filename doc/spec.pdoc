@@ -2982,11 +2982,78 @@ A facet is the value-type equivalent of a protocol. Where protocol instances
 contain a pointer to the underlying data, facet instances contain a copy of the
 data itself, making them value types.
 
-Facet instances do not require locking or ownership tracking of the source
-since the data is copied. They are suitable for small, copyable types where
-the overhead of indirection is not desired.
+Facet definitions follow the same syntax as protocols: the body contains
+specs (function signatures without bodies) that conforming types must
+implement. Only value types (records, variants) can implement facets.
 
-Facets are deferred to a future implementation phase.
+#code language=zerolang: """
+  measurable: facet {
+      measure: function {:this b: i64} out i64
+  }
+  """
+
+#----: Conformance
+
+A value type declares conformance to a facet via a labeled entry in its
+#~"as" section, the same pattern used for protocols:
+
+#code language=zerolang: """
+  point: record { x: i64 } as {
+      m: measurable
+      measure: function {p: this b: i64} out i64 is {
+          return p.x + b
+      }
+  }
+  """
+
+The compiler checks that the implementing type provides all specs with
+matching signatures (parameter names, types, and return type).
+
+Only value types may implement facets. Attempting to implement a facet on
+a class or union produces a compile-time error.
+
+#----: Constructors
+
+The compiler generates three constructors for non-generic facets:
+
+#ul:
+  [#*: #~"create" and #~"take" copy the source value into the facet
+  instance and return an owned facet.
+  Signature: #~"take: function {from: T.take} out facettype"]
+  [#*: #~"borrow" copies the source value and locks the source variable.
+  Signature: #~"borrow: function {from: T.lock} out facettype.borrow"]
+
+Although the data is always copied, #~"borrow" still locks the source to
+maintain consistent ownership semantics with protocols. This is important
+when facets and protocols are used interchangeably in generic code.
+
+#----: Runtime layout
+
+Facet instances are stack-allocated value types. The C representation is:
+
+#ul:
+  [#*: A pointer to the vtable (constant offset, first field)]
+  [#*: An inline data union sized to the largest conforming type]
+
+No heap allocation or destructor is needed. Method dispatch goes through
+the vtable, the same as protocols.
+
+#code language=zerolang: """
+  f: measurable.create from: p
+  r: f.measure b: 10    # dispatches through vtable
+  """
+
+#----: Facets as generic constraints
+
+Facets can be used as generic constraints, the same as protocols. A
+generic parameter constrained by a facet accepts any type that conforms
+to that facet.
+
+#----: Facets as typedef base
+
+A record typedef can wrap a facet type, just as a class typedef can wrap
+a protocol type. Both are kind-compatible (record wraps facet because
+both are value types).
 
 #---: union
 

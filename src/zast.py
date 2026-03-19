@@ -390,15 +390,13 @@ class Protocol(Node):
 @dataclass
 class Facet(Node):
     """
-    Facet Definition Node - similar to protocol/record
+    Facet Definition Node - value-type interface (like Protocol but valtype)
     """
 
     nodetype: NodeType = field(default=NodeType.FACET, init=False)
-    items: Dict[str, "Path"]
-    implements: typing.List["Path"]
-    functions: Dict[str, "Function"]
-    as_items: Dict[str, "Path"]
-    as_functions: Dict[str, "Function"]
+    parameters: Dict[str, "Path"]  # generic only, a TyperefOrNum
+    specs: Dict[str, "Function"]  # specs (to be implemented by conforming valtypes)
+    includes: typing.List["Path"]  # interfaces satisfied by this facet
 
 
 ExpressionSubTypes = typing.Union[

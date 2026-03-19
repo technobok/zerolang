@@ -31,6 +31,7 @@ class ZTypeType(IntEnum):
     UNION = 55
     ENUM = 56
     PROTOCOL = 57
+    FACET = 58
 
     DATA = 60  # constant array data
     TAG = 61  # tag discriminator type (placeholder until generics)

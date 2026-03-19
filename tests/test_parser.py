@@ -386,26 +386,30 @@ class TestWithExpression:
 
 class TestFacetDefinition:
     def test_simple_facet(self):
-        """facet definition similar to record"""
-        result = parse_unit("f: facet { x: f64\n y: f64 }")
+        """facet definition with specs (like protocol)"""
+        result = parse_unit("f: facet { show: function {:this} out i64 }")
         body = get_unit_body(result)
         assert "f" in body
         assert isinstance(body["f"], zast.Facet)
+        assert "show" in body["f"].specs
 
     def test_facet_with_is(self):
         """facet with explicit is keyword"""
-        result = parse_unit("f: facet is { x: f64 }")
+        result = parse_unit("f: facet is { show: function {:this} out i64 }")
         body = get_unit_body(result)
         assert isinstance(body["f"], zast.Facet)
+        assert "show" in body["f"].specs
 
-    def test_facet_with_as(self):
-        """facet with as clause"""
-        result = parse_unit("f: facet { x: f64 } as { y: f64 }")
+    def test_facet_with_generic_param(self):
+        """facet with generic parameter"""
+        result = parse_unit(
+            "f: facet { t: any.generic\n show: function {:this} out t }"
+        )
         body = get_unit_body(result)
         fac = body["f"]
         assert isinstance(fac, zast.Facet)
-        assert "x" in fac.items
-        assert "y" in fac.as_items
+        assert "t" in fac.parameters
+        assert "show" in fac.specs
 
 
 class TestAsClause:

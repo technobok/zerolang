@@ -75,6 +75,8 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return f"z_{cname}_ft"
     if ztype.typetype == ZTypeType.PROTOCOL:
         return f"z_{name}_t*"
+    if ztype.typetype == ZTypeType.FACET:
+        return f"z_{name}_t"
     return "void"
 
 
@@ -155,6 +157,7 @@ def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
         or name in emitter._const_names
         or name in emitter._unit_names
         or name in emitter._protocol_names
+        or name in emitter._facet_names
     )
 
 
@@ -184,6 +187,11 @@ class CEmitter:
         self._spec_names: set[str] = set()
         self._protocol_names: set[str] = set()
         self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
+        self._facet_names: set[str] = set()
+        self._facet_defs: dict[str, zast.Facet] = {}  # name -> AST node
+        self._facet_conformers: dict[
+            str, list
+        ] = {}  # facet name -> list of impl type names
         self._typedef_names: set[str] = set()  # names that are typedefs (no struct)
         self._typedef_base: dict[str, str] = {}  # typedef name -> base type name
         # (impl_type, proto_name) -> label for owned protocol create
@@ -292,7 +300,9 @@ class CEmitter:
                     return True
         return False
 
-    def _is_typedef_defn(self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant") -> bool:
+    def _is_typedef_defn(
+        self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant"
+    ) -> bool:
         """Check if a type definition is a typedef (single .typedef item)."""
         items = defn.items
         if len(items) != 1:
@@ -304,7 +314,9 @@ class CEmitter:
             and fpath.child.name == "typedef"
         )
 
-    def _typedef_base_name(self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant") -> str:
+    def _typedef_base_name(
+        self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant"
+    ) -> str:
         """Extract the base type name from a typedef definition."""
         fpath = next(iter(defn.items.values()))
         assert isinstance(fpath, zast.DottedPath)
@@ -368,6 +380,10 @@ class CEmitter:
                 if not self._is_generic_template(defn):
                     self._protocol_names.add(qname)
                     self._protocol_defs[qname] = defn
+            elif isinstance(defn, zast.Facet):
+                if not self._is_generic_template(defn):
+                    self._facet_names.add(qname)
+                    self._facet_defs[qname] = defn
             elif isinstance(defn, zast.Data):
                 self._data_names.add(qname)
             elif isinstance(defn, zast.Expression) and isinstance(
@@ -378,7 +394,7 @@ class CEmitter:
                 self._const_names.add(qname)
 
     def _collect_proto_conformance(self, prefix: str, body: dict) -> None:
-        """Build (impl_type, proto_name) -> label mapping for owned protocol create."""
+        """Build (impl_type, proto/facet_name) -> label mapping for create."""
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
             if isinstance(defn, zast.Unit):
@@ -391,6 +407,11 @@ class CEmitter:
                         )
                         if proto_name and proto_name in self._protocol_names:
                             self._proto_conformance[(qname, proto_name)] = label
+                        if proto_name and proto_name in self._facet_names:
+                            self._proto_conformance[(qname, proto_name)] = label
+                            self._facet_conformers.setdefault(proto_name, []).append(
+                                qname
+                            )
 
     def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
         """Recursively emit definitions from a unit body."""
@@ -410,6 +431,8 @@ class CEmitter:
                 self._emit_variant(qname, defn)
             elif isinstance(defn, zast.Protocol):
                 self._emit_protocol(qname, defn)
+            elif isinstance(defn, zast.Facet):
+                pass  # facets emitted in second pass (after all conforming types)
             elif isinstance(defn, zast.Function) and defn.body:
                 self._emit_func_typedef(qname, defn)
                 self._emit_function(qname, defn)
@@ -423,6 +446,25 @@ class CEmitter:
                 self._emit_data(qname, defn.expression)
             elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
+
+    def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
+        """Emit facet definitions and impls (deferred to after all conforming types)."""
+        # first: emit facet struct definitions
+        for name, defn in body.items():
+            qname = self._qualify(prefix, name)
+            if isinstance(defn, zast.Unit):
+                self._emit_deferred_facets(qname, defn.body)
+            elif isinstance(defn, zast.Facet):
+                if not self._is_generic_template(defn):
+                    self._emit_facet(qname, defn)
+            elif isinstance(defn, (zast.Record, zast.Variant)):
+                if not self._is_generic_template(defn):
+                    for label, apath in defn.as_items.items():
+                        facet_name = (
+                            apath.name if isinstance(apath, zast.AtomId) else None
+                        )
+                        if facet_name and facet_name in self._facet_names:
+                            self._emit_facet_impl(qname, label, facet_name, defn)
 
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
@@ -481,6 +523,9 @@ class CEmitter:
 
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
+
+        # third pass: emit facets (must come after all conforming types are defined)
+        self._emit_deferred_facets("", mainunit.body)
 
         # emit monomorphized types
         for mono_type, template_defn in getattr(self.program, "mono_types", []):
@@ -833,6 +878,121 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
+    def _emit_facet(self, name: str, facet: zast.Facet) -> None:
+        """Emit vtable struct, data union, and instance struct for a facet."""
+        self.needs_stdint = True
+        lines: List[str] = []
+
+        # vtable struct — function pointers with void* as first param (same as protocol)
+        lines.append("typedef struct {\n")
+        for sname, sfunc in facet.specs.items():
+            ret_ctype = self._resolve_return_ctype(sfunc)
+            params: List[str] = ["void*"]
+            for pname, ppath in sfunc.parameters.items():
+                if pname.startswith(":") or pname == "this":
+                    continue
+                params.append(self._resolve_param_ctype(ppath))
+            param_str = ", ".join(params)
+            lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
+        lines.append(f"}} z_{name}_vtable_t;\n\n")
+
+        # data union — sized to largest conforming type (provides size + alignment)
+        conformers = self._facet_conformers.get(name, [])
+        lines.append("typedef union {\n")
+        if conformers:
+            for impl_name in conformers:
+                lines.append(f"    z_{impl_name}_t _{impl_name.replace('.', '_')};\n")
+        else:
+            lines.append("    char _empty;\n")
+        lines.append(f"}} z_{name}_data_u;\n\n")
+
+        # instance struct — vtable first (constant offset), then inline data
+        lines.append("typedef struct {\n")
+        lines.append(f"    z_{name}_vtable_t* vtable;\n")
+        lines.append(f"    z_{name}_data_u data;\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_facet_impl(
+        self,
+        impl_name: str,
+        label: str,
+        facet_name: str,
+        impl_defn: "zast.Record | zast.Variant",
+    ) -> None:
+        """Emit wrapper functions, static vtable, and create function for a facet implementation."""
+        facet = self._facet_defs.get(facet_name)
+        if not facet:
+            return
+        impl_ctype = f"z_{impl_name}_t"
+
+        lines: List[str] = []
+
+        # forward declarations for methods called by wrappers
+        all_methods = dict(impl_defn.as_functions)
+        all_methods.update(impl_defn.functions)
+        for sname in facet.specs:
+            mfunc = all_methods.get(sname)
+            if mfunc and mfunc.body:
+                ret_ctype = self._resolve_return_ctype(mfunc, record_name=impl_name)
+                params: List[str] = []
+                for pname, ppath in mfunc.parameters.items():
+                    if pname.startswith(":"):
+                        continue
+                    ptype_str = self._resolve_param_ctype(ppath, record_name=impl_name)
+                    params.append(f"{ptype_str} {_mangle_var(pname)}")
+                param_str = ", ".join(params) if params else "void"
+                method_cname = _mangle_func(f"{impl_name}.{sname}")
+                lines.append(f"static {ret_ctype} {method_cname}({param_str});\n")
+        lines.append("\n")
+
+        # wrapper functions for each spec
+        for sname, sfunc in facet.specs.items():
+            ret_ctype = self._resolve_return_ctype(sfunc)
+            wrapper_params: List[str] = ["void* _data"]
+            call_args: List[str] = []
+            for pname, ppath in sfunc.parameters.items():
+                if pname.startswith(":") or pname == "this":
+                    continue
+                pctype = self._resolve_param_ctype(ppath)
+                wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
+                call_args.append(_mangle_var(pname))
+
+            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
+            param_str = ", ".join(wrapper_params)
+            lines.append(f"static {ret_ctype} {wrapper_name}({param_str}) {{\n")
+            # facet data is a void* to the inline data union — cast and dereference
+            lines.append(f"    {impl_ctype} _self = *({impl_ctype}*)_data;\n")
+            method_cname = _mangle_func(f"{impl_name}.{sname}")
+            all_args = ["_self"] + call_args
+            call_expr = f"{method_cname}({', '.join(all_args)})"
+            if ret_ctype == "void":
+                lines.append(f"    {call_expr};\n")
+            else:
+                lines.append(f"    return {call_expr};\n")
+            lines.append("}\n\n")
+
+        # static vtable instance
+        vtable_name = f"z_{impl_name}_{label}_vtable"
+        lines.append(f"static z_{facet_name}_vtable_t {vtable_name} = {{\n")
+        for sname in facet.specs:
+            wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
+            lines.append(f"    .{sname} = {wrapper_name},\n")
+        lines.append("};\n\n")
+
+        # create/take function — copies value into inline data buffer
+        create_name = f"z_{impl_name}_{label}_create_owned"
+        lines.append(f"static z_{facet_name}_t {create_name}({impl_ctype} val);\n")
+        lines.append(f"static z_{facet_name}_t {create_name}({impl_ctype} val) {{\n")
+        lines.append(f"    z_{facet_name}_t facet;\n")
+        lines.append(f"    facet.vtable = &{vtable_name};\n")
+        lines.append(f"    *({impl_ctype}*)&facet.data = val;\n")
+        lines.append("    return facet;\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
     def _emit_record(self, name: str, rec: zast.Record) -> None:
         if name in self._typedef_names:
             # Typedef: no struct, no meta.create — just emit as/is functions
@@ -875,6 +1035,7 @@ class CEmitter:
             proto_name = apath.name if isinstance(apath, zast.AtomId) else None
             if proto_name and proto_name in self._protocol_names:
                 self._emit_protocol_impl(name, label, proto_name, rec)
+            # facet impls are deferred to _emit_deferred_facets
 
     def _func_pointer_field_decl(
         self, parent_name: str, mname: str, mfunc: zast.Function
@@ -1638,6 +1799,8 @@ class CEmitter:
                 return f"z_{cname}_ft"
             if name in self._protocol_names:
                 return f"z_{name}_t*"
+            if name in self._facet_names:
+                return f"z_{name}_t"
         return "int64_t"
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
@@ -1678,6 +1841,8 @@ class CEmitter:
                 return f"z_{cname}_ft"
             if name in self._protocol_names:
                 return f"z_{name}_t*"
+            if name in self._facet_names:
+                return f"z_{name}_t"
         return "void"
 
     def _emit_function(
@@ -2078,6 +2243,67 @@ class CEmitter:
 
         return tmp
 
+    def _is_facet_create(self, call: zast.Call) -> bool:
+        """Check if call is facet.create/take from: expr."""
+        if not isinstance(call.callable, zast.DottedPath):
+            return False
+        if call.callable.child.name not in ("create", "take"):
+            return False
+        parent_type = getattr(call.callable.parent, "type", None)
+        return parent_type is not None and parent_type.typetype == ZTypeType.FACET
+
+    def _is_facet_borrow(self, call: zast.Call) -> bool:
+        """Check if call is facet.borrow from: expr."""
+        if not isinstance(call.callable, zast.DottedPath):
+            return False
+        if call.callable.child.name != "borrow":
+            return False
+        parent_type = getattr(call.callable.parent, "type", None)
+        return parent_type is not None and parent_type.typetype == ZTypeType.FACET
+
+    def _emit_facet_create_call(self, call: zast.Call) -> str:
+        """Emit facet.create/take from: expr — returns a value (not pointer)."""
+        assert isinstance(call.callable, zast.DottedPath)
+        facet_type = call.callable.parent.type
+        assert facet_type is not None
+        facet_name = facet_type.name
+
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        assert from_arg is not None
+
+        arg_val = self._emit_operation_value(from_arg.valtype)
+        arg_type = getattr(from_arg.valtype, "type", None)
+        if not arg_type:
+            if isinstance(from_arg.valtype, zast.DottedPath):
+                arg_type = getattr(from_arg.valtype.parent, "type", None)
+        impl_name = arg_type.name if arg_type else ""
+
+        label = self._proto_conformance.get((impl_name, facet_name), "")
+        owned_create = f"z_{impl_name}_{label}_create_owned"
+        return f"{owned_create}({arg_val})"
+
+    def _emit_facet_borrow_call(self, call: zast.Call) -> str:
+        """Emit facet.borrow from: expr — same as create (copies value)."""
+        return self._emit_facet_create_call(call)
+
+    def _emit_facet_dispatch(self, call: zast.Call) -> Optional[str]:
+        """If call is a facet method dispatch, return the C expression. Otherwise None."""
+        if not isinstance(call.callable, zast.DottedPath):
+            return None
+        parent_type = getattr(call.callable.parent, "type", None)
+        if not parent_type or parent_type.typetype != ZTypeType.FACET:
+            return None
+        parent_val = self._emit_path_value(call.callable.parent)
+        method = call.callable.child.name
+        args = [f"(void*)&{parent_val}.data"]
+        for arg in call.arguments:
+            args.append(self._emit_operation_value(arg.valtype))
+        return f"{parent_val}.vtable->{method}({', '.join(args)})"
+
     def _emit_protocol_dispatch(self, call: zast.Call) -> Optional[str]:
         """If call is a protocol method dispatch, return the C expression. Otherwise None."""
         if not isinstance(call.callable, zast.DottedPath):
@@ -2103,10 +2329,25 @@ class CEmitter:
             val = self._emit_protocol_borrow_call(call)
             return f"{indent}{val};\n"
 
+        # facet.create/take from: expr
+        if self._is_facet_create(call):
+            val = self._emit_facet_create_call(call)
+            return f"{indent}{val};\n"
+
+        # facet.borrow from: expr
+        if self._is_facet_borrow(call):
+            val = self._emit_facet_borrow_call(call)
+            return f"{indent}{val};\n"
+
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
         if proto_expr is not None:
             return f"{indent}{proto_expr};\n"
+
+        # facet method dispatch
+        facet_expr = self._emit_facet_dispatch(call)
+        if facet_expr is not None:
+            return f"{indent}{facet_expr};\n"
 
         callable_name = self._get_callable_name(call.callable)
 
@@ -2447,10 +2688,23 @@ class CEmitter:
         if self._is_protocol_borrow(call):
             return self._emit_protocol_borrow_call(call)
 
+        # facet.create/take from: expr
+        if self._is_facet_create(call):
+            return self._emit_facet_create_call(call)
+
+        # facet.borrow from: expr
+        if self._is_facet_borrow(call):
+            return self._emit_facet_borrow_call(call)
+
         # protocol method dispatch
         proto_expr = self._emit_protocol_dispatch(call)
         if proto_expr is not None:
             return proto_expr
+
+        # facet method dispatch
+        facet_expr = self._emit_facet_dispatch(call)
+        if facet_expr is not None:
+            return facet_expr
 
         # data.index call -> array access
         if self._is_data_index_call(call) and isinstance(

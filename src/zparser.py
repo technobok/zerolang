@@ -1204,11 +1204,10 @@ class Parser:
 
     def _acceptfacet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
         """
-        accept a facet
+        accept a facet (value-type interface, same syntax as protocol)
 
             facet
-                "facet" [ "is" ] "{" { item | newline } "}"
-                [ "as" "{" { item | newline } "}" ]
+                "facet" [ "is" ] "{" { facetitem | newline } "}"
 
         Returns a Facet or Error or None (if no 'facet' keyword)
         """
@@ -1216,21 +1215,21 @@ class Parser:
         if not lex.accept(TT.FACET):
             return None
 
-        is_body, as_body, extern, err = self._acceptitembodies(
-            lex, allowtag=False, unlabelledpath=True, unlabelledid=False
+        lex.accept(TT.IS)  # optional 'is'
+
+        b = self._getobjectbody(
+            lex, allowtag=False, unlabelledpath=False, unlabelledid=False
         )
-        if err:
-            return err
+        if isinstance(b, zast.Error):
+            return b  # propagate error
 
         facet = zast.Facet(
-            items=is_body.items,
-            implements=is_body.islist,
-            functions=is_body.functions,
-            as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
+            parameters=b.items,  # 'item's are the generic parameters for facets
+            specs=b.functions,
+            includes=b.islist,
             start=start,
         )
-        return NodeX(node=facet, extern=extern)
+        return NodeX(node=facet, extern=b.extern)
 
     def _acceptitembodies(
         self,

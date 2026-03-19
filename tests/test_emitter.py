@@ -2902,3 +2902,106 @@ class TestEmitterTypedefs:
         )
         output = compile_and_run(csource)
         assert output.strip() == "11"
+
+
+# ---- Phase 30: Facet Emitter Tests ----
+
+
+class TestEmitterFacets:
+    """Tests for facet C emission (valtype interface with inline data)."""
+
+    FACET_PREAMBLE = (
+        "showable: facet {\n"
+        "    show: function {:this b: i64} out i64\n"
+        "}\n"
+        "point: record {\n"
+        "    x: i64\n"
+        "} as {\n"
+        "    s: showable\n"
+        "    show: function {p: this b: i64} out i64 is { return p.x + b }\n"
+        "}\n"
+    )
+
+    def test_facet_struct_emitted(self):
+        """A facet should emit vtable, data union, and instance struct."""
+        csource = emit_source(
+            self.FACET_PREAMBLE + "main: function is { p: point x: 5 }"
+        )
+        assert "z_showable_vtable_t" in csource
+        assert "z_showable_data_u" in csource
+        assert "z_showable_t" in csource
+
+    def test_facet_create_and_dispatch(self):
+        """Facet create + method dispatch should compile and run."""
+        csource = emit_source(
+            self.FACET_PREAMBLE + "main: function is {\n"
+            "    p: point x: 10\n"
+            "    f: showable.create from: p\n"
+            "    r: f.show b: 5\n"
+            '    print "\\{r}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_facet_is_valtype(self):
+        """Facet instances are stack-allocated, no malloc/free."""
+        csource = emit_source(
+            self.FACET_PREAMBLE + "main: function is {\n"
+            "    p: point x: 3\n"
+            "    f: showable.create from: p\n"
+            "    r: f.show b: 1\n"
+            '    print "\\{r}"\n'
+            "}"
+        )
+        # no malloc for the facet instance itself
+        assert "z_showable_destroy" not in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "4"
+
+    def test_facet_as_function_param(self):
+        """Facet passed as function parameter — dispatches correctly."""
+        csource = emit_source(
+            self.FACET_PREAMBLE + "use_it: function {f: showable} out i64 is {\n"
+            "    return (f.show b: 100)\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: point x: 7\n"
+            "    f: showable.create from: p\n"
+            "    r: use_it f\n"
+            '    print "\\{r}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "107"
+
+    def test_facet_multiple_conformers(self):
+        """Multiple types conforming to same facet — both dispatch correctly."""
+        csource = emit_source(
+            "showable: facet {\n"
+            "    show: function {:this b: i64} out i64\n"
+            "}\n"
+            "point: record { x: i64 } as {\n"
+            "    s: showable\n"
+            "    show: function {p: this b: i64} out i64 is { return p.x + b }\n"
+            "}\n"
+            "color: record { r: i64 } as {\n"
+            "    s: showable\n"
+            "    show: function {c: this b: i64} out i64 is { return c.r * b }\n"
+            "}\n"
+            "use_it: function {f: showable} out i64 is {\n"
+            "    return (f.show b: 10)\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: point x: 5\n"
+            "    c: color r: 3\n"
+            "    r1: use_it (showable.create from: p)\n"
+            "    r2: use_it (showable.create from: c)\n"
+            '    print "\\{r1}"\n'
+            '    print "\\{r2}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "15"  # 5 + 10
+        assert lines[1] == "30"  # 3 * 10

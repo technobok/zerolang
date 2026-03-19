@@ -3635,3 +3635,148 @@ class TestTypedefs:
             "    y: show h\n"
             "}"
         )
+
+
+# ---- Phase 30: Facet Tests ----
+
+
+class TestFacets:
+    def test_facet_resolves(self):
+        """Facet definition creates FACET ZType with spec children."""
+        program = check_ok(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "showable")
+        assert t is not None
+        assert t.typetype == ZTypeType.FACET
+        assert t.is_valtype is True
+        assert "show" in t.children
+        assert t.children["show"].typetype == ZTypeType.FUNCTION
+
+    def test_facet_has_constructors(self):
+        """Non-generic facets get create/take/borrow constructors."""
+        program = check_ok(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "showable")
+        assert "create" in t.children
+        assert "take" in t.children
+        assert "borrow" in t.children
+
+    def test_facet_conformance_ok(self):
+        """Record with correct methods passes facet conformance check."""
+        check_ok(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "point: record {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    s: showable\n"
+            "    show: function {p: this} out i64 is { return p.x }\n"
+            "}\n"
+            "main: function is { p: point x: 5 }"
+        )
+
+    def test_facet_conformance_missing_method(self):
+        """Record missing a spec method errors."""
+        errors = check_errors(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "point: record {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    s: showable\n"
+            "}\n"
+            "main: function is { p: point x: 5 }"
+        )
+        assert any("missing method 'show'" in e.msg for e in errors)
+
+    def test_facet_valtype_only(self):
+        """Class implementing facet should error — facets are valtype only."""
+        errors = check_errors(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "myclass: class {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    s: showable\n"
+            "    show: function {c: this} out i64 is { return c.x }\n"
+            "}\n"
+            "main: function is { c: myclass x: 5 }"
+        )
+        assert any("value type" in e.msg.lower() for e in errors)
+
+    def test_facet_create(self):
+        """facet.create from: expr should type check."""
+        check_ok(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "point: record {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    s: showable\n"
+            "    show: function {p: this} out i64 is { return p.x }\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: point x: 10\n"
+            "    f: showable.create from: p\n"
+            "}"
+        )
+
+    def test_facet_create_nonconforming_error(self):
+        """facet.create with nonconforming type should error."""
+        errors = check_errors(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "point: record { x: i64 } as {}\n"
+            "main: function is {\n"
+            "    p: point x: 10\n"
+            "    f: showable.create from: p\n"
+            "}"
+        )
+        assert any("does not conform" in e.msg for e in errors)
+
+    def test_facet_borrow_locks_source(self):
+        """facet.borrow should lock the source variable."""
+        check_ok(
+            "showable: facet {\n"
+            "    show: function {:this} out i64\n"
+            "}\n"
+            "point: record {\n"
+            "    x: i64\n"
+            "} as {\n"
+            "    s: showable\n"
+            "    show: function {p: this} out i64 is { return p.x }\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: point x: 10\n"
+            "    f: showable.borrow from: p\n"
+            "}"
+        )
+
+    def test_facet_as_param_type(self):
+        """Function accepting facet type resolves correctly."""
+        check_ok(
+            "showable: facet {\n"
+            "    show: function {:this b: i64} out i64\n"
+            "}\n"
+            "use_facet: function {f: showable} out i64 is {\n"
+            "    return (f.show b: 5)\n"
+            "}\n"
+            "main: function is {}"
+        )
