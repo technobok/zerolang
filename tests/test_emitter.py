@@ -3262,3 +3262,124 @@ class TestArrayEmission:
         )
         output = compile_and_run(csource)
         assert output.strip() == "2 3 11"
+
+
+class TestStr:
+    """Tests for str type emission and runtime behavior."""
+
+    def test_str_struct_emitted(self):
+        """Str struct has len and data fields."""
+        csource = emit_source("main: function is { s: (str to: 32) }")
+        assert "z_str_32_t" in csource
+        assert "uint64_t len;" in csource
+        assert "char data[33];" in csource
+
+    def test_str_create_emitted(self):
+        """Str create function is emitted."""
+        csource = emit_source("main: function is { s: (str to: 32) }")
+        assert "z_str_32_create" in csource
+
+    def test_str_capacity_emitted(self):
+        """Str capacity define is emitted."""
+        csource = emit_source("main: function is { s: (str to: 32) }")
+        assert "#define z_str_32_capacity 32" in csource
+
+    def test_str_empty_length_zero(self):
+        """Create empty str, verify length = 0."""
+        csource = emit_source(
+            'main: function is {\n    s: (str to: 32)\n    print "\\{s.length}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0"
+
+    def test_str_from_literal_length(self):
+        """Create str from literal, read length."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: (str to: 32) from: "hello"\n'
+            '    print "\\{s.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "5"
+
+    def test_str_capacity_access(self):
+        """.capacity returns the buffer capacity."""
+        csource = emit_source(
+            'main: function is {\n    s: (str to: 32)\n    print "\\{s.capacity}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "32"
+
+    def test_str_truncation(self):
+        """Long string truncated to str capacity."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: (str to: 4) from: "hello world"\n'
+            '    print "\\{s.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "4"
+
+    def test_str_string_conversion(self):
+        """.string converts to heap-allocated ZStr*."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: (str to: 32) from: "hello"\n'
+            "    h: s.string\n"
+            "    print h\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
+    def test_str_print(self):
+        """Print with str value uses printf directly."""
+        csource = emit_source(
+            'main: function is {\n    s: (str to: 32) from: "hi there"\n    print s\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hi there"
+
+    def test_str_interpolation(self):
+        """String interpolation containing str."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: (str to: 32) from: "world"\n'
+            '    print "hello \\{s}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello world"
+
+    def test_str_in_record(self):
+        """Str in records works as valtype."""
+        csource = emit_source(
+            "entry: record { name: (str to: 16)\n age: i64 }\n"
+            "main: function is {\n"
+            '    e: (entry) name: ((str to: 16) from: "bob")\n'
+            '    print "\\{e.name.length} \\{e.age}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3 0"
+
+    def test_str_passed_to_function(self):
+        """Str passed to function by value."""
+        csource = emit_source(
+            "getlen: function { s: (str to: 32) } out u64 is { return s.length }\n"
+            "main: function is {\n"
+            '    s: (str to: 32) from: "test"\n'
+            '    print "\\{getlen s}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "4"
+
+    def test_str_from_literal_optimization(self):
+        """from: literal uses direct struct init (no malloc)."""
+        csource = emit_source('main: function is { s: (str to: 32) from: "hello" }')
+        # should NOT contain z_str_32_create call for this variable
+        # instead should have direct compound literal
+        assert '(z_str_32_t){5, "hello"}' in csource

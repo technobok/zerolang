@@ -4004,3 +4004,76 @@ class TestArrays:
         mono = monos[0]
         assert "i64" in mono.name
         assert "5" in mono.name
+
+
+class TestStr:
+    """Tests for str type resolution and monomorphization."""
+
+    def test_str_creation(self):
+        """str to: 32 creates a monomorphized str type."""
+        program = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in program.mono_types if "str" in m.name]
+        assert len(monos) >= 1
+        mono = monos[0]
+        assert mono.name == "str_32"
+
+    def test_str_is_valtype(self):
+        """str is a value type."""
+        program = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        assert len(monos) == 1
+        assert monos[0].is_valtype is True
+
+    def test_str_length_field(self):
+        """.length is synthesized as u64 field."""
+        program = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        mono = monos[0]
+        assert "length" in mono.children
+        assert mono.children["length"].name == "u64"
+
+    def test_str_capacity_field(self):
+        """.capacity is synthesized with correct default value."""
+        program = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        mono = monos[0]
+        assert "capacity" in mono.children
+        assert mono.param_defaults.get("capacity") == "32"
+
+    def test_str_string_method(self):
+        """.string method is synthesized returning string type."""
+        program = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        mono = monos[0]
+        assert "string" in mono.children
+        string_method = mono.children["string"]
+        assert string_method.typetype == ZTypeType.FUNCTION
+        ret = string_method.children.get(":return")
+        assert ret is not None
+        assert ret.name == "string"
+
+    def test_str_different_capacities_different_types(self):
+        """str to: 16 and str to: 32 are different types."""
+        program = check_ok(
+            "main: function is {\n    a: (str to: 16)\n    b: (str to: 32)\n}"
+        )
+        names = [m.name for m, _ in program.mono_types if "str" in m.name]
+        assert "str_16" in names
+        assert "str_32" in names
+
+    def test_str_from_string_literal(self):
+        """str with from: string literal."""
+        check_ok('main: function is { s: (str to: 32) from: "hello" }')
+
+    def test_str_from_string_variable(self):
+        """str with from: string variable."""
+        check_ok(
+            'main: function is {\n    msg: "hello"\n    s: (str to: 32) from: msg\n}'
+        )
+
+    def test_str_in_record(self):
+        """str can be used as a record field (valtype)."""
+        check_ok(
+            "entry: record { name: (str to: 16)\n age: i64 }\n"
+            "main: function is { e: (entry) }"
+        )

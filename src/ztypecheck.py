@@ -55,6 +55,21 @@ def _array_length(ztype: ZType) -> Optional[int]:
     return None
 
 
+def _is_str_type(ztype: ZType) -> bool:
+    """Check if a type is a monomorphized str type."""
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "str"
+    )
+
+
+def _str_capacity(ztype: ZType) -> Optional[int]:
+    """Get the capacity of a str type."""
+    to_arg = ztype.generic_args.get("to")
+    if to_arg and to_arg.numeric_value is not None:
+        return to_arg.numeric_value
+    return None
+
+
 def _is_valtype(ztype: ZType) -> bool:
     """Check if a type is a value type (copied, always owned)."""
     if ztype.is_valtype is not None:
@@ -1854,6 +1869,9 @@ class TypeChecker:
                 return None
             elem_type = _array_element_type(parent_type)
             return elem_type
+        # for str types: .string returns the string type directly (not the function)
+        if _is_str_type(parent_type) and child_name == "string":
+            return self._resolve_name("string")
         # for records/enums, look up child in children
         child = parent_type.children.get(child_name)
         if child:
@@ -1910,6 +1928,9 @@ class TypeChecker:
             return True
         if a.typetype == ZTypeType.FUNCTION and b.typetype == ZTypeType.FUNCTION:
             return self._function_types_equivalent(a, b)
+        # str types are compatible with string (print, function params)
+        if _is_str_type(a) and b.name == "string":
+            return True
         # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
         base = a.typedef_base
         while base is not None:
@@ -2172,6 +2193,29 @@ class TypeChecker:
                 set_type.children["val"] = elem_type
                 set_type.children[":return"] = self._resolve_name("bool") or self.t_null
                 mono.children["set"] = set_type
+
+        # for str types: set valtype, remove from field, synthesize length/capacity/string
+        if _is_str_type(mono) and not is_partial:
+            mono.is_valtype = True
+            str_cap = _str_capacity(mono)
+            # remove 'from' from children — it's a constructor arg, not a persistent field
+            mono.children.pop("from", None)
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            # synthesize .capacity constant (compile-time)
+            cap_type = _make_type("u64", ZTypeType.RECORD)
+            cap_type.is_valtype = True
+            mono.children["capacity"] = cap_type
+            if str_cap is not None:
+                mono.param_defaults["capacity"] = str(str_cap)
+            # synthesize .string method: function {} out string
+            string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
+            string_method.children[":return"] = (
+                self._resolve_name("string") or self.t_null
+            )
+            mono.children["string"] = string_method
 
         # for classes: rebuild meta.create for the monomorphized class
         if template_type.typetype == ZTypeType.CLASS:

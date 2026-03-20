@@ -74,6 +74,23 @@ def _array_length(ztype: ZType) -> Optional[int]:
     return None
 
 
+def _is_str_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized str type."""
+    if not ztype:
+        return False
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "str"
+    )
+
+
+def _str_capacity(ztype: ZType) -> Optional[int]:
+    """Get the capacity of a str type."""
+    to_arg = ztype.generic_args.get("to")
+    if to_arg and to_arg.numeric_value is not None:
+        return to_arg.numeric_value
+    return None
+
+
 def _ctype(ztype: Optional[ZType]) -> str:
     if not ztype:
         return "void"
@@ -512,6 +529,9 @@ class CEmitter:
             if _is_array_type(mono_type):
                 self._record_names.add(mono_type.name)
                 continue
+            if _is_str_type(mono_type):
+                self._record_names.add(mono_type.name)
+                continue
             if mono_type.typetype == ZTypeType.UNION:
                 self._union_names.add(mono_type.name)
             elif mono_type.typetype == ZTypeType.RECORD:
@@ -565,14 +585,21 @@ class CEmitter:
             elif mono_type.typetype == ZTypeType.PROTOCOL:
                 self._protocol_names.add(mono_type.name)
 
+        # emit str mono types early (before regular definitions that may reference them)
+        for mono_type, template_defn in getattr(self.program, "mono_types", []):
+            if _is_str_type(mono_type):
+                self._emit_mono_str(mono_type)
+
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
 
         # third pass: emit facets (must come after all conforming types are defined)
         self._emit_deferred_facets("", mainunit.body)
 
-        # emit monomorphized types
+        # emit monomorphized types (str already emitted above)
         for mono_type, template_defn in getattr(self.program, "mono_types", []):
+            if _is_str_type(mono_type):
+                continue
             self._emit_mono_type(mono_type, template_defn)
 
         for unitname, unit in self.program.units.items():
@@ -1449,6 +1476,9 @@ class CEmitter:
         if _is_array_type(mono_type):
             self._emit_mono_array(mono_type)
             return
+        if _is_str_type(mono_type):
+            self._emit_mono_str(mono_type)
+            return
         if mono_type.typetype == ZTypeType.UNION:
             self._emit_mono_union(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.RECORD:
@@ -1659,6 +1689,55 @@ class CEmitter:
         lines.append("        return true;\n")
         lines.append("    }\n")
         lines.append("    return false;\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_str(self, mono_type: ZType) -> None:
+        """Emit a monomorphized str type (struct, capacity define, create, string)."""
+        self.needs_stdint = True
+        self.needs_string = True
+        name = mono_type.name
+        ctype = f"z_{name}_t"
+        cap = _str_capacity(mono_type)
+        if cap is None:
+            return
+        lines: List[str] = []
+
+        # struct definition
+        lines.append("typedef struct {\n")
+        lines.append("    uint64_t len;\n")
+        lines.append(f"    char data[{cap + 1}];\n")
+        lines.append(f"}} {ctype};\n\n")
+
+        # capacity define
+        lines.append(f"#define z_{name}_capacity {cap}\n\n")
+
+        # create constructor
+        create_name = f"z_{name}_create"
+        lines.append(f"static {ctype} {create_name}(ZStr* _from);\n")
+        lines.append(f"static {ctype} {create_name}(ZStr* _from) {{\n")
+        lines.append(f"    {ctype} _this = {{0}};\n")
+        lines.append("    if (_from) {\n")
+        lines.append("        uint64_t slen = ZSTR_SIZE(_from);\n")
+        lines.append(f"        if (slen > {cap}) slen = {cap};\n")
+        lines.append("        _this.len = slen;\n")
+        lines.append("        memcpy(_this.data, _from->data, slen);\n")
+        lines.append("        _this.data[slen] = '\\0';\n")
+        lines.append("    }\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+
+        # .string method (str -> ZStr*)
+        self.needs_stdlib = True
+        string_name = f"z_{name}_string"
+        lines.append(f"static ZStr* {string_name}({ctype} _this);\n")
+        lines.append(f"static ZStr* {string_name}({ctype} _this) {{\n")
+        lines.append("    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + _this.len + 1);\n")
+        lines.append("    z->size = _this.len;\n")
+        lines.append("    memcpy(z->data, _this.data, _this.len);\n")
+        lines.append("    z->data[_this.len] = '\\0';\n")
+        lines.append("    return z;\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -2533,7 +2612,12 @@ class CEmitter:
             self.needs_string = True
             self.needs_stdlib = True
             if call.arguments:
-                arg = self._emit_operation_value(call.arguments[0].valtype)
+                arg_op = call.arguments[0].valtype
+                arg_type = self._get_operation_type(arg_op)
+                if arg_type and _is_str_type(arg_type):
+                    arg = self._emit_operation_value(arg_op)
+                    return f'{indent}printf("%.*s\\n", (int){arg}.len, {arg}.data);\n'
+                arg = self._emit_operation_value(arg_op)
                 return f"{indent}zstr_print({arg});\n"
             t = self._static_string("")
             return f"{indent}zstr_print({t});\n"
@@ -2563,6 +2647,9 @@ class CEmitter:
         if isinstance(call.callable, zast.DottedPath):
             dp_parent_type = getattr(call.callable.parent, "type", None)
             if dp_parent_type and _is_array_type(dp_parent_type):
+                val = self._emit_call_value(call)
+                return f"{indent}{val};\n"
+            if dp_parent_type and _is_str_type(dp_parent_type):
                 val = self._emit_call_value(call)
                 return f"{indent}{val};\n"
 
@@ -2913,6 +3000,36 @@ class CEmitter:
         if call.callable.type and _is_array_type(call.callable.type):
             return f"z_{call.callable.type.name}_create()"
 
+        # str construction: (str to: N) or (str to: N) from: expr
+        if call.callable.type and _is_str_type(call.callable.type):
+            str_name = call.callable.type.name
+            # find from: argument
+            from_arg = None
+            for arg in call.arguments:
+                if arg.name == "from":
+                    from_arg = arg
+                    break
+            if from_arg is not None:
+                # check for string literal optimization
+                from_val_inner = from_arg.valtype
+                if isinstance(from_val_inner, zast.Expression):
+                    from_val_inner = from_val_inner.expression
+                if isinstance(from_val_inner, zast.AtomString) and not any(
+                    isinstance(p, zast.Expression) for p in from_val_inner.stringparts
+                ):
+                    # literal string — emit direct struct initialization
+                    cap = _str_capacity(call.callable.type)
+                    literal = self._collect_string_literal(from_val_inner.stringparts)
+                    lit_len = len(
+                        literal.encode("utf-8").decode("unicode_escape").encode("utf-8")
+                    )
+                    if cap is not None and lit_len <= cap:
+                        ctype = f"z_{str_name}_t"
+                        return f'({ctype}){{{lit_len}, "{literal}"}}'
+                from_val = self._emit_operation_value(from_arg.valtype)
+                return f"z_{str_name}_create({from_val})"
+            return f"z_{str_name}_create(NULL)"
+
         # array method calls: .get and .set
         if isinstance(call.callable, zast.DottedPath):
             dp_parent_type = getattr(call.callable.parent, "type", None)
@@ -2939,6 +3056,17 @@ class CEmitter:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     val_val = self._emit_operation_value(call.arguments[1].valtype)
                     return f"z_{arr_type_name}_set(&{parent_val}, {idx_val}, {val_val})"
+
+        # str method calls: .string
+        if isinstance(call.callable, zast.DottedPath):
+            dp_parent_type = getattr(call.callable.parent, "type", None)
+            if dp_parent_type and _is_str_type(dp_parent_type):
+                method_name = call.callable.child.name
+                parent_val = self._emit_path_value(call.callable.parent)
+                str_type_name = dp_parent_type.name
+                if method_name == "string":
+                    result = f"z_{str_type_name}_string({parent_val})"
+                    return self._alloc_temp(result)
 
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
             rec_type = call.callable.type
@@ -3169,6 +3297,18 @@ class CEmitter:
         # array: .length constant access
         if parent_type_dp and _is_array_type(parent_type_dp) and child == "length":
             return f"z_{parent_type_dp.name}_length"
+        # str: .length field access
+        if parent_type_dp and _is_str_type(parent_type_dp) and child == "length":
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}.len"
+        # str: .capacity constant access
+        if parent_type_dp and _is_str_type(parent_type_dp) and child == "capacity":
+            return f"z_{parent_type_dp.name}_capacity"
+        # str: .string conversion (str -> ZStr*)
+        if parent_type_dp and _is_str_type(parent_type_dp) and child == "string":
+            parent = self._emit_path_value(path.parent)
+            result = f"z_{parent_type_dp.name}_string({parent})"
+            return self._alloc_temp(result)
         # data.array: copy data into new array
         if (
             parent_type_dp
@@ -3578,6 +3718,10 @@ class CEmitter:
                 elif val_type and val_type.name == "string":
                     # string variable reference — no temp needed
                     parts.append(val)
+                elif val_type and _is_str_type(val_type):
+                    # str valtype — convert to ZStr* for concatenation
+                    str_type_name = val_type.name
+                    parts.append(self._alloc_temp(f"z_{str_type_name}_string({val})"))
                 else:
                     parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
             else:
