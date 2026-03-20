@@ -3117,3 +3117,148 @@ class TestCodeDeduplication:
         # both names should appear in forward decls
         assert "z_mycls_10_getval" in csource
         assert "z_mycls_20_getval" in csource
+
+
+class TestArrayEmission:
+    """Tests for array type emission."""
+
+    def test_array_struct_emitted(self):
+        """Array struct has data field with correct type and size."""
+        csource = emit_source("main: function is { a: (array of: i64 to: 4) }")
+        assert "z_array_i64_4_t" in csource
+        assert "int64_t data[4];" in csource
+
+    def test_array_create_emitted(self):
+        """Array create function is emitted."""
+        csource = emit_source("main: function is { a: (array of: i64 to: 4) }")
+        assert "z_array_i64_4_create" in csource
+
+    def test_array_length_emitted(self):
+        """Array length define is emitted."""
+        csource = emit_source("main: function is { a: (array of: i64 to: 4) }")
+        assert "#define z_array_i64_4_length 4" in csource
+
+    def test_array_create_and_set_compiles(self):
+        """Create array, set elements, read them back."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            "    a.0 = 10\n"
+            "    a.1 = 20\n"
+            "    a.2 = 30\n"
+            "    a.3 = 40\n"
+            '    print "\\{a.0} \\{a.1} \\{a.2} \\{a.3}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10 20 30 40"
+
+    def test_array_zero_initialized(self):
+        """Array elements are zero-initialized."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 3)\n"
+            '    print "\\{a.0} \\{a.1} \\{a.2}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0 0 0"
+
+    def test_array_set_method_compiles(self):
+        """.set method with runtime index compiles and works."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            "    idx: 2\n"
+            "    a.set i: idx val: 99\n"
+            '    print "\\{a.2}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "99"
+
+    def test_array_set_returns_bool(self):
+        """.set returns true for in-bounds, false for out-of-bounds."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            "    ok: a.set i: 2 val: 99\n"
+            "    bad: a.set i: 10 val: 99\n"
+            '    print "\\{ok} \\{bad}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1 0"
+
+    def test_array_get_in_bounds(self):
+        """.get returns option.some for in-bounds access."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            "    a.0 = 42\n"
+            "    r: a.get i: 0\n"
+            '    match (r) case some then { print "found" } case none then { print "empty" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "found"
+
+    def test_array_get_out_of_bounds(self):
+        """.get returns option.none for out-of-bounds access."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            "    r: a.get i: 10\n"
+            '    match (r) case some then { print "found" } case none then { print "empty" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "empty"
+
+    def test_array_length_access(self):
+        """.length returns the array size."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            '    print "\\{a.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "4"
+
+    def test_array_of_records_compiles(self):
+        """Array of records with default constructor."""
+        csource = emit_source(
+            "point: record { x: i64\n y: i64 }\n"
+            "main: function is {\n"
+            "    pts: (array of: point to: 3)\n"
+            '    print "\\{pts.0.x} \\{pts.0.y}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0 0"
+
+    def test_array_passed_to_function(self):
+        """Array passed to function by value."""
+        csource = emit_source(
+            "first: function { a: (array of: i64 to: 3) } out i64 is { return a.0 }\n"
+            "main: function is {\n"
+            "    a: (array of: i64 to: 3)\n"
+            "    a.0 = 42\n"
+            '    print "\\{first a}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_data_array_copy(self):
+        """data.array copies data into array."""
+        csource = emit_source(
+            "primes: data { 2 3 5 7 11 }\n"
+            "main: function is {\n"
+            "    a: primes.array\n"
+            '    print "\\{a.0} \\{a.1} \\{a.4}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2 3 11"

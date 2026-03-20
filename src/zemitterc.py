@@ -52,6 +52,28 @@ def _is_numeric_id(name: str) -> bool:
     return c0.isdigit() or (c0 in ("+", "-") and len(name) > 1 and name[1].isdigit())
 
 
+def _is_array_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized array type."""
+    if not ztype:
+        return False
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "array"
+    )
+
+
+def _array_element_type(ztype: ZType) -> Optional[ZType]:
+    """Get the element type of an array type."""
+    return ztype.generic_args.get("of")
+
+
+def _array_length(ztype: ZType) -> Optional[int]:
+    """Get the length of an array type."""
+    to_arg = ztype.generic_args.get("to")
+    if to_arg and to_arg.numeric_value is not None:
+        return to_arg.numeric_value
+    return None
+
+
 def _ctype(ztype: Optional[ZType]) -> str:
     if not ztype:
         return "void"
@@ -487,6 +509,9 @@ class CEmitter:
 
         # register monomorphized type names before emission
         for mono_type, _ in getattr(self.program, "mono_types", []):
+            if _is_array_type(mono_type):
+                self._record_names.add(mono_type.name)
+                continue
             if mono_type.typetype == ZTypeType.UNION:
                 self._union_names.add(mono_type.name)
             elif mono_type.typetype == ZTypeType.RECORD:
@@ -1421,6 +1446,9 @@ class CEmitter:
         self, mono_type: ZType, template_defn: zast.TypeDefinition
     ) -> None:
         """Emit a monomorphized type (union, record, class, or protocol)."""
+        if _is_array_type(mono_type):
+            self._emit_mono_array(mono_type)
+            return
         if mono_type.typetype == ZTypeType.UNION:
             self._emit_mono_union(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.RECORD:
@@ -1541,6 +1569,97 @@ class CEmitter:
         # register field info for call emission
         self._type_field_ctypes[name] = [ct for _, ct in field_items]
         self._type_field_names[name] = field_names
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_array(self, mono_type: ZType) -> None:
+        """Emit a monomorphized array type (struct, create, get, set, length)."""
+        self.needs_stdint = True
+        self.needs_stdbool = True
+        name = mono_type.name
+        ctype = f"z_{name}_t"
+        elem_type = _array_element_type(mono_type)
+        arr_len = _array_length(mono_type)
+        if not elem_type or arr_len is None:
+            return
+        elem_ctype = _ctype(elem_type)
+        lines: List[str] = []
+
+        # struct definition
+        lines.append("typedef struct {\n")
+        lines.append(f"    {elem_ctype} data[{arr_len}];\n")
+        lines.append(f"}} {ctype};\n\n")
+
+        # length define
+        lines.append(f"#define z_{name}_length {arr_len}\n\n")
+
+        # create constructor (zero-initialized)
+        create_name = f"z_{name}_create"
+        lines.append(f"static {ctype} {create_name}(void);\n")
+        lines.append(f"static {ctype} {create_name}(void) {{\n")
+        # check if element type is a record (needs constructor call)
+        if elem_type.typetype == ZTypeType.RECORD and elem_type.name not in TYPEMAP:
+            lines.append(f"    {ctype} _this;\n")
+            lines.append(
+                f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
+                f"_this.data[_i] = z_{elem_type.name}_create("
+                f"{self._zero_args_for_ctypes(elem_type.name)}"
+                f"); }}\n"
+            )
+        else:
+            lines.append(f"    {ctype} _this = {{0}};\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+
+        # get method: returns option of element type
+        option_type = mono_type.children.get("get")
+        if option_type and option_type.typetype == ZTypeType.FUNCTION:
+            ret_type = option_type.children.get(":return")
+            if ret_type:
+                self.needs_stdlib = True
+                ret_ctype = _ctype(ret_type)
+                opt_name = ret_type.name
+                opt_struct = f"z_{opt_name}_t"
+                some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
+                none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+                get_name = f"z_{name}_get"
+                lines.append(
+                    f"static {ret_ctype} {get_name}({ctype} _this, int64_t _idx);\n"
+                )
+                lines.append(
+                    f"static {ret_ctype} {get_name}({ctype} _this, int64_t _idx) {{\n"
+                )
+                lines.append(
+                    f"    {opt_struct}* _r = ({opt_struct}*)malloc(sizeof({opt_struct}));\n"
+                )
+                lines.append(f"    if (_idx >= 0 && _idx < {arr_len}) {{\n")
+                lines.append(f"        _r->tag = {some_tag};\n")
+                lines.append(
+                    f"        {elem_ctype}* _d = ({elem_ctype}*)malloc(sizeof({elem_ctype}));\n"
+                )
+                lines.append("        *_d = _this.data[_idx];\n")
+                lines.append("        _r->data = _d;\n")
+                lines.append("    } else {\n")
+                lines.append(f"        _r->tag = {none_tag};\n")
+                lines.append("        _r->data = NULL;\n")
+                lines.append("    }\n")
+                lines.append("    return _r;\n")
+                lines.append("}\n\n")
+
+        # set method: returns bool
+        set_name = f"z_{name}_set"
+        lines.append(
+            f"static bool {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val);\n"
+        )
+        lines.append(
+            f"static bool {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val) {{\n"
+        )
+        lines.append(f"    if (_idx >= 0 && _idx < {arr_len}) {{\n")
+        lines.append("        _this->data[_idx] = _val;\n")
+        lines.append("        return true;\n")
+        lines.append("    }\n")
+        lines.append("    return false;\n")
+        lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
 
@@ -2440,6 +2559,13 @@ class CEmitter:
             )
             return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
 
+        # array method calls as statements
+        if isinstance(call.callable, zast.DottedPath):
+            dp_parent_type = getattr(call.callable.parent, "type", None)
+            if dp_parent_type and _is_array_type(dp_parent_type):
+                val = self._emit_call_value(call)
+                return f"{indent}{val};\n"
+
         args = self._emit_call_args(call)
         cname = self._emit_callable_expr(call)
         code = f"{indent}{cname}({args});\n"
@@ -2783,6 +2909,37 @@ class CEmitter:
                 return self._emit_operation_value(call.arguments[0].valtype)
             return "0"
 
+        # array construction: zero-initialized, no field args
+        if call.callable.type and _is_array_type(call.callable.type):
+            return f"z_{call.callable.type.name}_create()"
+
+        # array method calls: .get and .set
+        if isinstance(call.callable, zast.DottedPath):
+            dp_parent_type = getattr(call.callable.parent, "type", None)
+            if dp_parent_type and _is_array_type(dp_parent_type):
+                method_name = call.callable.child.name
+                parent_val = self._emit_path_value(call.callable.parent)
+                arr_type_name = dp_parent_type.name
+                if method_name == "get" and call.arguments:
+                    idx_val = self._emit_operation_value(call.arguments[0].valtype)
+                    result = f"z_{arr_type_name}_get({parent_val}, {idx_val})"
+                    # .get returns option (union pointer) — track as temp
+                    ret_type = call.type
+                    if ret_type and ret_type.typetype == ZTypeType.UNION:
+                        self._temp_counter += 1
+                        tmp = f"_c{self._temp_counter}"
+                        indent = self._indent()
+                        self._temp_decls.append(
+                            f"{indent}z_{ret_type.name}_t* {tmp} = {result};\n"
+                        )
+                        self._temp_frees.append(tmp)
+                        return tmp
+                    return result
+                if method_name == "set" and len(call.arguments) >= 2:
+                    idx_val = self._emit_operation_value(call.arguments[0].valtype)
+                    val_val = self._emit_operation_value(call.arguments[1].valtype)
+                    return f"z_{arr_type_name}_set(&{parent_val}, {idx_val}, {val_val})"
+
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
             rec_type = call.callable.type
             args_str, take_vars = self._build_meta_create_args(
@@ -3004,6 +3161,34 @@ class CEmitter:
         if unit_path is not None:
             return _mangle_func(f"{unit_path}.{child}")
 
+        # array: numeric index access (a.0 → a.data[0])
+        parent_type_dp = getattr(path.parent, "type", None)
+        if parent_type_dp and _is_array_type(parent_type_dp) and child.isdigit():
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}.data[{child}]"
+        # array: .length constant access
+        if parent_type_dp and _is_array_type(parent_type_dp) and child == "length":
+            return f"z_{parent_type_dp.name}_length"
+        # data.array: copy data into new array
+        if (
+            parent_type_dp
+            and parent_type_dp.typetype == ZTypeType.DATA
+            and child == "array"
+        ):
+            arr_type = getattr(path, "type", None)
+            if arr_type and _is_array_type(arr_type):
+                arr_len = _array_length(arr_type)
+                arr_ctype = _ctype(arr_type)
+                parent = self._emit_path_value(path.parent)
+                self._temp_counter += 1
+                tmp = f"_da{self._temp_counter}"
+                indent = self._indent()
+                self._temp_decls.append(
+                    f"{indent}{arr_ctype} {tmp};\n"
+                    f"{indent}for (int64_t _i = 0; _i < {arr_len}; _i++) "
+                    f"{{ {tmp}.data[_i] = {parent}[_i]; }}\n"
+                )
+                return tmp
         # check if the dotted path resolves to a function (method call or field access)
         if (
             hasattr(path, "type")

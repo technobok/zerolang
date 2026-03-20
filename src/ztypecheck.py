@@ -35,6 +35,26 @@ def _make_type(name: str, typetype: ZTypeType, parent: Optional[ZType] = None) -
     return ZType(name=name, typetype=typetype, parent=parent)
 
 
+def _is_array_type(ztype: ZType) -> bool:
+    """Check if a type is a monomorphized array type."""
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "array"
+    )
+
+
+def _array_element_type(ztype: ZType) -> Optional[ZType]:
+    """Get the element type of an array type."""
+    return ztype.generic_args.get("of")
+
+
+def _array_length(ztype: ZType) -> Optional[int]:
+    """Get the length of an array type."""
+    to_arg = ztype.generic_args.get("to")
+    if to_arg and to_arg.numeric_value is not None:
+        return to_arg.numeric_value
+    return None
+
+
 def _is_valtype(ztype: ZType) -> bool:
     """Check if a type is a value type (copied, always owned)."""
     if ztype.is_valtype is not None:
@@ -1570,7 +1590,10 @@ class TypeChecker:
         if isinstance(path, zast.Expression):
             inner = path.expression
             if isinstance(inner, zast.Call):
-                return self._resolve_typeref_call(inner)
+                t = self._resolve_typeref_call(inner)
+                if t:
+                    path.type = t
+                return t
         return None
 
     def _resolve_numeric_generic_arg(
@@ -1794,6 +1817,43 @@ class TypeChecker:
                     path.parent_tagged_type = parent_type
                 return child
             return None
+        # for data: .array method returns a new array of matching type/length
+        if parent_type.typetype == ZTypeType.DATA and child_name == "array":
+            elem_type = parent_type.children.get(":element_type")
+            if elem_type:
+                # count data elements (non-special keys)
+                data_len = sum(
+                    1
+                    for k in parent_type.children
+                    if not k.startswith(":") and k != "tag"
+                )
+                # monomorphize array with matching type and length
+                array_template = self._resolve_name("array")
+                if array_template and array_template.isgeneric:
+                    array_defn = self._find_generic_defn(array_template)
+                    if array_defn:
+                        len_type = _make_type(str(data_len), ZTypeType.RECORD)
+                        len_type.numeric_value = data_len
+                        len_type.is_valtype = True
+                        mono = self._monomorphize(
+                            array_template,
+                            {"of": elem_type, "to": len_type},
+                            array_defn,
+                        )
+                        return mono
+            return None
+        # for arrays: numeric index access (array.0, array.1, etc.)
+        if _is_array_type(parent_type) and child_name.isdigit():
+            idx = int(child_name)
+            arr_len = _array_length(parent_type)
+            if arr_len is not None and idx >= arr_len:
+                self._error(
+                    f"Array index {idx} out of bounds for array of length {arr_len}",
+                    loc=path.start,
+                )
+                return None
+            elem_type = _array_element_type(parent_type)
+            return elem_type
         # for records/enums, look up child in children
         child = parent_type.children.get(child_name)
         if child:
@@ -2076,6 +2136,42 @@ class TypeChecker:
             gen_tag.generic_origin = "tag"
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
+
+        # for arrays: validate element type, synthesize get/set/length
+        if _is_array_type(mono) and not is_partial:
+            elem_type = _array_element_type(mono)
+            arr_len = _array_length(mono)
+            if elem_type and not _is_valtype(elem_type):
+                self._error(
+                    f"Array element type '{elem_type.name}' is not a value type; "
+                    f"arrays require valtype elements"
+                )
+            # synthesize .length constant
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            if arr_len is not None:
+                mono.param_defaults["length"] = str(arr_len)
+            # synthesize .get method: function {i: i64} out option of: <elem>
+            if elem_type:
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["i"] = self._resolve_name("i64") or self.t_null
+                # return type: option of: elem_type
+                option_template = self._resolve_name("option")
+                if option_template and option_template.isgeneric:
+                    option_defn = self._find_generic_defn(option_template)
+                    if option_defn:
+                        option_mono = self._monomorphize(
+                            option_template, {"t": elem_type}, option_defn
+                        )
+                        get_type.children[":return"] = option_mono
+                mono.children["get"] = get_type
+                # synthesize .set method: function {i: i64, val: <elem>} out bool
+                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
+                set_type.children["i"] = self._resolve_name("i64") or self.t_null
+                set_type.children["val"] = elem_type
+                set_type.children[":return"] = self._resolve_name("bool") or self.t_null
+                mono.children["set"] = set_type
 
         # for classes: rebuild meta.create for the monomorphized class
         if template_type.typetype == ZTypeType.CLASS:

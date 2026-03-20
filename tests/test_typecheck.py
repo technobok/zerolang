@@ -3904,3 +3904,103 @@ class TestNumericGenerics:
         assert "n" in mono.children
         assert mono.children["n"].name == "u32"
         assert mono.param_defaults["n"] == "42"
+
+
+class TestArrays:
+    """Tests for array type resolution and monomorphization."""
+
+    def test_array_creation(self):
+        """array of: i64 to: 4 creates a monomorphized array type."""
+        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in program.mono_types if "array" in m.name]
+        assert len(monos) >= 1
+        mono = monos[0]
+        assert mono.name == "array_i64_4"
+        assert mono.is_valtype is True
+
+    def test_array_element_access(self):
+        """a.0 resolves to the element type."""
+        check_ok("main: function is {\n    a: (array of: i64 to: 4)\n    x: a.0\n}")
+
+    def test_array_element_set(self):
+        """a.0 = 5 is valid reassignment."""
+        check_ok("main: function is {\n    a: (array of: i64 to: 4)\n    a.0 = 5\n}")
+
+    def test_array_bounds_error(self):
+        """a.4 on to: 4 array produces error."""
+        errors = check_errors(
+            "main: function is {\n    a: (array of: i64 to: 4)\n    x: a.4\n}"
+        )
+        assert any("out of bounds" in e.msg for e in errors)
+
+    def test_array_bounds_error_on_set(self):
+        """a.4 = 5 on to: 4 array produces error."""
+        errors = check_errors(
+            "main: function is {\n    a: (array of: i64 to: 4)\n    a.4 = 5\n}"
+        )
+        assert any("out of bounds" in e.msg for e in errors)
+
+    def test_array_get_method(self):
+        """.get method is synthesized and returns option."""
+        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
+        assert len(monos) == 1
+        mono = monos[0]
+        assert "get" in mono.children
+        get = mono.children["get"]
+        assert get.typetype == ZTypeType.FUNCTION
+        ret = get.children.get(":return")
+        assert ret is not None
+        assert "option" in ret.name
+
+    def test_array_set_method(self):
+        """.set method is synthesized and returns bool."""
+        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
+        assert len(monos) == 1
+        mono = monos[0]
+        assert "set" in mono.children
+        set_ = mono.children["set"]
+        assert set_.typetype == ZTypeType.FUNCTION
+        ret = set_.children.get(":return")
+        assert ret is not None
+        assert ret.name == "bool"
+
+    def test_array_length_field(self):
+        """.length is synthesized with correct default value."""
+        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
+        assert len(monos) == 1
+        mono = monos[0]
+        assert "length" in mono.children
+        assert mono.param_defaults.get("length") == "4"
+
+    def test_array_different_lengths_different_types(self):
+        """array of: i64 to: 4 and array of: i64 to: 8 are different types."""
+        program = check_ok(
+            "main: function is {\n"
+            "    a: (array of: i64 to: 4)\n"
+            "    b: (array of: i64 to: 8)\n"
+            "}"
+        )
+        names = [m.name for m, _ in program.mono_types if "array" in m.name]
+        assert "array_i64_4" in names
+        assert "array_i64_8" in names
+
+    def test_array_of_records(self):
+        """Array of records with default constructor."""
+        check_ok(
+            "point: record { x: i64\n y: i64 }\n"
+            "main: function is { a: (array of: point to: 3) }"
+        )
+
+    def test_data_array_method(self):
+        """data.array returns matching array type."""
+        program = check_ok(
+            "primes: data { 2 3 5 7 11 }\nmain: function is { a: primes.array }"
+        )
+        monos = [m for m, _ in program.mono_types if "array" in m.name]
+        assert len(monos) >= 1
+        mono = monos[0]
+        assert "i64" in mono.name
+        assert "5" in mono.name
