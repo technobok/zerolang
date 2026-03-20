@@ -3042,3 +3042,78 @@ class TestNumericGenericsEmission:
         lines = output.strip().split("\n")
         assert lines[0] == "42"
         assert lines[1] == "10"
+
+
+class TestCodeDeduplication:
+    """Tests for AST-level code deduplication of monomorphized methods."""
+
+    def test_dedup_identical_numeric_generic_methods(self):
+        """Two numeric-generic instantiations with identical method body produce a #define alias."""
+        csource = emit_source(
+            "mycls: class { val: i64 } as {\n"
+            "    n: u64.generic\n"
+            "    getval: function {c: this} out i64 is { return c.val }\n"
+            "}\n"
+            "main: function is {\n"
+            "    a: (mycls n: 10) val: 1\n"
+            "    b: (mycls n: 20) val: 2\n"
+            '    print "ok"\n'
+            "}"
+        )
+        # one should be a #define alias pointing to the other
+        assert "#define" in csource
+        # both function names should be present (fwd decl + define)
+        assert "z_mycls_10_getval" in csource
+        assert "z_mycls_20_getval" in csource
+
+    def test_no_dedup_different_types(self):
+        """Structurally different instantiations are NOT deduped."""
+        csource = emit_source(
+            "mycls: class { val: t } as {\n"
+            "    t: any.generic\n"
+            "    getval: function {c: this} out i64 is { return 0 }\n"
+            "}\n"
+            "main: function is {\n"
+            "    a: (mycls t: i64) val: 1\n"
+            "    b: (mycls t: i32) val: 2i32\n"
+            '    print "ok"\n'
+            "}"
+        )
+        # both should have function definitions, no #define for these
+        assert "z_mycls_i64_getval" in csource
+        assert "z_mycls_i32_getval" in csource
+        # structurally different this types → no dedup
+        assert "#define z_mycls_i32_getval" not in csource
+
+    def test_dedup_compiles_and_runs(self):
+        """Deduped code compiles and produces correct output."""
+        csource = emit_source(
+            "mycls: class { val: i64 } as {\n"
+            "    n: u64.generic\n"
+            '    greet: function {c: this} is { print "hello" }\n'
+            "}\n"
+            "main: function is {\n"
+            "    a: (mycls n: 10) val: 42\n"
+            "    b: (mycls n: 20) val: 99\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert "ok" in output
+
+    def test_dedup_forward_decls_preserved(self):
+        """Both canonical and alias names get forward declarations."""
+        csource = emit_source(
+            "mycls: class { val: i64 } as {\n"
+            "    n: u64.generic\n"
+            "    getval: function {c: this} out i64 is { return c.val }\n"
+            "}\n"
+            "main: function is {\n"
+            "    a: (mycls n: 10) val: 1\n"
+            "    b: (mycls n: 20) val: 2\n"
+            '    print "ok"\n'
+            "}"
+        )
+        # both names should appear in forward decls
+        assert "z_mycls_10_getval" in csource
+        assert "z_mycls_20_getval" in csource

@@ -175,6 +175,7 @@ class CEmitter:
         self.struct_defs: List[str] = []
         self.func_defs: List[str] = []
         self.data_defs: List[str] = []
+        self.func_aliases: List[str] = []  # #define aliases for deduped functions
         # track which names are functions/records/data (unit-level defs)
         self._func_names: set[str] = set()
         self._data_names: set[str] = set()
@@ -644,6 +645,10 @@ class CEmitter:
         for fd in self.forward_decls:
             parts.append(fd)
         if self.forward_decls:
+            parts.append("\n")
+        for fa in self.func_aliases:
+            parts.append(fa)
+        if self.func_aliases:
             parts.append("\n")
         for dd in self.data_defs:
             parts.append(dd)
@@ -1581,11 +1586,29 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
-        # emit methods from template_defn with mangled names
+        # emit methods from cloned or template defn with mangled names
+        cloned_methods = getattr(self.program, "cloned_methods", {}).get(name)
+        func_aliases = getattr(self.program, "func_aliases", {})
         if isinstance(template_defn, zast.Class):
             for mname, mfunc in template_defn.as_functions.items():
                 if mfunc.body:
-                    self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+                    qualified = f"{name}.{mname}"
+                    if qualified in func_aliases:
+                        canonical = func_aliases[qualified]
+                        alias_c = _mangle_func(qualified)
+                        canon_c = _mangle_func(canonical)
+                        self.func_aliases.append(f"#define {alias_c} {canon_c}\n")
+                        # emit forward decl so callers can reference the alias
+                        self._emit_alias_forward_decl(
+                            qualified, mfunc, record_name=name
+                        )
+                    else:
+                        func_to_emit = (
+                            cloned_methods[mname]
+                            if cloned_methods and mname in cloned_methods
+                            else mfunc
+                        )
+                        self._emit_function(qualified, func_to_emit, record_name=name)
 
     def _emit_mono_class_create(
         self,
@@ -1863,6 +1886,22 @@ class CEmitter:
             if name in self._facet_names:
                 return f"z_{name}_t"
         return "void"
+
+    def _emit_alias_forward_decl(
+        self, name: str, func: zast.Function, record_name: str = ""
+    ) -> None:
+        """Emit a forward declaration for a deduped alias function."""
+        self.needs_stdint = True
+        cname = _mangle_func(name)
+        ret_ctype = self._resolve_return_ctype(func, record_name)
+        params: List[str] = []
+        for pname, ppath in func.parameters.items():
+            if pname.startswith(":"):
+                continue
+            ptype_str = self._resolve_param_ctype(ppath, record_name)
+            params.append(f"{ptype_str} {_mangle_var(pname)}")
+        param_str = ", ".join(params) if params else "void"
+        self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
     def _emit_function(
         self, name: str, func: zast.Function, record_name: str = ""

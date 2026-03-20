@@ -9,9 +9,10 @@ from typing import Optional, List, Tuple
 from collections import OrderedDict
 
 import zast
-from zast import ERR
+from zast import ERR, clone_function
 from zlexer import Token
 from zenv import SymbolTable
+import zasthash
 from ztypechecker import (
     ZType,
     ZTypeType,
@@ -104,6 +105,13 @@ class TypeChecker:
 
         # generic context stack: list of dicts mapping generic param name -> ZType
         self._generic_context: list[dict[str, ZType]] = []
+
+        # dedup: hash -> (canonical_qualified_name, canonical_Function)
+        self._func_hashes: dict[str, tuple[str, zast.Function]] = {}
+        # dedup aliases: alias_qualified_name -> canonical_qualified_name
+        self._func_aliases: dict[str, str] = {}
+        # cloned methods per mono type: mono_name -> {mname: Function}
+        self._cloned_methods: dict[str, dict[str, zast.Function]] = {}
 
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
@@ -449,6 +457,14 @@ class TypeChecker:
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 ctype.children[mname] = mt
 
+            # typecheck method bodies
+            for mname, mfunc in cls.functions.items():
+                if mfunc.body:
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+            for mname, mfunc in cls.as_functions.items():
+                if mfunc.body:
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+
             # as_items: protocol satisfaction
             self._process_as_items_protocols(name, ctype, cls.as_items, cls.start)
 
@@ -688,6 +704,14 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             utype.children[mname] = mt
 
+        # typecheck method bodies (non-generic only)
+        for mname, mfunc in union_defn.functions.items():
+            if mfunc.body:
+                self._check_function_body(f"{name}.{mname}", mfunc)
+        for mname, mfunc in union_defn.as_functions.items():
+            if mfunc.body:
+                self._check_function_body(f"{name}.{mname}", mfunc)
+
         self._resolving.pop()
         return utype
 
@@ -887,6 +911,14 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             vtype.children[mname] = mt
 
+        # typecheck method bodies (non-generic only — variants don't support generics yet)
+        for mname, mfunc in variant_defn.functions.items():
+            if mfunc.body:
+                self._check_function_body(f"{name}.{mname}", mfunc)
+        for mname, mfunc in variant_defn.as_functions.items():
+            if mfunc.body:
+                self._check_function_body(f"{name}.{mname}", mfunc)
+
         self._resolving.pop()
         return vtype
 
@@ -1038,6 +1070,15 @@ class TypeChecker:
         for mname, mfunc in rec.as_functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
+
+        # typecheck method bodies (non-generic only)
+        if not rtype.isgeneric:
+            for mname, mfunc in rec.functions.items():
+                if mfunc.body:
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+            for mname, mfunc in rec.as_functions.items():
+                if mfunc.body:
+                    self._check_function_body(f"{name}.{mname}", mfunc)
 
         # as_items: protocol satisfaction
         self._process_as_items_protocols(name, rtype, rec.as_items, rec.start)
@@ -1508,7 +1549,10 @@ class TypeChecker:
             if name == "type":
                 return self._resolve_type_keyword()
             if name == "this":
-                return self._resolve_this_keyword()
+                t = self._resolve_this_keyword()
+                if t:
+                    path.type = t
+                return t
             t = self._resolve_name(name)
             if t and t.isgeneric:
                 # allow bare generic 'tag' as field type (monomorphized on use)
@@ -2043,10 +2087,51 @@ class TypeChecker:
             if "create" not in mono.children:
                 mono.children["create"] = create_type
 
+        # clone, typecheck, hash, and dedup method bodies for non-partial monos
+        cloned_defn = defn
+        if not is_partial and isinstance(
+            defn, (zast.Class, zast.Record, zast.Union, zast.Variant)
+        ):
+            # collect method sources from the template definition
+            method_sources: list[tuple[str, zast.Function, str]] = []
+            for mname, mfunc in defn.as_functions.items():
+                if mfunc.body:
+                    method_sources.append((mname, mfunc, "as_functions"))
+            for mname, mfunc in defn.functions.items():
+                if mfunc.body:
+                    method_sources.append((mname, mfunc, "functions"))
+
+            # build cloned method dict for each source
+            cloned_methods: dict[str, zast.Function] = {}
+            for mname, mfunc, source_dict in method_sources:
+                qualified = f"{mangled}.{mname}"
+                cloned = clone_function(mfunc)
+
+                # push mono type onto resolving stack so 'this' resolves
+                self._resolving.append((mangled, mono))
+                # push generic context so body checking resolves generic params
+                self._generic_context.append({k: v for k, v in generic_args.items()})
+                self._check_function_body(qualified, cloned)
+                self._generic_context.pop()
+                self._resolving.pop()
+
+                # hash and dedup
+                func_hash = zasthash.hash_function(cloned)
+                if func_hash in self._func_hashes:
+                    canonical_name, canonical_func = self._func_hashes[func_hash]
+                    self._func_aliases[qualified] = canonical_name
+                    cloned_methods[mname] = canonical_func
+                else:
+                    self._func_hashes[func_hash] = (qualified, cloned)
+                    cloned_methods[mname] = cloned
+
+            # store cloned methods for emitter use
+            self._cloned_methods[mangled] = cloned_methods
+
         # cache and register
         self._mono_cache[cache_key] = mono
         if not is_partial:
-            self._mono_types.append((mono, defn))
+            self._mono_types.append((mono, cloned_defn))
             # register in _resolved so the emitter can find it
             for unitname in self.program.units:
                 key = f"{unitname}.{mangled}"
@@ -3217,4 +3302,6 @@ def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     tc = TypeChecker(program)
     errors = tc.check(full=full)
     program.mono_types = tc._mono_types
+    program.func_aliases = tc._func_aliases
+    program.cloned_methods = tc._cloned_methods
     return errors

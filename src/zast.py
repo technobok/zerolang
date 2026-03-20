@@ -2,6 +2,8 @@
 AST Nodes and types
 """
 
+import copy
+
 # import threading
 from dataclasses import dataclass, field
 from enum import IntEnum, unique
@@ -213,6 +215,18 @@ class Program:
     # monomorphized generic types: list of (mono_ztype, original_ast_node) tuples
     # populated by the type checker after monomorphization
     mono_types: typing.List = field(default_factory=list)
+
+    # dedup aliases: {qualified_alias_name: qualified_canonical_name}
+    # populated by type checker during monomorphization dedup
+    func_aliases: Dict[str, str] = field(default_factory=dict)
+
+    # cloned methods per mono type: {mono_name: {mname: Function}}
+    cloned_methods: Dict[str, Dict[str, "Function"]] = field(default_factory=dict)
+
+
+def clone_function(func: "Function") -> "Function":
+    """Deep copy a Function AST node for monomorphization."""
+    return copy.deepcopy(func)
 
 
 # a typesafe node id

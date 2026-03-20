@@ -289,7 +289,10 @@ def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
         f = float(rest)
         return numtype, f, None
 
-    i = int(rest, base=base)
+    try:
+        i = int(rest, base=base)
+    except ValueError:
+        return (numtype, 0, f"Invalid numeric literal: {numstr}")
     if numtype in NUMERIC_RANGES:
         lo, hi = NUMERIC_RANGES[numtype]
         if i < lo or i > hi:
