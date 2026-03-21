@@ -333,10 +333,10 @@ Each of these is a hand-crafted C code generator with inlined string templates. 
 
 #### Action Items
 
-- [ ] Extract the common container patterns (create, destroy, struct typedef) into shared helpers
-- [ ] Use `ZType.destructor_name` from Finding 3 to eliminate inline cleanup cascades
-- [ ] Consider a template-based approach for the largest generators (map: 330 lines)
-- [ ] Deduplicate list/array create patterns (both are `malloc + zero-init`)
+- [x] Extract the common container patterns (create, destroy, struct typedef) into shared helpers — `_emit_heap_container_create()` for list create, `_emit_bounds_check()` for list get/set/insert OOB checks
+- [x] Use `ZType.destructor_name` from Finding 3 to eliminate inline cleanup cascades — already done in Finding 3 (list destructor uses `elem_type.destructor_name`, map uses it in `emit_free_key`/`emit_free_val`)
+- [x] Consider a template-based approach for the largest generators (map: 330 lines) — map's hash/equality/probe logic is too specialized for simple templates; kept as-is but with shared helpers where applicable
+- [x] Deduplicate list/array create patterns (both are `malloc + zero-init`) — list uses `_emit_heap_container_create()`; array uses stack init (different pattern, kept separate)
 
 ---
 

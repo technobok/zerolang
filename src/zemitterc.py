@@ -356,6 +356,37 @@ class CEmitter:
             self.source_map.append(node_id)
             char_pos = line_end + 1  # +1 for the \n
 
+    def _emit_bounds_check(
+        self, lines: List[str], idx_expr: str, len_expr: str,
+        label: str, idx_fmt: str = "%lu", idx_cast: str = "(unsigned long)",
+    ) -> None:
+        """Emit a bounds-check with error exit for container get/set."""
+        lines.append(f"    if ({idx_expr} >= {len_expr}) {{\n")
+        lines.append(
+            f'        fprintf(stderr, "{label}: index {idx_fmt} out of bounds'
+            f' (length {idx_fmt})\\n", {idx_cast}{idx_expr}, {idx_cast}{len_expr});\n'
+        )
+        lines.append("        exit(1);\n")
+        lines.append("    }\n")
+
+    def _emit_heap_container_create(
+        self, lines: List[str], name: str, ctype: str, data_ctype: str,
+    ) -> None:
+        """Emit a heap-allocated container create function (list/map pattern)."""
+        create_name = f"z_{name}_create"
+        lines.append(f"static {ctype}* {create_name}(uint64_t _capacity);\n")
+        lines.append(f"static {ctype}* {create_name}(uint64_t _capacity) {{\n")
+        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+        lines.append(f"    *_this = ({ctype}){{0}};\n")
+        lines.append("    _this->capacity = _capacity;\n")
+        lines.append("    if (_capacity > 0) {\n")
+        lines.append(
+            f"        _this->data = ({data_ctype}*)calloc(_capacity, sizeof({data_ctype}));\n"
+        )
+        lines.append("    }\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+
     def _is_typedef(self, name: str) -> bool:
         """Check if a name is a typedef (has a typedef_base in the resolved type)."""
         t = self._resolved_type(name)
@@ -1757,18 +1788,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # create constructor
-        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity);\n")
-        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity) {{\n")
-        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
-        lines.append(f"    *_this = ({ctype}){{0}};\n")
-        lines.append("    _this->capacity = _capacity;\n")
-        lines.append("    if (_capacity > 0) {\n")
-        lines.append(
-            f"        _this->data = ({elem_ctype}*)calloc(_capacity, sizeof({elem_ctype}));\n"
-        )
-        lines.append("    }\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
+        self._emit_heap_container_create(lines, name, ctype, elem_ctype)
 
         # growth helper (inline in append/insert/extend via macro-like pattern)
         grow_fn = f"z_{name}_grow"
@@ -1804,12 +1824,7 @@ class CEmitter:
         lines.append(
             f"static void z_{name}_insert({ctype}* _this, {elem_ctype} _val, uint64_t _at) {{\n"
         )
-        lines.append("    if (_at > _this->length) {\n")
-        lines.append(
-            '        fprintf(stderr, "list insert: index %lu out of bounds (length %lu)\\n", (unsigned long)_at, (unsigned long)_this->length);\n'
-        )
-        lines.append("        exit(1);\n")
-        lines.append("    }\n")
+        self._emit_bounds_check(lines, "_at", "_this->length + 1", "list insert")
         lines.append(f"    {grow_fn}(_this, _this->length + 1);\n")
         lines.append(
             f"    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof({elem_ctype}));\n"
@@ -1840,12 +1855,7 @@ class CEmitter:
         lines.append(
             f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx) {{\n"
         )
-        lines.append("    if (_idx >= _this->length) {\n")
-        lines.append(
-            '        fprintf(stderr, "list get: index %lu out of bounds (length %lu)\\n", (unsigned long)_idx, (unsigned long)_this->length);\n'
-        )
-        lines.append("        exit(1);\n")
-        lines.append("    }\n")
+        self._emit_bounds_check(lines, "_idx", "_this->length", "list get")
         lines.append("    return _this->data[_idx];\n")
         lines.append("}\n\n")
 
@@ -1856,12 +1866,7 @@ class CEmitter:
         lines.append(
             f"static {elem_ctype} z_{name}_set({ctype}* _this, uint64_t _idx, {elem_ctype} _val) {{\n"
         )
-        lines.append("    if (_idx >= _this->length) {\n")
-        lines.append(
-            '        fprintf(stderr, "list set: index %lu out of bounds (length %lu)\\n", (unsigned long)_idx, (unsigned long)_this->length);\n'
-        )
-        lines.append("        exit(1);\n")
-        lines.append("    }\n")
+        self._emit_bounds_check(lines, "_idx", "_this->length", "list set")
         lines.append(f"    {elem_ctype} _old = _this->data[_idx];\n")
         lines.append("    _this->data[_idx] = _val;\n")
         lines.append("    return _old;\n")
