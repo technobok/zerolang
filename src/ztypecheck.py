@@ -1609,9 +1609,15 @@ class TypeChecker:
         if isinstance(path, zast.AtomId):
             name = path.name
             if _is_numeric_id(name):
-                return self._resolve_numeric(name, loc=path.start)
+                t = self._resolve_numeric(name, loc=path.start)
+                if t:
+                    path.type = t
+                return t
             if name == "type":
-                return self._resolve_type_keyword()
+                t = self._resolve_type_keyword()
+                if t:
+                    path.type = t
+                return t
             if name == "this":
                 t = self._resolve_this_keyword()
                 if t:
@@ -1621,6 +1627,7 @@ class TypeChecker:
             if t and t.isgeneric:
                 # allow bare generic 'tag' as field type (monomorphized on use)
                 if name == "tag":
+                    path.type = t
                     return t
                 self._error(
                     f"Generic type '{name}' requires type arguments, "
@@ -1628,9 +1635,14 @@ class TypeChecker:
                     loc=path.start,
                 )
                 return None
+            if t:
+                path.type = t
             return t
         if isinstance(path, zast.DottedPath):
-            return self._resolve_dotted_path(path)
+            t = self._resolve_dotted_path(path)
+            if t:
+                path.type = t
+            return t
         if isinstance(path, zast.Expression):
             inner = path.expression
             if isinstance(inner, zast.Call):

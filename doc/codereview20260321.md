@@ -70,14 +70,14 @@ Compare with `_resolve_param_ctype()` at line 2534 — nearly identical cascade 
 
 #### Action Items
 
-- [ ] Audit the type checker to find which AST nodes are not getting `.type` annotations
-- [ ] Ensure the type checker annotates every `Path` node (parameters, return types, field types, union subtypes)
-- [ ] Remove `_resolve_param_ctype()`, replace all call sites with `_ctype(ppath.type)`
-- [ ] Remove `_resolve_return_ctype()`, replace all call sites with `_ctype(func.returntype.type)`
-- [ ] Remove `_resolve_field_ctype()`, replace all call sites with `_ctype(fpath.type)`
-- [ ] Remove `_resolve_typedef_ctype()` — typedef resolution should be handled by `_ctype()` via `ZType.typedef_base`
-- [ ] Remove `_get_subtype_ctype()`, replace with `_ctype(subtype_path.type)`
-- [ ] Remove all `hasattr(…, "type")` and `getattr(…, "type", None)` fallback patterns (41 occurrences in zemitterc.py)
+- [x] Audit the type checker to find which AST nodes are not getting `.type` annotations
+- [x] Ensure the type checker annotates every `Path` node (parameters, return types, field types, union subtypes)
+- [x] Remove `_resolve_param_ctype()`, replace all call sites with `_ctype(ppath.type)`
+- [x] Remove `_resolve_return_ctype()`, replace all call sites with `_ctype(func.returntype.type)`
+- [x] Remove `_resolve_field_ctype()`, replace all call sites with `_ctype(fpath.type)`
+- [x] Remove `_resolve_typedef_ctype()` — typedef resolution should be handled by `_ctype()` via `ZType.typedef_base`
+- [x] Remove `_get_subtype_ctype()`, replace with `_ctype(subtype_path.type)`
+- [x] Remove all `hasattr(…, "type")` and `getattr(…, "type", None)` fallback patterns (41 occurrences in zemitterc.py)
 
 ---
 

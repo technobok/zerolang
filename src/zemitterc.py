@@ -343,7 +343,7 @@ class CEmitter:
         """
         # check if this is a function pointer field call (e.g. c.op)
         if isinstance(call.callable, zast.DottedPath):
-            ftype = getattr(call.callable, "type", None)
+            ftype = call.callable.type
             if ftype and ftype.typetype == ZTypeType.FUNCTION:
                 func_name = ftype.name
                 if func_name in self._is_func_fields:
@@ -398,23 +398,6 @@ class CEmitter:
             return parent.name
         return ""
 
-    def _resolve_typedef_ctype(self, name: str) -> str:
-        """Resolve a typedef name to its ultimate C type, following chains."""
-        while name in self._typedef_base:
-            name = self._typedef_base[name]
-        if name in TYPEMAP:
-            return TYPEMAP[name]
-        if name == "string":
-            return "ZStr*"
-        if name in self._record_names:
-            return f"z_{name}_t"
-        if name in self._class_names:
-            return f"z_{name}_t*"
-        if name in self._union_names:
-            return f"z_{name}_t*"
-        if name in self._variant_names:
-            return f"z_{name}_t"
-        return "int64_t"
 
     def _collect_unit_names(self, prefix: str, body: dict) -> None:
         """Recursively collect definition names from a unit body."""
@@ -950,13 +933,8 @@ class CEmitter:
             lines.append(f"    {impl_ctype}* r = ({impl_ctype}*)p;\n")
             # cleanup reftype fields
             for fname, fpath in impl_defn.items.items():
-                ftype_name = None
-                ftype_type = None
-                if hasattr(fpath, "type") and fpath.type:
-                    ftype_name = fpath.type.name
-                    ftype_type = fpath.type.typetype
-                elif isinstance(fpath, zast.AtomId):
-                    ftype_name = fpath.name
+                ftype_name = fpath.type.name if fpath.type else None
+                ftype_type = fpath.type.typetype if fpath.type else None
                 if ftype_name == "string":
                     lines.append(f"    zstr_free(r->{fname});\n")
                 elif ftype_type == ZTypeType.CLASS or (
@@ -1124,7 +1102,7 @@ class CEmitter:
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in rec.items.items():
-            ftype = self._resolve_field_ctype(fpath)
+            ftype = _ctype(fpath.type)
             lines.append(f"    {ftype} {fname};\n")
         # emit function pointer fields from 'is' section
         for mname, mfunc in rec.functions.items():
@@ -1166,35 +1144,6 @@ class CEmitter:
         param_str = ", ".join(params) if params else "void"
         return f"{ret_ctype} (*{mname})({param_str})"
 
-    def _resolve_field_ctype(self, fpath: zast.Path) -> str:
-        """Resolve the C type for a struct/class field."""
-        ftype = _ctype(fpath.type if hasattr(fpath, "type") else None)
-        if ftype == "void" and isinstance(fpath, zast.DottedPath):
-            if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
-                fpath.parent.name
-            ):
-                return TYPEMAP.get(fpath.child.name, "int64_t")
-        if ftype == "void" and isinstance(fpath, zast.AtomId):
-            fname = fpath.name
-            if _is_numeric_id(fname):
-                return "int64_t"
-            if fname == "string":
-                return "ZStr*"
-            if fname in self._class_names:
-                return f"z_{fname}_t*"
-            if fname in self._union_names:
-                return f"z_{fname}_t*"
-            if fname in self._variant_names:
-                return f"z_{fname}_t"
-            if fname in self._record_names:
-                return f"z_{fname}_t"
-            if fname in self._spec_names:
-                cname = fname.replace(".", "_")
-                return f"z_{cname}_ft"
-            if fname in self._protocol_names:
-                return f"z_{fname}_t*"
-            return TYPEMAP.get(fname, "int64_t")
-        return ftype
 
     def _emit_meta_create_record(self, name: str, rec: zast.Record) -> None:
         """Emit a meta.create constructor function for a record type."""
@@ -1203,7 +1152,7 @@ class CEmitter:
         field_names: List[str] = []
         field_ctypes: List[str] = []
         for fname, fpath in rec.items.items():
-            fct = self._resolve_field_ctype(fpath)
+            fct = _ctype(fpath.type)
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
@@ -1275,7 +1224,7 @@ class CEmitter:
         field_names: List[str] = []
         field_ctypes: List[str] = []
         for fname, fpath in cls.items.items():
-            fct = self._resolve_field_ctype(fpath)
+            fct = _ctype(fpath.type)
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
@@ -1355,7 +1304,7 @@ class CEmitter:
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in cls.items.items():
-            ftype = self._resolve_field_ctype(fpath)
+            ftype = _ctype(fpath.type)
             lines.append(f"    {ftype} {fname};\n")
         # emit function pointer fields from 'is' section
         for mname, mfunc in cls.functions.items():
@@ -1368,13 +1317,8 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
         lines.append("    if (!p) return;\n")
         for fname, fpath in cls.items.items():
-            ftype_name = None
-            ftype_type = None
-            if hasattr(fpath, "type") and fpath.type:
-                ftype_name = fpath.type.name
-                ftype_type = fpath.type.typetype
-            elif isinstance(fpath, zast.AtomId):
-                ftype_name = fpath.name
+            ftype_name = fpath.type.name if fpath.type else None
+            ftype_type = fpath.type.typetype if fpath.type else None
             if ftype_name == "string":
                 lines.append(f"    zstr_free(p->{fname});\n")
             elif ftype_type == ZTypeType.CLASS or (
@@ -2532,94 +2476,18 @@ class CEmitter:
             )
 
     def _resolve_param_ctype(self, ppath: zast.Path, record_name: str = "") -> str:
-        if hasattr(ppath, "type") and ppath.type:
-            return _ctype(ppath.type)
-        if isinstance(ppath, zast.DottedPath):
-            if isinstance(ppath.parent, zast.AtomId) and _is_numeric_id(
-                ppath.parent.name
-            ):
-                return TYPEMAP.get(ppath.child.name, "int64_t")
-        if isinstance(ppath, zast.AtomId):
-            name = ppath.name
-            if _is_numeric_id(name):
-                return "int64_t"
-            if name == "this" and record_name:
-                if record_name in self._class_names:
-                    return f"z_{record_name}_t*"
-                return f"z_{record_name}_t"
-            if name == "type" and record_name:
-                if record_name in self._class_names:
-                    return f"z_{record_name}_t*"
-                return f"z_{record_name}_t"
-            if name in TYPEMAP:
-                return TYPEMAP[name]
-            if name == "string":
-                return "ZStr*"
-            # typedef: resolve to base type
-            if name in self._typedef_names:
-                return self._resolve_typedef_ctype(name)
-            # check if it's a record name defined in the main unit
-            if name in self._record_names:
-                return f"z_{name}_t"
-            if name in self._class_names:
-                return f"z_{name}_t*"
-            if name in self._union_names:
-                return f"z_{name}_t*"
-            if name in self._variant_names:
-                return f"z_{name}_t"
-            if name in self._spec_names:
-                cname = name.replace(".", "_")
-                return f"z_{cname}_ft"
-            if name in self._func_names:
-                cname = name.replace(".", "_")
-                return f"z_{cname}_ft"
-            if name in self._protocol_names:
-                return f"z_{name}_t*"
-            if name in self._facet_names:
-                return f"z_{name}_t"
-        return "int64_t"
+        return _ctype(ppath.type)
 
     def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
         if not func.returntype:
             return "void"
-        if hasattr(func.returntype, "type") and func.returntype.type:
-            return _ctype(func.returntype.type)
-        if isinstance(func.returntype, zast.AtomId):
-            name = func.returntype.name
-            if name in ("type", "this") and record_name:
-                if record_name in self._class_names:
-                    return f"z_{record_name}_t*"
-                return f"z_{record_name}_t"
-            if name in TYPEMAP:
-                return TYPEMAP[name]
-            if name == "string":
-                self.needs_string = True
-                self.needs_stdlib = True
-                return "ZStr*"
-            # typedef: resolve to base type
-            if name in self._typedef_names:
-                return self._resolve_typedef_ctype(name)
-            if name in self._record_names:
-                return f"z_{name}_t"
-            if name in self._class_names:
-                self.needs_stdlib = True
-                return f"z_{name}_t*"
-            if name in self._union_names:
-                self.needs_stdlib = True
-                return f"z_{name}_t*"
-            if name in self._variant_names:
-                return f"z_{name}_t"
-            if name in self._spec_names:
-                cname = name.replace(".", "_")
-                return f"z_{cname}_ft"
-            if name in self._func_names:
-                cname = name.replace(".", "_")
-                return f"z_{cname}_ft"
-            if name in self._protocol_names:
-                return f"z_{name}_t*"
-            if name in self._facet_names:
-                return f"z_{name}_t"
-        return "void"
+        ct = _ctype(func.returntype.type)
+        if ct == "ZStr*":
+            self.needs_string = True
+            self.needs_stdlib = True
+        elif ct.endswith("*"):
+            self.needs_stdlib = True
+        return ct
 
     def _emit_alias_forward_decl(
         self, name: str, func: zast.Function, record_name: str = ""
@@ -2840,7 +2708,7 @@ class CEmitter:
         rhs = self._emit_expression_value(reassign.value)
         result = ""
         # check if this is a reftype reassignment — free old value first
-        lhs_type = getattr(reassign.topath, "type", None)
+        lhs_type = reassign.topath.type
         if lhs_type and lhs_type.name == "string":
             result += f"{indent}zstr_free({lhs});\n"
             # the variable now owns the new value — remove from temp frees
@@ -2894,7 +2762,7 @@ class CEmitter:
             ):
                 return ""
             var = self._emit_path_value(inner.parent)
-            var_type = getattr(inner, "type", None)
+            var_type = inner.type
             result = ""
             if var_type and var_type.name == "string":
                 result += f"{indent}zstr_free({var});\n"
@@ -2925,7 +2793,7 @@ class CEmitter:
             return False
         if call.callable.child.name not in ("create", "take"):
             return False
-        parent_type = getattr(call.callable.parent, "type", None)
+        parent_type = call.callable.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
 
     def _is_protocol_borrow(self, call: zast.Call) -> bool:
@@ -2934,7 +2802,7 @@ class CEmitter:
             return False
         if call.callable.child.name != "borrow":
             return False
-        parent_type = getattr(call.callable.parent, "type", None)
+        parent_type = call.callable.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
 
     def _emit_protocol_create_call(self, call: zast.Call) -> str:
@@ -2956,11 +2824,11 @@ class CEmitter:
         arg_val = self._emit_operation_value(from_arg.valtype)
 
         # get impl type name from the argument's resolved type
-        arg_type = getattr(from_arg.valtype, "type", None)
+        arg_type = from_arg.valtype.type
         if not arg_type:
             # try parent for dotted paths like f.take
             if isinstance(from_arg.valtype, zast.DottedPath):
-                arg_type = getattr(from_arg.valtype.parent, "type", None)
+                arg_type = from_arg.valtype.parent.type
         impl_name = arg_type.name if arg_type else ""
 
         # look up label
@@ -3004,10 +2872,10 @@ class CEmitter:
         arg_val = self._emit_operation_value(from_arg.valtype)
 
         # get impl type name from the argument's resolved type
-        arg_type = getattr(from_arg.valtype, "type", None)
+        arg_type = from_arg.valtype.type
         if not arg_type:
             if isinstance(from_arg.valtype, zast.DottedPath):
-                arg_type = getattr(from_arg.valtype.parent, "type", None)
+                arg_type = from_arg.valtype.parent.type
         impl_name = arg_type.name if arg_type else ""
 
         # look up label
@@ -3041,7 +2909,7 @@ class CEmitter:
             return False
         if call.callable.child.name not in ("create", "take"):
             return False
-        parent_type = getattr(call.callable.parent, "type", None)
+        parent_type = call.callable.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.FACET
 
     def _is_facet_borrow(self, call: zast.Call) -> bool:
@@ -3050,7 +2918,7 @@ class CEmitter:
             return False
         if call.callable.child.name != "borrow":
             return False
-        parent_type = getattr(call.callable.parent, "type", None)
+        parent_type = call.callable.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.FACET
 
     def _emit_facet_create_call(self, call: zast.Call) -> str:
@@ -3068,10 +2936,10 @@ class CEmitter:
         assert from_arg is not None
 
         arg_val = self._emit_operation_value(from_arg.valtype)
-        arg_type = getattr(from_arg.valtype, "type", None)
+        arg_type = from_arg.valtype.type
         if not arg_type:
             if isinstance(from_arg.valtype, zast.DottedPath):
-                arg_type = getattr(from_arg.valtype.parent, "type", None)
+                arg_type = from_arg.valtype.parent.type
         impl_name = arg_type.name if arg_type else ""
 
         label = self._proto_conformance.get((impl_name, facet_name), "")
@@ -3086,7 +2954,7 @@ class CEmitter:
         """If call is a facet method dispatch, return the C expression. Otherwise None."""
         if not isinstance(call.callable, zast.DottedPath):
             return None
-        parent_type = getattr(call.callable.parent, "type", None)
+        parent_type = call.callable.parent.type
         if not parent_type or parent_type.typetype != ZTypeType.FACET:
             return None
         parent_val = self._emit_path_value(call.callable.parent)
@@ -3100,7 +2968,7 @@ class CEmitter:
         """If call is a protocol method dispatch, return the C expression. Otherwise None."""
         if not isinstance(call.callable, zast.DottedPath):
             return None
-        parent_type = getattr(call.callable.parent, "type", None)
+        parent_type = call.callable.parent.type
         if not parent_type or parent_type.typetype != ZTypeType.PROTOCOL:
             return None
         parent_val = self._emit_path_value(call.callable.parent)
@@ -3181,7 +3049,7 @@ class CEmitter:
 
         # array method calls as statements
         if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = getattr(call.callable.parent, "type", None)
+            dp_parent_type = call.callable.parent.type
             if dp_parent_type and _is_array_type(dp_parent_type):
                 val = self._emit_call_value(call)
                 return f"{indent}{val};\n"
@@ -3216,7 +3084,7 @@ class CEmitter:
                 code += f"{indent}{take_var} = NULL;\n"
 
         # implicit take: nullify args passed to .take parameters
-        ftype = getattr(call.callable, "type", None)
+        ftype = call.callable.type
         if ftype and ftype.param_ownership:
             params = [
                 (k, v) for k, v in ftype.children.items() if not k.startswith(":")
@@ -3385,7 +3253,7 @@ class CEmitter:
 
     def _get_param_ctypes(self, call: zast.Call) -> List[str]:
         """Get C types for each parameter of the called function."""
-        if not hasattr(call.callable, "type") or not call.callable.type:
+        if not call.callable.type:
             return []
         ftype = call.callable.type
         if ftype.typetype not in (ZTypeType.FUNCTION, ZTypeType.NULL):
@@ -3405,7 +3273,7 @@ class CEmitter:
             parts.append(val)
 
         # fill defaults for missing trailing params
-        ftype = call.callable.type if hasattr(call.callable, "type") else None
+        ftype = call.callable.type
         if ftype and ftype.param_defaults:
             params = [
                 (k, v) for k, v in ftype.children.items() if not k.startswith(":")
@@ -3484,7 +3352,7 @@ class CEmitter:
         if isinstance(inner, zast.Operation):
             # bare function name = call with all-default args
             if isinstance(inner, zast.AtomId) and inner.name in self._func_names:
-                ftype = inner.type if hasattr(inner, "type") else None
+                ftype = inner.type
                 if ftype and ftype.param_defaults:
                     cname = _mangle_func(inner.name)
                     defaults: List[str] = []
@@ -3610,7 +3478,7 @@ class CEmitter:
 
         # array method calls: .get and .set
         if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = getattr(call.callable.parent, "type", None)
+            dp_parent_type = call.callable.parent.type
             if dp_parent_type and _is_array_type(dp_parent_type):
                 method_name = call.callable.child.name
                 parent_val = self._emit_path_value(call.callable.parent)
@@ -3625,7 +3493,7 @@ class CEmitter:
 
         # str method calls: .string
         if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = getattr(call.callable.parent, "type", None)
+            dp_parent_type = call.callable.parent.type
             if dp_parent_type and _is_str_type(dp_parent_type):
                 method_name = call.callable.child.name
                 parent_val = self._emit_path_value(call.callable.parent)
@@ -3636,7 +3504,7 @@ class CEmitter:
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = getattr(call.callable.parent, "type", None)
+            dp_parent_type = call.callable.parent.type
             if dp_parent_type and _is_list_type(dp_parent_type):
                 method_name = call.callable.child.name
                 parent_val = self._emit_path_value(call.callable.parent)
@@ -3684,7 +3552,7 @@ class CEmitter:
 
         # map method calls: .set, .get, .delete, .has
         if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = getattr(call.callable.parent, "type", None)
+            dp_parent_type = call.callable.parent.type
             if dp_parent_type and _is_map_type(dp_parent_type):
                 method_name = call.callable.child.name
                 parent_val = self._emit_path_value(call.callable.parent)
@@ -3770,7 +3638,7 @@ class CEmitter:
         result = f"{cname}({args})"
 
         # if call returns a reftype, wrap in temp for cleanup
-        if hasattr(call, "type") and call.type:
+        if call.type:
             if call.type.name == "string":
                 return self._alloc_temp(result)
             if call.type.typetype == ZTypeType.CLASS:
@@ -3946,7 +3814,7 @@ class CEmitter:
             return _mangle_func(f"{unit_path}.{child}")
 
         # array: numeric index access (a.0 → a.data[0])
-        parent_type_dp = getattr(path.parent, "type", None)
+        parent_type_dp = path.parent.type
         if parent_type_dp and _is_array_type(parent_type_dp) and child.isdigit():
             parent = self._emit_path_value(path.parent)
             return f"{parent}.data[{child}]"
@@ -3991,7 +3859,7 @@ class CEmitter:
             and parent_type_dp.typetype == ZTypeType.DATA
             and child == "array"
         ):
-            arr_type = getattr(path, "type", None)
+            arr_type = path.type
             if arr_type and _is_array_type(arr_type):
                 arr_len = _array_length(arr_type)
                 arr_ctype = _ctype(arr_type)
@@ -4006,11 +3874,7 @@ class CEmitter:
                 )
                 return tmp
         # check if the dotted path resolves to a function (method call or field access)
-        if (
-            hasattr(path, "type")
-            and path.type
-            and path.type.typetype == ZTypeType.FUNCTION
-        ):
+        if path.type and path.type.typetype == ZTypeType.FUNCTION:
             func_name = path.type.name  # e.g. "calculator.op" or "point.distance"
             # function pointer fields (from 'is' section) → struct field access
             if func_name in self._is_func_fields:
@@ -4023,12 +3887,8 @@ class CEmitter:
             return f"{_mangle_func(func_name)}({parent})"
 
         # protocol instance creation: obj.label where label maps to a protocol
-        if (
-            hasattr(path, "type")
-            and path.type
-            and path.type.typetype == ZTypeType.PROTOCOL
-        ):
-            parent_type = getattr(path.parent, "type", None)
+        if path.type and path.type.typetype == ZTypeType.PROTOCOL:
+            parent_type = path.parent.type
             if parent_type and parent_type.typetype in (
                 ZTypeType.RECORD,
                 ZTypeType.CLASS,
@@ -4066,7 +3926,7 @@ class CEmitter:
 
         # runtime numeric cast: x.u32 where x is a numeric variable
         if child in NUMERIC_CAST_TYPES:
-            parent_type = getattr(path.parent, "type", None)
+            parent_type = path.parent.type
             if parent_type and parent_type.name in TYPEMAP:
                 parent_val = self._emit_path_value(path.parent)
                 return self._emit_numeric_cast(parent_val, parent_type.name, child)
@@ -4076,7 +3936,7 @@ class CEmitter:
         if self._is_class_pointer_path(path.parent):
             return f"{parent}->{child}"
         # variant payload access: v.subname → v.data.subname
-        parent_type = getattr(path.parent, "type", None)
+        parent_type = path.parent.type
         if parent_type and parent_type.typetype == ZTypeType.VARIANT:
             # check if child is a subtype name (not a method)
             child_type = parent_type.children.get(child)
@@ -4087,7 +3947,7 @@ class CEmitter:
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
         """Check if a path refers to a class/union/protocol pointer (for -> vs . dispatch)."""
         # type annotation from type checker
-        parent_type = getattr(path, "type", None)
+        parent_type = path.type
         if parent_type and parent_type.typetype in (
             ZTypeType.CLASS,
             ZTypeType.UNION,
@@ -4126,7 +3986,7 @@ class CEmitter:
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
         # check type annotation for monomorphized union types
-        call_type = getattr(call, "type", None)
+        call_type = call.type
         if (
             call_type
             and call_type.typetype == ZTypeType.UNION
@@ -4158,7 +4018,7 @@ class CEmitter:
             return "NULL"
 
         # check for monomorphized union type (from type annotation)
-        call_type = getattr(call, "type", None)
+        call_type = call.type
         if (
             call_type
             and call_type.typetype == ZTypeType.UNION
@@ -4258,29 +4118,8 @@ class CEmitter:
         """Get the C type for a union subtype path."""
         if not subtype_path:
             return None
-        # use type annotation from type checker if available
-        if hasattr(subtype_path, "type") and subtype_path.type:
-            return _ctype(subtype_path.type)
-        if isinstance(subtype_path, zast.AtomId):
-            name = subtype_path.name
-            if name == "null":
-                return None
-            if name in TYPEMAP:
-                return TYPEMAP[name]
-            if name == "string":
-                return "ZStr*"
-            if name in self._record_names:
-                return f"z_{name}_t"
-            if name in self._class_names:
-                return f"z_{name}_t*"
-            if name in self._union_names:
-                return f"z_{name}_t*"
-            if name in self._variant_names:
-                return f"z_{name}_t"
-        # DottedPath: resolve via last component name
-        if isinstance(subtype_path, zast.DottedPath):
-            return self._get_subtype_ctype(subtype_path.child)
-        return None
+        ct = _ctype(subtype_path.type)
+        return ct if ct != "void" else None
 
     def _emit_union_null_construction(self, union_name: str, subtype_name: str) -> str:
         """Emit construction for a null-subtype union (no data)."""
@@ -4431,15 +4270,15 @@ class CEmitter:
         )
 
     def _get_expression_type(self, expr: zast.Expression) -> Optional[ZType]:
-        if hasattr(expr, "type") and expr.type:
+        if expr.type:
             return expr.type
         inner = expr.expression
-        if hasattr(inner, "type") and inner.type:
+        if inner.type:
             return inner.type
         return None
 
     def _get_operation_type(self, op: zast.Operation) -> Optional[ZType]:
-        if hasattr(op, "type") and op.type:
+        if op.type:
             return op.type
         # look inside Expression wrapper
         if isinstance(op, zast.Expression):
