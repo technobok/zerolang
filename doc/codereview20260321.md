@@ -417,9 +417,9 @@ Better yet, use a stack: `self._scope_stack.append(ScopeState())` / `self._scope
 
 #### Action Items
 
-- [ ] Create a `ScopeState` dataclass grouping all per-function cleanup state
-- [ ] Replace the 12 instance variables with a single `self._scope: ScopeState`
-- [ ] Replace save/restore blocks with push/pop on a scope stack
+- [x] Create a `ScopeState` dataclass grouping all per-function cleanup state
+- [x] Replace the 12 instance variables with a single `self._scope: ScopeState`
+- [x] Replace save/restore blocks with push/pop on a scope stack
 - [ ] Simplify the cleanup emission to iterate `self._scope.all_vars()` with type-driven cleanup
 
 ---

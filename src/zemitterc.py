@@ -5,10 +5,35 @@ Walks a type-checked AST and emits C source code.
 Includes ownership-based memory management for strings (ZStr*).
 """
 
+from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 
 import zast
 from ztypechecker import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
+
+
+@dataclass
+class ScopeState:
+    """Per-function cleanup state, pushed/popped at function boundaries."""
+    string_vars: List[str] = field(default_factory=list)
+    class_vars: List[str] = field(default_factory=list)
+    union_vars: List[str] = field(default_factory=list)
+    protocol_vars: List[str] = field(default_factory=list)
+    union_var_types: Dict[str, str] = field(default_factory=dict)
+    class_var_types: Dict[str, str] = field(default_factory=dict)
+    protocol_var_types: Dict[str, str] = field(default_factory=dict)
+    temp_counter: int = 0
+    record_name: str = ""
+    class_params: set = field(default_factory=set)
+
+
+@dataclass
+class TempState:
+    """Per-statement temporary variable state, pushed/popped at statement boundaries."""
+    decls: List[str] = field(default_factory=list)
+    frees: List[str] = field(default_factory=list)
+    string_set: set = field(default_factory=set)
+    class_set: Dict[str, str] = field(default_factory=dict)
 
 TYPEMAP: Dict[str, str] = {
     "i8": "int8_t",
@@ -273,25 +298,21 @@ class CEmitter:
         self._type_field_ctypes: Dict[str, List[str]] = {}
         self._type_field_names: Dict[str, List[str]] = {}
         self._type_field_defaults: Dict[str, Dict[str, str]] = {}
-        # temp variable infrastructure for string ownership
-        self._temp_counter: int = 0
-        self._temp_decls: List[str] = []
-        self._temp_frees: List[str] = []
-        self._temp_string_set: set[str] = set()  # temps that are ZStr*
-        self._func_string_vars: List[str] = []
-        self._func_class_vars: List[str] = []
-        self._func_union_vars: List[str] = []
-        self._func_protocol_vars: List[str] = []
-        self._union_var_types: Dict[str, str] = {}  # var_name -> union type name
-        self._class_var_types: Dict[str, str] = {}  # var_name -> class type name
-        self._protocol_var_types: Dict[str, str] = {}  # var_name -> protocol type name
-        self._temp_class_set: Dict[str, str] = {}  # temp_name -> class type name
+        # scope and temp state stacks (pushed/popped at function and statement boundaries)
+        self._scope_stack: List[ScopeState] = [ScopeState()]
+        self._temp_stack: List[TempState] = [TempState()]
         self._in_named_assignment: bool = False  # set during _emit_assignment
-        self._current_record_name: str = ""
-        self._func_class_params: set[str] = set()
         # static string literal deduplication
         self._string_literals: Dict[str, str] = {}  # escaped C string → static var name
         self._string_literal_counter: int = 0
+
+    @property
+    def _scope(self) -> ScopeState:
+        return self._scope_stack[-1]
+
+    @property
+    def _temp(self) -> TempState:
+        return self._temp_stack[-1]
 
     def _indent(self) -> str:
         return "    " * self.indent_level
@@ -394,20 +415,20 @@ class CEmitter:
 
     def _alloc_temp(self, expr: str) -> str:
         """Allocate a temporary variable for a heap-allocated string expression."""
-        self._temp_counter += 1
-        name = f"_t{self._temp_counter}"
+        self._scope.temp_counter += 1
+        name = f"_t{self._scope.temp_counter}"
         indent = self._indent()
-        self._temp_decls.append(f"{indent}ZStr* {name} = {expr};\n")
-        self._temp_frees.append(name)
-        self._temp_string_set.add(name)
+        self._temp.decls.append(f"{indent}ZStr* {name} = {expr};\n")
+        self._temp.frees.append(name)
+        self._temp.string_set.add(name)
         return name
 
     def _alloc_arg_temp(self, ctype: str, expr: str) -> str:
         """Allocate a temporary for a non-string argument (not freed)."""
-        self._temp_counter += 1
-        name = f"_a{self._temp_counter}"
+        self._scope.temp_counter += 1
+        name = f"_a{self._scope.temp_counter}"
         indent = self._indent()
-        self._temp_decls.append(f"{indent}{ctype} {name} = {expr};\n")
+        self._temp.decls.append(f"{indent}{ctype} {name} = {expr};\n")
         return name
 
     def _emit_field_cleanup(self, access: str, ftype: ZType, indent: str = "    ") -> str:
@@ -426,24 +447,24 @@ class CEmitter:
         If exclude_var is set (return value), that variable is skipped.
         """
         result = ""
-        for sv in reversed(self._func_protocol_vars):
+        for sv in reversed(self._scope.protocol_vars):
             if sv != exclude_var:
-                ptype_name = self._protocol_var_types.get(sv)
+                ptype_name = self._scope.protocol_var_types.get(sv)
                 if ptype_name:
                     result += f"{indent}z_{ptype_name}_destroy({sv});\n"
                 else:
                     result += f"{indent}free({sv});\n"
-        for sv in reversed(self._func_union_vars):
+        for sv in reversed(self._scope.union_vars):
             if sv != exclude_var:
                 utype_name = self._union_var_type_name(sv)
                 if utype_name:
                     result += f"{indent}z_{utype_name}_destroy({sv});\n"
                 else:
                     result += f"{indent}if ({sv}) free({sv});\n"
-        for sv in reversed(self._func_class_vars):
+        for sv in reversed(self._scope.class_vars):
             if sv != exclude_var:
                 result += f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
-        for sv in reversed(self._func_string_vars):
+        for sv in reversed(self._scope.string_vars):
             if sv != exclude_var:
                 result += f"{indent}zstr_free({sv});\n"
         return result
@@ -2497,29 +2518,8 @@ class CEmitter:
 
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
-        # save/reset per-function state
-        saved_string_vars = self._func_string_vars
-        saved_class_vars = self._func_class_vars
-        saved_union_vars = self._func_union_vars
-        saved_union_var_types = self._union_var_types
-        saved_class_var_types = self._class_var_types
-        saved_protocol_vars = self._func_protocol_vars
-        saved_protocol_var_types = self._protocol_var_types
-        saved_temp_class_set = self._temp_class_set
-        saved_temp_counter = self._temp_counter
-        saved_record_name = self._current_record_name
-        self._func_string_vars = []
-        self._func_class_vars = []
-        self._func_union_vars = []
-        self._func_protocol_vars = []
-        self._union_var_types = {}
-        self._class_var_types = {}
-        self._protocol_var_types = {}
-        self._temp_class_set = {}
-        self._temp_counter = 0
-        self._current_record_name = record_name
-        saved_class_params = self._func_class_params
-        self._func_class_params = set()
+        # push new scope for this function
+        self._scope_stack.append(ScopeState(record_name=record_name))
         # track parameters that are class pointers
         if self._typetype_of(record_name) == ZTypeType.CLASS:
             for pname, ppath in func.parameters.items():
@@ -2527,7 +2527,7 @@ class CEmitter:
                     continue
                 ptype_str = _ctype(ppath.type)
                 if ptype_str.endswith("*") and ptype_str.startswith("z_"):
-                    self._func_class_params.add(_mangle_var(pname))
+                    self._scope.class_params.add(_mangle_var(pname))
 
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
@@ -2544,18 +2544,8 @@ class CEmitter:
         lines.append("}\n\n")
         self.func_defs.append("".join(lines))
 
-        # restore
-        self._func_string_vars = saved_string_vars
-        self._func_class_vars = saved_class_vars
-        self._func_union_vars = saved_union_vars
-        self._union_var_types = saved_union_var_types
-        self._class_var_types = saved_class_var_types
-        self._func_protocol_vars = saved_protocol_vars
-        self._protocol_var_types = saved_protocol_var_types
-        self._temp_class_set = saved_temp_class_set
-        self._temp_counter = saved_temp_counter
-        self._current_record_name = saved_record_name
-        self._func_class_params = saved_class_params
+        # pop function scope
+        self._scope_stack.pop()
 
     def _emit_statement(self, stmt: zast.Statement) -> str:
         parts: List[str] = []
@@ -2565,14 +2555,7 @@ class CEmitter:
 
     def _emit_statement_line(self, sline: zast.StatementLine) -> str:
         # save temp state for this statement
-        saved_decls = self._temp_decls
-        saved_frees = self._temp_frees
-        saved_string_set = self._temp_string_set
-        saved_class_set = self._temp_class_set
-        self._temp_decls = []
-        self._temp_frees = []
-        self._temp_string_set = set()
-        self._temp_class_set = {}
+        self._temp_stack.append(TempState())
 
         inner = sline.statementline
         if isinstance(inner, zast.Assignment):
@@ -2587,13 +2570,13 @@ class CEmitter:
             code = ""
 
         # build result: temp decls + code + temp frees
-        result = "".join(self._temp_decls) + code
+        result = "".join(self._temp.decls) + code
         indent = self._indent()
-        for t in self._temp_frees:
-            if t in self._temp_string_set:
+        for t in self._temp.frees:
+            if t in self._temp.string_set:
                 result += f"{indent}zstr_free({t});\n"
-            elif t in self._temp_class_set:
-                tname = self._temp_class_set[t]
+            elif t in self._temp.class_set:
+                tname = self._temp.class_set[t]
                 if tname.startswith(":proto:"):
                     proto_name = tname[7:]  # strip ":proto:" prefix
                     result += f"{indent}z_{proto_name}_destroy({t});\n"
@@ -2602,11 +2585,7 @@ class CEmitter:
             else:
                 result += f"{indent}free({t});\n"
 
-        # restore temp state
-        self._temp_decls = saved_decls
-        self._temp_frees = saved_frees
-        self._temp_string_set = saved_string_set
-        self._temp_class_set = saved_class_set
+        self._temp_stack.pop()
         return result
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
@@ -2622,25 +2601,25 @@ class CEmitter:
             self.needs_string = True
             self.needs_stdlib = True
             # the variable now owns the value — remove from temp frees
-            if val in self._temp_frees:
-                self._temp_frees.remove(val)
-            self._func_string_vars.append(cname)
+            if val in self._temp.frees:
+                self._temp.frees.remove(val)
+            self._scope.string_vars.append(cname)
         elif ctype.startswith("z_") and ctype.endswith("_t*"):
             self.needs_stdlib = True
             # class/union pointer — the variable now owns it
-            if val in self._temp_frees:
-                self._temp_frees.remove(val)
+            if val in self._temp.frees:
+                self._temp.frees.remove(val)
             # distinguish union/class/protocol for proper destruction
             if assign.type and assign.type.typetype == ZTypeType.UNION:
-                self._func_union_vars.append(cname)
-                self._union_var_types[cname] = assign.type.name
+                self._scope.union_vars.append(cname)
+                self._scope.union_var_types[cname] = assign.type.name
             elif assign.type and assign.type.typetype == ZTypeType.PROTOCOL:
-                self._func_protocol_vars.append(cname)
-                self._protocol_var_types[cname] = assign.type.name
+                self._scope.protocol_vars.append(cname)
+                self._scope.protocol_var_types[cname] = assign.type.name
             else:
-                self._func_class_vars.append(cname)
+                self._scope.class_vars.append(cname)
                 if assign.type:
-                    self._class_var_types[cname] = assign.type.name
+                    self._scope.class_var_types[cname] = assign.type.name
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
@@ -2663,8 +2642,8 @@ class CEmitter:
         if lhs_type and lhs_type.needs_destructor:
             result += self._emit_field_cleanup(lhs, lhs_type, indent)
             # the variable now owns the new value — remove from temp frees
-            if rhs in self._temp_frees:
-                self._temp_frees.remove(rhs)
+            if rhs in self._temp.frees:
+                self._temp.frees.remove(rhs)
         result += f"{indent}{lhs} = {rhs};\n"
         return result
 
@@ -2779,20 +2758,20 @@ class CEmitter:
         owned_create = f"z_{impl_name}_{label}_create_owned"
 
         # allocate temp and track as protocol var
-        self._temp_counter += 1
-        tmp = f"_c{self._temp_counter}"
+        self._scope.temp_counter += 1
+        tmp = f"_c{self._scope.temp_counter}"
         indent = self._indent()
-        self._temp_decls.append(
+        self._temp.decls.append(
             f"{indent}z_{proto_name}_t* {tmp} = {owned_create}({arg_val});\n"
         )
-        self._temp_frees.append(tmp)
-        self._temp_class_set[tmp] = f":proto:{proto_name}"
+        self._temp.frees.append(tmp)
+        self._temp.class_set[tmp] = f":proto:{proto_name}"
 
         # handle .take nullification for class (reftype) arguments only
         if arg_type and arg_type.typetype == ZTypeType.CLASS:
             take_var = self._get_take_var(from_arg.valtype)
             if take_var:
-                self._temp_decls.append(f"{indent}{take_var} = NULL;\n")
+                self._temp.decls.append(f"{indent}{take_var} = NULL;\n")
 
         return tmp
 
@@ -2834,15 +2813,15 @@ class CEmitter:
         self.needs_stdlib = True
 
         # allocate temp and track as protocol var (borrowed: no destroy)
-        self._temp_counter += 1
-        tmp = f"_p{self._temp_counter}"
+        self._scope.temp_counter += 1
+        tmp = f"_p{self._scope.temp_counter}"
         indent = self._indent()
         proto_ctype = f"z_{proto_name}_t"
-        self._temp_decls.append(
+        self._temp.decls.append(
             f"{indent}{proto_ctype}* {tmp} = {create_name}({arg_expr});\n"
         )
-        self._temp_frees.append(tmp)
-        self._temp_class_set[tmp] = f":proto:{proto_name}"
+        self._temp.frees.append(tmp)
+        self._temp.class_set[tmp] = f":proto:{proto_name}"
 
         return tmp
 
@@ -3062,27 +3041,27 @@ class CEmitter:
                 )
                 result_expr = f"z_{first_arg.name}_create({args_str})"
                 ctype = f"z_{first_arg.name}_t"
-                self._temp_counter += 1
-                tmp = f"_c{self._temp_counter}"
-                self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
+                self._scope.temp_counter += 1
+                tmp = f"_c{self._scope.temp_counter}"
+                self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
                     if tv:
-                        self._temp_decls.append(f"{indent}{tv} = NULL;\n")
+                        self._temp.decls.append(f"{indent}{tv} = NULL;\n")
                 val = tmp
             else:
                 val = self._emit_operation_value(call.arguments[0].valtype)
             result = ""
 
             # remove return value from temp frees (caller owns it)
-            if val in self._temp_frees:
-                self._temp_frees.remove(val)
+            if val in self._temp.frees:
+                self._temp.frees.remove(val)
 
             # free remaining temps (intermediates) before return
-            for t in self._temp_frees:
-                if t in self._temp_string_set:
+            for t in self._temp.frees:
+                if t in self._temp.string_set:
                     result += f"{indent}zstr_free({t});\n"
-                elif t in self._temp_class_set:
-                    tname = self._temp_class_set[t]
+                elif t in self._temp.class_set:
+                    tname = self._temp.class_set[t]
                     if tname.startswith(":proto:"):
                         proto_name = tname[7:]
                         result += f"{indent}z_{proto_name}_destroy({t});\n"
@@ -3090,7 +3069,7 @@ class CEmitter:
                         result += f"{indent}{self._emit_class_free(t, tname)}\n"
                 else:
                     result += f"{indent}free({t});\n"
-            self._temp_frees.clear()
+            self._temp.frees.clear()
 
             # free func vars (except the return value)
             result += self._emit_scope_cleanup(indent, exclude_var=val)
@@ -3479,13 +3458,13 @@ class CEmitter:
                     # .get returns option (union pointer) — track as temp
                     ret_type = call.type
                     if ret_type and ret_type.typetype == ZTypeType.UNION:
-                        self._temp_counter += 1
-                        tmp = f"_c{self._temp_counter}"
+                        self._scope.temp_counter += 1
+                        tmp = f"_c{self._scope.temp_counter}"
                         indent = self._indent()
-                        self._temp_decls.append(
+                        self._temp.decls.append(
                             f"{indent}z_{ret_type.name}_t* {tmp} = {result};\n"
                         )
-                        self._temp_frees.append(tmp)
+                        self._temp.frees.append(tmp)
                         return tmp
                     return result
                 if method_name == "delete" and call.arguments:
@@ -3505,7 +3484,7 @@ class CEmitter:
             for fname, tv in take_vars.items():
                 if tv:
                     indent = self._indent()
-                    self._temp_decls.append(f"{indent}{tv} = NULL;\n")
+                    self._temp.decls.append(f"{indent}{tv} = NULL;\n")
             return result
 
         # union construction: union.subtype expr
@@ -3524,16 +3503,16 @@ class CEmitter:
                 cls_type.name, call.arguments
             )
             result = f"z_{cls_type.name}_create({args_str})"
-            self._temp_counter += 1
-            tmp = f"_c{self._temp_counter}"
+            self._scope.temp_counter += 1
+            tmp = f"_c{self._scope.temp_counter}"
             indent = self._indent()
-            self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+            self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
             # handle .take nullification
             for fname, tv in take_vars.items():
                 if tv:
-                    self._temp_decls.append(f"{indent}{tv} = NULL;\n")
-            self._temp_frees.append(tmp)
-            self._temp_class_set[tmp] = cls_type.name
+                    self._temp.decls.append(f"{indent}{tv} = NULL;\n")
+            self._temp.frees.append(tmp)
+            self._temp.class_set[tmp] = cls_type.name
             return tmp
 
         args = self._emit_call_args(call)
@@ -3546,20 +3525,20 @@ class CEmitter:
                 return self._alloc_temp(result)
             if call.type.typetype == ZTypeType.CLASS:
                 ctype = f"z_{call.type.name}_t"
-                self._temp_counter += 1
-                tmp = f"_c{self._temp_counter}"
+                self._scope.temp_counter += 1
+                tmp = f"_c{self._scope.temp_counter}"
                 indent = self._indent()
-                self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-                self._temp_frees.append(tmp)
-                self._temp_class_set[tmp] = call.type.name
+                self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+                self._temp.frees.append(tmp)
+                self._temp.class_set[tmp] = call.type.name
                 return tmp
             if call.type.typetype == ZTypeType.UNION:
                 ctype = f"z_{call.type.name}_t"
-                self._temp_counter += 1
-                tmp = f"_c{self._temp_counter}"
+                self._scope.temp_counter += 1
+                tmp = f"_c{self._scope.temp_counter}"
                 indent = self._indent()
-                self._temp_decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-                self._temp_frees.append(tmp)
+                self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+                self._temp.frees.append(tmp)
                 return tmp
 
         return result
@@ -3608,14 +3587,14 @@ class CEmitter:
             self.needs_stdlib = True
             ctype = f"z_{name}_t"
             zero_args = self._zero_args_for_ctypes(name)
-            self._temp_counter += 1
-            tmp = f"_c{self._temp_counter}"
+            self._scope.temp_counter += 1
+            tmp = f"_c{self._scope.temp_counter}"
             indent = self._indent()
-            self._temp_decls.append(
+            self._temp.decls.append(
                 f"{indent}{ctype}* {tmp} = z_{name}_create({zero_args});\n"
             )
-            self._temp_frees.append(tmp)
-            self._temp_class_set[tmp] = name
+            self._temp.frees.append(tmp)
+            self._temp.class_set[tmp] = name
             return tmp
         return _mangle_var(name)
 
@@ -3769,10 +3748,10 @@ class CEmitter:
                 arr_len = _array_length(arr_type)
                 arr_ctype = _ctype(arr_type)
                 parent = self._emit_path_value(path.parent)
-                self._temp_counter += 1
-                tmp = f"_da{self._temp_counter}"
+                self._scope.temp_counter += 1
+                tmp = f"_da{self._scope.temp_counter}"
                 indent = self._indent()
-                self._temp_decls.append(
+                self._temp.decls.append(
                     f"{indent}{arr_ctype} {tmp};\n"
                     f"{indent}for (int64_t _i = 0; _i < {arr_len}; _i++) "
                     f"{{ {tmp}.data[_i] = {parent}[_i]; }}\n"
@@ -3805,22 +3784,22 @@ class CEmitter:
                     arg = f"&{parent_val}"
                 else:
                     arg = parent_val
-                self._temp_counter += 1
-                tmp = f"_p{self._temp_counter}"
+                self._scope.temp_counter += 1
+                tmp = f"_p{self._scope.temp_counter}"
                 indent = self._indent()
                 proto_ctype = f"z_{path.type.name}_t"
                 if self._in_named_assignment:
                     # named var: heap-allocate via create function
-                    self._temp_decls.append(
+                    self._temp.decls.append(
                         f"{indent}{proto_ctype}* {tmp} = {create_name}({arg});\n"
                     )
-                    self._temp_frees.append(tmp)
-                    self._temp_class_set[tmp] = f":proto:{path.type.name}"
+                    self._temp.frees.append(tmp)
+                    self._temp.class_set[tmp] = f":proto:{path.type.name}"
                 else:
                     # temp: stack-allocate (no malloc/free needed)
-                    stk = f"_ps{self._temp_counter}"
+                    stk = f"_ps{self._scope.temp_counter}"
                     vtable_name = f"z_{parent_type.name}_{child}_vtable"
-                    self._temp_decls.append(
+                    self._temp.decls.append(
                         f"{indent}{proto_ctype} {stk};\n"
                         f"{indent}{stk}.data = {arg};\n"
                         f"{indent}{stk}.vtable = &{vtable_name};\n"
@@ -3863,24 +3842,24 @@ class CEmitter:
         if isinstance(path, zast.AtomId):
             cname = _mangle_var(path.name)
             if (
-                cname in self._func_class_vars
-                or cname in self._func_union_vars
-                or cname in self._func_protocol_vars
+                cname in self._scope.class_vars
+                or cname in self._scope.union_vars
+                or cname in self._scope.protocol_vars
             ):
                 return True
             # class method parameter (this/type resolves to class pointer)
-            if self._typetype_of(self._current_record_name) == ZTypeType.CLASS:
-                if cname in self._func_class_params:
+            if self._typetype_of(self._scope.record_name) == ZTypeType.CLASS:
+                if cname in self._scope.class_params:
                     return True
         return False
 
     def _union_var_type_name(self, var_name: str) -> Optional[str]:
         """Get the union type name for a union variable."""
-        return self._union_var_types.get(var_name)
+        return self._scope.union_var_types.get(var_name)
 
     def _class_var_type_name(self, var_name: str) -> Optional[str]:
         """Get the class type name for a class variable."""
-        return self._class_var_types.get(var_name)
+        return self._scope.class_var_types.get(var_name)
 
     def _emit_class_free(self, var: str, type_name: Optional[str]) -> str:
         """Emit the right destroy call for a class variable."""
@@ -3911,8 +3890,8 @@ class CEmitter:
         """Emit C code for union construction."""
         self.needs_stdlib = True
         indent = self._indent()
-        self._temp_counter += 1
-        tmp = f"_c{self._temp_counter}"
+        self._scope.temp_counter += 1
+        tmp = f"_c{self._scope.temp_counter}"
 
         if isinstance(call.callable, zast.DottedPath) and isinstance(
             call.callable.parent, zast.AtomId
@@ -3938,10 +3917,10 @@ class CEmitter:
         ctype = f"z_{union_name}_t"
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
 
-        self._temp_decls.append(
+        self._temp.decls.append(
             f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
         )
-        self._temp_decls.append(f"{indent}{tmp}->tag = {tag};\n")
+        self._temp.decls.append(f"{indent}{tmp}->tag = {tag};\n")
 
         # determine subtype info — check monomorphized type first
         is_null = False
@@ -3983,12 +3962,12 @@ class CEmitter:
                     break
 
         if is_null or value_arg is None:
-            self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
+            self._temp.decls.append(f"{indent}{tmp}->data = NULL;\n")
         else:
             # for monomorphized null subtype with explicit type arg, skip the arg
             # (it's a type name, not a value)
             if call_type and call_type.generic_origin and is_null:
-                self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
+                self._temp.decls.append(f"{indent}{tmp}->data = NULL;\n")
             else:
                 val = self._emit_operation_value(value_arg.valtype)
                 subtype_ctype = subtype_ctype_resolved
@@ -4002,21 +3981,21 @@ class CEmitter:
                     )
                 ):
                     # reftype: store pointer directly
-                    if val in self._temp_frees:
-                        self._temp_frees.remove(val)
-                    self._temp_decls.append(f"{indent}{tmp}->data = {val};\n")
+                    if val in self._temp.frees:
+                        self._temp.frees.remove(val)
+                    self._temp.decls.append(f"{indent}{tmp}->data = {val};\n")
                 else:
                     # valtype: box it (malloc + copy)
                     box_ctype = subtype_ctype or "int64_t"
-                    self._temp_counter += 1
-                    box_tmp = f"_box{self._temp_counter}"
-                    self._temp_decls.append(
+                    self._scope.temp_counter += 1
+                    box_tmp = f"_box{self._scope.temp_counter}"
+                    self._temp.decls.append(
                         f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
                     )
-                    self._temp_decls.append(f"{indent}*{box_tmp} = {val};\n")
-                    self._temp_decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
+                    self._temp.decls.append(f"{indent}*{box_tmp} = {val};\n")
+                    self._temp.decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
 
-        self._temp_frees.append(tmp)
+        self._temp.frees.append(tmp)
         return tmp
 
     def _get_subtype_ctype(self, subtype_path: Optional[zast.Path]) -> Optional[str]:
@@ -4030,16 +4009,16 @@ class CEmitter:
         """Emit construction for a null-subtype union (no data)."""
         self.needs_stdlib = True
         indent = self._indent()
-        self._temp_counter += 1
-        tmp = f"_c{self._temp_counter}"
+        self._scope.temp_counter += 1
+        tmp = f"_c{self._scope.temp_counter}"
         ctype = f"z_{union_name}_t"
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
-        self._temp_decls.append(
+        self._temp.decls.append(
             f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
         )
-        self._temp_decls.append(f"{indent}{tmp}->tag = {tag};\n")
-        self._temp_decls.append(f"{indent}{tmp}->data = NULL;\n")
-        self._temp_frees.append(tmp)
+        self._temp.decls.append(f"{indent}{tmp}->tag = {tag};\n")
+        self._temp.decls.append(f"{indent}{tmp}->data = NULL;\n")
+        self._temp.frees.append(tmp)
         return tmp
 
     def _is_variant_construction(self, call: zast.Call) -> bool:
@@ -4056,8 +4035,8 @@ class CEmitter:
     def _emit_variant_construction(self, call: zast.Call) -> str:
         """Emit C code for variant construction (stack-allocated, no malloc)."""
         indent = self._indent()
-        self._temp_counter += 1
-        tmp = f"_c{self._temp_counter}"
+        self._scope.temp_counter += 1
+        tmp = f"_c{self._scope.temp_counter}"
 
         if isinstance(call.callable, zast.DottedPath) and isinstance(
             call.callable.parent, zast.AtomId
@@ -4070,8 +4049,8 @@ class CEmitter:
         ctype = f"z_{variant_name}_t"
         tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
 
-        self._temp_decls.append(f"{indent}{ctype} {tmp};\n")
-        self._temp_decls.append(f"{indent}{tmp}.tag = {tag};\n")
+        self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+        self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
 
         # determine if this is a null subtype
         mainunit = self.program.units.get(self.program.mainunitname)
@@ -4088,7 +4067,7 @@ class CEmitter:
 
         if not is_null and call.arguments:
             val = self._emit_operation_value(call.arguments[0].valtype)
-            self._temp_decls.append(f"{indent}{tmp}.data.{subtype_name} = {val};\n")
+            self._temp.decls.append(f"{indent}{tmp}.data.{subtype_name} = {val};\n")
 
         # no temp_frees — value type, no cleanup needed
         return tmp
@@ -4098,12 +4077,12 @@ class CEmitter:
     ) -> str:
         """Emit construction for a null-subtype variant (tag only, no data)."""
         indent = self._indent()
-        self._temp_counter += 1
-        tmp = f"_c{self._temp_counter}"
+        self._scope.temp_counter += 1
+        tmp = f"_c{self._scope.temp_counter}"
         ctype = f"z_{variant_name}_t"
         tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
-        self._temp_decls.append(f"{indent}{ctype} {tmp};\n")
-        self._temp_decls.append(f"{indent}{tmp}.tag = {tag};\n")
+        self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+        self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
         return tmp
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
@@ -4264,8 +4243,8 @@ class CEmitter:
         cname = _mangle_var(withnode.name)
 
         # if value is a reftype temp, the with var now owns it
-        if (is_string or is_class) and val in self._temp_frees:
-            self._temp_frees.remove(val)
+        if (is_string or is_class) and val in self._temp.frees:
+            self._temp.frees.remove(val)
 
         parts.append(f"{indent}{{\n")
         self.indent_level += 1
@@ -4274,34 +4253,24 @@ class CEmitter:
 
         # doexpr may reference the with variable, so its temps must be
         # declared inside the block (not prepended to the outer statement)
-        saved_decls = self._temp_decls
-        saved_frees = self._temp_frees
-        saved_string_set = self._temp_string_set
-        saved_class_set = self._temp_class_set
-        self._temp_decls = []
-        self._temp_frees = []
-        self._temp_string_set = set()
-        self._temp_class_set = {}
+        self._temp_stack.append(TempState())
 
         doexpr_code = self._emit_expression_stmt(withnode.doexpr)
 
         # emit doexpr temps inside the with block
-        parts.append("".join(self._temp_decls))
+        parts.append("".join(self._temp.decls))
         parts.append(doexpr_code)
-        for t in self._temp_frees:
-            if t in self._temp_string_set:
+        for t in self._temp.frees:
+            if t in self._temp.string_set:
                 parts.append(f"{inner_indent}zstr_free({t});\n")
-            elif t in self._temp_class_set:
+            elif t in self._temp.class_set:
                 parts.append(
-                    f"{inner_indent}{self._emit_class_free(t, self._temp_class_set[t])}\n"
+                    f"{inner_indent}{self._emit_class_free(t, self._temp.class_set[t])}\n"
                 )
             else:
                 parts.append(f"{inner_indent}free({t});\n")
 
-        self._temp_decls = saved_decls
-        self._temp_frees = saved_frees
-        self._temp_string_set = saved_string_set
-        self._temp_class_set = saved_class_set
+        self._temp_stack.pop()
 
         if is_union and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")

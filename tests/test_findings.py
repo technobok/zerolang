@@ -611,3 +611,79 @@ class TestFinding10TypeAnnotationAudit:
         )
         missing = audit_type_annotations(program)
         assert missing == [], f"Unexpected missing annotations: {missing}"
+
+
+# ---- Finding 11: Scope cleanup state management ----
+
+
+class TestFinding11ScopeState:
+    """Finding 11: per-function state should use ScopeState/TempState dataclasses."""
+
+    def test_scope_state_dataclass_exists(self):
+        """ScopeState dataclass should be importable and have expected fields."""
+        from zemitterc import ScopeState
+        s = ScopeState()
+        assert s.string_vars == []
+        assert s.class_vars == []
+        assert s.union_vars == []
+        assert s.protocol_vars == []
+        assert s.union_var_types == {}
+        assert s.class_var_types == {}
+        assert s.protocol_var_types == {}
+        assert s.temp_counter == 0
+        assert s.record_name == ""
+        assert s.class_params == set()
+
+    def test_temp_state_dataclass_exists(self):
+        """TempState dataclass should be importable and have expected fields."""
+        from zemitterc import TempState
+        t = TempState()
+        assert t.decls == []
+        assert t.frees == []
+        assert t.string_set == set()
+        assert t.class_set == {}
+
+    def test_emitter_uses_scope_stack(self):
+        """Emitter should have _scope_stack and _temp_stack."""
+        program = parse_and_check('main: function is { print "hello" }')
+        emitter = zemitterc.CEmitter(program)
+        assert hasattr(emitter, "_scope_stack")
+        assert hasattr(emitter, "_temp_stack")
+        assert len(emitter._scope_stack) == 1
+        assert len(emitter._temp_stack) == 1
+
+    def test_scope_stack_depth_after_emit(self):
+        """After emitting, scope stack should be back to depth 1."""
+        csource, emitter = emit_with_emitter(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { print "\\{add a: 1 b: 2}" }'
+        )
+        assert len(emitter._scope_stack) == 1
+        assert len(emitter._temp_stack) == 1
+
+    def test_nested_functions_isolate_scope(self):
+        """Nested function calls should not leak scope state."""
+        csource, emitter = emit_with_emitter(
+            "inner: function {x: i64} out i64 is { return x + 1 }\n"
+            "outer: function {x: i64} out i64 is {\n    result: inner x: x\n    return result\n}\n"
+            'main: function is { print "\\{outer x: 5}" }'
+        )
+        # after emission, scope stack should be clean
+        assert len(emitter._scope_stack) == 1
+        assert emitter._scope_stack[0].string_vars == []
+
+    def test_class_cleanup_emitted(self):
+        """Class variables should get destroy calls at scope exit."""
+        csource, emitter = emit_with_emitter(
+            "box: class { value: i64 }\n"
+            'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
+        )
+        assert "z_box_destroy" in csource
+
+    def test_string_cleanup_emitted(self):
+        """String variables should get zstr_free at scope exit."""
+        csource, emitter = emit_with_emitter(
+            'greet: function {name: string} out string is { return "hello" }\n'
+            'main: function is {\n    s: greet name: "world"\n    print s\n}'
+        )
+        assert "zstr_free" in csource
