@@ -154,6 +154,7 @@ Some sites also check `hasattr(fpath, "type")` with fallback to `isinstance(fpat
 - [x] Create `_emit_field_cleanup(fname: str, ftype: ZType) -> str` that uses these properties
 - [x] Replace all 6 destructor sites with calls to `_emit_field_cleanup()` — also replaced map free helpers and reassignment cleanup
 - [x] Verify edge cases: nullable fields, recursive types, protocol boxed values — all 882 tests pass
+- [x] Simplify `_emit_scope_cleanup` to use a single loop with `ZType.destructor_name` instead of 4 separate loops (moved from Finding 11)
 
 ---
 
@@ -420,7 +421,7 @@ Better yet, use a stack: `self._scope_stack.append(ScopeState())` / `self._scope
 - [x] Create a `ScopeState` dataclass grouping all per-function cleanup state
 - [x] Replace the 12 instance variables with a single `self._scope: ScopeState`
 - [x] Replace save/restore blocks with push/pop on a scope stack
-- [ ] Simplify the cleanup emission to iterate `self._scope.all_vars()` with type-driven cleanup
+- [x] Simplify the cleanup emission to iterate `self._scope.all_vars()` with type-driven cleanup — moved to Finding 3
 
 ---
 

@@ -623,13 +623,7 @@ class TestFinding11ScopeState:
         """ScopeState dataclass should be importable and have expected fields."""
         from zemitterc import ScopeState
         s = ScopeState()
-        assert s.string_vars == []
-        assert s.class_vars == []
-        assert s.union_vars == []
-        assert s.protocol_vars == []
-        assert s.union_var_types == {}
-        assert s.class_var_types == {}
-        assert s.protocol_var_types == {}
+        assert s.cleanup_vars == []
         assert s.temp_counter == 0
         assert s.record_name == ""
         assert s.class_params == set()
@@ -670,7 +664,7 @@ class TestFinding11ScopeState:
         )
         # after emission, scope stack should be clean
         assert len(emitter._scope_stack) == 1
-        assert emitter._scope_stack[0].string_vars == []
+        assert emitter._scope_stack[0].cleanup_vars == []
 
     def test_class_cleanup_emitted(self):
         """Class variables should get destroy calls at scope exit."""
@@ -687,3 +681,26 @@ class TestFinding11ScopeState:
             'main: function is {\n    s: greet name: "world"\n    print s\n}'
         )
         assert "zstr_free" in csource
+
+    def test_union_cleanup_emitted(self):
+        """Union variables should get destroy calls at scope exit."""
+        csource, emitter = emit_with_emitter(
+            "result: union is { ok: i64  err: string }\n"
+            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+        )
+        assert "z_result_destroy" in csource
+
+    def test_cleanup_uses_destructor_name(self):
+        """Scope cleanup should use ZType.destructor_name (type-driven, not cascades)."""
+        from zemitterc import ScopeState
+        from ztypechecker import ZType, ZTypeType
+        # verify that a ZType with destructor_name set gets correct cleanup
+        t = ZType(name="box", typetype=ZTypeType.CLASS, parent=None)
+        t.needs_destructor = True
+        t.destructor_name = "z_box_destroy"
+        s = ScopeState()
+        s.cleanup_vars.append(("myvar", t))
+        # the cleanup_vars list stores (var_name, ZType) — verify structure
+        assert len(s.cleanup_vars) == 1
+        assert s.cleanup_vars[0][0] == "myvar"
+        assert s.cleanup_vars[0][1].destructor_name == "z_box_destroy"

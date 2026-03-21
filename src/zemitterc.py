@@ -15,13 +15,8 @@ from ztypechecker import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERI
 @dataclass
 class ScopeState:
     """Per-function cleanup state, pushed/popped at function boundaries."""
-    string_vars: List[str] = field(default_factory=list)
-    class_vars: List[str] = field(default_factory=list)
-    union_vars: List[str] = field(default_factory=list)
-    protocol_vars: List[str] = field(default_factory=list)
-    union_var_types: Dict[str, str] = field(default_factory=dict)
-    class_var_types: Dict[str, str] = field(default_factory=dict)
-    protocol_var_types: Dict[str, str] = field(default_factory=dict)
+    # (mangled_var_name, ZType) pairs in insertion order for scope-exit cleanup
+    cleanup_vars: list = field(default_factory=list)
     temp_counter: int = 0
     record_name: str = ""
     class_params: set = field(default_factory=set)
@@ -443,30 +438,13 @@ class CEmitter:
     def _emit_scope_cleanup(self, indent: str, exclude_var: Optional[str] = None) -> str:
         """Emit cleanup code for all tracked function-scope variables.
 
-        Used at scope-exit (fall-through) and before return statements.
+        Uses ZType.destructor_name for type-driven cleanup.
         If exclude_var is set (return value), that variable is skipped.
         """
         result = ""
-        for sv in reversed(self._scope.protocol_vars):
-            if sv != exclude_var:
-                ptype_name = self._scope.protocol_var_types.get(sv)
-                if ptype_name:
-                    result += f"{indent}z_{ptype_name}_destroy({sv});\n"
-                else:
-                    result += f"{indent}free({sv});\n"
-        for sv in reversed(self._scope.union_vars):
-            if sv != exclude_var:
-                utype_name = self._union_var_type_name(sv)
-                if utype_name:
-                    result += f"{indent}z_{utype_name}_destroy({sv});\n"
-                else:
-                    result += f"{indent}if ({sv}) free({sv});\n"
-        for sv in reversed(self._scope.class_vars):
-            if sv != exclude_var:
-                result += f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
-        for sv in reversed(self._scope.string_vars):
-            if sv != exclude_var:
-                result += f"{indent}zstr_free({sv});\n"
+        for var_name, var_type in reversed(self._scope.cleanup_vars):
+            if var_name != exclude_var:
+                result += self._emit_field_cleanup(var_name, var_type, indent)
         return result
 
     def _static_string(self, escaped: str) -> str:
@@ -2597,29 +2575,14 @@ class CEmitter:
         self._in_named_assignment = True
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
-        if ctype == "ZStr*":
-            self.needs_string = True
+        if assign.type and assign.type.needs_destructor:
+            if ctype == "ZStr*":
+                self.needs_string = True
             self.needs_stdlib = True
             # the variable now owns the value — remove from temp frees
             if val in self._temp.frees:
                 self._temp.frees.remove(val)
-            self._scope.string_vars.append(cname)
-        elif ctype.startswith("z_") and ctype.endswith("_t*"):
-            self.needs_stdlib = True
-            # class/union pointer — the variable now owns it
-            if val in self._temp.frees:
-                self._temp.frees.remove(val)
-            # distinguish union/class/protocol for proper destruction
-            if assign.type and assign.type.typetype == ZTypeType.UNION:
-                self._scope.union_vars.append(cname)
-                self._scope.union_var_types[cname] = assign.type.name
-            elif assign.type and assign.type.typetype == ZTypeType.PROTOCOL:
-                self._scope.protocol_vars.append(cname)
-                self._scope.protocol_var_types[cname] = assign.type.name
-            else:
-                self._scope.class_vars.append(cname)
-                if assign.type:
-                    self._scope.class_var_types[cname] = assign.type.name
+            self._scope.cleanup_vars.append((cname, assign.type))
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
@@ -3838,28 +3801,17 @@ class CEmitter:
             ZTypeType.PROTOCOL,
         ):
             return True
-        # local class/union variable
+        # local class/union/protocol variable tracked for cleanup
         if isinstance(path, zast.AtomId):
             cname = _mangle_var(path.name)
-            if (
-                cname in self._scope.class_vars
-                or cname in self._scope.union_vars
-                or cname in self._scope.protocol_vars
-            ):
-                return True
+            for vname, vtype in self._scope.cleanup_vars:
+                if vname == cname and vtype.is_heap_allocated:
+                    return True
             # class method parameter (this/type resolves to class pointer)
             if self._typetype_of(self._scope.record_name) == ZTypeType.CLASS:
                 if cname in self._scope.class_params:
                     return True
         return False
-
-    def _union_var_type_name(self, var_name: str) -> Optional[str]:
-        """Get the union type name for a union variable."""
-        return self._scope.union_var_types.get(var_name)
-
-    def _class_var_type_name(self, var_name: str) -> Optional[str]:
-        """Get the class type name for a class variable."""
-        return self._scope.class_var_types.get(var_name)
 
     def _emit_class_free(self, var: str, type_name: Optional[str]) -> str:
         """Emit the right destroy call for a class variable."""
