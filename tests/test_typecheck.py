@@ -4192,3 +4192,100 @@ class TestList:
         names = [m.name for m, _ in program.mono_types if "list" in m.name]
         assert "list_i64" in names
         assert "list_u64" in names
+
+
+class TestMap:
+    """Tests for map type resolution and monomorphization."""
+
+    def test_map_creation(self):
+        """map key: i64 value: i64 creates a monomorphized map type."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        monos = [m for m, _ in program.mono_types if "map" in m.name]
+        assert len(monos) >= 1
+        assert any(m.name == "map_i64_i64" for m in monos)
+
+    def test_map_is_reftype(self):
+        """map is a reference type (not valtype)."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "map_i64_i64"]
+        assert len(monos) == 1
+        assert monos[0].is_valtype is False
+
+    def test_map_length_field(self):
+        """.length is synthesized as u64 field."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        assert "length" in mono.children
+        assert mono.children["length"].name == "u64"
+
+    def test_map_capacity_field(self):
+        """.capacity is synthesized as u64 field."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        assert "capacity" in mono.children
+        assert mono.children["capacity"].name == "u64"
+
+    def test_map_set_method(self):
+        """.set is synthesized with key: and value: parameters."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        assert "set" in mono.children
+        set_m = mono.children["set"]
+        assert set_m.typetype == ZTypeType.FUNCTION
+        assert "key" in set_m.children
+        assert "value" in set_m.children
+
+    def test_map_get_method_returns_option(self):
+        """.get is synthesized returning option of value type."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        assert "get" in mono.children
+        get_m = mono.children["get"]
+        assert get_m.typetype == ZTypeType.FUNCTION
+        ret = get_m.children.get(":return")
+        assert ret is not None
+        assert "option" in ret.name
+
+    def test_map_delete_method(self):
+        """.delete is synthesized returning bool."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        assert "delete" in mono.children
+        del_m = mono.children["delete"]
+        assert del_m.typetype == ZTypeType.FUNCTION
+        assert "key" in del_m.children
+        ret = del_m.children.get(":return")
+        assert ret is not None
+        assert ret.name == "bool"
+
+    def test_map_has_method(self):
+        """.has is synthesized returning bool."""
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        assert "has" in mono.children
+        has_m = mono.children["has"]
+        assert has_m.typetype == ZTypeType.FUNCTION
+        ret = has_m.children.get(":return")
+        assert ret is not None
+        assert ret.name == "bool"
+
+    def test_map_different_types(self):
+        """Different key/value types produce different monomorphized types."""
+        program = check_ok(
+            "main: function is {\n"
+            "    a: (map key: i64 value: i64)\n"
+            "    b: (map key: string value: u64)\n"
+            "}"
+        )
+        names = [m.name for m, _ in program.mono_types if "map" in m.name]
+        assert "map_i64_i64" in names
+        assert "map_string_u64" in names
+
+    def test_map_string_key(self):
+        """map with string keys type-checks."""
+        check_ok(
+            "main: function is {\n"
+            "    m: (map key: string value: i64)\n"
+            '    m.set key: "hello" value: 42\n'
+            "}"
+        )

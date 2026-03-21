@@ -3611,3 +3611,182 @@ class TestList:
             for p in (cpath, outpath):
                 if os.path.exists(p):
                     os.unlink(p)
+
+
+class TestMap:
+    """Tests for map type emission and runtime behavior."""
+
+    def test_map_struct_emitted(self):
+        """Map struct has capacity, length, and buckets fields."""
+        csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
+        assert "z_map_i64_i64_t" in csource
+        assert "z_map_i64_i64_bucket_t" in csource
+        assert "uint64_t capacity;" in csource
+        assert "uint64_t length;" in csource
+
+    def test_map_create_destroy_emitted(self):
+        """Map create and destroy functions are emitted."""
+        csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
+        assert "z_map_i64_i64_create" in csource
+        assert "z_map_i64_i64_destroy" in csource
+
+    def test_map_set_and_length(self):
+        """Set entries and check length."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 1 value: 100\n"
+            "    m.set key: 2 value: 200\n"
+            '    print "\\{m.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_map_get_found(self):
+        """.get returns option.some for existing key."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 42 value: 999\n"
+            "    r: m.get key: 42\n"
+            '    match (r) case some then { print "found" } case none then { print "missing" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "found"
+
+    def test_map_get_missing(self):
+        """.get returns option.none for missing key."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    r: m.get key: 99\n"
+            '    match (r) case some then { print "found" } case none then { print "missing" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "missing"
+
+    def test_map_has(self):
+        """.has returns true for existing key, false for missing."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 1 value: 10\n"
+            '    print "\\{m.has key: 1} \\{m.has key: 2}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1 0"
+
+    def test_map_delete(self):
+        """.delete removes entry and returns true."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 1 value: 10\n"
+            "    m.set key: 2 value: 20\n"
+            "    d: m.delete key: 1\n"
+            '    print "\\{d} \\{m.length} \\{m.has key: 1}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1 1 0"
+
+    def test_map_delete_missing(self):
+        """.delete returns false for missing key."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    d: m.delete key: 99\n"
+            '    print "\\{d}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0"
+
+    def test_map_replace(self):
+        """Setting same key replaces the value."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 1 value: 100\n"
+            "    m.set key: 1 value: 200\n"
+            '    print "\\{m.length}"\n'
+            "    r: m.get key: 1\n"
+            '    match (r) case some then { print "ok" } case none then { print "bad" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        out_lines = output.strip().split("\n")
+        assert out_lines[0] == "1"
+        assert out_lines[1] == "ok"
+
+    def test_map_resize(self):
+        """Map resizes correctly when load factor exceeded."""
+        lines = ["m: (map key: i64 value: i64)"]
+        for i in range(20):
+            lines.append(f"m.set key: {i} value: {i * 10}")
+        lines.append('print "\\{m.length}"')
+        lines.append('print "\\{m.has key: 0}"')
+        lines.append('print "\\{m.has key: 19}"')
+        source = "main: function is {\n    " + "\n    ".join(lines) + "\n}"
+        csource = emit_source(source)
+        output = compile_and_run(csource)
+        result_lines = output.strip().split("\n")
+        assert result_lines[0] == "20"
+        assert result_lines[1] == "1"
+        assert result_lines[2] == "1"
+
+    def test_map_tombstone_reuse(self):
+        """Deleted slots are reused on insert."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 1 value: 10\n"
+            "    m.set key: 2 value: 20\n"
+            "    m.delete key: 1\n"
+            "    m.set key: 3 value: 30\n"
+            '    print "\\{m.length} \\{m.has key: 1} \\{m.has key: 2} \\{m.has key: 3}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2 0 1 1"
+
+    def test_map_string_keys(self):
+        """Map with string keys works correctly."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: string value: i64)\n"
+            '    m.set key: "hello" value: 42\n'
+            '    m.set key: "world" value: 99\n'
+            '    print "\\{m.length}"\n'
+            '    k: "hello"\n'
+            '    print "\\{m.has key: k}"\n'
+            '    k2: "nope"\n'
+            '    print "\\{m.has key: k2}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "2"
+        assert lines[1] == "1"
+        assert lines[2] == "0"
+
+    def test_map_capacity_preallocation(self):
+        """Pre-allocated capacity works."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64) capacity: 32.u64\n"
+            '    print "\\{m.capacity} \\{m.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "32 0"
+
+    def test_map_scope_cleanup(self):
+        """Map is destroyed on scope exit."""
+        csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
+        assert "z_map_i64_i64_destroy(m)" in csource
+        compile_and_run(csource)

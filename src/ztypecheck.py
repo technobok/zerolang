@@ -82,6 +82,23 @@ def _list_element_type(ztype: ZType) -> Optional[ZType]:
     return ztype.generic_args.get("of")
 
 
+def _is_map_type(ztype: ZType) -> bool:
+    """Check if a type is a monomorphized map type."""
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "map"
+    )
+
+
+def _map_key_type(ztype: ZType) -> Optional[ZType]:
+    """Get the key type of a map type."""
+    return ztype.generic_args.get("key")
+
+
+def _map_value_type(ztype: ZType) -> Optional[ZType]:
+    """Get the value type of a map type."""
+    return ztype.generic_args.get("value")
+
+
 def _is_valtype(ztype: ZType) -> bool:
     """Check if a type is a value type (copied, always owned)."""
     if ztype.is_valtype is not None:
@@ -2272,8 +2289,58 @@ class TypeChecker:
                 pop_type.children[":return"] = elem_type
                 mono.children["pop"] = pop_type
 
+        # for map types: set reftype, synthesize methods
+        if _is_map_type(mono) and not is_partial:
+            mono.is_valtype = False
+            key_type = _map_key_type(mono)
+            value_type = _map_value_type(mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            t_bool = self._resolve_name("bool") or self.t_null
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            # synthesize .capacity field (runtime, u64)
+            cap_type = _make_type("u64", ZTypeType.RECORD)
+            cap_type.is_valtype = True
+            mono.children["capacity"] = cap_type
+            if key_type and value_type:
+                # synthesize .set method: function {key: K value: V}
+                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
+                set_type.children["key"] = key_type
+                set_type.children["value"] = value_type
+                set_type.param_ownership["key"] = ZParamOwnership.TAKE
+                set_type.param_ownership["value"] = ZParamOwnership.TAKE
+                mono.children["set"] = set_type
+                # synthesize .get method: function {key: K} out option of: V
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["key"] = key_type
+                option_template = self._resolve_name("option")
+                if option_template and option_template.isgeneric:
+                    option_defn = self._find_generic_defn(option_template)
+                    if option_defn:
+                        option_mono = self._monomorphize(
+                            option_template, {"t": value_type}, option_defn
+                        )
+                        get_type.children[":return"] = option_mono
+                mono.children["get"] = get_type
+                # synthesize .delete method: function {key: K} out bool
+                delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
+                delete_type.children["key"] = key_type
+                delete_type.children[":return"] = t_bool
+                mono.children["delete"] = delete_type
+                # synthesize .has method: function {key: K} out bool
+                has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
+                has_type.children["key"] = key_type
+                has_type.children[":return"] = t_bool
+                mono.children["has"] = has_type
+
         # for classes: rebuild meta.create for the monomorphized class
-        if template_type.typetype == ZTypeType.CLASS and not _is_list_type(mono):
+        if (
+            template_type.typetype == ZTypeType.CLASS
+            and not _is_list_type(mono)
+            and not _is_map_type(mono)
+        ):
             is_func_names = set()
             if isinstance(defn, zast.Class):
                 is_func_names = set(defn.functions.keys())
