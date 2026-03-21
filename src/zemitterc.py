@@ -328,6 +328,35 @@ class CEmitter:
             return f"{indent}{ftype.destructor_name}({access});\n"
         return ""
 
+    def _emit_scope_cleanup(self, indent: str, exclude_var: Optional[str] = None) -> str:
+        """Emit cleanup code for all tracked function-scope variables.
+
+        Used at scope-exit (fall-through) and before return statements.
+        If exclude_var is set (return value), that variable is skipped.
+        """
+        result = ""
+        for sv in reversed(self._func_protocol_vars):
+            if sv != exclude_var:
+                ptype_name = self._protocol_var_types.get(sv)
+                if ptype_name:
+                    result += f"{indent}z_{ptype_name}_destroy({sv});\n"
+                else:
+                    result += f"{indent}free({sv});\n"
+        for sv in reversed(self._func_union_vars):
+            if sv != exclude_var:
+                utype_name = self._union_var_type_name(sv)
+                if utype_name:
+                    result += f"{indent}z_{utype_name}_destroy({sv});\n"
+                else:
+                    result += f"{indent}if ({sv}) free({sv});\n"
+        for sv in reversed(self._func_class_vars):
+            if sv != exclude_var:
+                result += f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
+        for sv in reversed(self._func_string_vars):
+            if sv != exclude_var:
+                result += f"{indent}zstr_free({sv});\n"
+        return result
+
     def _static_string(self, escaped: str) -> str:
         """Return the name of a static ZStr for this literal, deduplicating."""
         if escaped in self._string_literals:
@@ -2488,31 +2517,9 @@ class CEmitter:
             lines.append(body_code)
 
         # scope-exit cleanup for string/class/union/protocol vars (void functions / fall-through)
-        if (
-            self._func_string_vars
-            or self._func_class_vars
-            or self._func_union_vars
-            or self._func_protocol_vars
-        ):
-            indent = self._indent()
-            for sv in reversed(self._func_protocol_vars):
-                ptype_name = self._protocol_var_types.get(sv)
-                if ptype_name:
-                    lines.append(f"{indent}z_{ptype_name}_destroy({sv});\n")
-                else:
-                    lines.append(f"{indent}free({sv});\n")
-            for sv in reversed(self._func_union_vars):
-                utype_name = self._union_var_type_name(sv)
-                if utype_name:
-                    lines.append(f"{indent}z_{utype_name}_destroy({sv});\n")
-                else:
-                    lines.append(f"{indent}if ({sv}) free({sv});\n")
-            for sv in reversed(self._func_class_vars):
-                lines.append(
-                    f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
-                )
-            for sv in reversed(self._func_string_vars):
-                lines.append(f"{indent}zstr_free({sv});\n")
+        cleanup = self._emit_scope_cleanup(self._indent())
+        if cleanup:
+            lines.append(cleanup)
 
         lines.append("}\n\n")
         self.func_defs.append("".join(lines))
@@ -3065,54 +3072,14 @@ class CEmitter:
                     result += f"{indent}free({t});\n"
             self._temp_frees.clear()
 
-            # free func protocol vars (except the return value)
-            for sv in reversed(self._func_protocol_vars):
-                if sv != val:
-                    ptype_name = self._protocol_var_types.get(sv)
-                    if ptype_name:
-                        result += f"{indent}z_{ptype_name}_destroy({sv});\n"
-                    else:
-                        result += f"{indent}free({sv});\n"
-            # free func union vars (except the return value)
-            for sv in reversed(self._func_union_vars):
-                if sv != val:
-                    utype_name = self._union_var_type_name(sv)
-                    if utype_name:
-                        result += f"{indent}z_{utype_name}_destroy({sv});\n"
-                    else:
-                        result += f"{indent}if ({sv}) free({sv});\n"
-            # free func class vars (except the return value)
-            for sv in reversed(self._func_class_vars):
-                if sv != val:
-                    result += f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
-            # free func string vars (except the return value)
-            for sv in reversed(self._func_string_vars):
-                if sv != val:
-                    result += f"{indent}zstr_free({sv});\n"
+            # free func vars (except the return value)
+            result += self._emit_scope_cleanup(indent, exclude_var=val)
 
             result += f"{indent}return {val};\n"
             return result
 
-        # void return — free all func protocol/union/class/string vars
-        result = ""
-        for sv in reversed(self._func_protocol_vars):
-            ptype_name = self._protocol_var_types.get(sv)
-            if ptype_name:
-                result += f"{indent}z_{ptype_name}_destroy({sv});\n"
-            else:
-                result += f"{indent}free({sv});\n"
-        for sv in reversed(self._func_union_vars):
-            utype_name = self._union_var_type_name(sv)
-            if utype_name:
-                result += f"{indent}z_{utype_name}_destroy({sv});\n"
-            else:
-                result += f"{indent}if ({sv}) free({sv});\n"
-        for sv in reversed(self._func_class_vars):
-            result += (
-                f"{indent}{self._emit_class_free(sv, self._class_var_type_name(sv))}\n"
-            )
-        for sv in reversed(self._func_string_vars):
-            result += f"{indent}zstr_free({sv});\n"
+        # void return — free all func vars
+        result = self._emit_scope_cleanup(indent)
         result += f"{indent}return;\n"
         return result
 

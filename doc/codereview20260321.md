@@ -196,10 +196,10 @@ The type system already has `is_valtype` (`ztypechecker.py:138`), `ZOwnership` (
 
 #### Action Items
 
-- [ ] Add `ZType.needs_destructor` / `ZType.destructor_name` / `ZType.is_heap_allocated` (see Finding 3)
-- [ ] Unify scope-exit and return cleanup into a single `_emit_scope_cleanup(exclude_var: Optional[str] = None) -> str`
-- [ ] Unify reassignment cleanup to use the same `_emit_field_cleanup()` from Finding 3
-- [ ] Consider whether `.take` nullification should be a type-system concern (ownership transfer annotation)
+- [x] Add `ZType.needs_destructor` / `ZType.destructor_name` / `ZType.is_heap_allocated` (see Finding 3) — done in Finding 3
+- [x] Unify scope-exit and return cleanup into a single `_emit_scope_cleanup(exclude_var: Optional[str] = None) -> str`
+- [x] Unify reassignment cleanup to use the same `_emit_field_cleanup()` from Finding 3 — done in Finding 3
+- [x] Consider whether `.take` nullification should be a type-system concern (ownership transfer annotation) — `.take` is already modeled via `ZParamOwnership.TAKE`; emitter nullification is the C-level implementation of that annotation, appropriate to keep in the emitter
 
 ---
 
