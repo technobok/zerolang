@@ -100,7 +100,7 @@ The parser creates an abstract syntax tree (AST) based on the source units
 supplied. It begins with the 'core' system module and the user 'main' module
 and compiles each, following any unresolved references as they are found.
 
-xxx The Parser maintains an Environment stack for recording definitions at each
+The Parser maintains an Environment stack for recording definitions at each
 scope. At the beginning of each new scope, a new frame is pushed onto the
 Environment. The Parser records each definition made as compilation proceeds.
 References to these definitions are recorded as they are found.
@@ -137,30 +137,86 @@ types of definitions, assignments and arguments being passed to ensure the
 types are compatible.
 
 A stack of nodes being typechecked is maintained as checking proceeds. This
-allows the type checker to catch circular dependancies
+allows the type checker to catch circular dependencies.
 
-The ownership status of each expression is also determined (free, owned,
-borrowed, linked).
+#---: Demand-Driven Resolution
 
-Lock checking is also done at the same time. Locks are taken when evaluating
-each expression part, conferred to variable names (when assigned/created).
-Locks are dropped when the expression falls out of scope (before next
-expression, if 'free'; else when the name falls out of scope)
+The type checker is demand-driven: it starts from #~"main" and resolves names
+on demand as they are referenced. Types, functions, and definitions that are
+never reachable from #~"main" are never type-checked. This ensures the compiler
+only processes what is needed, and circular dependencies are detected when a
+name is encountered that is already on the resolution stack.
+
+#---: Monomorphization
+
+Generic types are instantiated through monomorphization. When a generic type
+(e.g., #~"list(string)") is used, the type checker creates a concrete copy
+(a monomorphized type) with the generic parameters replaced by concrete types.
+The monomorphized type name is mangled (e.g., #~"list__string") to produce a
+unique C identifier.
+
+Generic method bodies are deep-copied during monomorphization and type-checked
+with the concrete type arguments in scope. This ensures that each instantiation
+is independently validated.
+
+#---: Ownership and Lifetime
+
+The ownership status of each expression is determined using a 2-state model:
+OWNED (the variable owns the instance and is responsible for its lifetime) or
+BORROWED (a temporary reference; the variable does not own the instance).
+
+Function parameters carry ownership annotations: #~"take" (caller transfers
+ownership to callee), #~"borrow" (callee gets a borrowed reference), or
+#~"lock" (callee locks the argument for the duration of the call).
+
+Lock checking infrastructure exists (#~"ZLockState" with UNLOCKED, EXCLUSIVE,
+and SHARED states) but enforcement is not yet active.
 
 #--: Code Generator
 
-Finally, the code generator generates output in the destination based on the
-typed AST.
+The code generator (C emitter) walks the fully typed AST and emits C source
+code. The output is compiled by a C compiler (gcc/clang) to produce a native
+executable.
 
-The output is usually source code for the targer system that requires further
-compilation (C, Python, Webassembly).
+The emitter produces several output sections in order: struct/type definitions,
+forward declarations, function typedefs, function bodies, and a #~"main()"
+entry point. Each section is collected separately and assembled at the end.
 
-#---: Method Body Typechecking
+#---: Type Emission
 
-Non-generic record, class, union, and variant methods have their bodies
-typechecked during type resolution. For generic types, method bodies are
-cloned (deep-copied) during monomorphization and typechecked with the
-concrete type arguments in scope.
+Each zerolang type maps to a C representation:
+
+#ul:
+  [#*: Records → C structs (stack-allocated value types)]
+  [#*: Classes → C structs behind pointers (heap-allocated with constructors and destructors)]
+  [#*: Unions → tagged struct with void* data (heap-allocated)]
+  [#*: Variants → tagged struct with inline data union (stack-allocated)]
+  [#*: Protocols → vtable struct + instance struct (dynamic dispatch via function pointers)]
+  [#*: Facets → vtable + inline data union (value-type dynamic dispatch)]
+  [#*: Enums → integer constants with a tag enum type]
+
+#---: Memory Management
+
+The emitter implements ownership-based memory management without a garbage
+collector.
+
+String values (#~"ZStr*") are heap-allocated and freed via #~"zstr_free()".
+Class instances are heap-allocated via #~"malloc()" and freed via generated
+#~"z_<type>_destroy()" functions that recursively free owned fields.
+
+The emitter tracks variables that need cleanup in a per-function scope. At
+scope exit (function return or fall-through), all owned variables are destroyed
+in reverse declaration order. Each type carries #~"needs_destructor",
+#~"destructor_name", and #~"is_heap_allocated" metadata set by the type
+checker, so the emitter delegates cleanup decisions to the type system.
+
+Temporary values (intermediate results within a statement) are tracked
+separately and freed at the end of each statement. When a temporary is
+assigned to a named variable, ownership transfers and the temporary is removed
+from the free list.
+
+The #~".take" operation transfers ownership from one variable to another,
+nullifying the source to prevent double-free.
 
 #---: Code Deduplication
 

@@ -62,19 +62,27 @@ compiler emits C code which is compiled with gcc or clang.
   [#*: Boolean logic via #~"if" short-circuit #~"when" chains]
   [#*: Basic #~"match" on simple types (not full union pattern matching)]
 
-#---: v1 Defers
+#---: Implemented (originally deferred)
+
+The following features were originally deferred but are now fully implemented:
 
 #ul:
-  [#*: Classes (reftype product types) -- deferred to v2]
-  [#*: Unions, variants -- deferred to v2]
-  [#*: Protocols, facets -- deferred to v2]
-  [#*: Generics -- deferred to v2]
-  [#*: Ownership checking (owned/borrowed/free enforcement) -- deferred to v2]
-  [#*: Lock checking -- deferred to v3]
-  [#*: Generators/yield -- deferred to v3]
-  [#*: Compile-time evaluation (beyond simple constants) -- deferred to v3]
-  [#*: Type coercion (beyond explicit conversions) -- deferred to v2]
-  [#*: Typedefs -- deferred to v2]
+  [#*: Classes (reftype product types with heap allocation, destructors, methods)]
+  [#*: Unions (tagged heap-allocated sum types with pattern matching)]
+  [#*: Variants (tagged stack-allocated sum types)]
+  [#*: Protocols (vtable-based dynamic dispatch with boxing)]
+  [#*: Facets (value-type interfaces with inline data)]
+  [#*: Generics (monomorphization with AST-hash deduplication)]
+  [#*: Typedefs (type aliases with transparent resolution)]
+  [#*: Ownership checking (2-state OWNED/BORROWED model with take/borrow/lock)]
+
+#---: Still Deferred
+
+#ul:
+  [#*: Lock checking (enforcement) -- infrastructure exists, enforcement deferred]
+  [#*: Generators/yield -- deferred]
+  [#*: Compile-time evaluation (beyond simple constants) -- deferred]
+  [#*: Type coercion (beyond explicit conversions) -- deferred]
 
 #---: v1 Note on Ownership
 
@@ -91,10 +99,19 @@ flexible array member:
 
 #code language=c: """
   typedef struct {
-      int32_t len;    // byte length (excl NUL)
-      char data[];    // NUL-terminated UTF-8
+      uint64_t size;  /* bits 62-0: byte count; bit 63: static flag */
+      char data[];    /* NUL-terminated, starts at 8-byte boundary */
   } ZStr;
+
+  #define ZSTR_STATIC_FLAG  0x8000000000000000ull
+  #define ZSTR_SIZE(z)      ((z)->size & ~ZSTR_STATIC_FLAG)
+  #define ZSTR_IS_STATIC(z) ((z)->size & ZSTR_STATIC_FLAG)
   """
+
+The #~"size" field uses its top bit as a static flag. When set, the string is a
+compile-time literal embedded in the binary and must not be freed. The remaining
+63 bits hold the byte count (excluding the NUL terminator). The
+#~"ZSTR_SIZE" and #~"ZSTR_IS_STATIC" macros extract these components.
 
 This layout was chosen over external libraries (bstrlib, SDS) because:
 

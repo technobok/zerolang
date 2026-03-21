@@ -457,8 +457,8 @@ These aren't bugs but they add translation friction. Each pattern should be repl
 #### 1. roadmap.pdoc: v1 scope is outdated
 **roadmap.pdoc lines 65–77** say v1 defers classes, unions, variants, protocols, facets, generics, and typedefs to v2/v3. The implementation already has **all of these** fully working. The roadmap's v1/v2/v3 staging no longer reflects reality.
 
-- [ ] Update roadmap.pdoc to reflect which features are actually implemented
-- [ ] Either remove the v1/v2/v3 staging or mark completed items
+- [x] Update roadmap.pdoc to reflect which features are actually implemented
+- [x] Either remove the v1/v2/v3 staging or mark completed items
 
 #### 2. roadmap.pdoc: ZStr struct definition is outdated
 **roadmap.pdoc lines 92–97** show:
@@ -479,12 +479,12 @@ typedef struct {
 
 This is a significant difference: `uint64_t` vs `int32_t`, field named `size` vs `len`, and the static flag mechanism.
 
-- [ ] Update roadmap.pdoc ZStr definition to match implementation
+- [x] Update roadmap.pdoc ZStr definition to match implementation
 
 #### 3. compiler.pdoc: Placeholder text
 **compiler.pdoc line 103**: `xxx The Parser maintains an Environment stack...` — contains `xxx` placeholder indicating unfinished text.
 
-- [ ] Remove `xxx` placeholder and finalize the Parser section
+- [x] Remove `xxx` placeholder and finalize the Parser section
 
 #### 4. compiler.pdoc: Ownership model is outdated
 **compiler.pdoc line 142**: `The ownership status of each expression is also determined (free, owned, borrowed, linked).`
@@ -498,7 +498,7 @@ class ZOwnership(IntEnum):
 
 There is no `free` or `linked` state.
 
-- [ ] Update compiler.pdoc ownership section to describe the 2-state OWNED/BORROWED model
+- [x] Update compiler.pdoc ownership section to describe the 2-state OWNED/BORROWED model
 
 #### 5. compiler.pdoc: Missing major features
 The compiler.pdoc has **no mention** of:
@@ -507,15 +507,15 @@ The compiler.pdoc has **no mention** of:
 - The emitter's memory management (ZStr lifecycle, destructors, scope cleanup)
 - Lock checking (`ZLockState` enum exists in `ztypechecker.py:54–65`)
 
-- [ ] Add a section on monomorphization (how generic types are instantiated)
-- [ ] Add a section on demand-driven type checking
-- [ ] Expand the Code Generator section substantially (currently 3 sentences at lines 150–156 for 4666 lines of code)
-- [ ] Document memory management strategy (destructors, scope cleanup, .take ownership transfer)
+- [x] Add a section on monomorphization (how generic types are instantiated)
+- [x] Add a section on demand-driven type checking
+- [x] Expand the Code Generator section substantially (currently 3 sentences at lines 150–156 for 4666 lines of code)
+- [x] Document memory management strategy (destructors, scope cleanup, .take ownership transfer)
 
 #### 6. compiler.pdoc: No mention of lock checking
 `ZLockState` and `ZParamOwnership` enums exist in `ztypechecker.py` (lines 54–80). The roadmap says lock checking is deferred to v3, but partial infrastructure exists.
 
-- [ ] Document current lock checking status (infrastructure exists, enforcement scope TBD)
+- [x] Document current lock checking status (infrastructure exists, enforcement scope TBD)
 
 ---
 
