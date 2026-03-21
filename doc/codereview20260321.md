@@ -227,11 +227,11 @@ In the type checker:
 
 #### Action Items
 
-- [ ] Remove `_collect_unit_names()` entirely (see Finding 2)
-- [ ] Simplify `_emit_unit_definitions()` — use `ZType.typetype` dispatch instead of `isinstance`
-- [ ] Consider adding a `call_kind` enum to typed `Call` nodes to simplify `_emit_call_value()`
-- [ ] Consider using a dispatch table pattern: `{ZTypeType.RECORD: self._emit_record, ZTypeType.CLASS: self._emit_class, ...}`
-- [ ] For `_type_of_definition()` in the type checker: this cascade is more defensible since it maps AST→ZType, but could use a registry pattern
+- [x] Remove `_collect_unit_names()` entirely (see Finding 2) — merged with `_collect_proto_conformance` into single `_collect_pre_emission` pass
+- [x] Simplify `_emit_unit_definitions()` — converted `isinstance` checks to `type()` equality checks; same for `_collect_pre_emission` and `_emit_deferred_facets`
+- [ ] Consider adding a `call_kind` enum to typed `Call` nodes to simplify `_emit_call_value()` — deferred; requires annotating all Call nodes in the type checker
+- [x] Consider using a dispatch table pattern: `{ZTypeType.RECORD: self._emit_record, ZTypeType.CLASS: self._emit_class, ...}` — used dispatch table for `_type_of_definition()` in type checker
+- [x] For `_type_of_definition()` in the type checker: this cascade is more defensible since it maps AST→ZType, but could use a registry pattern — converted to dispatch table for the 8 structured types
 
 ---
 

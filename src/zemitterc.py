@@ -438,44 +438,23 @@ class CEmitter:
         return ""
 
 
-    def _collect_unit_names(self, prefix: str, body: dict) -> None:
-        """Recursively collect supplementary definition info from a unit body.
+    def _collect_pre_emission(self, prefix: str, body: dict) -> None:
+        """Pre-emission pass: collect supplementary data not derivable from ZType.
 
-        Most type information now comes from program.resolved (the type checker's
-        resolved dict). This pass collects only what can't be derived from ZType:
-        - _const_names: numeric constant aliases (no distinct ZTypeType)
-        - _protocol_defs / _facet_defs: AST node references for emission
-        - _is_func_fields: function pointer field qualified names
+        Gathers _const_names, _protocol_defs, _facet_defs, _is_func_fields,
+        _proto_conformance, and _facet_conformers in a single walk.
         """
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
-            if isinstance(defn, zast.Unit):
-                self._collect_unit_names(qname, defn.body)
-            elif isinstance(defn, (zast.Record, zast.Class)):
+            defn_type = type(defn)
+            if defn_type == zast.Unit:
+                self._collect_pre_emission(qname, defn.body)
+            elif defn_type in (zast.Record, zast.Class):
                 if not self._is_generic_template(defn):
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
-            elif isinstance(defn, zast.Protocol):
-                if not self._is_generic_template(defn):
-                    self._protocol_defs[qname] = defn
-            elif isinstance(defn, zast.Facet):
-                if not self._is_generic_template(defn):
-                    self._facet_defs[qname] = defn
-            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
-                self._const_names.add(qname)
-
-    def _collect_proto_conformance(self, prefix: str, body: dict) -> None:
-        """Build (impl_type, proto/facet_name) -> label mapping for create."""
-        for name, defn in body.items():
-            qname = self._qualify(prefix, name)
-            if isinstance(defn, zast.Unit):
-                self._collect_proto_conformance(qname, defn.body)
-            elif isinstance(defn, (zast.Record, zast.Class)):
-                if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
-                        proto_name = (
-                            apath.name if isinstance(apath, zast.AtomId) else None
-                        )
+                        proto_name = apath.name if type(apath) == zast.AtomId else None
                         if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                             self._proto_conformance[(qname, proto_name)] = label
                         if proto_name and self._typetype_of(proto_name) == ZTypeType.FACET:
@@ -483,39 +462,47 @@ class CEmitter:
                             self._facet_conformers.setdefault(proto_name, []).append(
                                 qname
                             )
+            elif defn_type == zast.Protocol:
+                if not self._is_generic_template(defn):
+                    self._protocol_defs[qname] = defn
+            elif defn_type == zast.Facet:
+                if not self._is_generic_template(defn):
+                    self._facet_defs[qname] = defn
+            elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
+                self._const_names.add(qname)
 
     def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
         """Recursively emit definitions from a unit body."""
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
             if self._is_generic_template(defn):
-                continue  # skip generic templates
-            if isinstance(defn, zast.Unit):
+                continue
+            defn_type = type(defn)
+            if defn_type == zast.Unit:
                 self._emit_unit_definitions(qname, defn.body)
-            elif isinstance(defn, zast.Record):
+            elif defn_type == zast.Record:
                 self._emit_record(qname, defn)
-            elif isinstance(defn, zast.Class):
+            elif defn_type == zast.Class:
                 self._emit_class(qname, defn)
-            elif isinstance(defn, zast.Union):
+            elif defn_type == zast.Union:
                 self._emit_union(qname, defn)
-            elif isinstance(defn, zast.Variant):
+            elif defn_type == zast.Variant:
                 self._emit_variant(qname, defn)
-            elif isinstance(defn, zast.Protocol):
+            elif defn_type == zast.Protocol:
                 self._emit_protocol(qname, defn)
-            elif isinstance(defn, zast.Facet):
-                pass  # facets emitted in second pass (after all conforming types)
-            elif isinstance(defn, zast.Function) and defn.body:
-                self._emit_func_typedef(qname, defn)
-                self._emit_function(qname, defn)
-            elif isinstance(defn, zast.Function) and defn.body is None:
-                self._emit_spec_typedef(qname, defn)
-            elif isinstance(defn, zast.Data):
+            elif defn_type == zast.Facet:
+                pass  # facets emitted in deferred pass
+            elif defn_type == zast.Function:
+                if defn.body:
+                    self._emit_func_typedef(qname, defn)
+                    self._emit_function(qname, defn)
+                else:
+                    self._emit_spec_typedef(qname, defn)
+            elif defn_type == zast.Data:
                 self._emit_data(qname, defn)
-            elif isinstance(defn, zast.Expression) and isinstance(
-                defn.expression, zast.Data
-            ):
+            elif defn_type == zast.Expression and isinstance(defn.expression, zast.Data):
                 self._emit_data(qname, defn.expression)
-            elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
+            elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
 
     def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
@@ -523,17 +510,16 @@ class CEmitter:
         # first: emit facet struct definitions
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
-            if isinstance(defn, zast.Unit):
+            defn_type = type(defn)
+            if defn_type == zast.Unit:
                 self._emit_deferred_facets(qname, defn.body)
-            elif isinstance(defn, zast.Facet):
+            elif defn_type == zast.Facet:
                 if not self._is_generic_template(defn):
                     self._emit_facet(qname, defn)
-            elif isinstance(defn, (zast.Record, zast.Variant)):
+            elif defn_type in (zast.Record, zast.Variant):
                 if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
-                        facet_name = (
-                            apath.name if isinstance(apath, zast.AtomId) else None
-                        )
+                        facet_name = apath.name if type(apath) == zast.AtomId else None
                         if facet_name and self._typetype_of(facet_name) == ZTypeType.FACET:
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
@@ -542,11 +528,8 @@ class CEmitter:
         if not mainunit:
             return "/* empty program */\n"
 
-        # first pass: collect all unit-level definition names (recursing into inline units)
-        self._collect_unit_names("", mainunit.body)
-
-        # build protocol conformance map for owned create
-        self._collect_proto_conformance("", mainunit.body)
+        # pre-emission pass: collect supplementary data
+        self._collect_pre_emission("", mainunit.body)
 
         # register monomorphized type names before emission
         for mono_type, _ in getattr(self.program, "mono_types", []):

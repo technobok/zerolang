@@ -306,44 +306,45 @@ class TypeChecker:
                 self.unit_types[unitname].children[name] = t
         return t
 
+    # dispatch table for _type_of_definition: AST type -> resolver method name
+    _DEFINITION_RESOLVERS: dict = {
+        zast.Function: "_resolve_function_type",
+        zast.Record: "_resolve_record_type",
+        zast.Class: "_resolve_class_type",
+        zast.Union: "_resolve_union_type",
+        zast.Variant: "_resolve_variant_type",
+        zast.Protocol: "_resolve_protocol_type",
+        zast.Facet: "_resolve_facet_type",
+        zast.Unit: "_resolve_inline_unit_type",
+    }
+
     def _type_of_definition(
         self, unitname: str, name: str, defn: zast.TypeDefinition
     ) -> Optional[ZType]:
         """Type-check a definition, pushing/popping the resolving stack."""
-        if isinstance(defn, zast.Function):
-            return self._resolve_function_type(unitname, name, defn)
-        if isinstance(defn, zast.Record):
-            return self._resolve_record_type(unitname, name, defn)
-        if isinstance(defn, zast.Class):
-            return self._resolve_class_type(unitname, name, defn)
-        if isinstance(defn, zast.Union):
-            return self._resolve_union_type(unitname, name, defn)
-        if isinstance(defn, zast.Variant):
-            return self._resolve_variant_type(unitname, name, defn)
-        if isinstance(defn, zast.Protocol):
-            return self._resolve_protocol_type(unitname, name, defn)
-        if isinstance(defn, zast.Facet):
-            return self._resolve_facet_type(unitname, name, defn)
-        if isinstance(defn, zast.Unit):
-            return self._resolve_inline_unit_type(unitname, name, defn)
-        # alias: DottedPath or AtomId reference
-        if isinstance(defn, zast.DottedPath):
+        # dispatch structured types via table
+        resolver_name = self._DEFINITION_RESOLVERS.get(type(defn))
+        if resolver_name:
+            return getattr(self, resolver_name)(unitname, name, defn)
+        # alias: DottedPath reference
+        defn_type = type(defn)
+        if defn_type == zast.DottedPath:
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
             self._resolving.append((key, shell))
             t = self._resolve_dotted_path(defn)
             self._resolving.pop()
             return t
-        if isinstance(defn, zast.LabelValue):
+        if defn_type == zast.LabelValue:
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
             self._resolving.append((key, shell))
             t = self._resolve_name(defn.name, skip_unit_def=(unitname, name))
             self._resolving.pop()
             return t
-        if isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.Data):
+        if defn_type == zast.Expression and isinstance(defn.expression, zast.Data):
             return self._resolve_data_type(unitname, name, defn.expression)
-        if isinstance(defn, zast.AtomId):
+        if defn_type == zast.AtomId:
             if _is_numeric_id(defn.name):
                 return self._resolve_numeric(defn.name, loc=defn.start)
             key = f"{unitname}.{name}"
