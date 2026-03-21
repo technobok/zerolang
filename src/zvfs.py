@@ -259,6 +259,8 @@ class ZVfs:
     def __init__(self) -> None:
         self.entrytable = DEntryTable()
         self._providertable: List[ZVfsProvider] = []
+        # file_id → name mapping, populated during walk
+        self._file_names: Dict[DEntryID, str] = {}
 
         self.rootid: DEntryID = self.register(NullProvider())
 
@@ -267,6 +269,10 @@ class ZVfs:
         stat - return the DEntry for a DEntryID
         """
         return self.entrytable[entryid]
+
+    def file_table(self) -> List[Tuple[int, str]]:
+        """Return (file_id, name) pairs for all files walked in this VFS."""
+        return [(int(eid), name) for eid, name in self._file_names.items()]
 
     def register(self, provider: ZVfsProvider) -> DEntryID:
         """
@@ -333,6 +339,7 @@ class ZVfs:
                         providerid=entry.providerid,
                         nodeid=newnodeid,
                     )
+                    self._file_names[newentryid] = p
                 elif newnodeidstat == ProviderNodeType.DIR:
                     newentryid = self.entrytable.directory(
                         parentid=newentryid,

@@ -572,6 +572,24 @@ class With(Node):
     doexpr: "Expression"
 
 
+@unique
+class CallKind(IntEnum):
+    """Classification of a Call node, set by the type checker."""
+
+    UNKNOWN = 0
+    REGULAR = 1           # regular function call
+    RETURN = 2            # return statement
+    RECORD_CREATE = 3     # record construction
+    CLASS_CREATE = 4      # class construction
+    UNION_CREATE = 5      # union subtype construction
+    PROTOCOL_CREATE = 6   # protocol.create/take from: expr
+    PROTOCOL_BORROW = 7   # protocol.borrow from: expr
+    FACET_CREATE = 8      # facet.create/take from: expr
+    FACET_BORROW = 9      # facet.borrow from: expr
+    TYPEDEF_CREATE = 10   # typedef.create/take from: expr
+    TYPEDEF_BORROW = 11   # typedef.borrow from: expr
+
+
 @dataclass
 class Call(Node):
     """
@@ -584,6 +602,9 @@ class Call(Node):
     # requires at least one argument (otherwise it is an operation
     # even though it could still be a call with 0 args)
     arguments: typing.List["NamedOperation"]
+
+    # set by type checker to classify the call for the emitter
+    call_kind: CallKind = field(default=CallKind.UNKNOWN, init=False)
 
 
 @dataclass

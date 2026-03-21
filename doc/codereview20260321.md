@@ -288,13 +288,13 @@ EmittedLine(line_id, node_id, c_line_number, c_text)
 
 #### Action Items
 
-- [ ] Add `node_id: int` to AST node base class (auto-incrementing)
-- [ ] Add `token_id: int` to Token class (sequential within file, or global)
-- [ ] Link AST nodes to their originating token via `token_id`
-- [ ] Add `file_id: int` to VFS (expose `ProviderID` or `DEntryID` as the file ID)
-- [ ] Track emitter output lines → source AST node IDs for debuggability
-- [ ] Design SQL tables (see Schema Design section below)
-- [ ] Add `CallKind` enum to typed `Call` nodes (PROTOCOL_CREATE, FACET_CREATE, META_CREATE, UNION_CONSTRUCT, REGULAR, etc.) — set in `_check_call()`, used to simplify `_emit_call_value()` dispatch (moved from Finding 5)
+- [x] Add `node_id: int` to AST node base class (auto-incrementing) — already existed as `Node.nodeid: NodeID`
+- [x] Add `token_id: int` to Token class (sequential within file, or global) — added `Token.tokenid: TokenID` with auto-incrementing counter
+- [x] Link AST nodes to their originating token via `token_id` — already existed via `Node.start: Token`; now Token carries `tokenid` for SQL serialization
+- [x] Add `file_id: int` to VFS (expose `ProviderID` or `DEntryID` as the file ID) — added `ZVfs.file_table()` returning `(file_id, name)` pairs; `DEntryID` already serves as file_id, carried in `Token.fsno`
+- [ ] Track emitter output lines → source AST node IDs for debuggability — deferred to emitter refactoring
+- [x] Design SQL tables (see Schema Design section below) — already in this document
+- [x] Add `CallKind` enum to typed `Call` nodes (PROTOCOL_CREATE, FACET_CREATE, META_CREATE, UNION_CONSTRUCT, REGULAR, etc.) — set in `_check_call()`, used to simplify `_emit_call_value()` dispatch (moved from Finding 5) — added 12-value `CallKind` enum, set at all classification points in `_check_call()`
 
 ---
 

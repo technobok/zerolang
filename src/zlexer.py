@@ -9,14 +9,21 @@ Usage:
 """
 
 from enum import Enum
-from typing import Optional, Sequence, List, Protocol, Tuple
+from typing import Optional, Sequence, List, Protocol, Tuple, NewType
 from abc import abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from itertools import count
+from typing import cast, Callable
 
 import zchar
 from zcharclass import CHARFLAGS, Charflag
 from ztokentype import TT, TTKWMAP, TTRESERVED
 from zvfs import DEntryID, ZVfsOpenFile
+
+
+TokenID = NewType("TokenID", int)
+
+_next_token_id = count()
 
 
 @dataclass
@@ -30,6 +37,10 @@ class Token:
     fsno: DEntryID  # unit number in Program / ParserState
     lineno: int
     colno: int
+
+    tokenid: TokenID = field(
+        default_factory=cast(Callable[[], TokenID], _next_token_id.__next__), init=False
+    )
 
 
 class ITokenizer(Protocol):

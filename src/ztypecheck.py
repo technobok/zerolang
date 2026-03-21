@@ -2986,6 +2986,7 @@ class TypeChecker:
 
         # handle return statement: check expression type against function return type
         if callee_type.name == "return" and callee_type.typetype == ZTypeType.FUNCTION:
+            call.call_kind = zast.CallKind.RETURN
             return self._check_return_call(call)
 
         # handle union/variant subtype construction: dotted path parent is a tagged type
@@ -3001,6 +3002,7 @@ class TypeChecker:
                 mono_type = self._infer_generic_union_construction(parent_tagged, call)
                 if mono_type:
                     call.type = mono_type
+                    call.call_kind = zast.CallKind.UNION_CREATE
                     # update the parent_tagged_type to point to the monomorphized type
                     call.callable.parent_tagged_type = mono_type
                     return mono_type
@@ -3009,6 +3011,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = parent_tagged
+            call.call_kind = zast.CallKind.UNION_CREATE
             return parent_tagged
 
         # handle record construction: calling a record type creates an instance
@@ -3019,11 +3022,13 @@ class TypeChecker:
                 if mono_type:
                     call.type = mono_type
                     call.callable.type = mono_type
+                    call.call_kind = zast.CallKind.RECORD_CREATE
                     return mono_type
                 return None  # error already emitted
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
+            call.call_kind = zast.CallKind.RECORD_CREATE
             return callee_type
 
         # handle class construction: calling a class type creates a new owned instance
@@ -3033,11 +3038,13 @@ class TypeChecker:
                 if mono_type:
                     call.type = mono_type
                     call.callable.type = mono_type
+                    call.call_kind = zast.CallKind.CLASS_CREATE
                     return mono_type
                 return None
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
+            call.call_kind = zast.CallKind.CLASS_CREATE
             return callee_type
 
         # handle union construction: union.subtype expr
@@ -3045,6 +3052,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
+            call.call_kind = zast.CallKind.UNION_CREATE
             return callee_type
 
         if callee_type.typetype != ZTypeType.FUNCTION:
@@ -3061,16 +3069,23 @@ class TypeChecker:
             and call.callable.child.name in ("create", "take", "borrow")
         ):
             parent_type = getattr(call.callable.parent, "type", None)
-            if parent_type and parent_type.typetype in (
-                ZTypeType.PROTOCOL,
-                ZTypeType.FACET,
-            ):
+            if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
                 if call.callable.child.name == "borrow":
+                    call.call_kind = zast.CallKind.PROTOCOL_BORROW
                     return self._check_protocol_borrow(parent_type, call)
+                call.call_kind = zast.CallKind.PROTOCOL_CREATE
+                return self._check_protocol_create(parent_type, call)
+            if parent_type and parent_type.typetype == ZTypeType.FACET:
+                if call.callable.child.name == "borrow":
+                    call.call_kind = zast.CallKind.FACET_BORROW
+                    return self._check_protocol_borrow(parent_type, call)
+                call.call_kind = zast.CallKind.FACET_CREATE
                 return self._check_protocol_create(parent_type, call)
             if parent_type and parent_type.typedef_base is not None:
                 if call.callable.child.name == "borrow":
+                    call.call_kind = zast.CallKind.TYPEDEF_BORROW
                     return self._check_typedef_borrow(parent_type, call)
+                call.call_kind = zast.CallKind.TYPEDEF_CREATE
                 return self._check_typedef_create(parent_type, call)
 
         # parameter types (skip :return and special entries)
@@ -3174,6 +3189,8 @@ class TypeChecker:
                 self.symtab.release_lock(target_name, holder)
 
         call.type = ret if ret else self.t_null
+        if call.call_kind == zast.CallKind.UNKNOWN:
+            call.call_kind = zast.CallKind.REGULAR
         return call.type
 
     def _take_arg_locks(
