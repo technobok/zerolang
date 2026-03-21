@@ -4077,3 +4077,118 @@ class TestStr:
             "entry: record { name: (str to: 16)\n age: i64 }\n"
             "main: function is { e: (entry) }"
         )
+
+
+class TestList:
+    """Tests for list type resolution and monomorphization."""
+
+    def test_list_creation(self):
+        """list of: i64 creates a monomorphized list type."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if "list" in m.name]
+        assert len(monos) >= 1
+        mono = monos[0]
+        assert mono.name == "list_i64"
+
+    def test_list_creation_with_capacity(self):
+        """list of: i64 with capacity argument type-checks."""
+        check_ok("main: function is { l: (list of: i64) capacity: 10.u64 }")
+
+    def test_list_is_reftype(self):
+        """list is a reference type (not valtype)."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        assert len(monos) == 1
+        assert monos[0].is_valtype is False
+
+    def test_list_length_field(self):
+        """.length is synthesized as u64 field."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "length" in mono.children
+        assert mono.children["length"].name == "u64"
+
+    def test_list_capacity_field(self):
+        """.capacity is synthesized as u64 field."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "capacity" in mono.children
+        assert mono.children["capacity"].name == "u64"
+
+    def test_list_append_method(self):
+        """.append is synthesized with from: parameter."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "append" in mono.children
+        append = mono.children["append"]
+        assert append.typetype == ZTypeType.FUNCTION
+        assert "from" in append.children
+
+    def test_list_get_method(self):
+        """.get is synthesized returning element type."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "get" in mono.children
+        get = mono.children["get"]
+        assert get.typetype == ZTypeType.FUNCTION
+        assert "i" in get.children
+        ret = get.children.get(":return")
+        assert ret is not None
+        assert ret.name == "i64"
+
+    def test_list_set_method(self):
+        """.set is synthesized returning element type."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "set" in mono.children
+        set_m = mono.children["set"]
+        assert set_m.typetype == ZTypeType.FUNCTION
+        assert "i" in set_m.children
+        assert "val" in set_m.children
+
+    def test_list_pop_method(self):
+        """.pop is synthesized returning element type."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "pop" in mono.children
+        pop = mono.children["pop"]
+        assert pop.typetype == ZTypeType.FUNCTION
+        ret = pop.children.get(":return")
+        assert ret is not None
+        assert ret.name == "i64"
+
+    def test_list_insert_method(self):
+        """.insert is synthesized with from: and at: parameters."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "insert" in mono.children
+        insert = mono.children["insert"]
+        assert insert.typetype == ZTypeType.FUNCTION
+        assert "from" in insert.children
+        assert "at" in insert.children
+
+    def test_list_extend_method(self):
+        """.extend is synthesized with from: list_T parameter."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        assert "extend" in mono.children
+        extend = mono.children["extend"]
+        assert extend.typetype == ZTypeType.FUNCTION
+        assert "from" in extend.children
+
+    def test_list_different_element_types(self):
+        """list of: i64 and list of: u64 are different types."""
+        program = check_ok(
+            "main: function is {\n    a: (list of: i64)\n    b: (list of: u64)\n}"
+        )
+        names = [m.name for m, _ in program.mono_types if "list" in m.name]
+        assert "list_i64" in names
+        assert "list_u64" in names

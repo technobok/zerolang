@@ -70,6 +70,18 @@ def _str_capacity(ztype: ZType) -> Optional[int]:
     return None
 
 
+def _is_list_type(ztype: ZType) -> bool:
+    """Check if a type is a monomorphized list type."""
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "list"
+    )
+
+
+def _list_element_type(ztype: ZType) -> Optional[ZType]:
+    """Get the element type of a list type."""
+    return ztype.generic_args.get("of")
+
+
 def _is_valtype(ztype: ZType) -> bool:
     """Check if a type is a value type (copied, always owned)."""
     if ztype.is_valtype is not None:
@@ -1872,6 +1884,9 @@ class TypeChecker:
         # for str types: .string returns the string type directly (not the function)
         if _is_str_type(parent_type) and child_name == "string":
             return self._resolve_name("string")
+        # for list types: .pop returns the element type directly (zero-arg method)
+        if _is_list_type(parent_type) and child_name == "pop":
+            return _list_element_type(parent_type)
         # for records/enums, look up child in children
         child = parent_type.children.get(child_name)
         if child:
@@ -2217,8 +2232,56 @@ class TypeChecker:
             )
             mono.children["string"] = string_method
 
+        # for list types: set reftype, synthesize methods
+        if _is_list_type(mono) and not is_partial:
+            mono.is_valtype = False
+            elem_type = _list_element_type(mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            # synthesize .capacity field (runtime, u64)
+            cap_type = _make_type("u64", ZTypeType.RECORD)
+            cap_type.is_valtype = True
+            mono.children["capacity"] = cap_type
+            if elem_type:
+                # synthesize .append method: function {from: <elem>}
+                append_type = _make_type(f"{mangled}.append", ZTypeType.FUNCTION)
+                append_type.children["from"] = elem_type
+                append_type.param_ownership["from"] = ZParamOwnership.TAKE
+                mono.children["append"] = append_type
+                # synthesize .insert method: function {from: <elem> at: u64}
+                insert_type = _make_type(f"{mangled}.insert", ZTypeType.FUNCTION)
+                insert_type.children["from"] = elem_type
+                insert_type.children["at"] = t_u64
+                insert_type.param_ownership["from"] = ZParamOwnership.TAKE
+                mono.children["insert"] = insert_type
+                # synthesize .extend method: function {from: list_T}
+                extend_type = _make_type(f"{mangled}.extend", ZTypeType.FUNCTION)
+                extend_type.children["from"] = mono
+                extend_type.param_ownership["from"] = ZParamOwnership.TAKE
+                mono.children["extend"] = extend_type
+                # synthesize .get method: function {i: u64} out <elem>
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["i"] = t_u64
+                get_type.children[":return"] = elem_type
+                get_type.param_ownership[":return"] = ZParamOwnership.BORROW
+                mono.children["get"] = get_type
+                # synthesize .set method: function {i: u64 val: <elem>} out <elem>
+                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
+                set_type.children["i"] = t_u64
+                set_type.children["val"] = elem_type
+                set_type.children[":return"] = elem_type
+                set_type.param_ownership["val"] = ZParamOwnership.TAKE
+                mono.children["set"] = set_type
+                # synthesize .pop method: function {} out <elem>
+                pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
+                pop_type.children[":return"] = elem_type
+                mono.children["pop"] = pop_type
+
         # for classes: rebuild meta.create for the monomorphized class
-        if template_type.typetype == ZTypeType.CLASS:
+        if template_type.typetype == ZTypeType.CLASS and not _is_list_type(mono):
             is_func_names = set()
             if isinstance(defn, zast.Class):
                 is_func_names = set(defn.functions.keys())

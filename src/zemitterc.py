@@ -91,6 +91,20 @@ def _str_capacity(ztype: ZType) -> Optional[int]:
     return None
 
 
+def _is_list_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized list type."""
+    if not ztype:
+        return False
+    return (
+        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "list"
+    )
+
+
+def _list_element_type(ztype: ZType) -> Optional[ZType]:
+    """Get the element type of a list type."""
+    return ztype.generic_args.get("of")
+
+
 def _ctype(ztype: Optional[ZType]) -> str:
     if not ztype:
         return "void"
@@ -531,6 +545,9 @@ class CEmitter:
                 continue
             if _is_str_type(mono_type):
                 self._record_names.add(mono_type.name)
+                continue
+            if _is_list_type(mono_type):
+                self._class_names.add(mono_type.name)
                 continue
             if mono_type.typetype == ZTypeType.UNION:
                 self._union_names.add(mono_type.name)
@@ -1479,6 +1496,9 @@ class CEmitter:
         if _is_str_type(mono_type):
             self._emit_mono_str(mono_type)
             return
+        if _is_list_type(mono_type):
+            self._emit_mono_list(mono_type)
+            return
         if mono_type.typetype == ZTypeType.UNION:
             self._emit_mono_union(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.RECORD:
@@ -1738,6 +1758,177 @@ class CEmitter:
         lines.append("    memcpy(z->data, _this.data, _this.len);\n")
         lines.append("    z->data[_this.len] = '\\0';\n")
         lines.append("    return z;\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_list(self, mono_type: ZType) -> None:
+        """Emit a monomorphized list type (struct, create, destroy, methods)."""
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        self.needs_stdio = True
+        self.needs_string = True
+        name = mono_type.name
+        ctype = f"z_{name}_t"
+        elem_type = _list_element_type(mono_type)
+        if elem_type is None:
+            return
+        elem_ctype = _ctype(elem_type)
+        elem_is_reftype = elem_ctype.endswith("*")
+        lines: List[str] = []
+
+        # struct definition
+        lines.append("typedef struct {\n")
+        lines.append("    uint64_t capacity;\n")
+        lines.append("    uint64_t length;\n")
+        lines.append(f"    {elem_ctype}* data;\n")
+        lines.append(f"}} {ctype};\n\n")
+
+        # destroy
+        lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
+        lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
+        lines.append("    if (!p) return;\n")
+        if elem_is_reftype:
+            elem_type_name = elem_type.name if elem_type else ""
+            if (
+                elem_type_name in self._class_names
+                or elem_type_name in self._union_names
+            ):
+                lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
+                lines.append(f"        z_{elem_type_name}_destroy(p->data[i]);\n")
+                lines.append("    }\n")
+            elif elem_ctype == "ZStr*":
+                lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
+                lines.append("        zstr_free(p->data[i]);\n")
+                lines.append("    }\n")
+            else:
+                lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
+                lines.append("        if (p->data[i]) free(p->data[i]);\n")
+                lines.append("    }\n")
+        lines.append("    free(p->data);\n")
+        lines.append("    free(p);\n")
+        lines.append("}\n\n")
+
+        # create constructor
+        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity);\n")
+        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity) {{\n")
+        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+        lines.append(f"    *_this = ({ctype}){{0}};\n")
+        lines.append("    _this->capacity = _capacity;\n")
+        lines.append("    if (_capacity > 0) {\n")
+        lines.append(
+            f"        _this->data = ({elem_ctype}*)calloc(_capacity, sizeof({elem_ctype}));\n"
+        )
+        lines.append("    }\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+
+        # growth helper (inline in append/insert/extend via macro-like pattern)
+        grow_fn = f"z_{name}_grow"
+        lines.append(f"static void {grow_fn}({ctype}* _this, uint64_t _needed);\n")
+        lines.append(f"static void {grow_fn}({ctype}* _this, uint64_t _needed) {{\n")
+        lines.append("    if (_needed <= _this->capacity) return;\n")
+        lines.append(
+            "    uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;\n"
+        )
+        lines.append("    if (newcap < _needed) newcap = _needed;\n")
+        lines.append("    _this->capacity = newcap;\n")
+        lines.append(
+            f"    _this->data = ({elem_ctype}*)realloc(_this->data, newcap * sizeof({elem_ctype}));\n"
+        )
+        lines.append("}\n\n")
+
+        # append
+        lines.append(
+            f"static void z_{name}_append({ctype}* _this, {elem_ctype} _val);\n"
+        )
+        lines.append(
+            f"static void z_{name}_append({ctype}* _this, {elem_ctype} _val) {{\n"
+        )
+        lines.append(f"    {grow_fn}(_this, _this->length + 1);\n")
+        lines.append("    _this->data[_this->length] = _val;\n")
+        lines.append("    _this->length++;\n")
+        lines.append("}\n\n")
+
+        # insert
+        lines.append(
+            f"static void z_{name}_insert({ctype}* _this, {elem_ctype} _val, uint64_t _at);\n"
+        )
+        lines.append(
+            f"static void z_{name}_insert({ctype}* _this, {elem_ctype} _val, uint64_t _at) {{\n"
+        )
+        lines.append("    if (_at > _this->length) {\n")
+        lines.append(
+            '        fprintf(stderr, "list insert: index %lu out of bounds (length %lu)\\n", (unsigned long)_at, (unsigned long)_this->length);\n'
+        )
+        lines.append("        exit(1);\n")
+        lines.append("    }\n")
+        lines.append(f"    {grow_fn}(_this, _this->length + 1);\n")
+        lines.append(
+            f"    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof({elem_ctype}));\n"
+        )
+        lines.append("    _this->data[_at] = _val;\n")
+        lines.append("    _this->length++;\n")
+        lines.append("}\n\n")
+
+        # extend
+        lines.append(f"static void z_{name}_extend({ctype}* _this, {ctype}* _from);\n")
+        lines.append(
+            f"static void z_{name}_extend({ctype}* _this, {ctype}* _from) {{\n"
+        )
+        lines.append("    if (!_from) return;\n")
+        lines.append(f"    {grow_fn}(_this, _this->length + _from->length);\n")
+        lines.append(
+            f"    memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof({elem_ctype}));\n"
+        )
+        lines.append("    _this->length += _from->length;\n")
+        lines.append("    free(_from->data);\n")
+        lines.append("    free(_from);\n")
+        lines.append("}\n\n")
+
+        # get
+        lines.append(
+            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx);\n"
+        )
+        lines.append(
+            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx) {{\n"
+        )
+        lines.append("    if (_idx >= _this->length) {\n")
+        lines.append(
+            '        fprintf(stderr, "list get: index %lu out of bounds (length %lu)\\n", (unsigned long)_idx, (unsigned long)_this->length);\n'
+        )
+        lines.append("        exit(1);\n")
+        lines.append("    }\n")
+        lines.append("    return _this->data[_idx];\n")
+        lines.append("}\n\n")
+
+        # set
+        lines.append(
+            f"static {elem_ctype} z_{name}_set({ctype}* _this, uint64_t _idx, {elem_ctype} _val);\n"
+        )
+        lines.append(
+            f"static {elem_ctype} z_{name}_set({ctype}* _this, uint64_t _idx, {elem_ctype} _val) {{\n"
+        )
+        lines.append("    if (_idx >= _this->length) {\n")
+        lines.append(
+            '        fprintf(stderr, "list set: index %lu out of bounds (length %lu)\\n", (unsigned long)_idx, (unsigned long)_this->length);\n'
+        )
+        lines.append("        exit(1);\n")
+        lines.append("    }\n")
+        lines.append(f"    {elem_ctype} _old = _this->data[_idx];\n")
+        lines.append("    _this->data[_idx] = _val;\n")
+        lines.append("    return _old;\n")
+        lines.append("}\n\n")
+
+        # pop
+        lines.append(f"static {elem_ctype} z_{name}_pop({ctype}* _this);\n")
+        lines.append(f"static {elem_ctype} z_{name}_pop({ctype}* _this) {{\n")
+        lines.append("    if (_this->length == 0) {\n")
+        lines.append('        fprintf(stderr, "list pop: empty list\\n");\n')
+        lines.append("        exit(1);\n")
+        lines.append("    }\n")
+        lines.append("    _this->length--;\n")
+        lines.append("    return _this->data[_this->length];\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -2652,6 +2843,14 @@ class CEmitter:
             if dp_parent_type and _is_str_type(dp_parent_type):
                 val = self._emit_call_value(call)
                 return f"{indent}{val};\n"
+            if dp_parent_type and _is_list_type(dp_parent_type):
+                val = self._emit_call_value(call)
+                code = f"{indent}{val};\n"
+                for arg in call.arguments:
+                    take_var = self._get_take_var(arg.valtype)
+                    if take_var:
+                        code += f"{indent}{take_var} = NULL;\n"
+                return code
 
         args = self._emit_call_args(call)
         cname = self._emit_callable_expr(call)
@@ -3030,6 +3229,19 @@ class CEmitter:
                 return f"z_{str_name}_create({from_val})"
             return f"z_{str_name}_create(NULL)"
 
+        # list construction: (list of: T) or (list of: T) capacity: N
+        if call.callable.type and _is_list_type(call.callable.type):
+            list_name = call.callable.type.name
+            cap_arg = None
+            for arg in call.arguments:
+                if arg.name == "capacity":
+                    cap_arg = arg
+                    break
+            if cap_arg is not None:
+                cap_val = self._emit_operation_value(cap_arg.valtype)
+                return f"z_{list_name}_create({cap_val})"
+            return f"z_{list_name}_create(0)"
+
         # array method calls: .get and .set
         if isinstance(call.callable, zast.DottedPath):
             dp_parent_type = getattr(call.callable.parent, "type", None)
@@ -3067,6 +3279,54 @@ class CEmitter:
                 if method_name == "string":
                     result = f"z_{str_type_name}_string({parent_val})"
                     return self._alloc_temp(result)
+
+        # list method calls: .append, .insert, .extend, .get, .set, .pop
+        if isinstance(call.callable, zast.DottedPath):
+            dp_parent_type = getattr(call.callable.parent, "type", None)
+            if dp_parent_type and _is_list_type(dp_parent_type):
+                method_name = call.callable.child.name
+                parent_val = self._emit_path_value(call.callable.parent)
+                list_type_name = dp_parent_type.name
+                if method_name == "append" and call.arguments:
+                    from_arg = call.arguments[0]
+                    val = self._emit_operation_value(from_arg.valtype)
+                    return f"z_{list_type_name}_append({parent_val}, {val})"
+                if method_name == "insert" and len(call.arguments) >= 2:
+                    from_val = None
+                    at_val = None
+                    for arg in call.arguments:
+                        if arg.name == "from":
+                            from_val = self._emit_operation_value(arg.valtype)
+                        elif arg.name == "at":
+                            at_val = self._emit_operation_value(arg.valtype)
+                    if from_val is None:
+                        from_val = self._emit_operation_value(call.arguments[0].valtype)
+                    if at_val is None:
+                        at_val = self._emit_operation_value(call.arguments[1].valtype)
+                    return (
+                        f"z_{list_type_name}_insert({parent_val}, {from_val}, {at_val})"
+                    )
+                if method_name == "extend" and call.arguments:
+                    from_val = self._emit_operation_value(call.arguments[0].valtype)
+                    return f"z_{list_type_name}_extend({parent_val}, {from_val})"
+                if method_name == "get" and call.arguments:
+                    idx_val = self._emit_operation_value(call.arguments[0].valtype)
+                    return f"z_{list_type_name}_get({parent_val}, {idx_val})"
+                if method_name == "set" and len(call.arguments) >= 2:
+                    idx_val = None
+                    val_val = None
+                    for arg in call.arguments:
+                        if arg.name == "i":
+                            idx_val = self._emit_operation_value(arg.valtype)
+                        elif arg.name == "val":
+                            val_val = self._emit_operation_value(arg.valtype)
+                    if idx_val is None:
+                        idx_val = self._emit_operation_value(call.arguments[0].valtype)
+                    if val_val is None:
+                        val_val = self._emit_operation_value(call.arguments[1].valtype)
+                    return f"z_{list_type_name}_set({parent_val}, {idx_val}, {val_val})"
+                if method_name == "pop":
+                    return f"z_{list_type_name}_pop({parent_val})"
 
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
             rec_type = call.callable.type
@@ -3309,6 +3569,18 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             result = f"z_{parent_type_dp.name}_string({parent})"
             return self._alloc_temp(result)
+        # list: .length field access
+        if parent_type_dp and _is_list_type(parent_type_dp) and child == "length":
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}->length"
+        # list: .capacity field access
+        if parent_type_dp and _is_list_type(parent_type_dp) and child == "capacity":
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}->capacity"
+        # list: .pop as dotted path (zero-arg method call)
+        if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
+            parent = self._emit_path_value(path.parent)
+            return f"z_{parent_type_dp.name}_pop({parent})"
         # data.array: copy data into new array
         if (
             parent_type_dp

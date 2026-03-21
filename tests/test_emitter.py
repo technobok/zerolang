@@ -3383,3 +3383,186 @@ class TestStr:
         # should NOT contain z_str_32_create call for this variable
         # instead should have direct compound literal
         assert '(z_str_32_t){5, "hello"}' in csource
+
+
+class TestList:
+    """Tests for list type emission and runtime behavior."""
+
+    def test_list_struct_emitted(self):
+        """List struct has capacity, length, and data fields."""
+        csource = emit_source("main: function is { l: (list of: i64) }")
+        assert "z_list_i64_t" in csource
+        assert "uint64_t capacity;" in csource
+        assert "uint64_t length;" in csource
+        assert "int64_t* data;" in csource
+
+    def test_list_create_emitted(self):
+        """List create function is emitted."""
+        csource = emit_source("main: function is { l: (list of: i64) }")
+        assert "z_list_i64_create" in csource
+
+    def test_list_destroy_emitted(self):
+        """List destroy function is emitted."""
+        csource = emit_source("main: function is { l: (list of: i64) }")
+        assert "z_list_i64_destroy" in csource
+
+    def test_list_append_and_length(self):
+        """Append elements and check length."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (list of: i64)\n"
+            "    l.append from: 10\n"
+            "    l.append from: 20\n"
+            '    print "\\{l.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_list_get_in_bounds(self):
+        """Get element at valid index."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (list of: i64)\n"
+            "    l.append from: 42\n"
+            "    l.append from: 99\n"
+            '    print "\\{l.get i: 0.u64}"\n'
+            '    print "\\{l.get i: 1.u64}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "42"
+        assert lines[1] == "99"
+
+    def test_list_set_replaces_and_returns_old(self):
+        """Set replaces element and returns old value."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (list of: i64)\n"
+            "    l.append from: 10\n"
+            "    old: l.set i: 0.u64 val: 77\n"
+            '    print "\\{old}"\n'
+            '    print "\\{l.get i: 0.u64}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "10"
+        assert lines[1] == "77"
+
+    def test_list_pop_returns_last(self):
+        """Pop returns last element."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (list of: i64)\n"
+            "    l.append from: 1\n"
+            "    l.append from: 2\n"
+            "    l.append from: 3\n"
+            "    p: l.pop\n"
+            '    print "\\{p} \\{l.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3 2"
+
+    def test_list_insert_at_position(self):
+        """Insert shifts elements."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (list of: i64)\n"
+            "    l.append from: 1\n"
+            "    l.append from: 3\n"
+            "    l.insert from: 2 at: 1.u64\n"
+            '    print "\\{l.get i: 0.u64} \\{l.get i: 1.u64} \\{l.get i: 2.u64}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1 2 3"
+
+    def test_list_extend_bulk_copies(self):
+        """Extend copies elements from another list."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (list of: i64)\n"
+            "    a.append from: 1\n"
+            "    a.append from: 2\n"
+            "    b: (list of: i64)\n"
+            "    b.append from: 3\n"
+            "    b.append from: 4\n"
+            "    a.extend from: b.take\n"
+            '    print "\\{a.length} \\{a.get i: 2.u64} \\{a.get i: 3.u64}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "4 3 4"
+
+    def test_list_capacity_preallocation(self):
+        """Pre-allocated capacity is reported correctly."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (list of: i64) capacity: 10.u64\n"
+            '    print "\\{l.capacity} \\{l.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10 0"
+
+    def test_list_scope_cleanup(self):
+        """List is destroyed on scope exit (ASan-safe)."""
+        csource = emit_source("main: function is { l: (list of: i64) }")
+        assert "z_list_i64_destroy(l)" in csource
+        # should compile and run without issues
+        compile_and_run(csource)
+
+    def test_list_oob_get_exits(self):
+        """Out-of-bounds get exits with error."""
+        csource = emit_source(
+            "main: function is {\n    l: (list of: i64)\n    x: l.get i: 0.u64\n}"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+            f.write(csource)
+            cpath = f.name
+        outpath = cpath.replace(".c", "")
+        try:
+            subprocess.run(
+                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            result = subprocess.run(
+                [outpath], capture_output=True, text=True, timeout=10
+            )
+            assert result.returncode != 0
+        finally:
+            for p in (cpath, outpath):
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_list_pop_empty_exits(self):
+        """Pop on empty list exits with error."""
+        csource = emit_source(
+            "main: function is {\n    l: (list of: i64)\n    p: l.pop\n}"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+            f.write(csource)
+            cpath = f.name
+        outpath = cpath.replace(".c", "")
+        try:
+            subprocess.run(
+                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            result = subprocess.run(
+                [outpath], capture_output=True, text=True, timeout=10
+            )
+            assert result.returncode != 0
+        finally:
+            for p in (cpath, outpath):
+                if os.path.exists(p):
+                    os.unlink(p)
