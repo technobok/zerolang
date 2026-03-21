@@ -229,7 +229,7 @@ In the type checker:
 
 - [x] Remove `_collect_unit_names()` entirely (see Finding 2) — merged with `_collect_proto_conformance` into single `_collect_pre_emission` pass
 - [x] Simplify `_emit_unit_definitions()` — converted `isinstance` checks to `type()` equality checks; same for `_collect_pre_emission` and `_emit_deferred_facets`
-- [ ] Consider adding a `call_kind` enum to typed `Call` nodes to simplify `_emit_call_value()` — deferred; requires annotating all Call nodes in the type checker
+- [x] Consider adding a `call_kind` enum to typed `Call` nodes to simplify `_emit_call_value()` — moved to Finding 7 (enrich typed AST)
 - [x] Consider using a dispatch table pattern: `{ZTypeType.RECORD: self._emit_record, ZTypeType.CLASS: self._emit_class, ...}` — used dispatch table for `_type_of_definition()` in type checker
 - [x] For `_type_of_definition()` in the type checker: this cascade is more defensible since it maps AST→ZType, but could use a registry pattern — converted to dispatch table for the 8 structured types
 
@@ -294,6 +294,7 @@ EmittedLine(line_id, node_id, c_line_number, c_text)
 - [ ] Add `file_id: int` to VFS (expose `ProviderID` or `DEntryID` as the file ID)
 - [ ] Track emitter output lines → source AST node IDs for debuggability
 - [ ] Design SQL tables (see Schema Design section below)
+- [ ] Add `CallKind` enum to typed `Call` nodes (PROTOCOL_CREATE, FACET_CREATE, META_CREATE, UNION_CONSTRUCT, REGULAR, etc.) — set in `_check_call()`, used to simplify `_emit_call_value()` dispatch (moved from Finding 5)
 
 ---
 
