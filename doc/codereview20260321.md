@@ -308,9 +308,9 @@ EmittedLine(line_id, node_id, c_line_number, c_text)
 
 #### Action Items
 
-- [ ] Add a method `zvfs.file_table() -> List[Tuple[int, str]]` returning `(file_id, path)` pairs
-- [ ] Store `file_id` in tokens instead of (or alongside) the string path
-- [ ] Ensure `file_id` is used consistently through parser → type checker → emitter
+- [x] Add a method `zvfs.file_table() -> List[Tuple[int, str]]` returning `(file_id, path)` pairs — done in Finding 7
+- [x] Store `file_id` in tokens instead of (or alongside) the string path — tokens already carry `fsno: DEntryID` (integer); no string path was ever stored
+- [x] Ensure `file_id` is used consistently through parser → type checker → emitter — `Program.vfs` is available to all stages; `ZVfs.path(fsno)` resolves token file IDs to paths
 
 ---
 

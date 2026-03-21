@@ -282,6 +282,46 @@ class TestFinding7VfsFileTable:
         assert vfs.file_table() == []
 
 
+# ---- Finding 8: file_id consistency through compiler stages ----
+
+
+class TestFinding8FileIdConsistency:
+    """Finding 8: token.fsno should be resolvable via VFS through all stages."""
+
+    def test_token_fsno_is_integer(self):
+        program = parse_and_check('main: function is { print "hello" }')
+        mainunit = program.units[program.mainunitname]
+        main_func = mainunit.body["main"]
+        assert isinstance(main_func.start.fsno, int)
+
+    def test_token_fsno_resolves_via_vfs_path(self):
+        program = parse_and_check('main: function is { print "hello" }')
+        mainunit = program.units[program.mainunitname]
+        main_func = mainunit.body["main"]
+        # vfs.path() should resolve the token's fsno to a file path
+        path = program.vfs.path(main_func.start.fsno)
+        assert path is not None
+        assert "test.z" in path
+
+    def test_file_table_contains_compiled_files(self):
+        program = parse_and_check('main: function is { print "hello" }')
+        table = program.vfs.file_table()
+        names = [name for _, name in table]
+        # the test unit should appear
+        assert "test.z" in names
+        # system files should also appear
+        assert any("core.z" in n or "system.z" in n or "io.z" in n for n in names)
+
+    def test_file_table_ids_match_token_fsno(self):
+        program = parse_and_check('main: function is { print "hello" }')
+        table = program.vfs.file_table()
+        file_ids = {fid for fid, _ in table}
+        # the main function's token fsno should be in the file table
+        mainunit = program.units[program.mainunitname]
+        main_func = mainunit.body["main"]
+        assert int(main_func.start.fsno) in file_ids
+
+
 # ---- Finding 7: CallKind ----
 
 
