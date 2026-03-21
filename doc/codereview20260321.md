@@ -255,10 +255,10 @@ The monomorphized versions (`_emit_mono_class_create`, etc.) add further copies.
 
 #### Action Items
 
-- [ ] Extract shared logic into `_emit_meta_create_common(name, items, functions, is_heap: bool) -> str`
-- [ ] Pass `is_heap_allocated` from the type (see Finding 3) to select stack vs heap
-- [ ] Deduplicate the field-default extraction into a shared helper
-- [ ] Apply the same refactor to mono variants
+- [x] Extract shared logic into `_emit_meta_create_common(name, items, functions, is_heap: bool) -> str` — split into `_collect_field_params()`, `_extract_field_defaults()`, and `_emit_create_functions(is_heap=...)`
+- [x] Pass `is_heap_allocated` from the type (see Finding 3) to select stack vs heap — `_emit_create_functions` uses `is_heap` to select `{0}` vs `malloc`, `.` vs `->`, value vs pointer return
+- [x] Deduplicate the field-default extraction into a shared helper — `_extract_field_defaults()` replaces two identical 20-line cascades
+- [x] Apply the same refactor to mono variants — `_emit_mono_class_create` and `_emit_mono_record` both use `_emit_create_functions()`
 
 ---
 

@@ -1120,19 +1120,22 @@ class CEmitter:
         return f"{ret_ctype} (*{mname})({param_str})"
 
 
-    def _emit_meta_create_record(self, name: str, rec: zast.Record) -> None:
-        """Emit a meta.create constructor function for a record type."""
-        ctype = f"z_{name}_t"
+    def _collect_field_params(
+        self, name: str, items: dict, functions: dict
+    ) -> tuple:
+        """Collect C parameter strings, field names, and field C types.
+
+        Returns (params, field_names, field_ctypes).
+        """
         params: List[str] = []
         field_names: List[str] = []
         field_ctypes: List[str] = []
-        for fname, fpath in rec.items.items():
+        for fname, fpath in items.items():
             fct = _ctype(fpath.type)
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
-        # include function pointer fields from 'is' section
-        for mname, mfunc in rec.functions.items():
+        for mname, mfunc in functions.items():
             ret_ctype = self._resolve_return_ctype(mfunc, record_name=name)
             fp_params: List[str] = []
             for pname, ppath in mfunc.parameters.items():
@@ -1144,15 +1147,18 @@ class CEmitter:
             params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
             field_names.append(mname)
             field_ctypes.append(fp_ctype)
-        self._type_field_ctypes[name] = field_ctypes
-        self._type_field_names[name] = field_names
-        # extract field defaults
+        return params, field_names, field_ctypes
+
+    def _extract_field_defaults(
+        self, name: str, items: dict, functions: dict
+    ) -> Dict[str, str]:
+        """Extract C-level default values for fields and function pointer fields."""
         field_defaults: Dict[str, str] = {}
-        for fname, fpath in rec.items.items():
-            if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
+        for fname, fpath in items.items():
+            if type(fpath) == zast.AtomId and _is_numeric_id(fpath.name):
                 field_defaults[fname] = self._emit_numeric_literal(fpath.name)
-            elif isinstance(fpath, zast.DottedPath):
-                if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
+            elif type(fpath) == zast.DottedPath:
+                if type(fpath.parent) == zast.AtomId and _is_numeric_id(
                     fpath.parent.name
                 ):
                     child_name = fpath.child.name
@@ -1163,31 +1169,65 @@ class CEmitter:
                             field_defaults[fname] = f"(({dct}){value})"
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
-            elif isinstance(fpath, zast.AtomId) and self._typetype_of(fpath.name) == ZTypeType.FUNCTION:
+            elif type(fpath) == zast.AtomId and self._typetype_of(fpath.name) == ZTypeType.FUNCTION:
                 field_defaults[fname] = _mangle_func(fpath.name)
-        for mname, mfunc in rec.functions.items():
+        for mname, mfunc in functions.items():
             if mfunc.body is not None:
                 field_defaults[mname] = _mangle_func(f"{name}.{mname}")
-        self._type_field_defaults[name] = field_defaults
+        return field_defaults
+
+    def _emit_create_functions(
+        self,
+        name: str,
+        ctype: str,
+        params: List[str],
+        field_names: List[str],
+        is_heap: bool,
+        has_user_create: bool,
+        lines: List[str],
+    ) -> None:
+        """Emit meta.create and optional create forwarding functions."""
         param_str = ", ".join(params) if params else "void"
         arg_str = ", ".join(field_names) if field_names else ""
-        lines: List[str] = []
         func_name = f"z_{name}_meta_create"
-        lines.append(f"static {ctype} {func_name}({param_str});\n")
-        lines.append(f"static {ctype} {func_name}({param_str}) {{\n")
-        lines.append(f"    {ctype} _this = {{0}};\n")
+        ret_type = f"{ctype}*" if is_heap else ctype
+        lines.append(f"static {ret_type} {func_name}({param_str});\n")
+        lines.append(f"static {ret_type} {func_name}({param_str}) {{\n")
+        if is_heap:
+            lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+            lines.append(f"    *_this = ({ctype}){{0}};\n")
+            accessor = "->"
+        else:
+            lines.append(f"    {ctype} _this = {{0}};\n")
+            accessor = "."
         for fname in field_names:
-            lines.append(f"    _this.{fname} = {fname};\n")
+            lines.append(f"    _this{accessor}{fname} = {fname};\n")
         lines.append("    return _this;\n")
         lines.append("}\n\n")
-        # emit z_{name}_create forwarding function if user didn't define create
-        has_user_create = "create" in rec.functions or "create" in rec.as_functions
         if not has_user_create:
             create_name = f"z_{name}_create"
-            lines.append(f"static {ctype} {create_name}({param_str});\n")
-            lines.append(f"static {ctype} {create_name}({param_str}) {{\n")
+            lines.append(f"static {ret_type} {create_name}({param_str});\n")
+            lines.append(f"static {ret_type} {create_name}({param_str}) {{\n")
             lines.append(f"    return {func_name}({arg_str});\n")
             lines.append("}\n\n")
+
+    def _emit_meta_create_record(self, name: str, rec: zast.Record) -> None:
+        """Emit a meta.create constructor function for a record type."""
+        ctype = f"z_{name}_t"
+        params, field_names, field_ctypes = self._collect_field_params(
+            name, rec.items, rec.functions
+        )
+        self._type_field_ctypes[name] = field_ctypes
+        self._type_field_names[name] = field_names
+        self._type_field_defaults[name] = self._extract_field_defaults(
+            name, rec.items, rec.functions
+        )
+        has_user_create = "create" in rec.functions or "create" in rec.as_functions
+        lines: List[str] = []
+        self._emit_create_functions(
+            name, ctype, params, field_names, is_heap=False,
+            has_user_create=has_user_create, lines=lines,
+        )
         self.struct_defs.append("".join(lines))
 
     def _emit_meta_create_class(
@@ -1195,71 +1235,19 @@ class CEmitter:
     ) -> None:
         """Emit a meta.create constructor function for a class type."""
         ctype = f"z_{name}_t"
-        params: List[str] = []
-        field_names: List[str] = []
-        field_ctypes: List[str] = []
-        for fname, fpath in cls.items.items():
-            fct = _ctype(fpath.type)
-            params.append(f"{fct} {fname}")
-            field_names.append(fname)
-            field_ctypes.append(fct)
-        # include function pointer fields from 'is' section
-        for mname, mfunc in cls.functions.items():
-            ret_ctype = self._resolve_return_ctype(mfunc, record_name=name)
-            fp_params: List[str] = []
-            for pname, ppath in mfunc.parameters.items():
-                if pname.startswith(":"):
-                    continue
-                fp_params.append(self._resolve_param_ctype(ppath, record_name=name))
-            fp_param_str = ", ".join(fp_params) if fp_params else "void"
-            fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
-            params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
-            field_names.append(mname)
-            field_ctypes.append(fp_ctype)
+        params, field_names, field_ctypes = self._collect_field_params(
+            name, cls.items, cls.functions
+        )
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
-        # extract field defaults
-        field_defaults: Dict[str, str] = {}
-        for fname, fpath in cls.items.items():
-            if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
-                field_defaults[fname] = self._emit_numeric_literal(fpath.name)
-            elif isinstance(fpath, zast.DottedPath):
-                if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
-                    fpath.parent.name
-                ):
-                    child_name = fpath.child.name
-                    dct = TYPEMAP.get(child_name, "int64_t")
-                    typename, value, err = parse_number(fpath.parent.name + child_name)
-                    if not err:
-                        if typename.startswith("f"):
-                            field_defaults[fname] = f"(({dct}){value})"
-                        else:
-                            field_defaults[fname] = f"(({dct}){int(value)})"
-            elif isinstance(fpath, zast.AtomId) and self._typetype_of(fpath.name) == ZTypeType.FUNCTION:
-                field_defaults[fname] = _mangle_func(fpath.name)
-        for mname, mfunc in cls.functions.items():
-            if mfunc.body is not None:
-                field_defaults[mname] = _mangle_func(f"{name}.{mname}")
-        self._type_field_defaults[name] = field_defaults
-        param_str = ", ".join(params) if params else "void"
-        arg_str = ", ".join(field_names) if field_names else ""
-        func_name = f"z_{name}_meta_create"
-        lines.append(f"static {ctype}* {func_name}({param_str});\n")
-        lines.append(f"static {ctype}* {func_name}({param_str}) {{\n")
-        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
-        lines.append(f"    *_this = ({ctype}){{0}};\n")
-        for fname in field_names:
-            lines.append(f"    _this->{fname} = {fname};\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
-        # emit z_{name}_create forwarding function if user didn't define create
+        self._type_field_defaults[name] = self._extract_field_defaults(
+            name, cls.items, cls.functions
+        )
         has_user_create = "create" in cls.functions or "create" in cls.as_functions
-        if not has_user_create:
-            create_name = f"z_{name}_create"
-            lines.append(f"static {ctype}* {create_name}({param_str});\n")
-            lines.append(f"static {ctype}* {create_name}({param_str}) {{\n")
-            lines.append(f"    return {func_name}({arg_str});\n")
-            lines.append("}\n\n")
+        self._emit_create_functions(
+            name, ctype, params, field_names, is_heap=True,
+            has_user_create=has_user_create, lines=lines,
+        )
 
     def _emit_class(self, name: str, cls: zast.Class) -> None:
         if self._is_typedef(name):
@@ -1522,21 +1510,10 @@ class CEmitter:
         # emit meta.create and create functions
         params = [f"{ct} {fn}" for fn, ct in field_items]
         field_names = [fn for fn, _ in field_items]
-        param_str = ", ".join(params) if params else "void"
-        arg_str = ", ".join(field_names) if field_names else ""
-        func_name = f"z_{name}_meta_create"
-        lines.append(f"static {ctype} {func_name}({param_str});\n")
-        lines.append(f"static {ctype} {func_name}({param_str}) {{\n")
-        lines.append(f"    {ctype} _this = {{0}};\n")
-        for fn in field_names:
-            lines.append(f"    _this.{fn} = {fn};\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
-        create_name = f"z_{name}_create"
-        lines.append(f"static {ctype} {create_name}({param_str});\n")
-        lines.append(f"static {ctype} {create_name}({param_str}) {{\n")
-        lines.append(f"    return {func_name}({arg_str});\n")
-        lines.append("}\n\n")
+        self._emit_create_functions(
+            name, ctype, params, field_names, is_heap=False,
+            has_user_create=False, lines=lines,
+        )
 
         # register field info for call emission
         self._type_field_ctypes[name] = [ct for _, ct in field_items]
@@ -2244,22 +2221,10 @@ class CEmitter:
         self._type_field_names[name] = field_names
         if name not in self._type_field_defaults:
             self._type_field_defaults[name] = {}
-        param_str = ", ".join(params) if params else "void"
-        arg_str = ", ".join(field_names)
-        func_name = f"z_{name}_meta_create"
-        lines.append(f"static {ctype}* {func_name}({param_str});\n")
-        lines.append(f"static {ctype}* {func_name}({param_str}) {{\n")
-        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
-        lines.append(f"    *_this = ({ctype}){{0}};\n")
-        for fname in field_names:
-            lines.append(f"    _this->{fname} = {fname};\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
-        create_name = f"z_{name}_create"
-        lines.append(f"static {ctype}* {create_name}({param_str});\n")
-        lines.append(f"static {ctype}* {create_name}({param_str}) {{\n")
-        lines.append(f"    return {func_name}({arg_str});\n")
-        lines.append("}\n\n")
+        self._emit_create_functions(
+            name, ctype, params, field_names, is_heap=True,
+            has_user_create=False, lines=lines,
+        )
 
     def _emit_mono_protocol(
         self, mono_type: ZType, template_defn: zast.TypeDefinition
