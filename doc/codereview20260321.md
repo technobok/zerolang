@@ -105,13 +105,13 @@ These are populated by `_collect_unit_names()` (lines 419–467), a 49-line func
 
 #### Action Items
 
-- [ ] Replace all `name in self._class_names` checks with `resolved_type.typetype == ZTypeType.CLASS`
-- [ ] Replace all `name in self._union_names` checks with `resolved_type.typetype == ZTypeType.UNION`
-- [ ] Do the same for `_record_names`, `_variant_names`, `_protocol_names`, `_facet_names`, `_spec_names`, `_func_names`
-- [ ] Remove `_collect_unit_names()` entirely
-- [ ] Remove all 11 name sets from `__init__`
-- [ ] Keep `_typedef_base` only if needed; prefer `ZType.typedef_base` (already exists at `ztypechecker.py:163`)
-- [ ] Keep `_protocol_defs` and `_facet_defs` only if AST node references are genuinely needed beyond what ZType provides
+- [x] Replace all `name in self._class_names` checks with `resolved_type.typetype == ZTypeType.CLASS`
+- [x] Replace all `name in self._union_names` checks with `resolved_type.typetype == ZTypeType.UNION`
+- [x] Do the same for `_record_names`, `_variant_names`, `_protocol_names`, `_facet_names`, `_spec_names`, `_func_names`
+- [x] Remove `_collect_unit_names()` entirely — reduced to collecting only `_const_names`, `_protocol_defs`, `_facet_defs`, `_is_func_fields`
+- [x] Remove all 11 name sets from `__init__` — removed 10 of 11; kept `_const_names` (no distinct ZTypeType for numeric constants)
+- [x] Keep `_typedef_base` only if needed; prefer `ZType.typedef_base` (already exists at `ztypechecker.py:163`) — removed `_typedef_base`, using `ZType.typedef_base`
+- [x] Keep `_protocol_defs` and `_facet_defs` only if AST node references are genuinely needed beyond what ZType provides — kept, AST nodes needed for emission
 
 ---
 

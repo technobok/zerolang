@@ -223,6 +223,10 @@ class Program:
     # cloned methods per mono type: {mono_name: {mname: Function}}
     cloned_methods: Dict[str, Dict[str, "Function"]] = field(default_factory=dict)
 
+    # resolved type names: {qualified_name: ZType}
+    # populated by type checker after resolution
+    resolved: Dict[str, "ZType"] = field(default_factory=dict)
+
 
 def clone_function(func: "Function") -> "Function":
     """Deep copy a Function AST node for monomorphization."""

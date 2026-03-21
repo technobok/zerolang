@@ -3578,4 +3578,5 @@ def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     program.mono_types = tc._mono_types
     program.func_aliases = tc._func_aliases
     program.cloned_methods = tc._cloned_methods
+    program.resolved = dict(tc._resolved)
     return errors

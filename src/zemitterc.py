@@ -219,17 +219,8 @@ def _mangle_var(name: str) -> str:
 def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
     """Check if a name refers to a unit-level definition."""
     return (
-        name in emitter._func_names
-        or name in emitter._spec_names
-        or name in emitter._record_names
-        or name in emitter._class_names
-        or name in emitter._union_names
-        or name in emitter._variant_names
-        or name in emitter._data_names
+        emitter._resolved_type(name) is not None
         or name in emitter._const_names
-        or name in emitter._unit_names
-        or name in emitter._protocol_names
-        or name in emitter._facet_names
     )
 
 
@@ -248,25 +239,13 @@ class CEmitter:
         self.func_defs: List[str] = []
         self.data_defs: List[str] = []
         self.func_aliases: List[str] = []  # #define aliases for deduped functions
-        # track which names are functions/records/data (unit-level defs)
-        self._func_names: set[str] = set()
-        self._data_names: set[str] = set()
+        # track numeric constant names (no distinct ZTypeType for these)
         self._const_names: set[str] = set()
-        self._record_names: set[str] = set()
-        self._class_names: set[str] = set()
-        self._union_names: set[str] = set()
-        self._variant_names: set[str] = set()
-        self._unit_names: set[str] = set()
-        self._spec_names: set[str] = set()
-        self._protocol_names: set[str] = set()
         self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
-        self._facet_names: set[str] = set()
         self._facet_defs: dict[str, zast.Facet] = {}  # name -> AST node
         self._facet_conformers: dict[
             str, list
         ] = {}  # facet name -> list of impl type names
-        self._typedef_names: set[str] = set()  # names that are typedefs (no struct)
-        self._typedef_base: dict[str, str] = {}  # typedef name -> base type name
         # (impl_type, proto_name) -> label for owned protocol create
         self._proto_conformance: Dict[tuple, str] = {}
         # qualified names like "calculator.op" for func pointer fields in 'is' sections
@@ -299,6 +278,28 @@ class CEmitter:
 
     def _indent(self) -> str:
         return "    " * self.indent_level
+
+    def _resolved_type(self, name: str) -> Optional[ZType]:
+        """Look up a name in the type checker's resolved dict.
+
+        Tries the bare name first, then prefixed with the main unit name.
+        This bridges the emitter's convention (bare names for main unit defs)
+        with the type checker's convention (unitname.name keys).
+        """
+        t = self.program.resolved.get(name)
+        if t is None:
+            t = self.program.resolved.get(f"{self.program.mainunitname}.{name}")
+        return t
+
+    def _typetype_of(self, name: str) -> Optional[ZTypeType]:
+        """Get the ZTypeType for a resolved name, or None if not found."""
+        t = self._resolved_type(name)
+        return t.typetype if t else None
+
+    def _is_typedef(self, name: str) -> bool:
+        """Check if a name is a typedef (has a typedef_base in the resolved type)."""
+        t = self._resolved_type(name)
+        return t is not None and t.typedef_base is not None
 
     def _alloc_temp(self, expr: str) -> str:
         """Allocate a temporary variable for a heap-allocated string expression."""
@@ -400,52 +401,28 @@ class CEmitter:
 
 
     def _collect_unit_names(self, prefix: str, body: dict) -> None:
-        """Recursively collect definition names from a unit body."""
+        """Recursively collect supplementary definition info from a unit body.
+
+        Most type information now comes from program.resolved (the type checker's
+        resolved dict). This pass collects only what can't be derived from ZType:
+        - _const_names: numeric constant aliases (no distinct ZTypeType)
+        - _protocol_defs / _facet_defs: AST node references for emission
+        - _is_func_fields: function pointer field qualified names
+        """
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
             if isinstance(defn, zast.Unit):
-                self._unit_names.add(qname)
                 self._collect_unit_names(qname, defn.body)
-            elif isinstance(defn, zast.Function) and defn.body:
+            elif isinstance(defn, (zast.Record, zast.Class)):
                 if not self._is_generic_template(defn):
-                    self._func_names.add(qname)
-            elif isinstance(defn, zast.Function) and defn.body is None:
-                self._spec_names.add(qname)
-            elif isinstance(defn, zast.Record):
-                if not self._is_generic_template(defn):
-                    if self._is_typedef_defn(defn):
-                        self._typedef_names.add(qname)
-                        self._typedef_base[qname] = self._typedef_base_name(defn)
-                    self._record_names.add(qname)
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
-            elif isinstance(defn, zast.Class):
-                if not self._is_generic_template(defn):
-                    if self._is_typedef_defn(defn):
-                        self._typedef_names.add(qname)
-                        self._typedef_base[qname] = self._typedef_base_name(defn)
-                    self._class_names.add(qname)
-                    for mname in defn.functions:
-                        self._is_func_fields.add(f"{qname}.{mname}")
-            elif isinstance(defn, zast.Union):
-                if not self._is_generic_template(defn):
-                    self._union_names.add(qname)
-            elif isinstance(defn, zast.Variant):
-                self._variant_names.add(qname)
             elif isinstance(defn, zast.Protocol):
                 if not self._is_generic_template(defn):
-                    self._protocol_names.add(qname)
                     self._protocol_defs[qname] = defn
             elif isinstance(defn, zast.Facet):
                 if not self._is_generic_template(defn):
-                    self._facet_names.add(qname)
                     self._facet_defs[qname] = defn
-            elif isinstance(defn, zast.Data):
-                self._data_names.add(qname)
-            elif isinstance(defn, zast.Expression) and isinstance(
-                defn.expression, zast.Data
-            ):
-                self._data_names.add(qname)
             elif isinstance(defn, zast.AtomId) and _is_numeric_id(defn.name):
                 self._const_names.add(qname)
 
@@ -461,9 +438,9 @@ class CEmitter:
                         proto_name = (
                             apath.name if isinstance(apath, zast.AtomId) else None
                         )
-                        if proto_name and proto_name in self._protocol_names:
+                        if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                             self._proto_conformance[(qname, proto_name)] = label
-                        if proto_name and proto_name in self._facet_names:
+                        if proto_name and self._typetype_of(proto_name) == ZTypeType.FACET:
                             self._proto_conformance[(qname, proto_name)] = label
                             self._facet_conformers.setdefault(proto_name, []).append(
                                 qname
@@ -519,7 +496,7 @@ class CEmitter:
                         facet_name = (
                             apath.name if isinstance(apath, zast.AtomId) else None
                         )
-                        if facet_name and facet_name in self._facet_names:
+                        if facet_name and self._typetype_of(facet_name) == ZTypeType.FACET:
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
     def emit(self) -> str:
@@ -533,31 +510,19 @@ class CEmitter:
         # build protocol conformance map for owned create
         self._collect_proto_conformance("", mainunit.body)
 
-        for unitname, unit in self.program.units.items():
-            if unitname in ("system", "core", "io", self.program.mainunitname):
-                continue
-            for name, defn in unit.body.items():
-                if isinstance(defn, zast.Function) and defn.body:
-                    self._func_names.add(f"{unitname}.{name}")
-
         # register monomorphized type names before emission
         for mono_type, _ in getattr(self.program, "mono_types", []):
+            # register in resolved dict so _typetype_of() works for mono types
+            self.program.resolved[mono_type.name] = mono_type
             if _is_array_type(mono_type):
-                self._record_names.add(mono_type.name)
                 continue
             if _is_str_type(mono_type):
-                self._record_names.add(mono_type.name)
                 continue
             if _is_list_type(mono_type):
-                self._class_names.add(mono_type.name)
                 continue
             if _is_map_type(mono_type):
-                self._class_names.add(mono_type.name)
                 continue
-            if mono_type.typetype == ZTypeType.UNION:
-                self._union_names.add(mono_type.name)
-            elif mono_type.typetype == ZTypeType.RECORD:
-                self._record_names.add(mono_type.name)
+            if mono_type.typetype == ZTypeType.RECORD:
                 # pre-register field info so _build_meta_create_args works
                 # during function body emission (before mono type emission)
                 name = mono_type.name
@@ -581,7 +546,6 @@ class CEmitter:
                             defaults_r[fn] = f"(({ct}){default_val})"
                 self._type_field_defaults[name] = defaults_r
             elif mono_type.typetype == ZTypeType.CLASS:
-                self._class_names.add(mono_type.name)
                 # pre-register field info so _build_meta_create_args works
                 # during function body emission (before mono type emission)
                 name = mono_type.name
@@ -605,7 +569,7 @@ class CEmitter:
                             defaults_c[fn] = f"(({ct}){default_val})"
                 self._type_field_defaults[name] = defaults_c
             elif mono_type.typetype == ZTypeType.PROTOCOL:
-                self._protocol_names.add(mono_type.name)
+                pass
 
         # emit str mono types early (before regular definitions that may reference them)
         for mono_type, template_defn in getattr(self.program, "mono_types", []):
@@ -937,13 +901,9 @@ class CEmitter:
                 ftype_type = fpath.type.typetype if fpath.type else None
                 if ftype_name == "string":
                     lines.append(f"    zstr_free(r->{fname});\n")
-                elif ftype_type == ZTypeType.CLASS or (
-                    ftype_name and ftype_name in self._class_names
-                ):
+                elif ftype_type == ZTypeType.CLASS:
                     lines.append(f"    z_{ftype_name}_destroy(r->{fname});\n")
-                elif ftype_type == ZTypeType.UNION or (
-                    ftype_name and ftype_name in self._union_names
-                ):
+                elif ftype_type == ZTypeType.UNION:
                     lines.append(f"    z_{ftype_name}_destroy(r->{fname});\n")
             lines.append("    free(r);\n")
             lines.append("}\n\n")
@@ -1086,7 +1046,7 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _emit_record(self, name: str, rec: zast.Record) -> None:
-        if name in self._typedef_names:
+        if self._is_typedef(name):
             # Typedef: no struct, no meta.create — just emit as/is functions
             for mname, mfunc in rec.as_functions.items():
                 if mfunc.body:
@@ -1094,7 +1054,7 @@ class CEmitter:
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
             for label, apath in rec.as_items.items():
                 proto_name = apath.name if isinstance(apath, zast.AtomId) else None
-                if proto_name and proto_name in self._protocol_names:
+                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, rec)
             return
 
@@ -1125,7 +1085,7 @@ class CEmitter:
         # emit protocol implementations
         for label, apath in rec.as_items.items():
             proto_name = apath.name if isinstance(apath, zast.AtomId) else None
-            if proto_name and proto_name in self._protocol_names:
+            if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, rec)
             # facet impls are deferred to _emit_deferred_facets
 
@@ -1188,7 +1148,7 @@ class CEmitter:
                             field_defaults[fname] = f"(({dct}){value})"
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
-            elif isinstance(fpath, zast.AtomId) and fpath.name in self._func_names:
+            elif isinstance(fpath, zast.AtomId) and self._typetype_of(fpath.name) == ZTypeType.FUNCTION:
                 field_defaults[fname] = _mangle_func(fpath.name)
         for mname, mfunc in rec.functions.items():
             if mfunc.body is not None:
@@ -1260,7 +1220,7 @@ class CEmitter:
                             field_defaults[fname] = f"(({dct}){value})"
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
-            elif isinstance(fpath, zast.AtomId) and fpath.name in self._func_names:
+            elif isinstance(fpath, zast.AtomId) and self._typetype_of(fpath.name) == ZTypeType.FUNCTION:
                 field_defaults[fname] = _mangle_func(fpath.name)
         for mname, mfunc in cls.functions.items():
             if mfunc.body is not None:
@@ -1287,7 +1247,7 @@ class CEmitter:
             lines.append("}\n\n")
 
     def _emit_class(self, name: str, cls: zast.Class) -> None:
-        if name in self._typedef_names:
+        if self._is_typedef(name):
             # Typedef: no struct, no destructor, no meta.create — just emit as/is functions
             for mname, mfunc in cls.as_functions.items():
                 if mfunc.body:
@@ -1295,7 +1255,7 @@ class CEmitter:
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
             for label, apath in cls.as_items.items():
                 proto_name = apath.name if isinstance(apath, zast.AtomId) else None
-                if proto_name and proto_name in self._protocol_names:
+                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, cls)
             return
 
@@ -1321,13 +1281,9 @@ class CEmitter:
             ftype_type = fpath.type.typetype if fpath.type else None
             if ftype_name == "string":
                 lines.append(f"    zstr_free(p->{fname});\n")
-            elif ftype_type == ZTypeType.CLASS or (
-                ftype_name and ftype_name in self._class_names
-            ):
+            elif ftype_type == ZTypeType.CLASS:
                 lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
-            elif ftype_type == ZTypeType.UNION or (
-                ftype_name and ftype_name in self._union_names
-            ):
+            elif ftype_type == ZTypeType.UNION:
                 lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
         lines.append("    free(p);\n")
         lines.append("}\n\n")
@@ -1348,7 +1304,7 @@ class CEmitter:
         # emit protocol implementations
         for label, apath in cls.as_items.items():
             proto_name = apath.name if isinstance(apath, zast.AtomId) else None
-            if proto_name and proto_name in self._protocol_names:
+            if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, cls)
 
     def _resolve_tag_values(
@@ -1428,10 +1384,11 @@ class CEmitter:
                 lines.append("            break;\n")
             else:
                 # check subtype: class subtypes need their own destroyer
-                stype_name = spath.name if isinstance(spath, zast.AtomId) else None
-                if stype_name and stype_name == "string":
+                stype = spath.type
+                stype_name = stype.name if stype else None
+                if stype_name == "string":
                     lines.append("            zstr_free((ZStr*)u->data);\n")
-                elif stype_name and stype_name in self._class_names:
+                elif stype and stype.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                     lines.append(
                         f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
                     )
@@ -1529,11 +1486,7 @@ class CEmitter:
                 stype_name = stype.name
                 if stype_name == "string":
                     lines.append("            zstr_free((ZStr*)u->data);\n")
-                elif stype_name in self._class_names:
-                    lines.append(
-                        f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
-                    )
-                elif stype_name in self._union_names:
+                elif stype.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                     lines.append(
                         f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
                     )
@@ -1744,10 +1697,7 @@ class CEmitter:
         lines.append("    if (!p) return;\n")
         if elem_is_reftype:
             elem_type_name = elem_type.name if elem_type else ""
-            if (
-                elem_type_name in self._class_names
-                or elem_type_name in self._union_names
-            ):
+            if elem_type and elem_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                 lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
                 lines.append(f"        z_{elem_type_name}_destroy(p->data[i]);\n")
                 lines.append("    }\n")
@@ -1984,7 +1934,7 @@ class CEmitter:
                 return f"{indent}zstr_free({var});\n"
             if key_is_reftype:
                 kname = key_type.name if key_type else ""
-                if kname in self._class_names or kname in self._union_names:
+                if key_type and key_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                     return f"{indent}z_{kname}_destroy({var});\n"
                 return f"{indent}if ({var}) free({var});\n"
             return ""
@@ -1995,7 +1945,7 @@ class CEmitter:
                 return f"{indent}zstr_free({var});\n"
             if val_is_reftype:
                 vname = value_type.name if value_type else ""
-                if vname in self._class_names or vname in self._union_names:
+                if value_type and value_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                     return f"{indent}z_{vname}_destroy({var});\n"
                 return f"{indent}if ({var}) free({var});\n"
             return ""
@@ -2252,9 +2202,7 @@ class CEmitter:
         for fname, ftype in field_items:
             if ftype.name == "string":
                 lines.append(f"    zstr_free(p->{fname});\n")
-            elif ftype.name in self._class_names:
-                lines.append(f"    z_{ftype.name}_destroy(p->{fname});\n")
-            elif ftype.name in self._union_names:
+            elif ftype.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
                 lines.append(f"    z_{ftype.name}_destroy(p->{fname});\n")
         lines.append("    free(p);\n")
         lines.append("}\n\n")
@@ -2428,7 +2376,7 @@ class CEmitter:
                     and sub_ctype.endswith("_t")
                 ):
                     sub_name = sub_ctype[2:-2]  # z_foo_t -> foo
-                    if sub_name in self._variant_names:
+                    if self._typetype_of(sub_name) == ZTypeType.VARIANT:
                         # variant subtype: use its eq function
                         lines.append(
                             f" return z_{sub_name}_eq(a.data.{sname}, b.data.{sname});\n"
@@ -2549,7 +2497,7 @@ class CEmitter:
         saved_class_params = self._func_class_params
         self._func_class_params = set()
         # track parameters that are class pointers
-        if record_name in self._class_names:
+        if self._typetype_of(record_name) == ZTypeType.CLASS:
             for pname, ppath in func.parameters.items():
                 if pname.startswith(":"):
                     continue
@@ -2693,7 +2641,8 @@ class CEmitter:
                     self._class_var_types[cname] = assign.type.name
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
-        if isinstance(inner, zast.AtomId) and inner.name in self._record_names:
+        inner_resolved = self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
+        if inner_resolved and inner_resolved.typetype == ZTypeType.RECORD and inner_resolved.name == inner.name:
             ctype = f"z_{inner.name}_t"
         result = f"{indent}{ctype} {cname} = {val};\n"
         # nullify source on .take for class pointers
@@ -2783,7 +2732,7 @@ class CEmitter:
             if isinstance(call.callable.parent, zast.AtomId):
                 pname = call.callable.parent.name
                 child = call.callable.child.name
-                if pname in self._data_names and child == "index":
+                if self._typetype_of(pname) == ZTypeType.DATA and child == "index":
                     return True
         return False
 
@@ -3109,7 +3058,7 @@ class CEmitter:
             first_arg = call.arguments[0].valtype
             if (
                 isinstance(first_arg, zast.AtomId)
-                and first_arg.name in self._class_names
+                and first_arg.type and first_arg.type.typetype == ZTypeType.CLASS
                 and len(call.arguments) > 1
             ):
                 # emit as meta.create call
@@ -3228,8 +3177,8 @@ class CEmitter:
             name = op.name
             if (
                 not _is_numeric_id(name)
-                and name not in self._func_names
-                and name not in self._data_names
+                and self._typetype_of(name) != ZTypeType.FUNCTION
+                and self._typetype_of(name) != ZTypeType.DATA
                 and name not in self._const_names
             ):
                 return _mangle_var(name)
@@ -3282,7 +3231,7 @@ class CEmitter:
                 pname, _ = params[i]
                 if pname in ftype.param_defaults:
                     default = ftype.param_defaults[pname]
-                    if default in self._func_names:
+                    if self._typetype_of(default) == ZTypeType.FUNCTION:
                         default = _mangle_func(default)
                     parts.append(default)
 
@@ -3351,7 +3300,7 @@ class CEmitter:
             return self._emit_call_value(inner)
         if isinstance(inner, zast.Operation):
             # bare function name = call with all-default args
-            if isinstance(inner, zast.AtomId) and inner.name in self._func_names:
+            if isinstance(inner, zast.AtomId) and self._typetype_of(inner.name) == ZTypeType.FUNCTION:
                 ftype = inner.type
                 if ftype and ftype.param_defaults:
                     cname = _mangle_func(inner.name)
@@ -3361,7 +3310,7 @@ class CEmitter:
                             continue
                         if pname in ftype.param_defaults:
                             d = ftype.param_defaults[pname]
-                            if d in self._func_names:
+                            if self._typetype_of(d) == ZTypeType.FUNCTION:
                                 d = _mangle_func(d)
                             defaults.append(d)
                     return f"{cname}({', '.join(defaults)})"
@@ -3691,16 +3640,17 @@ class CEmitter:
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
         # check if this refers to a function, constant, data, or record
-        if (
-            name in self._func_names
-            or name in self._data_names
-            or name in self._const_names
-        ):
+        resolved = self._resolved_type(name)
+        tt = resolved.typetype if resolved else None
+        if tt in (ZTypeType.FUNCTION, ZTypeType.DATA):
             return _mangle_func(name)
-        if name in self._record_names:
+        if name in self._const_names:
+            return _mangle_func(name)
+        # only match user-defined records (not numeric constant aliases like north: 0)
+        if tt == ZTypeType.RECORD and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
             return f"z_{name}_create({zero_args})"
-        if name in self._class_names:
+        if tt == ZTypeType.CLASS and resolved.name == name:
             self.needs_stdlib = True
             ctype = f"z_{name}_t"
             zero_args = self._zero_args_for_ctypes(name)
@@ -3749,14 +3699,14 @@ class CEmitter:
     def _extract_unit_path(self, path: zast.Path) -> Optional[str]:
         """If path resolves to an inline unit, return its dotted name. Otherwise None."""
         if isinstance(path, zast.AtomId):
-            if path.name in self._unit_names:
+            if self._typetype_of(path.name) == ZTypeType.UNIT:
                 return path.name
             return None
         if isinstance(path, zast.DottedPath):
             parent_path = self._extract_unit_path(path.parent)
             if parent_path is not None:
                 qname = f"{parent_path}.{path.child.name}"
-                if qname in self._unit_names:
+                if self._typetype_of(qname) == ZTypeType.UNIT:
                     return qname
         return None
 
@@ -3788,24 +3738,25 @@ class CEmitter:
             if pname in self.program.units and pname not in ("system", "core", "io"):
                 return _mangle_func(f"{pname}.{child}")
             # inline unit.name reference
-            if pname in self._unit_names:
+            if self._typetype_of(pname) == ZTypeType.UNIT:
                 qname = f"{pname}.{child}"
                 # check if the child is itself a unit (nested)
-                if qname in self._unit_names:
+                if self._typetype_of(qname) == ZTypeType.UNIT:
                     # will be resolved by further dotted path traversal
                     return _mangle_func(qname)
                 return _mangle_func(qname)
             # record_name.method or class_name.method — method call with no extra args
-            if pname in self._record_names or pname in self._class_names:
+            ptt = self._typetype_of(pname)
+            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS):
                 return _mangle_func(f"{pname}.{child}")
             # union_name.subtype — emit null subtype construction
-            if pname in self._union_names:
+            if ptt == ZTypeType.UNION:
                 return self._emit_union_null_construction(pname, child)
             # variant_name.subtype — emit null subtype construction
-            if pname in self._variant_names:
+            if ptt == ZTypeType.VARIANT:
                 return self._emit_variant_null_construction(pname, child)
             # data.index call
-            if pname in self._data_names and child == "index":
+            if ptt == ZTypeType.DATA and child == "index":
                 return _mangle_func(pname)
 
         # check if parent resolves to a nested inline unit path
@@ -3964,7 +3915,7 @@ class CEmitter:
             ):
                 return True
             # class method parameter (this/type resolves to class pointer)
-            if self._current_record_name in self._class_names:
+            if self._typetype_of(self._current_record_name) == ZTypeType.CLASS:
                 if cname in self._func_class_params:
                     return True
         return False
@@ -3995,10 +3946,10 @@ class CEmitter:
             return True
         if isinstance(call.callable, zast.DottedPath):
             if isinstance(call.callable.parent, zast.AtomId):
-                if call.callable.parent.name in self._union_names:
+                if self._typetype_of(call.callable.parent.name) == ZTypeType.UNION:
                     return True
         if isinstance(call.callable, zast.AtomId):
-            if call.callable.name in self._union_names:
+            if self._typetype_of(call.callable.name) == ZTypeType.UNION:
                 return True
         return False
 
@@ -4141,10 +4092,10 @@ class CEmitter:
         """Check if a call is a variant construction (variant.subtype expr)."""
         if isinstance(call.callable, zast.DottedPath):
             if isinstance(call.callable.parent, zast.AtomId):
-                if call.callable.parent.name in self._variant_names:
+                if self._typetype_of(call.callable.parent.name) == ZTypeType.VARIANT:
                     return True
         if isinstance(call.callable, zast.AtomId):
-            if call.callable.name in self._variant_names:
+            if self._typetype_of(call.callable.name) == ZTypeType.VARIANT:
                 return True
         return False
 
