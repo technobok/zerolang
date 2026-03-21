@@ -3941,7 +3941,7 @@ class TestArrays:
         assert any("out of bounds" in e.msg for e in errors)
 
     def test_array_get_method(self):
-        """.get method is synthesized and returns option."""
+        """.get method is synthesized and returns element type."""
         program = check_ok("main: function is { a: (array of: i64 to: 4) }")
         monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
@@ -3951,10 +3951,10 @@ class TestArrays:
         assert get.typetype == ZTypeType.FUNCTION
         ret = get.children.get(":return")
         assert ret is not None
-        assert "option" in ret.name
+        assert ret.name == "i64"
 
     def test_array_set_method(self):
-        """.set method is synthesized and returns bool."""
+        """.set method is synthesized and returns element type."""
         program = check_ok("main: function is { a: (array of: i64 to: 4) }")
         monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
@@ -3964,7 +3964,7 @@ class TestArrays:
         assert set_.typetype == ZTypeType.FUNCTION
         ret = set_.children.get(":return")
         assert ret is not None
-        assert ret.name == "bool"
+        assert ret.name == "i64"
 
     def test_array_length_field(self):
         """.length is synthesized with correct default value."""

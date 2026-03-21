@@ -1625,7 +1625,7 @@ class CEmitter:
     def _emit_mono_array(self, mono_type: ZType) -> None:
         """Emit a monomorphized array type (struct, create, get, set, length)."""
         self.needs_stdint = True
-        self.needs_stdbool = True
+        self.needs_stdio = True
         name = mono_type.name
         ctype = f"z_{name}_t"
         elem_type = _array_element_type(mono_type)
@@ -1661,54 +1661,39 @@ class CEmitter:
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
-        # get method: returns option of element type
-        option_type = mono_type.children.get("get")
-        if option_type and option_type.typetype == ZTypeType.FUNCTION:
-            ret_type = option_type.children.get(":return")
-            if ret_type:
-                self.needs_stdlib = True
-                ret_ctype = _ctype(ret_type)
-                opt_name = ret_type.name
-                opt_struct = f"z_{opt_name}_t"
-                some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
-                none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
-                get_name = f"z_{name}_get"
-                lines.append(
-                    f"static {ret_ctype} {get_name}({ctype} _this, int64_t _idx);\n"
-                )
-                lines.append(
-                    f"static {ret_ctype} {get_name}({ctype} _this, int64_t _idx) {{\n"
-                )
-                lines.append(
-                    f"    {opt_struct}* _r = ({opt_struct}*)malloc(sizeof({opt_struct}));\n"
-                )
-                lines.append(f"    if (_idx >= 0 && _idx < {arr_len}) {{\n")
-                lines.append(f"        _r->tag = {some_tag};\n")
-                lines.append(
-                    f"        {elem_ctype}* _d = ({elem_ctype}*)malloc(sizeof({elem_ctype}));\n"
-                )
-                lines.append("        *_d = _this.data[_idx];\n")
-                lines.append("        _r->data = _d;\n")
-                lines.append("    } else {\n")
-                lines.append(f"        _r->tag = {none_tag};\n")
-                lines.append("        _r->data = NULL;\n")
-                lines.append("    }\n")
-                lines.append("    return _r;\n")
-                lines.append("}\n\n")
+        # get method: returns element, runtime error on OOB
+        self.needs_stdio = True
+        get_name = f"z_{name}_get"
+        lines.append(f"static {elem_ctype} {get_name}({ctype} _this, int64_t _idx);\n")
+        lines.append(
+            f"static {elem_ctype} {get_name}({ctype} _this, int64_t _idx) {{\n"
+        )
+        lines.append(f"    if (_idx < 0 || _idx >= {arr_len}) {{\n")
+        lines.append(
+            f'        fprintf(stderr, "array get: index %ld out of bounds (length {arr_len})\\n", (long)_idx);\n'
+        )
+        lines.append("        exit(1);\n")
+        lines.append("    }\n")
+        lines.append("    return _this.data[_idx];\n")
+        lines.append("}\n\n")
 
-        # set method: returns bool
+        # set method: returns old element, runtime error on OOB
         set_name = f"z_{name}_set"
         lines.append(
-            f"static bool {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val);\n"
+            f"static {elem_ctype} {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val);\n"
         )
         lines.append(
-            f"static bool {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val) {{\n"
+            f"static {elem_ctype} {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val) {{\n"
         )
-        lines.append(f"    if (_idx >= 0 && _idx < {arr_len}) {{\n")
-        lines.append("        _this->data[_idx] = _val;\n")
-        lines.append("        return true;\n")
+        lines.append(f"    if (_idx < 0 || _idx >= {arr_len}) {{\n")
+        lines.append(
+            f'        fprintf(stderr, "array set: index %ld out of bounds (length {arr_len})\\n", (long)_idx);\n'
+        )
+        lines.append("        exit(1);\n")
         lines.append("    }\n")
-        lines.append("    return false;\n")
+        lines.append(f"    {elem_ctype} _old = _this->data[_idx];\n")
+        lines.append("    _this->data[_idx] = _val;\n")
+        lines.append("    return _old;\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -3251,19 +3236,7 @@ class CEmitter:
                 arr_type_name = dp_parent_type.name
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
-                    result = f"z_{arr_type_name}_get({parent_val}, {idx_val})"
-                    # .get returns option (union pointer) — track as temp
-                    ret_type = call.type
-                    if ret_type and ret_type.typetype == ZTypeType.UNION:
-                        self._temp_counter += 1
-                        tmp = f"_c{self._temp_counter}"
-                        indent = self._indent()
-                        self._temp_decls.append(
-                            f"{indent}z_{ret_type.name}_t* {tmp} = {result};\n"
-                        )
-                        self._temp_frees.append(tmp)
-                        return tmp
-                    return result
+                    return f"z_{arr_type_name}_get({parent_val}, {idx_val})"
                 if method_name == "set" and len(call.arguments) >= 2:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     val_val = self._emit_operation_value(call.arguments[1].valtype)

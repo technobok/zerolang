@@ -2188,25 +2188,17 @@ class TypeChecker:
             mono.children["length"] = length_type
             if arr_len is not None:
                 mono.param_defaults["length"] = str(arr_len)
-            # synthesize .get method: function {i: i64} out option of: <elem>
+            # synthesize .get method: function {i: i64} out <elem>
             if elem_type:
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
                 get_type.children["i"] = self._resolve_name("i64") or self.t_null
-                # return type: option of: elem_type
-                option_template = self._resolve_name("option")
-                if option_template and option_template.isgeneric:
-                    option_defn = self._find_generic_defn(option_template)
-                    if option_defn:
-                        option_mono = self._monomorphize(
-                            option_template, {"t": elem_type}, option_defn
-                        )
-                        get_type.children[":return"] = option_mono
+                get_type.children[":return"] = elem_type
                 mono.children["get"] = get_type
-                # synthesize .set method: function {i: i64, val: <elem>} out bool
+                # synthesize .set method: function {i: i64, val: <elem>} out <elem>
                 set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
                 set_type.children["i"] = self._resolve_name("i64") or self.t_null
                 set_type.children["val"] = elem_type
-                set_type.children[":return"] = self._resolve_name("bool") or self.t_null
+                set_type.children[":return"] = elem_type
                 mono.children["set"] = set_type
 
         # for str types: set valtype, remove from field, synthesize length/capacity/string

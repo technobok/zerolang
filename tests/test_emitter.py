@@ -3177,43 +3177,88 @@ class TestArrayEmission:
         output = compile_and_run(csource)
         assert output.strip() == "99"
 
-    def test_array_set_returns_bool(self):
-        """.set returns true for in-bounds, false for out-of-bounds."""
+    def test_array_set_returns_old_value(self):
+        """.set returns old element value."""
         csource = emit_source(
             "main: function is {\n"
             "    a: (array of: i64 to: 4)\n"
-            "    ok: a.set i: 2 val: 99\n"
-            "    bad: a.set i: 10 val: 99\n"
-            '    print "\\{ok} \\{bad}"\n'
+            "    a.0 = 42\n"
+            "    old: a.set i: 0 val: 99\n"
+            '    print "\\{old} \\{a.0}"\n'
             "}"
         )
         output = compile_and_run(csource)
-        assert output.strip() == "1 0"
+        assert output.strip() == "42 99"
 
     def test_array_get_in_bounds(self):
-        """.get returns option.some for in-bounds access."""
+        """.get returns element value for in-bounds access."""
         csource = emit_source(
             "main: function is {\n"
             "    a: (array of: i64 to: 4)\n"
             "    a.0 = 42\n"
             "    r: a.get i: 0\n"
-            '    match (r) case some then { print "found" } case none then { print "empty" }\n'
+            '    print "\\{r}"\n'
             "}"
         )
         output = compile_and_run(csource)
-        assert output.strip() == "found"
+        assert output.strip() == "42"
 
-    def test_array_get_out_of_bounds(self):
-        """.get returns option.none for out-of-bounds access."""
+    def test_array_get_out_of_bounds_exits(self):
+        """.get exits with error for out-of-bounds access."""
+        csource = emit_source(
+            "main: function is {\n    a: (array of: i64 to: 4)\n    r: a.get i: 10\n}"
+        )
+        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+            f.write(csource)
+            cpath = f.name
+        outpath = cpath.replace(".c", "")
+        try:
+            subprocess.run(
+                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            result = subprocess.run(
+                [outpath], capture_output=True, text=True, timeout=10
+            )
+            assert result.returncode != 0
+            assert "out of bounds" in result.stderr
+        finally:
+            for p in (cpath, outpath):
+                if os.path.exists(p):
+                    os.unlink(p)
+
+    def test_array_set_out_of_bounds_exits(self):
+        """.set exits with error for out-of-bounds access."""
         csource = emit_source(
             "main: function is {\n"
             "    a: (array of: i64 to: 4)\n"
-            "    r: a.get i: 10\n"
-            '    match (r) case some then { print "found" } case none then { print "empty" }\n'
+            "    old: a.set i: 10 val: 99\n"
             "}"
         )
-        output = compile_and_run(csource)
-        assert output.strip() == "empty"
+        with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+            f.write(csource)
+            cpath = f.name
+        outpath = cpath.replace(".c", "")
+        try:
+            subprocess.run(
+                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=True,
+            )
+            result = subprocess.run(
+                [outpath], capture_output=True, text=True, timeout=10
+            )
+            assert result.returncode != 0
+            assert "out of bounds" in result.stderr
+        finally:
+            for p in (cpath, outpath):
+                if os.path.exists(p):
+                    os.unlink(p)
 
     def test_array_length_access(self):
         """.length returns the array size."""
