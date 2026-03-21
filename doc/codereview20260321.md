@@ -660,12 +660,12 @@ Every stage links back to the previous one via integer foreign keys. This enable
 
 #### Action Items
 
-- [ ] Add `node_id: int` to AST base class (auto-incrementing counter)
-- [ ] Add `token_id: int` to Token
-- [ ] Add `file_id: int` to VFS file entries
-- [ ] Implement `dump_sql()` method on each stage (VFS, Tokenizer, Parser, TypeChecker, Emitter)
-- [ ] Wire up back-references: AST nodes store `token_id`, typed nodes store `node_id`, emitted lines store `node_id`
-- [ ] Write integration test: compile a program, dump SQL, verify foreign key integrity
+- [x] Add `node_id: int` to AST base class (auto-incrementing counter) — `Node.nodeid` (Finding 7)
+- [x] Add `token_id: int` to Token — `Token.tokenid` (Finding 7)
+- [x] Add `file_id: int` to VFS file entries — `VFS.file_table()` (Finding 7)
+- [x] Implement `dump_sql()` method on each stage (VFS, Tokenizer, Parser, TypeChecker, Emitter) — `zsqldump.dump_sql()`
+- [x] Wire up back-references: AST nodes store `token_id`, typed nodes store `node_id`, emitted lines store `node_id`
+- [x] Write integration test: compile a program, dump SQL, verify foreign key integrity
 
 ---
 
@@ -833,11 +833,11 @@ return _ctype(fpath.type)  # no name-set lookup needed at all
 
 **Depends on:** Phase 1 only (for type metadata fields in SQL schema)
 
-- [ ] Add `node_id` to AST nodes
-- [ ] Add `token_id` to tokens
-- [ ] Expose `file_id` from VFS
-- [ ] Implement `dump_sql()` on each compiler stage
-- [ ] Write integration tests for SQL dump
+- [x] Add `node_id` to AST nodes — `Node.nodeid` (Finding 7)
+- [x] Add `token_id` to tokens — `Token.tokenid` (Finding 7)
+- [x] Expose `file_id` from VFS — `VFS.file_table()` (Finding 7)
+- [x] Implement `dump_sql()` on each compiler stage — `zsqldump.dump_sql()`
+- [x] Write integration tests for SQL dump
 
 ### Phase 8: Simplify Monomorphized Container Emission
 

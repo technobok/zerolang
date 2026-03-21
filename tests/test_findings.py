@@ -1,5 +1,5 @@
 """
-Tests for code review findings infrastructure (Findings 1, 3, 7, 8, 10).
+Tests for code review findings infrastructure (Findings 1, 3, 7, 8, 10, 11, 12, SQL).
 
 These test the new fields and metadata added during the code review:
 - Finding 1: type annotations on all Path nodes
@@ -7,9 +7,14 @@ These test the new fields and metadata added during the code review:
 - Finding 7: Token IDs, VFS file_table, CallKind, source map
 - Finding 8: file ID consistency
 - Finding 10: type annotation audit
+- Finding 11: ScopeState / TempState
+- Finding 12: self-hosting patterns
+- SQL schema: dump_sql integration
 """
 
 import os
+import sqlite3
+import tempfile
 
 from conftest import make_parser_vfs, collect_tokens
 from zparser import Parser
@@ -19,6 +24,7 @@ import zemitterc
 import zast
 from zast import CallKind
 from zvfs import ZVfs, FSProvider, StringProvider, BindType
+import zsqldump
 
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
@@ -764,3 +770,213 @@ class TestFinding12SelfHostingPatterns:
         parent.children["y"] = c2
         parent.children["z"] = c3
         assert list(parent.children.keys()) == ["x", "y", "z"]
+
+
+# ---- SQL Schema: dump_sql integration ----
+
+
+def _load_sql(sql: str) -> sqlite3.Connection:
+    """Execute SQL dump into an in-memory SQLite database."""
+    conn = sqlite3.connect(":memory:")
+    conn.executescript(sql)
+    return conn
+
+
+class TestSqlDump:
+    """SQL schema dump: compile a program, dump SQL, verify integrity."""
+
+    def test_dump_sql_produces_output(self):
+        """dump_sql should return non-empty SQL string."""
+        program = parse_and_check(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { print "\\{add a: 1 b: 2}" }'
+        )
+        sql = zsqldump.dump_sql(program)
+        assert len(sql) > 0
+        assert "CREATE TABLE" in sql
+        assert "INSERT INTO" in sql
+
+    def test_dump_sql_loads_into_sqlite(self):
+        """SQL dump should be valid SQLite."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is { print "ok" }'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        # basic sanity: tables exist
+        tables = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()
+        table_names = {t[0] for t in tables}
+        assert "files" in table_names
+        assert "tokens" in table_names
+        assert "ast_nodes" in table_names
+        assert "types" in table_names
+        assert "typed_nodes" in table_names
+        conn.close()
+
+    def test_files_table_populated(self):
+        """files table should contain compiled source files."""
+        program = parse_and_check('main: function is { print "hello" }')
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        rows = conn.execute("SELECT * FROM files").fetchall()
+        assert len(rows) >= 1
+        names = [r[1] for r in rows]
+        assert any("test.z" in n for n in names)
+        conn.close()
+
+    def test_tokens_table_populated(self):
+        """tokens table should contain parsed tokens."""
+        program = parse_and_check('main: function is { print "hello" }')
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        count = conn.execute("SELECT COUNT(*) FROM tokens").fetchone()[0]
+        assert count > 0
+        conn.close()
+
+    def test_ast_nodes_table_populated(self):
+        """ast_nodes table should contain parsed AST nodes."""
+        program = parse_and_check(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { print "\\{add a: 1 b: 2}" }'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        count = conn.execute("SELECT COUNT(*) FROM ast_nodes").fetchone()[0]
+        assert count > 0
+        # should have Function nodes
+        funcs = conn.execute(
+            "SELECT name FROM ast_nodes WHERE kind = 'Function'"
+        ).fetchall()
+        func_names = [r[0] for r in funcs]
+        assert any("add" in n for n in func_names)
+        conn.close()
+
+    def test_types_table_populated(self):
+        """types table should contain resolved types."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is {\n    p: point x: 1.0 y: 2.0\n    print "ok"\n}'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        count = conn.execute("SELECT COUNT(*) FROM types").fetchone()[0]
+        assert count > 0
+        # check for specific type
+        rows = conn.execute(
+            "SELECT name, typetype FROM types WHERE name = 'point'"
+        ).fetchall()
+        assert len(rows) >= 1
+        assert rows[0][1] == "RECORD"
+        conn.close()
+
+    def test_typed_nodes_populated(self):
+        """typed_nodes should link AST nodes to types."""
+        program = parse_and_check(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { print "\\{add a: 1 b: 2}" }'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        count = conn.execute("SELECT COUNT(*) FROM typed_nodes").fetchone()[0]
+        assert count > 0
+        conn.close()
+
+    def test_emitted_lines_populated(self):
+        """emitted_lines should be populated when emitter is provided."""
+        csource, emitter = emit_with_emitter(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is { print "hello" }'
+        )
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is { print "hello" }'
+        )
+        emitter2 = zemitterc.CEmitter(program)
+        csource2 = emitter2.emit()
+        sql = zsqldump.dump_sql(program, emitter=emitter2, csource=csource2)
+        conn = _load_sql(sql)
+        count = conn.execute("SELECT COUNT(*) FROM emitted_lines").fetchone()[0]
+        assert count > 0
+        # some lines should map back to AST nodes
+        mapped = conn.execute(
+            "SELECT COUNT(*) FROM emitted_lines WHERE node_id IS NOT NULL"
+        ).fetchone()[0]
+        assert mapped > 0
+        conn.close()
+
+    def test_foreign_key_integrity(self):
+        """All foreign keys should be valid (no dangling references)."""
+        program = parse_and_check(
+            "box: class { value: i64 }\n"
+            'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
+        )
+        emitter = zemitterc.CEmitter(program)
+        csource = emitter.emit()
+        sql = zsqldump.dump_sql(program, emitter=emitter, csource=csource)
+        conn = _load_sql(sql)
+        conn.execute("PRAGMA foreign_keys = ON")
+
+        # tokens → files: every token.file_id should exist in files
+        orphan_tokens = conn.execute("""
+            SELECT COUNT(*) FROM tokens t
+            WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.file_id = t.file_id)
+        """).fetchone()[0]
+        assert orphan_tokens == 0, f"{orphan_tokens} tokens reference missing files"
+
+        # typed_nodes → ast_nodes: every typed_nodes.node_id should exist in ast_nodes
+        orphan_typed = conn.execute("""
+            SELECT COUNT(*) FROM typed_nodes tn
+            WHERE NOT EXISTS (SELECT 1 FROM ast_nodes a WHERE a.node_id = tn.node_id)
+        """).fetchone()[0]
+        assert orphan_typed == 0, f"{orphan_typed} typed_nodes reference missing ast_nodes"
+
+        # typed_nodes → types: every typed_nodes.type_id should exist in types
+        orphan_type_refs = conn.execute("""
+            SELECT COUNT(*) FROM typed_nodes tn
+            WHERE tn.type_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM types t WHERE t.type_id = tn.type_id)
+        """).fetchone()[0]
+        assert orphan_type_refs == 0, f"{orphan_type_refs} typed_nodes reference missing types"
+
+        # emitted_lines → ast_nodes (where node_id is not null)
+        orphan_emitted = conn.execute("""
+            SELECT COUNT(*) FROM emitted_lines el
+            WHERE el.node_id IS NOT NULL
+            AND NOT EXISTS (SELECT 1 FROM ast_nodes a WHERE a.node_id = el.node_id)
+        """).fetchone()[0]
+        assert orphan_emitted == 0, f"{orphan_emitted} emitted_lines reference missing ast_nodes"
+
+        conn.close()
+
+    def test_type_children_populated(self):
+        """type_children should link parent types to their children."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is { print "ok" }'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        count = conn.execute("SELECT COUNT(*) FROM type_children").fetchone()[0]
+        assert count > 0
+        conn.close()
+
+    def test_destructor_metadata_in_types(self):
+        """Types with destructors should have needs_destructor and destructor_name."""
+        program = parse_and_check(
+            "box: class { value: i64 }\n"
+            'main: function is {\n    b: box value: 42\n    print "ok"\n}'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        row = conn.execute(
+            "SELECT needs_destructor, destructor_name, is_heap_allocated "
+            "FROM types WHERE name = 'box'"
+        ).fetchone()
+        assert row is not None, "box type not in types table"
+        assert row[0] == 1  # needs_destructor
+        assert row[1] == "z_box_destroy"
+        assert row[2] == 1  # is_heap_allocated
+        conn.close()
