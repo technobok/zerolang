@@ -825,12 +825,12 @@ class CEmitter:
     def _emit_func_typedef(self, name: str, func: zast.Function) -> None:
         """Emit a C typedef for a function (placed after struct defs)."""
         self.needs_stdint = True
-        ret_ctype = self._resolve_return_ctype(func)
+        ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             if pname.startswith(":"):
                 continue
-            ptype_str = self._resolve_param_ctype(ppath)
+            ptype_str = _ctype(ppath.type)
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         cname = name.replace(".", "_")
@@ -841,12 +841,12 @@ class CEmitter:
     def _emit_spec_typedef(self, name: str, func: zast.Function) -> None:
         """Emit a C typedef for a spec (function pointer type)."""
         self.needs_stdint = True
-        ret_ctype = self._resolve_return_ctype(func)
+        ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             if pname.startswith(":"):
                 continue
-            ptype_str = self._resolve_param_ctype(ppath)
+            ptype_str = _ctype(ppath.type)
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         cname = name.replace(".", "_")
@@ -875,12 +875,12 @@ class CEmitter:
         # vtable struct — function pointers with void* as first param
         lines.append("typedef struct {\n")
         for sname, sfunc in proto.specs.items():
-            ret_ctype = self._resolve_return_ctype(sfunc)
+            ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             for pname, ppath in sfunc.parameters.items():
                 if pname.startswith(":") or pname == "this":
                     continue
-                params.append(self._resolve_param_ctype(ppath))
+                params.append(_ctype(ppath.type))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
@@ -924,12 +924,12 @@ class CEmitter:
         for sname in proto.specs:
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
-                ret_ctype = self._resolve_return_ctype(mfunc, record_name=impl_name)
+                ret_ctype = self._return_ctype(mfunc)
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
                     if pname.startswith(":"):
                         continue
-                    ptype_str = self._resolve_param_ctype(ppath, record_name=impl_name)
+                    ptype_str = _ctype(ppath.type)
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
                 method_cname = _mangle_func(f"{impl_name}.{sname}")
@@ -938,14 +938,14 @@ class CEmitter:
 
         # wrapper functions for each spec
         for sname, sfunc in proto.specs.items():
-            ret_ctype = self._resolve_return_ctype(sfunc)
+            ret_ctype = self._return_ctype(sfunc)
             # wrapper params: void* _data, then remaining non-this params
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
                 if pname.startswith(":") or pname == "this":
                     continue
-                pctype = self._resolve_param_ctype(ppath)
+                pctype = _ctype(ppath.type)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
@@ -1054,12 +1054,12 @@ class CEmitter:
         # vtable struct — function pointers with void* as first param (same as protocol)
         lines.append("typedef struct {\n")
         for sname, sfunc in facet.specs.items():
-            ret_ctype = self._resolve_return_ctype(sfunc)
+            ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             for pname, ppath in sfunc.parameters.items():
                 if pname.startswith(":") or pname == "this":
                     continue
-                params.append(self._resolve_param_ctype(ppath))
+                params.append(_ctype(ppath.type))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
@@ -1103,12 +1103,12 @@ class CEmitter:
         for sname in facet.specs:
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
-                ret_ctype = self._resolve_return_ctype(mfunc, record_name=impl_name)
+                ret_ctype = self._return_ctype(mfunc)
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
                     if pname.startswith(":"):
                         continue
-                    ptype_str = self._resolve_param_ctype(ppath, record_name=impl_name)
+                    ptype_str = _ctype(ppath.type)
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
                 method_cname = _mangle_func(f"{impl_name}.{sname}")
@@ -1117,13 +1117,13 @@ class CEmitter:
 
         # wrapper functions for each spec
         for sname, sfunc in facet.specs.items():
-            ret_ctype = self._resolve_return_ctype(sfunc)
+            ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
                 if pname.startswith(":") or pname == "this":
                     continue
-                pctype = self._resolve_param_ctype(ppath)
+                pctype = _ctype(ppath.type)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
@@ -1210,12 +1210,12 @@ class CEmitter:
     ) -> str:
         """Get the full C struct field declaration for a function pointer in an 'is' section.
         Returns e.g. 'int64_t (*callback)(int64_t, int64_t)'"""
-        ret_ctype = self._resolve_return_ctype(mfunc, record_name=parent_name)
+        ret_ctype = self._return_ctype(mfunc)
         params: List[str] = []
         for pname, ppath in mfunc.parameters.items():
             if pname.startswith(":"):
                 continue
-            ptype_str = self._resolve_param_ctype(ppath, record_name=parent_name)
+            ptype_str = _ctype(ppath.type)
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         return f"{ret_ctype} (*{mname})({param_str})"
@@ -1237,12 +1237,12 @@ class CEmitter:
             field_names.append(fname)
             field_ctypes.append(fct)
         for mname, mfunc in functions.items():
-            ret_ctype = self._resolve_return_ctype(mfunc, record_name=name)
+            ret_ctype = self._return_ctype(mfunc)
             fp_params: List[str] = []
             for pname, ppath in mfunc.parameters.items():
                 if pname.startswith(":"):
                     continue
-                fp_params.append(self._resolve_param_ctype(ppath, record_name=name))
+                fp_params.append(_ctype(ppath.type))
             fp_param_str = ", ".join(fp_params) if fp_params else "void"
             fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
             params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
@@ -2450,10 +2450,7 @@ class CEmitter:
                 f"static const int64_t {cname}_len = {len(values)};\n\n"
             )
 
-    def _resolve_param_ctype(self, ppath: zast.Path, record_name: str = "") -> str:
-        return _ctype(ppath.type)
-
-    def _resolve_return_ctype(self, func: zast.Function, record_name: str = "") -> str:
+    def _return_ctype(self, func: zast.Function) -> str:
         if not func.returntype:
             return "void"
         ct = _ctype(func.returntype.type)
@@ -2470,12 +2467,12 @@ class CEmitter:
         """Emit a forward declaration for a deduped alias function."""
         self.needs_stdint = True
         cname = _mangle_func(name)
-        ret_ctype = self._resolve_return_ctype(func, record_name)
+        ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             if pname.startswith(":"):
                 continue
-            ptype_str = self._resolve_param_ctype(ppath, record_name)
+            ptype_str = _ctype(ppath.type)
             params.append(f"{ptype_str} {_mangle_var(pname)}")
         param_str = ", ".join(params) if params else "void"
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
@@ -2486,14 +2483,14 @@ class CEmitter:
         self.needs_stdint = True
         cname = _mangle_func(name)
 
-        ret_ctype = self._resolve_return_ctype(func, record_name)
+        ret_ctype = self._return_ctype(func)
 
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             # skip hidden :this parameter (unnamed first param of methods)
             if pname.startswith(":"):
                 continue
-            ptype_str = self._resolve_param_ctype(ppath, record_name)
+            ptype_str = _ctype(ppath.type)
             params.append(f"{ptype_str} {_mangle_var(pname)}")
 
         param_str = ", ".join(params) if params else "void"
@@ -2528,7 +2525,7 @@ class CEmitter:
             for pname, ppath in func.parameters.items():
                 if pname.startswith(":"):
                     continue
-                ptype_str = self._resolve_param_ctype(ppath, record_name)
+                ptype_str = _ctype(ppath.type)
                 if ptype_str.endswith("*") and ptype_str.startswith("z_"):
                     self._func_class_params.add(_mangle_var(pname))
 

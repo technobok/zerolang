@@ -1,17 +1,19 @@
 """
-Tests for code review findings infrastructure (Findings 1, 3, 7).
+Tests for code review findings infrastructure (Findings 1, 3, 7, 8, 10).
 
 These test the new fields and metadata added during the code review:
 - Finding 1: type annotations on all Path nodes
 - Finding 3: destructor metadata on ZType
 - Finding 7: Token IDs, VFS file_table, CallKind, source map
+- Finding 8: file ID consistency
+- Finding 10: type annotation audit
 """
 
 import os
 
 from conftest import make_parser_vfs, collect_tokens
 from zparser import Parser
-from ztypecheck import typecheck
+from ztypecheck import typecheck, audit_type_annotations
 from ztypechecker import ZTypeType
 import zemitterc
 import zast
@@ -483,3 +485,129 @@ class TestFinding7SourceMap:
         assert len(main_lines) > 0, "No z_main body lines found"
         for lineno, nid in main_lines:
             assert nid is not None, f"Line {lineno} has z_main body but no node ID"
+
+
+# ---- Finding 10: Type annotation audit ----
+
+
+class TestFinding10TypeAnnotationAudit:
+    """Finding 10: audit_type_annotations should detect missing .type."""
+
+    def test_audit_clean_for_simple_program(self):
+        program = parse_and_check(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is {\n    x: add a: 1 b: 2\n    print "ok"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_record_fields(self):
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is {\n    p: point\n    print "ok"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_class(self):
+        program = parse_and_check(
+            "box: class is { value: i64 }\n"
+            'main: function is {\n    b: box value: 42\n    print "ok"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_union(self):
+        program = parse_and_check(
+            "result: union is { ok: i64  err: string }\n"
+            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_string_operations(self):
+        program = parse_and_check(
+            'main: function is {\n    s: "hello"\n    print s\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_skips_binop_operator(self):
+        """Binary operators like + should not require .type."""
+        program = parse_and_check(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is {\n    print "\\{add a: 1 b: 2}"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert not any("+'" in m for m in missing), f"Operator + flagged: {missing}"
+
+    def test_audit_skips_data_values(self):
+        """Numeric literals in data arrays should not require .type."""
+        program = parse_and_check(
+            'primes: data is { 2 3 5 7 }\nmain: function is { print "ok" }'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Data values flagged: {missing}"
+
+    def test_audit_skips_constants(self):
+        """Top-level numeric constants should not require .type."""
+        program = parse_and_check(
+            'north: 0\nsouth: 1\nmain: function is { print "ok" }'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Constants flagged: {missing}"
+
+    def test_audit_clean_for_variant(self):
+        """Variant subtype types should be annotated."""
+        program = parse_and_check(
+            "shape: variant is { circle: f64  square: f64  none: null }\n"
+            'main: function is {\n    s: shape.circle 3.14\n    print "ok"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_method_params(self):
+        """Method parameters in class 'as' blocks should be annotated."""
+        program = parse_and_check(
+            "counter: class {\n"
+            "    value: i64\n"
+            "} as {\n"
+            "    get: function {c: this} out i64 is { return c.value }\n"
+            "}\n"
+            'main: function is {\n    c: counter value: 0\n    print "\\{counter.get c}"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_spec(self):
+        """Spec (function pointer type) parameters should be annotated."""
+        program = parse_and_check(
+            "binop: function {a: i64 b: i64} out i64\n"
+            "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
+            "    result: f a: a b: b\n"
+            "    return result\n"
+            "}\n"
+            'main: function is {\n    print "ok"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_nested_expressions(self):
+        """Nested if/then/else expressions should have annotated paths."""
+        program = parse_and_check(
+            "abs: function {x: i64} out i64 is {\n"
+            "    if x < 0 then return 0 - x else return x\n"
+            "}\n"
+            'main: function is { print "\\{abs x: -5}" }'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"
+
+    def test_audit_clean_for_dotted_path_access(self):
+        """Dotted path access (field reads) should be annotated."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is {\n    p: point x: 1.0 y: 2.0\n    print "\\{p.x}"\n}'
+        )
+        missing = audit_type_annotations(program)
+        assert missing == [], f"Unexpected missing annotations: {missing}"

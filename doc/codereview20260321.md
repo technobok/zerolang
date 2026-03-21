@@ -360,11 +360,11 @@ This pattern means the type checker doesn't consistently annotate all AST nodes.
 
 #### Action Items
 
-- [ ] Add a post-type-check validation pass that asserts every `Path` node has a `.type` attribute
-- [ ] Fix the type checker to annotate all missing nodes
-- [ ] Once all nodes are annotated, remove all `hasattr`/`getattr` fallbacks
-- [ ] Remove the 5 fallback resolution functions (Finding 1)
-- [ ] Consider making `.type` a required field on AST Path nodes (default `None`, assert not-None after type checking)
+- [x] Add a post-type-check validation pass that asserts every `Path` node has a `.type` attribute
+- [x] Fix the type checker to annotate all missing nodes
+- [x] Once all nodes are annotated, remove all `hasattr`/`getattr` fallbacks
+- [x] Remove the 5 fallback resolution functions (Finding 1)
+- [x] Consider making `.type` a required field on AST Path nodes (default `None`, assert not-None after type checking)
 
 ---
 
