@@ -442,11 +442,11 @@ These aren't bugs but they add translation friction. Each pattern should be repl
 
 #### Action Items
 
-- [ ] Replace `count().__next__` with an explicit `_next_type_id: int` module variable and `_alloc_type_id()` function
-- [ ] Evaluate whether `OrderedDict` insertion order matters (Python 3.7+ dicts are ordered) — if so, use plain `dict`; if key ordering matters, use `list[tuple]`
-- [ ] Remove `threading.Lock` from `TypeTable` (single-threaded compiler)
-- [ ] Replace `NewType` with plain `int` aliases with naming convention
-- [ ] Add a comment noting each replacement for future reference
+- [x] Replace `count().__next__` with an explicit `_next_type_id: int` module variable and `_alloc_type_id()` function
+- [x] Evaluate whether `OrderedDict` insertion order matters (Python 3.7+ dicts are ordered) — if so, use plain `dict`; if key ordering matters, use `list[tuple]`
+- [x] Remove `threading.Lock` from `TypeTable` (single-threaded compiler)
+- [x] Replace `NewType` with plain `int` aliases with naming convention
+- [x] Add a comment noting each replacement for future reference
 
 ---
 

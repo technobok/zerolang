@@ -4,12 +4,9 @@ ZeroLang type checker
 Type definitions and type checking pass for the AST.
 """
 
-import threading
 from enum import IntEnum, unique
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List, NewType, cast, Callable, Tuple
-from collections import OrderedDict
-from itertools import count
+from typing import Dict, Optional, List, Tuple
 
 
 @unique
@@ -90,8 +87,19 @@ class ZNaming(IntEnum):
     NAMED = 1
 
 
-# a typesafe type id
-TypeID = NewType("TypeID", int)
+# plain int alias for type IDs (replaces NewType for self-hosting simplicity)
+TypeID = int
+
+# module-level counters for auto-incrementing IDs
+_next_type_id: int = 0
+
+
+def _alloc_type_id() -> int:
+    """Allocate the next auto-incrementing type ID."""
+    global _next_type_id
+    tid = _next_type_id
+    _next_type_id += 1
+    return tid
 
 
 @dataclass
@@ -116,15 +124,14 @@ class ZType:
     semantics.
     """
 
-    nodeid: TypeID = field(
-        default_factory=cast(Callable[[], TypeID], count().__next__), init=False
-    )
+    nodeid: int = field(default_factory=_alloc_type_id, init=False)
 
     name: str
     typetype: ZTypeType
     parent: "Optional[ZType]"
 
-    children: "OrderedDict[str, ZType]" = field(default_factory=OrderedDict, init=False)
+    # plain dict (insertion-ordered since Python 3.7+, replaces OrderedDict)
+    children: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
     isgeneric: bool = False
     isliteral: bool = False
@@ -141,17 +148,13 @@ class ZType:
     param_defaults: "dict[str, str]" = field(default_factory=dict, init=False)
 
     # generic type parameters: param name → constraint ZType (for template types)
-    generic_params: "OrderedDict[str, ZType]" = field(
-        default_factory=OrderedDict, init=False
-    )
+    generic_params: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
     # for monomorphized types: points to the original template type (or "tag" sentinel)
     generic_origin: "Optional[ZType | str]" = field(default=None, init=False)
 
     # for monomorphized types: maps param name → concrete ZType
-    generic_args: "OrderedDict[str, ZType]" = field(
-        default_factory=OrderedDict, init=False
-    )
+    generic_args: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
     # names of generic params that are numeric (constraint is a numeric type)
     numeric_generic_params: "set[str]" = field(default_factory=set, init=False)
@@ -168,8 +171,18 @@ class ZType:
     is_heap_allocated: bool = field(default=False, init=False)
 
 
-# a typesafe variable id
-VariableID = NewType("VariableID", int)
+# plain int alias for variable IDs (replaces NewType for self-hosting simplicity)
+VariableID = int
+
+_next_variable_id: int = 0
+
+
+def _alloc_variable_id() -> int:
+    """Allocate the next auto-incrementing variable ID."""
+    global _next_variable_id
+    vid = _next_variable_id
+    _next_variable_id += 1
+    return vid
 
 
 @dataclass
@@ -191,9 +204,7 @@ class ZVariable:
     ZVariable - type + ownership + lock info for a variable/expression
     """
 
-    variableid: VariableID = field(
-        default_factory=cast(Callable[[], VariableID], count().__next__), init=False
-    )
+    variableid: int = field(default_factory=_alloc_variable_id, init=False)
     ztype: ZType
     ownership: ZOwnership
     named: ZNaming
@@ -205,23 +216,22 @@ class ZVariable:
 
 class TypeTable:
     """
-    TypeTable - table of all types for a program
+    TypeTable - table of all types for a program.
+    Single-threaded — no locking needed.
     """
 
     def __init__(self) -> None:
         self._table: List[ZType] = []
-        self._lock = threading.Lock()
 
-    def __getitem__(self, index: TypeID) -> ZType:
+    def __getitem__(self, index: int) -> ZType:
         return self._table[index]
 
-    def _append(self, typeitem: ZType) -> TypeID:
-        with self._lock:
-            idx = TypeID(len(self._table))
-            self._table.append(typeitem)
+    def _append(self, typeitem: ZType) -> int:
+        idx = len(self._table)
+        self._table.append(typeitem)
         return idx
 
-    def add(self, name: str, typetype: ZTypeType) -> TypeID:
+    def add(self, name: str, typetype: ZTypeType) -> int:
         t = ZType(name=name, typetype=typetype, parent=None)
         return self._append(t)
 

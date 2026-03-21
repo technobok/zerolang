@@ -704,3 +704,63 @@ class TestFinding11ScopeState:
         assert len(s.cleanup_vars) == 1
         assert s.cleanup_vars[0][0] == "myvar"
         assert s.cleanup_vars[0][1].destructor_name == "z_box_destroy"
+
+
+# ---- Finding 12: Python-specific patterns simplified for self-hosting ----
+
+
+class TestFinding12SelfHostingPatterns:
+    """Finding 12: Python-specific patterns replaced with simpler equivalents."""
+
+    def test_type_ids_are_plain_ints(self):
+        """TypeID and VariableID should be plain int aliases, not NewType."""
+        from ztypechecker import TypeID, VariableID
+        # plain int aliases: TypeID is int, VariableID is int
+        assert TypeID is int
+        assert VariableID is int
+
+    def test_type_ids_auto_increment(self):
+        """ZType.nodeid should auto-increment via _alloc_type_id."""
+        from ztypechecker import ZType, ZTypeType
+        t1 = ZType(name="a", typetype=ZTypeType.RECORD, parent=None)
+        t2 = ZType(name="b", typetype=ZTypeType.RECORD, parent=None)
+        assert isinstance(t1.nodeid, int)
+        assert isinstance(t2.nodeid, int)
+        assert t2.nodeid > t1.nodeid
+
+    def test_variable_ids_auto_increment(self):
+        """ZVariable.variableid should auto-increment via _alloc_variable_id."""
+        from ztypechecker import ZVariable, ZType, ZTypeType, ZOwnership, ZNaming
+        t = ZType(name="x", typetype=ZTypeType.RECORD, parent=None)
+        v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        assert isinstance(v1.variableid, int)
+        assert v2.variableid > v1.variableid
+
+    def test_no_threading_in_typetable(self):
+        """TypeTable should not use threading.Lock."""
+        import inspect
+        from ztypechecker import TypeTable
+        source = inspect.getsource(TypeTable)
+        assert "threading" not in source
+        assert "Lock" not in source
+
+    def test_no_ordered_dict_in_ztype(self):
+        """ZType fields should use plain dict, not OrderedDict."""
+        from ztypechecker import ZType, ZTypeType
+        t = ZType(name="test", typetype=ZTypeType.RECORD, parent=None)
+        assert type(t.children) is dict
+        assert type(t.generic_params) is dict
+        assert type(t.generic_args) is dict
+
+    def test_children_dict_preserves_order(self):
+        """Plain dict should preserve insertion order (Python 3.7+)."""
+        from ztypechecker import ZType, ZTypeType
+        parent = ZType(name="rec", typetype=ZTypeType.RECORD, parent=None)
+        c1 = ZType(name="x", typetype=ZTypeType.RECORD, parent=parent)
+        c2 = ZType(name="y", typetype=ZTypeType.RECORD, parent=parent)
+        c3 = ZType(name="z", typetype=ZTypeType.RECORD, parent=parent)
+        parent.children["x"] = c1
+        parent.children["y"] = c2
+        parent.children["z"] = c3
+        assert list(parent.children.keys()) == ["x", "y", "z"]

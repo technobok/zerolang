@@ -6,7 +6,6 @@ Includes ownership checking (Phase 4c).
 """
 
 from typing import Optional, List, Tuple
-from collections import OrderedDict
 
 import zast
 from zast import ERR, clone_function
@@ -2101,7 +2100,7 @@ class TypeChecker:
         # create monomorphized type
         mono = _make_type(mangled, template_type.typetype)
         mono.generic_origin = template_type
-        mono.generic_args = OrderedDict(generic_args)
+        mono.generic_args = dict(generic_args)
         mono.is_valtype = template_type.is_valtype
         _set_destructor_metadata(mono)
 
