@@ -216,6 +216,19 @@ def _mangle_var(name: str) -> str:
     return name
 
 
+class TrackedList(list):
+    """A list that records the emitter's _current_node_id alongside each appended item."""
+
+    def __init__(self, emitter: "CEmitter"):
+        super().__init__()
+        self._emitter = emitter
+        self.node_ids: List[Optional[int]] = []
+
+    def append(self, item: str) -> None:
+        super().append(item)
+        self.node_ids.append(self._emitter._current_node_id)
+
+
 def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
     """Check if a name refers to a unit-level definition."""
     return (
@@ -235,10 +248,14 @@ class CEmitter:
         self.needs_stdbool = False
         self.needs_string = False
         self.forward_decls: List[str] = []
-        self.struct_defs: List[str] = []
-        self.func_defs: List[str] = []
-        self.data_defs: List[str] = []
+        self.struct_defs: "TrackedList" = TrackedList(self)
+        self.func_defs: "TrackedList" = TrackedList(self)
+        self.data_defs: "TrackedList" = TrackedList(self)
         self.func_aliases: List[str] = []  # #define aliases for deduped functions
+        # current AST node ID being emitted (set before emission blocks)
+        self._current_node_id: Optional[int] = None
+        # final source map: C output line (1-based) → AST node ID
+        self.source_map: List[Optional[int]] = []
         # track numeric constant names (no distinct ZTypeType for these)
         self._const_names: set[str] = set()
         self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
@@ -295,6 +312,49 @@ class CEmitter:
         """Get the ZTypeType for a resolved name, or None if not found."""
         t = self._resolved_type(name)
         return t.typetype if t else None
+
+    def _build_source_map(self, output: str) -> None:
+        """Build source_map: for each C output line, the AST node ID that produced it.
+
+        Uses the tracked node IDs from struct_defs, func_defs, data_defs.
+        Lines from boilerplate (includes, ZStr runtime, main wrapper) get None.
+        """
+        # build a set of (line_start_offset, node_id) from tracked sections
+        offset_to_node: List[tuple] = []
+        for section in (self.struct_defs, self.func_defs, self.data_defs):
+            if isinstance(section, TrackedList):
+                for text, nid in zip(section, section.node_ids):
+                    pos = output.find(text)
+                    if pos >= 0:
+                        offset_to_node.append((pos, len(text), nid))
+
+        # sort by position
+        offset_to_node.sort()
+
+        # for each output line, find which section block it falls in
+        lines = output.split("\n")
+        self.source_map = []
+        char_pos = 0
+        block_idx = 0
+        for line in lines:
+            line_end = char_pos + len(line)
+            node_id = None
+            # find the block that contains this line
+            while block_idx < len(offset_to_node):
+                bpos, blen, bnid = offset_to_node[block_idx]
+                if char_pos >= bpos and char_pos < bpos + blen:
+                    node_id = bnid
+                    break
+                if bpos > char_pos:
+                    break
+                block_idx += 1
+            # re-check current block (block_idx may have advanced past)
+            if block_idx > 0:
+                bpos, blen, bnid = offset_to_node[block_idx - 1]
+                if char_pos >= bpos and char_pos < bpos + blen:
+                    node_id = bnid
+            self.source_map.append(node_id)
+            char_pos = line_end + 1  # +1 for the \n
 
     def _is_typedef(self, name: str) -> bool:
         """Check if a name is a typedef (has a typedef_base in the resolved type)."""
@@ -477,6 +537,8 @@ class CEmitter:
             qname = self._qualify(prefix, name)
             if self._is_generic_template(defn):
                 continue
+            # tag emitted output with the source AST node ID
+            self._current_node_id = defn.nodeid if hasattr(defn, "nodeid") else None
             defn_type = type(defn)
             if defn_type == zast.Unit:
                 self._emit_unit_definitions(qname, defn.body)
@@ -607,6 +669,7 @@ class CEmitter:
         for mono_type, template_defn in getattr(self.program, "mono_types", []):
             if _is_str_type(mono_type):
                 continue
+            self._current_node_id = mono_type.nodeid
             self._emit_mono_type(mono_type, template_defn)
 
         for unitname, unit in self.program.units.items():
@@ -614,6 +677,7 @@ class CEmitter:
                 continue
             for name, defn in unit.body.items():
                 if isinstance(defn, zast.Function) and defn.body:
+                    self._current_node_id = defn.nodeid
                     self._emit_function(f"{unitname}.{name}", defn)
 
         # assemble output
@@ -695,7 +759,7 @@ class CEmitter:
             parts.append(st)
         if self.spec_typedefs:
             parts.append("\n")
-        for sd in self.struct_defs:
+        for i, sd in enumerate(self.struct_defs):
             parts.append(sd)
         for ft in self.func_typedefs:
             parts.append(ft)
@@ -709,9 +773,9 @@ class CEmitter:
             parts.append(fa)
         if self.func_aliases:
             parts.append("\n")
-        for dd in self.data_defs:
+        for i, dd in enumerate(self.data_defs):
             parts.append(dd)
-        for fd in self.func_defs:
+        for i, fd in enumerate(self.func_defs):
             parts.append(fd)
 
         parts.append("int main(int argc, char* argv[]) {\n")
@@ -719,7 +783,13 @@ class CEmitter:
         parts.append("    return 0;\n")
         parts.append("}\n")
 
-        return "".join(parts)
+        output = "".join(parts)
+
+        # build source map: for each output line, find the node ID
+        # by walking the tracked output sections
+        self._build_source_map(output)
+
+        return output
 
     def _emit_func_typedef(self, name: str, func: zast.Function) -> None:
         """Emit a C typedef for a function (placed after struct defs)."""
