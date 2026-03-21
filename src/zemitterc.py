@@ -319,6 +319,15 @@ class CEmitter:
         self._temp_decls.append(f"{indent}{ctype} {name} = {expr};\n")
         return name
 
+    def _emit_field_cleanup(self, access: str, ftype: ZType, indent: str = "    ") -> str:
+        """Emit cleanup code for a single field/variable given its ZType.
+
+        Returns a C statement string (with newline) or empty string if no cleanup needed.
+        """
+        if ftype.needs_destructor and ftype.destructor_name:
+            return f"{indent}{ftype.destructor_name}({access});\n"
+        return ""
+
     def _static_string(self, escaped: str) -> str:
         """Return the name of a static ZStr for this literal, deduplicating."""
         if escaped in self._string_literals:
@@ -897,14 +906,8 @@ class CEmitter:
             lines.append(f"    {impl_ctype}* r = ({impl_ctype}*)p;\n")
             # cleanup reftype fields
             for fname, fpath in impl_defn.items.items():
-                ftype_name = fpath.type.name if fpath.type else None
-                ftype_type = fpath.type.typetype if fpath.type else None
-                if ftype_name == "string":
-                    lines.append(f"    zstr_free(r->{fname});\n")
-                elif ftype_type == ZTypeType.CLASS:
-                    lines.append(f"    z_{ftype_name}_destroy(r->{fname});\n")
-                elif ftype_type == ZTypeType.UNION:
-                    lines.append(f"    z_{ftype_name}_destroy(r->{fname});\n")
+                if fpath.type:
+                    lines.append(self._emit_field_cleanup(f"r->{fname}", fpath.type))
             lines.append("    free(r);\n")
             lines.append("}\n\n")
 
@@ -1277,14 +1280,8 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
         lines.append("    if (!p) return;\n")
         for fname, fpath in cls.items.items():
-            ftype_name = fpath.type.name if fpath.type else None
-            ftype_type = fpath.type.typetype if fpath.type else None
-            if ftype_name == "string":
-                lines.append(f"    zstr_free(p->{fname});\n")
-            elif ftype_type == ZTypeType.CLASS:
-                lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
-            elif ftype_type == ZTypeType.UNION:
-                lines.append(f"    z_{ftype_name}_destroy(p->{fname});\n")
+            if fpath.type:
+                lines.append(self._emit_field_cleanup(f"p->{fname}", fpath.type))
         lines.append("    free(p);\n")
         lines.append("}\n\n")
 
@@ -1383,15 +1380,10 @@ class CEmitter:
             if is_null:
                 lines.append("            break;\n")
             else:
-                # check subtype: class subtypes need their own destroyer
                 stype = spath.type
-                stype_name = stype.name if stype else None
-                if stype_name == "string":
-                    lines.append("            zstr_free((ZStr*)u->data);\n")
-                elif stype and stype.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                    lines.append(
-                        f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
-                    )
+                if stype and stype.needs_destructor and stype.destructor_name:
+                    cast = f"({_ctype(stype)})u->data"
+                    lines.append(f"            {stype.destructor_name}({cast});\n")
                 else:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
@@ -1483,13 +1475,9 @@ class CEmitter:
             if is_null:
                 lines.append("            break;\n")
             else:
-                stype_name = stype.name
-                if stype_name == "string":
-                    lines.append("            zstr_free((ZStr*)u->data);\n")
-                elif stype.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                    lines.append(
-                        f"            z_{stype_name}_destroy((z_{stype_name}_t*)u->data);\n"
-                    )
+                if stype.needs_destructor and stype.destructor_name:
+                    cast = f"({_ctype(stype)})u->data"
+                    lines.append(f"            {stype.destructor_name}({cast});\n")
                 else:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
@@ -1697,13 +1685,9 @@ class CEmitter:
         lines.append("    if (!p) return;\n")
         if elem_is_reftype:
             elem_type_name = elem_type.name if elem_type else ""
-            if elem_type and elem_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
+            if elem_type and elem_type.needs_destructor and elem_type.destructor_name:
                 lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
-                lines.append(f"        z_{elem_type_name}_destroy(p->data[i]);\n")
-                lines.append("    }\n")
-            elif elem_ctype == "ZStr*":
-                lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
-                lines.append("        zstr_free(p->data[i]);\n")
+                lines.append(f"        {elem_type.destructor_name}(p->data[i]);\n")
                 lines.append("    }\n")
             else:
                 lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
@@ -1930,23 +1914,17 @@ class CEmitter:
 
         # helper: free a key if reftype
         def emit_free_key(var: str, indent: str = "    ") -> str:
-            if key_is_string:
-                return f"{indent}zstr_free({var});\n"
+            if key_type and key_type.needs_destructor and key_type.destructor_name:
+                return f"{indent}{key_type.destructor_name}({var});\n"
             if key_is_reftype:
-                kname = key_type.name if key_type else ""
-                if key_type and key_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                    return f"{indent}z_{kname}_destroy({var});\n"
                 return f"{indent}if ({var}) free({var});\n"
             return ""
 
         # helper: free a value if reftype
         def emit_free_val(var: str, indent: str = "    ") -> str:
-            if val_is_string:
-                return f"{indent}zstr_free({var});\n"
+            if value_type and value_type.needs_destructor and value_type.destructor_name:
+                return f"{indent}{value_type.destructor_name}({var});\n"
             if val_is_reftype:
-                vname = value_type.name if value_type else ""
-                if value_type and value_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                    return f"{indent}z_{vname}_destroy({var});\n"
                 return f"{indent}if ({var}) free({var});\n"
             return ""
 
@@ -2200,10 +2178,7 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
         lines.append("    if (!p) return;\n")
         for fname, ftype in field_items:
-            if ftype.name == "string":
-                lines.append(f"    zstr_free(p->{fname});\n")
-            elif ftype.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                lines.append(f"    z_{ftype.name}_destroy(p->{fname});\n")
+            lines.append(self._emit_field_cleanup(f"p->{fname}", ftype))
         lines.append("    free(p);\n")
         lines.append("}\n\n")
 
@@ -2658,17 +2633,9 @@ class CEmitter:
         result = ""
         # check if this is a reftype reassignment — free old value first
         lhs_type = reassign.topath.type
-        if lhs_type and lhs_type.name == "string":
-            result += f"{indent}zstr_free({lhs});\n"
+        if lhs_type and lhs_type.needs_destructor:
+            result += self._emit_field_cleanup(lhs, lhs_type, indent)
             # the variable now owns the new value — remove from temp frees
-            if rhs in self._temp_frees:
-                self._temp_frees.remove(rhs)
-        elif lhs_type and lhs_type.typetype == ZTypeType.CLASS:
-            result += f"{indent}z_{lhs_type.name}_destroy({lhs});\n"
-            if rhs in self._temp_frees:
-                self._temp_frees.remove(rhs)
-        elif lhs_type and lhs_type.typetype == ZTypeType.UNION:
-            result += f"{indent}z_{lhs_type.name}_destroy({lhs});\n"
             if rhs in self._temp_frees:
                 self._temp_frees.remove(rhs)
         result += f"{indent}{lhs} = {rhs};\n"

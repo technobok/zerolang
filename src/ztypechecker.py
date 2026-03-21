@@ -162,6 +162,11 @@ class ZType:
     # for typedef types: points to the immediate base type being wrapped
     typedef_base: "Optional[ZType]" = field(default=None, init=False)
 
+    # memory management metadata (set by type checker after resolution)
+    needs_destructor: bool = field(default=False, init=False)
+    destructor_name: Optional[str] = field(default=None, init=False)
+    is_heap_allocated: bool = field(default=False, init=False)
+
 
 # a typesafe variable id
 VariableID = NewType("VariableID", int)

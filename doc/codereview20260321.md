@@ -148,12 +148,12 @@ Some sites also check `hasattr(fpath, "type")` with fallback to `isinstance(fpat
 
 #### Action Items
 
-- [ ] Add `needs_destructor: bool` property to `ZType` (True for string, class, union, protocol; False for records, numerics, variants)
-- [ ] Add `destructor_name: Optional[str]` property to `ZType` (e.g., `"zstr_free"`, `"z_foo_destroy"`, `None`)
-- [ ] Add `is_heap_allocated: bool` property to `ZType` (True for class, union, protocol, string)
-- [ ] Create `_emit_field_cleanup(fname: str, ftype: ZType) -> str` that uses these properties
-- [ ] Replace all 6 destructor sites with calls to `_emit_field_cleanup()`
-- [ ] Verify edge cases: nullable fields, recursive types, protocol boxed values
+- [x] Add `needs_destructor: bool` property to `ZType` (True for string, class, union, protocol; False for records, numerics, variants)
+- [x] Add `destructor_name: Optional[str]` property to `ZType` (e.g., `"zstr_free"`, `"z_foo_destroy"`, `None`)
+- [x] Add `is_heap_allocated: bool` property to `ZType` (True for class, union, protocol, string)
+- [x] Create `_emit_field_cleanup(fname: str, ftype: ZType) -> str` that uses these properties
+- [x] Replace all 6 destructor sites with calls to `_emit_field_cleanup()` — also replaced map free helpers and reassignment cleanup
+- [x] Verify edge cases: nullable fields, recursive types, protocol boxed values — all 882 tests pass
 
 ---
 

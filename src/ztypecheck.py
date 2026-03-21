@@ -114,6 +114,22 @@ def _is_valtype(ztype: ZType) -> bool:
     )
 
 
+def _set_destructor_metadata(ztype: ZType) -> None:
+    """Set needs_destructor, destructor_name, is_heap_allocated based on type."""
+    if ztype.name == "string":
+        ztype.needs_destructor = True
+        ztype.destructor_name = "zstr_free"
+        ztype.is_heap_allocated = True
+    elif ztype.typetype in (ZTypeType.CLASS, ZTypeType.UNION, ZTypeType.PROTOCOL):
+        ztype.needs_destructor = True
+        ztype.destructor_name = f"z_{ztype.name}_destroy"
+        ztype.is_heap_allocated = True
+    else:
+        ztype.needs_destructor = False
+        ztype.destructor_name = None
+        ztype.is_heap_allocated = False
+
+
 # Sentinel for definitions currently being resolved
 _RESOLVING = object()
 
@@ -436,6 +452,7 @@ class TypeChecker:
         self._resolving.append((key, ctype))
 
         ctype.is_valtype = False  # classes are reference types
+        _set_destructor_metadata(ctype)
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
@@ -551,6 +568,7 @@ class TypeChecker:
         self._resolving.append((key, utype))
 
         utype.is_valtype = False  # unions are reference types
+        _set_destructor_metadata(utype)
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
@@ -793,6 +811,7 @@ class TypeChecker:
         self._resolving.append((key, vtype))
 
         vtype.is_valtype = True  # variants are value types
+        _set_destructor_metadata(vtype)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -1053,6 +1072,7 @@ class TypeChecker:
         self._resolving.append((key, rtype))
 
         rtype.is_valtype = True  # records are value types
+        _set_destructor_metadata(rtype)
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
@@ -1365,6 +1385,7 @@ class TypeChecker:
         self._resolved[key] = ptype
         self._resolving.append((key, ptype))
         ptype.is_valtype = False  # protocol instances are reference types
+        _set_destructor_metadata(ptype)
 
         # pass 1: detect generic params from protocol parameters
         generic_ctx: dict[str, ZType] = {}
@@ -1423,6 +1444,7 @@ class TypeChecker:
         self._resolved[key] = ftype
         self._resolving.append((key, ftype))
         ftype.is_valtype = True  # facet instances are value types
+        _set_destructor_metadata(ftype)
 
         # pass 1: detect generic params from facet parameters
         generic_ctx: dict[str, ZType] = {}
@@ -2080,6 +2102,7 @@ class TypeChecker:
         mono.generic_origin = template_type
         mono.generic_args = OrderedDict(generic_args)
         mono.is_valtype = template_type.is_valtype
+        _set_destructor_metadata(mono)
 
         # propagate numeric_generic_params for partial instantiation
         mono.numeric_generic_params = set(template_type.numeric_generic_params)
@@ -2173,6 +2196,7 @@ class TypeChecker:
             mono.is_valtype = False
         elif template_type.typetype == ZTypeType.FACET:
             mono.is_valtype = True
+        _set_destructor_metadata(mono)
 
         # for unions: rebuild tag enum with the monomorphized name
         if template_type.typetype == ZTypeType.UNION:
@@ -2233,6 +2257,7 @@ class TypeChecker:
         # for str types: set valtype, remove from field, synthesize length/capacity/string
         if _is_str_type(mono) and not is_partial:
             mono.is_valtype = True
+            _set_destructor_metadata(mono)
             str_cap = _str_capacity(mono)
             # remove 'from' from children — it's a constructor arg, not a persistent field
             mono.children.pop("from", None)
@@ -2256,6 +2281,7 @@ class TypeChecker:
         # for list types: set reftype, synthesize methods
         if _is_list_type(mono) and not is_partial:
             mono.is_valtype = False
+            _set_destructor_metadata(mono)
             elem_type = _list_element_type(mono)
             t_u64 = self._resolve_name("u64") or self.t_null
             # synthesize .length field (runtime, u64)
@@ -2304,6 +2330,7 @@ class TypeChecker:
         # for map types: set reftype, synthesize methods
         if _is_map_type(mono) and not is_partial:
             mono.is_valtype = False
+            _set_destructor_metadata(mono)
             key_type = _map_key_type(mono)
             value_type = _map_value_type(mono)
             t_u64 = self._resolve_name("u64") or self.t_null
