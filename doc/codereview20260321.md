@@ -759,14 +759,14 @@ def _emit_field_cleanup(self, field_access: str, ftype: ZType) -> str:
 5. `_emit_mono_list()` destructor (lines 1797–1820)
 6. Protocol `boxed_destroy` (lines 949–971)
 
-- [ ] Implement `_emit_field_cleanup()`
-- [ ] Replace class destructor with call to `_emit_field_cleanup()` per field
-- [ ] Replace union destructor (switch cases) to use `_emit_field_cleanup()`
-- [ ] Replace mono_union destructor
-- [ ] Replace mono_class destructor
-- [ ] Replace mono_list destructor
-- [ ] Replace protocol boxed_destroy
-- [ ] Verify all emitter tests pass
+- [x] Implement `_emit_field_cleanup()` — done in Finding 3
+- [x] Replace class destructor with call to `_emit_field_cleanup()` per field — done in Finding 3
+- [x] Replace union destructor (switch cases) to use `_emit_field_cleanup()` — done in Finding 3
+- [x] Replace mono_union destructor — done in Finding 3
+- [x] Replace mono_class destructor — done in Finding 3
+- [x] Replace mono_list destructor — done in Finding 3
+- [x] Replace protocol boxed_destroy — done in Finding 3
+- [x] Verify all emitter tests pass — 952 tests passing
 
 ### Phase 4: Remove Parallel Symbol Tables
 
