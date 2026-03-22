@@ -794,17 +794,17 @@ Or better, since Phase 2 ensures `.type` annotations exist:
 return _ctype(fpath.type)  # no name-set lookup needed at all
 ```
 
-- [ ] Pass resolved type dict to emitter (or access via program metadata)
-- [ ] Replace each `_class_names` usage with `ZType.typetype` check (or direct `_ctype()` call)
-- [ ] Replace each `_union_names` usage
-- [ ] Replace each `_record_names` usage
-- [ ] Replace each `_variant_names` usage
-- [ ] Replace each `_protocol_names` / `_facet_names` / `_spec_names` / `_func_names` usage
-- [ ] Remove `_collect_unit_names()` (lines 419–467)
-- [ ] Remove `_collect_proto_conformance()` if protocol conformance info is available from types
-- [ ] Remove the 11 name sets from `__init__`
-- [ ] Remove the 5 fallback resolution functions (Finding 1)
-- [ ] Verify all emitter tests pass
+- [x] Pass resolved type dict to emitter (or access via program metadata) — `program.resolved` accessed via `_resolved_type()` / `_typetype_of()`
+- [x] Replace each `_class_names` usage with `ZType.typetype` check (or direct `_ctype()` call) — replaced with `_typetype_of()`
+- [x] Replace each `_union_names` usage — replaced with `_typetype_of()`
+- [x] Replace each `_record_names` usage — replaced with `_typetype_of()`
+- [x] Replace each `_variant_names` usage — replaced with `_typetype_of()`
+- [x] Replace each `_protocol_names` / `_facet_names` / `_spec_names` / `_func_names` usage — replaced with `_typetype_of()`
+- [x] Remove `_collect_unit_names()` — replaced by `_collect_pre_emission()` which gathers only non-type-derivable data
+- [x] Remove `_collect_proto_conformance()` if protocol conformance info is available from types — kept as part of `_collect_pre_emission()` (conformance labels not in ZType)
+- [x] Remove the 11 name sets from `__init__` — removed; only `_const_names` remains (no ZTypeType for numeric constants)
+- [x] Remove the 5 fallback resolution functions (Finding 1) — done in Finding 10
+- [x] Verify all emitter tests pass — 952 tests passing
 
 ### Phase 5: Scope Cleanup Refactor
 
