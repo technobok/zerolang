@@ -9,6 +9,7 @@ import argparse
 
 import ztypecheck
 import zemitterc
+import zsqldump
 import zast
 from zparser import Parser
 from zvfs import ZVfs, FSProvider, BindType, DEntryID
@@ -36,6 +37,12 @@ def main() -> None:
         action="store_true",
         default=False,
         help="Type-check all definitions, not just those reachable from main",
+    )
+    parser.add_argument(
+        "--dump-sql",
+        default=None,
+        metavar="FILE",
+        help="Write SQL dump of compiler state to FILE (use - for stdout)",
     )
     args = parser.parse_args()
 
@@ -100,10 +107,20 @@ def main() -> None:
 
     print("Type check passed.")
 
-    csource = zemitterc.emit(program)
+    emitter = zemitterc.CEmitter(program)
+    csource = emitter.emit()
     with open(outfn, "w") as f:
         f.write(csource)
     print(f"Written [{outfn}]")
+
+    if args.dump_sql is not None:
+        sql = zsqldump.dump_sql(program, emitter=emitter, csource=csource)
+        if args.dump_sql == "-":
+            sys.stdout.write(sql)
+        else:
+            with open(args.dump_sql, "w") as f:
+                f.write(sql)
+            print(f"SQL dump written [{args.dump_sql}]")
 
 
 if __name__ == "__main__":
