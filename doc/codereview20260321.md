@@ -708,10 +708,10 @@ ztype.is_heap_allocated = True
 
 **Verification:** Existing tests should continue to pass unchanged. Add new unit tests asserting the metadata values.
 
-- [ ] Add `needs_destructor`, `destructor_name`, `is_heap_allocated` fields to `ZType`
-- [ ] Set these fields in the type checker for all type kinds (record, class, union, variant, protocol, facet, string, numerics)
-- [ ] Add unit tests for the new metadata
-- [ ] Verify all existing tests pass
+- [x] Add `needs_destructor`, `destructor_name`, `is_heap_allocated` fields to `ZType` — done in Finding 3
+- [x] Set these fields in the type checker for all type kinds (record, class, union, variant, protocol, facet, string, numerics) — `_set_destructor_metadata()` called at 11 sites
+- [x] Add unit tests for the new metadata — `TestFinding3DestructorMetadata` (5 tests)
+- [x] Verify all existing tests pass — 952 tests passing
 
 ### Phase 2: Complete Type Annotations on AST Nodes
 
