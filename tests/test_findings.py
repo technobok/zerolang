@@ -13,6 +13,7 @@ These test the new fields and metadata added during the code review:
 """
 
 import os
+import sys
 import sqlite3
 import tempfile
 
@@ -980,3 +981,32 @@ class TestSqlDump:
         assert row[1] == "z_box_destroy"
         assert row[2] == 1  # is_heap_allocated
         conn.close()
+
+    def test_cli_dump_sql_flag(self):
+        """zc --dump-sql should write valid SQL to a file."""
+        import subprocess
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # write a small zerolang source file
+            src = os.path.join(tmpdir, "clitest.z")
+            with open(src, "w") as f:
+                f.write('main: function is { print "hello" }\n')
+            sql_path = os.path.join(tmpdir, "out.sql")
+            src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
+            result = subprocess.run(
+                [
+                    sys.executable, os.path.join(src_dir, "zc.py"),
+                    "--src", tmpdir, "clitest",
+                    "--dump-sql", sql_path,
+                ],
+                capture_output=True, text=True, timeout=30,
+            )
+            assert result.returncode == 0, f"zc failed: {result.stderr}"
+            assert os.path.exists(sql_path), "SQL file not created"
+            sql = open(sql_path).read()
+            assert "CREATE TABLE" in sql
+            assert "INSERT INTO" in sql
+            # verify it loads into SQLite
+            conn = _load_sql(sql)
+            count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+            assert count > 0
+            conn.close()
