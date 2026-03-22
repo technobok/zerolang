@@ -812,11 +812,11 @@ return _ctype(fpath.type)  # no name-set lookup needed at all
 
 **Depends on:** Phase 3 (unified cleanup emission)
 
-- [ ] Create `ScopeState` dataclass
-- [ ] Replace instance variables with `self._scope: ScopeState`
-- [ ] Replace save/restore blocks with scope stack push/pop
-- [ ] Unify scope-exit cleanup and return cleanup into single method
-- [ ] Verify all tests pass
+- [x] Create `ScopeState` dataclass — done in Finding 11 (also `TempState` for per-statement temps)
+- [x] Replace instance variables with `self._scope: ScopeState` — `_scope_stack` with `_scope` property
+- [x] Replace save/restore blocks with scope stack push/pop — done in Finding 11
+- [x] Unify scope-exit cleanup and return cleanup into single method — `_emit_scope_cleanup()` used at both sites
+- [x] Verify all tests pass — 952 tests passing
 
 ### Phase 6: Constructor Deduplication
 
