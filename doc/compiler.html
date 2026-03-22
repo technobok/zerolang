@@ -90,10 +90,20 @@ Table of Contents</div>
 <li><a href="#parser">Parser</a>
 </li>
 <li><a href="#semantic-analyser-type-ownership-lock-checking">Semantic Analyser (Type/Ownership/Lock checking)</a>
+<ul>
+<li><a href="#demand-driven-resolution">Demand-Driven Resolution</a>
+</li>
+<li><a href="#monomorphization">Monomorphization</a>
+</li>
+<li><a href="#ownership-and-lifetime">Ownership and Lifetime</a>
+</li>
+</ul>
 </li>
 <li><a href="#code-generator">Code Generator</a>
 <ul>
-<li><a href="#method-body-typechecking">Method Body Typechecking</a>
+<li><a href="#type-emission">Type Emission</a>
+</li>
+<li><a href="#memory-management">Memory Management</a>
 </li>
 <li><a href="#code-deduplication">Code Deduplication</a>
 </li>
@@ -158,7 +168,7 @@ form part of that string literal.</p>
 <p>The parser creates an abstract syntax tree (AST) based on the source units
 supplied. It begins with the 'core' system module and the user 'main' module
 and compiles each, following any unresolved references as they are found.</p>
-<p>xxx The Parser maintains an Environment stack for recording definitions at each
+<p>The Parser maintains an Environment stack for recording definitions at each
 scope. At the beginning of each new scope, a new frame is pushed onto the
 Environment. The Parser records each definition made as compilation proceeds.
 References to these definitions are recorded as they are found.</p>
@@ -186,24 +196,67 @@ attempt to reset and continue compilation.</p>
 types of definitions, assignments and arguments being passed to ensure the
 types are compatible.</p>
 <p>A stack of nodes being typechecked is maintained as checking proceeds. This
-allows the type checker to catch circular dependancies</p>
-<p>The ownership status of each expression is also determined (free, owned,
-borrowed, linked).</p>
-<p>Lock checking is also done at the same time. Locks are taken when evaluating
-each expression part, conferred to variable names (when assigned/created).
-Locks are dropped when the expression falls out of scope (before next
-expression, if 'free'; else when the name falls out of scope)</p>
+allows the type checker to catch circular dependencies.</p>
+<h3 id="demand-driven-resolution"><a href="#demand-driven-resolution">6.1. Demand-Driven Resolution</a></h3>
+<p>The type checker is demand-driven: it starts from <code>main</code> and resolves names
+on demand as they are referenced. Types, functions, and definitions that are
+never reachable from <code>main</code> are never type-checked. This ensures the compiler
+only processes what is needed, and circular dependencies are detected when a
+name is encountered that is already on the resolution stack.</p>
+<h3 id="monomorphization"><a href="#monomorphization">6.2. Monomorphization</a></h3>
+<p>Generic types are instantiated through monomorphization. When a generic type
+(e.g., <code>list(string)</code>) is used, the type checker creates a concrete copy
+(a monomorphized type) with the generic parameters replaced by concrete types.
+The monomorphized type name is mangled (e.g., <code>list__string</code>) to produce a
+unique C identifier.</p>
+<p>Generic method bodies are deep-copied during monomorphization and type-checked
+with the concrete type arguments in scope. This ensures that each instantiation
+is independently validated.</p>
+<h3 id="ownership-and-lifetime"><a href="#ownership-and-lifetime">6.3. Ownership and Lifetime</a></h3>
+<p>The ownership status of each expression is determined using a 2-state model:
+OWNED (the variable owns the instance and is responsible for its lifetime) or
+BORROWED (a temporary reference; the variable does not own the instance).</p>
+<p>Function parameters carry ownership annotations: <code>take</code> (caller transfers
+ownership to callee), <code>borrow</code> (callee gets a borrowed reference), or
+<code>lock</code> (callee locks the argument for the duration of the call).</p>
+<p>Lock checking infrastructure exists (<code>ZLockState</code> with UNLOCKED, EXCLUSIVE,
+and SHARED states) but enforcement is not yet active.</p>
 <h2 id="code-generator"><a href="#code-generator">7. Code Generator</a></h2>
-<p>Finally, the code generator generates output in the destination based on the
-typed AST.</p>
-<p>The output is usually source code for the targer system that requires further
-compilation (C, Python, Webassembly).</p>
-<h3 id="method-body-typechecking"><a href="#method-body-typechecking">7.1. Method Body Typechecking</a></h3>
-<p>Non-generic record, class, union, and variant methods have their bodies
-typechecked during type resolution. For generic types, method bodies are
-cloned (deep-copied) during monomorphization and typechecked with the
-concrete type arguments in scope.</p>
-<h3 id="code-deduplication"><a href="#code-deduplication">7.2. Code Deduplication</a></h3>
+<p>The code generator (C emitter) walks the fully typed AST and emits C source
+code. The output is compiled by a C compiler (gcc/clang) to produce a native
+executable.</p>
+<p>The emitter produces several output sections in order: struct/type definitions,
+forward declarations, function typedefs, function bodies, and a <code>main()</code>
+entry point. Each section is collected separately and assembled at the end.</p>
+<h3 id="type-emission"><a href="#type-emission">7.1. Type Emission</a></h3>
+<p>Each zerolang type maps to a C representation:</p>
+<ul>
+<li>Records &#x2192; C structs (stack-allocated value types)</li>
+<li>Classes &#x2192; C structs behind pointers (heap-allocated with constructors and destructors)</li>
+<li>Unions &#x2192; tagged struct with void* data (heap-allocated)</li>
+<li>Variants &#x2192; tagged struct with inline data union (stack-allocated)</li>
+<li>Protocols &#x2192; vtable struct + instance struct (dynamic dispatch via function pointers)</li>
+<li>Facets &#x2192; vtable + inline data union (value-type dynamic dispatch)</li>
+<li>Enums &#x2192; integer constants with a tag enum type</li>
+</ul>
+<h3 id="memory-management"><a href="#memory-management">7.2. Memory Management</a></h3>
+<p>The emitter implements ownership-based memory management without a garbage
+collector.</p>
+<p>String values (<code>ZStr*</code>) are heap-allocated and freed via <code>zstr_free()</code>.
+Class instances are heap-allocated via <code>malloc()</code> and freed via generated
+<code>z_&lt;type&gt;_destroy()</code> functions that recursively free owned fields.</p>
+<p>The emitter tracks variables that need cleanup in a per-function scope. At
+scope exit (function return or fall-through), all owned variables are destroyed
+in reverse declaration order. Each type carries <code>needs_destructor</code>,
+<code>destructor_name</code>, and <code>is_heap_allocated</code> metadata set by the type
+checker, so the emitter delegates cleanup decisions to the type system.</p>
+<p>Temporary values (intermediate results within a statement) are tracked
+separately and freed at the end of each statement. When a temporary is
+assigned to a named variable, ownership transfers and the temporary is removed
+from the free list.</p>
+<p>The <code>.take</code> operation transfers ownership from one variable to another,
+nullifying the source to prevent double-free.</p>
+<h3 id="code-deduplication"><a href="#code-deduplication">7.3. Code Deduplication</a></h3>
 <p>Monomorphized methods are deduplicated using AST content hashing. During
 monomorphization, each cloned method body is hashed (SHA-256 over the typed
 AST structure). If two methods produce the same hash, the second becomes an

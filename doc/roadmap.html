@@ -87,7 +87,9 @@ Table of Contents</div>
 <ul>
 <li><a href="#v1-includes">v1 Includes</a>
 </li>
-<li><a href="#v1-defers">v1 Defers</a>
+<li><a href="#implemented-originally-deferred">Implemented (originally deferred)</a>
+</li>
+<li><a href="#still-deferred">Still Deferred</a>
 </li>
 <li><a href="#v1-note-on-ownership">v1 Note on Ownership</a>
 </li>
@@ -183,7 +185,7 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-37-v2-integration-examples">Phase 37: v2 Integration Examples</a>
 </li>
-<li><a href="#phase-38-sql-compiler-output">Phase 38: SQL Compiler output</a>
+<li><a href="#phase-38-sql-compiler-output-complete">Phase 38: SQL Compiler output [COMPLETE]</a>
 </li>
 <li><a href="#phase-39-static-string-literals-zstr-header-modernization-complete">Phase 39: Static String Literals + ZStr Header Modernization [COMPLETE]</a>
 </li>
@@ -228,32 +230,46 @@ compiler emits C code which is compiled with gcc or clang.</p>
 <li>Boolean logic via <code>if</code> short-circuit <code>when</code> chains</li>
 <li>Basic <code>match</code> on simple types (not full union pattern matching)</li>
 </ul>
-<h3 id="v1-defers"><a href="#v1-defers">2.2. v1 Defers</a></h3>
+<h3 id="implemented-originally-deferred"><a href="#implemented-originally-deferred">2.2. Implemented (originally deferred)</a></h3>
+<p>The following features were originally deferred but are now fully implemented:</p>
 <ul>
-<li>Classes (reftype product types) -- deferred to v2</li>
-<li>Unions, variants -- deferred to v2</li>
-<li>Protocols, facets -- deferred to v2</li>
-<li>Generics -- deferred to v2</li>
-<li>Ownership checking (owned/borrowed/free enforcement) -- deferred to v2</li>
-<li>Lock checking -- deferred to v3</li>
-<li>Generators/yield -- deferred to v3</li>
-<li>Compile-time evaluation (beyond simple constants) -- deferred to v3</li>
-<li>Type coercion (beyond explicit conversions) -- deferred to v2</li>
-<li>Typedefs -- deferred to v2</li>
+<li>Classes (reftype product types with heap allocation, destructors, methods)</li>
+<li>Unions (tagged heap-allocated sum types with pattern matching)</li>
+<li>Variants (tagged stack-allocated sum types)</li>
+<li>Protocols (vtable-based dynamic dispatch with boxing)</li>
+<li>Facets (value-type interfaces with inline data)</li>
+<li>Generics (monomorphization with AST-hash deduplication)</li>
+<li>Typedefs (type aliases with transparent resolution)</li>
+<li>Ownership checking (2-state OWNED/BORROWED model with take/borrow/lock)</li>
 </ul>
-<h3 id="v1-note-on-ownership"><a href="#v1-note-on-ownership">2.3. v1 Note on Ownership</a></h3>
+<h3 id="still-deferred"><a href="#still-deferred">2.3. Still Deferred</a></h3>
+<ul>
+<li>Lock checking (enforcement) -- infrastructure exists, enforcement deferred</li>
+<li>Generators/yield -- deferred</li>
+<li>Compile-time evaluation (beyond simple constants) -- deferred</li>
+<li>Type coercion (beyond explicit conversions) -- deferred</li>
+</ul>
+<h3 id="v1-note-on-ownership"><a href="#v1-note-on-ownership">2.4. v1 Note on Ownership</a></h3>
 <p>v1 will NOT enforce ownership rules at compile time. All heap allocations will
 be freed at scope exit (simple stack-based lifetime). This is incorrect for the
 full language but sufficient to get programs running. Ownership enforcement
 comes in v2.</p>
-<h3 id="v1-note-on-strings"><a href="#v1-note-on-strings">2.4. v1 Note on Strings</a></h3>
+<h3 id="v1-note-on-strings"><a href="#v1-note-on-strings">2.5. v1 Note on Strings</a></h3>
 <p>v1 uses a simple immutable string type with a home-grown implementation
 (<code>ZStr</code>). Strings are heap-allocated as a single contiguous block using a C
 flexible array member:</p>
 <pre><code class="language-c">typedef struct {
-    int32_t len;    // byte length (excl NUL)
-    char data[];    // NUL-terminated UTF-8
-} ZStr;</code></pre>
+    uint64_t size;  /* bits 62-0: byte count; bit 63: static flag */
+    char data[];    /* NUL-terminated, starts at 8-byte boundary */
+} ZStr;
+
+#define ZSTR_STATIC_FLAG  0x8000000000000000ull
+#define ZSTR_SIZE(z)      ((z)-&gt;size &amp; ~ZSTR_STATIC_FLAG)
+#define ZSTR_IS_STATIC(z) ((z)-&gt;size &amp; ZSTR_STATIC_FLAG)</code></pre>
+<p>The <code>size</code> field uses its top bit as a static flag. When set, the string is a
+compile-time literal embedded in the binary and must not be freed. The remaining
+63 bits hold the byte count (excluding the NUL terminator). The
+<code>ZSTR_SIZE</code> and <code>ZSTR_IS_STATIC</code> macros extract these components.</p>
 <p>This layout was chosen over external libraries (bstrlib, SDS) because:</p>
 <ul>
 <li>Immutability is fundamental to zerolang strings. Both bstrlib and SDS are
@@ -1310,7 +1326,7 @@ integration tests for the full v2 feature set.</p>
 <li>Write <code>examples/iterator.z</code>: iterator protocol, demonstrating</li>
 <li>Verify all v2 example programs compile with gcc and produce</li>
 </ol>
-<h3 id="phase-38-sql-compiler-output"><a href="#phase-38-sql-compiler-output">5.38. Phase 38: SQL Compiler output</a></h3>
+<h3 id="phase-38-sql-compiler-output-complete"><a href="#phase-38-sql-compiler-output-complete">5.38. Phase 38: SQL Compiler output [COMPLETE]</a></h3>
 <p>Have an alternate output format to create an sql file that will create tables
 and dump details from the current compiler run into them with appropriate
 indexes.</p>
@@ -1321,6 +1337,28 @@ files they came from. The AST. The typechecker. The expected output. The
 compiler needs to maintain or be able to generate lists of each of these
 elements with numeric id's to allow references between them. The compiler may
 need to be restructured to use formats friendly to sql dumping.</p>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add integer IDs to all compiler stages: <code>NodeID</code> on AST nodes,</li>
+<code>TokenID</code>
+<code>TypeID</code>
+<code>VariableID</code>
+<code>CallKind</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>source_map</code> to C emitter (<code>TrackedList</code>) linking each</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Implement <code>zsqldump.py</code> with <code>dump_sql()</code> generating</li>
+<code>files</code>
+<code>tokens</code>
+<code>ast_nodes</code>
+<code>types</code>
+<code>type_children</code>
+<code>typed_nodes</code>
+<code>emitted_lines</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>--dump-sql FILE</code> CLI flag to <code>zc.py</code> (supports file</li>
+<code>-</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add comprehensive tests in <code>test_findings.py</code>: SQL generation,</li>
+</ol>
+<p>Files: <code>src/zsqldump.py</code>, <code>src/zc.py</code>, <code>src/zast.py</code>,
+<code>src/zlexer.py</code>, <code>src/zvfs.py</code>, <code>src/zemitterc.py</code>,
+<code>src/ztypechecker.py</code>, <code>tests/test_findings.py</code></p>
 <h3 id="phase-39-static-string-literals-zstr-header-modernization-complete"><a href="#phase-39-static-string-literals-zstr-header-modernization-complete">5.39. Phase 39: Static String Literals + ZStr Header Modernization [COMPLETE]</a></h3>
 <p>Modernize the <code>ZStr</code> layout to a 64-bit header and add static string
 support so string literals are never heap-allocated.</p>
