@@ -730,11 +730,11 @@ def _audit_type_annotations(program: zast.Program) -> List[str]:
 
 **Verification:** The audit pass returns an empty list for all test programs.
 
-- [ ] Write the audit pass
-- [ ] Run it against the test suite to identify all missing annotations
-- [ ] Fix each missing case in the type checker
-- [ ] Verify audit returns empty for all tests
-- [ ] Remove the audit pass (or keep as a debug-mode assertion)
+- [x] Write the audit pass — `audit_type_annotations()` in ztypecheck.py (Finding 10)
+- [x] Run it against the test suite to identify all missing annotations — done in Finding 10
+- [x] Fix each missing case in the type checker — done in Finding 1/10
+- [x] Verify audit returns empty for all tests — 13 tests in `TestFinding10TypeAnnotationAudit`
+- [x] Remove the audit pass (or keep as a debug-mode assertion) — kept as reusable validation function
 
 ### Phase 3: Unify Destructor Emission
 
