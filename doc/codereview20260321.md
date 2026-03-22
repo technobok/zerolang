@@ -843,20 +843,20 @@ return _ctype(fpath.type)  # no name-set lookup needed at all
 
 **Depends on:** Phase 3 (unified cleanup), Phase 4 (no name sets)
 
-- [ ] Extract common container struct/create/destroy patterns
-- [ ] Consider C template approach for map (330 lines)
-- [ ] Reduce code duplication between list/array/map generators
-- [ ] Verify all tests pass
+- [x] Extract common container struct/create/destroy patterns — `_emit_heap_container_create()`, `_emit_bounds_check()` (Finding 9)
+- [x] Consider C template approach for map (330 lines) — map logic too specialized; kept with shared helpers (Finding 9)
+- [x] Reduce code duplication between list/array/map generators — shared helpers + `ZType.destructor_name` (Finding 9)
+- [x] Verify all tests pass — 952 tests passing
 
 ### Phase 9: Self-Hosting Preparation
 
 **Depends on:** All previous phases
 
-- [ ] Replace `count().__next__` with explicit counters
-- [ ] Replace `OrderedDict` with plain dict (or list of pairs if order matters)
-- [ ] Remove `threading.Lock` from TypeTable
-- [ ] Replace `NewType` with plain int type aliases
-- [ ] Audit remaining Python-specific patterns
+- [x] Replace `count().__next__` with explicit counters — done in Finding 12
+- [x] Replace `OrderedDict` with plain dict (or list of pairs if order matters) — done in Finding 12
+- [x] Remove `threading.Lock` from TypeTable — done in Finding 12
+- [x] Replace `NewType` with plain int type aliases — done in Finding 12
+- [x] Audit remaining Python-specific patterns — done in Finding 12
 - [ ] Document the zerolang-to-zerolang compiler bootstrap plan
 
 ---
