@@ -1187,7 +1187,7 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
         # emit meta.create constructor
-        self._emit_meta_create_record(name, rec)
+        self._emit_meta_create(name, rec)
 
         # emit 'is' functions with body as regular C functions (for default values)
         for mname, mfunc in rec.functions.items():
@@ -1311,43 +1311,36 @@ class CEmitter:
             lines.append(f"    return {func_name}({arg_str});\n")
             lines.append("}\n\n")
 
-    def _emit_meta_create_record(self, name: str, rec: zast.Record) -> None:
-        """Emit a meta.create constructor function for a record type."""
-        ctype = f"z_{name}_t"
-        params, field_names, field_ctypes = self._collect_field_params(
-            name, rec.items, rec.functions
-        )
-        self._type_field_ctypes[name] = field_ctypes
-        self._type_field_names[name] = field_names
-        self._type_field_defaults[name] = self._extract_field_defaults(
-            name, rec.items, rec.functions
-        )
-        has_user_create = "create" in rec.functions or "create" in rec.as_functions
-        lines: List[str] = []
-        self._emit_create_functions(
-            name, ctype, params, field_names, is_heap=False,
-            has_user_create=has_user_create, lines=lines,
-        )
-        self.struct_defs.append("".join(lines))
-
-    def _emit_meta_create_class(
-        self, name: str, cls: zast.Class, lines: List[str]
+    def _emit_meta_create(
+        self,
+        name: str,
+        defn: zast.TypeDefinition,
+        lines: Optional[List[str]] = None,
     ) -> None:
-        """Emit a meta.create constructor function for a class type."""
+        """Emit meta.create constructor for a record or class type.
+
+        Uses ZType.is_heap_allocated to select stack vs heap allocation.
+        If lines is None, appends to self.struct_defs.
+        """
+        ztype = self._resolved_type(name)
+        is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
         params, field_names, field_ctypes = self._collect_field_params(
-            name, cls.items, cls.functions
+            name, defn.items, defn.functions
         )
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
         self._type_field_defaults[name] = self._extract_field_defaults(
-            name, cls.items, cls.functions
+            name, defn.items, defn.functions
         )
-        has_user_create = "create" in cls.functions or "create" in cls.as_functions
+        has_user_create = "create" in defn.functions or "create" in defn.as_functions
+        target: List[str] = lines if lines is not None else []
         self._emit_create_functions(
-            name, ctype, params, field_names, is_heap=True,
-            has_user_create=has_user_create, lines=lines,
+            name, ctype, params, field_names, is_heap=is_heap,
+            has_user_create=has_user_create, lines=target,
         )
+        if lines is None:
+            self.struct_defs.append("".join(target))
 
     def _emit_class(self, name: str, cls: zast.Class) -> None:
         if self._is_typedef(name):
@@ -1386,7 +1379,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # emit meta.create constructor
-        self._emit_meta_create_class(name, cls, lines)
+        self._emit_meta_create(name, cls, lines)
 
         self.struct_defs.append("".join(lines))
 
@@ -2246,7 +2239,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # meta.create constructor
-        self._emit_mono_class_create(name, mono_type, field_items, lines)
+        self._emit_mono_create(name, mono_type, field_items, lines)
 
         self.struct_defs.append("".join(lines))
 
@@ -2274,14 +2267,17 @@ class CEmitter:
                         )
                         self._emit_function(qualified, func_to_emit, record_name=name)
 
-    def _emit_mono_class_create(
+    def _emit_mono_create(
         self,
         name: str,
         mono_type: ZType,
         field_items: list,
         lines: List[str],
     ) -> None:
-        """Emit meta.create and create functions for a monomorphized class."""
+        """Emit meta.create and create functions for a monomorphized type.
+
+        Uses mono_type.is_heap_allocated to select stack vs heap allocation.
+        """
         ctype = f"z_{name}_t"
         params: List[str] = []
         field_names: List[str] = []
@@ -2296,7 +2292,8 @@ class CEmitter:
         if name not in self._type_field_defaults:
             self._type_field_defaults[name] = {}
         self._emit_create_functions(
-            name, ctype, params, field_names, is_heap=True,
+            name, ctype, params, field_names,
+            is_heap=mono_type.is_heap_allocated,
             has_user_create=False, lines=lines,
         )
 

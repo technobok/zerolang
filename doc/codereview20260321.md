@@ -824,10 +824,10 @@ return _ctype(fpath.type)  # no name-set lookup needed at all
 
 **Depends on:** Phase 1 (ZType has `is_heap_allocated`), Phase 4 (no name-set lookups)
 
-- [ ] Extract shared create logic into `_emit_meta_create(name, type, items, functions)`
-- [ ] Use `type.is_heap_allocated` to select stack vs heap allocation
-- [ ] Apply same deduplication to mono create variants
-- [ ] Verify all tests pass
+- [x] Extract shared create logic into `_emit_meta_create(name, type, items, functions)`
+- [x] Use `type.is_heap_allocated` to select stack vs heap allocation
+- [x] Apply same deduplication to mono create variants — `_emit_mono_create()` uses `mono_type.is_heap_allocated`
+- [x] Verify all tests pass — 952 tests passing
 
 ### Phase 7: Add Integer IDs for SQL (can be done in parallel with Phases 3–6)
 
