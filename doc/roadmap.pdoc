@@ -1698,6 +1698,100 @@ Files: #~"src/zc.py", #~"src/zast.py", #~"src/ztypecheck.py",
 #~"doc/roadmap.pdoc", #~"tests/test_cli.py"
 
 
+#---: Phase 40b: if-as-expression and unit-level if
+
+The spec defines #~"if" as both a statement and an expression, but only
+the statement form is currently implemented. This phase adds the two
+missing forms. Also clean up the spec: remove the stale variable binding
+syntax (#~"if x: expr when ...") from the if expression table — a
+#~"with" expression is now required for variable introduction.
+
+#---: 40b.1 if-as-expression (Priority 1)
+
+When #~"if" has an #~"else" clause and is used in expression position
+(e.g. RHS of an assignment), it should evaluate to a value. Per the
+spec: the #~"if" must be exhaustive and each arm must evaluate to the
+same type, or must not complete (#~"return", #~"break", #~"continue").
+
+Context detection: the compiler knows whether #~"if" is in expression
+position (RHS of assignment, call argument, interpolation) vs statement
+position (standalone #~"StatementLine") by checking whether the result
+type is consumed. If #~"_check_if()" returns a non-null type, the
+emitter uses the temp-variable pattern; otherwise it emits a normal C
+#~"if" statement.
+
+Type checker (#~"src/ztypecheck.py"):
+
+#ol:
+  #*: In #~"_check_if()", when the if node has an else clause, compute
+    the type of the last expression in each then/else block
+  #*: If all branch types are compatible, set #~"ifnode.type" to that
+    common type (currently always returns #~"t_null")
+  #*: Branches that end with #~"return"/#~"break"/#~"continue" are
+    exempt from type matching (they do not complete)
+  #*: If used in expression position without an else clause, emit error:
+    if-expression is not exhaustive
+  #*: If branch types are incompatible, emit error with the conflicting
+    types
+  #*: For reftypes: only one branch executes so only one allocation
+    happens; ownership transfers to the assignment target
+
+Emitter (#~"src/zemitterc.py"):
+
+#ol:
+  #*: When an #~"If" node has a non-null type (expression-if), emit
+    using a temporary variable rather than a C statement:
+    #~"Type _ifN; if (cond) { _ifN = val; } else { _ifN = val; }"
+  #*: For simple single-expression branches, consider emitting a C
+    ternary #~"(cond ? a : b)" instead
+  #*: Return the temp variable name as the expression result
+
+Tests:
+
+#ol:
+  #*: #~"x: if true then 1 else 2" — basic expression-if
+  #*: #~"x: if a > b then a else b" — max pattern
+  #*: #~"s: if flag then \"yes\" else \"no\"" — string expression-if
+  #*: Type mismatch error: #~"x: if true then 1 else \"hello\""
+  #*: Missing else error: #~"x: if true then 1" (not exhaustive)
+  #*: Return exemption: branches ending in return/break/continue
+  #*: Compile and run under ASan
+
+#---: 40b.2 Unit-level if definition (Priority 3 — deferred)
+
+Per the spec (line 583): an #~"if" may be used as a definition at the
+unit level. Each clause must evaluate to a constant. Each arm may
+produce a completely different type. This is compile-time conditional
+compilation (similar to C's #~"#ifdef" but type-safe). For example:
+#~"platform_int: if system.word_size == 64 then u64 else u32".
+
+This requires a compile-time constant evaluator, which is a larger
+feature shared with generic specialisation. Deferred until constant
+evaluation infrastructure exists.
+
+#ol:
+  #*: Add compile-time constant evaluation for integer comparisons
+    and system properties
+  #*: Parser: accept #~"if" at unit body level (currently only in
+    function body)
+  #*: Type checker: resolve each arm independently, result type is
+    the type of the first true arm
+  #*: Each arm may produce a different type (unlike expression-if
+    which requires compatible types)
+
+Spec cleanup (#~"doc/spec.pdoc"):
+
+#ol:
+  #*: Remove #~"[var]:" initialisation expression row from the #~"if"
+    argument table (line 860) — variable binding via #~"with" is the
+    correct mechanism
+  #*: Remove or update the code example showing #~"if x: func..." syntax
+    (line 886)
+
+Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
+#~"doc/spec.pdoc", #~"tests/test_emitter.py", #~"tests/test_typecheck.py"
+
+
 #---: Phase 41: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently

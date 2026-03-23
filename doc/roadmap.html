@@ -209,6 +209,12 @@ Table of Contents</div>
 </li>
 <li><a href="#40-9-future-considerations-not-in-this-phase">40.9 Future considerations (not in this phase)</a>
 </li>
+<li><a href="#phase-40b-if-as-expression-and-unit-level-if">Phase 40b: if-as-expression and unit-level if</a>
+</li>
+<li><a href="#40b-1-if-as-expression-priority-1">40b.1 if-as-expression (Priority 1)</a>
+</li>
+<li><a href="#40b-2-unit-level-if-definition-priority-3-deferred">40b.2 Unit-level if definition (Priority 3 &#x2014; deferred)</a>
+</li>
 <li><a href="#phase-41-c-runtime-library">Phase 41: C Runtime Library</a>
 </li>
 <li><a href="#phase-42-expand-to-v3-full-language">Phase 42: Expand to v3 (Full Language)</a>
@@ -1511,7 +1517,75 @@ and diagnostics go to stderr. Add standard compiler flags.</p>
 <p>Files: <code>src/zc.py</code>, <code>src/zast.py</code>, <code>src/ztypecheck.py</code>,
 <code>src/zparser.py</code>, <code>doc/zc.pdoc</code>, <code>doc/index.pdoc</code>,
 <code>doc/roadmap.pdoc</code>, <code>tests/test_cli.py</code></p>
-<h3 id="phase-41-c-runtime-library"><a href="#phase-41-c-runtime-library">5.50. Phase 41: C Runtime Library</a></h3>
+<h3 id="phase-40b-if-as-expression-and-unit-level-if"><a href="#phase-40b-if-as-expression-and-unit-level-if">5.50. Phase 40b: if-as-expression and unit-level if</a></h3>
+<p>The spec defines <code>if</code> as both a statement and an expression, but only
+the statement form is currently implemented. This phase adds the two
+missing forms. Also clean up the spec: remove the stale variable binding
+syntax (<code>if x: expr when ...</code>) from the if expression table &#x2014; a
+<code>with</code> expression is now required for variable introduction.</p>
+<h3 id="40b-1-if-as-expression-priority-1"><a href="#40b-1-if-as-expression-priority-1">5.51. 40b.1 if-as-expression (Priority 1)</a></h3>
+<p>When <code>if</code> has an <code>else</code> clause and is used in expression position
+(e.g. RHS of an assignment), it should evaluate to a value. Per the
+spec: the <code>if</code> must be exhaustive and each arm must evaluate to the
+same type, or must not complete (<code>return</code>, <code>break</code>, <code>continue</code>).</p>
+<p>Context detection: the compiler knows whether <code>if</code> is in expression
+position (RHS of assignment, call argument, interpolation) vs statement
+position (standalone <code>StatementLine</code>) by checking whether the result
+type is consumed. If <code>_check_if()</code> returns a non-null type, the
+emitter uses the temp-variable pattern; otherwise it emits a normal C
+<code>if</code> statement.</p>
+<p>Type checker (<code>src/ztypecheck.py</code>):</p>
+<ol>
+<li>In <code>_check_if()</code>, when the if node has an else clause, compute</li>
+<li>If all branch types are compatible, set <code>ifnode.type</code> to that</li>
+<code>t_null</code>
+<li>Branches that end with <code>return</code>/<code>break</code>/<code>continue</code> are</li>
+<li>If used in expression position without an else clause, emit error:</li>
+<li>If branch types are incompatible, emit error with the conflicting</li>
+<li>For reftypes: only one branch executes so only one allocation</li>
+</ol>
+<p>Emitter (<code>src/zemitterc.py</code>):</p>
+<ol>
+<li>When an <code>If</code> node has a non-null type (expression-if), emit</li>
+<code>Type _ifN; if (cond) { _ifN = val; } else { _ifN = val; }</code>
+<li>For simple single-expression branches, consider emitting a C</li>
+<code>(cond ? a : b)</code>
+<li>Return the temp variable name as the expression result</li>
+</ol>
+<p>Tests:</p>
+<ol>
+<li><code>x: if true then 1 else 2</code> &#x2014; basic expression-if</li>
+<li><code>x: if a &gt; b then a else b</code> &#x2014; max pattern</li>
+<li><code>s: if flag then "yes" else "no"</code> &#x2014; string expression-if</li>
+<li>Type mismatch error: <code>x: if true then 1 else "hello"</code></li>
+<li>Missing else error: <code>x: if true then 1</code> (not exhaustive)</li>
+<li>Return exemption: branches ending in return/break/continue</li>
+<li>Compile and run under ASan</li>
+</ol>
+<h3 id="40b-2-unit-level-if-definition-priority-3-deferred"><a href="#40b-2-unit-level-if-definition-priority-3-deferred">5.52. 40b.2 Unit-level if definition (Priority 3 &#x2014; deferred)</a></h3>
+<p>Per the spec (line 583): an <code>if</code> may be used as a definition at the
+unit level. Each clause must evaluate to a constant. Each arm may
+produce a completely different type. This is compile-time conditional
+compilation (similar to C's <code>#ifdef</code> but type-safe). For example:
+<code>platform_int: if system.word_size == 64 then u64 else u32</code>.</p>
+<p>This requires a compile-time constant evaluator, which is a larger
+feature shared with generic specialisation. Deferred until constant
+evaluation infrastructure exists.</p>
+<ol>
+<li>Add compile-time constant evaluation for integer comparisons</li>
+<li>Parser: accept <code>if</code> at unit body level (currently only in</li>
+<li>Type checker: resolve each arm independently, result type is</li>
+<li>Each arm may produce a different type (unlike expression-if</li>
+</ol>
+<p>Spec cleanup (<code>doc/spec.pdoc</code>):</p>
+<ol>
+<li>Remove <code>[var]:</code> initialisation expression row from the <code>if</code></li>
+<code>with</code>
+<li>Remove or update the code example showing <code>if x: func...</code> syntax</li>
+</ol>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>doc/spec.pdoc</code>, <code>tests/test_emitter.py</code>, <code>tests/test_typecheck.py</code></p>
+<h3 id="phase-41-c-runtime-library"><a href="#phase-41-c-runtime-library">5.53. Phase 41: C Runtime Library</a></h3>
 <p>Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (<code>ZStr</code>, <code>zstr_new</code>,
 <code>zstr_cat</code>, etc.) into every generated <code>.c</code> file. This phase moves
@@ -1545,14 +1619,14 @@ static library (<code>libzrt.a</code>), and links it into the final executable.<
 <li>Verify all existing examples and tests still pass with the</li>
 <li>Future runtime candidates: format/print infrastructure, I/O,</li>
 </ol>
-<h3 id="phase-42-expand-to-v3-full-language"><a href="#phase-42-expand-to-v3-full-language">5.51. Phase 42: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-42-expand-to-v3-full-language"><a href="#phase-42-expand-to-v3-full-language">5.54. Phase 42: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-43-developer-tools"><a href="#phase-43-developer-tools">5.52. Phase 43: Developer Tools</a></h3>
+<h3 id="phase-43-developer-tools"><a href="#phase-43-developer-tools">5.55. Phase 43: Developer Tools</a></h3>
 <p>Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.</p>
 <ol>
@@ -1563,7 +1637,7 @@ source files in IDEs and editors.</p>
 <li>Formatter: canonical source formatter that reads <code>.z</code> files</li>
 <li>Editor integration: VS Code extension and/or tree-sitter grammar</li>
 </ol>
-<h3 id="phase-44-self-hosting"><a href="#phase-44-self-hosting">5.53. Phase 44: Self-Hosting</a></h3>
+<h3 id="phase-44-self-hosting"><a href="#phase-44-self-hosting">5.56. Phase 44: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>
