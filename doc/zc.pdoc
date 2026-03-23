@@ -1,0 +1,279 @@
+#doc.lang: en
+
+#//: Zerolang Compiler Command Reference
+
+#doc.title: zc — Zerolang Compiler
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-03-23
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: zc — Zerolang Compiler Command Reference
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+#--: Synopsis
+
+#code: """
+  zc [options] unitname
+  """
+
+
+#--: Description
+
+#~"zc" is the zerolang compiler. It compiles zerolang source files
+(#~".z") into C source code (#~".c"), which can then be compiled with
+a standard C compiler (gcc or clang) to produce a native executable.
+
+The compiler operates on #_*"units" — each source file defines a unit,
+and the compiler follows dependencies between units automatically.
+Compilation starts from the named unit and discovers all referenced
+units through the Virtual File System (VFS).
+
+The VFS presents a unified source tree to the compiler by mounting the
+user source directory over the system library directory. User units are
+found first, shadowing any system units with the same name.
+
+
+#--: Arguments
+
+#---: unitname (required)
+
+The name of the unit to compile. This must be a valid zerolang unit name:
+lowercase ASCII letters and digits only. The compiler will look for a file
+named #~"unitname.z" in the source directory.
+
+#code: """
+  zc hello --src examples
+  """
+
+#---: -o FILE, --output FILE
+
+Specify the output C filename. By default the output file is named
+#~"unitname.c" in the current directory.
+
+#code: """
+  zc hello --src examples -o build/hello.c
+  """
+
+#---: --src DIR
+
+Path to the user source directory. Defaults to the current working
+directory. The compiler searches this directory for #~".z" source files.
+
+#code: """
+  zc myprogram --src /path/to/project
+  """
+
+#---: --system DIR
+
+Path to the system library directory. By default this is auto-detected
+relative to the compiler installation. The system library provides built-in
+types (#~"i64", #~"f64", #~"string", etc.), operators, and standard types
+(#~"option", #~"array", #~"list", #~"map").
+
+This flag is rarely needed — use it only when developing the compiler
+itself or testing against an alternate standard library.
+
+#---: -v, --verbose
+
+Enable verbose output. When active, the compiler prints compilation
+progress, settings, and timing information to stderr. This is useful
+for debugging compilation issues or understanding which files are being
+processed.
+
+#code: """
+  zc hello --src examples -v
+  """
+
+Example verbose output:
+
+#code: """
+  source directory: examples
+  system directory: /path/to/lib/system
+  output file: hello.c
+  parsing hello...
+    compiling: core.z
+    resolving dependency: system
+    compiling: system.z
+    compiling: hello.z
+  type checking...
+  type check passed
+  emitting C...
+  written hello.c
+  completed in 0.042s
+  """
+
+#---: --full-typecheck
+
+Type-check all definitions in all units, not just those reachable from
+#~"main". By default the compiler is demand-driven: it only type-checks
+definitions that are actually used. This flag forces a complete check,
+which is useful for library development or finding unused dead code.
+
+#---: --dump-sql FILE
+
+Write a SQL dump of the compiler's internal state to the specified file.
+The SQL is SQLite-compatible and includes tables for files, tokens, AST
+nodes, types, and emitted C lines. Use #~"-" to write to stdout.
+
+This is a diagnostic tool for compiler development and debugging.
+
+#code: """
+  zc hello --src examples --dump-sql hello.sql
+  sqlite3 hello.sql "SELECT name, cname FROM types WHERE cname IS NOT NULL"
+  """
+
+#---: --no-color
+
+Disable ANSI color codes in error messages. By default, color is enabled
+when stderr is a terminal (TTY) and disabled when piped or redirected.
+Use this flag to force plain text output in all cases.
+
+
+#--: Exit Codes
+
+#ul:
+  [#*: #~"0" — Compilation succeeded. The output C file has been written.]
+  [#*: #~"1" — Compilation failed. One or more errors were found during
+    parsing or type checking. Error messages are written to stderr.]
+  [#*: #~"2" — Usage error. Invalid command-line arguments, invalid unit
+    name, or invalid directory paths.]
+
+
+#--: Error Format
+
+The compiler uses a rustc-inspired error format designed for readability
+and tool integration. Each error includes an error code, source location,
+and the relevant source line with a caret pointing to the error.
+
+#---: Basic Error Format
+
+#code: """
+  error[E0008]: undefined identifier: x
+   --> myfile.z:5:10
+       |
+     5 |     print x
+       |           ^
+  """
+
+The first line contains the error code (#~"E0008") and the error message.
+The second line shows the file path, line number, and column number in
+the standard #~"file:line:col" format used by gcc, clang, and rustc.
+The source line is displayed with a caret marker pointing to the exact
+location of the error.
+
+#---: Notes and Hints
+
+Some errors include additional context as #_*"notes" (explaining why the
+error occurred) or #_*"hints" (suggesting how to fix it):
+
+#code: """
+  error[E0200]: function returns 'borrow' but has no 'lock' parameter
+   --> myfile.z:3:1
+       |
+     3 | f: function out string.borrow is { return "hello" }
+       | ^
+       = hint: add .lock to a parameter to borrow from it
+  """
+
+#code: """
+  error[E0008]: undefined identifier: pritn
+   --> myfile.z:2:5
+       |
+     2 |     pritn "hello"
+       |     ^^^^^
+       = hint: did you mean 'print'?
+  """
+
+#---: Error Code Numbering
+
+Error codes are grouped by category:
+
+#ul:
+  [#*: #~"E0001–E0099": Parser and syntax errors — malformed source code,
+    unexpected tokens, missing delimiters, invalid definitions]
+  [#*: #~"E0100–E0199": Type resolution errors — type mismatches,
+    undefined types, incompatible assignments]
+  [#*: #~"E0200–E0299": Ownership errors — invalid take/borrow/lock usage,
+    use after ownership transfer, lock violations, reftype aliasing]
+  [#*: #~"E0300–E0399": Call and argument errors — wrong number of arguments,
+    named argument mismatches, type mismatches in function calls]
+  [#*: #~"E0400–E0499": Generic and monomorphization errors — missing type
+    arguments, failed type inference, invalid generic constraints]
+
+An error count summary is printed at the end:
+
+#code: """
+  3 errors found
+  """
+
+
+#--: Compiling the Output
+
+The compiler produces a standalone C source file. To compile it into an
+executable, use a C compiler:
+
+#code: """
+  zc hello --src examples
+  gcc -Wall -Wno-unused-function -o hello hello.c
+  ./hello
+  """
+
+For development and testing, compile with address sanitizer to detect
+memory errors:
+
+#code: """
+  gcc -fsanitize=address,undefined -fno-omit-frame-pointer -Wall -Wno-unused-function -o hello hello.c
+  ./hello
+  """
+
+
+#--: Examples
+
+Compile a simple program:
+
+#code: """
+  zc hello --src examples
+  """
+
+Compile with verbose output and custom output path:
+
+#code: """
+  zc myapp --src src -o build/myapp.c -v
+  """
+
+Compile and run:
+
+#code: """
+  zc hello --src examples && gcc -o hello hello.c && ./hello
+  """
+
+Generate SQL diagnostics:
+
+#code: """
+  zc hello --src examples --dump-sql - | sqlite3 :memory:
+  """
+
+Full type-check of a library (not just reachable from main):
+
+#code: """
+  zc mylib --src lib --full-typecheck
+  """

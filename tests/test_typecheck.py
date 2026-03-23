@@ -433,7 +433,7 @@ class TestReturnTypeChecking:
         errors = check_errors(
             'f: function out i64 is { return "hello" }\nmain: function is {}'
         )
-        assert any("Return type mismatch" in e.msg for e in errors)
+        assert any("return type mismatch" in e.msg for e in errors)
 
     def test_void_function_no_return(self):
         check_ok("f: function is {}\nmain: function is {}")
@@ -3041,7 +3041,7 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some }"
         )
-        assert any("Cannot infer type arguments" in e.msg for e in errors)
+        assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_error_generic_union_none_no_args(self):
         """Using generic union null subtype with no type arg emits error."""
@@ -3049,7 +3049,7 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.none }"
         )
-        assert any("Cannot infer type arguments" in e.msg for e in errors)
+        assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_generic_union_from_infers_type(self):
         """option.some from: 42 infers t=i64 via from: syntax."""
@@ -3098,7 +3098,7 @@ class TestGenerics:
         errors = check_errors(
             "myrec: record { x: t } as { t: any.generic }\nmain: function is { r: myrec }"
         )
-        assert any("Cannot infer type arguments" in e.msg for e in errors)
+        assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_error_generic_record_no_inferrable_args(self):
         """Using generic record with args that don't cover generic params emits error."""
@@ -3106,7 +3106,7 @@ class TestGenerics:
             "myrec: record { x: t\n y: i64 } as { t: any.generic }\n"
             "main: function is { r: myrec y: 42 }"
         )
-        assert any("Cannot infer" in e.msg for e in errors)
+        assert any("cannot infer" in e.msg for e in errors)
 
     def test_generic_record_infer_from_value(self):
         """myrec x: 42 infers t=i64 from field type."""

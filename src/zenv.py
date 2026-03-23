@@ -129,6 +129,17 @@ class SymbolTable:
             self.release_lock(target_name, holder_name)
         var.held_locks.clear()
 
+    def all_names(self) -> List[str]:
+        """Return all defined names across all scopes (for did-you-mean suggestions)."""
+        names: List[str] = []
+        seen: set = set()
+        for scope in reversed(self._scopes):
+            for name in scope.symbols:
+                if name not in seen:
+                    names.append(name)
+                    seen.add(name)
+        return names
+
     @property
     def depth(self) -> int:
         return len(self._scopes)

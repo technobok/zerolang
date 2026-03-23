@@ -25,6 +25,46 @@ from ztypes import (
 )
 
 
+def _levenshtein(a: str, b: str) -> int:
+    """Compute Levenshtein edit distance between two strings."""
+    if len(a) < len(b):
+        return _levenshtein(b, a)
+    if len(b) == 0:
+        return len(a)
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a):
+        curr = [i + 1]
+        for j, cb in enumerate(b):
+            cost = 0 if ca == cb else 1
+            curr.append(min(curr[j] + 1, prev[j + 1] + 1, prev[j] + cost))
+        prev = curr
+    return prev[len(b)]
+
+
+def _suggest_similar(name: str, candidates, max_distance: int = 2) -> Optional[str]:
+    """Find the closest match to name among candidates (Levenshtein distance).
+
+    Returns the best match if distance <= max_distance and it's the unique best,
+    otherwise None.
+    """
+    best = None
+    best_dist = max_distance + 1
+    tied = False
+    for c in candidates:
+        if c.startswith(":") or c == name:
+            continue
+        d = _levenshtein(name, c)
+        if d < best_dist:
+            best = c
+            best_dist = d
+            tied = False
+        elif d == best_dist:
+            tied = True
+    if best is not None and best_dist <= max_distance and not tied:
+        return best
+    return None
+
+
 def _is_numeric_id(name: str) -> bool:
     c0 = name[0]
     return c0.isdigit() or (c0 in ("+", "-") and len(name) > 1 and name[1].isdigit())
@@ -196,8 +236,15 @@ class TypeChecker:
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
 
-    def _error(self, msg: str, loc: Optional[Token] = None) -> None:
-        self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
+    def _error(
+        self,
+        msg: str,
+        loc: Optional[Token] = None,
+        err: ERR = ERR.COMPILERERROR,
+        note: Optional[str] = None,
+        hint: Optional[str] = None,
+    ) -> None:
+        self.errors.append(zast.Error(err=err, msg=msg, loc=loc, note=note, hint=hint))
 
     def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
         """Assign a C identifier to a type, auto-resolving collisions.
@@ -529,16 +576,19 @@ class TypeChecker:
         has_lock_param = any(v == ZParamOwnership.LOCK for v in own.values())
         if has_lock_param and not has_return:
             self._error(
-                "Parameter marked as 'lock' but function has no return value",
+                "parameter marked as 'lock' but function has no return value",
                 loc=func.start,
+                err=ERR.OWNERERROR,
+                hint="lock parameters are only useful when the function returns a borrowed value",
             )
 
         # a function returning borrow must have at least one lock parameter
         if ret_is_borrow and not has_lock_param:
             self._error(
-                "Function returns 'borrow' but has no 'lock' parameter; "
-                "a borrowed return value must live in a locked parameter",
+                "function returns 'borrow' but has no 'lock' parameter",
                 loc=func.start,
+                err=ERR.OWNERERROR,
+                hint="add .lock to a parameter to borrow from it",
             )
 
     def _resolve_class_type(self, unitname: str, name: str, cls: zast.Class) -> ZType:
@@ -1750,9 +1800,10 @@ class TypeChecker:
                     path.type = t
                     return t
                 self._error(
-                    f"Generic type '{name}' requires type arguments, "
-                    f"e.g. ({name} t: i64)",
+                    f"generic type '{name}' requires type arguments",
                     loc=path.start,
+                    err=ERR.GENERICERROR,
+                    hint=f"specify type parameters, e.g. ({name} t: i64)",
                 )
                 return None
             if t:
@@ -2624,7 +2675,7 @@ class TypeChecker:
 
         if not generic_args:
             self._error(
-                f"Cannot infer type arguments for generic type "
+                f"cannot infer type arguments for generic type "
                 f"'{template.name}.{subtype_name}'",
                 loc=call.start,
             )
@@ -2634,7 +2685,7 @@ class TypeChecker:
         for param_name in template.generic_params:
             if param_name not in generic_args:
                 self._error(
-                    f"Cannot infer generic parameter '{param_name}' for "
+                    f"cannot infer generic parameter '{param_name}' for "
                     f"'{template.name}.{subtype_name}'"
                 )
                 return None
@@ -2723,7 +2774,7 @@ class TypeChecker:
 
         if not generic_args:
             self._error(
-                f"Cannot infer type arguments for generic type '{template.name}'",
+                f"cannot infer type arguments for generic type '{template.name}'",
                 loc=call.start,
             )
             return None
@@ -2731,7 +2782,7 @@ class TypeChecker:
         for param_name in template.generic_params:
             if param_name not in generic_args:
                 self._error(
-                    f"Cannot infer generic parameter '{param_name}' for "
+                    f"cannot infer generic parameter '{param_name}' for "
                     f"'{template.name}'",
                     loc=call.start,
                 )
@@ -2920,7 +2971,7 @@ class TypeChecker:
                 if isinstance(op, zast.DottedPath):
                     type_desc = f"{t.name}.{op.child.name}"
                 self._error(
-                    f"Cannot infer type arguments for generic type '{type_desc}'",
+                    f"cannot infer type arguments for generic type '{type_desc}'",
                     loc=op.start,
                 )
                 return None
@@ -3075,7 +3126,15 @@ class TypeChecker:
             atom.type = t
             return t
 
-        self._error(f"Undefined identifier: {name}", loc=atom.start)
+        # did-you-mean: search available names in scope
+        candidates = list(self.symtab.all_names())
+        suggestion = _suggest_similar(name, candidates)
+        self._error(
+            f"undefined identifier: {name}",
+            loc=atom.start,
+            err=ERR.REFNOTFOUND,
+            hint=f"did you mean '{suggestion}'?" if suggestion else None,
+        )
         return None
 
     def _check_call(self, call: zast.Call) -> Optional[ZType]:
@@ -3209,9 +3268,12 @@ class TypeChecker:
                 if arg_name:
                     if arg_name in reftype_args:
                         self._error(
-                            f"Reftype aliasing: '{arg_name}' passed as multiple "
+                            f"reftype aliasing: '{arg_name}' passed as multiple "
                             f"arguments in the same call",
                             loc=arg.start,
+                            err=ERR.OWNERERROR,
+                            note="passing the same reference type as multiple arguments "
+                            "could allow conflicting mutations",
                         )
                     else:
                         reftype_args[arg_name] = arg.start
@@ -3226,19 +3288,22 @@ class TypeChecker:
                 if matched:
                     if not self._types_compatible(arg_type, matched):
                         self._error(
-                            f"Argument '{arg.name}' type mismatch: expected "
+                            f"argument '{arg.name}' type mismatch: expected "
                             f"{matched.name}, got {arg_type.name}",
                             loc=arg.start,
+                            err=ERR.CALLERROR,
                         )
                 # don't error on unmatched named args for now (may be :this etc)
             elif arg_type and i < len(params):
                 # positional argument
-                _, ptype = params[i]
+                pname, ptype = params[i]
                 if not self._types_compatible(arg_type, ptype):
                     self._error(
-                        f"Argument type mismatch: expected {ptype.name}, "
+                        f"argument type mismatch: expected {ptype.name}, "
                         f"got {arg_type.name}",
                         loc=arg.start,
+                        err=ERR.CALLERROR,
+                        note=f"parameter '{pname}' expects type {ptype.name}",
                     )
 
             # ownership check: take parameters consume the argument
@@ -3568,9 +3633,10 @@ class TypeChecker:
         if self._current_return_type and ret_type:
             if not self._types_compatible(ret_type, self._current_return_type):
                 self._error(
-                    f"Return type mismatch: function expects {self._current_return_type.name}, "
-                    f"got {ret_type.name}",
+                    f"return type mismatch: function expects "
+                    f"{self._current_return_type.name}, got {ret_type.name}",
                     loc=call.start,
+                    err=ERR.TYPEERROR,
                 )
 
         # ownership check: cannot return a local variable as borrowed

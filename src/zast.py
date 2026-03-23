@@ -21,46 +21,61 @@ from ztypes import ZType, ZParamOwnership
 @unique
 class ERR(IntEnum):
     """
-    List of numeric error codes
+    Error codes grouped by category.
+
+    E0001-E0099: Parser/syntax errors
+    E0100-E0199: Type resolution errors
+    E0200-E0299: Ownership errors
+    E0300-E0399: Call/argument errors
+    E0400-E0499: Generic/monomorphization errors
     """
 
-    COMPILERERROR = 1  # something that shouldn't happen. error in compiler
-    FILENOTFOUND = 2
-    DUPLICATEDEF = 3
-    BADUNITNAME = 4
-    BADUNIT = 5
-    BADFUNCTION = 6
-    IOERROR = 7
-    REFNOTFOUND = 8
-    # requested parser production not found
-    # parser can recover from these and end the current producion
-    # or try another one. Do NOT return this if tokens have been consumed
-    # (convert to a different fatal error)
-    # PRODUCTIONNOTFOUND = 9 # use None return instead
-    EXPECTEDDEF = 10
-    EXPECTEDEXP = 12
-    EXPECTEDOP = 13
-    EXPECTEDTYPEDEF = 14
-    EXPECTEDSTATEMENT = 15
+    # --- Parser/syntax errors (E0001-E0099) ---
+    FILENOTFOUND = 2  # E0002
+    DUPLICATEDEF = 3  # E0003
+    BADUNITNAME = 4  # E0004
+    BADUNIT = 5  # E0005
+    BADFUNCTION = 6  # E0006
+    IOERROR = 7  # E0007
+    EXPECTEDDEF = 10  # E0010
+    EXPECTEDEXP = 12  # E0012
+    EXPECTEDOP = 13  # E0013
+    EXPECTEDTYPEDEF = 14  # E0014
+    EXPECTEDSTATEMENT = 15  # E0015
+    BADARGUMENT = 17  # E0017
+    BADARGUMENTBLOCK = 18  # E0018
+    BADEXPRESSION = 19  # E0019
+    BADOPERATION = 20  # E0020
+    BADSTRING = 21  # E0021
+    BADPATH = 22  # E0022
+    BADREFERENCE = 23  # E0023
+    BADCALL = 24  # E0024
+    BADPARAMETER = 25  # E0025
+    BADPARAMETERBLOCK = 26  # E0026
+    BADOBJECTBLOCK = 27  # E0027
+    BADITEM = 28  # E0028
+    BADTHEN = 29  # E0029
+    BADELSE = 30  # E0030
+    BADCASE = 31  # E0031
+    BADFOR = 32  # E0032
+    BADDATA = 34  # E0034
+    BADSTATEMENT = 35  # E0035
 
-    BADARGUMENT = 17
-    BADARGUMENTBLOCK = 18
-    BADEXPRESSION = 19
-    BADOPERATION = 20
-    BADSTRING = 21
-    BADPATH = 22
-    BADREFERENCE = 23
-    BADCALL = 24
-    BADPARAMETER = 25
-    BADPARAMETERBLOCK = 26
-    BADOBJECTBLOCK = 27
-    BADITEM = 28
-    BADTHEN = 29
-    BADELSE = 30
-    BADCASE = 31
-    BADFOR = 32
-    BADDATA = 34
-    BADSTATEMENT = 35
+    # --- Type resolution errors (E0100-E0199) ---
+    TYPEERROR = 100  # E0100: general type error
+    REFNOTFOUND = 8  # E0008 (legacy; undefined identifier)
+
+    # --- Ownership errors (E0200-E0299) ---
+    OWNERERROR = 200  # E0200: general ownership error
+
+    # --- Call/argument errors (E0300-E0399) ---
+    CALLERROR = 300  # E0300: general call error
+
+    # --- Generic/monomorphization errors (E0400-E0499) ---
+    GENERICERROR = 400  # E0400: general generic error
+
+    # --- Internal compiler error ---
+    COMPILERERROR = 1  # E0001: should not happen
 
 
 @dataclass
@@ -69,33 +84,84 @@ class Error:
     Error - is not an AST Node
 
     err = ERR numeric error code
-    msg = parser error message
+    msg = error message
+    loc = optional source location
+    note = optional context note (e.g. "ownership was transferred here")
+    hint = optional suggestion (e.g. "did you mean 'y'?")
     """
 
     err: ERR
     msg: str
     loc: Optional[Token]
+    note: Optional[str] = None
+    hint: Optional[str] = None
 
 
-def errortomessage(err: Error, vfs: zvfs.ZVfs) -> str:
+# ANSI color codes
+_RED = "\033[1;31m"
+_BLUE = "\033[1;34m"
+_GREEN = "\033[1;32m"
+_CYAN = "\033[1;36m"
+_BOLD = "\033[1m"
+_RESET = "\033[0m"
+
+
+def errortomessage(err: Error, vfs: zvfs.ZVfs, color: bool = False) -> str:
+    """Format an error in rustc-style format.
+
+    Example output:
+        error[E0008]: undefined identifier 'x'
+         --> test.z:5:10
+          |
+        5 |     print x
+          |           ^ not found
+          |
+          = note: ...
+          = hint: did you mean 'y'?
     """
-    errortomessage - convert an error to a message that can be printed to the
-    console
-    """
+    # color helpers
+    red = _RED if color else ""
+    blue = _BLUE if color else ""
+    green = _GREEN if color else ""
+    cyan = _CYAN if color else ""
+    bold = _BOLD if color else ""
+    reset = _RESET if color else ""
+
+    code = f"E{err.err.value:04d}"
     result = []
+
+    # first line: error[E0008]: message
+    result.append(f"{red}error[{code}]{reset}: {bold}{err.msg}{reset}")
+
     if err.loc:
         loc = err.loc
-        result.append(f"ERROR: {err.err.name} {err.msg}")
         path = vfs.pathfromprovider(loc.fsno)
-        result.append(f'In file "{path}", line {loc.lineno}, column {loc.colno}')
+
+        # location line
+        result.append(f" {blue}-->{reset} {path}:{loc.lineno}:{loc.colno}")
+
+        # source line with gutter
         line = vfs.getline(loc.fsno, loc.lineno)
         if line:
-            result.append(line.rstrip())
-            marker = (" " * (loc.colno - 1)) + ("^" * len(loc.tokstr))
-            result.append(marker)
-    else:
-        result.append(f"ERROR: {err.err.name}")
-        result.append(err.msg)
+            gutter = f"{blue}{loc.lineno:>4} |{reset}"
+            empty_gutter = f"{blue}     |{reset}"
+            result.append(empty_gutter)
+            result.append(f"{gutter} {line.rstrip()}")
+            underline = (
+                (" " * loc.colno)
+                + f"{red}"
+                + ("^" * max(len(loc.tokstr), 1))
+                + f"{reset}"
+            )
+            result.append(f"{empty_gutter}{underline}")
+
+    # note and hint
+    if err.note:
+        gutter = f"{blue}     ={reset}"
+        result.append(f"{gutter} {cyan}note{reset}: {err.note}")
+    if err.hint:
+        gutter = f"{blue}     ={reset}"
+        result.append(f"{gutter} {green}hint{reset}: {err.hint}")
 
     return "\n".join(result)
 

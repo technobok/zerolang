@@ -227,13 +227,15 @@ class Parser:
 
     # pylint: disable=R0903
 
-    def __init__(self, vfs: ZVfs, mainunitname: str):
+    def __init__(self, vfs: ZVfs, mainunitname: str, verbose_fn=None):
         """
         vfs: Virtual Filesystem instance to gain access to the module source(s)
         mainunitname: name of main unit (within main; not path, no slashes) to compile
+        verbose_fn: optional callback for verbose messages (called with a string)
         """
         self.vfs: ZVfs = vfs
         self.mainunitname: str = mainunitname
+        self._verbose_fn = verbose_fn
 
         # self.nodetable: zast.NodeTable = zast.NodeTable()
         # self.environment = Environment()
@@ -292,7 +294,8 @@ class Parser:
             for k, v in unit.extern.items():
                 # skip nodes we've already compiled or already have in the queue to compile
                 if k not in definitions and k not in unitstocompile:
-                    print(f"pushing up {k}")
+                    if self._verbose_fn:
+                        self._verbose_fn(f"  resolving dependency: {k}")
                     unitstocompile[k] = v
 
             definitions[refname] = unit.node
@@ -344,7 +347,8 @@ class Parser:
             tokenizer = Tokenizer(openfile)
             lex = Lexer(tokenizer)
             fsid = openfile.entryid
-            print(f"Compiling module file at: {self.vfs.path(fsid)}")
+            if self._verbose_fn:
+                self._verbose_fn(f"  compiling: {self.vfs.path(fsid)}")
 
             unitorerr = self._acceptunitbody(lex)
             if isinstance(unitorerr, zast.Error):

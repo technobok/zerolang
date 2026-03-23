@@ -1562,36 +1562,132 @@ Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
 
 #---: Phase 40: Compiler console output and error messages
 
-Review the output of the compiler that typically goes to the console:
+Modernize the compiler CLI and error experience. Use rustc-style error
+format with error codes, ANSI color, and contextual notes/hints. Make
+the compiler quiet by default with #~"-v" for verbose output. All errors
+and diagnostics go to stderr. Add standard compiler flags.
+
+#---: 40.1 Error infrastructure (#~"src/zast.py")
 
 #ol:
-  [#*: Compiler output in the common case should be quiet]
-  [#*: Verbose compiler output should be triggered by the '-v' flag to assist
-  with compiler debugging, or compile  run debugging eg. seeing which files are
-  being read and compiled; showing the settings the compiler is using eg
-  location of project root and stdlib]
-  [#*: Compiler help '-h' needs to provide a succinct any helpful message about
-  arguments and their effect]
-  [#*: Compiler arguments should use standard names and shortcuts that are
-  common in other major compilers (gcc,  clang, rust, golang, swift)]
-  [#*: Compiler error messages need to provide nicely formatted error messages
-  that are easy to parse and correct by the programmer]
-  [#*: Compiler error messages need to provide filename and location in
-  standard formats that are commonly used by other compilers so that the error
-  message can be used by external tools eg editors to navigate to errors]
-  [#*: Zerolang has an ownership model that may often cause compiler error
-  messages that the user will need to correct. Ensure these are clear and
-  helpful. eg. they must explain if ownership is required in that location that
-  caused the error; or more generally, they must show the current ownership of
-  the instance that is being used and the required ownership type required in
-  the location that caused the error; if a call/binop is used incorrectly,
-  explain the type mismatch and provide the names and types of the arguments
-  that are required; they must explain if there is a lock in place over a
-  variable and give the location of the expression that created that lock]
-  [#*: Suggest any common compiler arguments that are not currently
-  implemented]
-  [#*: Provide any other suggestions or future directions that should be
-  considered for command line arguments and compiler output]
+  #*: #+ Add error code numbering to #~"ERR" enum: E0001-E0099 parser,
+    E0100-E0199 type resolution, E0200-E0299 ownership, E0300-E0399
+    call/argument, E0400-E0499 generics
+  #*: #+ Add optional #~"note: str" field to #~"Error" for context lines
+    (e.g. "ownership was transferred here", "required by this parameter")
+  #*: #+ Add optional #~"hint: str" field to #~"Error" for suggestions
+    (e.g. "did you mean 'y'?", "add .lock to a parameter")
+  #*: #+ Rewrite #~"errortomessage()" to produce rustc-style format:
+    #~"error[E0102]: message" / #~" --> file:line:col" /
+    #~" | source line" / #~" | ^^ underline" /
+    #~" = note: ..." / #~" = hint: ..."
+  #*: #+ Add ANSI color support: #~"error" in red, #~"note" in blue,
+    #~"hint" in green, line numbers in blue. Auto-detect TTY via
+    #~"sys.stderr.isatty()". Accept color flag parameter.
+
+#---: 40.2 CLI and output routing (#~"src/zc.py")
+
+#ol:
+  #*: #+ Add #~"-v" / #~"--verbose" flag — print compilation progress,
+    settings (system dir, src dir, output file), and timing to stderr
+  #*: #+ Add #~"-o" / #~"--output" flag for output C filename
+    (default: #~"unitname.c")
+  #*: #+ Add #~"--no-color" flag to suppress ANSI color codes
+  #*: #+ Remove all #~"print()" calls from the normal compilation path —
+    success produces zero output
+  #*: #+ Route all errors and verbose output to stderr
+  #*: #+ Print error count summary at end: #~"N error(s) found" to stderr
+  #*: #+ Exit codes: 0 success, 1 compilation errors, 2 usage/argument errors
+  #*: #+ Improve #~"-h" help text: description, grouped arguments, usage examples
+
+#---: 40.3 Parser cleanup (#~"src/zparser.py")
+
+#ol:
+  #*: #+ Remove #~"print(\"Compiling module file at: ...\")" (line 347)
+  #*: #+ Remove #~"print(\"pushing up ...\")" (line 295)
+  #*: #+ Centralise verbose output in simple functions (not Python-specific
+    modules like #~"logging" — keep portable for future self-hosting)
+  #*: #+ If parser needs to report verbose info, pass a callback from the
+    compiler driver (#~"zc.py") to the Parser constructor
+
+#---: 40.4 Ownership error improvements (#~"src/ztypecheck.py")
+
+#ol:
+  #*: "cannot use 'x' after ownership transfer" — add note showing
+    the location where #~".take" transferred ownership
+  #*: #+ "function returns 'borrow' but has no 'lock' parameter" — add
+    hint: "add .lock to a parameter to borrow from it"
+  #*: #+ "parameter marked as 'lock' but function has no return value"
+    — add hint: "lock is only useful when the function returns a
+    borrowed value"
+  #*: Lock violation errors — add note showing the location of the
+    expression that created the lock
+  #*: #+ Reftype aliasing — add note explaining why passing the same
+    reftype twice is unsafe
+
+#---: 40.5 Type error improvements (#~"src/ztypecheck.py")
+
+#ol:
+  #*: #+ "undefined identifier: x" — add did-you-mean using edit distance
+    on available names in scope (Levenshtein, max distance 2)
+  #*: "type mismatch: expected X, got Y" — ensure both type names shown
+    with their full qualified names when ambiguous
+  #*: #+ "argument 'x' type mismatch" — show the expected parameter
+    signature alongside the actual argument type
+  #*: #+ "generic type 'T' requires type arguments" — add hint with
+    example syntax: #~"(T t: i64)"
+  #*: "unknown named argument 'x'" — did-you-mean on parameter names
+  #*: "too many/too few arguments" — show expected function signature
+
+#---: 40.6 Did-you-mean infrastructure (#~"src/ztypecheck.py")
+
+#ol:
+  #*: #+ Add #~"_suggest_similar(name, candidates, max_distance=2)"
+    helper using Levenshtein distance (no external deps)
+  #*: #+ Use for undefined identifiers
+  #*: Use for unknown parameter names and unknown type names
+  #*: #+ Only suggest when distance <= 2 and there is a single best match
+
+#---: 40.7 Compiler command documentation (#~"doc/zc.pdoc")
+
+#ol:
+  #*: #+ Create #~"doc/zc.pdoc" — full command-line reference for the
+    zerolang compiler
+  #*: #+ Synopsis, description, all arguments with detailed descriptions
+    and examples
+  #*: #+ Document the error format (rustc-style) with annotated examples
+  #*: #+ Document the error code numbering scheme: E0001-E0099 parser,
+    E0100-E0199 type resolution, E0200-E0299 ownership, E0300-E0399
+    call/argument, E0400-E0499 generics
+  #*: #+ Document exit codes: 0 success, 1 errors, 2 usage
+  #*: #+ Add link to #~"doc/index.pdoc" documentation index
+
+#---: 40.8 Tests
+
+#ol:
+  #*: Test quiet output: no stdout on successful compilation
+  #*: Test #~"-v" produces verbose output to stderr
+  #*: Test #~"-o" writes to specified output file
+  #*: Test error format matches #~"error[Exxxx]:" pattern
+  #*: Test #~"--no-color" suppresses ANSI escape codes
+  #*: Test exit codes: 0 success, 1 errors, 2 bad args
+  #*: Test error count summary in stderr
+  #*: Test did-you-mean suggestions appear for close misspellings
+  #*: Test ownership error notes include source locations
+
+#---: 40.9 Future considerations (not in this phase)
+
+#ul:
+  #*: Warning vs error distinction (currently all diagnostics are errors)
+  #*: #~"--emit" flag to choose output format (c, sql, ast-dump)
+  #*: #~"-W" flags for warning control (e.g. #~"-Wunused")
+  #*: #~"--explain Exxxx" to show detailed documentation for an error code
+  #*: Watch mode (#~"--watch") for recompilation on file change
+  #*: JSON error output for IDE integration (#~"--error-format=json")
+
+Files: #~"src/zc.py", #~"src/zast.py", #~"src/ztypecheck.py",
+#~"src/zparser.py", #~"doc/zc.pdoc", #~"doc/index.pdoc",
+#~"doc/roadmap.pdoc", #~"tests/test_cli.py"
 
 
 #---: Phase 41: C Runtime Library
