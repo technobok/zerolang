@@ -3038,7 +3038,12 @@ class TypeChecker:
                         else:
                             # release any locks held by this variable before invalidating
                             self.symtab.release_held_locks(path.parent.name)
-                            self.symtab.invalidate(path.parent.name)
+                            take_loc = (
+                                (path.start.lineno, path.start.colno, path.start.fsno)
+                                if path.start
+                                else None
+                            )
+                            self.symtab.invalidate(path.parent.name, loc=take_loc)
                     path.type = parent_type
                     return parent_type
 
@@ -3125,6 +3130,18 @@ class TypeChecker:
         if t:
             atom.type = t
             return t
+
+        # check if the variable was taken (ownership transferred)
+        taken_loc = self.symtab.get_taken_location(name)
+        if taken_loc:
+            tline, tcol, _ = taken_loc
+            self._error(
+                f"cannot use '{name}' after ownership transfer",
+                loc=atom.start,
+                err=ERR.OWNERERROR,
+                note=f"ownership of '{name}' was transferred at line {tline}, column {tcol}",
+            )
+            return None
 
         # did-you-mean: search available names in scope
         candidates = list(self.symtab.all_names())
@@ -3293,7 +3310,16 @@ class TypeChecker:
                             loc=arg.start,
                             err=ERR.CALLERROR,
                         )
-                # don't error on unmatched named args for now (may be :this etc)
+                elif not arg.name.startswith(":"):
+                    # unknown named argument — suggest similar parameter names
+                    param_names = [p for p, _ in params if not p.startswith(":")]
+                    suggestion = _suggest_similar(arg.name, param_names)
+                    self._error(
+                        f"unknown argument '{arg.name}'",
+                        loc=arg.start,
+                        err=ERR.CALLERROR,
+                        hint=f"did you mean '{suggestion}'?" if suggestion else None,
+                    )
             elif arg_type and i < len(params):
                 # positional argument
                 pname, ptype = params[i]
@@ -3325,7 +3351,12 @@ class TypeChecker:
                             )
                         else:
                             self.symtab.release_held_locks(arg_root)
-                            self.symtab.invalidate(arg_root)
+                            take_loc = (
+                                (arg.start.lineno, arg.start.colno, arg.start.fsno)
+                                if arg.start
+                                else None
+                            )
+                            self.symtab.invalidate(arg_root, loc=take_loc)
 
             # locking algorithm: take locks on arguments
             if arg_type and not _is_valtype(arg_type):

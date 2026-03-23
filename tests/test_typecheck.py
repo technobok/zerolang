@@ -756,9 +756,11 @@ class TestTakeBorrowCompilerMethods:
         check_ok("main: function is {\n  x: 42\n  y: x.borrow\n}")
 
     def test_take_invalidates_name(self):
-        """After x.take, x should be invalid."""
+        """After x.take, x should be invalid (ownership transferred)."""
         errors = check_errors("main: function is {\n  x: 42\n  y: x.take\n  z: x\n}")
-        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
 
 
 class TestSwapOwnership:
@@ -1147,7 +1149,9 @@ class TestClassOwnership:
             "  e: c\n"
             "}"
         )
-        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
 
     def test_class_borrow_locks(self):
         """Borrowing a class variable locks the source."""
@@ -1213,7 +1217,9 @@ class TestStringMigration:
         errors = check_errors(
             'main: function is {\n  s: "hello"\n  d: s.take\n  e: s\n}'
         )
-        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
 
     def test_string_borrow_locks(self):
         """Borrowing a string variable should lock the source."""
@@ -1351,7 +1357,9 @@ class TestUnionOwnership:
             "  z: x\n"
             "}"
         )
-        assert any("Undefined" in e.msg or "undefined" in e.msg for e in errors)
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
 
     def test_union_borrow_locks(self):
         """Borrowing a union variable locks the source."""

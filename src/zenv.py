@@ -2,7 +2,7 @@
 ZeroLang scoped symbol table for the type checker
 """
 
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Tuple
 from ztypes import ZType, ZVariable, ZLockState, LockEntry
 
 
@@ -39,6 +39,8 @@ class SymbolTable:
 
     def __init__(self) -> None:
         self._scopes: List[Scope] = []
+        # track taken (invalidated) variables: name -> (line, col, file_id)
+        self._taken: Dict[str, Tuple[int, int, int]] = {}
 
     def push(self, name: str) -> Scope:
         scope = Scope(name)
@@ -68,15 +70,24 @@ class SymbolTable:
                 return v
         return None
 
-    def invalidate(self, name: str) -> bool:
-        """Mark a variable as consumed (taken). Returns True if found and invalidated."""
+    def invalidate(self, name: str, loc: Optional[Tuple[int, int, int]] = None) -> bool:
+        """Mark a variable as consumed (taken). Returns True if found and invalidated.
+
+        loc: optional (line, col, file_id) of the take expression for error reporting.
+        """
         for scope in reversed(self._scopes):
             if name in scope.symbols:
                 del scope.symbols[name]
                 if name in scope.variables:
                     del scope.variables[name]
+                if loc is not None:
+                    self._taken[name] = loc
                 return True
         return False
+
+    def get_taken_location(self, name: str) -> Optional[Tuple[int, int, int]]:
+        """Return the (line, col, file_id) where a variable was taken, or None."""
+        return self._taken.get(name)
 
     def try_lock(
         self, target_name: str, lock_type: ZLockState, holder: str
