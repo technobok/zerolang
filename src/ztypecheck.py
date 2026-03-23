@@ -236,6 +236,32 @@ class TypeChecker:
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
 
+    # Keywords used to auto-categorise errors when no explicit code is given
+    _OWNERSHIP_KEYWORDS = (
+        "take",
+        "swap",
+        "borrowed",
+        "borrow",
+        "lock",
+        "ownership",
+    )
+    _GENERIC_KEYWORDS = (
+        "generic",
+        "infer",
+        "monomorph",
+        "numeric generic",
+        "Numeric generic",
+    )
+    _CALL_KEYWORDS = (
+        "operator",
+        "argument",
+        "exhaustive",
+        "missing method",
+        "requires",
+        "Cannot call",
+        "param",
+    )
+
     def _error(
         self,
         msg: str,
@@ -244,6 +270,17 @@ class TypeChecker:
         note: Optional[str] = None,
         hint: Optional[str] = None,
     ) -> None:
+        # auto-categorise if caller used the default COMPILERERROR
+        if err == ERR.COMPILERERROR:
+            ml = msg.lower()
+            if any(k.lower() in ml for k in self._OWNERSHIP_KEYWORDS):
+                err = ERR.OWNERERROR
+            elif any(k.lower() in ml for k in self._GENERIC_KEYWORDS):
+                err = ERR.GENERICERROR
+            elif any(k.lower() in ml for k in self._CALL_KEYWORDS):
+                err = ERR.CALLERROR
+            else:
+                err = ERR.TYPEERROR
         self.errors.append(zast.Error(err=err, msg=msg, loc=loc, note=note, hint=hint))
 
     def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
