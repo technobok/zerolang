@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 import zast
 from zlexer import Token
-from ztypes import ZType, ZTypeType
+from ztypes import ZType
 import zemitterc
 
 
@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS emitted_lines (
 
 # ---- Data collection ----
 
+
 def _collect_tokens(program: zast.Program) -> List[Token]:
     """Collect all unique tokens from AST nodes."""
     tokens: dict[int, Token] = {}
@@ -171,6 +172,7 @@ def _collect_ast_nodes(program: zast.Program) -> List[Tuple[zast.Node, str]]:
 
 # ---- SQL generation ----
 
+
 def dump_sql(
     program: zast.Program,
     emitter: Optional[zemitterc.CEmitter] = None,
@@ -186,9 +188,7 @@ def dump_sql(
     # Stage 1: files
     file_table = program.vfs.file_table()
     for file_id, path in file_table:
-        lines.append(
-            f"INSERT INTO files VALUES ({file_id}, {_sql_str(path)});"
-        )
+        lines.append(f"INSERT INTO files VALUES ({file_id}, {_sql_str(path)});")
 
     # Stage 2: tokens
     tokens = _collect_tokens(program)
@@ -242,7 +242,9 @@ def dump_sql(
 
     for ztype in all_types.values():
         parent_id = _sql_int(ztype.parent.nodeid) if ztype.parent else "NULL"
-        typedef_id = _sql_int(ztype.typedef_base.nodeid) if ztype.typedef_base else "NULL"
+        typedef_id = (
+            _sql_int(ztype.typedef_base.nodeid) if ztype.typedef_base else "NULL"
+        )
         origin_id = "NULL"
         if isinstance(ztype.generic_origin, ZType):
             origin_id = _sql_int(ztype.generic_origin.nodeid)

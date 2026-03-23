@@ -215,17 +215,33 @@ class TypeChecker:
 
     # Multi-char operator names (checked first, before per-char mangling)
     _OP_NAMES = {
-        "<=": "le", ">=": "ge", "==": "eq", "!=": "ne",
+        "<=": "le",
+        ">=": "ge",
+        "==": "eq",
+        "!=": "ne",
     }
 
     # Single-char replacements for zerolang identifier chars invalid in C
     # Named after the character glyph, not the operation it performs
     _CHAR_MANGLE = {
-        "!": "excl", "$": "dollar", "%": "perc", "&": "amp",
-        "'": "tick", "*": "star", "+": "plus", "-": "minus",
-        "/": "slash", "<": "lt", "=": "eq", ">": "gt",
-        "?": "ques", "@": "at", "\\": "bslash", "^": "caret",
-        "|": "pipe", "~": "tilde",
+        "!": "excl",
+        "$": "dollar",
+        "%": "perc",
+        "&": "amp",
+        "'": "tick",
+        "*": "star",
+        "+": "plus",
+        "-": "minus",
+        "/": "slash",
+        "<": "lt",
+        "=": "eq",
+        ">": "gt",
+        "?": "ques",
+        "@": "at",
+        "\\": "bslash",
+        "^": "caret",
+        "|": "pipe",
+        "~": "tilde",
     }
 
     @staticmethod
@@ -262,9 +278,14 @@ class TypeChecker:
             base = "z_" + self._mangle_name(name)
             self._assign_cname(ztype, base)
         elif ztype.typetype in (
-            ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.UNION,
-            ZTypeType.VARIANT, ZTypeType.PROTOCOL, ZTypeType.FACET,
-            ZTypeType.ENUM, ZTypeType.TAG,
+            ZTypeType.RECORD,
+            ZTypeType.CLASS,
+            ZTypeType.UNION,
+            ZTypeType.VARIANT,
+            ZTypeType.PROTOCOL,
+            ZTypeType.FACET,
+            ZTypeType.ENUM,
+            ZTypeType.TAG,
         ):
             base = f"z_{ztype.name}_t"
             self._assign_cname(ztype, base)
@@ -505,9 +526,7 @@ class TypeChecker:
         ret_is_borrow = ftype.return_ownership == ZParamOwnership.BORROW
 
         # lock parameters are only valid when there is a return value
-        has_lock_param = any(
-            v == ZParamOwnership.LOCK for v in own.values()
-        )
+        has_lock_param = any(v == ZParamOwnership.LOCK for v in own.values())
         if has_lock_param and not has_return:
             self._error(
                 "Parameter marked as 'lock' but function has no return value",
@@ -1403,11 +1422,7 @@ class TypeChecker:
         """Check that impl method signature matches protocol spec signature."""
         # extract non-receiver params
         # "this" is the receiver in both spec and impl; skip it
-        spec_params = [
-            (k, v)
-            for k, v in spec_func.children.items()
-            if k != "this"
-        ]
+        spec_params = [(k, v) for k, v in spec_func.children.items() if k != "this"]
         impl_params = [
             (k, v)
             for k, v in impl_func.children.items()
@@ -2357,9 +2372,7 @@ class TypeChecker:
                 mono.param_defaults["capacity"] = str(str_cap)
             # synthesize .string method: function {} out string
             string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
-            string_method.return_type = (
-                self._resolve_name("string") or self.t_null
-            )
+            string_method.return_type = self._resolve_name("string") or self.t_null
             mono.children["string"] = string_method
 
         # for list types: set reftype, synthesize methods

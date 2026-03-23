@@ -15,6 +15,7 @@ from ztypes import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANG
 @dataclass
 class ScopeState:
     """Per-function cleanup state, pushed/popped at function boundaries."""
+
     # (mangled_var_name, ZType) pairs in insertion order for scope-exit cleanup
     cleanup_vars: list = field(default_factory=list)
     temp_counter: int = 0
@@ -26,10 +27,12 @@ class ScopeState:
 @dataclass
 class TempState:
     """Per-statement temporary variable state, pushed/popped at statement boundaries."""
+
     decls: List[str] = field(default_factory=list)
     frees: List[str] = field(default_factory=list)
     string_set: set = field(default_factory=set)
     class_set: Dict[str, str] = field(default_factory=dict)
+
 
 TYPEMAP: Dict[str, str] = {
     "i8": "int8_t",
@@ -260,10 +263,7 @@ class TrackedList(list):
 
 def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
     """Check if a name refers to a unit-level definition."""
-    return (
-        emitter._resolved_type(name) is not None
-        or name in emitter._const_names
-    )
+    return emitter._resolved_type(name) is not None or name in emitter._const_names
 
 
 class CEmitter:
@@ -382,8 +382,13 @@ class CEmitter:
             char_pos = line_end + 1  # +1 for the \n
 
     def _emit_bounds_check(
-        self, lines: List[str], idx_expr: str, len_expr: str,
-        label: str, idx_fmt: str = "%lu", idx_cast: str = "(unsigned long)",
+        self,
+        lines: List[str],
+        idx_expr: str,
+        len_expr: str,
+        label: str,
+        idx_fmt: str = "%lu",
+        idx_cast: str = "(unsigned long)",
     ) -> None:
         """Emit a bounds-check with error exit for container get/set."""
         lines.append(f"    if ({idx_expr} >= {len_expr}) {{\n")
@@ -395,7 +400,11 @@ class CEmitter:
         lines.append("    }\n")
 
     def _emit_heap_container_create(
-        self, lines: List[str], name: str, ctype: str, data_ctype: str,
+        self,
+        lines: List[str],
+        name: str,
+        ctype: str,
+        data_ctype: str,
     ) -> None:
         """Emit a heap-allocated container create function (list/map pattern)."""
         create_name = f"z_{name}_create"
@@ -439,7 +448,9 @@ class CEmitter:
         self._temp.decls.append(f"{indent}{ctype} {name} = {expr};\n")
         return name
 
-    def _emit_field_cleanup(self, access: str, ftype: ZType, indent: str = "    ") -> str:
+    def _emit_field_cleanup(
+        self, access: str, ftype: ZType, indent: str = "    "
+    ) -> str:
         """Emit cleanup code for a single field/variable given its ZType.
 
         Returns a C statement string (with newline) or empty string if no cleanup needed.
@@ -448,7 +459,9 @@ class CEmitter:
             return f"{indent}{ftype.destructor_name}({access});\n"
         return ""
 
-    def _emit_scope_cleanup(self, indent: str, exclude_var: Optional[str] = None) -> str:
+    def _emit_scope_cleanup(
+        self, indent: str, exclude_var: Optional[str] = None
+    ) -> str:
         """Emit cleanup code for all tracked function-scope variables.
 
         Uses ZType.destructor_name for type-driven cleanup.
@@ -540,7 +553,6 @@ class CEmitter:
             return parent.name
         return ""
 
-
     def _collect_pre_emission(self, prefix: str, body: dict) -> None:
         """Pre-emission pass: collect supplementary data not derivable from ZType.
 
@@ -558,9 +570,15 @@ class CEmitter:
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
                         proto_name = apath.name if type(apath) == zast.AtomId else None
-                        if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+                        if (
+                            proto_name
+                            and self._typetype_of(proto_name) == ZTypeType.PROTOCOL
+                        ):
                             self._proto_conformance[(qname, proto_name)] = label
-                        if proto_name and self._typetype_of(proto_name) == ZTypeType.FACET:
+                        if (
+                            proto_name
+                            and self._typetype_of(proto_name) == ZTypeType.FACET
+                        ):
                             self._proto_conformance[(qname, proto_name)] = label
                             self._facet_conformers.setdefault(proto_name, []).append(
                                 qname
@@ -605,7 +623,9 @@ class CEmitter:
                     self._emit_spec_typedef(qname, defn)
             elif defn_type == zast.Data:
                 self._emit_data(qname, defn)
-            elif defn_type == zast.Expression and isinstance(defn.expression, zast.Data):
+            elif defn_type == zast.Expression and isinstance(
+                defn.expression, zast.Data
+            ):
                 self._emit_data(qname, defn.expression)
             elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
@@ -625,7 +645,10 @@ class CEmitter:
                 if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
                         facet_name = apath.name if type(apath) == zast.AtomId else None
-                        if facet_name and self._typetype_of(facet_name) == ZTypeType.FACET:
+                        if (
+                            facet_name
+                            and self._typetype_of(facet_name) == ZTypeType.FACET
+                        ):
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
     def emit(self) -> str:
@@ -1232,10 +1255,7 @@ class CEmitter:
         param_str = ", ".join(params) if params else "void"
         return f"{ret_ctype} (*{mname})({param_str})"
 
-
-    def _collect_field_params(
-        self, name: str, items: dict, functions: dict
-    ) -> tuple:
+    def _collect_field_params(self, name: str, items: dict, functions: dict) -> tuple:
         """Collect C parameter strings, field names, and field C types.
 
         Returns (params, field_names, field_ctypes).
@@ -1282,7 +1302,10 @@ class CEmitter:
                             field_defaults[fname] = f"(({dct}){value})"
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
-            elif type(fpath) == zast.AtomId and self._typetype_of(fpath.name) == ZTypeType.FUNCTION:
+            elif (
+                type(fpath) == zast.AtomId
+                and self._typetype_of(fpath.name) == ZTypeType.FUNCTION
+            ):
                 field_defaults[fname] = _mangle_func(fpath.name)
         for mname, mfunc in functions.items():
             if mfunc.body is not None:
@@ -1349,8 +1372,13 @@ class CEmitter:
         has_user_create = "create" in defn.functions or "create" in defn.as_functions
         target: List[str] = lines if lines is not None else []
         self._emit_create_functions(
-            name, ctype, params, field_names, is_heap=is_heap,
-            has_user_create=has_user_create, lines=target,
+            name,
+            ctype,
+            params,
+            field_names,
+            is_heap=is_heap,
+            has_user_create=has_user_create,
+            lines=target,
         )
         if lines is None:
             self.struct_defs.append("".join(target))
@@ -1617,8 +1645,13 @@ class CEmitter:
         params = [f"{ct} {fn}" for fn, ct in field_items]
         field_names = [fn for fn, _ in field_items]
         self._emit_create_functions(
-            name, ctype, params, field_names, is_heap=False,
-            has_user_create=False, lines=lines,
+            name,
+            ctype,
+            params,
+            field_names,
+            is_heap=False,
+            has_user_create=False,
+            lines=lines,
         )
 
         # register field info for call emission
@@ -1991,7 +2024,11 @@ class CEmitter:
 
         # helper: free a value if reftype
         def emit_free_val(var: str, indent: str = "    ") -> str:
-            if value_type and value_type.needs_destructor and value_type.destructor_name:
+            if (
+                value_type
+                and value_type.needs_destructor
+                and value_type.destructor_name
+            ):
                 return f"{indent}{value_type.destructor_name}({var});\n"
             if val_is_reftype:
                 return f"{indent}if ({var}) free({var});\n"
@@ -2305,9 +2342,13 @@ class CEmitter:
         if name not in self._type_field_defaults:
             self._type_field_defaults[name] = {}
         self._emit_create_functions(
-            name, ctype, params, field_names,
+            name,
+            ctype,
+            params,
+            field_names,
             is_heap=mono_type.is_heap_allocated,
-            has_user_create=False, lines=lines,
+            has_user_create=False,
+            lines=lines,
         )
 
     def _emit_mono_protocol(
@@ -2508,7 +2549,9 @@ class CEmitter:
 
         # push new scope for this function
         func_nid = func.nodeid if hasattr(func, "nodeid") else 0
-        self._scope_stack.append(ScopeState(record_name=record_name, func_nodeid=func_nid))
+        self._scope_stack.append(
+            ScopeState(record_name=record_name, func_nodeid=func_nid)
+        )
         # track parameters that are class pointers
         if self._typetype_of(record_name) == ZTypeType.CLASS:
             for pname, ppath in func.parameters.items():
@@ -2596,8 +2639,14 @@ class CEmitter:
             self._scope.cleanup_vars.append((cname, assign.type))
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
-        inner_resolved = self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
-        if inner_resolved and inner_resolved.typetype == ZTypeType.RECORD and inner_resolved.name == inner.name:
+        inner_resolved = (
+            self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
+        )
+        if (
+            inner_resolved
+            and inner_resolved.typetype == ZTypeType.RECORD
+            and inner_resolved.name == inner.name
+        ):
             ctype = f"z_{inner.name}_t"
         result = f"{indent}{ctype} {cname} = {val};\n"
         # nullify source on .take for class pointers
@@ -3003,7 +3052,8 @@ class CEmitter:
             first_arg = call.arguments[0].valtype
             if (
                 isinstance(first_arg, zast.AtomId)
-                and first_arg.type and first_arg.type.typetype == ZTypeType.CLASS
+                and first_arg.type
+                and first_arg.type.typetype == ZTypeType.CLASS
                 and len(call.arguments) > 1
             ):
                 # emit as meta.create call
@@ -3204,7 +3254,10 @@ class CEmitter:
             return self._emit_call_value(inner)
         if isinstance(inner, zast.Operation):
             # bare function name = call with all-default args
-            if isinstance(inner, zast.AtomId) and self._typetype_of(inner.name) == ZTypeType.FUNCTION:
+            if (
+                isinstance(inner, zast.AtomId)
+                and self._typetype_of(inner.name) == ZTypeType.FUNCTION
+            ):
                 ftype = inner.type
                 if ftype and ftype.param_defaults:
                     cname = _mangle_func(inner.name)

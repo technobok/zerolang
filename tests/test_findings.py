@@ -24,7 +24,7 @@ from ztypes import ZTypeType
 import zemitterc
 import zast
 from zast import CallKind
-from zvfs import ZVfs, FSProvider, StringProvider, BindType
+from zvfs import ZVfs, StringProvider
 import zsqldump
 
 
@@ -102,7 +102,9 @@ class TestFinding1TypeAnnotations:
         assert isinstance(point, zast.Record)
         for fname, fpath in point.items.items():
             assert fpath.type is not None, f"Field '{fname}' has no .type"
-            assert fpath.type.name in ("f64",), f"Field '{fname}' type is {fpath.type.name}"
+            assert fpath.type.name in ("f64",), (
+                f"Field '{fname}' type is {fpath.type.name}"
+            )
 
     def test_function_param_types_annotated(self):
         program = parse_and_check(
@@ -439,32 +441,27 @@ class TestFinding7SourceMap:
 
     def test_source_map_length_matches_output(self):
         csource, emitter = emit_with_emitter(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "hello" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
         lines = csource.split("\n")
         assert len(emitter.source_map) == len(lines)
 
     def test_source_map_has_mapped_lines(self):
         csource, emitter = emit_with_emitter(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "hello" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
         mapped = [n for n in emitter.source_map if n is not None]
         assert len(mapped) > 0, "No lines mapped to AST nodes"
 
     def test_source_map_boilerplate_is_none(self):
-        csource, emitter = emit_with_emitter(
-            'main: function is { print "hello" }'
-        )
+        csource, emitter = emit_with_emitter('main: function is { print "hello" }')
         lines = csource.split("\n")
         # first line is a comment, should be None
         assert emitter.source_map[0] is None
 
     def test_source_map_definition_lines_have_node_ids(self):
         csource, emitter = emit_with_emitter(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "hello" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
         lines = csource.split("\n")
         # find the struct definition line
@@ -479,9 +476,7 @@ class TestFinding7SourceMap:
             assert nid is not None, f"Line {lineno} has z_point_t but no node ID"
 
     def test_source_map_function_lines_have_node_ids(self):
-        csource, emitter = emit_with_emitter(
-            'main: function is { print "hello" }'
-        )
+        csource, emitter = emit_with_emitter('main: function is { print "hello" }')
         lines = csource.split("\n")
         # find the z_main function body (not forward decl)
         main_lines = [
@@ -533,9 +528,7 @@ class TestFinding10TypeAnnotationAudit:
         assert missing == [], f"Unexpected missing annotations: {missing}"
 
     def test_audit_clean_for_string_operations(self):
-        program = parse_and_check(
-            'main: function is {\n    s: "hello"\n    print s\n}'
-        )
+        program = parse_and_check('main: function is {\n    s: "hello"\n    print s\n}')
         missing = audit_type_annotations(program)
         assert missing == [], f"Unexpected missing annotations: {missing}"
 
@@ -629,6 +622,7 @@ class TestFinding11ScopeState:
     def test_scope_state_dataclass_exists(self):
         """ScopeState dataclass should be importable and have expected fields."""
         from zemitterc import ScopeState
+
         s = ScopeState()
         assert s.cleanup_vars == []
         assert s.temp_counter == 0
@@ -638,6 +632,7 @@ class TestFinding11ScopeState:
     def test_temp_state_dataclass_exists(self):
         """TempState dataclass should be importable and have expected fields."""
         from zemitterc import TempState
+
         t = TempState()
         assert t.decls == []
         assert t.frees == []
@@ -701,6 +696,7 @@ class TestFinding11ScopeState:
         """Scope cleanup should use ZType.destructor_name (type-driven, not cascades)."""
         from zemitterc import ScopeState
         from ztypes import ZType, ZTypeType
+
         # verify that a ZType with destructor_name set gets correct cleanup
         t = ZType(name="box", typetype=ZTypeType.CLASS, parent=None)
         t.needs_destructor = True
@@ -722,6 +718,7 @@ class TestFinding12SelfHostingPatterns:
     def test_type_ids_are_plain_ints(self):
         """TypeID and VariableID should be plain int aliases, not NewType."""
         from ztypes import TypeID, VariableID
+
         # plain int aliases: TypeID is int, VariableID is int
         assert TypeID is int
         assert VariableID is int
@@ -729,6 +726,7 @@ class TestFinding12SelfHostingPatterns:
     def test_type_ids_auto_increment(self):
         """ZType.nodeid should auto-increment via _alloc_type_id."""
         from ztypes import ZType, ZTypeType
+
         t1 = ZType(name="a", typetype=ZTypeType.RECORD, parent=None)
         t2 = ZType(name="b", typetype=ZTypeType.RECORD, parent=None)
         assert isinstance(t1.nodeid, int)
@@ -738,6 +736,7 @@ class TestFinding12SelfHostingPatterns:
     def test_variable_ids_auto_increment(self):
         """ZVariable.variableid should auto-increment via _alloc_variable_id."""
         from ztypes import ZVariable, ZType, ZTypeType, ZOwnership, ZNaming
+
         t = ZType(name="x", typetype=ZTypeType.RECORD, parent=None)
         v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
         v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
@@ -748,6 +747,7 @@ class TestFinding12SelfHostingPatterns:
         """TypeTable should not use threading.Lock."""
         import inspect
         from ztypes import TypeTable
+
         source = inspect.getsource(TypeTable)
         assert "threading" not in source
         assert "Lock" not in source
@@ -755,6 +755,7 @@ class TestFinding12SelfHostingPatterns:
     def test_no_ordered_dict_in_ztype(self):
         """ZType fields should use plain dict, not OrderedDict."""
         from ztypes import ZType, ZTypeType
+
         t = ZType(name="test", typetype=ZTypeType.RECORD, parent=None)
         assert type(t.children) is dict
         assert type(t.generic_params) is dict
@@ -763,6 +764,7 @@ class TestFinding12SelfHostingPatterns:
     def test_children_dict_preserves_order(self):
         """Plain dict should preserve insertion order (Python 3.7+)."""
         from ztypes import ZType, ZTypeType
+
         parent = ZType(name="rec", typetype=ZTypeType.RECORD, parent=None)
         c1 = ZType(name="x", typetype=ZTypeType.RECORD, parent=parent)
         c2 = ZType(name="y", typetype=ZTypeType.RECORD, parent=parent)
@@ -800,8 +802,7 @@ class TestSqlDump:
     def test_dump_sql_loads_into_sqlite(self):
         """SQL dump should be valid SQLite."""
         program = parse_and_check(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "ok" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "ok" }'
         )
         sql = zsqldump.dump_sql(program)
         conn = _load_sql(sql)
@@ -888,12 +889,10 @@ class TestSqlDump:
     def test_emitted_lines_populated(self):
         """emitted_lines should be populated when emitter is provided."""
         csource, emitter = emit_with_emitter(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "hello" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
         program = parse_and_check(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "hello" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
         emitter2 = zemitterc.CEmitter(program)
         csource2 = emitter2.emit()
@@ -932,7 +931,9 @@ class TestSqlDump:
             SELECT COUNT(*) FROM typed_nodes tn
             WHERE NOT EXISTS (SELECT 1 FROM ast_nodes a WHERE a.node_id = tn.node_id)
         """).fetchone()[0]
-        assert orphan_typed == 0, f"{orphan_typed} typed_nodes reference missing ast_nodes"
+        assert orphan_typed == 0, (
+            f"{orphan_typed} typed_nodes reference missing ast_nodes"
+        )
 
         # typed_nodes → types: every typed_nodes.type_id should exist in types
         orphan_type_refs = conn.execute("""
@@ -940,7 +941,9 @@ class TestSqlDump:
             WHERE tn.type_id IS NOT NULL
             AND NOT EXISTS (SELECT 1 FROM types t WHERE t.type_id = tn.type_id)
         """).fetchone()[0]
-        assert orphan_type_refs == 0, f"{orphan_type_refs} typed_nodes reference missing types"
+        assert orphan_type_refs == 0, (
+            f"{orphan_type_refs} typed_nodes reference missing types"
+        )
 
         # emitted_lines → ast_nodes (where node_id is not null)
         orphan_emitted = conn.execute("""
@@ -948,15 +951,16 @@ class TestSqlDump:
             WHERE el.node_id IS NOT NULL
             AND NOT EXISTS (SELECT 1 FROM ast_nodes a WHERE a.node_id = el.node_id)
         """).fetchone()[0]
-        assert orphan_emitted == 0, f"{orphan_emitted} emitted_lines reference missing ast_nodes"
+        assert orphan_emitted == 0, (
+            f"{orphan_emitted} emitted_lines reference missing ast_nodes"
+        )
 
         conn.close()
 
     def test_type_children_populated(self):
         """type_children should link parent types to their children."""
         program = parse_and_check(
-            "point: record is { x: f64  y: f64 }\n"
-            'main: function is { print "ok" }'
+            'point: record is { x: f64  y: f64 }\nmain: function is { print "ok" }'
         )
         sql = zsqldump.dump_sql(program)
         conn = _load_sql(sql)
@@ -985,6 +989,7 @@ class TestSqlDump:
     def test_cli_dump_sql_flag(self):
         """zc --dump-sql should write valid SQL to a file."""
         import subprocess
+
         with tempfile.TemporaryDirectory() as tmpdir:
             # write a small zerolang source file
             src = os.path.join(tmpdir, "clitest.z")
@@ -994,11 +999,17 @@ class TestSqlDump:
             src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
             result = subprocess.run(
                 [
-                    sys.executable, os.path.join(src_dir, "zc.py"),
-                    "--src", tmpdir, "clitest",
-                    "--dump-sql", sql_path,
+                    sys.executable,
+                    os.path.join(src_dir, "zc.py"),
+                    "--src",
+                    tmpdir,
+                    "clitest",
+                    "--dump-sql",
+                    sql_path,
                 ],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True,
+                text=True,
+                timeout=30,
             )
             assert result.returncode == 0, f"zc failed: {result.stderr}"
             assert os.path.exists(sql_path), "SQL file not created"
@@ -1103,17 +1114,15 @@ class TestCname:
         """SQL dump should include cname column in types table."""
         program = parse_and_check(
             "point: record is { x: f64  y: f64 }\n"
-            'main: function is {\n'
-            '    p: point x: 1.0 y: 2.0\n'
+            "main: function is {\n"
+            "    p: point x: 1.0 y: 2.0\n"
             '    print "\\{p.x}"\n'
-            '}'
+            "}"
         )
         sql = zsqldump.dump_sql(program)
         conn = _load_sql(sql)
         # check cname column exists
-        row = conn.execute(
-            "SELECT cname FROM types WHERE name = 'point'"
-        ).fetchone()
+        row = conn.execute("SELECT cname FROM types WHERE name = 'point'").fetchone()
         assert row is not None
         assert row[0] == "z_point_t"
         conn.close()
@@ -1122,10 +1131,10 @@ class TestCname:
         """SQL dump should include cname column in ast_nodes table."""
         program = parse_and_check(
             "point: record is { x: f64  y: f64 }\n"
-            'main: function is {\n'
-            '    p: point x: 1.0 y: 2.0\n'
+            "main: function is {\n"
+            "    p: point x: 1.0 y: 2.0\n"
             '    print "\\{p.x}"\n'
-            '}'
+            "}"
         )
         sql = zsqldump.dump_sql(program)
         conn = _load_sql(sql)
@@ -1188,6 +1197,7 @@ class TestNodeIdTemps:
         )
         # temp variables should follow _t{nodeid}_{counter} pattern
         import re
+
         temps = re.findall(r"_t\d+_\d+", csource)
         assert len(temps) > 0, "No NodeID-scoped temps found in output"
         # all temps in main should share the same nodeid prefix
