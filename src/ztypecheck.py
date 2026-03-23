@@ -212,6 +212,44 @@ class TypeChecker:
             ztype.cname = f"{base_cname}_{ztype.nodeid}"
         self._assigned_cnames.add(ztype.cname)
 
+    # Multi-char operator names (checked first, before per-char mangling)
+    _OP_NAMES = {
+        "<=": "le", ">=": "ge", "==": "eq", "!=": "ne",
+    }
+
+    # Single-char replacements for zerolang identifier chars invalid in C
+    # Named after the character glyph, not the operation it performs
+    _CHAR_MANGLE = {
+        "!": "excl", "$": "dollar", "%": "perc", "&": "amp",
+        "'": "tick", "*": "star", "+": "plus", "-": "minus",
+        "/": "slash", "<": "lt", "=": "eq", ">": "gt",
+        "?": "ques", "@": "at", "\\": "bslash", "^": "caret",
+        "|": "pipe", "~": "tilde",
+    }
+
+    @staticmethod
+    def _mangle_name(name: str) -> str:
+        """Convert a zerolang qualified name to a valid C identifier fragment.
+
+        Replaces dots with underscores. For each dot-separated part, tries
+        multi-char operator lookup first, then falls back to per-character
+        replacement of any non-C-identifier characters.
+        """
+        parts = name.split(".")
+        mangled = []
+        for part in parts:
+            op = TypeChecker._OP_NAMES.get(part)
+            if op is not None:
+                mangled.append(op)
+            elif any(c in TypeChecker._CHAR_MANGLE for c in part):
+                result = []
+                for c in part:
+                    result.append(TypeChecker._CHAR_MANGLE.get(c, c))
+                mangled.append("".join(result))
+            else:
+                mangled.append(part)
+        return "_".join(mangled)
+
     def _assign_cname_type(self, ztype: ZType, qualified_name: str = "") -> None:
         """Assign cname for a type definition.
 
@@ -220,7 +258,7 @@ class TypeChecker:
         """
         if ztype.typetype == ZTypeType.FUNCTION:
             name = qualified_name if qualified_name else ztype.name
-            base = "z_" + name.replace(".", "_")
+            base = "z_" + self._mangle_name(name)
             self._assign_cname(ztype, base)
         elif ztype.typetype in (
             ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.UNION,
