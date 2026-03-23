@@ -11,7 +11,7 @@ from zlexer import Lexer, Tokenizer, Token, isvalidunitname
 from ztokentype import TT
 import zast
 from zast import ERR
-from ztypechecker import ZParamOwnership
+from ztypes import ZParamOwnership
 
 # ownership annotation suffixes recognized on dotted type paths
 _OWNERSHIP_SUFFIXES = {

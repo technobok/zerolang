@@ -8,7 +8,7 @@ import os
 from conftest import make_parser_vfs
 from zparser import Parser
 from ztypecheck import typecheck, TypeChecker
-from ztypechecker import (
+from ztypes import (
     ZTypeType,
     ZParamOwnership,
     ZOwnership,
@@ -495,7 +495,7 @@ class TestOwnershipEnums:
         assert len(ZParamOwnership) == 3
 
     def test_zvariable_defaults(self):
-        from ztypechecker import ZType
+        from ztypes import ZType
 
         t = ZType(name="i64", typetype=ZTypeType.RECORD, parent=None)
         v = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
@@ -503,7 +503,7 @@ class TestOwnershipEnums:
         assert v.held_locks == []
 
     def test_zvariable_with_lock(self):
-        from ztypechecker import ZType
+        from ztypes import ZType
 
         t = ZType(name="point", typetype=ZTypeType.RECORD, parent=None)
         v = ZVariable(
@@ -854,7 +854,7 @@ class TestSymbolTableLocking:
 
     def _make_symtab_with_vars(self, *names):
         from zenv import SymbolTable
-        from ztypechecker import ZType
+        from ztypes import ZType
 
         st = SymbolTable()
         st.push("test")

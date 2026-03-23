@@ -12,7 +12,7 @@ from zast import ERR, clone_function
 from zlexer import Token
 from zenv import SymbolTable
 import zasthash
-from ztypechecker import (
+from ztypes import (
     ZType,
     ZTypeType,
     ZParamOwnership,
@@ -192,8 +192,43 @@ class TypeChecker:
         # cloned methods per mono type: mono_name -> {mname: Function}
         self._cloned_methods: dict[str, dict[str, zast.Function]] = {}
 
+        # C name collision tracking: assigned cnames -> set for collision detection
+        self._assigned_cnames: set[str] = set()
+
     def _error(self, msg: str, loc: Optional[Token] = None) -> None:
         self.errors.append(zast.Error(err=ERR.COMPILERERROR, msg=msg, loc=loc))
+
+    def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
+        """Assign a C identifier to a type, auto-resolving collisions.
+
+        If base_cname is already taken, appends the type's nodeid to
+        disambiguate. The final cname is stored on ztype.cname.
+        """
+        if ztype.cname:
+            return  # already assigned via earlier resolution path
+        if base_cname not in self._assigned_cnames:
+            ztype.cname = base_cname
+        else:
+            ztype.cname = f"{base_cname}_{ztype.nodeid}"
+        self._assigned_cnames.add(ztype.cname)
+
+    def _assign_cname_type(self, ztype: ZType, qualified_name: str = "") -> None:
+        """Assign cname for a type definition.
+
+        For functions, qualified_name should be the dotted name (e.g. "point.distance").
+        For other types, the name is taken from ztype.name.
+        """
+        if ztype.typetype == ZTypeType.FUNCTION:
+            name = qualified_name if qualified_name else ztype.name
+            base = "z_" + name.replace(".", "_")
+            self._assign_cname(ztype, base)
+        elif ztype.typetype in (
+            ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.UNION,
+            ZTypeType.VARIANT, ZTypeType.PROTOCOL, ZTypeType.FACET,
+            ZTypeType.ENUM, ZTypeType.TAG,
+        ):
+            base = f"z_{ztype.name}_t"
+            self._assign_cname(ztype, base)
 
     def check(self, full: bool = False) -> List[zast.Error]:
         """Run the type checker starting from main.
@@ -418,6 +453,7 @@ class TypeChecker:
         # validate function signature ownership rules
         self._validate_function_ownership(ftype, func)
 
+        self._assign_cname_type(ftype, qualified_name=name)
         self._resolving.pop()
         return ftype
 
@@ -453,6 +489,7 @@ class TypeChecker:
 
         ctype.is_valtype = False  # classes are reference types
         _set_destructor_metadata(ctype)
+        self._assign_cname_type(ctype)
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
@@ -569,6 +606,7 @@ class TypeChecker:
 
         utype.is_valtype = False  # unions are reference types
         _set_destructor_metadata(utype)
+        self._assign_cname_type(utype)
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
@@ -812,6 +850,7 @@ class TypeChecker:
 
         vtype.is_valtype = True  # variants are value types
         _set_destructor_metadata(vtype)
+        self._assign_cname_type(vtype)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -1073,6 +1112,7 @@ class TypeChecker:
 
         rtype.is_valtype = True  # records are value types
         _set_destructor_metadata(rtype)
+        self._assign_cname_type(rtype)
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
@@ -1386,6 +1426,7 @@ class TypeChecker:
         self._resolving.append((key, ptype))
         ptype.is_valtype = False  # protocol instances are reference types
         _set_destructor_metadata(ptype)
+        self._assign_cname_type(ptype)
 
         # pass 1: detect generic params from protocol parameters
         generic_ctx: dict[str, ZType] = {}
@@ -1445,6 +1486,7 @@ class TypeChecker:
         self._resolving.append((key, ftype))
         ftype.is_valtype = True  # facet instances are value types
         _set_destructor_metadata(ftype)
+        self._assign_cname_type(ftype)
 
         # pass 1: detect generic params from facet parameters
         generic_ctx: dict[str, ZType] = {}
@@ -2103,6 +2145,7 @@ class TypeChecker:
         mono.generic_args = dict(generic_args)
         mono.is_valtype = template_type.is_valtype
         _set_destructor_metadata(mono)
+        self._assign_cname_type(mono)
 
         # propagate numeric_generic_params for partial instantiation
         mono.numeric_generic_params = set(template_type.numeric_generic_params)

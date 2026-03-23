@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 
 import zast
 from zlexer import Token
-from ztypechecker import ZType, ZTypeType
+from ztypes import ZType, ZTypeType
 import zemitterc
 
 
@@ -71,7 +71,8 @@ CREATE TABLE IF NOT EXISTS types (
     generic_origin_id INTEGER REFERENCES types(type_id),
     needs_destructor  BOOLEAN,
     destructor_name   TEXT,
-    is_heap_allocated BOOLEAN
+    is_heap_allocated BOOLEAN,
+    cname             TEXT
 );
 
 CREATE TABLE IF NOT EXISTS type_children (
@@ -249,7 +250,8 @@ def dump_sql(
             f"{typedef_id}, {origin_id}, "
             f"{_sql_bool(ztype.needs_destructor)}, "
             f"{_sql_str(ztype.destructor_name)}, "
-            f"{_sql_bool(ztype.is_heap_allocated)});"
+            f"{_sql_bool(ztype.is_heap_allocated)}, "
+            f"{_sql_str(ztype.cname if ztype.cname else None)});"
         )
 
     # type_children

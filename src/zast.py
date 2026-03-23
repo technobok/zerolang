@@ -12,10 +12,10 @@ from typing import Optional, Dict, NewType, cast, Callable
 from itertools import count
 
 # from collections import OrderedDict  # pylint: disable=W0611
-# import ztypechecker
+# import ztypes
 import zvfs
 from zlexer import Token
-from ztypechecker import ZType, ZParamOwnership
+from ztypes import ZType, ZParamOwnership
 
 
 @unique

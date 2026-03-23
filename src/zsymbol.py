@@ -3,7 +3,7 @@ Symbol definition and symbol table
 """
 
 from dataclasses import dataclass  # , field
-from ztypechecker import ZType
+from ztypes import ZType
 
 
 @dataclass

@@ -2322,8 +2322,8 @@ class TestProtocols:
             '    print "\\{use_reader f.myreader}"\n'
             "}\n"
         )
-        # temp path should have stack alloc pattern, not create() call
-        assert "_ps" in csource
+        # temp path should have stack alloc pattern (companion stack var ends with 's')
+        assert "s.data" in csource and "s.vtable" in csource
         # the temp should not appear in any free() call
         assert "z_reader_destroy(_p" not in csource
 

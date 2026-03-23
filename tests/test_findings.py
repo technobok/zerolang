@@ -20,7 +20,7 @@ import tempfile
 from conftest import make_parser_vfs, collect_tokens
 from zparser import Parser
 from ztypecheck import typecheck, audit_type_annotations
-from ztypechecker import ZTypeType
+from ztypes import ZTypeType
 import zemitterc
 import zast
 from zast import CallKind
@@ -700,7 +700,7 @@ class TestFinding11ScopeState:
     def test_cleanup_uses_destructor_name(self):
         """Scope cleanup should use ZType.destructor_name (type-driven, not cascades)."""
         from zemitterc import ScopeState
-        from ztypechecker import ZType, ZTypeType
+        from ztypes import ZType, ZTypeType
         # verify that a ZType with destructor_name set gets correct cleanup
         t = ZType(name="box", typetype=ZTypeType.CLASS, parent=None)
         t.needs_destructor = True
@@ -721,14 +721,14 @@ class TestFinding12SelfHostingPatterns:
 
     def test_type_ids_are_plain_ints(self):
         """TypeID and VariableID should be plain int aliases, not NewType."""
-        from ztypechecker import TypeID, VariableID
+        from ztypes import TypeID, VariableID
         # plain int aliases: TypeID is int, VariableID is int
         assert TypeID is int
         assert VariableID is int
 
     def test_type_ids_auto_increment(self):
         """ZType.nodeid should auto-increment via _alloc_type_id."""
-        from ztypechecker import ZType, ZTypeType
+        from ztypes import ZType, ZTypeType
         t1 = ZType(name="a", typetype=ZTypeType.RECORD, parent=None)
         t2 = ZType(name="b", typetype=ZTypeType.RECORD, parent=None)
         assert isinstance(t1.nodeid, int)
@@ -737,7 +737,7 @@ class TestFinding12SelfHostingPatterns:
 
     def test_variable_ids_auto_increment(self):
         """ZVariable.variableid should auto-increment via _alloc_variable_id."""
-        from ztypechecker import ZVariable, ZType, ZTypeType, ZOwnership, ZNaming
+        from ztypes import ZVariable, ZType, ZTypeType, ZOwnership, ZNaming
         t = ZType(name="x", typetype=ZTypeType.RECORD, parent=None)
         v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
         v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
@@ -747,14 +747,14 @@ class TestFinding12SelfHostingPatterns:
     def test_no_threading_in_typetable(self):
         """TypeTable should not use threading.Lock."""
         import inspect
-        from ztypechecker import TypeTable
+        from ztypes import TypeTable
         source = inspect.getsource(TypeTable)
         assert "threading" not in source
         assert "Lock" not in source
 
     def test_no_ordered_dict_in_ztype(self):
         """ZType fields should use plain dict, not OrderedDict."""
-        from ztypechecker import ZType, ZTypeType
+        from ztypes import ZType, ZTypeType
         t = ZType(name="test", typetype=ZTypeType.RECORD, parent=None)
         assert type(t.children) is dict
         assert type(t.generic_params) is dict
@@ -762,7 +762,7 @@ class TestFinding12SelfHostingPatterns:
 
     def test_children_dict_preserves_order(self):
         """Plain dict should preserve insertion order (Python 3.7+)."""
-        from ztypechecker import ZType, ZTypeType
+        from ztypes import ZType, ZTypeType
         parent = ZType(name="rec", typetype=ZTypeType.RECORD, parent=None)
         c1 = ZType(name="x", typetype=ZTypeType.RECORD, parent=parent)
         c2 = ZType(name="y", typetype=ZTypeType.RECORD, parent=parent)
@@ -1010,3 +1010,127 @@ class TestSqlDump:
             count = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
             assert count > 0
             conn.close()
+
+
+# ---- Code Review 2: Name Mangling and cname ----
+
+
+class TestCname:
+    """Tests for cname assignment on ZType."""
+
+    def test_record_gets_cname(self):
+        """Record types should have cname set to z_{name}_t."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            "main: function is {\n"
+            "    p: point x: 1.0 y: 2.0\n"
+            '    print "\\{p.x}"\n'
+            "}\n"
+        )
+        for ztype in program.resolved.values():
+            if ztype.name == "point":
+                assert ztype.cname == "z_point_t"
+                return
+        assert False, "point type not found in resolved"
+
+    def test_class_gets_cname(self):
+        """Class types should have cname set to z_{name}_t."""
+        program = parse_and_check(
+            "node: class is { val: i64 }\n"
+            "main: function is {\n"
+            "    n: node val: 1\n"
+            '    print "\\{n.val}"\n'
+            "}\n"
+        )
+        for ztype in program.resolved.values():
+            if ztype.name == "node":
+                assert ztype.cname == "z_node_t"
+                return
+        assert False, "node type not found in resolved"
+
+    def test_function_gets_cname(self):
+        """Functions should have cname set to z_{name}."""
+        program = parse_and_check(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            'main: function is { print "\\{add a: 1 b: 2}" }'
+        )
+        for ztype in program.resolved.values():
+            if ztype.name == "add":
+                assert ztype.cname == "z_add"
+                return
+        assert False, "add function type not found in resolved"
+
+    def test_union_gets_cname(self):
+        """Union types should have cname set to z_{name}_t."""
+        program = parse_and_check(
+            "shape: union {\n"
+            "    circle: f64\n"
+            "    square: f64\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: shape.circle 1.0\n"
+            '    print "ok"\n'
+            "}\n"
+        )
+        for ztype in program.resolved.values():
+            if ztype.name == "shape":
+                assert ztype.cname == "z_shape_t"
+                return
+        assert False, "shape type not found in resolved"
+
+    def test_collision_auto_resolves(self):
+        """All assigned cnames should be unique across the program."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            "node: class is { val: i64 }\n"
+            "main: function is {\n"
+            "    p: point x: 1.0 y: 2.0\n"
+            "    n: node val: 1\n"
+            '    print "\\{p.x} \\{n.val}"\n'
+            "}\n"
+        )
+        cnames: dict[str, int] = {}  # cname -> object id
+        for ztype in program.resolved.values():
+            if ztype.cname:
+                prev_id = cnames.get(ztype.cname)
+                if prev_id is not None and prev_id != id(ztype):
+                    raise AssertionError(
+                        f"Collision: {ztype.cname} assigned to multiple types"
+                    )
+                cnames[ztype.cname] = id(ztype)
+
+    def test_cname_in_sql_dump(self):
+        """SQL dump should include cname column in types table."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is {\n'
+            '    p: point x: 1.0 y: 2.0\n'
+            '    print "\\{p.x}"\n'
+            '}'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        # check cname column exists
+        row = conn.execute(
+            "SELECT cname FROM types WHERE name = 'point'"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == "z_point_t"
+        conn.close()
+
+
+class TestNodeIdTemps:
+    """Tests for NodeID-scoped temporary variable names."""
+
+    def test_temps_include_nodeid(self):
+        """Emitter temporaries should include the function's NodeID."""
+        csource, _ = emit_with_emitter(
+            'main: function is { print "hello \\{1 + 2} world" }'
+        )
+        # temp variables should follow _t{nodeid}_{counter} pattern
+        import re
+        temps = re.findall(r"_t\d+_\d+", csource)
+        assert len(temps) > 0, "No NodeID-scoped temps found in output"
+        # all temps in main should share the same nodeid prefix
+        nodeids = {t.split("_")[1] for t in temps}
+        assert len(nodeids) == 1, f"Expected 1 NodeID prefix, got {nodeids}"

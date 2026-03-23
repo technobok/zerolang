@@ -10,7 +10,7 @@ import hashlib
 
 import zast
 from zast import NodeType
-from ztypechecker import ZType, ZTypeType
+from ztypes import ZType, ZTypeType
 
 
 def hash_function(func: zast.Function) -> str:

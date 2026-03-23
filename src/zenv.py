@@ -3,7 +3,7 @@ ZeroLang scoped symbol table for the type checker
 """
 
 from typing import Optional, Dict, List
-from ztypechecker import ZType, ZVariable, ZLockState, LockEntry
+from ztypes import ZType, ZVariable, ZLockState, LockEntry
 
 
 class Scope:

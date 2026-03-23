@@ -170,6 +170,14 @@ class ZType:
     destructor_name: Optional[str] = field(default=None, init=False)
     is_heap_allocated: bool = field(default=False, init=False)
 
+    # C identifier for this type (set by type checker, used by emitter)
+    # For type definitions: "z_point_t", "z_list_i64_t", etc.
+    # For function types: "z_math_add", "z_point_distance", etc.
+    cname: str = field(default="", init=False)
+
+    def __repr__(self) -> str:
+        return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"
+
 
 # plain int alias for variable IDs (replaces NewType for self-hosting simplicity)
 VariableID = int

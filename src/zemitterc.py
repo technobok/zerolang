@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict
 
 import zast
-from ztypechecker import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
+from ztypes import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
 
 
 @dataclass
@@ -20,6 +20,7 @@ class ScopeState:
     temp_counter: int = 0
     record_name: str = ""
     class_params: set = field(default_factory=set)
+    func_nodeid: int = 0  # NodeID of enclosing function (for unique temp names)
 
 
 @dataclass
@@ -154,6 +155,14 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return TYPEMAP[name]
     if name == "string":
         return "ZStr*"
+    # use pre-computed cname when available
+    if ztype.cname:
+        if ztype.typetype in (ZTypeType.CLASS, ZTypeType.UNION, ZTypeType.PROTOCOL):
+            return f"{ztype.cname}*"
+        if ztype.typetype == ZTypeType.FUNCTION:
+            return f"{ztype.cname}_ft"
+        return ztype.cname
+    # fallback for types without cname (e.g. synthesized helper types)
     if ztype.typetype == ZTypeType.RECORD and name not in TYPEMAP:
         return f"z_{name}_t"
     if ztype.typetype == ZTypeType.CLASS:
@@ -408,10 +417,15 @@ class CEmitter:
         t = self._resolved_type(name)
         return t is not None and t.typedef_base is not None
 
+    def _temp_name(self, prefix: str) -> str:
+        """Generate a unique temporary variable name with function NodeID."""
+        self._scope.temp_counter += 1
+        nid = self._scope.func_nodeid
+        return f"_{prefix}{nid}_{self._scope.temp_counter}"
+
     def _alloc_temp(self, expr: str) -> str:
         """Allocate a temporary variable for a heap-allocated string expression."""
-        self._scope.temp_counter += 1
-        name = f"_t{self._scope.temp_counter}"
+        name = self._temp_name("t")
         indent = self._indent()
         self._temp.decls.append(f"{indent}ZStr* {name} = {expr};\n")
         self._temp.frees.append(name)
@@ -420,8 +434,7 @@ class CEmitter:
 
     def _alloc_arg_temp(self, ctype: str, expr: str) -> str:
         """Allocate a temporary for a non-string argument (not freed)."""
-        self._scope.temp_counter += 1
-        name = f"_a{self._scope.temp_counter}"
+        name = self._temp_name("a")
         indent = self._indent()
         self._temp.decls.append(f"{indent}{ctype} {name} = {expr};\n")
         return name
@@ -2494,7 +2507,8 @@ class CEmitter:
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
 
         # push new scope for this function
-        self._scope_stack.append(ScopeState(record_name=record_name))
+        func_nid = func.nodeid if hasattr(func, "nodeid") else 0
+        self._scope_stack.append(ScopeState(record_name=record_name, func_nodeid=func_nid))
         # track parameters that are class pointers
         if self._typetype_of(record_name) == ZTypeType.CLASS:
             for pname, ppath in func.parameters.items():
@@ -2718,8 +2732,7 @@ class CEmitter:
         owned_create = f"z_{impl_name}_{label}_create_owned"
 
         # allocate temp and track as protocol var
-        self._scope.temp_counter += 1
-        tmp = f"_c{self._scope.temp_counter}"
+        tmp = self._temp_name("c")
         indent = self._indent()
         self._temp.decls.append(
             f"{indent}z_{proto_name}_t* {tmp} = {owned_create}({arg_val});\n"
@@ -2773,8 +2786,7 @@ class CEmitter:
         self.needs_stdlib = True
 
         # allocate temp and track as protocol var (borrowed: no destroy)
-        self._scope.temp_counter += 1
-        tmp = f"_p{self._scope.temp_counter}"
+        tmp = self._temp_name("p")
         indent = self._indent()
         proto_ctype = f"z_{proto_name}_t"
         self._temp.decls.append(
@@ -3001,8 +3013,7 @@ class CEmitter:
                 )
                 result_expr = f"z_{first_arg.name}_create({args_str})"
                 ctype = f"z_{first_arg.name}_t"
-                self._scope.temp_counter += 1
-                tmp = f"_c{self._scope.temp_counter}"
+                tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
                     if tv:
@@ -3418,8 +3429,7 @@ class CEmitter:
                     # .get returns option (union pointer) — track as temp
                     ret_type = call.type
                     if ret_type and ret_type.typetype == ZTypeType.UNION:
-                        self._scope.temp_counter += 1
-                        tmp = f"_c{self._scope.temp_counter}"
+                        tmp = self._temp_name("c")
                         indent = self._indent()
                         self._temp.decls.append(
                             f"{indent}z_{ret_type.name}_t* {tmp} = {result};\n"
@@ -3463,8 +3473,7 @@ class CEmitter:
                 cls_type.name, call.arguments
             )
             result = f"z_{cls_type.name}_create({args_str})"
-            self._scope.temp_counter += 1
-            tmp = f"_c{self._scope.temp_counter}"
+            tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
             # handle .take nullification
@@ -3485,8 +3494,7 @@ class CEmitter:
                 return self._alloc_temp(result)
             if call.type.typetype == ZTypeType.CLASS:
                 ctype = f"z_{call.type.name}_t"
-                self._scope.temp_counter += 1
-                tmp = f"_c{self._scope.temp_counter}"
+                tmp = self._temp_name("c")
                 indent = self._indent()
                 self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
                 self._temp.frees.append(tmp)
@@ -3494,8 +3502,7 @@ class CEmitter:
                 return tmp
             if call.type.typetype == ZTypeType.UNION:
                 ctype = f"z_{call.type.name}_t"
-                self._scope.temp_counter += 1
-                tmp = f"_c{self._scope.temp_counter}"
+                tmp = self._temp_name("c")
                 indent = self._indent()
                 self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
                 self._temp.frees.append(tmp)
@@ -3547,8 +3554,7 @@ class CEmitter:
             self.needs_stdlib = True
             ctype = f"z_{name}_t"
             zero_args = self._zero_args_for_ctypes(name)
-            self._scope.temp_counter += 1
-            tmp = f"_c{self._scope.temp_counter}"
+            tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(
                 f"{indent}{ctype}* {tmp} = z_{name}_create({zero_args});\n"
@@ -3708,8 +3714,7 @@ class CEmitter:
                 arr_len = _array_length(arr_type)
                 arr_ctype = _ctype(arr_type)
                 parent = self._emit_path_value(path.parent)
-                self._scope.temp_counter += 1
-                tmp = f"_da{self._scope.temp_counter}"
+                tmp = self._temp_name("da")
                 indent = self._indent()
                 self._temp.decls.append(
                     f"{indent}{arr_ctype} {tmp};\n"
@@ -3744,8 +3749,7 @@ class CEmitter:
                     arg = f"&{parent_val}"
                 else:
                     arg = parent_val
-                self._scope.temp_counter += 1
-                tmp = f"_p{self._scope.temp_counter}"
+                tmp = self._temp_name("p")
                 indent = self._indent()
                 proto_ctype = f"z_{path.type.name}_t"
                 if self._in_named_assignment:
@@ -3757,7 +3761,7 @@ class CEmitter:
                     self._temp.class_set[tmp] = f":proto:{path.type.name}"
                 else:
                     # temp: stack-allocate (no malloc/free needed)
-                    stk = f"_ps{self._scope.temp_counter}"
+                    stk = f"{tmp}s"  # companion stack var for protocol temp
                     vtable_name = f"z_{parent_type.name}_{child}_vtable"
                     self._temp.decls.append(
                         f"{indent}{proto_ctype} {stk};\n"
@@ -3839,8 +3843,7 @@ class CEmitter:
         """Emit C code for union construction."""
         self.needs_stdlib = True
         indent = self._indent()
-        self._scope.temp_counter += 1
-        tmp = f"_c{self._scope.temp_counter}"
+        tmp = self._temp_name("c")
 
         if isinstance(call.callable, zast.DottedPath) and isinstance(
             call.callable.parent, zast.AtomId
@@ -3936,8 +3939,7 @@ class CEmitter:
                 else:
                     # valtype: box it (malloc + copy)
                     box_ctype = subtype_ctype or "int64_t"
-                    self._scope.temp_counter += 1
-                    box_tmp = f"_box{self._scope.temp_counter}"
+                    box_tmp = self._temp_name("box")
                     self._temp.decls.append(
                         f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
                     )
@@ -3958,8 +3960,7 @@ class CEmitter:
         """Emit construction for a null-subtype union (no data)."""
         self.needs_stdlib = True
         indent = self._indent()
-        self._scope.temp_counter += 1
-        tmp = f"_c{self._scope.temp_counter}"
+        tmp = self._temp_name("c")
         ctype = f"z_{union_name}_t"
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
         self._temp.decls.append(
@@ -3984,8 +3985,7 @@ class CEmitter:
     def _emit_variant_construction(self, call: zast.Call) -> str:
         """Emit C code for variant construction (stack-allocated, no malloc)."""
         indent = self._indent()
-        self._scope.temp_counter += 1
-        tmp = f"_c{self._scope.temp_counter}"
+        tmp = self._temp_name("c")
 
         if isinstance(call.callable, zast.DottedPath) and isinstance(
             call.callable.parent, zast.AtomId
@@ -4026,8 +4026,7 @@ class CEmitter:
     ) -> str:
         """Emit construction for a null-subtype variant (tag only, no data)."""
         indent = self._indent()
-        self._scope.temp_counter += 1
-        tmp = f"_c{self._scope.temp_counter}"
+        tmp = self._temp_name("c")
         ctype = f"z_{variant_name}_t"
         tag = f"Z_{variant_name.upper()}_TAG_{subtype_name.upper()}"
         self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
