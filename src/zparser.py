@@ -1777,7 +1777,10 @@ class Parser:
         whileindex = 0  # counter for 'fake' binding names (for 'when' clauses)
         while True:
             t = lex.peek()
-            if (first or t.toktype == TT.WHILE) and t.toktype != TT.LABEL:
+            if (first or t.toktype == TT.WHILE) and t.toktype not in (
+                TT.LABEL,
+                TT.LOOP,
+            ):
                 if t.toktype == TT.WHILE:
                     lex.acceptany()  # 'while'
                     lex.accept(TT.EOL)  # optional EOL
@@ -1834,6 +1837,7 @@ class Parser:
                     )
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 loop = statementx.node
+                first = False
 
             else:
                 break  # nothing matched, end of 'if'

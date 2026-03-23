@@ -101,6 +101,93 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "15"
 
+    def test_for_do_while(self):
+        """Post-condition: for loop { body } while cond — executes at least once."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  i: 0\n"
+            "  for loop { i = i + 1 } while i < 3\n"
+            '  print "\\{i}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3"
+
+    def test_for_do_while_once(self):
+        """Post-condition with immediately-false condition executes exactly once."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  i: 0\n"
+            "  for loop { i = i + 1 } while i < 1\n"
+            '  print "\\{i}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1"
+
+    def test_for_pre_and_post_condition(self):
+        """Combined pre+post: while pre loop { body } while post."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  i: 0\n"
+            "  for while i < 10 loop { i = i + 1 } while i < 5\n"
+            '  print "\\{i}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "5"
+
+    def test_for_do_while_multiline(self):
+        """Post-condition with multi-line loop body."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  i: 0\n"
+            "  for loop {\n"
+            "    i = i + 1\n"
+            "  } while i < 5\n"
+            '  print "\\{i}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "5"
+
+    def test_for_infinite_loop(self):
+        """for loop { } generates while(1) — verified by emitted C code."""
+        csource = emit_source("main: function is {\n  for loop { return }\n}")
+        assert "while (1)" in csource
+
+    def test_for_break(self):
+        """break exits a for loop."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  i: 0\n"
+            "  for loop {\n"
+            "    i = i + 1\n"
+            "    if i == 3 then { break }\n"
+            "  }\n"
+            '  print "\\{i}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3"
+
+    def test_for_continue(self):
+        """continue skips to next iteration."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  sum: 0\n"
+            "  for i: 0 while i < 5 loop {\n"
+            "    i = i + 1\n"
+            "    if i == 3 then { continue }\n"
+            "    sum = sum + i\n"
+            "  }\n"
+            '  print "\\{sum}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        # sum = 1+2+4+5 = 12 (skip 3)
+        assert output.strip() == "12"
+
     def test_swap(self):
         csource = emit_source(
             'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'

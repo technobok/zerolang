@@ -2688,6 +2688,11 @@ class CEmitter:
     def _emit_expression_stmt(self, expr: zast.Expression) -> str:
         indent = self._indent()
         inner = expr.expression
+        # handle break/continue as standalone statements
+        if isinstance(inner, zast.AtomId) and inner.name == "break":
+            return f"{indent}break;\n"
+        if isinstance(inner, zast.AtomId) and inner.name == "continue":
+            return f"{indent}continue;\n"
         if isinstance(inner, zast.Call):
             return self._emit_call_stmt(inner, indent)
         if isinstance(inner, zast.If):
@@ -4214,15 +4219,40 @@ class CEmitter:
         for iv in init_vars:
             parts.append(iv)
 
-        cond_str = " && ".join(cond_exprs) if cond_exprs else "1"
-        parts.append(f"{indent}while ({cond_str}) {{\n")
+        # emit post-condition expressions
+        post_exprs: List[str] = []
+        for postcond in fornode.postconditions:
+            post_exprs.append(self._emit_operation_value(postcond))
 
-        if fornode.loop:
-            self.indent_level += 1
-            parts.append(self._emit_statement(fornode.loop))
-            self.indent_level -= 1
+        has_pre = bool(cond_exprs)
+        has_post = bool(post_exprs)
 
-        parts.append(f"{indent}}}\n")
+        if has_post and not has_pre:
+            # pure post-condition: do { body } while (postcond);
+            parts.append(f"{indent}do {{\n")
+            if fornode.loop:
+                self.indent_level += 1
+                parts.append(self._emit_statement(fornode.loop))
+                self.indent_level -= 1
+            post_str = " && ".join(post_exprs)
+            parts.append(f"{indent}}} while ({post_str});\n")
+        else:
+            # pre-condition (with optional post-condition break)
+            cond_str = " && ".join(cond_exprs) if cond_exprs else "1"
+            parts.append(f"{indent}while ({cond_str}) {{\n")
+            if fornode.loop:
+                self.indent_level += 1
+                parts.append(self._emit_statement(fornode.loop))
+                self.indent_level -= 1
+            if has_post:
+                # post-condition: break if postcondition fails
+                self.indent_level += 1
+                inner = self._indent()
+                self.indent_level -= 1
+                post_str = " && ".join(post_exprs)
+                parts.append(f"{inner}if (!({post_str})) break;\n")
+            parts.append(f"{indent}}}\n")
+
         return "".join(parts)
 
     def _emit_do(self, donode: zast.Do) -> str:
