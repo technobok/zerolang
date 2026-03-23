@@ -3320,7 +3320,7 @@ class TypeChecker:
                         err=ERR.CALLERROR,
                         hint=f"did you mean '{suggestion}'?" if suggestion else None,
                     )
-            elif arg_type and i < len(params):
+            elif arg_type and not arg.name and i < len(params):
                 # positional argument
                 pname, ptype = params[i]
                 if not self._types_compatible(arg_type, ptype):
@@ -3330,6 +3330,22 @@ class TypeChecker:
                         loc=arg.start,
                         err=ERR.CALLERROR,
                         note=f"parameter '{pname}' expects type {ptype.name}",
+                    )
+            elif arg_type and not arg.name and i >= len(params):
+                # too many positional arguments
+                if params:
+                    sig = ", ".join(f"{p}: {t.name}" for p, t in params)
+                    self._error(
+                        f"too many arguments: expected {len(params)}, got at least {i + 1}",
+                        loc=arg.start,
+                        err=ERR.CALLERROR,
+                        note=f"function signature: ({sig})",
+                    )
+                else:
+                    self._error(
+                        f"too many arguments: function takes no parameters",
+                        loc=arg.start,
+                        err=ERR.CALLERROR,
                     )
 
             # ownership check: take parameters consume the argument

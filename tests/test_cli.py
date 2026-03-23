@@ -207,3 +207,28 @@ class TestOwnershipErrors:
             assert rc == 1
             assert "hint" in stderr
             assert ".lock" in stderr
+
+
+class TestArgumentErrors:
+    def test_too_many_args_zero_param(self):
+        """Passing args to a zero-param function should error."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = os.path.join(tmpdir, "errtest.z")
+            with open(src, "w") as f:
+                f.write('f: function is { print "ok" }\nmain: function is { f 42 }\n')
+            rc, stdout, stderr = run_zc("errtest", "--src", tmpdir, "--no-color")
+            assert rc == 1
+            assert "too many arguments" in stderr
+
+    def test_unknown_named_arg(self):
+        """Unknown named argument should error with did-you-mean."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            src = os.path.join(tmpdir, "errtest.z")
+            with open(src, "w") as f:
+                f.write(
+                    "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+                    'main: function is { print "\\{add a: 1 b: 2 c: 3}" }\n'
+                )
+            rc, stdout, stderr = run_zc("errtest", "--src", tmpdir, "--no-color")
+            assert rc == 1
+            assert "unknown argument" in stderr
