@@ -223,6 +223,8 @@ def dump_sql(
         all_types[zt.nodeid] = zt
         for ctype in zt.children.values():
             _register_type(ctype)
+        if zt.return_type:
+            _register_type(zt.return_type)
         if zt.parent and isinstance(zt.parent, ZType):
             _register_type(zt.parent)
         if zt.typedef_base:

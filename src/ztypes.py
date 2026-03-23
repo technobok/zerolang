@@ -107,14 +107,14 @@ class ZType:
     """
     ZType - describes a type
 
-    For functions, children contains parameters keyed by name, plus
-    a special ":return" entry for the return type.
+    For functions, children contains parameters keyed by name.
+    The return type is stored in the dedicated return_type field.
 
     For records, children contains fields and methods.
 
     For units, children contains the unit's exported definitions.
 
-    param_ownership maps parameter names (and ":return") to their
+    param_ownership maps parameter names to their
     ownership annotation (take/borrow/lock). Only populated for
     FUNCTION types.
 
@@ -132,6 +132,11 @@ class ZType:
 
     # plain dict (insertion-ordered since Python 3.7+, replaces OrderedDict)
     children: "dict[str, ZType]" = field(default_factory=dict, init=False)
+
+    # return type for function types (None for non-functions or void functions)
+    return_type: "Optional[ZType]" = field(default=None, init=False)
+    # ownership annotation on the return type (if any)
+    return_ownership: "Optional[ZParamOwnership]" = field(default=None, init=False)
 
     isgeneric: bool = False
     isliteral: bool = False

@@ -247,7 +247,7 @@ class TestComparisonOperators:
         i64 = system.children["i64"]
         lt = i64.children["<"]
         assert lt.typetype == ZTypeType.FUNCTION
-        ret = lt.children[":return"]
+        ret = lt.return_type
         assert ret.name == "bool"
 
     def test_comparison_on_f64(self):
@@ -344,7 +344,7 @@ class TestCircularReferences:
         assert vec_type is not None
         scale = vec_type.children.get("scale")
         assert scale is not None
-        ret = scale.children.get(":return")
+        ret = scale.return_type
         assert ret is vec_type
 
     def test_circular_chain_reports_full_chain(self):
@@ -573,15 +573,15 @@ class TestOwnershipParsing:
         )
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
-        assert func.param_ownership[":return"] == ZParamOwnership.BORROW
+        assert func.return_ownership == ZParamOwnership.BORROW
         assert func.param_ownership["a"] == ZParamOwnership.LOCK
 
     def test_return_type_no_ownership(self):
-        """Return type without annotation should not have :return in param_ownership."""
+        """Return type without annotation should not have return_ownership set."""
         program = check_ok("f: function out i64 is { return 42 }\nmain: function is {}")
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
-        assert ":return" not in func.param_ownership
+        assert func.return_ownership is None
 
 
 class TestOwnershipInZType:
@@ -610,7 +610,7 @@ class TestOwnershipInZType:
         tc.check()
         ftype = tc._resolved.get("test.f")
         assert ftype is not None
-        assert ftype.param_ownership[":return"] == ZParamOwnership.BORROW
+        assert ftype.return_ownership == ZParamOwnership.BORROW
         assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
 
     def test_no_ownership_empty_dict(self):
@@ -1118,7 +1118,7 @@ class TestClassTypeResolution:
         tc.check()
         ct = tc._resolved.get("test.myclass")
         clone_fn = ct.children["clone"]
-        ret = clone_fn.children.get(":return")
+        ret = clone_fn.return_type
         assert ret is ct
 
 
@@ -3340,7 +3340,7 @@ class TestGenerics:
         assert myproto is not None
         get_fn = myproto.children.get("get")
         assert get_fn is not None
-        ret = get_fn.children.get(":return")
+        ret = get_fn.return_type
         assert ret is not None
         assert ret.typetype == ZTypeType.GENERIC_PARAM
 
@@ -3949,7 +3949,7 @@ class TestArrays:
         assert "get" in mono.children
         get = mono.children["get"]
         assert get.typetype == ZTypeType.FUNCTION
-        ret = get.children.get(":return")
+        ret = get.return_type
         assert ret is not None
         assert ret.name == "i64"
 
@@ -3962,7 +3962,7 @@ class TestArrays:
         assert "set" in mono.children
         set_ = mono.children["set"]
         assert set_.typetype == ZTypeType.FUNCTION
-        ret = set_.children.get(":return")
+        ret = set_.return_type
         assert ret is not None
         assert ret.name == "i64"
 
@@ -4048,7 +4048,7 @@ class TestStr:
         assert "string" in mono.children
         string_method = mono.children["string"]
         assert string_method.typetype == ZTypeType.FUNCTION
-        ret = string_method.children.get(":return")
+        ret = string_method.return_type
         assert ret is not None
         assert ret.name == "string"
 
@@ -4136,7 +4136,7 @@ class TestList:
         get = mono.children["get"]
         assert get.typetype == ZTypeType.FUNCTION
         assert "i" in get.children
-        ret = get.children.get(":return")
+        ret = get.return_type
         assert ret is not None
         assert ret.name == "i64"
 
@@ -4159,7 +4159,7 @@ class TestList:
         assert "pop" in mono.children
         pop = mono.children["pop"]
         assert pop.typetype == ZTypeType.FUNCTION
-        ret = pop.children.get(":return")
+        ret = pop.return_type
         assert ret is not None
         assert ret.name == "i64"
 
@@ -4242,7 +4242,7 @@ class TestMap:
         assert "get" in mono.children
         get_m = mono.children["get"]
         assert get_m.typetype == ZTypeType.FUNCTION
-        ret = get_m.children.get(":return")
+        ret = get_m.return_type
         assert ret is not None
         assert "option" in ret.name
 
@@ -4254,7 +4254,7 @@ class TestMap:
         del_m = mono.children["delete"]
         assert del_m.typetype == ZTypeType.FUNCTION
         assert "key" in del_m.children
-        ret = del_m.children.get(":return")
+        ret = del_m.return_type
         assert ret is not None
         assert ret.name == "bool"
 
@@ -4265,7 +4265,7 @@ class TestMap:
         assert "has" in mono.children
         has_m = mono.children["has"]
         assert has_m.typetype == ZTypeType.FUNCTION
-        ret = has_m.children.get(":return")
+        ret = has_m.return_type
         assert ret is not None
         assert ret.name == "bool"
 

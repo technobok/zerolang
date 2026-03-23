@@ -301,8 +301,9 @@ class Function(Node):
     ]  # really, a TyperefOrNum            # xxTypeDefinition?
     body: Optional["Statement"]  # None for Spec
     # ownership annotations: param name -> ZParamOwnership (v2)
-    # also uses ":return" key for return type ownership
     param_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
+    # ownership annotation on the return type (if any)
+    return_ownership: Optional["ZParamOwnership"] = None
 
 
 @dataclass

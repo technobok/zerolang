@@ -185,7 +185,7 @@ def _ctype_func_inline(ztype: ZType) -> str:
     """Generate an inline C function pointer type for a FUNCTION ZType.
     Returns e.g. 'int64_t (*)(int64_t, int64_t)'.
     """
-    ret = ztype.children.get(":return")
+    ret = ztype.return_type
     ret_ctype = _ctype(ret) if ret else "void"
     params: List[str] = []
     for k, v in ztype.children.items():
@@ -2138,7 +2138,7 @@ class CEmitter:
 
         # get method — returns option
         get_type = mono_type.children.get("get")
-        ret_type = get_type.children.get(":return") if get_type else None
+        ret_type = get_type.return_type if get_type else None
         if ret_type:
             self.needs_stdlib = True
             ret_ctype = _ctype(ret_type)
@@ -2329,7 +2329,7 @@ class CEmitter:
         # vtable struct
         lines.append("typedef struct {\n")
         for sname, stype in specs:
-            ret_type = stype.children.get(":return")
+            ret_type = stype.return_type
             ret_ctype = _ctype(ret_type) if ret_type else "void"
             params = ["void*"]
             for pname, ptype in stype.children.items():

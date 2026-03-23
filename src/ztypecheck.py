@@ -166,6 +166,7 @@ class TypeChecker:
 
         # current function's ownership annotations (for ownership checking)
         self._current_func_ownership: dict[str, ZParamOwnership] = {}
+        self._current_func_return_ownership: Optional[ZParamOwnership] = None
 
         # pending borrow lock: set by .borrow, consumed by _check_assignment
         self._pending_borrow_lock: Optional[str] = None
@@ -457,7 +458,7 @@ class TypeChecker:
         if func.returntype:
             rt = self._resolve_typeref(func.returntype)
             if rt:
-                ftype.children[":return"] = rt
+                ftype.return_type = rt
         for pname, ppath in func.parameters.items():
             if pname in ftype.generic_params:
                 continue  # skip generic params
@@ -487,6 +488,8 @@ class TypeChecker:
         # propagate ownership annotations from AST to ZType
         if func.param_ownership:
             ftype.param_ownership = dict(func.param_ownership)
+        if func.return_ownership is not None:
+            ftype.return_ownership = func.return_ownership
 
         # validate function signature ownership rules
         self._validate_function_ownership(ftype, func)
@@ -498,12 +501,12 @@ class TypeChecker:
     def _validate_function_ownership(self, ftype: ZType, func: zast.Function) -> None:
         """Validate ownership rules on a function signature."""
         own = ftype.param_ownership
-        has_return = ":return" in ftype.children
-        ret_is_borrow = own.get(":return") == ZParamOwnership.BORROW
+        has_return = ftype.return_type is not None
+        ret_is_borrow = ftype.return_ownership == ZParamOwnership.BORROW
 
         # lock parameters are only valid when there is a return value
         has_lock_param = any(
-            v == ZParamOwnership.LOCK for k, v in own.items() if k != ":return"
+            v == ZParamOwnership.LOCK for v in own.values()
         )
         if has_lock_param and not has_return:
             self._error(
@@ -1323,7 +1326,7 @@ class TypeChecker:
         # Synthesize constructors: take/create and borrow
         if not rtype.isgeneric:
             take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
-            take_type.children[":return"] = rtype
+            take_type.return_type = rtype
             take_type.children["from"] = base_type
             take_type.param_ownership["from"] = ZParamOwnership.TAKE
             rtype.children["take"] = take_type
@@ -1331,7 +1334,7 @@ class TypeChecker:
             rtype.children[":meta.create"] = take_type
 
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
-            borrow_type.children[":return"] = rtype
+            borrow_type.return_type = rtype
             borrow_type.children["from"] = base_type
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             rtype.children["borrow"] = borrow_type
@@ -1398,17 +1401,17 @@ class TypeChecker:
         loc: Token,
     ) -> None:
         """Check that impl method signature matches protocol spec signature."""
-        # extract non-receiver, non-return params
-        # "this" is the receiver in both spec and impl; skip it along with ":return"
+        # extract non-receiver params
+        # "this" is the receiver in both spec and impl; skip it
         spec_params = [
             (k, v)
             for k, v in spec_func.children.items()
-            if k != "this" and k != ":return"
+            if k != "this"
         ]
         impl_params = [
             (k, v)
             for k, v in impl_func.children.items()
-            if k != "this" and k != ":return" and v.name != impl_name
+            if k != "this" and v.name != impl_name
         ]
 
         if len(spec_params) != len(impl_params):
@@ -1433,8 +1436,8 @@ class TypeChecker:
                     loc=loc,
                 )
 
-        spec_ret = spec_func.children.get(":return")
-        impl_ret = impl_func.children.get(":return")
+        spec_ret = spec_func.return_type
+        impl_ret = impl_func.return_type
         if spec_ret and impl_ret:
             if spec_ret.name != impl_ret.name:
                 self._error(
@@ -1494,7 +1497,7 @@ class TypeChecker:
         # owned create: protocol.create from: expr
         if not ptype.isgeneric:
             create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
-            create_type.children[":return"] = ptype
+            create_type.return_type = ptype
             # from: parameter — placeholder type (conformance checked in _check_call)
             create_type.children["from"] = self.t_null
             create_type.param_ownership["from"] = ZParamOwnership.TAKE
@@ -1502,14 +1505,14 @@ class TypeChecker:
 
             # take: alias for create
             take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
-            take_type.children[":return"] = ptype
+            take_type.return_type = ptype
             take_type.children["from"] = self.t_null
             take_type.param_ownership["from"] = ZParamOwnership.TAKE
             ptype.children["take"] = take_type
 
             # borrow: borrowed protocol creation
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
-            borrow_type.children[":return"] = ptype
+            borrow_type.return_type = ptype
             borrow_type.children["from"] = self.t_null
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             ptype.children["borrow"] = borrow_type
@@ -1554,20 +1557,20 @@ class TypeChecker:
         # create/take: owned facet creation (copies value)
         if not ftype.isgeneric:
             create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
-            create_type.children[":return"] = ftype
+            create_type.return_type = ftype
             create_type.children["from"] = self.t_null
             create_type.param_ownership["from"] = ZParamOwnership.TAKE
             ftype.children["create"] = create_type
 
             take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
-            take_type.children[":return"] = ftype
+            take_type.return_type = ftype
             take_type.children["from"] = self.t_null
             take_type.param_ownership["from"] = ZParamOwnership.TAKE
             ftype.children["take"] = take_type
 
             # borrow: borrowed facet creation (copies value, locks source)
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
-            borrow_type.children[":return"] = ftype
+            borrow_type.return_type = ftype
             borrow_type.children["from"] = self.t_null
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             ftype.children["borrow"] = borrow_type
@@ -1587,7 +1590,7 @@ class TypeChecker:
         be included as constructor parameters (function pointer fields).
         """
         ftype = _make_type(f"{name}.create", ZTypeType.FUNCTION)
-        ftype.children[":return"] = parent_type
+        ftype.return_type = parent_type
         for fname, ft in parent_type.children.items():
             if fname.startswith(":"):
                 continue
@@ -2087,8 +2090,8 @@ class TypeChecker:
 
     def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
         """Check structural equivalence of two function types (same params + return)."""
-        a_ret = a.children.get(":return")
-        b_ret = b.children.get(":return")
+        a_ret = a.return_type
+        b_ret = b.return_type
         if (a_ret is None) != (b_ret is None):
             return False
         if a_ret and b_ret and a_ret.name != b_ret.name:
@@ -2326,13 +2329,13 @@ class TypeChecker:
             if elem_type:
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
                 get_type.children["i"] = self._resolve_name("i64") or self.t_null
-                get_type.children[":return"] = elem_type
+                get_type.return_type = elem_type
                 mono.children["get"] = get_type
                 # synthesize .set method: function {i: i64, val: <elem>} out <elem>
                 set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
                 set_type.children["i"] = self._resolve_name("i64") or self.t_null
                 set_type.children["val"] = elem_type
-                set_type.children[":return"] = elem_type
+                set_type.return_type = elem_type
                 mono.children["set"] = set_type
 
         # for str types: set valtype, remove from field, synthesize length/capacity/string
@@ -2354,7 +2357,7 @@ class TypeChecker:
                 mono.param_defaults["capacity"] = str(str_cap)
             # synthesize .string method: function {} out string
             string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
-            string_method.children[":return"] = (
+            string_method.return_type = (
                 self._resolve_name("string") or self.t_null
             )
             mono.children["string"] = string_method
@@ -2393,19 +2396,19 @@ class TypeChecker:
                 # synthesize .get method: function {i: u64} out <elem>
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
                 get_type.children["i"] = t_u64
-                get_type.children[":return"] = elem_type
-                get_type.param_ownership[":return"] = ZParamOwnership.BORROW
+                get_type.return_type = elem_type
+                get_type.return_ownership = ZParamOwnership.BORROW
                 mono.children["get"] = get_type
                 # synthesize .set method: function {i: u64 val: <elem>} out <elem>
                 set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
                 set_type.children["i"] = t_u64
                 set_type.children["val"] = elem_type
-                set_type.children[":return"] = elem_type
+                set_type.return_type = elem_type
                 set_type.param_ownership["val"] = ZParamOwnership.TAKE
                 mono.children["set"] = set_type
                 # synthesize .pop method: function {} out <elem>
                 pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
-                pop_type.children[":return"] = elem_type
+                pop_type.return_type = elem_type
                 mono.children["pop"] = pop_type
 
         # for map types: set reftype, synthesize methods
@@ -2442,17 +2445,17 @@ class TypeChecker:
                         option_mono = self._monomorphize(
                             option_template, {"t": value_type}, option_defn
                         )
-                        get_type.children[":return"] = option_mono
+                        get_type.return_type = option_mono
                 mono.children["get"] = get_type
                 # synthesize .delete method: function {key: K} out bool
                 delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
                 delete_type.children["key"] = key_type
-                delete_type.children[":return"] = t_bool
+                delete_type.return_type = t_bool
                 mono.children["delete"] = delete_type
                 # synthesize .has method: function {key: K} out bool
                 has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
                 has_type.children["key"] = key_type
-                has_type.children[":return"] = t_bool
+                has_type.return_type = t_bool
                 mono.children["has"] = has_type
 
         # for classes: rebuild meta.create for the monomorphized class
@@ -2735,7 +2738,9 @@ class TypeChecker:
 
         # save/restore ownership context
         prev_func_ownership = self._current_func_ownership
+        prev_func_return_ownership = self._current_func_return_ownership
         self._current_func_ownership = dict(func.param_ownership)
+        self._current_func_return_ownership = func.return_ownership
 
         for pname, ppath in func.parameters.items():
             pt = self._resolve_typeref(ppath)
@@ -2762,6 +2767,7 @@ class TypeChecker:
         self._check_statement(func.body)
         self._current_return_type = prev_return_type
         self._current_func_ownership = prev_func_ownership
+        self._current_func_return_ownership = prev_func_return_ownership
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
@@ -3168,7 +3174,7 @@ class TypeChecker:
                 call.call_kind = zast.CallKind.TYPEDEF_CREATE
                 return self._check_typedef_create(parent_type, call)
 
-        # parameter types (skip :return and special entries)
+        # parameter types (skip special entries like :tag, :meta.create)
         params = [
             (k, v) for k, v in callee_type.children.items() if not k.startswith(":")
         ]
@@ -3253,11 +3259,11 @@ class TypeChecker:
         self._lock_receiver(call.callable, call)
 
         # after call: transfer lock-param locks to return value, release others
-        ret = callee_type.children.get(":return")
+        ret = callee_type.return_type
         lock_param_names = {
             k
             for k, v in callee_type.param_ownership.items()
-            if v == ZParamOwnership.LOCK and k != ":return"
+            if v == ZParamOwnership.LOCK
         }
         for target_name, holder, pname in call_locks:
             if pname in lock_param_names:
@@ -3555,7 +3561,7 @@ class TypeChecker:
                 )
 
         # ownership check: cannot return a local variable as borrowed
-        ret_own = self._current_func_ownership.get(":return")
+        ret_own = self._current_func_return_ownership
         if ret_own == ZParamOwnership.BORROW and call.arguments:
             arg_op = call.arguments[0].valtype
             arg_name = self._get_arg_root_name(arg_op)
@@ -3588,7 +3594,7 @@ class TypeChecker:
         op_name = binop.operator.name
         method = lhs_type.children.get(op_name)
         if method and method.typetype == ZTypeType.FUNCTION:
-            ret = method.children.get(":return")
+            ret = method.return_type
             if ret:
                 binop.type = ret
                 return ret

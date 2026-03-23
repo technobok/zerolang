@@ -919,6 +919,7 @@ class Parser:
         returntype: Optional[zast.Path] = None
         parameters: Dict[str, zast.Path] = {}
         param_ownership: Dict[str, ZParamOwnership] = {}
+        return_ownership: Optional[ZParamOwnership] = None
         # externs from 'accept' function parameters
         externparam: Dict[str, zast.AtomId] = {}
         # parameter names - local definitions for determining externs
@@ -948,7 +949,7 @@ class Parser:
                 stripped_ret, ret_own = self._strip_ownership(typeref.node)
                 returntype = stripped_ret
                 if ret_own is not None:
-                    param_ownership[":return"] = ret_own
+                    return_ownership = ret_own
                 first = False
 
             elif lex.accept(TT.IS):
@@ -1048,6 +1049,7 @@ class Parser:
             body=body,
             start=start,
             param_ownership=param_ownership,
+            return_ownership=return_ownership,
         )
         return NodeX(node=func, extern=extern)
 
