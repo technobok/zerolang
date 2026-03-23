@@ -57,7 +57,8 @@ CREATE TABLE IF NOT EXISTS ast_nodes (
     name            TEXT,
     file_id         INTEGER REFERENCES files(file_id),
     start_line      INTEGER,
-    start_col       INTEGER
+    start_col       INTEGER,
+    cname           TEXT
 );
 
 CREATE TABLE IF NOT EXISTS types (
@@ -206,10 +207,11 @@ def dump_sql(
         file_id = _sql_int(node.start.fsno) if node.start else "NULL"
         start_line = _sql_int(node.start.lineno) if node.start else "NULL"
         start_col = _sql_int(node.start.colno) if node.start else "NULL"
+        cname = _sql_str(node.type.cname) if node.type and node.type.cname else "NULL"
         lines.append(
             f"INSERT INTO ast_nodes VALUES ("
             f"{node.nodeid}, {_sql_str(kind)}, {token_id}, "
-            f"{_sql_str(name)}, {file_id}, {start_line}, {start_col});"
+            f"{_sql_str(name)}, {file_id}, {start_line}, {start_col}, {cname});"
         )
 
     # Stage 4: types — collect all reachable types

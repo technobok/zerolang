@@ -1118,6 +1118,65 @@ class TestCname:
         assert row[0] == "z_point_t"
         conn.close()
 
+    def test_cname_in_ast_nodes_dump(self):
+        """SQL dump should include cname column in ast_nodes table."""
+        program = parse_and_check(
+            "point: record is { x: f64  y: f64 }\n"
+            'main: function is {\n'
+            '    p: point x: 1.0 y: 2.0\n'
+            '    print "\\{p.x}"\n'
+            '}'
+        )
+        sql = zsqldump.dump_sql(program)
+        conn = _load_sql(sql)
+        # expression nodes referencing point should have its cname
+        row = conn.execute(
+            "SELECT cname FROM ast_nodes WHERE cname = 'z_point_t'"
+        ).fetchone()
+        assert row is not None
+        conn.close()
+
+    def test_dot_underscore_collision_resolved(self):
+        """Unit function m.f and top-level m_f get distinct cnames."""
+        program = parse_and_check(
+            "m: unit { f: function {x: i64} out i64 is { return x } }\n"
+            "m_f: function {x: i64} out i64 is { return x + 1 }\n"
+            'main: function is { print "\\{m.f 5} \\{m_f 5}" }'
+        )
+        # m.f (unit function) and m_f (top-level) both mangle to z_m_f base
+        unit_fn = program.resolved.get("test.m.f")
+        top_fn = program.resolved.get("test.m_f")
+        assert unit_fn is not None, "test.m.f not resolved"
+        assert top_fn is not None, "test.m_f not resolved"
+        assert unit_fn.cname != top_fn.cname, (
+            f"Collision not resolved: both have cname {unit_fn.cname}"
+        )
+
+    def test_generic_monomorphization_collision_resolved(self):
+        """Non-generic box_i64 record and generic box[of i64] get distinct cnames."""
+        program = parse_and_check(
+            "box: union { some: t\n none: null } as { t: any.generic }\n"
+            "box_i64: record is { val: i64 }\n"
+            "main: function is {\n"
+            "    a: box.some 42\n"
+            "    b: box_i64 val: 99\n"
+            '    print "\\{b.val}"\n'
+            "}"
+        )
+        # box[of i64] monomorphizes to name "box_i64" — same as the plain record
+        mono_cname = None
+        plain_cname = None
+        for ztype in program.resolved.values():
+            if ztype.name == "box_i64" and ztype.generic_origin:
+                mono_cname = ztype.cname
+            elif ztype.name == "box_i64" and not ztype.generic_origin:
+                plain_cname = ztype.cname
+        assert mono_cname is not None, "Monomorphized box_i64 not found"
+        assert plain_cname is not None, "Plain box_i64 not found"
+        assert mono_cname != plain_cname, (
+            f"Collision not resolved: both have cname {mono_cname}"
+        )
+
 
 class TestNodeIdTemps:
     """Tests for NodeID-scoped temporary variable names."""

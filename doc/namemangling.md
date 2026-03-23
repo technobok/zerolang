@@ -200,7 +200,9 @@ and traceable.
 
 - [x] Change temporary naming from `_t{counter}` to `_t{nodeid}_{counter}` where
   `nodeid` is the enclosing function's NodeID. Same for `_a`, `_c`, `_p` prefixes
-- [ ] Change static string literal naming from `_zs{counter}` to `_zs{nodeid}_{counter}`
+- [x] ~~Change static string literal naming~~ — not applicable: `_zs` literals are
+  global (file-scope `ZSTR_STATIC`), deduplicated across functions, so per-function
+  nodeid scoping would prevent deduplication
 - [x] The `ScopeState` already tracks `temp_counter` — add the function's NodeID to
   `ScopeState` (or pass it through) so temporaries can include it
 - [x] This eliminates Class 3 collisions entirely — no user identifier starts with
@@ -211,18 +213,18 @@ and traceable.
 Extend the SQL schema to include the C identifier for diagnostic queries.
 
 - [x] Add `cname TEXT` column to the `types` table in `src/zsqldump.py`
-- [ ] Add `cname TEXT` column to the `ast_nodes` table for function definitions
+- [x] Add `cname TEXT` column to the `ast_nodes` table for function definitions
 - [x] Populate from `ztype.cname`
 
 ### Phase 6: Update tests
 
-- [ ] Add test: two types whose names collide after mangling are auto-resolved
-  (e.g. define `foo_bar` record and a unit `foo` with `bar` record — verify different
-  cnames are generated)
-- [ ] Add test: monomorphized generic collision is auto-resolved
+- [x] Add test: two types whose names collide after mangling are auto-resolved
+  (unit function `m.f` vs top-level `m_f` — both mangle to `z_m_f`, collision auto-resolved)
+- [x] Add test: monomorphized generic collision is auto-resolved
+  (generic `box[of i64]` → `box_i64` vs plain `box_i64` record — collision auto-resolved)
 - [x] Add test: emitter temporaries include NodeID
 - [x] Add test: `cname` appears in SQL dump output
-- [x] Verify all existing tests still pass (959 tests pass)
+- [x] Verify all existing tests still pass (962 tests pass)
 
 ---
 
