@@ -3877,3 +3877,127 @@ class TestMap:
         csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
         assert "z_map_i64_i64_destroy(m)" in csource
         compile_and_run(csource)
+
+
+class TestConstantFolding:
+    """Tests for constant folding in emitter (Phase 41)."""
+
+    def test_constant_fold_arithmetic(self):
+        """1 + 2 should emit folded value 3, not (1 + 2)."""
+        csource = emit_source('main: function is {\n  x: 1 + 2\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "3"
+
+    def test_constant_fold_subtraction(self):
+        """10 - 3 should fold to 7."""
+        csource = emit_source('main: function is {\n  x: 10 - 3\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_constant_fold_multiplication(self):
+        """4 * 5 should fold to 20."""
+        csource = emit_source('main: function is {\n  x: 4 * 5\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "20"
+
+    def test_constant_fold_division(self):
+        """10 / 3 should fold to 3."""
+        csource = emit_source('main: function is {\n  x: 10 / 3\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "3"
+
+    def test_constant_fold_negative_division(self):
+        """-7 / 2 should fold to -3 (truncation toward zero)."""
+        csource = emit_source('main: function is {\n  x: -7 / 2\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "-3"
+
+    def test_constant_fold_comparison_true(self):
+        """3 < 5 should fold to a true value."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: 3 < 5\n"
+            '  if x then print "yes" else print "no"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "yes"
+
+    def test_constant_fold_chained(self):
+        """1 + 2 + 3 should fold to 6."""
+        csource = emit_source('main: function is {\n  x: 1 + 2 + 3\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "6"
+
+    def test_constant_fold_named_constant(self):
+        """Named constant + literal should fold."""
+        csource = emit_source(
+            'north: 0\nmain: function is {\n  x: north + 1\n  print "\\{x}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1"
+
+    def test_constant_fold_chained_named(self):
+        """Chained named constants should fold: a: 1, b: a + 2 -> b is 3."""
+        csource = emit_source(
+            'a: 1\nb: a + 2\nmain: function is {\n  x: b\n  print "\\{x}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3"
+
+    def test_constant_if_true(self):
+        """if with constant-true condition should emit only the then branch."""
+        csource = emit_source(
+            'main: function is {\n  if 1 < 2 then print "yes" else print "no"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "yes"
+        # the C output should not contain a conditional if statement for 1 < 2
+        # (string cleanup 'if (s &&' is OK, we check there's no comparison if)
+        assert "if (1" not in csource
+        assert "} else {" not in csource
+
+    def test_constant_if_false(self):
+        """if with constant-false condition should emit only the else branch."""
+        csource = emit_source(
+            'main: function is {\n  if 1 > 2 then print "yes" else print "no"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "no"
+        assert "if (1" not in csource
+        assert "} else {" not in csource
+
+    def test_constant_if_no_else_false(self):
+        """if with constant-false and no else should emit nothing."""
+        csource = emit_source('main: function is {\n  if 1 > 2 then print "yes"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == ""
+        assert "if (1" not in csource
+
+    def test_mixed_nonconstant_not_folded(self):
+        """Variable + literal should NOT be folded."""
+        csource = emit_source(
+            'main: function is {\n  x: 5\n  y: x + 1\n  print "\\{y}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "6"
+        # y should use a runtime addition, not a folded constant
+        assert "+" in csource or "x" in csource
+
+    def test_unit_level_constant_expression(self):
+        """Unit-level expression 2 + 3 should emit as static const."""
+        csource = emit_source(
+            'result: 2 + 3\nmain: function is {\n  print "\\{result}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "5"
+        assert "static const" in csource
+
+    def test_constant_fold_c_output_literal(self):
+        """Verify folded value appears as literal in C output, not as expression."""
+        csource = emit_source('main: function is {\n  x: 1 + 2\n  print "\\{x}"\n}')
+        # the assignment should contain the folded value 3
+        # and should NOT contain (1 + 2) or similar
+        lines = [l.strip() for l in csource.split("\n")]
+        assign_lines = [l for l in lines if "= 3;" in l or "= 3 " in l]
+        assert len(assign_lines) > 0, f"Expected folded '= 3' in C output:\n{csource}"

@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS ast_nodes (
     file_id         INTEGER REFERENCES files(file_id),
     start_line      INTEGER,
     start_col       INTEGER,
-    cname           TEXT
+    cname           TEXT,
+    is_const        BOOLEAN,
+    const_value     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS types (
@@ -208,10 +210,15 @@ def dump_sql(
         start_line = _sql_int(node.start.lineno) if node.start else "NULL"
         start_col = _sql_int(node.start.colno) if node.start else "NULL"
         cname = _sql_str(node.type.cname) if node.type and node.type.cname else "NULL"
+        is_const = _sql_bool(node.const_value is not None)
+        const_val = (
+            _sql_str(str(node.const_value)) if node.const_value is not None else "NULL"
+        )
         lines.append(
             f"INSERT INTO ast_nodes VALUES ("
             f"{node.nodeid}, {_sql_str(kind)}, {token_id}, "
-            f"{_sql_str(name)}, {file_id}, {start_line}, {start_col}, {cname});"
+            f"{_sql_str(name)}, {file_id}, {start_line}, {start_col}, {cname}, "
+            f"{is_const}, {const_val});"
         )
 
     # Stage 4: types — collect all reachable types

@@ -522,13 +522,34 @@ class TypeChecker:
             return t
         if defn_type == zast.Expression and isinstance(defn.expression, zast.Data):
             return self._resolve_data_type(unitname, name, defn.expression)
+        if defn_type == zast.Expression and isinstance(defn.expression, zast.Operation):
+            key = f"{unitname}.{name}"
+            shell = _make_type(name, ZTypeType.NULL)
+            self._resolving.append((key, shell))
+            t = self._check_expression(defn)
+            self._resolving.pop()
+            return t
         if defn_type == zast.AtomId:
             if _is_numeric_id(defn.name):
-                return self._resolve_numeric(defn.name, loc=defn.start)
+                t = self._resolve_numeric(defn.name, loc=defn.start)
+                # constant folding: set const_value on the definition node
+                if t:
+                    _, value, err = parse_number(defn.name)
+                    if not err and isinstance(value, int):
+                        defn.const_value = value
+                return t
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
             self._resolving.append((key, shell))
             t = self._resolve_name(defn.name)
+            self._resolving.pop()
+            return t
+        # constant folding: handle BinOp at unit level (e.g., b: a + 2)
+        if defn_type == zast.BinOp:
+            key = f"{unitname}.{name}"
+            shell = _make_type(name, ZTypeType.NULL)
+            self._resolving.append((key, shell))
+            t = self._check_binop(defn)
             self._resolving.pop()
             return t
         return None
@@ -2984,7 +3005,11 @@ class TypeChecker:
         if isinstance(inner, zast.Data):
             return None
         if isinstance(inner, zast.Operation):
-            return self._check_operation(inner)
+            t = self._check_operation(inner)
+            # propagate const_value from inner operation to expression wrapper
+            if inner.const_value is not None:
+                expr.const_value = inner.const_value
+            return t
         return None
 
     def _check_operation(self, op: zast.Operation) -> Optional[ZType]:
@@ -3161,11 +3186,29 @@ class TypeChecker:
             t = self._resolve_numeric(name, loc=atom.start)
             if t:
                 atom.type = t
+                # constant folding: set const_value for integer literals
+                _, value, err = parse_number(name)
+                if not err and isinstance(value, int):
+                    atom.const_value = value
             return t
 
         t = self._resolve_name(name)
         if t:
             atom.type = t
+            # constant folding: propagate const_value for true/false literals
+            if name == "true":
+                atom.const_value = True
+            elif name == "false":
+                atom.const_value = False
+            else:
+                # propagate const_value from named constants
+                defn = self._lookup_definition(name)
+                if (
+                    defn is not None
+                    and hasattr(defn, "const_value")
+                    and defn.const_value is not None
+                ):
+                    atom.const_value = defn.const_value
             return t
 
         # check if the variable was taken (ownership transferred)
@@ -3380,7 +3423,7 @@ class TypeChecker:
                     )
                 else:
                     self._error(
-                        f"too many arguments: function takes no parameters",
+                        "too many arguments: function takes no parameters",
                         loc=arg.start,
                         err=ERR.CALLERROR,
                     )
@@ -3747,6 +3790,38 @@ class TypeChecker:
         call.type = never if never else self.t_null
         return call.type
 
+    @staticmethod
+    def _fold_binop(op: str, lhs: int, rhs: int) -> Optional[object]:
+        """Evaluate a binary operation on constant integer values at compile time.
+
+        Returns int for arithmetic, bool for comparisons, None if not foldable.
+        """
+        if op == "+":
+            return lhs + rhs
+        if op == "-":
+            return lhs - rhs
+        if op == "*":
+            return lhs * rhs
+        if op == "/":
+            if rhs == 0:
+                return None
+            # truncation toward zero (C semantics)
+            result = lhs / rhs
+            return int(result) if result >= 0 else -int(-result)
+        if op == "<=":
+            return lhs <= rhs
+        if op == "<":
+            return lhs < rhs
+        if op == ">":
+            return lhs > rhs
+        if op == ">=":
+            return lhs >= rhs
+        if op == "==":
+            return lhs == rhs
+        if op == "!=":
+            return lhs != rhs
+        return None
+
     def _check_binop(self, binop: zast.BinOp) -> Optional[ZType]:
         lhs_type = self._check_operation(binop.lhs)
         rhs_type = self._check_path(binop.rhs)
@@ -3760,6 +3835,26 @@ class TypeChecker:
             ret = method.return_type
             if ret:
                 binop.type = ret
+                # constant folding: evaluate when both operands are constant integers
+                lhs_cv = binop.lhs.const_value
+                rhs_cv = binop.rhs.const_value
+                if isinstance(lhs_cv, int) and isinstance(rhs_cv, int):
+                    folded = self._fold_binop(op_name, lhs_cv, rhs_cv)
+                    if folded is not None and isinstance(folded, int):
+                        # overflow check for integer results
+                        rng = NUMERIC_RANGES.get(ret.name)
+                        if rng:
+                            lo, hi = rng
+                            if folded < lo or folded > hi:
+                                self._error(
+                                    f"constant expression overflows type '{ret.name}' "
+                                    f"(result: {folded}, range: {lo}..{hi})",
+                                    loc=binop.start,
+                                )
+                                return ret
+                        binop.const_value = folded
+                    elif folded is not None and isinstance(folded, bool):
+                        binop.const_value = folded
                 return ret
 
         self._error(

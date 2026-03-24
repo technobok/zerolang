@@ -4297,3 +4297,154 @@ class TestMap:
             '    m.set key: "hello" value: 42\n'
             "}"
         )
+
+
+class TestConstantFolding:
+    """Tests for constant folding (Phase 41)."""
+
+    @staticmethod
+    def _get_rhs(program, stmt_index=0):
+        """Get the RHS expression from an assignment in main's body."""
+        main = program.units[program.mainunitname].body["main"]
+        line = main.body.statements[stmt_index]
+        sl = line.statementline
+        if isinstance(sl, zast.Assignment):
+            return sl.value
+        return sl
+
+    @staticmethod
+    def _get_rhs_inner(program, stmt_index=0):
+        """Get the inner expression from an assignment RHS."""
+        main = program.units[program.mainunitname].body["main"]
+        line = main.body.statements[stmt_index]
+        sl = line.statementline
+        if isinstance(sl, zast.Assignment):
+            expr = sl.value
+            if isinstance(expr, zast.Expression):
+                return expr.expression
+            return expr
+        return sl
+
+    def test_const_value_numeric_literal(self):
+        """Numeric literal should have const_value set."""
+        program = check_ok("main: function is { x: 42 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.AtomId)
+        assert inner.const_value == 42
+
+    def test_const_value_binop_addition(self):
+        """1 + 2 should fold to const_value == 3."""
+        program = check_ok("main: function is { x: 1 + 2 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 3
+
+    def test_const_value_binop_subtraction(self):
+        """10 - 3 should fold to const_value == 7."""
+        program = check_ok("main: function is { x: 10 - 3 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 7
+
+    def test_const_value_binop_multiplication(self):
+        """4 * 5 should fold to const_value == 20."""
+        program = check_ok("main: function is { x: 4 * 5 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 20
+
+    def test_const_value_binop_division(self):
+        """10 / 3 should fold to const_value == 3 (truncation toward zero)."""
+        program = check_ok("main: function is { x: 10 / 3 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 3
+
+    def test_const_value_negative_division(self):
+        """-7 / 2 should fold to -3 (truncation toward zero, C semantics)."""
+        program = check_ok("main: function is { x: -7 / 2 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == -3
+
+    def test_const_value_binop_comparison(self):
+        """3 < 5 should fold to const_value == True."""
+        program = check_ok("main: function is { x: 3 < 5 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is True
+
+    def test_const_value_comparison_false(self):
+        """5 < 3 should fold to const_value == False."""
+        program = check_ok("main: function is { x: 5 < 3 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is False
+
+    def test_const_value_chained(self):
+        """1 + 2 + 3 should fold to const_value == 6 (left-to-right)."""
+        program = check_ok("main: function is { x: 1 + 2 + 3 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 6
+
+    def test_const_value_none_for_variables(self):
+        """Variable + literal should NOT fold."""
+        program = check_ok("main: function is {\n  x: 5\n  y: x + 1\n}")
+        inner = self._get_rhs_inner(program, stmt_index=1)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is None
+
+    def test_const_value_division_by_zero(self):
+        """1 / 0 should NOT fold (division by zero)."""
+        program = check_ok("main: function is { x: 1 / 0 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is None
+
+    def test_const_value_named_constant(self):
+        """Reference to a named constant should propagate const_value."""
+        program = check_ok(
+            'north: 0\nmain: function is {\n  x: north\n  print "\\{x}"\n}'
+        )
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.AtomId)
+        assert inner.const_value == 0
+
+    def test_const_value_chained_named(self):
+        """Chained named constants: a: 1, b: a + 2 -> b is 3."""
+        program = check_ok(
+            'a: 1\nb: a + 2\nmain: function is {\n  x: b\n  print "\\{x}"\n}'
+        )
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.AtomId)
+        assert inner.const_value == 3
+
+    def test_const_value_overflow_error(self):
+        """255u8 + 1u8 should produce a compile-time overflow error."""
+        errors = check_errors("main: function is { x: 255u8 + 1u8 }")
+        assert any("overflow" in e.msg.lower() for e in errors)
+
+    def test_const_value_float_not_folded(self):
+        """Float operations should not be folded."""
+        program = check_ok("main: function is { x: 1.5f64 + 2.5f64 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is None
+
+    def test_const_value_bool_via_comparison(self):
+        """Comparison results should have bool const_value (True/False)."""
+        program = check_ok("main: function is {\n  x: 1 == 1\n  y: 1 == 2\n}")
+        inner0 = self._get_rhs_inner(program, stmt_index=0)
+        inner1 = self._get_rhs_inner(program, stmt_index=1)
+        assert isinstance(inner0, zast.BinOp)
+        assert inner0.const_value is True
+        assert isinstance(inner1, zast.BinOp)
+        assert inner1.const_value is False
+
+    def test_const_value_propagates_through_expression(self):
+        """const_value should propagate from inner Operation to Expression wrapper."""
+        program = check_ok("main: function is { x: 1 + 2 }")
+        rhs = self._get_rhs(program)
+        assert isinstance(rhs, zast.Expression)
+        assert rhs.const_value == 3

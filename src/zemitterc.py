@@ -591,6 +591,9 @@ class CEmitter:
                     self._facet_defs[qname] = defn
             elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._const_names.add(qname)
+            elif hasattr(defn, "const_value") and defn.const_value is not None:
+                # unit-level expression that folded to a constant
+                self._const_names.add(qname)
 
     def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
         """Recursively emit definitions from a unit body."""
@@ -629,6 +632,19 @@ class CEmitter:
                 self._emit_data(qname, defn.expression)
             elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
+            elif hasattr(defn, "const_value") and isinstance(defn.const_value, int):
+                # unit-level expression that folded to an integer constant
+                self._emit_folded_constant(qname, defn)
+
+    def _emit_folded_constant(self, name: str, node: zast.Node) -> None:
+        """Emit a compile-time folded constant as a static const."""
+        v = node.const_value
+        self.needs_stdint = True
+        cname = _mangle_func(name)
+        ctype = "int64_t"
+        if node.type:
+            ctype = TYPEMAP.get(node.type.name, "int64_t")
+        self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
 
     def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
         """Emit facet definitions and impls (deferred to after all conforming types)."""
@@ -3568,7 +3584,22 @@ class CEmitter:
 
         return result
 
+    def _emit_const_value(self, node: zast.Node) -> str:
+        """Emit a compile-time constant value as a C literal."""
+        v = node.const_value
+        self.needs_stdint = True
+        if isinstance(v, bool):
+            return "1" if v else "0"
+        raw = str(int(v))
+        if node.type and node.type.name != "i64":
+            ctype = TYPEMAP.get(node.type.name, "int64_t")
+            if ctype != "int64_t":
+                return f"(({ctype}){raw})"
+        return raw
+
     def _emit_operation_value(self, op: zast.Operation) -> str:
+        if op.const_value is not None:
+            return self._emit_const_value(op)
         if isinstance(op, zast.BinOp):
             return self._emit_binop_value(op)
         if isinstance(op, zast.Path):
@@ -3576,6 +3607,8 @@ class CEmitter:
         return "0"
 
     def _emit_binop_value(self, binop: zast.BinOp) -> str:
+        if binop.const_value is not None:
+            return self._emit_const_value(binop)
         lhs = self._emit_operation_value(binop.lhs)
         rhs = self._emit_path_value(binop.rhs)
         op = binop.operator.name
@@ -4179,24 +4212,62 @@ class CEmitter:
         indent = self._indent()
         parts: List[str] = []
 
-        for i, clause in enumerate(ifnode.clauses):
-            keyword = "if" if i == 0 else "} else if"
-            conds: List[str] = []
-            for _, cond_op in clause.conditions.items():
-                conds.append(self._emit_operation_value(cond_op))
-            cond_str = " && ".join(conds) if conds else "1"
-            parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
-            self.indent_level += 1
-            parts.append(self._emit_statement(clause.statement))
-            self.indent_level -= 1
+        # constant folding: check if any clause has all-constant conditions
+        emitted_true_branch = False
+        non_const_clauses: List[tuple] = []  # (index, clause) for non-constant clauses
 
-        if ifnode.elseclause:
-            parts.append(f"{indent}}} else {{\n")
+        for i, clause in enumerate(ifnode.clauses):
+            # check if all conditions in this clause are compile-time constants
+            all_const = all(
+                cond_op.const_value is not None
+                for _, cond_op in clause.conditions.items()
+            )
+            if all_const and not emitted_true_branch:
+                all_true = all(
+                    bool(cond_op.const_value)
+                    for _, cond_op in clause.conditions.items()
+                )
+                if all_true:
+                    # emit just the branch body in a new scope
+                    parts.append(f"{indent}{{\n")
+                    self.indent_level += 1
+                    parts.append(self._emit_statement(clause.statement))
+                    self.indent_level -= 1
+                    parts.append(f"{indent}}}\n")
+                    emitted_true_branch = True
+                # else: all-false constant, skip this clause
+            else:
+                if not emitted_true_branch:
+                    non_const_clauses.append((i, clause))
+
+        if not emitted_true_branch and non_const_clauses:
+            # emit remaining non-constant clauses as normal if/else-if
+            for j, (_, clause) in enumerate(non_const_clauses):
+                keyword = "if" if j == 0 else "} else if"
+                conds: List[str] = []
+                for _, cond_op in clause.conditions.items():
+                    conds.append(self._emit_operation_value(cond_op))
+                cond_str = " && ".join(conds) if conds else "1"
+                parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
+                self.indent_level += 1
+                parts.append(self._emit_statement(clause.statement))
+                self.indent_level -= 1
+
+            if ifnode.elseclause:
+                parts.append(f"{indent}}} else {{\n")
+                self.indent_level += 1
+                parts.append(self._emit_statement(ifnode.elseclause))
+                self.indent_level -= 1
+
+            parts.append(f"{indent}}}\n")
+        elif not emitted_true_branch and ifnode.elseclause:
+            # all clauses were constant-false, emit else branch in a scope
+            parts.append(f"{indent}{{\n")
             self.indent_level += 1
             parts.append(self._emit_statement(ifnode.elseclause))
             self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
 
-        parts.append(f"{indent}}}\n")
         return "".join(parts)
 
     def _emit_for(self, fornode: zast.For) -> str:

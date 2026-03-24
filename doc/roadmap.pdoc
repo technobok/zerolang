@@ -1567,7 +1567,7 @@ format with error codes, ANSI color, and contextual notes/hints. Make
 the compiler quiet by default with #~"-v" for verbose output. All errors
 and diagnostics go to stderr. Add standard compiler flags.
 
-#---: 40.1 Error infrastructure (#~"src/zast.py")
+#----: 40.1 Error infrastructure (#~"src/zast.py")
 
 #ol:
   #*: #+ Add error code numbering to #~"ERR" enum: E0001-E0099 parser,
@@ -1585,7 +1585,7 @@ and diagnostics go to stderr. Add standard compiler flags.
     #~"hint" in green, line numbers in blue. Auto-detect TTY via
     #~"sys.stderr.isatty()". Accept color flag parameter.
 
-#---: 40.2 CLI and output routing (#~"src/zc.py")
+#----: 40.2 CLI and output routing (#~"src/zc.py")
 
 #ol:
   #*: #+ Add #~"-v" / #~"--verbose" flag — print compilation progress,
@@ -1600,7 +1600,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ Exit codes: 0 success, 1 compilation errors, 2 usage/argument errors
   #*: #+ Improve #~"-h" help text: description, grouped arguments, usage examples
 
-#---: 40.3 Parser cleanup (#~"src/zparser.py")
+#----: 40.3 Parser cleanup (#~"src/zparser.py")
 
 #ol:
   #*: #+ Remove #~"print(\"Compiling module file at: ...\")" (line 347)
@@ -1610,7 +1610,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ If parser needs to report verbose info, pass a callback from the
     compiler driver (#~"zc.py") to the Parser constructor
 
-#---: 40.4 Ownership error improvements (#~"src/ztypecheck.py")
+#----: 40.4 Ownership error improvements (#~"src/ztypecheck.py")
 
 #ol:
   #*: #+ Use-after-take error: add note showing the location where
@@ -1624,7 +1624,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ Reftype aliasing error: add note explaining why passing the
     same reftype twice is unsafe
 
-#---: 40.5 Type error improvements (#~"src/ztypecheck.py")
+#----: 40.5 Type error improvements (#~"src/ztypecheck.py")
 
 #ol:
   #*: #+ Undefined identifier: add did-you-mean using edit distance
@@ -1637,7 +1637,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ Unknown named argument: did-you-mean on parameter names
   #*: #+ Too many arguments: show expected function signature
 
-#---: 40.6 Did-you-mean infrastructure (#~"src/ztypecheck.py")
+#----: 40.6 Did-you-mean infrastructure (#~"src/ztypecheck.py")
 
 #ol:
   #*: #+ Add #~"_suggest_similar(name, candidates, max_distance=2)"
@@ -1646,7 +1646,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ Use for unknown parameter names and unknown type names
   #*: #+ Only suggest when distance <= 2 and there is a single best match
 
-#---: 40.7 Compiler command documentation (#~"doc/zc.pdoc")
+#----: 40.7 Compiler command documentation (#~"doc/zc.pdoc")
 
 #ol:
   #*: #+ Create #~"doc/zc.pdoc" — full command-line reference for the
@@ -1660,7 +1660,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ Document exit codes: 0 success, 1 errors, 2 usage
   #*: #+ Add link to #~"doc/index.pdoc" documentation index
 
-#---: 40.8 Tests
+#----: 40.8 Tests
 
 #ol:
   #*: #+ Test quiet output: no stdout on successful compilation
@@ -1673,7 +1673,7 @@ and diagnostics go to stderr. Add standard compiler flags.
   #*: #+ Test did-you-mean suggestions appear for close misspellings
   #*: #+ Test ownership error notes include source locations
 
-#---: 40.9 Future considerations (not in this phase)
+#----: 40.9 Future considerations (not in this phase)
 
 #ul:
   #*: Warning vs error distinction (currently all diagnostics are errors)
@@ -1698,7 +1698,88 @@ Files: #~"src/zc.py", #~"src/zast.py", #~"src/ztypecheck.py",
 #~"doc/roadmap.pdoc", #~"tests/test_cli.py"
 
 
-#---: Phase 40b: if-as-expression and unit-level if
+#---: Phase 41: Constant folding \[COMPLETE\]
+
+#----: 41.1 Constant value tracking on AST nodes
+
+#ol:
+  #*: #+ Add #~"const_value" field to #~"Node" base class in #~"zast.py"
+  #*: #+ Set #~"const_value" on integer numeric literals in
+    #~"_check_atomid()"
+  #*: #+ Propagate #~"const_value" through #~"Expression" wrappers in
+    #~"_check_expression()"
+
+#----: 41.2 Compile-time evaluation of binary operations
+
+#ol:
+  #*: #+ Add #~"_fold_binop()" helper for integer arithmetic (#~"+ - * /")
+    and comparison (#~"< > <= >= == !=") operators
+  #*: #+ Fold in #~"_check_binop()" when both operands have
+    #~"const_value" set
+  #*: #+ Integer division uses truncation toward zero (C semantics)
+  #*: #+ Detect overflow against #~"NUMERIC_RANGES" — report compile-time
+    error
+
+#----: 41.3 Named constant propagation
+
+#ol:
+  #*: #+ Propagate #~"const_value" for references to unit-level numeric
+    constants via #~"_lookup_definition()"
+  #*: #+ Set #~"const_value" on definition nodes during
+    #~"_type_of_definition()"
+  #*: #+ Support chained constant expressions (e.g. #~"a: 1",
+    #~"b: a + 2") via unit-level #~"BinOp" resolution
+  #*: #+ Support unit-level #~"Expression" wrapping #~"Operation"
+
+#----: 41.4 Emitter: emit folded constants
+
+#ol:
+  #*: #+ Add #~"_emit_const_value()" helper
+  #*: #+ Use #~"const_value" in #~"_emit_binop_value()" and
+    #~"_emit_operation_value()"
+  #*: #+ Emit unit-level constant expressions as #~"static const"
+    via #~"_emit_folded_constant()"
+
+#----: 41.5 Constant-condition if elimination
+
+#ol:
+  #*: #+ In #~"_emit_if()", skip false branches when condition has
+    compile-time constant #~"const_value"
+  #*: #+ Emit true branch in scoped block without #~"if" keyword
+  #*: #+ All branches still type-checked regardless of constness
+
+#----: 41.6 SQL dump: expose constant folding for debugging
+
+#ol:
+  #*: #+ Add #~"is_const" and #~"const_value" columns to #~"ast_nodes"
+    table in #~"zsqldump.py"
+  #*: #+ Emit #~"const_value" in SQL INSERT statements
+  #*: #+ AST tree structure preserved for traceability (folding is
+    annotation, not node replacement)
+
+#----: 41.7 Tests
+
+#ol:
+  #*: #+ Type checker tests for #~"const_value" propagation (17 tests)
+  #*: #+ Emitter tests for folded C output (15 tests)
+  #*: #+ End-to-end compile-and-run tests
+  #*: #+ Constant-condition if elimination tests
+  #*: #+ Overflow detection tests
+
+#----: 41.8 Documentation and examples
+
+#ol:
+  #*: #+ Add #~"examples/constfold.z" example program
+  #*: #+ Update spec constant folding section (#~"doc/spec.pdoc")
+  #*: #+ Update roadmap with detailed substeps (#~"doc/roadmap.pdoc")
+
+Files: #~"src/zast.py", #~"src/ztypecheck.py", #~"src/zemitterc.py",
+#~"src/zsqldump.py", #~"tests/test_emitter.py",
+#~"tests/test_typecheck.py", #~"doc/spec.pdoc", #~"doc/roadmap.pdoc",
+#~"examples/constfold.z"
+
+
+#---: Phase 42: if-as-expression and unit-level if
 
 The spec defines #~"if" as both a statement and an expression, but only
 the statement form is currently implemented. This phase adds the two
@@ -1706,7 +1787,7 @@ missing forms. Also clean up the spec: remove the stale variable binding
 syntax (#~"if x: expr when ...") from the if expression table — a
 #~"with" expression is now required for variable introduction.
 
-#---: 40b.1 if-as-expression (Priority 1)
+#----: 41.1 if-as-expression (Priority 1)
 
 When #~"if" has an #~"else" clause and is used in expression position
 (e.g. RHS of an assignment), it should evaluate to a value. Per the
@@ -1757,7 +1838,7 @@ Tests:
   #*: Return exemption: branches ending in return/break/continue
   #*: Compile and run under ASan
 
-#---: 40b.2 Unit-level if definition (Priority 3 — deferred)
+#----: 41.2 Unit-level if definition (Priority 3 — deferred)
 
 Per the spec (line 583): an #~"if" may be used as a definition at the
 unit level. Each clause must evaluate to a constant. Each arm may
@@ -1792,11 +1873,11 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
 #~"doc/spec.pdoc", #~"tests/test_emitter.py", #~"tests/test_typecheck.py"
 
 
-#---: Phase 40c: for-expression improvements
+#---: Phase 43: for-expression improvements
 
 The #~"for" expression has several unimplemented features from the spec.
 
-#---: 40c.1 Post-conditions (do-while) \[COMPLETE\]
+#----: 42.1 Post-conditions (do-while) \[COMPLETE\]
 
 #ol:
   #*: #+ Fix emitter to generate #~"do { body } while (postcond);" for
@@ -1811,7 +1892,7 @@ The #~"for" expression has several unimplemented features from the spec.
   #*: #+ Tests: do-while, do-while-once, pre+post, multiline do-while,
     infinite loop, break in loop, continue in loop (7 new tests)
 
-#---: 40c.2 Iterator protocol (#~"for x: in iterable") — deferred
+#----: 42.2 Iterator protocol (#~"for x: in iterable") — deferred
 
 Requires design of the #~".iterate" method convention and iterator
 protocol in the system library. Depends on protocol infrastructure.
@@ -1823,7 +1904,7 @@ protocol in the system library. Depends on protocol infrastructure.
   #*: Type checker: resolve iterator type, lock iterable during loop
   #*: Emitter: generate iterator setup/advance/cleanup code
 
-#---: 40c.3 for-as-expression (list comprehension) — deferred
+#----: 42.3 for-as-expression (list comprehension) — deferred
 
 Spec says: #~"for can be used as an expression. The result will be a
 list of the final values of the loop statement." Depends on the list
@@ -1834,7 +1915,7 @@ collection type being fully operational.
     expression, set for-node type to #~"list[of element_type]"
   #*: Emitter: allocate list, append each iteration's value, return it
 
-#---: 40c.4 Range iteration (#~"each") — deferred
+#----: 42.4 Range iteration (#~"each") — deferred
 
 Spec mentions #~"for x: each 10" for iterating 0..N-1. Needs design
 decision on what #~"each" is (integer method? builtin? protocol?).
@@ -1843,7 +1924,7 @@ Files: #~"src/zemitterc.py", #~"src/zparser.py",
 #~"tests/test_emitter.py"
 
 
-#---: Phase 41: C Runtime Library
+#---: Phase 44: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (#~"ZStr", #~"zstr_new",
@@ -1875,7 +1956,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
     union destructors, protocol vtable helpers, generic container
     support.
 
-#---: Phase 42: Expand to v3 (Full Language)
+#---: Phase 45: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
@@ -1883,7 +1964,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
   #*: Iterator protocol.
   #*: Full standard library.
 
-#---: Phase 43: Developer Tools
+#---: Phase 46: Developer Tools
 
 Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.
@@ -1903,7 +1984,7 @@ source files in IDEs and editors.
   #*: Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.
 
-#---: Phase 44: Self-Hosting
+#---: Phase 47: Self-Hosting
 
 #ol:
   #*: Write the zerolang compiler in zerolang.
