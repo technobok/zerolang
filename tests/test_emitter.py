@@ -312,6 +312,20 @@ class TestEmitterExamples:
         assert "13" in output  # apply a:10 b:3 -> add(10,3)
         assert "5 0 0" in output  # point x:5
 
+    def test_constfold(self):
+        csource = self._emit_example("constfold")
+        output = compile_and_run(csource)
+        assert "5" in output
+        assert "6" in output
+
+    def test_ifexpr(self):
+        csource = self._emit_example("ifexpr")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert "10" in lines[0]
+        assert "12" in lines[1]
+        assert "yes" in lines[2]
+
 
 def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
     """Compile C source with ASan and run, returning the CompletedProcess."""
