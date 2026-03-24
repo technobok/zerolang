@@ -191,7 +191,7 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-40-compiler-console-output-and-error-messages">Phase 40: Compiler console output and error messages</a>
 </li>
-<li><a href="#phase-41-constant-folding">Phase 41: Constant folding</a>
+<li><a href="#phase-41-constant-folding-complete">Phase 41: Constant folding [COMPLETE]</a>
 </li>
 <li><a href="#phase-42-if-as-expression-and-unit-level-if">Phase 42: if-as-expression and unit-level if</a>
 </li>
@@ -1499,38 +1499,82 @@ and diagnostics go to stderr. Add standard compiler flags.</p>
 <p>Files: <code>src/zc.py</code>, <code>src/zast.py</code>, <code>src/ztypecheck.py</code>,
 <code>src/zparser.py</code>, <code>doc/zc.pdoc</code>, <code>doc/index.pdoc</code>,
 <code>doc/roadmap.pdoc</code>, <code>tests/test_cli.py</code></p>
-<h3 id="phase-41-constant-folding"><a href="#phase-41-constant-folding">5.41. Phase 41: Constant folding</a></h3>
-<ul>
-<li>References to constants need to be marked as constant in the AST</li>
-<li>Some operations/functions also need to be marked as constant when
-  performed on constant arguments</li>
-<li>The compiler should evaluate constant operations during compilation and
-  use the result of the operation instead of the operation itself when emitting
-  output.</li>
-<li>constant operations can appear at the unit level or within executable
-  code</li>
-<li>Example: '1 + 2' should be replaced by the literal value 3. Types of
-  components and results are still evaluated and must be compatible</li>
-<li>Example: an 'if' with a literal test, should be replaced with the
-  'branch' code itself. In unit level 'if's, the test MUST result in a literal
-  and so MUST be replaced with a value for assigning to the LHS. In runtime
-  code with a literal condition, the test itself can be omitted and the 'false'
-  arm(s) of the 'if' statement can be skipped during the emitter phase (they
-  still need to pass typechecking). Note that there must still be a new scope
-  created for the 'if' code produced. This allows ifdef style conditional
-  compilation within runtime code</li>
-<li>Example: at the unit level, curly braces are allowed which creates a
-  sub-scope and each line within must evaluate to a constant, which can then be
-  used in subsequent lines. The result of the block is the last line of that
-  block.</li>
-</ul>
+<h3 id="phase-41-constant-folding-complete"><a href="#phase-41-constant-folding-complete">5.41. Phase 41: Constant folding [COMPLETE]</a></h3>
+<h4 id="41-1-constant-value-tracking-on-ast-nodes"><a href="#41-1-constant-value-tracking-on-ast-nodes">5.41.1. 41.1 Constant value tracking on AST nodes</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>const_value</code> field to <code>Node</code> base class in <code>zast.py</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Set <code>const_value</code> on integer numeric literals in</li>
+<code>_check_atomid()</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Propagate <code>const_value</code> through <code>Expression</code> wrappers in</li>
+<code>_check_expression()</code>
+</ol>
+<h4 id="41-2-compile-time-evaluation-of-binary-operations"><a href="#41-2-compile-time-evaluation-of-binary-operations">5.41.2. 41.2 Compile-time evaluation of binary operations</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_fold_binop()</code> helper for integer arithmetic (<code>+ - * /</code>)</li>
+<code>&lt; &gt; &lt;= &gt;= == !=</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Fold in <code>_check_binop()</code> when both operands have</li>
+<code>const_value</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Integer division uses truncation toward zero (C semantics)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Detect overflow against <code>NUMERIC_RANGES</code> &#x2014; report compile-time</li>
+</ol>
+<h4 id="41-3-named-constant-propagation"><a href="#41-3-named-constant-propagation">5.41.3. 41.3 Named constant propagation</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Propagate <code>const_value</code> for references to unit-level numeric</li>
+<code>_lookup_definition()</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Set <code>const_value</code> on definition nodes during</li>
+<code>_type_of_definition()</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Support chained constant expressions (e.g. <code>a: 1</code>,</li>
+<code>b: a + 2</code>
+<code>BinOp</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Support unit-level <code>Expression</code> wrapping <code>Operation</code></li>
+</ol>
+<h4 id="41-4-emitter-emit-folded-constants"><a href="#41-4-emitter-emit-folded-constants">5.41.4. 41.4 Emitter: emit folded constants</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_emit_const_value()</code> helper</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Use <code>const_value</code> in <code>_emit_binop_value()</code> and</li>
+<code>_emit_operation_value()</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emit unit-level constant expressions as <code>static const</code></li>
+<code>_emit_folded_constant()</code>
+</ol>
+<h4 id="41-5-constant-condition-if-elimination"><a href="#41-5-constant-condition-if-elimination">5.41.5. 41.5 Constant-condition if elimination</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> In <code>_emit_if()</code>, skip false branches when condition has</li>
+<code>const_value</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emit true branch in scoped block without <code>if</code> keyword</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> All branches still type-checked regardless of constness</li>
+</ol>
+<h4 id="41-6-sql-dump-expose-constant-folding-for-debugging"><a href="#41-6-sql-dump-expose-constant-folding-for-debugging">5.41.6. 41.6 SQL dump: expose constant folding for debugging</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>is_const</code> and <code>const_value</code> columns to <code>ast_nodes</code></li>
+<code>zsqldump.py</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emit <code>const_value</code> in SQL INSERT statements</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> AST tree structure preserved for traceability (folding is</li>
+</ol>
+<h4 id="41-7-tests"><a href="#41-7-tests">5.41.7. 41.7 Tests</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Type checker tests for <code>const_value</code> propagation (17 tests)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emitter tests for folded C output (15 tests)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> End-to-end compile-and-run tests</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Constant-condition if elimination tests</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Overflow detection tests</li>
+</ol>
+<h4 id="41-8-documentation-and-examples"><a href="#41-8-documentation-and-examples">5.41.8. 41.8 Documentation and examples</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>examples/constfold.z</code> example program</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Update spec constant folding section (<code>doc/spec.pdoc</code>)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Update roadmap with detailed substeps (<code>doc/roadmap.pdoc</code>)</li>
+</ol>
+<p>Files: <code>src/zast.py</code>, <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>src/zsqldump.py</code>, <code>tests/test_emitter.py</code>,
+<code>tests/test_typecheck.py</code>, <code>doc/spec.pdoc</code>, <code>doc/roadmap.pdoc</code>,
+<code>examples/constfold.z</code></p>
 <h3 id="phase-42-if-as-expression-and-unit-level-if"><a href="#phase-42-if-as-expression-and-unit-level-if">5.42. Phase 42: if-as-expression and unit-level if</a></h3>
 <p>The spec defines <code>if</code> as both a statement and an expression, but only
 the statement form is currently implemented. This phase adds the two
 missing forms. Also clean up the spec: remove the stale variable binding
 syntax (<code>if x: expr when ...</code>) from the if expression table &#x2014; a
 <code>with</code> expression is now required for variable introduction.</p>
-<h4 id="41-1-if-as-expression-priority-1"><a href="#41-1-if-as-expression-priority-1">5.42.1. 41.1 if-as-expression (Priority 1)</a></h4>
+<h4 id="42-1-if-as-expression-priority-1"><a href="#42-1-if-as-expression-priority-1">5.42.1. 42.1 if-as-expression (Priority 1)</a></h4>
 <p>When <code>if</code> has an <code>else</code> clause and is used in expression position
 (e.g. RHS of an assignment), it should evaluate to a value. Per the
 spec: the <code>if</code> must be exhaustive and each arm must evaluate to the
@@ -1569,7 +1613,7 @@ emitter uses the temp-variable pattern; otherwise it emits a normal C
 <li>Return exemption: branches ending in return/break/continue</li>
 <li>Compile and run under ASan</li>
 </ol>
-<h4 id="41-2-unit-level-if-definition-priority-3-deferred"><a href="#41-2-unit-level-if-definition-priority-3-deferred">5.42.2. 41.2 Unit-level if definition (Priority 3 &#x2014; deferred)</a></h4>
+<h4 id="42-2-unit-level-if-definition-priority-3-deferred"><a href="#42-2-unit-level-if-definition-priority-3-deferred">5.42.2. 42.2 Unit-level if definition (Priority 3 &#x2014; deferred)</a></h4>
 <p>Per the spec (line 583): an <code>if</code> may be used as a definition at the
 unit level. Each clause must evaluate to a constant. Each arm may
 produce a completely different type. This is compile-time conditional
