@@ -4513,3 +4513,68 @@ class TestIfExpression:
             '  if x > 3 then print "big" else print "small"\n'
             "}"
         )
+
+
+class TestUnitLevelIf:
+    """Tests for unit-level if definitions (Phase 42.2)."""
+
+    def test_unit_level_if_basic(self):
+        """Unit-level if with constant condition type-checks."""
+        check_ok(
+            "x: if 1 < 2 then { 42 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+
+    def test_unit_level_if_type(self):
+        """Unit-level if should resolve to the taken branch's type."""
+        program = check_ok(
+            "x: if 1 < 2 then { 42 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        resolved = program.resolved
+        x_type = None
+        for k, v in resolved.items():
+            if k.endswith(".x"):
+                x_type = v
+                break
+        assert x_type is not None
+        assert x_type.name == "i64"
+
+    def test_unit_level_if_false_branch(self):
+        """Unit-level if where condition is false selects else branch."""
+        check_ok(
+            "x: if 1 > 2 then { 42 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+
+    def test_unit_level_if_with_named_constants(self):
+        """Unit-level if can reference other constants in condition."""
+        check_ok(
+            "THRESHOLD: 5\n"
+            "x: if THRESHOLD > 3 then { 100 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+
+    def test_unit_level_if_nonconstant_error(self):
+        """Non-constant condition at unit level should produce an error."""
+        errors = check_errors(
+            "x: if main then { 1 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        assert any("compile-time constant" in e.msg for e in errors)
+
+    def test_unit_level_if_different_types(self):
+        """Unit-level if arms can produce different types."""
+        program = check_ok(
+            "x: if 1 < 2 then { 42 } else { 99u8 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        # x should have type i64 (the true branch type)
+        resolved = program.resolved
+        x_type = None
+        for k, v in resolved.items():
+            if k.endswith(".x"):
+                x_type = v
+                break
+        assert x_type is not None
+        assert x_type.name == "i64"

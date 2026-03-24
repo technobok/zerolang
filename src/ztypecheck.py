@@ -522,6 +522,8 @@ class TypeChecker:
             return t
         if defn_type == zast.Expression and isinstance(defn.expression, zast.Data):
             return self._resolve_data_type(unitname, name, defn.expression)
+        if defn_type == zast.Expression and isinstance(defn.expression, zast.If):
+            return self._resolve_unit_level_if(unitname, name, defn)
         if defn_type == zast.Expression and isinstance(defn.expression, zast.Operation):
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
@@ -553,6 +555,79 @@ class TypeChecker:
             self._resolving.pop()
             return t
         return None
+
+    def _resolve_unit_level_if(
+        self, unitname: str, name: str, defn: zast.Expression
+    ) -> Optional[ZType]:
+        """Resolve a unit-level if definition (compile-time conditional)."""
+        ifnode = defn.expression
+        assert isinstance(ifnode, zast.If)
+        key = f"{unitname}.{name}"
+        shell = _make_type(name, ZTypeType.NULL)
+        self._resolving.append((key, shell))
+
+        # type-check all conditions and branches
+        for clause in ifnode.clauses:
+            for _, cond_op in clause.conditions.items():
+                self._check_operation(cond_op)
+            self._check_statement(clause.statement)
+        if ifnode.elseclause:
+            self._check_statement(ifnode.elseclause)
+
+        # find the first clause whose conditions are all constant-true
+        taken_stmt = None
+        for clause in ifnode.clauses:
+            all_const = all(
+                cond_op.const_value is not None
+                for _, cond_op in clause.conditions.items()
+            )
+            if not all_const:
+                self._error(
+                    "unit-level if condition must be a compile-time constant",
+                    loc=clause.start,
+                )
+                self._resolving.pop()
+                return None
+            all_true = all(
+                bool(cond_op.const_value)
+                for _, cond_op in clause.conditions.items()
+            )
+            if all_true and taken_stmt is None:
+                taken_stmt = clause.statement
+
+        if taken_stmt is None:
+            if ifnode.elseclause:
+                taken_stmt = ifnode.elseclause
+            else:
+                self._error(
+                    "unit-level if: no branch matched and no else clause",
+                    loc=ifnode.start,
+                )
+                self._resolving.pop()
+                return None
+
+        # get type from the taken branch's last expression
+        t = self._last_statement_type(taken_stmt)
+        if t is self._NORETURN or t is None or not isinstance(t, ZType):
+            self._error(
+                "unit-level if branch must produce a value",
+                loc=ifnode.start,
+            )
+            self._resolving.pop()
+            return None
+
+        ifnode.type = t
+
+        # propagate const_value from taken branch if available
+        if taken_stmt.statements:
+            last_inner = taken_stmt.statements[-1].statementline
+            if isinstance(last_inner, zast.Expression):
+                inner_expr = last_inner.expression
+                if hasattr(inner_expr, "const_value") and inner_expr.const_value is not None:
+                    defn.const_value = inner_expr.const_value
+
+        self._resolving.pop()
+        return t
 
     def _resolve_function_type(
         self, unitname: str, name: str, func: zast.Function

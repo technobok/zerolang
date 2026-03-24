@@ -4097,3 +4097,56 @@ class TestIfExpression:
         )
         output = compile_and_run(csource)
         assert output.strip() == "big"
+
+
+class TestUnitLevelIf:
+    """Tests for unit-level if definitions (Phase 42.2)."""
+
+    def test_unit_level_if_true(self):
+        """Unit-level if with true condition compiles and runs."""
+        csource = emit_source(
+            "x: if 1 < 2 then { 42 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+        assert "static const" in csource
+
+    def test_unit_level_if_false(self):
+        """Unit-level if with false condition selects else branch."""
+        csource = emit_source(
+            "x: if 1 > 2 then { 42 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0"
+
+    def test_unit_level_if_with_constants(self):
+        """Unit-level if referencing named constants."""
+        csource = emit_source(
+            "A: 10\n"
+            "x: if A > 5 then { A } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10"
+
+    def test_unit_level_if_chained_constants(self):
+        """Unit-level if with chained constant references."""
+        csource = emit_source(
+            "A: 10\n"
+            "B: A + 5\n"
+            "x: if B > 10 then { B } else { A }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_unit_level_if_no_runtime_if(self):
+        """Unit-level if should not produce runtime if in C output."""
+        csource = emit_source(
+            "x: if 1 < 2 then { 42 } else { 0 }\n"
+            'main: function is { print "\\{x}" }'
+        )
+        # should be a static const, no runtime if
+        assert "if (1" not in csource
