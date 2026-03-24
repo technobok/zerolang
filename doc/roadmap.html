@@ -1570,72 +1570,81 @@ and diagnostics go to stderr. Add standard compiler flags.</p>
 <code>examples/constfold.z</code></p>
 <h3 id="phase-42-if-as-expression-and-unit-level-if"><a href="#phase-42-if-as-expression-and-unit-level-if">5.42. Phase 42: if-as-expression and unit-level if</a></h3>
 <p>The spec defines <code>if</code> as both a statement and an expression, but only
-the statement form is currently implemented. This phase adds the two
-missing forms. Also clean up the spec: remove the stale variable binding
-syntax (<code>if x: expr when ...</code>) from the if expression table &#x2014; a
-<code>with</code> expression is now required for variable introduction.</p>
-<h4 id="42-1-if-as-expression-priority-1"><a href="#42-1-if-as-expression-priority-1">5.42.1. 42.1 if-as-expression (Priority 1)</a></h4>
+the statement form was previously implemented. This phase adds
+if-as-expression (42.1). Unit-level if (42.2) is deferred. The spec is
+cleaned up to remove deprecated variable binding syntax.</p>
+<h4 id="42-1-if-as-expression-complete"><a href="#42-1-if-as-expression-complete">5.42.1. 42.1 if-as-expression [COMPLETE]</a></h4>
 <p>When <code>if</code> has an <code>else</code> clause and is used in expression position
-(e.g. RHS of an assignment), it should evaluate to a value. Per the
-spec: the <code>if</code> must be exhaustive and each arm must evaluate to the
+(e.g. RHS of an assignment, string interpolation), it evaluates to a
+value. The <code>if</code> must be exhaustive and each arm must evaluate to the
 same type, or must not complete (<code>return</code>, <code>break</code>, <code>continue</code>).</p>
-<p>Context detection: the compiler knows whether <code>if</code> is in expression
-position (RHS of assignment, call argument, interpolation) vs statement
-position (standalone <code>StatementLine</code>) by checking whether the result
-type is consumed. If <code>_check_if()</code> returns a non-null type, the
-emitter uses the temp-variable pattern; otherwise it emits a normal C
-<code>if</code> statement.</p>
 <p>Type checker (<code>src/ztypecheck.py</code>):</p>
 <ol>
-<li>In <code>_check_if()</code>, when the if node has an else clause, compute</li>
-<li>If all branch types are compatible, set <code>ifnode.type</code> to that</li>
-<code>t_null</code>
-<li>Branches that end with <code>return</code>/<code>break</code>/<code>continue</code> are</li>
-<li>If used in expression position without an else clause, emit error:</li>
-<li>If branch types are incompatible, emit error with the conflicting</li>
-<li>For reftypes: only one branch executes so only one allocation</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_last_statement_type()</code> helper to extract the type of</li>
+<code>Statement</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_NORETURN</code> sentinel for branches ending in</li>
+<code>return</code>
+<code>break</code>
+<code>continue</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> In <code>_check_if()</code>, when the if node has an else clause,</li>
+<code>ifnode.type</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Report error when branch types are incompatible</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_check_exhaustive_if()</code> for exhaustiveness checking</li>
 </ol>
 <p>Emitter (<code>src/zemitterc.py</code>):</p>
 <ol>
-<li>When an <code>If</code> node has a non-null type (expression-if), emit</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_emit_branch_with_result()</code> helper that emits a</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>_emit_if_expression_value()</code> using temp-variable</li>
 <code>Type _ifN; if (cond) { _ifN = val; } else { _ifN = val; }</code>
-<li>For simple single-expression branches, consider emitting a C</li>
-<code>(cond ? a : b)</code>
-<li>Return the temp variable name as the expression result</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Wire up in <code>_emit_expression_value()</code> for <code>If</code> nodes</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Integrate with constant-condition folding from Phase 41</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Handle reftype ownership for string if-expressions</li>
 </ol>
 <p>Tests:</p>
 <ol>
-<li><code>x: if true then 1 else 2</code> &#x2014; basic expression-if</li>
-<li><code>x: if a &gt; b then a else b</code> &#x2014; max pattern</li>
-<li><code>s: if flag then "yes" else "no"</code> &#x2014; string expression-if</li>
-<li>Type mismatch error: <code>x: if true then 1 else "hello"</code></li>
-<li>Missing else error: <code>x: if true then 1</code> (not exhaustive)</li>
-<li>Return exemption: branches ending in return/break/continue</li>
-<li>Compile and run under ASan</li>
-</ol>
-<h4 id="42-2-unit-level-if-definition-priority-3-deferred"><a href="#42-2-unit-level-if-definition-priority-3-deferred">5.42.2. 42.2 Unit-level if definition (Priority 3 &#x2014; deferred)</a></h4>
-<p>Per the spec (line 583): an <code>if</code> may be used as a definition at the
-unit level. Each clause must evaluate to a constant. Each arm may
-produce a completely different type. This is compile-time conditional
-compilation (similar to C's <code>#ifdef</code> but type-safe). For example:
-<code>platform_int: if system.word_size == 64 then u64 else u32</code>.</p>
-<p>This requires a compile-time constant evaluator, which is a larger
-feature shared with generic specialisation. Deferred until constant
-evaluation infrastructure exists.</p>
-<ol>
-<li>Add compile-time constant evaluation for integer comparisons</li>
-<li>Parser: accept <code>if</code> at unit body level (currently only in</li>
-<li>Type checker: resolve each arm independently, result type is</li>
-<li>Each arm may produce a different type (unlike expression-if</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Basic expression-if: <code>x: if 1 &lt; 2 then 1 else 2</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Max pattern: <code>x: if a &gt; b then a else b</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> String expression-if: <code>s: if 1 &lt; 2 then "yes" else "no"</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Multi-line branch: result is last expression in block</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Type mismatch error: <code>x: if 1 &lt; 2 then 1 else "hello"</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Missing else error: <code>x: if 1 &lt; 2 then 1</code> (not exhaustive)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Exhaustiveness check in reassignment and interpolation</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Return exemption: branches ending in return/break/continue</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Constant-folded if-expression</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Compile and run all tests</li>
 </ol>
 <p>Spec cleanup (<code>doc/spec.pdoc</code>):</p>
 <ol>
-<li>Remove <code>[var]:</code> initialisation expression row from the <code>if</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Remove <code>[var]:</code> initialisation expression row from the</li>
+<code>if</code>
 <code>with</code>
-<li>Remove or update the code example showing <code>if x: func...</code> syntax</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Remove deprecated <code>if x: func...</code> code example</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add if-expression examples showing the new feature</li>
+</ol>
+<p>Documentation:</p>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Add <code>examples/ifexpr.z</code> example program</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Update roadmap with detailed substeps</li>
+</ol>
+<h4 id="42-2-unit-level-if-definition-priority-3-deferred"><a href="#42-2-unit-level-if-definition-priority-3-deferred">5.42.2. 42.2 Unit-level if definition (Priority 3 &#x2014; deferred)</a></h4>
+<p>Per the spec: an <code>if</code> may be used as a definition at the unit level.
+Each clause must evaluate to a constant. Each arm may produce a
+completely different type. This is compile-time conditional compilation
+(similar to C's <code>#ifdef</code> but type-safe). For example:
+<code>platform_int: if system.word_size == 64 then u64 else u32</code>.</p>
+<p>This requires each arm to potentially produce different types (unlike
+expression-if which requires compatible types). Deferred to a future
+phase.</p>
+<ol>
+<li><input type="checkbox" disabled class="task-list-item-checkbox"> Add compile-time constant evaluation for integer comparisons</li>
+<li><input type="checkbox" disabled class="task-list-item-checkbox"> Parser: accept <code>if</code> at unit body level (currently only in</li>
+<li><input type="checkbox" disabled class="task-list-item-checkbox"> Type checker: resolve each arm independently, result type is</li>
+<li><input type="checkbox" disabled class="task-list-item-checkbox"> Each arm may produce a different type (unlike expression-if</li>
 </ol>
 <p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
-<code>doc/spec.pdoc</code>, <code>tests/test_emitter.py</code>, <code>tests/test_typecheck.py</code></p>
+<code>src/zsqldump.py</code>, <code>doc/spec.pdoc</code>, <code>doc/roadmap.pdoc</code>,
+<code>tests/test_emitter.py</code>, <code>tests/test_typecheck.py</code>,
+<code>examples/ifexpr.z</code></p>
 <h3 id="phase-43-for-expression-improvements"><a href="#phase-43-for-expression-improvements">5.43. Phase 43: for-expression improvements</a></h3>
 <p>The <code>for</code> expression has several unimplemented features from the spec.</p>
 <h4 id="42-1-post-conditions-do-while-complete"><a href="#42-1-post-conditions-do-while-complete">5.43.1. 42.1 Post-conditions (do-while) [COMPLETE]</a></h4>
