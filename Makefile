@@ -3,9 +3,10 @@ CC       := gcc
 CFLAGS   := -Wall -Wno-unused-function
 BUILDDIR := out
 
-# all .z files in examples/
+# all .z files in examples/ (exclude library-only modules without main)
+SKIP     := mathutil
 EXAMPLES := $(wildcard examples/*.z)
-NAMES    := $(basename $(notdir $(EXAMPLES)))
+NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
 .PHONY: check test fmt build clean
 
