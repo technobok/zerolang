@@ -4448,3 +4448,68 @@ class TestConstantFolding:
         rhs = self._get_rhs(program)
         assert isinstance(rhs, zast.Expression)
         assert rhs.const_value == 3
+
+
+class TestIfExpression:
+    """Tests for if-as-expression (Phase 42)."""
+
+    def test_if_expression_basic(self):
+        """Basic if-expression with compatible integer branches."""
+        program = check_ok("main: function is { x: if 1 < 2 then 1 else 2 }")
+        main = program.units[program.mainunitname].body["main"]
+        assign = main.body.statements[0].statementline
+        assert isinstance(assign, zast.Assignment)
+        assert assign.type is not None
+        assert assign.type.name == "i64"
+
+    def test_if_expression_sets_ifnode_type(self):
+        """If with else should set ifnode.type to common branch type."""
+        program = check_ok("main: function is { x: if 1 < 2 then 10 else 20 }")
+        main = program.units[program.mainunitname].body["main"]
+        assign = main.body.statements[0].statementline
+        expr = assign.value
+        inner = expr.expression
+        assert isinstance(inner, zast.If)
+        assert inner.type is not None
+        assert inner.type.name == "i64"
+
+    def test_if_expression_type_mismatch(self):
+        """Incompatible branch types should produce an error."""
+        errors = check_errors(
+            'main: function is { x: if 1 < 2 then 1 else "hello" }'
+        )
+        assert any("incompatible" in e.msg.lower() for e in errors)
+
+    def test_if_expression_missing_else(self):
+        """If-expression without else should produce an exhaustiveness error."""
+        errors = check_errors("main: function is { x: if 1 < 2 then 1 }")
+        assert any("exhaustive" in e.msg.lower() for e in errors)
+
+    def test_if_expression_missing_else_reassignment(self):
+        """Exhaustiveness check also applies to reassignment."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  x: 0\n"
+            "  x = if 1 < 2 then 1\n"
+            "}"
+        )
+        assert any("exhaustive" in e.msg.lower() for e in errors)
+
+    def test_if_expression_return_exemption(self):
+        """Branch ending in return is exempt from type matching."""
+        check_ok(
+            "f: function {n: i64} out i64 is {\n"
+            "  x: if n < 0 then { return 0 } else n\n"
+            '  print "\\{x}"\n'
+            "  return x\n"
+            "}"
+        )
+
+    def test_if_expression_statement_if_still_works(self):
+        """Statement-if (no expression context) should still work as before."""
+        check_ok(
+            "main: function is {\n"
+            "  x: 5\n"
+            '  if x > 3 then print "big" else print "small"\n'
+            "}"
+        )

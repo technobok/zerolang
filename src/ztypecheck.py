@@ -2910,6 +2910,7 @@ class TypeChecker:
     def _check_assignment(self, assign: zast.Assignment) -> None:
         self._pending_borrow_lock = None
         t = self._check_expression(assign.value)
+        self._check_exhaustive_if(assign.value)
         if t:
             # check if this assignment is from a .borrow call
             borrow_target = self._pending_borrow_lock
@@ -2937,6 +2938,7 @@ class TypeChecker:
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
         existing = self._check_path(reassign.topath)
         new_t = self._check_expression(reassign.value)
+        self._check_exhaustive_if(reassign.value)
         if existing and new_t and not self._types_compatible(existing, new_t):
             self._error(
                 f"Cannot assign {new_t.name} to variable of type {existing.name}",
@@ -3179,6 +3181,7 @@ class TypeChecker:
         for part in atom.stringparts:
             if isinstance(part, zast.Expression):
                 self._check_expression(part)
+                self._check_exhaustive_if(part)
 
     def _check_atomid(self, atom: zast.AtomId) -> Optional[ZType]:
         name = atom.name
@@ -3863,6 +3866,42 @@ class TypeChecker:
         )
         return None
 
+    # sentinel for branches that don't complete (return/break/continue)
+    _NORETURN = object()
+
+    def _last_statement_type(self, stmt: zast.Statement) -> object:
+        """Get the type of the last expression in a statement block.
+
+        Returns ZType for value-producing branches, _NORETURN for
+        return/break/continue, or None if no value produced.
+        """
+        if not stmt.statements:
+            return None
+        last = stmt.statements[-1].statementline
+        if isinstance(last, zast.Expression):
+            inner = last.expression
+            # check for non-completing expressions
+            if isinstance(inner, zast.AtomId) and inner.name in ("break", "continue"):
+                return self._NORETURN
+            if isinstance(inner, zast.Call) and inner.call_kind == zast.CallKind.RETURN:
+                return self._NORETURN
+            # get type from the inner expression node (Expression wrapper .type may be None)
+            if isinstance(inner, zast.Node) and inner.type is not None:
+                return inner.type
+            return last.type
+        if isinstance(last, zast.Assignment):
+            return last.type
+        return None
+
+    def _check_exhaustive_if(self, expr: zast.Expression) -> None:
+        """Emit error if an if-expression is missing its else clause."""
+        inner = expr.expression
+        if isinstance(inner, zast.If) and not inner.elseclause:
+            self._error(
+                "if-expression is not exhaustive (missing else clause)",
+                loc=inner.start,
+            )
+
     def _check_if(self, ifnode: zast.If) -> Optional[ZType]:
         self.symtab.push("if")
         for clause in ifnode.clauses:
@@ -3871,8 +3910,45 @@ class TypeChecker:
             self._check_statement(clause.statement)
         if ifnode.elseclause:
             self._check_statement(ifnode.elseclause)
+
+        result_type = self.t_null
+
+        # if-as-expression: compute branch types when else clause is present
+        if ifnode.elseclause:
+            branch_types = []
+            for clause in ifnode.clauses:
+                branch_types.append(self._last_statement_type(clause.statement))
+            branch_types.append(self._last_statement_type(ifnode.elseclause))
+
+            # filter out non-completing branches (return/break/continue)
+            completing = [t for t in branch_types if t is not self._NORETURN]
+
+            if completing:
+                first = completing[0]
+                if first is not None and isinstance(first, ZType):
+                    all_ok = all(
+                        t is not None
+                        and isinstance(t, ZType)
+                        and self._types_compatible(first, t)
+                        for t in completing[1:]
+                    )
+                    if all_ok:
+                        result_type = first
+                        ifnode.type = first
+                    else:
+                        # find first incompatible type for error message
+                        for t in completing[1:]:
+                            if t is None or not isinstance(t, ZType) or not self._types_compatible(first, t):
+                                tname = t.name if isinstance(t, ZType) else "null"
+                                self._error(
+                                    f"incompatible branch types in if-expression: "
+                                    f"'{first.name}' and '{tname}'",
+                                    loc=ifnode.start,
+                                )
+                                break
+
         self.symtab.pop()
-        return self.t_null
+        return result_type
 
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")

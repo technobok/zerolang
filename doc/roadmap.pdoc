@@ -1782,95 +1782,97 @@ Files: #~"src/zast.py", #~"src/ztypecheck.py", #~"src/zemitterc.py",
 #---: Phase 42: if-as-expression and unit-level if
 
 The spec defines #~"if" as both a statement and an expression, but only
-the statement form is currently implemented. This phase adds the two
-missing forms. Also clean up the spec: remove the stale variable binding
-syntax (#~"if x: expr when ...") from the if expression table — a
-#~"with" expression is now required for variable introduction.
+the statement form was previously implemented. This phase adds
+if-as-expression (42.1). Unit-level if (42.2) is deferred. The spec is
+cleaned up to remove deprecated variable binding syntax.
 
-#----: 42.1 if-as-expression (Priority 1)
+#----: 42.1 if-as-expression \[COMPLETE\]
 
 When #~"if" has an #~"else" clause and is used in expression position
-(e.g. RHS of an assignment), it should evaluate to a value. Per the
-spec: the #~"if" must be exhaustive and each arm must evaluate to the
+(e.g. RHS of an assignment, string interpolation), it evaluates to a
+value. The #~"if" must be exhaustive and each arm must evaluate to the
 same type, or must not complete (#~"return", #~"break", #~"continue").
-
-Context detection: the compiler knows whether #~"if" is in expression
-position (RHS of assignment, call argument, interpolation) vs statement
-position (standalone #~"StatementLine") by checking whether the result
-type is consumed. If #~"_check_if()" returns a non-null type, the
-emitter uses the temp-variable pattern; otherwise it emits a normal C
-#~"if" statement.
 
 Type checker (#~"src/ztypecheck.py"):
 
 #ol:
-  #*: In #~"_check_if()", when the if node has an else clause, compute
-    the type of the last expression in each then/else block
-  #*: If all branch types are compatible, set #~"ifnode.type" to that
-    common type (currently always returns #~"t_null")
-  #*: Branches that end with #~"return"/#~"break"/#~"continue" are
-    exempt from type matching (they do not complete)
-  #*: If used in expression position without an else clause, emit error:
-    if-expression is not exhaustive
-  #*: If branch types are incompatible, emit error with the conflicting
-    types
-  #*: For reftypes: only one branch executes so only one allocation
-    happens; ownership transfers to the assignment target
+  #*: #+ Add #~"_last_statement_type()" helper to extract the type of
+    the last expression in a #~"Statement" block
+  #*: #+ Add #~"_NORETURN" sentinel for branches ending in
+    #~"return"/#~"break"/#~"continue" (exempt from type matching)
+  #*: #+ In #~"_check_if()", when the if node has an else clause,
+    compute branch types and set #~"ifnode.type" to the common type
+  #*: #+ Report error when branch types are incompatible
+  #*: #+ Add #~"_check_exhaustive_if()" for exhaustiveness checking
+    in all expression-consuming contexts (assignment, reassignment,
+    string interpolation)
 
 Emitter (#~"src/zemitterc.py"):
 
 #ol:
-  #*: When an #~"If" node has a non-null type (expression-if), emit
-    using a temporary variable rather than a C statement:
-    #~"Type _ifN; if (cond) { _ifN = val; } else { _ifN = val; }"
-  #*: For simple single-expression branches, consider emitting a C
-    ternary #~"(cond ? a : b)" instead
-  #*: Return the temp variable name as the expression result
+  #*: #+ Add #~"_emit_branch_with_result()" helper that emits a
+    branch body and assigns the last expression to a result variable
+  #*: #+ Add #~"_emit_if_expression_value()" using temp-variable
+    pattern: #~"Type _ifN; if (cond) { _ifN = val; } else { _ifN = val; }"
+  #*: #+ Wire up in #~"_emit_expression_value()" for #~"If" nodes
+  #*: #+ Integrate with constant-condition folding from Phase 41
+  #*: #+ Handle reftype ownership for string if-expressions
 
 Tests:
 
 #ol:
-  #*: #~"x: if true then 1 else 2" — basic expression-if
-  #*: #~"x: if a > b then a else b" — max pattern
-  #*: #~"s: if flag then \"yes\" else \"no\"" — string expression-if
-  #*: Type mismatch error: #~"x: if true then 1 else \"hello\""
-  #*: Missing else error: #~"x: if true then 1" (not exhaustive)
-  #*: Return exemption: branches ending in return/break/continue
-  #*: Compile and run under ASan
-
-#----: 42.2 Unit-level if definition (Priority 3 — deferred)
-
-Per the spec (line 583): an #~"if" may be used as a definition at the
-unit level. Each clause must evaluate to a constant. Each arm may
-produce a completely different type. This is compile-time conditional
-compilation (similar to C's #~"#ifdef" but type-safe). For example:
-#~"platform_int: if system.word_size == 64 then u64 else u32".
-
-This requires a compile-time constant evaluator, which is a larger
-feature shared with generic specialisation. Deferred until constant
-evaluation infrastructure exists.
-
-#ol:
-  #*: Add compile-time constant evaluation for integer comparisons
-    and system properties
-  #*: Parser: accept #~"if" at unit body level (currently only in
-    function body)
-  #*: Type checker: resolve each arm independently, result type is
-    the type of the first true arm
-  #*: Each arm may produce a different type (unlike expression-if
-    which requires compatible types)
+  #*: #+ Basic expression-if: #~"x: if 1 < 2 then 1 else 2"
+  #*: #+ Max pattern: #~"x: if a > b then a else b"
+  #*: #+ String expression-if: #~"s: if 1 < 2 then \"yes\" else \"no\""
+  #*: #+ Multi-line branch: result is last expression in block
+  #*: #+ Type mismatch error: #~"x: if 1 < 2 then 1 else \"hello\""
+  #*: #+ Missing else error: #~"x: if 1 < 2 then 1" (not exhaustive)
+  #*: #+ Exhaustiveness check in reassignment and interpolation
+  #*: #+ Return exemption: branches ending in return/break/continue
+  #*: #+ Constant-folded if-expression
+  #*: #+ Compile and run all tests
 
 Spec cleanup (#~"doc/spec.pdoc"):
 
 #ol:
-  #*: Remove #~"[var]:" initialisation expression row from the #~"if"
-    argument table (line 860) — variable binding via #~"with" is the
+  #*: #+ Remove #~"[var]:" initialisation expression row from the
+    #~"if" argument table — variable binding via #~"with" is the
     correct mechanism
-  #*: Remove or update the code example showing #~"if x: func..." syntax
-    (line 886)
+  #*: #+ Remove deprecated #~"if x: func..." code example
+  #*: #+ Add if-expression examples showing the new feature
+
+Documentation:
+
+#ol:
+  #*: #+ Add #~"examples/ifexpr.z" example program
+  #*: #+ Update roadmap with detailed substeps
+
+#----: 42.2 Unit-level if definition (Priority 3 — deferred)
+
+Per the spec: an #~"if" may be used as a definition at the unit level.
+Each clause must evaluate to a constant. Each arm may produce a
+completely different type. This is compile-time conditional compilation
+(similar to C's #~"#ifdef" but type-safe). For example:
+#~"platform_int: if system.word_size == 64 then u64 else u32".
+
+This requires each arm to potentially produce different types (unlike
+expression-if which requires compatible types). Deferred to a future
+phase.
+
+#ol:
+  #*: #_ Add compile-time constant evaluation for integer comparisons
+    and system properties
+  #*: #_ Parser: accept #~"if" at unit body level (currently only in
+    function body)
+  #*: #_ Type checker: resolve each arm independently, result type is
+    the type of the first true arm
+  #*: #_ Each arm may produce a different type (unlike expression-if
+    which requires compatible types)
 
 Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
-#~"doc/spec.pdoc", #~"tests/test_emitter.py", #~"tests/test_typecheck.py"
+#~"src/zsqldump.py", #~"doc/spec.pdoc", #~"doc/roadmap.pdoc",
+#~"tests/test_emitter.py", #~"tests/test_typecheck.py",
+#~"examples/ifexpr.z"
 
 
 #---: Phase 43: for-expression improvements

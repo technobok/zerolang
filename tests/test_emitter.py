@@ -4001,3 +4001,99 @@ class TestConstantFolding:
         lines = [l.strip() for l in csource.split("\n")]
         assign_lines = [l for l in lines if "= 3;" in l or "= 3 " in l]
         assert len(assign_lines) > 0, f"Expected folded '= 3' in C output:\n{csource}"
+
+
+class TestIfExpression:
+    """Tests for if-as-expression (Phase 42)."""
+
+    def test_if_expression_basic(self):
+        """Basic if-expression: x: if 1 < 2 then 1 else 2."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: if 1 < 2 then 1 else 2\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1"
+
+    def test_if_expression_false_branch(self):
+        """If-expression where condition is false."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: if 1 > 2 then 1 else 2\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_if_expression_max_pattern(self):
+        """Max pattern: x: if a > b then a else b."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  a: 10\n"
+            "  b: 20\n"
+            "  x: if a > b then a else b\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "20"
+
+    def test_if_expression_string(self):
+        """String if-expression."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  s: if 1 < 2 then "yes" else "no"\n'
+            '  print s\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "yes"
+
+    def test_if_expression_multiline_branch(self):
+        """Multi-statement branch: result is last expression."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: if 1 < 2 then {\n"
+            "    y: 1\n"
+            "    y + 1\n"
+            "  } else 0\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_if_expression_constant_fold(self):
+        """Constant-folded if-expression should not emit C if."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: if 1 < 2 then 10 else 20\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10"
+
+    def test_if_expression_in_interpolation(self):
+        """If-expression used in string interpolation."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  print "\\{if 1 < 2 then 42 else 0}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_if_expression_statement_if_unchanged(self):
+        """Statement-if should still work normally (regression check)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  x: 5\n"
+            '  if x > 3 then print "big" else print "small"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "big"

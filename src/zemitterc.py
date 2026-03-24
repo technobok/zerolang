@@ -3295,6 +3295,8 @@ class CEmitter:
             return self._emit_operation_value(inner)
         if isinstance(inner, zast.With):
             return self._emit_expression_value(inner.doexpr)
+        if isinstance(inner, zast.If):
+            return self._emit_if_expression_value(inner)
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
@@ -4269,6 +4271,129 @@ class CEmitter:
             parts.append(f"{indent}}}\n")
 
         return "".join(parts)
+
+    def _emit_branch_with_result(
+        self, stmt: zast.Statement, result_var: str
+    ) -> str:
+        """Emit a branch body, assigning the last expression's value to result_var."""
+        parts: List[str] = []
+        lines = stmt.statements
+        for i, sline in enumerate(lines):
+            is_last = i == len(lines) - 1
+            inner = sline.statementline
+
+            if is_last and isinstance(inner, zast.Expression):
+                expr_inner = inner.expression
+                # non-completing: emit normally (return/break/continue)
+                if isinstance(expr_inner, zast.AtomId) and expr_inner.name in (
+                    "break",
+                    "continue",
+                ):
+                    parts.append(self._emit_statement_line(sline))
+                elif (
+                    isinstance(expr_inner, zast.Call)
+                    and expr_inner.call_kind == zast.CallKind.RETURN
+                ):
+                    parts.append(self._emit_statement_line(sline))
+                else:
+                    # value-producing: assign to result_var
+                    self._temp_stack.append(TempState())
+                    val = self._emit_expression_value(inner)
+                    indent = self._indent()
+                    code = f"{indent}{result_var} = {val};\n"
+                    result = "".join(self._temp.decls) + code
+                    self._temp_stack.pop()
+                    parts.append(result)
+            else:
+                parts.append(self._emit_statement_line(sline))
+
+        return "".join(parts)
+
+    def _emit_if_expression_value(self, ifnode: zast.If) -> str:
+        """Emit if-as-expression using temp variable pattern."""
+        ctype = "int64_t"
+        if ifnode.type:
+            ctype = _ctype(ifnode.type)
+
+        tmp = self._temp_name("if")
+        indent = self._indent()
+
+        # declare temp variable
+        self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+
+        # build the if/else-if/else structure
+        parts: List[str] = []
+
+        # handle constant folding (reuse logic from _emit_if)
+        emitted_true_branch = False
+        non_const_clauses: List[tuple] = []
+
+        for i, clause in enumerate(ifnode.clauses):
+            all_const = all(
+                cond_op.const_value is not None
+                for _, cond_op in clause.conditions.items()
+            )
+            if all_const and not emitted_true_branch:
+                all_true = all(
+                    bool(cond_op.const_value)
+                    for _, cond_op in clause.conditions.items()
+                )
+                if all_true:
+                    parts.append(f"{indent}{{\n")
+                    self.indent_level += 1
+                    parts.append(
+                        self._emit_branch_with_result(clause.statement, tmp)
+                    )
+                    self.indent_level -= 1
+                    parts.append(f"{indent}}}\n")
+                    emitted_true_branch = True
+            else:
+                if not emitted_true_branch:
+                    non_const_clauses.append((i, clause))
+
+        if not emitted_true_branch and non_const_clauses:
+            for j, (_, clause) in enumerate(non_const_clauses):
+                keyword = "if" if j == 0 else "} else if"
+                conds: List[str] = []
+                for _, cond_op in clause.conditions.items():
+                    conds.append(self._emit_operation_value(cond_op))
+                cond_str = " && ".join(conds) if conds else "1"
+                parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(clause.statement, tmp)
+                )
+                self.indent_level -= 1
+
+            if ifnode.elseclause:
+                parts.append(f"{indent}}} else {{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(ifnode.elseclause, tmp)
+                )
+                self.indent_level -= 1
+
+            parts.append(f"{indent}}}\n")
+        elif not emitted_true_branch and ifnode.elseclause:
+            # all clauses constant-false, emit else
+            parts.append(f"{indent}{{\n")
+            self.indent_level += 1
+            parts.append(
+                self._emit_branch_with_result(ifnode.elseclause, tmp)
+            )
+            self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+
+        self._temp.decls.append("".join(parts))
+
+        # track reftype ownership
+        if ifnode.type and ifnode.type.needs_destructor:
+            self._temp.frees.append(tmp)
+            if ctype == "ZStr*":
+                self._temp.string_set.add(tmp)
+                self.needs_string = True
+
+        return tmp
 
     def _emit_for(self, fornode: zast.For) -> str:
         indent = self._indent()
