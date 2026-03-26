@@ -1657,7 +1657,7 @@ must use curly braces at unit level.</p>
 <code>examples/ifexpr.z</code></p>
 <h3 id="phase-43-for-expression-improvements"><a href="#phase-43-for-expression-improvements">5.43. Phase 43: for-expression improvements</a></h3>
 <p>The <code>for</code> expression has several unimplemented features from the spec.</p>
-<h4 id="42-1-post-conditions-do-while-complete"><a href="#42-1-post-conditions-do-while-complete">5.43.1. 42.1 Post-conditions (do-while) [COMPLETE]</a></h4>
+<h4 id="43-1-post-conditions-do-while-complete"><a href="#43-1-post-conditions-do-while-complete">5.43.1. 43.1 Post-conditions (do-while) [COMPLETE]</a></h4>
 <ol>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Fix emitter to generate <code>do { body } while (postcond);</code> for</li>
 <code>for loop { body } while cond</code>
@@ -1671,18 +1671,35 @@ must use curly braces at unit level.</p>
 <code>v_continue</code>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Tests: do-while, do-while-once, pre+post, multiline do-while,</li>
 </ol>
-<h4 id="42-2-iterator-protocol-deferred"><a href="#42-2-iterator-protocol-deferred">5.43.2. 42.2 Iterator protocol (<code>for x: in iterable</code>) &#x2014; deferred</a></h4>
-<p>Requires design of the <code>.iterate</code> method convention and iterator
-protocol in the system library. Depends on protocol infrastructure.</p>
-<ol>
-<li>Design iterator protocol: <code>.iterate</code> method returning an</li>
-<code>.next</code>
-<code>option</code>
-<li>Add <code>in</code> keyword handling to parser for <code>for x: in iterable</code></li>
-<li>Type checker: resolve iterator type, lock iterable during loop</li>
-<li>Emitter: generate iterator setup/advance/cleanup code</li>
-</ol>
-<h4 id="42-3-for-as-expression-list-comprehension-deferred"><a href="#42-3-for-as-expression-list-comprehension-deferred">5.43.3. 42.3 for-as-expression (list comprehension) &#x2014; deferred</a></h4>
+<h4 id="43-2-iterator-protocol"><a href="#43-2-iterator-protocol">5.43.2. 43.2 Iterator protocol</a></h4>
+<p>The iterator "protocol" is simply methods and callable object.</p>
+<p>A callable object is an object that has a 'call' method. The compiler
+determines if the syntax represents a call (with 0, 1, or many arguments) and
+if the target/receiver of that call is an object (rather than a
+function/method) then the compiler checks if the object has a 'call' method and
+implicitly uses that method as the method being called.</p>
+<p>An iterable object is one that has a method that returns an iterator callable
+object. The method returning this is called 'iterate' by convention, but it can
+have any name. The iterate method will lock the object being iterated and will
+return a borrowed iterator object.</p>
+<p>The iterator object itself will usually be constructed (from the parent object)
+so that it locks the parent object that is passed to it. The parent object may
+also pass its private (internal) API so that the iterator has full access to
+the parent internals (public / private to be implemented in a later phase).</p>
+<p>The iterator object is callable and returns an optional value. Once the
+iterator is exhausted, it returns the 'none' option. The iterator may also have
+arguments - for implementing a coroutine style iterator. But no arguments is
+the common case.</p>
+<p>The 'for' loop can only be bound to an iterator like object/function (that
+returns an option). The iterator must be extracted from the iterable object
+explicitly (at this stage, may change in the future if a less verbose syntax is
+required). Retrieving the iterator would usually be done with a 'with'
+statement. So full syntax would look similar to:</p>
+<p>"with i: myiterable.iterate for x: i loop { ... }"</p>
+<p>'i' becomes the iterator and within the loop body, 'x' is bound to the current
+'some' value of the option. If the iterator returns 'none', 'x' is not bound
+and the loop terminates.</p>
+<h4 id="43-3-for-as-expression-list-comprehension"><a href="#43-3-for-as-expression-list-comprehension">5.43.3. 43.3 for-as-expression (list comprehension)</a></h4>
 <p>Spec says: <code>for can be used as an expression. The result will be a
 list of the final values of the loop statement.</code> Depends on the list
 collection type being fully operational.</p>
@@ -1691,11 +1708,15 @@ collection type being fully operational.</p>
 <code>list[of element_type]</code>
 <li>Emitter: allocate list, append each iteration's value, return it</li>
 </ol>
-<h4 id="42-4-range-iteration-deferred"><a href="#42-4-range-iteration-deferred">5.43.4. 42.4 Range iteration (<code>each</code>) &#x2014; deferred</a></h4>
-<p>Spec mentions <code>for x: each 10</code> for iterating 0..N-1. Needs design
-decision on what <code>each</code> is (integer method? builtin? protocol?).</p>
-<p>Files: <code>src/zemitterc.py</code>, <code>src/zparser.py</code>,
-<code>tests/test_emitter.py</code></p>
+<h4 id="43-4-range-iteration"><a href="#43-4-range-iteration">5.43.4. 43.4 Range iteration (<code>each</code>)</a></h4>
+<p>All integers in zerolang support an 'each' 'method' that can be used to iterate
+that number of times.</p>
+<p>'each' takes a 'from' argument that has a default value of 0. So a standard
+range iterator of myint.each will by default iterate from 0 to myint - 1.</p>
+<p>The each method appears to support usual zerolang iteration (ie. returning a
+callable that returns each value in turn) but the C emitter does not create all
+of these objects and instead emits a standard C for loop over the integer
+values.</p>
 <h3 id="phase-44-c-runtime-library"><a href="#phase-44-c-runtime-library">5.44. Phase 44: C Runtime Library</a></h3>
 <p>Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (<code>ZStr</code>, <code>zstr_new</code>,

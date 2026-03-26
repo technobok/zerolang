@@ -1887,7 +1887,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
 
 The #~"for" expression has several unimplemented features from the spec.
 
-#----: 42.1 Post-conditions (do-while) \[COMPLETE\]
+#----: 43.1 Post-conditions (do-while) \[COMPLETE\]
 
 #ol:
   #*: #+ Fix emitter to generate #~"do { body } while (postcond);" for
@@ -1902,19 +1902,44 @@ The #~"for" expression has several unimplemented features from the spec.
   #*: #+ Tests: do-while, do-while-once, pre+post, multiline do-while,
     infinite loop, break in loop, continue in loop (7 new tests)
 
-#----: 42.2 Iterator protocol (#~"for x: in iterable") — deferred
+#----: 43.2 Iterator protocol
 
-Requires design of the #~".iterate" method convention and iterator
-protocol in the system library. Depends on protocol infrastructure.
+The iterator "protocol" is simply methods and callable object.
 
-#ol:
-  #*: Design iterator protocol: #~".iterate" method returning an
-    iterator with a #~".next" method returning #~"option"
-  #*: Add #~"in" keyword handling to parser for #~"for x: in iterable"
-  #*: Type checker: resolve iterator type, lock iterable during loop
-  #*: Emitter: generate iterator setup/advance/cleanup code
+A callable object is an object that has a 'call' method. The compiler
+determines if the syntax represents a call (with 0, 1, or many arguments) and
+if the target/receiver of that call is an object (rather than a
+function/method) then the compiler checks if the object has a 'call' method and
+implicitly uses that method as the method being called.
 
-#----: 42.3 for-as-expression (list comprehension) — deferred
+An iterable object is one that has a method that returns an iterator callable
+object. The method returning this is called 'iterate' by convention, but it can
+have any name. The iterate method will lock the object being iterated and will
+return a borrowed iterator object.
+
+The iterator object itself will usually be constructed (from the parent object)
+so that it locks the parent object that is passed to it. The parent object may
+also pass its private (internal) API so that the iterator has full access to
+the parent internals (public / private to be implemented in a later phase).
+
+The iterator object is callable and returns an optional value. Once the
+iterator is exhausted, it returns the 'none' option. The iterator may also have
+arguments - for implementing a coroutine style iterator. But no arguments is
+the common case.
+
+The 'for' loop can only be bound to an iterator like object/function (that
+returns an option). The iterator must be extracted from the iterable object
+explicitly (at this stage, may change in the future if a less verbose syntax is
+required). Retrieving the iterator would usually be done with a 'with'
+statement. So full syntax would look similar to:
+
+"with i: myiterable.iterate for x: i loop { ... }"
+
+'i' becomes the iterator and within the loop body, 'x' is bound to the current
+'some' value of the option. If the iterator returns 'none', 'x' is not bound
+and the loop terminates.
+
+#----: 43.3 for-as-expression (list comprehension)
 
 Spec says: #~"for can be used as an expression. The result will be a
 list of the final values of the loop statement." Depends on the list
@@ -1925,14 +1950,18 @@ collection type being fully operational.
     expression, set for-node type to #~"list[of element_type]"
   #*: Emitter: allocate list, append each iteration's value, return it
 
-#----: 42.4 Range iteration (#~"each") — deferred
+#----: 43.4 Range iteration (#~"each")
 
-Spec mentions #~"for x: each 10" for iterating 0..N-1. Needs design
-decision on what #~"each" is (integer method? builtin? protocol?).
+All integers in zerolang support an 'each' 'method' that can be used to iterate
+that number of times.
 
-Files: #~"src/zemitterc.py", #~"src/zparser.py",
-#~"tests/test_emitter.py"
+'each' takes a 'from' argument that has a default value of 0. So a standard
+range iterator of myint.each will by default iterate from 0 to myint - 1.
 
+The each method appears to support usual zerolang iteration (ie. returning a
+callable that returns each value in turn) but the C emitter does not create all
+of these objects and instead emits a standard C for loop over the integer
+values.
 
 #---: Phase 44: C Runtime Library
 
