@@ -1215,6 +1215,10 @@ compiler generated 'generic' method, that allows that defined object to be used
 as a generic constraint when used as a type in a field or parameter. Also,
 'generic' is a predeclared type that takes a 'from' parameter of type 'any'
 that can be used to specify generic fields or parameters.</p>
+<p>For all compound types and functions, generic parameters are declared in the
+<code>as</code> clause, not in instance fields or function parameters. Functions declare
+generic parameters via <code>as { name: constraint.generic }</code> alongside their
+<code>in</code>, <code>out</code> and <code>is</code> clauses. See <a href="#function-definition-arguments">Function Definition Arguments</a> for details.</p>
 <p>Any object (unit, function/spec, union, variant, class, object, protocol,
 facet) that has one or more such generic fields or parameters is a generic
 type.</p>
@@ -1248,6 +1252,10 @@ vs <code>myrec_20</code>). Negative values use a "neg" prefix in mangled names (
 <p>  main: function is {
       a: (sized t: i64 size: 10) val: 42
   }</p>
+<p>Generic function example:</p>
+<pre><code>identity: function as { t: any.generic } in { val: t } out t is {
+    return val
+}</code></pre>
 <p>Note that when passing a generic argument, the type itself is passed to the generic
 parameter - an instance is not created; <code>create</code> is not automatically called
 as would be done for non-generic arguments. To make this optionally obvious at
@@ -2257,30 +2265,42 @@ equivalent when, in both definitions:</p>
 <tr><th style="text-align: left">Argument</th><th style="text-align: left">Default</th><th style="text-align: left">Description</th></tr>
 </thead>
 <tbody>
-<tr><td>in</td><td>Yes</td><td>Block of standard and generic parameters</td></tr>
+<tr><td>in</td><td>Yes</td><td>Block of standard parameters</td></tr>
 <tr><td>out</td><td>No</td><td>The return type of the function</td></tr>
-<tr><td>over/each?</td><td>No</td><td>The return type of each item being yielded</td></tr>
-<tr><td>as</td><td>No</td><td>Facet of parent object after method call</td></tr>
+<tr><td>as</td><td>No</td><td>Generic type parameters for the function</td></tr>
 <tr><td>is</td><td>No</td><td>Function body expression/block</td></tr>
 </tbody>
 </table>
-<p>- <code>in</code> is optional; omitted when no parameters are required
+<p>- <code>in</code> is optional; omitted when no parameters are required. If <code>as</code>
+  appears before the parameter block, <code>in</code> must be explicitly stated.
 - <code>out</code> is optional; omitted for procedures and iterators
-- <code>over/each??</code> is optional; required for iterators, omitted for standard functions
-- <code>as</code> is optional; only permitted on methods and only those providing typestate
+- <code>as</code> is optional; declares generic type parameters. Generic parameters
+  <em><strong>must</strong></em> be declared here, not in <code>in</code>.
 - <code>is</code> is optional; omitted when defining a <a href="#specs">spec</a>.</p>
 <p>A <code>function</code> defined with no arguments is a spec that takes no arguments and
 returns no value. It only has side-effects.</p>
 <p>The <code>in</code>  argument takes a brace delimited block of parameter definitions
 of the form <code>name: typereference</code>. See <a href="#declarations-and-references">Declarations and References</a> for
 details. A parameter <em><strong>must not</strong></em> be private (<code>_</code>) but may have ownership
-attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.lock</code>) or be
-<a href="#generic-types">generic</a> (<code>type.generic</code>) or it may have a default
-constant numeric value or a default function reference value.</p>
-<p>The order of the parameters is significant. The first non-generic parameter may
+attributes (<code>type.take</code>, <code>type.borrow</code>, <code>type.lock</code>) or it may have a
+default constant numeric value or a default function reference value. Parameters
+may reference generic types declared in the <code>as</code> clause. Declaring generic
+parameters directly in <code>in</code> (e.g. <code>t: any.generic</code>) is a compile error.</p>
+<p>The order of the parameters is significant. The first parameter may
 be the 'primary' argument that can be used without specifying the parameter
-name in a call. See <a href="#calls">Calls</a> for details. The first generic parameter may also
-be specified without name in type specifiers.</p>
+name in a call. See <a href="#calls">Calls</a> for details.</p>
+<p>The <code>as</code> argument takes a brace delimited block of generic type parameter
+declarations of the form <code>name: constraint.generic</code> (e.g. <code>t: any.generic</code>
+or <code>n: u64.generic</code> for numeric generics). The <code>as</code> block follows the same
+form as the <code>as</code> clause on <a href="#record">compound type definitions</a>. The
+first generic parameter in <code>as</code> can be specified without name at call sites;
+the remainder require names. This makes the instantiation interface
+self-documenting.</p>
+<p>Methods (functions with a parameter of type <code>this</code>) <em><strong>must not</strong></em> have an
+<code>as</code> clause. They inherit generic parameters from the enclosing type
+definition. Static functions (functions without <code>this</code>, including those in a
+type's <code>as</code> block) may declare their own generic parameters and are
+independently monomorphized.</p>
 <p>A function usually will return a value. The type of the returned item is
 specified by the argument named <code>out</code>. Ownership of a returned reftype value
 after the call implicitly lies with the caller (<code>.take</code> is the default for
@@ -2341,13 +2361,28 @@ taker arg: myreftype
 getter: function {t: myclass.lock} out refchild.borrow is {
     return t.myrefchild
 }</code></pre>
-<p>TODO: generic example:</p>
-<pre><code class="language-zerolang">myfunc: function t {
-    t: generic any
-    x: int
-    y: t
-} out t is {
-    t * x
+<p>Generic function example:</p>
+<pre><code class="language-zerolang"># generic identity function
+identity: function as { t: any.generic } in { val: t } out t is {
+    return val
+}
+
+# generic function with multiple type parameters
+map: function
+    as { t: any.generic
+         u: any.generic }
+    in { val: t
+         f: function in { x: t } out u }
+    out u
+is {
+    f x: val
+}
+
+# numeric generic parameter
+repeat: function as { n: u64.generic } in { val: i64 } out i64 is {
+    result: 0
+    for n loop { result = result + val }
+    return result
 }</code></pre>
 <h4 id="function-parameter-types"><a href="#function-parameter-types">5.11.2. Function Parameter Types</a></h4>
 <p>In the <code>in</code> block, the function argument types specified (after the

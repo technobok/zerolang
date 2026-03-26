@@ -314,6 +314,78 @@ class TestFunctionInKeyword:
         assert "n" in func.parameters
 
 
+class TestFunctionAsClause:
+    def test_function_as_before_in(self):
+        """'as' clause before 'in' for generic params"""
+        result = parse_unit("f: function as { t: any.generic } in { x: t } out t")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert "t" in func.as_items
+        assert "x" in func.parameters
+
+    def test_function_as_after_out(self):
+        """'as' clause after 'out' — any order is valid"""
+        result = parse_unit("f: function in { x: t } out t as { t: any.generic }")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert "t" in func.as_items
+        assert "x" in func.parameters
+
+    def test_function_as_between_in_and_out(self):
+        """'as' clause between 'in' and 'out'"""
+        result = parse_unit("f: function in { x: t } as { t: any.generic } out t")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert "t" in func.as_items
+
+    def test_function_as_multiple_generics(self):
+        """Multiple generic params in 'as'"""
+        result = parse_unit(
+            "f: function as { t: any.generic\n u: any.generic } in { x: t } out u"
+        )
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert "t" in func.as_items
+        assert "u" in func.as_items
+
+    def test_function_as_duplicate_error(self):
+        """Duplicate 'as' clause is an error"""
+        result = parse_unit(
+            "f: function as { t: any.generic } as { u: any.generic } in { x: t } out t"
+        )
+        assert isinstance(result, zast.Error)
+
+    def test_function_as_empty_items(self):
+        """Function without 'as' has empty as_items"""
+        result = parse_unit("f: function in { x: i64 } out i64")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.as_items == {}
+        assert func.as_functions == {}
+
+    def test_function_as_with_static_function(self):
+        """'as' clause can contain static functions"""
+        result = parse_unit(
+            "f: function as { t: any.generic\n helper: function out i64 } in { x: t } out t"
+        )
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert "t" in func.as_items
+        assert "helper" in func.as_functions
+
+    def test_function_as_requires_explicit_in(self):
+        """When 'as' is first, unnamed brace block is not 'in'"""
+        result = parse_unit("f: function as { t: any.generic } { x: t } out t")
+        # The '{' after 'as {...}' is not treated as 'in' — it's unexpected
+        assert isinstance(result, zast.Error)
+
+
 class TestEnumReserved:
     def test_enum_is_reserved_word(self):
         """enum is a reserved word and should produce an error"""

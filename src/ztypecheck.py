@@ -589,8 +589,7 @@ class TypeChecker:
                 self._resolving.pop()
                 return None
             all_true = all(
-                bool(cond_op.const_value)
-                for _, cond_op in clause.conditions.items()
+                bool(cond_op.const_value) for _, cond_op in clause.conditions.items()
             )
             if all_true and taken_stmt is None:
                 taken_stmt = clause.statement
@@ -623,7 +622,10 @@ class TypeChecker:
             last_inner = taken_stmt.statements[-1].statementline
             if isinstance(last_inner, zast.Expression):
                 inner_expr = last_inner.expression
-                if hasattr(inner_expr, "const_value") and inner_expr.const_value is not None:
+                if (
+                    hasattr(inner_expr, "const_value")
+                    and inner_expr.const_value is not None
+                ):
                     defn.const_value = inner_expr.const_value
 
         self._resolving.pop()
@@ -637,9 +639,9 @@ class TypeChecker:
         self._resolved[key] = ftype  # early register for self-reference
         self._resolving.append((key, ftype))
 
-        # pass 1: detect generic params in parameters
+        # pass 1: detect generic params from 'as' clause
         generic_ctx: dict[str, ZType] = {}
-        for pname, ppath in func.parameters.items():
+        for pname, ppath in func.as_items.items():
             pt = self._resolve_typeref(ppath)
             if (
                 pt
@@ -653,6 +655,30 @@ class TypeChecker:
                 if constraint.name in NUMERIC_RANGES:
                     ftype.numeric_generic_params.add(pname)
 
+        # check: methods (functions with a parameter of type 'this') cannot have 'as'
+        if generic_ctx and func.as_items:
+            has_this = any(
+                (isinstance(ppath, zast.AtomId) and ppath.name == "this")
+                or (
+                    isinstance(ppath, zast.DottedPath)
+                    and isinstance(ppath.parent, zast.AtomId)
+                    and ppath.parent.name == "this"
+                )
+                for ppath in func.parameters.values()
+            )
+            if has_this:
+                self._error(
+                    "Methods cannot declare generic parameters; "
+                    "move the generic parameter to the type definition, "
+                    "or make this a static function",
+                    loc=func.start,
+                )
+
+        # resolve as_functions (static functions in function's 'as' block)
+        for mname, mfunc in func.as_functions.items():
+            mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+            ftype.children[mname] = mt
+
         # pass 2: resolve non-generic params with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
@@ -661,9 +687,17 @@ class TypeChecker:
             if rt:
                 ftype.return_type = rt
         for pname, ppath in func.parameters.items():
-            if pname in ftype.generic_params:
-                continue  # skip generic params
             pt = self._resolve_typeref(ppath)
+            if (
+                pt
+                and pt.typetype == ZTypeType.GENERIC_PARAM
+                and pt.name == "__generic_param"
+            ):
+                self._error(
+                    f"Generic parameters must be declared in the 'as' section, not 'in': '{pname}'",
+                    loc=func.start,
+                )
+                continue
             if pt:
                 ftype.children[pname] = pt
                 # detect defaults
@@ -4013,7 +4047,11 @@ class TypeChecker:
                     else:
                         # find first incompatible type for error message
                         for t in completing[1:]:
-                            if t is None or not isinstance(t, ZType) or not self._types_compatible(first, t):
+                            if (
+                                t is None
+                                or not isinstance(t, ZType)
+                                or not self._types_compatible(first, t)
+                            ):
                                 tname = t.name if isinstance(t, ZType) else "null"
                                 self._error(
                                     f"incompatible branch types in if-expression: "

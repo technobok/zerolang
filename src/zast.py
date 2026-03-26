@@ -364,7 +364,7 @@ class Function(Node):
 
     nodetype: NodeType = field(default=NodeType.FUNCTION, init=False)
     returntype: Optional["Path"]  # really a Typeref
-    # parameters - both normal and generic in same frame
+    # parameters - normal (non-generic) parameters
     parameters: Dict[
         str, "Path"
     ]  # really, a TyperefOrNum            # xxTypeDefinition?
@@ -373,6 +373,9 @@ class Function(Node):
     param_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
     # ownership annotation on the return type (if any)
     return_ownership: Optional["ZParamOwnership"] = None
+    # 'as' clause: generic parameters and static functions
+    as_items: Dict[str, "Path"] = field(default_factory=dict)
+    as_functions: Dict[str, "Function"] = field(default_factory=dict)
 
 
 @dataclass

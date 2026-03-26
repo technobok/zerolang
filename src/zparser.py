@@ -911,6 +911,10 @@ class Parser:
                 [ [ "in" ] "{" { parameteritem | newline } "}" ]
                 [ "out" typeref ]
                 [ "is" statement ]
+                [ "as" "{" { label constant-expression | label-value } "}" ]
+
+        Clauses can appear in any order. If 'as' appears before parameters,
+        'in' must be explicit.
 
         Returns a Function or Error or None (if no 'function' keyword)
         """
@@ -931,6 +935,7 @@ class Parser:
         gotaccept = False  # need this because accept could be empty block
         body: Optional[zast.Statement] = None  # None for spec
         externbody: Dict[str, zast.AtomId] = {}  # externs from 'is' function body
+        as_body: Optional[ObjectBody] = None  # 'as' clause for generic params
         first = True  # true for first arg only (unnamed arg allowed)
 
         while True:
@@ -972,6 +977,24 @@ class Parser:
                 body = statement.node
                 externbody = statement.extern
                 first = False
+
+            elif lex.accept(TT.AS):
+                if as_body is not None:
+                    msg = "Duplicate 'as'"
+                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
+
+                b = self._getobjectbody(
+                    lex,
+                    allowtag=False,
+                    unlabelledpath=False,
+                    unlabelledid=False,
+                )
+                if isinstance(b, zast.Error):
+                    return b
+
+                as_body = b
+                first = False
+
             elif (
                 lex.accept(TT.IN) or first
             ):  # must be last to handle other keywords first
@@ -1046,6 +1069,14 @@ class Parser:
         # (ie. for generic params), so check is made against localparams
         promoteexterns(addto=extern, addfrom=externparam, local=localparam)
         promoteexterns(addto=extern, addfrom=externbody, local=localparam)
+        if as_body:
+            # as-body externs, excluding items defined in as-body itself
+            as_locals = set(as_body.items.keys())
+            promoteexterns(addto=extern, addfrom=as_body.extern, local=as_locals)
+            # remove param externs that are defined in as-body (generic params)
+            for k in list(extern.keys()):
+                if k in as_locals:
+                    del extern[k]
 
         func = zast.Function(
             returntype=returntype,
@@ -1054,6 +1085,8 @@ class Parser:
             start=start,
             param_ownership=param_ownership,
             return_ownership=return_ownership,
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
         )
         return NodeX(node=func, extern=extern)
 

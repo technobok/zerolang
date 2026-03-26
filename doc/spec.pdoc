@@ -1246,6 +1246,12 @@ as a generic constraint when used as a type in a field or parameter. Also,
 'generic' is a predeclared type that takes a 'from' parameter of type 'any'
 that can be used to specify generic fields or parameters.
 
+For all compound types and functions, generic parameters are declared in the
+#~"as" clause, not in instance fields or function parameters. Functions declare
+generic parameters via #~"as { name: constraint.generic }" alongside their
+#~"in", #~"out" and #~"is" clauses. See [#> to=function-definition-arguments:
+Function Definition Arguments] for details.
+
 Any object (unit, function/spec, union, variant, class, object, protocol,
 facet) that has one or more such generic fields or parameters is a generic
 type.
@@ -1287,6 +1293,13 @@ Example:
 
   main: function is {
       a: (sized t: i64 size: 10) val: 42
+  }
+
+Generic function example:
+
+#code:
+  identity: function as { t: any.generic } in { val: t } out t is {
+      return val
   }
 
 Note that when passing a generic argument, the type itself is passed to the generic
@@ -2533,16 +2546,16 @@ Arguments to #~"function":
 
 #table cols="2 2 4":
   Argument  |Default |Description
-  in        |Yes     |Block of standard and generic parameters
+  in        |Yes     |Block of standard parameters
   out       |No      |The return type of the function
-  over/each?|No      |The return type of each item being yielded
-  as        |No      |Facet of parent object after method call
+  as        |No      |Generic type parameters for the function
   is        |No      |Function body expression/block
 
-- #~"in" is optional; omitted when no parameters are required
+- #~"in" is optional; omitted when no parameters are required. If #~"as"
+  appears before the parameter block, #~"in" must be explicitly stated.
 - #~"out" is optional; omitted for procedures and iterators
-- #~"over/each??" is optional; required for iterators, omitted for standard functions
-- #~"as" is optional; only permitted on methods and only those providing typestate
+- #~"as" is optional; declares generic type parameters. Generic parameters
+  #_*"must" be declared here, not in #~"in".
 - #~"is" is optional; omitted when defining a [#> to=specs: spec].
 
 A #~"function" defined with no arguments is a spec that takes no arguments and
@@ -2551,14 +2564,28 @@ returns no value. It only has side-effects.
 The #~"in"  argument takes a brace delimited block of parameter definitions
 of the form #~"name: typereference". See #>"declarations-and-references" for
 details. A parameter #_*"must not" be private (#~"_") but may have ownership
-attributes (#~"type.take", #~"type.borrow", #~"type.lock") or be
-[#> to=generic-types: generic] (#~"type.generic") or it may have a default
-constant numeric value or a default function reference value.
+attributes (#~"type.take", #~"type.borrow", #~"type.lock") or it may have a
+default constant numeric value or a default function reference value. Parameters
+may reference generic types declared in the #~"as" clause. Declaring generic
+parameters directly in #~"in" (e.g. #~"t: any.generic") is a compile error.
 
-The order of the parameters is significant. The first non-generic parameter may
+The order of the parameters is significant. The first parameter may
 be the 'primary' argument that can be used without specifying the parameter
-name in a call. See #>"calls" for details. The first generic parameter may also
-be specified without name in type specifiers.
+name in a call. See #>"calls" for details.
+
+The #~"as" argument takes a brace delimited block of generic type parameter
+declarations of the form #~"name: constraint.generic" (e.g. #~"t: any.generic"
+or #~"n: u64.generic" for numeric generics). The #~"as" block follows the same
+form as the #~"as" clause on [#> to=record: compound type definitions]. The
+first generic parameter in #~"as" can be specified without name at call sites;
+the remainder require names. This makes the instantiation interface
+self-documenting.
+
+Methods (functions with a parameter of type #~"this") #_*"must not" have an
+#~"as" clause. They inherit generic parameters from the enclosing type
+definition. Static functions (functions without #~"this", including those in a
+type's #~"as" block) may declare their own generic parameters and are
+independently monomorphized.
 
 A function usually will return a value. The type of the returned item is
 specified by the argument named #~"out". Ownership of a returned reftype value
@@ -2633,16 +2660,32 @@ inaccessible/destroyed after the call in any case.
   """
 
 
-TODO: generic example:
+Generic function example:
 
-#code language=zerolang:
-  myfunc: function t {
-      t: generic any
-      x: int
-      y: t
-  } out t is {
-      t * x
+#code language=zerolang: """
+  # generic identity function
+  identity: function as { t: any.generic } in { val: t } out t is {
+      return val
   }
+
+  # generic function with multiple type parameters
+  map: function
+      as { t: any.generic
+           u: any.generic }
+      in { val: t
+           f: function in { x: t } out u }
+      out u
+  is {
+      f x: val
+  }
+
+  # numeric generic parameter
+  repeat: function as { n: u64.generic } in { val: i64 } out i64 is {
+      result: 0
+      for n loop { result = result + val }
+      return result
+  }
+  """
 
 #----: Function Parameter Types
 

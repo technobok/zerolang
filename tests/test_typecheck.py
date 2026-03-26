@@ -2950,9 +2950,9 @@ class TestGenerics:
         assert "y" in pair.children
 
     def test_generic_function_resolution(self):
-        """Function with generic param: t: any.generic."""
+        """Function with generic param in 'as' clause: t: any.generic."""
         program = check_ok(
-            "myfn: function { t: any.generic\n x: t } out t\nmain: function is {}"
+            "myfn: function as { t: any.generic } in { x: t } out t\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -2962,6 +2962,69 @@ class TestGenerics:
         assert "t" in myfn.generic_params
         assert "x" in myfn.children
         assert myfn.children["x"].typetype == ZTypeType.GENERIC_PARAM
+
+    def test_generic_function_multiple_params(self):
+        """Function with multiple generic params in 'as'."""
+        program = check_ok(
+            "myfn: function as { t: any.generic\n u: any.generic } "
+            "in { x: t\n y: u } out t\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myfn = tc._resolved.get("test.myfn")
+        assert myfn is not None
+        assert myfn.isgeneric is True
+        assert "t" in myfn.generic_params
+        assert "u" in myfn.generic_params
+        assert "x" in myfn.children
+        assert "y" in myfn.children
+
+    def test_generic_function_any_clause_order(self):
+        """Function with 'as' after 'out' resolves correctly."""
+        program = check_ok(
+            "myfn: function in { x: t } out t as { t: any.generic }\nmain: function is {}"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        myfn = tc._resolved.get("test.myfn")
+        assert myfn is not None
+        assert myfn.isgeneric is True
+        assert "t" in myfn.generic_params
+
+    def test_generic_param_in_function_in_error(self):
+        """Generic params in function 'in' section should error."""
+        errors = check_errors(
+            "myfn: function { t: any.generic\n x: t } out t\nmain: function is {}"
+        )
+        assert any(
+            "generic parameters must be declared in the 'as' section" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_method_with_as_error(self):
+        """Method (function with 'this' type) cannot have 'as' clause."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as {\n"
+            "  meth: function as { t: any.generic } in { self: this\n val: t } out t is { val }\n"
+            "}\nmain: function is { r: myrec x: 1 }"
+        )
+        assert any(
+            "methods cannot declare generic parameters" in e.msg.lower() for e in errors
+        )
+
+    def test_static_function_in_type_as_with_own_as(self):
+        """Static function (no 'this') in type's 'as' block can have own 'as'."""
+        program = check_ok(
+            "myrec: record { x: i64 } as {\n"
+            "  helper: function as { t: any.generic } in { val: t } out i64 is { 0 }\n"
+            "}\nmain: function is { r: myrec x: 1 }"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        helper = tc._resolved.get("test.myrec.helper")
+        assert helper is not None
+        assert helper.isgeneric is True
+        assert "t" in helper.generic_params
 
     def test_option_some_infers_i64(self):
         """option.some 42 infers t=i64."""
@@ -4475,9 +4538,7 @@ class TestIfExpression:
 
     def test_if_expression_type_mismatch(self):
         """Incompatible branch types should produce an error."""
-        errors = check_errors(
-            'main: function is { x: if 1 < 2 then 1 else "hello" }'
-        )
+        errors = check_errors('main: function is { x: if 1 < 2 then 1 else "hello" }')
         assert any("incompatible" in e.msg.lower() for e in errors)
 
     def test_if_expression_missing_else(self):
@@ -4487,12 +4548,7 @@ class TestIfExpression:
 
     def test_if_expression_missing_else_reassignment(self):
         """Exhaustiveness check also applies to reassignment."""
-        errors = check_errors(
-            "main: function is {\n"
-            "  x: 0\n"
-            "  x = if 1 < 2 then 1\n"
-            "}"
-        )
+        errors = check_errors("main: function is {\n  x: 0\n  x = if 1 < 2 then 1\n}")
         assert any("exhaustive" in e.msg.lower() for e in errors)
 
     def test_if_expression_return_exemption(self):
@@ -4521,15 +4577,13 @@ class TestUnitLevelIf:
     def test_unit_level_if_basic(self):
         """Unit-level if with constant condition type-checks."""
         check_ok(
-            "x: if 1 < 2 then { 42 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 < 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
 
     def test_unit_level_if_type(self):
         """Unit-level if should resolve to the taken branch's type."""
         program = check_ok(
-            "x: if 1 < 2 then { 42 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 < 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
         resolved = program.resolved
         x_type = None
@@ -4543,8 +4597,7 @@ class TestUnitLevelIf:
     def test_unit_level_if_false_branch(self):
         """Unit-level if where condition is false selects else branch."""
         check_ok(
-            "x: if 1 > 2 then { 42 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 > 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
 
     def test_unit_level_if_with_named_constants(self):
@@ -4558,16 +4611,14 @@ class TestUnitLevelIf:
     def test_unit_level_if_nonconstant_error(self):
         """Non-constant condition at unit level should produce an error."""
         errors = check_errors(
-            "x: if main then { 1 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if main then { 1 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
         assert any("compile-time constant" in e.msg for e in errors)
 
     def test_unit_level_if_different_types(self):
         """Unit-level if arms can produce different types."""
         program = check_ok(
-            "x: if 1 < 2 then { 42 } else { 99u8 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 < 2 then { 42 } else { 99u8 }\nmain: function is { print "\\{x}" }'
         )
         # x should have type i64 (the true branch type)
         resolved = program.resolved
