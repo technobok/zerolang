@@ -1883,7 +1883,7 @@ Files: #~"src/ztypecheck.py", #~"src/zemitterc.py",
 #~"examples/ifexpr.z"
 
 
-#---: Phase 43: for-expression improvements
+#---: Phase 43: for-expression improvements \[COMPLETE\]
 
 The #~"for" expression has several unimplemented features from the spec.
 
@@ -1902,7 +1902,7 @@ The #~"for" expression has several unimplemented features from the spec.
   #*: #+ Tests: do-while, do-while-once, pre+post, multiline do-while,
     infinite loop, break in loop, continue in loop (7 new tests)
 
-#----: 43.2 Iterator protocol
+#----: 43.2 Iterator protocol \[COMPLETE\]
 
 The iterator "protocol" is simply methods and callable object.
 
@@ -1939,18 +1939,46 @@ statement. So full syntax would look similar to:
 'some' value of the option. If the iterator returns 'none', 'x' is not bound
 and the loop terminates.
 
-#----: 43.3 for-as-expression (list comprehension)
+#ol:
+  #*: #+ Callable objects: type checker (#~"_check_call") detects when a
+    variable (not a type name) is called and the variable's type has a
+    #~"call" child method. Redirects dispatch through #~"CallKind.CALLABLE",
+    skips the #~"this" parameter for argument matching. Emitter generates
+    #~"z_type_call(receiver, args)".
+  #*: #+ For-loop iterator bindings: #~"_check_for" detects when a named
+    binding's operation returns #~"option" (directly, via a callable
+    object's #~"call" method, or via a function's return type). Marks the
+    binding in #~"fornode.iterator_bindings". Unwraps #~"some" type for
+    the bound variable. Emitter generates a #~"while(1)" loop that calls
+    the operation each iteration, checks #~"TAG_NONE" to break, and
+    dereferences #~"->data" for the unwrapped value.
+  #*: #+ Generic return types in parens: #~"out (option t: i64)" now
+    works for functions returning monomorphized generic types. The parser
+    accepts parenthesized generic type instantiation in the #~"out" clause.
+  #*: #+ Tests: callable objects (with and without extra args), iterator
+    bindings with callable classes, empty iterators (9 new tests total
+    across all 43.x sub-phases).
+
+#----: 43.3 for-as-expression (list comprehension) \[COMPLETE\]
 
 Spec says: #~"for can be used as an expression. The result will be a
 list of the final values of the loop statement." Depends on the list
 collection type being fully operational.
 
 #ol:
-  #*: Type checker: compute element type from loop body's last
-    expression, set for-node type to #~"list[of element_type]"
-  #*: Emitter: allocate list, append each iteration's value, return it
+  #*: #+ Type checker (#~"_check_for"): after checking the loop body,
+    inspects the last statement. If it is an #~"Expression" with a non-null
+    type, monomorphizes #~"list of: elem_type" and sets
+    #~"fornode.type" to the list type.
+  #*: #+ Emitter (#~"_emit_for_expression_value"): allocates a list temp
+    variable, emits the for-loop with a modified body
+    (#~"_emit_for_body") that appends each iteration's last expression
+    value via #~"z_list_ELEM_append". Returns the list variable.
+  #*: #+ #~"_emit_expression_value" dispatches #~"For" nodes with a type
+    to #~"_emit_for_expression_value".
+  #*: #+ Tests: basic comprehension with #~".each" producing a list.
 
-#----: 43.4 Range iteration (#~"each")
+#----: 43.4 Range iteration (#~"each") \[COMPLETE\]
 
 All integers in zerolang support an 'each' 'method' that can be used to iterate
 that number of times.
@@ -1962,6 +1990,21 @@ The each method appears to support usual zerolang iteration (ie. returning a
 callable that returns each value in turn) but the C emitter does not create all
 of these objects and instead emits a standard C for loop over the integer
 values.
+
+#ol:
+  #*: #+ Type checker (#~"_check_dotted_path"): when the child name is
+    #~"each" and the parent type is an integer, synthesizes a function type
+    with a #~"from" parameter and an #~"option" return type. Placed before
+    the numeric dotted-path check so #~"5.each" is not misinterpreted as a
+    numeric cast.
+  #*: #+ Emitter (#~"_emit_for"): detects #~".each" on integers in
+    iterator bindings (unwrapping #~"Expression" wrappers for parenthesized
+    calls). Emits an optimized C #~"for" loop:
+    #~"for (type v = from; v < n; v++)".
+  #*: #+ Supports #~"from:" parameter: #~"(n.each from: k)" iterates from
+    k to n-1. Default is 0.
+  #*: #+ Tests: #~"n.each", literal #~"3.each", #~"each from:",
+    zero-iteration #~"0.each".
 
 #---: Phase 44: C Runtime Library
 
