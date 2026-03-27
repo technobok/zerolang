@@ -621,6 +621,10 @@ class For(Node):
     # can be empty, no bindings, Operation - must be bool condition
     postconditions: typing.List["Operation"]
 
+    # set by type checker: named bindings whose operation returns option
+    # (re-evaluated each iteration, auto-unwrapped, terminates on none)
+    iterator_bindings: typing.Set[str] = field(default_factory=set, init=False)
+
 
 @dataclass
 class Do(Node):
@@ -661,6 +665,7 @@ class CallKind(IntEnum):
     FACET_BORROW = 9  # facet.borrow from: expr
     TYPEDEF_CREATE = 10  # typedef.create/take from: expr
     TYPEDEF_BORROW = 11  # typedef.borrow from: expr
+    CALLABLE = 12  # callable object dispatch (object with 'call' method)
 
 
 @dataclass
@@ -678,6 +683,9 @@ class Call(Node):
 
     # set by type checker to classify the call for the emitter
     call_kind: CallKind = field(default=CallKind.UNKNOWN, init=False)
+
+    # for CALLABLE kind: the type name of the callable object (to construct C method name)
+    callable_type_name: Optional[str] = field(default=None, init=False)
 
 
 @dataclass

@@ -3248,6 +3248,27 @@ class TypeChecker:
                 path.type = parent_type
             return parent_type
 
+        # .each on integer types: synthesize iteration method
+        _INTEGER_TYPES = {
+            "i8", "i16", "i32", "i64", "i128",
+            "u8", "u16", "u32", "u64", "u128",
+        }
+        if child_name == "each":
+            parent_type = self._check_path(path.parent)
+            if parent_type and parent_type.name in _INTEGER_TYPES:
+                each_fn = _make_type(f"{parent_type.name}.each", ZTypeType.FUNCTION)
+                each_fn.children["from"] = parent_type
+                option_template = self._resolve_name("option")
+                if option_template and option_template.isgeneric:
+                    option_defn = self._find_generic_defn(option_template)
+                    if option_defn:
+                        option_mono = self._monomorphize(
+                            option_template, {"t": parent_type}, option_defn
+                        )
+                        each_fn.return_type = option_mono
+                path.type = each_fn
+                return each_fn
+
         # numeric dotted path: 0.u32, 42.i8, 0xff.u16
         if isinstance(path.parent, zast.AtomId) and _is_numeric_id(path.parent.name):
             child_name = path.child.name
@@ -3381,6 +3402,22 @@ class TypeChecker:
             call.call_kind = zast.CallKind.UNION_CREATE
             return parent_tagged
 
+        # callable object dispatch: variable with a 'call' method
+        # must be before construction checks — a variable of record/class type
+        # with a 'call' method should dispatch to call, not construct
+        callee_is_var = isinstance(call.callable, zast.AtomId) and (
+            self.symtab.lookup_var(call.callable.name) is not None
+        )
+        if callee_is_var and callee_type.typetype != ZTypeType.FUNCTION:
+            call_method = callee_type.children.get("call")
+            if call_method and call_method.typetype == ZTypeType.FUNCTION:
+                # redirect to the 'call' method
+                call.call_kind = zast.CallKind.CALLABLE
+                call.callable_type_name = callee_type.name
+                callee_type = call_method
+                call.callable.type = call_method
+                # fall through to function call checking below
+
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             # generic record construction
@@ -3459,6 +3496,11 @@ class TypeChecker:
         params = [
             (k, v) for k, v in callee_type.children.items() if not k.startswith(":")
         ]
+
+        # for callable dispatch, skip the 'this' parameter (first param of call method)
+        # — the receiver is passed implicitly
+        if call.call_kind == zast.CallKind.CALLABLE and params:
+            params = params[1:]
 
         # check for reftype aliasing: same reftype arg passed twice
         reftype_args: dict[str, Token] = {}
@@ -4063,6 +4105,14 @@ class TypeChecker:
         self.symtab.pop()
         return result_type
 
+    def _is_option_type(self, t: ZType) -> bool:
+        """Check if a type is a monomorphized option type."""
+        return (
+            t.typetype == ZTypeType.UNION
+            and getattr(t, "generic_origin", None) is not None
+            and t.generic_origin.name == "option"
+        )
+
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")
         # lock tracking for for-loop targets
@@ -4070,6 +4120,34 @@ class TypeChecker:
         for name, cond_op in fornode.conditions.items():
             t = self._check_operation(cond_op)
             if t and not name.startswith(" "):
+                # iterator binding: check if operation type is or returns option
+                iter_option_type = None
+                if self._is_option_type(t):
+                    # operation directly returns option (e.g., function call)
+                    iter_option_type = t
+                elif (
+                    t.typetype == ZTypeType.FUNCTION
+                    and t.return_type
+                    and self._is_option_type(t.return_type)
+                ):
+                    # function that returns option (e.g., .each on integers)
+                    iter_option_type = t.return_type
+                elif t.typetype != ZTypeType.FUNCTION:
+                    # check if it's a callable object whose call returns option
+                    call_method = t.children.get("call")
+                    if (
+                        call_method
+                        and call_method.typetype == ZTypeType.FUNCTION
+                        and call_method.return_type
+                        and self._is_option_type(call_method.return_type)
+                    ):
+                        iter_option_type = call_method.return_type
+
+                if iter_option_type:
+                    some_type = iter_option_type.children.get("some")
+                    if some_type:
+                        fornode.iterator_bindings.add(name)
+                        t = some_type
                 self.symtab.define(name, t)
                 # lock the iteration target to prevent mutation in body
                 if not _is_valtype(t):
@@ -4079,12 +4157,35 @@ class TypeChecker:
                         locked_targets.append((name, holder))
         for postcond in fornode.postconditions:
             self._check_operation(postcond)
+        elem_type = None
         if fornode.loop:
             self._check_statement(fornode.loop)
+            # for-as-expression: if the last statement in the loop body is an
+            # expression, the for-expression returns a list of that type
+            if fornode.loop.statements:
+                last = fornode.loop.statements[-1].statementline
+                if isinstance(last, zast.Expression):
+                    inner_type = (
+                        last.type
+                        or getattr(last.expression, "type", None)
+                    )
+                    if inner_type:
+                        elem_type = inner_type
         # release for-loop locks
         for target_name, holder in locked_targets:
             self.symtab.release_lock(target_name, holder)
         self.symtab.pop()
+        # for-as-expression: return list of elem_type (non-null values only)
+        if elem_type and elem_type != self.t_null and elem_type.name != "null":
+            list_template = self._resolve_name("list")
+            if list_template and list_template.isgeneric:
+                list_defn = self._find_generic_defn(list_template)
+                if list_defn:
+                    list_mono = self._monomorphize(
+                        list_template, {"of": elem_type}, list_defn
+                    )
+                    fornode.type = list_mono
+                    return list_mono
         return self.t_null
 
     def _check_with(self, withnode: zast.With) -> Optional[ZType]:

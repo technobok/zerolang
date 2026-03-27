@@ -2942,7 +2942,21 @@ class CEmitter:
             args.append(self._emit_operation_value(arg.valtype))
         return f"{parent_val}->vtable->{method}({', '.join(args)})"
 
+    def _emit_callable_dispatch(self, call: zast.Call) -> str:
+        """Emit a callable object dispatch: obj(args) -> z_type_call(obj, args)."""
+        type_name = call.callable_type_name
+        cname = _mangle_func(f"{type_name}.call")
+        receiver = self._emit_path_value(call.callable)
+        args = self._emit_call_args(call)
+        arg_str = f"{receiver}, {args}" if args else receiver
+        return f"{cname}({arg_str})"
+
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
+        # callable object dispatch as statement
+        if call.call_kind == zast.CallKind.CALLABLE:
+            result = self._emit_callable_dispatch(call)
+            return f"{indent}{result};\n"
+
         # protocol.create/take from: expr (owned protocol creation)
         if self._is_protocol_create(call):
             val = self._emit_protocol_create_call(call)
@@ -3297,9 +3311,34 @@ class CEmitter:
             return self._emit_expression_value(inner.doexpr)
         if isinstance(inner, zast.If):
             return self._emit_if_expression_value(inner)
+        if isinstance(inner, zast.For) and inner.type:
+            return self._emit_for_expression_value(inner)
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
+        # callable object dispatch: obj(args) -> z_type_call(obj, args)
+        if call.call_kind == zast.CallKind.CALLABLE:
+            result = self._emit_callable_dispatch(call)
+            if call.type:
+                if call.type.name == "string":
+                    return self._alloc_temp(result)
+                if call.type.typetype == ZTypeType.CLASS:
+                    ctype = f"z_{call.type.name}_t"
+                    tmp = self._temp_name("c")
+                    indent = self._indent()
+                    self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+                    self._temp.frees.append(tmp)
+                    self._temp.class_set[tmp] = call.type.name
+                    return tmp
+                if call.type.typetype == ZTypeType.UNION:
+                    ctype = f"z_{call.type.name}_t"
+                    tmp = self._temp_name("c")
+                    indent = self._indent()
+                    self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
+                    self._temp.frees.append(tmp)
+                    return tmp
+            return result
+
         # protocol.create/take from: expr (owned protocol creation)
         if self._is_protocol_create(call):
             return self._emit_protocol_create_call(call)
@@ -4272,9 +4311,7 @@ class CEmitter:
 
         return "".join(parts)
 
-    def _emit_branch_with_result(
-        self, stmt: zast.Statement, result_var: str
-    ) -> str:
+    def _emit_branch_with_result(self, stmt: zast.Statement, result_var: str) -> str:
         """Emit a branch body, assigning the last expression's value to result_var."""
         parts: List[str] = []
         lines = stmt.statements
@@ -4341,9 +4378,7 @@ class CEmitter:
                 if all_true:
                     parts.append(f"{indent}{{\n")
                     self.indent_level += 1
-                    parts.append(
-                        self._emit_branch_with_result(clause.statement, tmp)
-                    )
+                    parts.append(self._emit_branch_with_result(clause.statement, tmp))
                     self.indent_level -= 1
                     parts.append(f"{indent}}}\n")
                     emitted_true_branch = True
@@ -4360,17 +4395,13 @@ class CEmitter:
                 cond_str = " && ".join(conds) if conds else "1"
                 parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
                 self.indent_level += 1
-                parts.append(
-                    self._emit_branch_with_result(clause.statement, tmp)
-                )
+                parts.append(self._emit_branch_with_result(clause.statement, tmp))
                 self.indent_level -= 1
 
             if ifnode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
-                parts.append(
-                    self._emit_branch_with_result(ifnode.elseclause, tmp)
-                )
+                parts.append(self._emit_branch_with_result(ifnode.elseclause, tmp))
                 self.indent_level -= 1
 
             parts.append(f"{indent}}}\n")
@@ -4378,9 +4409,7 @@ class CEmitter:
             # all clauses constant-false, emit else
             parts.append(f"{indent}{{\n")
             self.indent_level += 1
-            parts.append(
-                self._emit_branch_with_result(ifnode.elseclause, tmp)
-            )
+            parts.append(self._emit_branch_with_result(ifnode.elseclause, tmp))
             self.indent_level -= 1
             parts.append(f"{indent}}}\n")
 
@@ -4401,9 +4430,64 @@ class CEmitter:
 
         init_vars: List[str] = []
         cond_exprs: List[str] = []
+        # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_type)
+        iter_bindings: List[Tuple[str, zast.Operation, str, str, str, Optional[str]]] = []
+        # each bindings: (name, limit_expr, from_expr, elem_ctype) — optimized C for loop
+        each_bindings: List[Tuple[str, str, str, str]] = []
+
         for name, cond_op in fornode.conditions.items():
             if name.startswith(" "):
                 cond_exprs.append(self._emit_operation_value(cond_op))
+            elif name in fornode.iterator_bindings:
+                # check for .each on integer types (C for-loop optimization)
+                is_each = False
+                actual_op = cond_op
+                while isinstance(actual_op, zast.Expression):
+                    actual_op = actual_op.expression
+                if isinstance(actual_op, (zast.DottedPath, zast.Call)):
+                    each_path = None
+                    from_val = "0"
+                    if isinstance(actual_op, zast.DottedPath) and actual_op.child.name == "each":
+                        each_path = actual_op
+                    elif isinstance(actual_op, zast.Call) and isinstance(
+                        actual_op.callable, zast.DottedPath
+                    ) and actual_op.callable.child.name == "each":
+                        each_path = actual_op.callable
+                        for arg in actual_op.arguments:
+                            if arg.name == "from" or arg.name is None:
+                                from_val = self._emit_operation_value(arg.valtype)
+                    if each_path:
+                        parent_type = each_path.parent.type
+                        if parent_type and parent_type.name in {
+                            "i8", "i16", "i32", "i64", "i128",
+                            "u8", "u16", "u32", "u64", "u128",
+                        }:
+                            limit_val = self._emit_path_value(each_path.parent)
+                            elem_ctype = _ctype(parent_type)
+                            each_bindings.append((name, limit_val, from_val, elem_ctype))
+                            is_each = True
+
+                if not is_each:
+                    t = self._get_operation_type(cond_op)
+                    if t:
+                        call_method = t.children.get("call") if t.typetype != ZTypeType.FUNCTION else None
+                        if call_method and call_method.return_type:
+                            opt_type = call_method.return_type
+                            opt_ctype = _ctype(opt_type)
+                            opt_name = opt_type.name
+                            some_type = opt_type.children.get("some")
+                            elem_ctype = _ctype(some_type) if some_type else "int64_t"
+                            iter_bindings.append(
+                                (name, cond_op, opt_ctype, elem_ctype, opt_name, t.name)
+                            )
+                        else:
+                            opt_ctype = _ctype(t)
+                            opt_name = t.name
+                            some_type = t.children.get("some")
+                            elem_ctype = _ctype(some_type) if some_type else "int64_t"
+                            iter_bindings.append(
+                                (name, cond_op, opt_ctype, elem_ctype, opt_name, None)
+                            )
             else:
                 val = self._emit_operation_value(cond_op)
                 ctype = "int64_t"
@@ -4422,13 +4506,61 @@ class CEmitter:
 
         has_pre = bool(cond_exprs)
         has_post = bool(post_exprs)
+        has_iter = bool(iter_bindings)
+        has_each = bool(each_bindings)
 
-        if has_post and not has_pre:
+        if has_each and not has_iter:
+            # each-based loop: emit optimized C for loop
+            for ename, limit_val, from_val, elem_ctype in each_bindings:
+                cvar = _mangle_var(ename)
+                parts.append(
+                    f"{indent}for ({elem_ctype} {cvar} = {from_val}; "
+                    f"{cvar} < {limit_val}; {cvar}++) {{\n"
+                )
+            if fornode.loop:
+                self.indent_level += 1
+                parts.append(self._emit_for_body(fornode))
+                self.indent_level -= 1
+            if has_post:
+                self.indent_level += 1
+                inner = self._indent()
+                self.indent_level -= 1
+                post_str = " && ".join(post_exprs)
+                parts.append(f"{inner}if (!({post_str})) break;\n")
+            for _ in each_bindings:
+                parts.append(f"{indent}}}\n")
+        elif has_iter:
+            # iterator-based loop: while(1) with per-iteration call + option unwrap
+            cond_str = " && ".join(cond_exprs) if cond_exprs else "1"
+            parts.append(f"{indent}while ({cond_str}) {{\n")
+            self.indent_level += 1
+            inner = self._indent()
+            for iname, iop, opt_ctype, elem_ctype, opt_name, callable_type in iter_bindings:
+                if callable_type:
+                    obj_val = self._emit_operation_value(iop)
+                    call_fn = _mangle_func(f"{callable_type}.call")
+                    iter_val = f"{call_fn}({obj_val})"
+                else:
+                    iter_val = self._emit_operation_value(iop)
+                none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+                tmp = f"__iter_{_mangle_var(iname)}"
+                parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
+                parts.append(f"{inner}if ({tmp}->tag == {none_tag}) {{ free({tmp}); break; }}\n")
+                parts.append(f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}->data;\n")
+                parts.append(f"{inner}free({tmp});\n")
+            if fornode.loop:
+                parts.append(self._emit_for_body(fornode))
+            if has_post:
+                post_str = " && ".join(post_exprs)
+                parts.append(f"{inner}if (!({post_str})) break;\n")
+            self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+        elif has_post and not has_pre:
             # pure post-condition: do { body } while (postcond);
             parts.append(f"{indent}do {{\n")
             if fornode.loop:
                 self.indent_level += 1
-                parts.append(self._emit_statement(fornode.loop))
+                parts.append(self._emit_for_body(fornode))
                 self.indent_level -= 1
             post_str = " && ".join(post_exprs)
             parts.append(f"{indent}}} while ({post_str});\n")
@@ -4438,10 +4570,9 @@ class CEmitter:
             parts.append(f"{indent}while ({cond_str}) {{\n")
             if fornode.loop:
                 self.indent_level += 1
-                parts.append(self._emit_statement(fornode.loop))
+                parts.append(self._emit_for_body(fornode))
                 self.indent_level -= 1
             if has_post:
-                # post-condition: break if postcondition fails
                 self.indent_level += 1
                 inner = self._indent()
                 self.indent_level -= 1
@@ -4450,6 +4581,47 @@ class CEmitter:
             parts.append(f"{indent}}}\n")
 
         return "".join(parts)
+
+    def _emit_for_body(self, fornode: zast.For) -> str:
+        """Emit for-loop body, with optional list comprehension append."""
+        if not fornode.loop:
+            return ""
+        list_var = getattr(fornode, "_comprehension_list_var", None)
+        if not list_var:
+            return self._emit_statement(fornode.loop)
+        list_name = fornode._comprehension_list_name  # type: ignore[attr-defined]
+        parts: List[str] = []
+        stmts = fornode.loop.statements
+        for sl in stmts[:-1]:
+            parts.append(self._emit_statement_line(sl))
+        last = stmts[-1].statementline
+        if isinstance(last, zast.Expression):
+            val = self._emit_expression_value(last)
+            indent = self._indent()
+            parts.append(f"{indent}z_{list_name}_append({list_var}, {val});\n")
+        else:
+            parts.append(self._emit_statement_line(stmts[-1]))
+        return "".join(parts)
+
+    def _emit_for_expression_value(self, fornode: zast.For) -> str:
+        """Emit for-as-expression (list comprehension): returns a list."""
+        list_type = fornode.type
+        list_ctype = _ctype(list_type)
+        list_name = list_type.name
+        tmp = self._temp_name("fl")
+        indent = self._indent()
+        self._temp.decls.append(
+            f"{indent}{list_ctype} {tmp} = z_{list_name}_create(0);\n"
+        )
+        self._temp.frees.append(tmp)
+        if list_name not in self._temp.class_set:
+            self._temp.class_set[tmp] = list_name
+        fornode._comprehension_list_var = tmp  # type: ignore[attr-defined]
+        fornode._comprehension_list_name = list_name  # type: ignore[attr-defined]
+        self._temp.decls.append(self._emit_for(fornode))
+        if tmp in self._temp.frees:
+            self._temp.frees.remove(tmp)
+        return tmp
 
     def _emit_do(self, donode: zast.Do) -> str:
         return self._emit_statement(donode.statement)

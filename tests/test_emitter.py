@@ -188,6 +188,128 @@ class TestEmitterBasic:
         # sum = 1+2+4+5 = 12 (skip 3)
         assert output.strip() == "12"
 
+    def test_callable_object(self):
+        """Record with a 'call' method can be invoked as a function."""
+        csource = emit_source(
+            "adder: record { base: i64 } as {\n"
+            "  call: function {a: this n: i64} out i64 is {\n"
+            "    return a.base + n\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  a: adder base: 10\n"
+            "  result: a 5\n"
+            '  print "\\{result}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_callable_object_no_extra_args(self):
+        """Callable object with only 'this' parameter (no extra args)."""
+        csource = emit_source(
+            "getter: record { value: i64 } as {\n"
+            "  call: function {g: this} out i64 is {\n"
+            "    return g.value\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  g: getter value: 42\n"
+            "  result: getter.call g\n"
+            '  print "\\{result}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_for_iterator_binding(self):
+        """For-loop with iterator binding: callable returning option."""
+        csource = emit_source(
+            "counter: class { i: i64 max: i64 } as {\n"
+            "  call: function {c: this} out (option t: i64) is {\n"
+            "    if c.i < c.max then {\n"
+            "      result: option.some c.i\n"
+            "      c.i = c.i + 1\n"
+            "      return result\n"
+            "    }\n"
+            "    result: option.none i64\n"
+            "    return result\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  with iter: counter i: 0 max: 3 do for x: iter loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0\n1\n2"
+
+    def test_for_each_integer(self):
+        """for x: n.each — iterates from 0 to n-1."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  n: 5\n"
+            "  for x: n.each loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0\n1\n2\n3\n4"
+
+    def test_for_each_literal(self):
+        """for x: 3.each — iterates with literal."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  for x: 3.each loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0\n1\n2"
+
+    def test_for_each_from(self):
+        """for x: (n.each from: 2) — iterates from k to n-1."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  n: 5\n"
+            "  for x: (n.each from: 2) loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2\n3\n4"
+
+    def test_for_each_zero(self):
+        """for x: 0.each — no iterations."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  for x: 0.each loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            '  print "done"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "done"
+
+    def test_for_comprehension(self):
+        """for-as-expression returns a list."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  result: for x: 3.each loop { x * 2 }\n"
+            '  print "\\{result.length}"\n'
+            "  for i: result.length.each loop {\n"
+            '    print "\\{result.get i}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3\n0\n2\n4"
+
     def test_swap(self):
         csource = emit_source(
             'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'
@@ -4023,10 +4145,7 @@ class TestIfExpression:
     def test_if_expression_basic(self):
         """Basic if-expression: x: if 1 < 2 then 1 else 2."""
         csource = emit_source(
-            "main: function is {\n"
-            "  x: if 1 < 2 then 1 else 2\n"
-            '  print "\\{x}"\n'
-            "}"
+            'main: function is {\n  x: if 1 < 2 then 1 else 2\n  print "\\{x}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "1"
@@ -4034,10 +4153,7 @@ class TestIfExpression:
     def test_if_expression_false_branch(self):
         """If-expression where condition is false."""
         csource = emit_source(
-            "main: function is {\n"
-            "  x: if 1 > 2 then 1 else 2\n"
-            '  print "\\{x}"\n'
-            "}"
+            'main: function is {\n  x: if 1 > 2 then 1 else 2\n  print "\\{x}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "2"
@@ -4058,10 +4174,7 @@ class TestIfExpression:
     def test_if_expression_string(self):
         """String if-expression."""
         csource = emit_source(
-            "main: function is {\n"
-            '  s: if 1 < 2 then "yes" else "no"\n'
-            '  print s\n'
-            "}"
+            'main: function is {\n  s: if 1 < 2 then "yes" else "no"\n  print s\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "yes"
@@ -4083,10 +4196,7 @@ class TestIfExpression:
     def test_if_expression_constant_fold(self):
         """Constant-folded if-expression should not emit C if."""
         csource = emit_source(
-            "main: function is {\n"
-            "  x: if 1 < 2 then 10 else 20\n"
-            '  print "\\{x}"\n'
-            "}"
+            'main: function is {\n  x: if 1 < 2 then 10 else 20\n  print "\\{x}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "10"
@@ -4094,9 +4204,7 @@ class TestIfExpression:
     def test_if_expression_in_interpolation(self):
         """If-expression used in string interpolation."""
         csource = emit_source(
-            "main: function is {\n"
-            '  print "\\{if 1 < 2 then 42 else 0}"\n'
-            "}"
+            'main: function is {\n  print "\\{if 1 < 2 then 42 else 0}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
@@ -4119,8 +4227,7 @@ class TestUnitLevelIf:
     def test_unit_level_if_true(self):
         """Unit-level if with true condition compiles and runs."""
         csource = emit_source(
-            "x: if 1 < 2 then { 42 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 < 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
@@ -4129,8 +4236,7 @@ class TestUnitLevelIf:
     def test_unit_level_if_false(self):
         """Unit-level if with false condition selects else branch."""
         csource = emit_source(
-            "x: if 1 > 2 then { 42 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 > 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "0"
@@ -4159,8 +4265,7 @@ class TestUnitLevelIf:
     def test_unit_level_if_no_runtime_if(self):
         """Unit-level if should not produce runtime if in C output."""
         csource = emit_source(
-            "x: if 1 < 2 then { 42 } else { 0 }\n"
-            'main: function is { print "\\{x}" }'
+            'x: if 1 < 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
         # should be a static const, no runtime if
         assert "if (1" not in csource
