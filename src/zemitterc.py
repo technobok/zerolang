@@ -595,6 +595,32 @@ class CEmitter:
                 # unit-level expression that folded to a constant
                 self._const_names.add(qname)
 
+    def _pre_register_fields(self, prefix: str, body: dict) -> None:
+        """Pre-register field names/ctypes for all records and classes.
+
+        This ensures _build_meta_create_args works correctly even when a
+        function references a type that appears later in the source file.
+        """
+        for name, defn in body.items():
+            qname = self._qualify(prefix, name)
+            if self._is_generic_template(defn):
+                continue
+            defn_type = type(defn)
+            if defn_type == zast.Unit:
+                self._pre_register_fields(qname, defn.body)
+            elif defn_type in (zast.Record, zast.Class):
+                if qname not in self._type_field_names:
+                    if self._is_typedef_defn(defn):
+                        continue
+                    _, field_names, field_ctypes = self._collect_field_params(
+                        qname, defn.items, defn.functions
+                    )
+                    self._type_field_names[qname] = field_names
+                    self._type_field_ctypes[qname] = field_ctypes
+                    self._type_field_defaults[qname] = self._extract_field_defaults(
+                        qname, defn.items, defn.functions
+                    )
+
     def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
         """Recursively emit definitions from a unit body."""
         for name, defn in body.items():
@@ -740,6 +766,10 @@ class CEmitter:
         for mono_type, template_defn in getattr(self.program, "mono_types", []):
             if _is_str_type(mono_type):
                 self._emit_mono_str(mono_type)
+
+        # pre-register field info for all non-generic records/classes
+        # so that construction calls work regardless of definition order
+        self._pre_register_fields("", mainunit.body)
 
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
