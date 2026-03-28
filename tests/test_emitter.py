@@ -377,6 +377,35 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "8\n15"
 
+    def test_generic_unit_4level(self):
+        """4-level generic nesting: level1 → level2 → level3, each with own param."""
+        csource = emit_source(
+            "level1: unit as {\n"
+            "  a: any.generic\n"
+            "  level2: unit as {\n"
+            "    b: any.generic\n"
+            "    level3: unit as {\n"
+            "      c: any.generic\n"
+            "      sum3: function {x: a y: b z: c} out a is {\n"
+            "        return x + y.i64 + z.i64\n"
+            "      }\n"
+            "    }\n"
+            "    sum2: function {x: a y: b} out a is { return x + y.i64 }\n"
+            "  }\n"
+            "  inc: function {x: a} out a is { return x + 1 }\n"
+            "}\n"
+            "main: function is {\n"
+            "  l1: (level1 a: i64)\n"
+            "  l2: (l1.level2 b: i32)\n"
+            "  l3: (l2.level3 c: i16)\n"
+            '  print "\\{l1.inc 9}"\n'
+            '  print "\\{l2.sum2 x: 10 y: 5.i32}"\n'
+            '  print "\\{l3.sum3 x: 1 y: 2.i32 z: 3.i16}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10\n15\n6"
+
     def test_generic_file_unit(self):
         """Generic file unit instantiated from another file."""
         from zvfs import ZVfs, StringProvider, FSProvider, BindType

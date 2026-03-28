@@ -2520,6 +2520,8 @@ class TypeChecker:
                 child_type.isgeneric
                 and isinstance(child_type.generic_origin, ZType)
                 and not is_partial
+                # skip UNIT children — handled by _partial_instantiate_subunits
+                and child_type.typetype != ZTypeType.UNIT
             ):
                 # partially-instantiated child — resolve remaining generic params
                 child_args: dict[str, ZType] = {}
@@ -2794,54 +2796,7 @@ class TypeChecker:
 
         # for monomorphized units: partially instantiate nested generic subunits
         if not is_partial and isinstance(defn, zast.Unit):
-            for child_name, child_type in list(mono.children.items()):
-                if (
-                    child_type.typetype == ZTypeType.UNIT
-                    and child_type.isgeneric
-                ):
-                    # create a partially-instantiated subunit: substitute
-                    # parent's generic params, keep the subunit's own params
-                    sub_name = f"{mangled}.{child_name}"
-                    sub_unit = _make_type(sub_name, ZTypeType.UNIT)
-                    sub_unit.generic_origin = child_type
-                    # store parent's resolved args for body checking later
-                    sub_unit.generic_args = dict(generic_args)
-                    # copy the subunit's own generic params (not from parent)
-                    for gp_name, gp_constraint in child_type.generic_params.items():
-                        if gp_name not in generic_args:
-                            sub_unit.generic_params[gp_name] = gp_constraint
-                            sub_unit.isgeneric = True
-                    # substitute parent's generic params in subunit's children
-                    for ck, cv in child_type.children.items():
-                        if cv.typetype == ZTypeType.FUNCTION:
-                            new_func = _make_type(
-                                f"{sub_name}.{ck}", ZTypeType.FUNCTION
-                            )
-                            for pk, pv in cv.children.items():
-                                if (
-                                    pv.typetype == ZTypeType.GENERIC_PARAM
-                                    and pv.name in generic_args
-                                ):
-                                    new_func.children[pk] = generic_args[pv.name]
-                                else:
-                                    new_func.children[pk] = pv
-                            if cv.return_type:
-                                rt = cv.return_type
-                                if (
-                                    rt.typetype == ZTypeType.GENERIC_PARAM
-                                    and rt.name in generic_args
-                                ):
-                                    new_func.return_type = generic_args[rt.name]
-                                else:
-                                    new_func.return_type = rt
-                            new_func.param_ownership = cv.param_ownership.copy()
-                            new_func.return_ownership = cv.return_ownership
-                            sub_unit.children[ck] = new_func
-                        else:
-                            sub_unit.children[ck] = cv
-                    mono.children[child_name] = sub_unit
-                    self.unit_types[sub_name] = sub_unit
-
+            self._partial_instantiate_subunits(mono, mangled, generic_args)
             self.unit_types[mangled] = mono
             cloned_methods: dict[str, zast.Function] = {}
             for dname, ddefn in defn.body.items():
@@ -2924,6 +2879,54 @@ class TypeChecker:
 
         return mono
 
+    def _partial_instantiate_subunits(
+        self, parent: ZType, parent_name: str, args: dict[str, ZType]
+    ) -> None:
+        """Recursively partially instantiate nested generic subunits.
+
+        Substitutes the parent's concrete generic args into each child subunit's
+        functions, while keeping the subunit's own generic params unresolved.
+        Works to arbitrary depth.
+        """
+        for child_name, child_type in list(parent.children.items()):
+            if child_type.typetype != ZTypeType.UNIT or not child_type.isgeneric:
+                continue
+            sub_name = f"{parent_name}.{child_name}"
+            sub_unit = _make_type(sub_name, ZTypeType.UNIT)
+            sub_unit.generic_origin = child_type
+            # accumulate all resolved args (parent chain + current)
+            sub_unit.generic_args = dict(getattr(child_type, "generic_args", {}) or {})
+            sub_unit.generic_args.update(args)
+            # keep the subunit's own generic params (those not resolved by parent)
+            for gp_name, gp_constraint in child_type.generic_params.items():
+                if gp_name not in args:
+                    sub_unit.generic_params[gp_name] = gp_constraint
+                    sub_unit.isgeneric = True
+            # substitute parent's generic params in subunit's children
+            for ck, cv in child_type.children.items():
+                if cv.typetype == ZTypeType.FUNCTION:
+                    new_func = _make_type(f"{sub_name}.{ck}", ZTypeType.FUNCTION)
+                    for pk, pv in cv.children.items():
+                        if pv.typetype == ZTypeType.GENERIC_PARAM and pv.name in args:
+                            new_func.children[pk] = args[pv.name]
+                        else:
+                            new_func.children[pk] = pv
+                    if cv.return_type:
+                        rt = cv.return_type
+                        if rt.typetype == ZTypeType.GENERIC_PARAM and rt.name in args:
+                            new_func.return_type = args[rt.name]
+                        else:
+                            new_func.return_type = rt
+                    new_func.param_ownership = cv.param_ownership.copy()
+                    new_func.return_ownership = cv.return_ownership
+                    sub_unit.children[ck] = new_func
+                else:
+                    sub_unit.children[ck] = cv
+            parent.children[child_name] = sub_unit
+            self.unit_types[sub_name] = sub_unit
+            # recurse into the subunit's children for deeper nesting
+            self._partial_instantiate_subunits(sub_unit, sub_name, args)
+
     def _find_generic_defn(self, template_type: ZType) -> Optional[zast.TypeDefinition]:
         """Find the AST definition node for a generic template type."""
         name = template_type.name
@@ -2945,13 +2948,33 @@ class TypeChecker:
                 origin_defn = self._find_generic_defn(origin)
                 if origin_defn is not None:
                     return origin_defn
-            # also search all unit bodies recursively
-            for unitname, unit in self.program.units.items():
-                for dname, ddefn in unit.body.items():
-                    if isinstance(ddefn, zast.Unit):
-                        inner = ddefn.body.get(parts[1])
-                        if inner is not None:
-                            return inner
+            # also search all unit bodies recursively for the leaf name
+            leaf = parts[1]
+            result = self._search_unit_bodies_for(leaf)
+            if result is not None:
+                return result
+        return None
+
+    def _search_unit_bodies_for(self, name: str) -> Optional[zast.TypeDefinition]:
+        """Recursively search all unit bodies for a definition by name."""
+        for _, unit in self.program.units.items():
+            result = self._search_body_recursive(unit.body, name)
+            if result is not None:
+                return result
+        return None
+
+    def _search_body_recursive(
+        self, body: dict, name: str
+    ) -> Optional[zast.TypeDefinition]:
+        """Search a unit body (and nested units) for a definition by name."""
+        defn = body.get(name)
+        if defn is not None:
+            return defn
+        for dname, ddefn in body.items():
+            if isinstance(ddefn, zast.Unit):
+                result = self._search_body_recursive(ddefn.body, name)
+                if result is not None:
+                    return result
         return None
 
     def _infer_generic_union_construction(
