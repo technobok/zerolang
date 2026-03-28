@@ -666,6 +666,7 @@ class CallKind(IntEnum):
     TYPEDEF_CREATE = 10  # typedef.create/take from: expr
     TYPEDEF_BORROW = 11  # typedef.borrow from: expr
     CALLABLE = 12  # callable object dispatch (object with 'call' method)
+    UNIT_INSTANTIATE = 13  # generic unit instantiation: (myunit t: i64)
 
 
 @dataclass

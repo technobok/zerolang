@@ -200,6 +200,8 @@ class TypeChecker:
         self.unit_types: dict[str, ZType] = {}
         for unitname in self.program.units:
             self.unit_types[unitname] = _make_type(unitname, ZTypeType.UNIT)
+        # track which file units have been fully resolved (generic params detected)
+        self._resolved_file_units: set[str] = set()
 
         # current function return type (for return statement checking)
         self._current_return_type: Optional[ZType] = None
@@ -1851,11 +1853,36 @@ class TypeChecker:
         self._resolved[key] = utype
         self.unit_types[name] = utype
 
+        # detect generic params in unit body (DottedPath items like t: any.generic)
+        generic_ctx: dict[str, ZType] = {}
+        generic_param_names: set[str] = set()
+        for dname, ddefn in unit.body.items():
+            if isinstance(ddefn, zast.DottedPath):
+                ft = self._resolve_typeref(ddefn)
+                if (
+                    ft
+                    and ft.typetype == ZTypeType.GENERIC_PARAM
+                    and ft.name == "__generic_param"
+                ):
+                    constraint = ft.parent if ft.parent else self.t_null
+                    utype.generic_params[dname] = constraint
+                    utype.isgeneric = True
+                    generic_ctx[dname] = constraint
+                    generic_param_names.add(dname)
+                    if constraint.name in NUMERIC_RANGES:
+                        utype.numeric_generic_params.add(dname)
+
         # push this unit onto the context stack for name resolution
         self._unit_context.append((name, unit))
 
-        # resolve each definition in the inline unit's body
+        # if generic, push generic context so body definitions can reference params
+        if utype.isgeneric:
+            self._generic_context.append(generic_ctx)
+
+        # resolve each non-generic-param definition in the inline unit's body
         for dname, ddefn in unit.body.items():
+            if dname in generic_param_names:
+                continue  # skip generic param declarations
             dkey = f"{unitname}.{name}.{dname}"
             if dkey in self._resolved:
                 utype.children[dname] = self._resolved[dkey]
@@ -1864,9 +1891,17 @@ class TypeChecker:
             if t:
                 self._resolved[dkey] = t
                 utype.children[dname] = t
-            # check function bodies inside inline units
-            if isinstance(ddefn, zast.Function) and ddefn.body:
+            # check function bodies inside inline units (skip for generic units —
+            # bodies will be checked after monomorphization)
+            if (
+                not utype.isgeneric
+                and isinstance(ddefn, zast.Function)
+                and ddefn.body
+            ):
                 self._check_function_body(f"{name}.{dname}", ddefn)
+
+        if utype.isgeneric:
+            self._generic_context.pop()
 
         self._unit_context.pop()
         return utype
@@ -1930,6 +1965,10 @@ class TypeChecker:
             t = self._resolve_unit_name("core", name)
             if t:
                 return t
+
+        # 5. file unit names (for generic unit instantiation)
+        if name in self.program.units and name != current:
+            return self._ensure_file_unit_resolved(name)
 
         return None
 
@@ -2128,14 +2167,25 @@ class TypeChecker:
                 return self._resolve_name(child_name)
             # check if it's a unit name first (file-level units)
             if pname in self.program.units:
-                # resolve the child from that unit on demand
+                # ensure file unit is fully resolved (generic params detected)
+                utype = self._ensure_file_unit_resolved(pname)
+                if utype and utype.isgeneric:
+                    # generic file unit accessed as dotted path without
+                    # instantiation — must instantiate first
+                    self._error(
+                        f"Generic unit '{pname}' must be instantiated"
+                        f" with type arguments before use",
+                        loc=path.start,
+                    )
+                    return None
+                if utype:
+                    child = utype.children.get(path.child.name)
+                    if child:
+                        return child
+                # fallback: demand-resolve the child
                 t = self._resolve_unit_name(pname, path.child.name)
                 if t:
                     return t
-                # might also be already in unit_types
-                parent_type = self.unit_types.get(pname)
-                if parent_type:
-                    return parent_type.children.get(path.child.name)
                 return None
             # check if it's an inline unit name
             if (
@@ -2703,6 +2753,69 @@ class TypeChecker:
             if "create" not in mono.children:
                 mono.children["create"] = create_type
 
+        # for monomorphized units: substitute generic params in function children,
+        # register in unit_types, and clone function bodies
+        if not is_partial and isinstance(defn, zast.Unit):
+            # functions inside unit have generic params as their parameter/return types
+            # we need to create new function types with concrete substitutions
+            for child_name, child_type in list(mono.children.items()):
+                if child_type.typetype == ZTypeType.FUNCTION:
+                    new_func = _make_type(f"{mangled}.{child_name}", ZTypeType.FUNCTION)
+                    for pk, pv in child_type.children.items():
+                        if (
+                            pv.typetype == ZTypeType.GENERIC_PARAM
+                            and pv.name in generic_args
+                        ):
+                            new_func.children[pk] = generic_args[pv.name]
+                        else:
+                            new_func.children[pk] = pv
+                    # substitute return type
+                    if child_type.return_type:
+                        rt = child_type.return_type
+                        if (
+                            rt.typetype == ZTypeType.GENERIC_PARAM
+                            and rt.name in generic_args
+                        ):
+                            new_func.return_type = generic_args[rt.name]
+                        else:
+                            new_func.return_type = rt
+                    # copy ownership info
+                    new_func.param_ownership = child_type.param_ownership.copy()
+                    new_func.return_ownership = child_type.return_ownership
+                    mono.children[child_name] = new_func
+                    # register the resolved function type
+                    for unitname_key in self.program.units:
+                        fkey = f"{unitname_key}.{mangled}.{child_name}"
+                        self._resolved[fkey] = new_func
+                        break
+
+        if not is_partial and isinstance(defn, zast.Unit):
+            self.unit_types[mangled] = mono
+            cloned_methods: dict[str, zast.Function] = {}
+            for dname, ddefn in defn.body.items():
+                if dname in template_type.generic_params:
+                    continue  # skip generic param declarations
+                if isinstance(ddefn, zast.Function) and ddefn.body:
+                    qualified = f"{mangled}.{dname}"
+                    cloned = clone_function(ddefn)
+                    # define generic param names as concrete types in symtab
+                    # so _check_function_body resolves them during param checking
+                    self.symtab.push(f"unitgeneric:{mangled}")
+                    for gp_name, concrete_type in generic_args.items():
+                        self.symtab.define(gp_name, concrete_type)
+                    self._check_function_body(qualified, cloned)
+                    self.symtab.pop()
+                    func_hash = zasthash.hash_function(cloned)
+                    if func_hash in self._func_hashes:
+                        canonical_name, canonical_func = self._func_hashes[func_hash]
+                        self._func_aliases[qualified] = canonical_name
+                        cloned_methods[dname] = canonical_func
+                    else:
+                        self._func_hashes[func_hash] = (qualified, cloned)
+                        cloned_methods[dname] = cloned
+            if cloned_methods:
+                self._cloned_methods[mangled] = cloned_methods
+
         # clone, typecheck, hash, and dedup method bodies for non-partial monos
         cloned_defn = defn
         if not is_partial and isinstance(
@@ -2762,6 +2875,10 @@ class TypeChecker:
             defn = unit.body.get(template_type.name)
             if defn is not None:
                 return defn
+        # check if the template is a file unit itself
+        file_unit = self.program.units.get(template_type.name)
+        if file_unit is not None:
+            return file_unit
         return None
 
     def _infer_generic_union_construction(
@@ -3250,8 +3367,16 @@ class TypeChecker:
 
         # .each on integer types: synthesize iteration method
         _INTEGER_TYPES = {
-            "i8", "i16", "i32", "i64", "i128",
-            "u8", "u16", "u32", "u64", "u128",
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "i128",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "u128",
         }
         if child_name == "each":
             parent_type = self._check_path(path.parent)
@@ -3458,6 +3583,15 @@ class TypeChecker:
             call.type = callee_type
             call.call_kind = zast.CallKind.UNION_CREATE
             return callee_type
+
+        # generic unit instantiation: (mathops t: i64) → monomorphized unit
+        if callee_type.typetype == ZTypeType.UNIT and callee_type.isgeneric:
+            mono = self._resolve_typeref_call(call)
+            if mono:
+                call.type = mono
+                call.call_kind = zast.CallKind.UNIT_INSTANTIATE
+                return mono
+            return None
 
         if callee_type.typetype != ZTypeType.FUNCTION:
             self._error(
@@ -4105,6 +4239,28 @@ class TypeChecker:
         self.symtab.pop()
         return result_type
 
+    # system/library units that should not be resolved as generic file units
+    _SYSTEM_UNITS = {"core", "system", "io", "collections"}
+
+    def _ensure_file_unit_resolved(self, unitname: str) -> Optional[ZType]:
+        """Ensure a file unit has been fully resolved (generic params detected).
+
+        File units get bare ZTypes in __init__. This method triggers full
+        resolution via _resolve_inline_unit_type on first access.
+        Skips system/library units which are handled by the standard pipeline.
+        """
+        if unitname in self._resolved_file_units:
+            return self.unit_types.get(unitname)
+        if unitname not in self.program.units:
+            return None
+        if unitname in self._SYSTEM_UNITS:
+            return self.unit_types.get(unitname)
+        self._resolved_file_units.add(unitname)
+        file_unit = self.program.units[unitname]
+        # replace the bare ZType with a fully resolved one
+        utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
+        return utype
+
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""
         return (
@@ -4165,10 +4321,7 @@ class TypeChecker:
             if fornode.loop.statements:
                 last = fornode.loop.statements[-1].statementline
                 if isinstance(last, zast.Expression):
-                    inner_type = (
-                        last.type
-                        or getattr(last.expression, "type", None)
-                    )
+                    inner_type = last.type or getattr(last.expression, "type", None)
                     if inner_type:
                         elem_type = inner_type
         # release for-loop locks

@@ -301,6 +301,7 @@ class CEmitter:
         # field info per type name (for meta.create calls)
         self._type_field_ctypes: Dict[str, List[str]] = {}
         self._type_field_names: Dict[str, List[str]] = {}
+        self._unit_aliases: Dict[str, ZType] = {}  # compile-time unit instantiation aliases
         self._type_field_defaults: Dict[str, Dict[str, str]] = {}
         # scope and temp state stacks (pushed/popped at function and statement boundaries)
         self._scope_stack: List[ScopeState] = [ScopeState()]
@@ -518,6 +519,8 @@ class CEmitter:
             items = defn.parameters
         elif isinstance(defn, zast.Protocol):
             items = defn.parameters
+        elif isinstance(defn, zast.Unit):
+            items = defn.body
         if items is None:
             return False
         for fpath in items.values():
@@ -786,6 +789,9 @@ class CEmitter:
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", self.program.mainunitname):
+                continue
+            # skip generic file unit templates (emitted via mono_types)
+            if self._is_generic_template(unit):
                 continue
             for name, defn in unit.body.items():
                 if isinstance(defn, zast.Function) and defn.body:
@@ -1605,6 +1611,33 @@ class CEmitter:
             self._emit_mono_class(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.PROTOCOL:
             self._emit_mono_protocol(mono_type, template_defn)
+        elif mono_type.typetype == ZTypeType.UNIT:
+            self._emit_mono_unit(mono_type, template_defn)
+
+    def _emit_mono_unit(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized unit: emit its function definitions."""
+        mangled = mono_type.name
+        cloned_methods = getattr(self.program, "cloned_methods", {}).get(mangled, {})
+        if not isinstance(template_defn, zast.Unit):
+            return
+        for dname, ddefn in template_defn.body.items():
+            if dname in (template_defn.body.keys() - cloned_methods.keys()):
+                # skip generic param declarations and non-function items
+                pass
+            if dname in cloned_methods:
+                func = cloned_methods[dname]
+                qualified = f"{mangled}.{dname}"
+                # check for func alias (deduplication)
+                aliases = getattr(self.program, "func_aliases", {})
+                if qualified in aliases:
+                    # already emitted via canonical name; emit typedef alias
+                    canonical = aliases[qualified]
+                    self._func_aliases[qualified] = canonical
+                else:
+                    self._emit_func_typedef(qualified, func)
+                    self._emit_function(qualified, func)
 
     def _emit_mono_union(
         self, mono_type: ZType, template_defn: zast.TypeDefinition
@@ -2668,6 +2701,11 @@ class CEmitter:
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
+        # unit instantiation is compile-time only — no C code needed
+        if assign.type and assign.type.typetype == ZTypeType.UNIT:
+            # register the unit alias so dotted path resolution works
+            self._unit_aliases[assign.name] = assign.type
+            return ""
         ctype = "int64_t"
         if assign.type:
             ctype = _ctype(assign.type)
@@ -3307,6 +3345,9 @@ class CEmitter:
 
     def _get_callable_name(self, path: zast.Path) -> str:
         if isinstance(path, zast.AtomId):
+            # resolve unit aliases to their actual type name
+            if path.name in self._unit_aliases:
+                return self._unit_aliases[path.name].name
             return path.name
         if isinstance(path, zast.DottedPath):
             parent = self._get_callable_name(path.parent)
@@ -4461,7 +4502,9 @@ class CEmitter:
         init_vars: List[str] = []
         cond_exprs: List[str] = []
         # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_type)
-        iter_bindings: List[Tuple[str, zast.Operation, str, str, str, Optional[str]]] = []
+        iter_bindings: List[
+            Tuple[str, zast.Operation, str, str, str, Optional[str]]
+        ] = []
         # each bindings: (name, limit_expr, from_expr, elem_ctype) — optimized C for loop
         each_bindings: List[Tuple[str, str, str, str]] = []
 
@@ -4477,11 +4520,16 @@ class CEmitter:
                 if isinstance(actual_op, (zast.DottedPath, zast.Call)):
                     each_path = None
                     from_val = "0"
-                    if isinstance(actual_op, zast.DottedPath) and actual_op.child.name == "each":
+                    if (
+                        isinstance(actual_op, zast.DottedPath)
+                        and actual_op.child.name == "each"
+                    ):
                         each_path = actual_op
-                    elif isinstance(actual_op, zast.Call) and isinstance(
-                        actual_op.callable, zast.DottedPath
-                    ) and actual_op.callable.child.name == "each":
+                    elif (
+                        isinstance(actual_op, zast.Call)
+                        and isinstance(actual_op.callable, zast.DottedPath)
+                        and actual_op.callable.child.name == "each"
+                    ):
                         each_path = actual_op.callable
                         for arg in actual_op.arguments:
                             if arg.name == "from" or arg.name is None:
@@ -4489,18 +4537,32 @@ class CEmitter:
                     if each_path:
                         parent_type = each_path.parent.type
                         if parent_type and parent_type.name in {
-                            "i8", "i16", "i32", "i64", "i128",
-                            "u8", "u16", "u32", "u64", "u128",
+                            "i8",
+                            "i16",
+                            "i32",
+                            "i64",
+                            "i128",
+                            "u8",
+                            "u16",
+                            "u32",
+                            "u64",
+                            "u128",
                         }:
                             limit_val = self._emit_path_value(each_path.parent)
                             elem_ctype = _ctype(parent_type)
-                            each_bindings.append((name, limit_val, from_val, elem_ctype))
+                            each_bindings.append(
+                                (name, limit_val, from_val, elem_ctype)
+                            )
                             is_each = True
 
                 if not is_each:
                     t = self._get_operation_type(cond_op)
                     if t:
-                        call_method = t.children.get("call") if t.typetype != ZTypeType.FUNCTION else None
+                        call_method = (
+                            t.children.get("call")
+                            if t.typetype != ZTypeType.FUNCTION
+                            else None
+                        )
                         if call_method and call_method.return_type:
                             opt_type = call_method.return_type
                             opt_ctype = _ctype(opt_type)
@@ -4565,7 +4627,14 @@ class CEmitter:
             parts.append(f"{indent}while ({cond_str}) {{\n")
             self.indent_level += 1
             inner = self._indent()
-            for iname, iop, opt_ctype, elem_ctype, opt_name, callable_type in iter_bindings:
+            for (
+                iname,
+                iop,
+                opt_ctype,
+                elem_ctype,
+                opt_name,
+                callable_type,
+            ) in iter_bindings:
                 if callable_type:
                     obj_val = self._emit_operation_value(iop)
                     call_fn = _mangle_func(f"{callable_type}.call")
@@ -4575,8 +4644,12 @@ class CEmitter:
                 none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                 tmp = f"__iter_{_mangle_var(iname)}"
                 parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
-                parts.append(f"{inner}if ({tmp}->tag == {none_tag}) {{ free({tmp}); break; }}\n")
-                parts.append(f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}->data;\n")
+                parts.append(
+                    f"{inner}if ({tmp}->tag == {none_tag}) {{ free({tmp}); break; }}\n"
+                )
+                parts.append(
+                    f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}->data;\n"
+                )
                 parts.append(f"{inner}free({tmp});\n")
             if fornode.loop:
                 parts.append(self._emit_for_body(fornode))

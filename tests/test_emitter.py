@@ -261,11 +261,7 @@ class TestEmitterBasic:
     def test_for_each_literal(self):
         """for x: 3.each — iterates with literal."""
         csource = emit_source(
-            "main: function is {\n"
-            "  for x: 3.each loop {\n"
-            '    print "\\{x}"\n'
-            "  }\n"
-            "}"
+            'main: function is {\n  for x: 3.each loop {\n    print "\\{x}"\n  }\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "0\n1\n2"
@@ -309,6 +305,94 @@ class TestEmitterBasic:
         )
         output = compile_and_run(csource)
         assert output.strip() == "3\n0\n2\n4"
+
+    def test_generic_unit(self):
+        """Generic unit instantiation with function."""
+        csource = emit_source(
+            "mathops: unit as {\n"
+            "  t: any.generic\n"
+            "  add: function {a: t b: t} out t is { return a + b }\n"
+            "}\n"
+            "main: function is {\n"
+            "  intmath: (mathops t: i64)\n"
+            "  result: intmath.add a: 3 b: 5\n"
+            '  print "\\{result}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "8"
+
+    def test_generic_unit_multiple_instantiations(self):
+        """Same generic unit instantiated with different types."""
+        csource = emit_source(
+            "ops: unit as {\n"
+            "  t: any.generic\n"
+            "  double: function {v: t} out t is { return v + v }\n"
+            "}\n"
+            "main: function is {\n"
+            "  iops: (ops t: i64)\n"
+            "  i32ops: (ops t: i32)\n"
+            '  print "\\{iops.double 21}"\n'
+            '  print "\\{i32ops.double 16.i32}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42\n32"
+
+    def test_generic_unit_multiple_functions(self):
+        """Generic unit with multiple functions."""
+        csource = emit_source(
+            "utils: unit as {\n"
+            "  t: any.generic\n"
+            "  identity: function {v: t} out t is { return v }\n"
+            "  sum: function {a: t b: t} out t is { return a + b }\n"
+            "}\n"
+            "main: function is {\n"
+            "  u: (utils t: i64)\n"
+            '  print "\\{u.identity 99}"\n'
+            '  print "\\{u.sum a: 10 b: 20}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "99\n30"
+
+    def test_generic_file_unit(self):
+        """Generic file unit instantiated from another file."""
+        from zvfs import ZVfs, StringProvider, FSProvider, BindType
+
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        vfs = ZVfs()
+        psystemid = vfs.register(FSProvider(rootpath=lib_dir, parentpath="system"))
+        pmainid = vfs.register(
+            StringProvider(
+                files={
+                    "test.z": (
+                        "main: function is {\n"
+                        "  intmath: (mathutil t: i64)\n"
+                        "  result: intmath.add a: 3 b: 5\n"
+                        '  print "\\{result}"\n'
+                        "}"
+                    ),
+                    "mathutil.z": (
+                        "t: any.generic\n"
+                        "add: function {a: t b: t} out t is { return a + b }\n"
+                    ),
+                }
+            )
+        )
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "test")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], [e.msg for e in errors]
+        csource = zemitterc.emit(program)
+        output = compile_and_run(csource)
+        assert output.strip() == "8"
 
     def test_swap(self):
         csource = emit_source(
