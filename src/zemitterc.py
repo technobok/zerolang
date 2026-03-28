@@ -578,7 +578,9 @@ class CEmitter:
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
-                        proto_name = apath.name if type(apath) == zast.AtomId else None
+                        proto_name = (
+                            apath.name if isinstance(apath, zast.AtomId) else None
+                        )
                         if (
                             proto_name
                             and self._typetype_of(proto_name) == ZTypeType.PROTOCOL
@@ -706,7 +708,9 @@ class CEmitter:
             elif defn_type in (zast.Record, zast.Variant):
                 if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
-                        facet_name = apath.name if type(apath) == zast.AtomId else None
+                        facet_name = (
+                            apath.name if isinstance(apath, zast.AtomId) else None
+                        )
                         if (
                             facet_name
                             and self._typetype_of(facet_name) == ZTypeType.FACET
@@ -1354,10 +1358,10 @@ class CEmitter:
         """Extract C-level default values for fields and function pointer fields."""
         field_defaults: Dict[str, str] = {}
         for fname, fpath in items.items():
-            if type(fpath) == zast.AtomId and _is_numeric_id(fpath.name):
+            if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
                 field_defaults[fname] = self._emit_numeric_literal(fpath.name)
-            elif type(fpath) == zast.DottedPath:
-                if type(fpath.parent) == zast.AtomId and _is_numeric_id(
+            elif isinstance(fpath, zast.DottedPath):
+                if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
                     fpath.parent.name
                 ):
                     child_name = fpath.child.name
@@ -1369,7 +1373,7 @@ class CEmitter:
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
             elif (
-                type(fpath) == zast.AtomId
+                isinstance(fpath, zast.AtomId)
                 and self._typetype_of(fpath.name) == ZTypeType.FUNCTION
             ):
                 field_defaults[fname] = _mangle_func(fpath.name)
@@ -1905,7 +1909,6 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
         if elem_is_reftype:
-            elem_type_name = elem_type.name if elem_type else ""
             if elem_type and elem_type.needs_destructor and elem_type.destructor_name:
                 lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
                 lines.append(f"        {elem_type.destructor_name}(p->data[i]);\n")

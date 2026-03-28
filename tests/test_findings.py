@@ -162,7 +162,7 @@ class TestFinding3DestructorMetadata:
     def test_string_destructor(self):
         program = parse_and_check('main: function is {\n    s: "hello"\n    print s\n}')
         # string type should have destructor metadata
-        t = program.resolved.get("system.string")
+        _ = program.resolved.get("system.string")
         # string might not be in resolved directly; check via a known type
         # use the record field approach
         program2 = parse_and_check(
@@ -265,7 +265,7 @@ class TestFinding7VfsFileTable:
         rootid = vfs.walk()
         rootid = vfs.bind(parentid=rootid, name=None, newid=pid)
         # walk to the file
-        fileid = vfs.walk(path=["test.z"])
+        _ = vfs.walk(path=["test.z"])
         table = vfs.file_table()
         assert len(table) >= 1
         names = [name for _, name in table]
@@ -454,8 +454,7 @@ class TestFinding7SourceMap:
         assert len(mapped) > 0, "No lines mapped to AST nodes"
 
     def test_source_map_boilerplate_is_none(self):
-        csource, emitter = emit_with_emitter('main: function is { print "hello" }')
-        lines = csource.split("\n")
+        _, emitter = emit_with_emitter('main: function is { print "hello" }')
         # first line is a comment, should be None
         assert emitter.source_map[0] is None
 

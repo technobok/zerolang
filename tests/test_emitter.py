@@ -4354,8 +4354,8 @@ class TestConstantFolding:
         csource = emit_source('main: function is {\n  x: 1 + 2\n  print "\\{x}"\n}')
         # the assignment should contain the folded value 3
         # and should NOT contain (1 + 2) or similar
-        lines = [l.strip() for l in csource.split("\n")]
-        assign_lines = [l for l in lines if "= 3;" in l or "= 3 " in l]
+        lines = [ln.strip() for ln in csource.split("\n")]
+        assign_lines = [ln for ln in lines if "= 3;" in ln or "= 3 " in ln]
         assert len(assign_lines) > 0, f"Expected folded '= 3' in C output:\n{csource}"
 
 
