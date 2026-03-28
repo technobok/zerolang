@@ -356,6 +356,27 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "99\n30"
 
+    def test_generic_unit_3level(self):
+        """3-level generic composition: outer unit → inner subunit."""
+        csource = emit_source(
+            "outer: unit as {\n"
+            "  t: any.generic\n"
+            "  inner: unit as {\n"
+            "    u: any.generic\n"
+            "    add_both: function {a: t b: u} out t is { return a + b.i64 }\n"
+            "  }\n"
+            "  add: function {a: t b: t} out t is { return a + b }\n"
+            "}\n"
+            "main: function is {\n"
+            "  iops: (outer t: i64)\n"
+            '  print "\\{iops.add a: 3 b: 5}"\n'
+            "  iops2: (iops.inner u: i32)\n"
+            '  print "\\{iops2.add_both a: 10 b: 5.i32}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "8\n15"
+
     def test_generic_file_unit(self):
         """Generic file unit instantiated from another file."""
         from zvfs import ZVfs, StringProvider, FSProvider, BindType

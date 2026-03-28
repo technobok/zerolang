@@ -2085,9 +2085,12 @@ class TypeChecker:
 
     def _resolve_typeref_call(self, call: zast.Call) -> Optional[ZType]:
         """Resolve a Call in type position: (myrec t: i64) or (myrec t: u)."""
-        if not isinstance(call.callable, zast.AtomId):
+        if isinstance(call.callable, zast.AtomId):
+            template = self._resolve_name(call.callable.name)
+        elif isinstance(call.callable, zast.DottedPath):
+            template = self._check_dotted_path(call.callable)
+        else:
             return None
-        template = self._resolve_name(call.callable.name)
         if not template or not template.isgeneric:
             return None
 
@@ -2789,7 +2792,56 @@ class TypeChecker:
                         self._resolved[fkey] = new_func
                         break
 
+        # for monomorphized units: partially instantiate nested generic subunits
         if not is_partial and isinstance(defn, zast.Unit):
+            for child_name, child_type in list(mono.children.items()):
+                if (
+                    child_type.typetype == ZTypeType.UNIT
+                    and child_type.isgeneric
+                ):
+                    # create a partially-instantiated subunit: substitute
+                    # parent's generic params, keep the subunit's own params
+                    sub_name = f"{mangled}.{child_name}"
+                    sub_unit = _make_type(sub_name, ZTypeType.UNIT)
+                    sub_unit.generic_origin = child_type
+                    # store parent's resolved args for body checking later
+                    sub_unit.generic_args = dict(generic_args)
+                    # copy the subunit's own generic params (not from parent)
+                    for gp_name, gp_constraint in child_type.generic_params.items():
+                        if gp_name not in generic_args:
+                            sub_unit.generic_params[gp_name] = gp_constraint
+                            sub_unit.isgeneric = True
+                    # substitute parent's generic params in subunit's children
+                    for ck, cv in child_type.children.items():
+                        if cv.typetype == ZTypeType.FUNCTION:
+                            new_func = _make_type(
+                                f"{sub_name}.{ck}", ZTypeType.FUNCTION
+                            )
+                            for pk, pv in cv.children.items():
+                                if (
+                                    pv.typetype == ZTypeType.GENERIC_PARAM
+                                    and pv.name in generic_args
+                                ):
+                                    new_func.children[pk] = generic_args[pv.name]
+                                else:
+                                    new_func.children[pk] = pv
+                            if cv.return_type:
+                                rt = cv.return_type
+                                if (
+                                    rt.typetype == ZTypeType.GENERIC_PARAM
+                                    and rt.name in generic_args
+                                ):
+                                    new_func.return_type = generic_args[rt.name]
+                                else:
+                                    new_func.return_type = rt
+                            new_func.param_ownership = cv.param_ownership.copy()
+                            new_func.return_ownership = cv.return_ownership
+                            sub_unit.children[ck] = new_func
+                        else:
+                            sub_unit.children[ck] = cv
+                    mono.children[child_name] = sub_unit
+                    self.unit_types[sub_name] = sub_unit
+
             self.unit_types[mangled] = mono
             cloned_methods: dict[str, zast.Function] = {}
             for dname, ddefn in defn.body.items():
@@ -2800,8 +2852,11 @@ class TypeChecker:
                     cloned = clone_function(ddefn)
                     # define generic param names as concrete types in symtab
                     # so _check_function_body resolves them during param checking
+                    # include parent's resolved args (for nested generic units)
                     self.symtab.push(f"unitgeneric:{mangled}")
-                    for gp_name, concrete_type in generic_args.items():
+                    all_args = dict(getattr(template_type, "generic_args", {}) or {})
+                    all_args.update(generic_args)
+                    for gp_name, concrete_type in all_args.items():
                         self.symtab.define(gp_name, concrete_type)
                     self._check_function_body(qualified, cloned)
                     self.symtab.pop()
@@ -2871,14 +2926,32 @@ class TypeChecker:
 
     def _find_generic_defn(self, template_type: ZType) -> Optional[zast.TypeDefinition]:
         """Find the AST definition node for a generic template type."""
+        name = template_type.name
         for unitname, unit in self.program.units.items():
-            defn = unit.body.get(template_type.name)
+            defn = unit.body.get(name)
             if defn is not None:
                 return defn
         # check if the template is a file unit itself
-        file_unit = self.program.units.get(template_type.name)
+        file_unit = self.program.units.get(name)
         if file_unit is not None:
             return file_unit
+        # for partially-instantiated nested units (e.g., outer_i64.inner):
+        # strip the monomorphized prefix and search in the original template
+        if "." in name:
+            parts = name.rsplit(".", 1)
+            origin = template_type.generic_origin
+            if origin:
+                # the generic origin IS the original definition
+                origin_defn = self._find_generic_defn(origin)
+                if origin_defn is not None:
+                    return origin_defn
+            # also search all unit bodies recursively
+            for unitname, unit in self.program.units.items():
+                for dname, ddefn in unit.body.items():
+                    if isinstance(ddefn, zast.Unit):
+                        inner = ddefn.body.get(parts[1])
+                        if inner is not None:
+                            return inner
         return None
 
     def _infer_generic_union_construction(
