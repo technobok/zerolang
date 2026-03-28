@@ -687,6 +687,7 @@ class CEmitter:
     def _emit_folded_constant(self, name: str, node: zast.Node) -> None:
         """Emit a compile-time folded constant as a static const."""
         v = node.const_value
+        assert v is not None
         self.needs_stdint = True
         cname = _mangle_func(name)
         ctype = "int64_t"
@@ -1428,6 +1429,7 @@ class CEmitter:
         Uses ZType.is_heap_allocated to select stack vs heap allocation.
         If lines is None, appends to self.struct_defs.
         """
+        assert isinstance(defn, (zast.Record, zast.Class))
         ztype = self._resolved_type(name)
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
@@ -1652,7 +1654,9 @@ class CEmitter:
                 if qualified in aliases:
                     # already emitted via canonical name; emit typedef alias
                     canonical = aliases[qualified]
-                    self._func_aliases[qualified] = canonical
+                    alias_c = _mangle_func(qualified)
+                    canon_c = _mangle_func(canonical)
+                    self.func_aliases.append(f"#define {alias_c} {canon_c}\n")
                 else:
                     self._emit_func_typedef(qualified, func)
                     self._emit_function(qualified, func)
@@ -2744,7 +2748,8 @@ class CEmitter:
             self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
         )
         if (
-            inner_resolved
+            isinstance(inner, zast.AtomId)
+            and inner_resolved
             and inner_resolved.typetype == ZTypeType.RECORD
             and inner_resolved.name == inner.name
         ):
@@ -3716,6 +3721,7 @@ class CEmitter:
     def _emit_const_value(self, node: zast.Node) -> str:
         """Emit a compile-time constant value as a C literal."""
         v = node.const_value
+        assert v is not None
         self.needs_stdint = True
         if isinstance(v, bool):
             return "1" if v else "0"
@@ -3767,10 +3773,10 @@ class CEmitter:
         if name in self._const_names:
             return _mangle_func(name)
         # only match user-defined records (not numeric constant aliases like north: 0)
-        if tt == ZTypeType.RECORD and resolved.name == name:
+        if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
             return f"z_{name}_create({zero_args})"
-        if tt == ZTypeType.CLASS and resolved.name == name:
+        if tt == ZTypeType.CLASS and resolved is not None and resolved.name == name:
             self.needs_stdlib = True
             ctype = f"z_{name}_t"
             zero_args = self._zero_args_for_ctypes(name)
@@ -4726,6 +4732,7 @@ class CEmitter:
     def _emit_for_expression_value(self, fornode: zast.For) -> str:
         """Emit for-as-expression (list comprehension): returns a list."""
         list_type = fornode.type
+        assert list_type is not None
         list_ctype = _ctype(list_type)
         list_name = list_type.name
         tmp = self._temp_name("fl")

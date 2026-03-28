@@ -507,33 +507,34 @@ class TypeChecker:
         if resolver_name:
             return getattr(self, resolver_name)(unitname, name, defn)
         # alias: DottedPath reference
-        defn_type = type(defn)
-        if defn_type == zast.DottedPath:
+        if isinstance(defn, zast.DottedPath):
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
             self._resolving.append((key, shell))
             t = self._resolve_dotted_path(defn)
             self._resolving.pop()
             return t
-        if defn_type == zast.LabelValue:
+        if isinstance(defn, zast.LabelValue):
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
             self._resolving.append((key, shell))
             t = self._resolve_name(defn.name, skip_unit_def=(unitname, name))
             self._resolving.pop()
             return t
-        if defn_type == zast.Expression and isinstance(defn.expression, zast.Data):
+        if isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.Data):
             return self._resolve_data_type(unitname, name, defn.expression)
-        if defn_type == zast.Expression and isinstance(defn.expression, zast.If):
+        if isinstance(defn, zast.Expression) and isinstance(defn.expression, zast.If):
             return self._resolve_unit_level_if(unitname, name, defn)
-        if defn_type == zast.Expression and isinstance(defn.expression, zast.Operation):
+        if isinstance(defn, zast.Expression) and isinstance(
+            defn.expression, zast.Operation
+        ):
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
             self._resolving.append((key, shell))
             t = self._check_expression(defn)
             self._resolving.pop()
             return t
-        if defn_type == zast.AtomId:
+        if isinstance(defn, zast.AtomId):
             if _is_numeric_id(defn.name):
                 t = self._resolve_numeric(defn.name, loc=defn.start)
                 # constant folding: set const_value on the definition node
@@ -549,7 +550,7 @@ class TypeChecker:
             self._resolving.pop()
             return t
         # constant folding: handle BinOp at unit level (e.g., b: a + 2)
-        if defn_type == zast.BinOp:
+        if isinstance(defn, zast.BinOp):
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
             self._resolving.append((key, shell))
@@ -2936,7 +2937,7 @@ class TypeChecker:
         if "." in name:
             parts = name.rsplit(".", 1)
             origin = template_type.generic_origin
-            if origin:
+            if origin and isinstance(origin, ZType):
                 # the generic origin IS the original definition
                 origin_defn = self._find_generic_defn(origin)
                 if origin_defn is not None:
@@ -4354,7 +4355,7 @@ class TypeChecker:
         """Check if a type is a monomorphized option type."""
         return (
             t.typetype == ZTypeType.UNION
-            and getattr(t, "generic_origin", None) is not None
+            and isinstance(t.generic_origin, ZType)
             and t.generic_origin.name == "option"
         )
 
