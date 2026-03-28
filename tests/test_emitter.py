@@ -444,6 +444,102 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "8"
 
+    def test_hidden_file_unit(self):
+        """Hidden file unit (subunit in directory) is loaded and callable."""
+        from zvfs import ZVfs, StringProvider, FSProvider, BindType
+
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        vfs = ZVfs()
+        psystemid = vfs.register(FSProvider(rootpath=lib_dir, parentpath="system"))
+        pmainid = vfs.register(
+            StringProvider(
+                files={
+                    "test.z": (
+                        "main: function is {\n"
+                        '  print "\\{mymod.compute 7}"\n'
+                        "}"
+                    ),
+                    "mymod.z": (
+                        "compute: function {n: i64} out i64 is {\n"
+                        "  result: helper.square n\n"
+                        "  return result\n"
+                        "}"
+                    ),
+                    "mymod/helper.z": (
+                        "square: function {n: i64} out i64 is {\n"
+                        "  return n * n\n"
+                        "}"
+                    ),
+                }
+            )
+        )
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "test")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], [e.msg for e in errors]
+        csource = zemitterc.emit(program)
+        output = compile_and_run(csource)
+        assert output.strip() == "49"
+
+    def test_hidden_file_unit_multiple_subunits(self):
+        """Multiple hidden subunits in the same parent unit."""
+        from zvfs import ZVfs, StringProvider, FSProvider, BindType
+
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        vfs = ZVfs()
+        psystemid = vfs.register(FSProvider(rootpath=lib_dir, parentpath="system"))
+        pmainid = vfs.register(
+            StringProvider(
+                files={
+                    "test.z": (
+                        "main: function is {\n"
+                        '  print "\\{mymod.compute 3}"\n'
+                        '  print "\\{mymod.negate 7}"\n'
+                        "}"
+                    ),
+                    "mymod.z": (
+                        "compute: function {n: i64} out i64 is {\n"
+                        "  result: mathhelp.square n\n"
+                        "  return result\n"
+                        "}\n"
+                        "negate: function {n: i64} out i64 is {\n"
+                        "  result: signhelp.neg n\n"
+                        "  return result\n"
+                        "}"
+                    ),
+                    "mymod/mathhelp.z": (
+                        "square: function {n: i64} out i64 is {\n"
+                        "  return n * n\n"
+                        "}"
+                    ),
+                    "mymod/signhelp.z": (
+                        "neg: function {n: i64} out i64 is {\n"
+                        "  return 0 - n\n"
+                        "}"
+                    ),
+                }
+            )
+        )
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "test")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], [e.msg for e in errors]
+        csource = zemitterc.emit(program)
+        output = compile_and_run(csource)
+        assert output.strip() == "9\n-7"
+
     def test_swap(self):
         csource = emit_source(
             'main: function is {\n  a: 1\n  b: 2\n  a swap b\n  print "\\{a} \\{b}"\n}'

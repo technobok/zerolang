@@ -504,6 +504,10 @@ class CEmitter:
                 func_name = ftype.name
                 if func_name in self._is_func_fields:
                     return self._emit_dotted_path_value(call.callable)
+                # use the resolved type name for proper qualification
+                # (handles subunit functions like mymod.helper.square)
+                if "." in func_name:
+                    return _mangle_func(func_name)
         callable_name = self._get_callable_name(call.callable)
         return self._mangle_callable(callable_name)
 
@@ -597,6 +601,17 @@ class CEmitter:
             elif hasattr(defn, "const_value") and defn.const_value is not None:
                 # unit-level expression that folded to a constant
                 self._const_names.add(qname)
+
+    def _emit_file_unit_functions(self, prefix: str, body: dict) -> None:
+        """Emit functions from a file unit body, recursing into subunits."""
+        for name, defn in body.items():
+            qname = f"{prefix}.{name}"
+            if isinstance(defn, zast.Function) and defn.body:
+                self._current_node_id = defn.nodeid
+                self._emit_function(qname, defn)
+            elif isinstance(defn, zast.Unit):
+                if not self._is_generic_template(defn):
+                    self._emit_file_unit_functions(qname, defn.body)
 
     def _pre_register_fields(self, prefix: str, body: dict) -> None:
         """Pre-register field names/ctypes for all records and classes.
@@ -793,10 +808,7 @@ class CEmitter:
             # skip generic file unit templates (emitted via mono_types)
             if self._is_generic_template(unit):
                 continue
-            for name, defn in unit.body.items():
-                if isinstance(defn, zast.Function) and defn.body:
-                    self._current_node_id = defn.nodeid
-                    self._emit_function(f"{unitname}.{name}", defn)
+            self._emit_file_unit_functions(unitname, unit.body)
 
         # assemble output
         parts: List[str] = []
