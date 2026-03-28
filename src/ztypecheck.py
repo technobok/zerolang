@@ -2520,10 +2520,10 @@ class TypeChecker:
                 child_type.isgeneric
                 and isinstance(child_type.generic_origin, ZType)
                 and not is_partial
-                # skip UNIT children — handled by _partial_instantiate_subunits
                 and child_type.typetype != ZTypeType.UNIT
             ):
-                # partially-instantiated child — resolve remaining generic params
+                # partially-instantiated non-unit child — resolve remaining generic params
+                # (UNIT children are handled by _monomorphize_unit)
                 child_args: dict[str, ZType] = {}
                 for gp_name, gp_arg in child_type.generic_args.items():
                     if (
@@ -2758,73 +2758,11 @@ class TypeChecker:
             if "create" not in mono.children:
                 mono.children["create"] = create_type
 
-        # for monomorphized units: substitute generic params in function children,
-        # register in unit_types, and clone function bodies
+        # for monomorphized units: all UNIT-specific work in one method
         if not is_partial and isinstance(defn, zast.Unit):
-            # functions inside unit have generic params as their parameter/return types
-            # we need to create new function types with concrete substitutions
-            for child_name, child_type in list(mono.children.items()):
-                if child_type.typetype == ZTypeType.FUNCTION:
-                    new_func = _make_type(f"{mangled}.{child_name}", ZTypeType.FUNCTION)
-                    for pk, pv in child_type.children.items():
-                        if (
-                            pv.typetype == ZTypeType.GENERIC_PARAM
-                            and pv.name in generic_args
-                        ):
-                            new_func.children[pk] = generic_args[pv.name]
-                        else:
-                            new_func.children[pk] = pv
-                    # substitute return type
-                    if child_type.return_type:
-                        rt = child_type.return_type
-                        if (
-                            rt.typetype == ZTypeType.GENERIC_PARAM
-                            and rt.name in generic_args
-                        ):
-                            new_func.return_type = generic_args[rt.name]
-                        else:
-                            new_func.return_type = rt
-                    # copy ownership info
-                    new_func.param_ownership = child_type.param_ownership.copy()
-                    new_func.return_ownership = child_type.return_ownership
-                    mono.children[child_name] = new_func
-                    # register the resolved function type
-                    for unitname_key in self.program.units:
-                        fkey = f"{unitname_key}.{mangled}.{child_name}"
-                        self._resolved[fkey] = new_func
-                        break
-
-        # for monomorphized units: partially instantiate nested generic subunits
-        if not is_partial and isinstance(defn, zast.Unit):
-            self._partial_instantiate_subunits(mono, mangled, generic_args)
-            self.unit_types[mangled] = mono
-            cloned_methods: dict[str, zast.Function] = {}
-            for dname, ddefn in defn.body.items():
-                if dname in template_type.generic_params:
-                    continue  # skip generic param declarations
-                if isinstance(ddefn, zast.Function) and ddefn.body:
-                    qualified = f"{mangled}.{dname}"
-                    cloned = clone_function(ddefn)
-                    # define generic param names as concrete types in symtab
-                    # so _check_function_body resolves them during param checking
-                    # include parent's resolved args (for nested generic units)
-                    self.symtab.push(f"unitgeneric:{mangled}")
-                    all_args = dict(getattr(template_type, "generic_args", {}) or {})
-                    all_args.update(generic_args)
-                    for gp_name, concrete_type in all_args.items():
-                        self.symtab.define(gp_name, concrete_type)
-                    self._check_function_body(qualified, cloned)
-                    self.symtab.pop()
-                    func_hash = zasthash.hash_function(cloned)
-                    if func_hash in self._func_hashes:
-                        canonical_name, canonical_func = self._func_hashes[func_hash]
-                        self._func_aliases[qualified] = canonical_name
-                        cloned_methods[dname] = canonical_func
-                    else:
-                        self._func_hashes[func_hash] = (qualified, cloned)
-                        cloned_methods[dname] = cloned
-            if cloned_methods:
-                self._cloned_methods[mangled] = cloned_methods
+            self._monomorphize_unit(
+                mono, mangled, template_type, generic_args, defn
+            )
 
         # clone, typecheck, hash, and dedup method bodies for non-partial monos
         cloned_defn = defn
@@ -2879,14 +2817,91 @@ class TypeChecker:
 
         return mono
 
-    def _partial_instantiate_subunits(
+    def _substitute_func_type(
+        self,
+        name: str,
+        func_type: ZType,
+        args: dict[str, ZType],
+    ) -> ZType:
+        """Create a new function type with generic params substituted."""
+        new_func = _make_type(name, ZTypeType.FUNCTION)
+        for pk, pv in func_type.children.items():
+            if pv.typetype == ZTypeType.GENERIC_PARAM and pv.name in args:
+                new_func.children[pk] = args[pv.name]
+            else:
+                new_func.children[pk] = pv
+        if func_type.return_type:
+            rt = func_type.return_type
+            if rt.typetype == ZTypeType.GENERIC_PARAM and rt.name in args:
+                new_func.return_type = args[rt.name]
+            else:
+                new_func.return_type = rt
+        new_func.param_ownership = func_type.param_ownership.copy()
+        new_func.return_ownership = func_type.return_ownership
+        return new_func
+
+    def _monomorphize_unit(
+        self,
+        mono: ZType,
+        mangled: str,
+        template_type: ZType,
+        generic_args: dict[str, ZType],
+        defn: zast.Unit,
+    ) -> None:
+        """Complete monomorphization of a UNIT type.
+
+        Handles: function child substitution, recursive partial instantiation
+        of nested generic subunits, function body cloning and type-checking.
+        """
+        # 1. substitute generic params in function children
+        for child_name, child_type in list(mono.children.items()):
+            if child_type.typetype == ZTypeType.FUNCTION:
+                new_func = self._substitute_func_type(
+                    f"{mangled}.{child_name}", child_type, generic_args
+                )
+                mono.children[child_name] = new_func
+                for unitname_key in self.program.units:
+                    self._resolved[f"{unitname_key}.{mangled}.{child_name}"] = new_func
+                    break
+
+        # 2. recursively partially instantiate nested generic subunits
+        self._partially_instantiate_subunits(mono, mangled, generic_args)
+
+        # 3. register and clone function bodies
+        self.unit_types[mangled] = mono
+        cloned_methods: dict[str, zast.Function] = {}
+        all_args = dict(getattr(template_type, "generic_args", {}) or {})
+        all_args.update(generic_args)
+        for dname, ddefn in defn.body.items():
+            if dname in template_type.generic_params:
+                continue
+            if isinstance(ddefn, zast.Function) and ddefn.body:
+                qualified = f"{mangled}.{dname}"
+                cloned = clone_function(ddefn)
+                self.symtab.push(f"unitgeneric:{mangled}")
+                for gp_name, concrete_type in all_args.items():
+                    self.symtab.define(gp_name, concrete_type)
+                self._check_function_body(qualified, cloned)
+                self.symtab.pop()
+                func_hash = zasthash.hash_function(cloned)
+                if func_hash in self._func_hashes:
+                    canonical_name, canonical_func = self._func_hashes[func_hash]
+                    self._func_aliases[qualified] = canonical_name
+                    cloned_methods[dname] = canonical_func
+                else:
+                    self._func_hashes[func_hash] = (qualified, cloned)
+                    cloned_methods[dname] = cloned
+        if cloned_methods:
+            self._cloned_methods[mangled] = cloned_methods
+
+    def _partially_instantiate_subunits(
         self, parent: ZType, parent_name: str, args: dict[str, ZType]
     ) -> None:
         """Recursively partially instantiate nested generic subunits.
 
-        Substitutes the parent's concrete generic args into each child subunit's
-        functions, while keeping the subunit's own generic params unresolved.
-        Works to arbitrary depth.
+        For each generic UNIT child, substitute the parent's concrete args
+        into its function children while keeping its own generic params.
+        Recurses to arbitrary depth.
         """
         for child_name, child_type in list(parent.children.items()):
             if child_type.typetype != ZTypeType.UNIT or not child_type.isgeneric:
@@ -2894,38 +2909,22 @@ class TypeChecker:
             sub_name = f"{parent_name}.{child_name}"
             sub_unit = _make_type(sub_name, ZTypeType.UNIT)
             sub_unit.generic_origin = child_type
-            # accumulate all resolved args (parent chain + current)
             sub_unit.generic_args = dict(getattr(child_type, "generic_args", {}) or {})
             sub_unit.generic_args.update(args)
-            # keep the subunit's own generic params (those not resolved by parent)
             for gp_name, gp_constraint in child_type.generic_params.items():
                 if gp_name not in args:
                     sub_unit.generic_params[gp_name] = gp_constraint
                     sub_unit.isgeneric = True
-            # substitute parent's generic params in subunit's children
             for ck, cv in child_type.children.items():
                 if cv.typetype == ZTypeType.FUNCTION:
-                    new_func = _make_type(f"{sub_name}.{ck}", ZTypeType.FUNCTION)
-                    for pk, pv in cv.children.items():
-                        if pv.typetype == ZTypeType.GENERIC_PARAM and pv.name in args:
-                            new_func.children[pk] = args[pv.name]
-                        else:
-                            new_func.children[pk] = pv
-                    if cv.return_type:
-                        rt = cv.return_type
-                        if rt.typetype == ZTypeType.GENERIC_PARAM and rt.name in args:
-                            new_func.return_type = args[rt.name]
-                        else:
-                            new_func.return_type = rt
-                    new_func.param_ownership = cv.param_ownership.copy()
-                    new_func.return_ownership = cv.return_ownership
-                    sub_unit.children[ck] = new_func
+                    sub_unit.children[ck] = self._substitute_func_type(
+                        f"{sub_name}.{ck}", cv, args
+                    )
                 else:
                     sub_unit.children[ck] = cv
             parent.children[child_name] = sub_unit
             self.unit_types[sub_name] = sub_unit
-            # recurse into the subunit's children for deeper nesting
-            self._partial_instantiate_subunits(sub_unit, sub_name, args)
+            self._partially_instantiate_subunits(sub_unit, sub_name, args)
 
     def _find_generic_defn(self, template_type: ZType) -> Optional[zast.TypeDefinition]:
         """Find the AST definition node for a generic template type."""
