@@ -6,7 +6,7 @@ Includes ownership-based memory management for strings (ZStr*).
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 
 import zast
 from ztypes import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
@@ -301,7 +301,9 @@ class CEmitter:
         # field info per type name (for meta.create calls)
         self._type_field_ctypes: Dict[str, List[str]] = {}
         self._type_field_names: Dict[str, List[str]] = {}
-        self._unit_aliases: Dict[str, ZType] = {}  # compile-time unit instantiation aliases
+        self._unit_aliases: Dict[
+            str, ZType
+        ] = {}  # compile-time unit instantiation aliases
         self._type_field_defaults: Dict[str, Dict[str, str]] = {}
         # scope and temp state stacks (pushed/popped at function and statement boundaries)
         self._scope_stack: List[ScopeState] = [ScopeState()]

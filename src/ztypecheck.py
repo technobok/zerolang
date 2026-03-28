@@ -1893,11 +1893,7 @@ class TypeChecker:
                 utype.children[dname] = t
             # check function bodies inside inline units (skip for generic units —
             # bodies will be checked after monomorphization)
-            if (
-                not utype.isgeneric
-                and isinstance(ddefn, zast.Function)
-                and ddefn.body
-            ):
+            if not utype.isgeneric and isinstance(ddefn, zast.Function) and ddefn.body:
                 self._check_function_body(f"{name}.{dname}", ddefn)
 
         if utype.isgeneric:
@@ -2760,9 +2756,7 @@ class TypeChecker:
 
         # for monomorphized units: all UNIT-specific work in one method
         if not is_partial and isinstance(defn, zast.Unit):
-            self._monomorphize_unit(
-                mono, mangled, template_type, generic_args, defn
-            )
+            self._monomorphize_unit(mono, mangled, template_type, generic_args, defn)
 
         # clone, typecheck, hash, and dedup method bodies for non-partial monos
         cloned_defn = defn

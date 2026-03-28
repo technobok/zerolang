@@ -454,11 +454,7 @@ class TestEmitterBasic:
         pmainid = vfs.register(
             StringProvider(
                 files={
-                    "test.z": (
-                        "main: function is {\n"
-                        '  print "\\{mymod.compute 7}"\n'
-                        "}"
-                    ),
+                    "test.z": ('main: function is {\n  print "\\{mymod.compute 7}"\n}'),
                     "mymod.z": (
                         "compute: function {n: i64} out i64 is {\n"
                         "  result: helper.square n\n"
@@ -466,9 +462,7 @@ class TestEmitterBasic:
                         "}"
                     ),
                     "mymod/helper.z": (
-                        "square: function {n: i64} out i64 is {\n"
-                        "  return n * n\n"
-                        "}"
+                        "square: function {n: i64} out i64 is {\n  return n * n\n}"
                     ),
                 }
             )
@@ -514,14 +508,10 @@ class TestEmitterBasic:
                         "}"
                     ),
                     "mymod/mathhelp.z": (
-                        "square: function {n: i64} out i64 is {\n"
-                        "  return n * n\n"
-                        "}"
+                        "square: function {n: i64} out i64 is {\n  return n * n\n}"
                     ),
                     "mymod/signhelp.z": (
-                        "neg: function {n: i64} out i64 is {\n"
-                        "  return 0 - n\n"
-                        "}"
+                        "neg: function {n: i64} out i64 is {\n  return 0 - n\n}"
                     ),
                 }
             )
