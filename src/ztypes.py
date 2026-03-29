@@ -187,6 +187,10 @@ class ZType:
     # resolution when public: unit { ... } is declared in the as block.
     public_members: "Optional[dict[str, str]]" = field(default=None, init=False)
 
+    # fields declared with .private type: set of field names that grant private
+    # access to the referenced type. Set during type resolution.
+    private_fields: "set[str]" = field(default_factory=set, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.
@@ -237,6 +241,8 @@ class ZVariable:
     locks: List[LockEntry] = field(default_factory=list)
     # names of variables this variable holds locks on (for cleanup on scope exit)
     held_locks: List[str] = field(default_factory=list)
+    # private access: variable declared with .private type, bypasses public_members
+    is_private_access: bool = False
 
 
 class TypeTable:

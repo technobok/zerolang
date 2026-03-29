@@ -252,6 +252,8 @@ class TypeChecker:
 
         # pending borrow lock: set by .borrow, consumed by _check_assignment
         self._pending_borrow_lock: Optional[str] = None
+        # pending private access: set by .private, consumed by _check_assignment
+        self._pending_private_access: bool = False
 
         # inline unit context stack: tracks nesting during resolution
         # each entry is (unitname, zast.Unit) for name lookup chain
@@ -910,6 +912,9 @@ class TypeChecker:
                 continue
             if ft:
                 ctype.children[fname] = ft
+                # detect .private field type (friend access)
+                if isinstance(fpath, zast.DottedPath) and fpath.child.name == "private":
+                    ctype.private_fields.add(fname)
                 # detect field defaults
                 if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
                     _, val, err = parse_number(fpath.name)
@@ -2382,6 +2387,10 @@ class TypeChecker:
             # .lock is an alias for .borrow (borrowed reference / explicit lock)
             path.type = parent_type
             return parent_type
+        if child_name == "private":
+            # .private grants access to all members (friend access)
+            path.type = parent_type
+            return parent_type
         # numeric type casting: x.u32 where x is a numeric type
         _NUMERIC_NAMES = set(NUMERIC_RANGES) | {"f32", "f64", "f128"}
         if child_name in _NUMERIC_NAMES and parent_type.name in _NUMERIC_NAMES:
@@ -3424,18 +3433,23 @@ class TypeChecker:
 
     def _check_assignment(self, assign: zast.Assignment) -> None:
         self._pending_borrow_lock = None
+        self._pending_private_access = False
         t = self._check_expression(assign.value)
         self._check_exhaustive_if(assign.value)
         if t:
             # check if this assignment is from a .borrow call
             borrow_target = self._pending_borrow_lock
             self._pending_borrow_lock = None
+            # check if this assignment is from a .private expression
+            private_access = self._pending_private_access
+            self._pending_private_access = False
 
             if borrow_target:
                 # the new variable is borrowed and holds an exclusive lock on the target
                 var = ZVariable(
                     ztype=t, ownership=ZOwnership.BORROWED, named=ZNaming.NAMED
                 )
+                var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
                 err = self.symtab.try_lock(
                     borrow_target, ZLockState.EXCLUSIVE, assign.name
@@ -3447,6 +3461,7 @@ class TypeChecker:
                 var = ZVariable(
                     ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED
                 )
+                var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
             assign.type = t
 
@@ -3651,6 +3666,27 @@ class TypeChecker:
             if parent_type:
                 if isinstance(path.parent, zast.AtomId):
                     self._pending_borrow_lock = path.parent.name
+                path.type = parent_type
+            return parent_type
+
+        # handle .private (friend access)
+        if child_name == "private":
+            parent_type = self._check_path(path.parent)
+            if parent_type:
+                # enforce: only internal access can use .private
+                if not self._is_internal_access(parent_type, path):
+                    # also allow if the variable itself has private access
+                    # (chained friend: it.items.private where items is bag.private)
+                    root_var = self._get_path_root_var(path.parent)
+                    if not (root_var and root_var.is_private_access):
+                        self._error(
+                            f"Cannot access '{parent_type.name}.private' from outside "
+                            f"the type definition",
+                            loc=path.start,
+                            err=ERR.TYPEERROR,
+                            hint="only methods of the type or friend types can use .private",
+                        )
+                self._pending_private_access = True
                 path.type = parent_type
             return parent_type
 
@@ -4563,6 +4599,14 @@ class TypeChecker:
         utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
         return utype
 
+    def _get_path_root_var(self, path: zast.Path) -> Optional[ZVariable]:
+        """Get the ZVariable for the root of a path expression (if any)."""
+        if isinstance(path, zast.AtomId):
+            return self.symtab.lookup_var(path.name)
+        if isinstance(path, zast.DottedPath):
+            return self._get_path_root_var(path.parent)
+        return None
+
     def _is_internal_access(self, parent_type: ZType, path: zast.DottedPath) -> bool:
         """Check if access is from inside the type definition (private access)."""
         if isinstance(path.parent, zast.AtomId) and path.parent.name == "this":
@@ -4588,6 +4632,18 @@ class TypeChecker:
             return False  # tag accessor always accessible
         if self._is_internal_access(parent_type, path):
             return False
+        # friend access: variable declared with .private type bypasses restrictions
+        root_var = self._get_path_root_var(path.parent)
+        if root_var and root_var.is_private_access:
+            return False
+        # friend access via .private field: it.items.field where items is a private_field
+        if isinstance(path.parent, zast.DottedPath):
+            grandparent_type = path.parent.parent.type if path.parent.parent else None
+            if (
+                grandparent_type
+                and path.parent.child.name in grandparent_type.private_fields
+            ):
+                return False
         # external access: check public_members (keys are external names)
         return child_name not in parent_type.public_members
 

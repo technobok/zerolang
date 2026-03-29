@@ -4855,3 +4855,69 @@ class TestNativeTypeCheck:
     def test_error_function_native(self):
         """error function (native) resolves and type-checks."""
         check_ok('main: function is { error "test" }')
+
+
+class TestPrivateFriendAccess:
+    """Tests for .private friend access mechanism."""
+
+    def test_private_field_type_grants_access(self):
+        """A field declared as mytype.private grants private access."""
+        check_ok(
+            "bag: class { secret: i64 } as { public: unit {} }\n"
+            "reader: class { src: bag.private } as {\n"
+            "  read: function {r: this} out i64 is { return r.src.secret }\n"
+            "}\n"
+            "main: function is { b: bag secret: 42\n"
+            "  r: reader src: b.take\n"
+            '  print "\\{reader.read r: r}" }'
+        )
+
+    def test_external_private_access_blocked(self):
+        """External code cannot use .private to bypass access control."""
+        errors = check_errors(
+            "bag: class { secret: i64 } as { public: unit {} }\n"
+            "main: function is { b: bag secret: 42\n"
+            "  x: b.private }"
+        )
+        assert any("private" in e.msg.lower() for e in errors)
+
+    def test_external_private_access_has_hint(self):
+        """Error for external .private includes a helpful hint."""
+        errors = check_errors(
+            "bag: class { secret: i64 } as { public: unit {} }\n"
+            "main: function is { b: bag secret: 42\n"
+            "  x: b.private }"
+        )
+        priv_errors = [e for e in errors if "private" in e.msg.lower()]
+        assert len(priv_errors) > 0
+        assert priv_errors[0].hint is not None
+
+    def test_direct_field_access_still_blocked(self):
+        """Without .private, external code still can't access private fields."""
+        errors = check_errors(
+            "bag: class { secret: i64 } as { public: unit {} }\n"
+            "reader: class { src: bag } as {\n"
+            "  read: function {r: this} out i64 is { return r.src.secret }\n"
+            "}\n"
+            "main: function is { b: bag secret: 42\n"
+            "  r: reader src: b.take\n"
+            '  print "\\{reader.read r: r}" }'
+        )
+        assert any("not public" in e.msg.lower() for e in errors)
+
+    def test_private_via_this_in_method(self):
+        """this.private can be passed from inside the type's own method."""
+        check_ok(
+            "bag: class { val: i64 } as {\n"
+            "  public: unit { :get }\n"
+            "  get: function {self: this} out holder is {\n"
+            "    return holder src: self.private\n"
+            "  }\n"
+            "}\n"
+            "holder: class { src: bag.private } as {\n"
+            "  read: function {h: this} out i64 is { return h.src.val }\n"
+            "}\n"
+            "main: function is { b: bag val: 42\n"
+            "  h: (bag.get self: b)\n"
+            '  print "\\{holder.read h: h}" }'
+        )

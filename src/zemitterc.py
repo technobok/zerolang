@@ -4061,6 +4061,10 @@ class CEmitter:
         if child == "lock":
             return self._emit_path_value(path.parent)
 
+        # .private emits just the variable value (access control at type-check time)
+        if child == "private":
+            return self._emit_path_value(path.parent)
+
         if isinstance(path.parent, zast.AtomId):
             pname = path.parent.name
             # numeric dotted path: 0.u32, 42.i8, 0xff.u16
