@@ -313,14 +313,17 @@ class Tokenizer(ITokenizer):
 
         if colonpre:
             # LABELPRE - return the colon, prefill nexttoken with the label
-            if ttkw:
-                # error - label cannot be a keyword
+            if ttkw or tstr in TTRESERVED:
+                # error - label cannot be a keyword or reserved word
                 self.nexttoken = Token(TT.ERR, tstr, self.fsno, lineno, colno)
             else:
                 self.nexttoken = Token(TT.LABELPRE, tstr, self.fsno, lineno, colno)
             return colonpre
 
         if c == zchar.COLON:
+            if tstr in TTRESERVED:
+                # reserved word followed by colon — return error
+                return Token(TT.ERR, tstr, self.fsno, lineno, colno)
             # LABEL - return the label, prefill nexttoken with colon
             tok = Token(TT.LABEL, tstr, self.fsno, lineno, colno)
             self.nexttoken = Token(TT.COLON, chr(c), self.fsno, self.lineno, self.colno)

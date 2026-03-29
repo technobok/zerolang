@@ -769,6 +769,13 @@ class TestNativeKeyword:
         assert isinstance(func, zast.Function)
         assert func.is_native is True
 
+    def test_native_as_label_parses(self):
+        """native: as a label parses at parser level (type checker catches it)."""
+        result = parse_unit("native: i64")
+        # Parses as a definition — the type checker will reject native in user code
+        body = get_unit_body(result)
+        assert "native" in body
+
     def test_regular_record_not_native(self):
         """A normal record is not marked native."""
         result = parse_unit("r: record { x: i64 }")

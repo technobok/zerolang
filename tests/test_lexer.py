@@ -334,3 +334,45 @@ class TestIsValidUnitName:
         # (valid unit names require at least one char starting with lowercase)
         # This is a known quirk - empty string passes validation
         assert isvalidunitname("") is True
+
+
+class TestKeywordLabelInteraction:
+    """Reserved words cannot be used as labels. Keywords as labels are caught
+    by the type checker (some keywords like 'data' are legitimate field names)."""
+
+    def test_colon_keyword_returns_error(self):
+        """:native should return COLON + ERR (prefix label with keyword)."""
+        tok = make_tokenizer(":native")
+        t1 = tok.token()
+        assert t1.toktype == TT.COLON
+        t2 = tok.token()
+        assert t2.toktype == TT.ERR
+
+    def test_reserved_colon_returns_error(self):
+        """enum: should return ERR token (reserved word as label)."""
+        tok = make_tokenizer("enum:")
+        t = tok.token()
+        assert t.toktype == TT.ERR
+
+    def test_colon_reserved_returns_error(self):
+        """:enum should return COLON + ERR."""
+        tok = make_tokenizer(":enum")
+        t1 = tok.token()
+        assert t1.toktype == TT.COLON
+        t2 = tok.token()
+        assert t2.toktype == TT.ERR
+
+    def test_normal_label_still_works(self):
+        """Regular identifiers followed by colon still produce LABEL."""
+        tok = make_tokenizer("name:")
+        t = tok.token()
+        assert t.toktype == TT.LABEL
+        assert t.tokstr == "name"
+
+    def test_keyword_as_label_produces_label(self):
+        """Keywords followed by colon produce LABEL (caught later by type checker).
+        This is needed because some keywords (data, in, out) are legitimate field names."""
+        tok = make_tokenizer("data:")
+        t = tok.token()
+        assert t.toktype == TT.LABEL
+        assert t.tokstr == "data"
