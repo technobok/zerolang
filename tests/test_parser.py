@@ -680,3 +680,99 @@ class TestExamples:
             pytest.fail(msg)
         assert isinstance(result, zast.Program)
         assert unitname in result.units
+
+
+class TestNativeKeyword:
+    def test_native_function(self):
+        """is native marks a function as compiler-provided."""
+        result = parse_unit("f: function out i64 is native")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.is_native is True
+        assert func.body is None
+
+    def test_native_function_with_params(self):
+        """Native function with parameters."""
+        result = parse_unit("f: function {n: i64} out i64 is native")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.is_native is True
+        assert "n" in func.parameters
+
+    def test_native_not_spec(self):
+        """Native function is distinguishable from a spec."""
+        result = parse_unit("f: function out i64")
+        body = get_unit_body(result)
+        spec = body["f"]
+        assert isinstance(spec, zast.Function)
+        assert spec.is_native is False
+        assert spec.body is None
+
+    def test_native_record(self):
+        """record is native parses as a native record."""
+        result = parse_unit("r: record is native")
+        body = get_unit_body(result)
+        rec = body["r"]
+        assert isinstance(rec, zast.Record)
+        assert rec.is_native is True
+        assert rec.items == {}
+
+    def test_native_record_elided_is(self):
+        """record native (elided is) parses as a native record."""
+        result = parse_unit("r: record native")
+        body = get_unit_body(result)
+        rec = body["r"]
+        assert isinstance(rec, zast.Record)
+        assert rec.is_native is True
+
+    def test_native_class(self):
+        """class is native parses as a native class."""
+        result = parse_unit("c: class is native")
+        body = get_unit_body(result)
+        cls = body["c"]
+        assert isinstance(cls, zast.Class)
+        assert cls.is_native is True
+
+    def test_native_class_with_as(self):
+        """class is native as { ... } parses with native flag and as section."""
+        result = parse_unit("c: class is native as { m: function out i64 is native }")
+        body = get_unit_body(result)
+        cls = body["c"]
+        assert isinstance(cls, zast.Class)
+        assert cls.is_native is True
+        assert "m" in cls.as_functions
+        assert cls.as_functions["m"].is_native is True
+
+    def test_native_union(self):
+        """union is native parses as a native union."""
+        result = parse_unit("u: union is native")
+        body = get_unit_body(result)
+        u = body["u"]
+        assert isinstance(u, zast.Union)
+        assert u.is_native is True
+
+    def test_native_variant(self):
+        """variant is native parses as a native variant."""
+        result = parse_unit("v: variant is native")
+        body = get_unit_body(result)
+        v = body["v"]
+        assert isinstance(v, zast.Variant)
+        assert v.is_native is True
+
+    def test_native_keyword_as_ref(self):
+        """native is a keyword; using it as a reference (not label) parses as keyword."""
+        result = parse_unit("f: function is native")
+        body = get_unit_body(result)
+        func = body["f"]
+        assert isinstance(func, zast.Function)
+        assert func.is_native is True
+
+    def test_regular_record_not_native(self):
+        """A normal record is not marked native."""
+        result = parse_unit("r: record { x: i64 }")
+        body = get_unit_body(result)
+        rec = body["r"]
+        assert isinstance(rec, zast.Record)
+        assert rec.is_native is False

@@ -934,6 +934,7 @@ class Parser:
         localparam: Set[str] = set()
         gotaccept = False  # need this because accept could be empty block
         body: Optional[zast.Statement] = None  # None for spec
+        is_native: bool = False  # True for native (compiler-provided) functions
         externbody: Dict[str, zast.AtomId] = {}  # externs from 'is' function body
         as_body: Optional[ObjectBody] = None  # 'as' clause for generic params
         first = True  # true for first arg only (unnamed arg allowed)
@@ -962,21 +963,27 @@ class Parser:
                 first = False
 
             elif lex.accept(TT.IS):
-                if body:
+                if body or is_native:
                     msg = "Duplicate 'is'"
                     return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
 
-                statement = self._acceptstatement(lex)
-                if statement is None:
-                    msg = "Expected Statement for 'is'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                if lex.accept(TT.NATIVE):
+                    is_native = True
+                    first = False
+                else:
+                    statement = self._acceptstatement(lex)
+                    if statement is None:
+                        msg = "Expected Statement for 'is'"
+                        return zast.Error(
+                            err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany()
+                        )
 
-                if isinstance(statement, zast.Error):
-                    return statement  # propagate any other error
+                    if isinstance(statement, zast.Error):
+                        return statement  # propagate any other error
 
-                body = statement.node
-                externbody = statement.extern
-                first = False
+                    body = statement.node
+                    externbody = statement.extern
+                    first = False
 
             elif lex.accept(TT.AS):
                 if as_body is not None:
@@ -1085,6 +1092,7 @@ class Parser:
             start=start,
             param_ownership=param_ownership,
             return_ownership=return_ownership,
+            is_native=is_native,
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
         )
@@ -1103,19 +1111,20 @@ class Parser:
         if not lex.accept(TT.RECORD):
             return None
 
-        is_body, as_body, extern, err = self._acceptitembodies(
+        is_body, as_body, extern, err, native = self._acceptitembodies(
             lex, allowtag=False, unlabelledpath=True, unlabelledid=False
         )
         if err:
             return err
 
         record = zast.Record(
-            items=is_body.items,
-            implements=is_body.islist,
-            functions=is_body.functions,
+            items=is_body.items if is_body else {},
+            implements=is_body.islist if is_body else [],
+            functions=is_body.functions if is_body else {},
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
             start=start,
+            is_native=native,
         )
         return NodeX(node=record, extern=extern)
 
@@ -1132,19 +1141,20 @@ class Parser:
         if not lex.accept(TT.CLASS):
             return None
 
-        is_body, as_body, extern, err = self._acceptitembodies(
+        is_body, as_body, extern, err, native = self._acceptitembodies(
             lex, allowtag=False, unlabelledpath=True, unlabelledid=False
         )
         if err:
             return err
 
         c = zast.Class(
-            items=is_body.items,
-            implements=is_body.islist,
-            functions=is_body.functions,
+            items=is_body.items if is_body else {},
+            implements=is_body.islist if is_body else [],
+            functions=is_body.functions if is_body else {},
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
             start=start,
+            is_native=native,
         )
         return NodeX(node=c, extern=extern)
 
@@ -1163,20 +1173,21 @@ class Parser:
         if not lex.accept(TT.VARIANT):
             return None
 
-        is_body, as_body, extern, err = self._acceptitembodies(
+        is_body, as_body, extern, err, native = self._acceptitembodies(
             lex, allowtag=True, unlabelledpath=True, unlabelledid=False
         )
         if err:
             return err
 
         variant = zast.Variant(
-            items=is_body.items,
-            implements=is_body.islist,
-            functions=is_body.functions,
-            tag=is_body.tag,
+            items=is_body.items if is_body else {},
+            implements=is_body.islist if is_body else [],
+            functions=is_body.functions if is_body else {},
+            tag=is_body.tag if is_body else None,
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
             start=start,
+            is_native=native,
         )
         return NodeX(node=variant, extern=extern)
 
@@ -1193,20 +1204,21 @@ class Parser:
         if not lex.accept(TT.UNION):
             return None
 
-        is_body, as_body, extern, err = self._acceptitembodies(
+        is_body, as_body, extern, err, native = self._acceptitembodies(
             lex, allowtag=True, unlabelledpath=True, unlabelledid=False
         )
         if err:
             return err
 
         union = zast.Union(
-            items=is_body.items,
-            implements=is_body.islist,
-            functions=is_body.functions,
-            tag=is_body.tag,
+            items=is_body.items if is_body else {},
+            implements=is_body.islist if is_body else [],
+            functions=is_body.functions if is_body else {},
+            tag=is_body.tag if is_body else None,
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
             start=start,
+            is_native=native,
         )
         return NodeX(node=union, extern=extern)
 
@@ -1281,36 +1293,57 @@ class Parser:
         Parse 'is' and 'as' bodies for item definitions.
         'is' and 'as' can appear in any order if named.
         Unnamed first arg defaults to 'is'.
+        'is native' marks the type as having compiler-provided state.
 
-        Returns (is_body, as_body, extern, error)
-        where is_body is ObjectBody, as_body is Optional[ObjectBody],
-        extern is Dict, error is Optional[Error]
+        Returns (is_body, as_body, extern, error, is_native)
+        where is_body is ObjectBody or None, as_body is Optional[ObjectBody],
+        extern is Dict, error is Optional[Error], is_native is bool
         """
         is_body: Optional[ObjectBody] = None
         as_body: Optional[ObjectBody] = None
+        is_native: bool = False
         extern: Dict[str, zast.AtomId] = {}
 
-        for _ in range(2):  # max 2 iterations: one for is, one for as
+        for _ in range(3):  # max 3 iterations: is, as, and possibly native+as
             t = lex.peek()
             if t.toktype == TT.IS:
-                if is_body is not None:
+                if is_body is not None or is_native:
                     msg = "Duplicate 'is' clause"
-                    return None, None, None, zast.Error(err=ERR.BADITEM, msg=msg, loc=t)
+                    return (
+                        None,
+                        None,
+                        None,
+                        zast.Error(err=ERR.BADITEM, msg=msg, loc=t),
+                        False,
+                    )
                 lex.acceptany()
-                b = self._getobjectbody(
-                    lex,
-                    allowtag=allowtag,
-                    unlabelledpath=unlabelledpath,
-                    unlabelledid=unlabelledid,
-                )
-                if isinstance(b, zast.Error):
-                    return None, None, None, b
-                is_body = b
-                promoteexterns(addto=extern, addfrom=b.extern)
+                if lex.accept(TT.NATIVE):
+                    is_native = True
+                else:
+                    b = self._getobjectbody(
+                        lex,
+                        allowtag=allowtag,
+                        unlabelledpath=unlabelledpath,
+                        unlabelledid=unlabelledid,
+                    )
+                    if isinstance(b, zast.Error):
+                        return None, None, None, b, False
+                    is_body = b
+                    promoteexterns(addto=extern, addfrom=b.extern)
+            elif t.toktype == TT.NATIVE and is_body is None and not is_native:
+                # elided 'is': native as first unnamed arg
+                lex.acceptany()
+                is_native = True
             elif t.toktype == TT.AS:
                 if as_body is not None:
                     msg = "Duplicate 'as' clause"
-                    return None, None, None, zast.Error(err=ERR.BADITEM, msg=msg, loc=t)
+                    return (
+                        None,
+                        None,
+                        None,
+                        zast.Error(err=ERR.BADITEM, msg=msg, loc=t),
+                        False,
+                    )
                 lex.acceptany()
                 b = self._getobjectbody(
                     lex,
@@ -1319,10 +1352,10 @@ class Parser:
                     unlabelledid=False,
                 )
                 if isinstance(b, zast.Error):
-                    return None, None, None, b
+                    return None, None, None, b, False
                 as_body = b
                 promoteexterns(addto=extern, addfrom=b.extern)
-            elif t.toktype == TT.BRACEOPEN and is_body is None:
+            elif t.toktype == TT.BRACEOPEN and is_body is None and not is_native:
                 # unnamed first arg defaults to 'is'
                 b = self._getobjectbody(
                     lex,
@@ -1331,19 +1364,20 @@ class Parser:
                     unlabelledid=unlabelledid,
                 )
                 if isinstance(b, zast.Error):
-                    return None, None, None, b
+                    return None, None, None, b, False
                 is_body = b
                 promoteexterns(addto=extern, addfrom=b.extern)
             else:
                 break
 
-        if is_body is None:
-            msg = "Expected '{' for item body"
+        if is_body is None and not is_native:
+            msg = "Expected '{' or 'native' for item body"
             return (
                 None,
                 None,
                 None,
                 zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.peek()),
+                False,
             )
 
         # remove is-body externs that are defined in as-body (e.g. generic params)
@@ -1353,7 +1387,7 @@ class Parser:
                 if k in as_locals:
                     del extern[k]
 
-        return is_body, as_body, extern, None
+        return is_body, as_body, extern, None, is_native
 
     def _getobjectbody(
         self,

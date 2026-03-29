@@ -277,7 +277,9 @@ def _pprintfunction(node: Node, depth: int) -> str:
         s += "\n" + sepinner + "}"
         o.append(s)
 
-    if node.body:
+    if node.is_native:
+        o.append(f"{sepinner}*NATIVE")
+    elif node.body:
         s = f"{sepinner}*BODY{{\n"
         s += pprintnode(node.body, depth + 2)
         s += "\n" + sepinner + "}"

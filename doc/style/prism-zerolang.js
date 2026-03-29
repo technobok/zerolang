@@ -27,7 +27,8 @@
         'function', 'in', 'out', 'is', 'as',
         'if', 'when', 'then', 'else',
         'for', 'while', 'loop', 'with', 'do', 'on',
-        'match', 'case', 'break', 'continue', 'yield', 'return', 'swap'
+        'match', 'case', 'break', 'continue', 'yield', 'return', 'swap',
+        'native'
     ];
 
     var reserved = [

@@ -373,6 +373,8 @@ class Function(Node):
     param_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
     # ownership annotation on the return type (if any)
     return_ownership: Optional["ZParamOwnership"] = None
+    # native function: body is compiler-provided (not a spec)
+    is_native: bool = False
     # 'as' clause: generic parameters and static functions
     as_items: Dict[str, "Path"] = field(default_factory=dict)
     as_functions: Dict[str, "Function"] = field(default_factory=dict)
@@ -392,6 +394,7 @@ class Record(Node):
     functions: Dict[str, "Function"]
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
+    is_native: bool = False  # native type: instance state is compiler-provided
 
 
 @dataclass
@@ -408,6 +411,7 @@ class Class(Node):
     functions: Dict[str, "Function"]
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
+    is_native: bool = False  # native type: instance state is compiler-provided
 
 
 @dataclass
@@ -426,6 +430,7 @@ class Union(Node):
     tag: Optional["Path"]  # a Typeref
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
+    is_native: bool = False  # native type: instance state is compiler-provided
 
 
 @dataclass
@@ -443,6 +448,7 @@ class Variant(Node):
     tag: Optional["Path"]  # a Typeref
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
+    is_native: bool = False  # native type: instance state is compiler-provided
 
 
 @dataclass

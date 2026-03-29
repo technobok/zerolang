@@ -41,7 +41,9 @@ def hash_function(func: zast.Function) -> str:
 
     # hash body
     h.update(b"|BODY|")
-    if func.body:
+    if func.is_native:
+        h.update(b"|NATIVE|")
+    elif func.body:
         h.update(_hash_node(func.body).encode())
 
     return h.hexdigest()
