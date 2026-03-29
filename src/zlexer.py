@@ -321,8 +321,11 @@ class Tokenizer(ITokenizer):
             return colonpre
 
         if c == zchar.COLON:
-            if tstr in TTRESERVED:
-                # reserved word followed by colon — return error
+            if ttkw or tstr in TTRESERVED:
+                # keyword or reserved word followed by colon — return keyword,
+                # leave colon for next token
+                if ttkw:
+                    return Token(ttkw, tstr, self.fsno, lineno, colno)
                 return Token(TT.ERR, tstr, self.fsno, lineno, colno)
             # LABEL - return the label, prefill nexttoken with colon
             tok = Token(TT.LABEL, tstr, self.fsno, lineno, colno)

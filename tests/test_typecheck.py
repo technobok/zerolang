@@ -3966,14 +3966,14 @@ class TestNumericGenerics:
     def test_mixed_type_and_numeric_generics(self):
         """(myarray t: i64 size: 10) creates myarray_i64_10."""
         program = check_ok(
-            "myarray: record { data: t } as { t: any.generic\n size: u64.generic }\n"
-            "main: function is { a: (myarray t: i64 size: 10) data: 42 }"
+            "myarray: record { payload: t } as { t: any.generic\n size: u64.generic }\n"
+            "main: function is { a: (myarray t: i64 size: 10) payload: 42 }"
         )
         monos = [m for m, _ in program.mono_types if m.name == "myarray_i64_10"]
         assert len(monos) == 1
         mono = monos[0]
-        assert "data" in mono.children
-        assert mono.children["data"].name == "i64"
+        assert "payload" in mono.children
+        assert mono.children["payload"].name == "i64"
         assert "size" in mono.children
         assert mono.children["size"].name == "u64"
         assert mono.param_defaults["size"] == "10"

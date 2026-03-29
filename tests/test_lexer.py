@@ -337,11 +337,34 @@ class TestIsValidUnitName:
 
 
 class TestKeywordLabelInteraction:
-    """Reserved words cannot be used as labels. Keywords as labels are caught
-    by the type checker (some keywords like 'data' are legitimate field names)."""
+    """Neither keywords nor reserved words can be used as labels."""
+
+    def test_keyword_colon_returns_keyword(self):
+        """native: returns NATIVE keyword, not a LABEL token."""
+        tok = make_tokenizer("native:")
+        t = tok.token()
+        assert t.toktype == TT.NATIVE
+
+    def test_data_colon_returns_keyword(self):
+        """data: returns DATA keyword, not a LABEL token."""
+        tok = make_tokenizer("data:")
+        t = tok.token()
+        assert t.toktype == TT.DATA
+
+    def test_function_colon_returns_keyword(self):
+        """function: returns FUNCTION keyword."""
+        tok = make_tokenizer("function:")
+        t = tok.token()
+        assert t.toktype == TT.FUNCTION
+
+    def test_is_colon_returns_keyword(self):
+        """is: returns IS keyword."""
+        tok = make_tokenizer("is:")
+        t = tok.token()
+        assert t.toktype == TT.IS
 
     def test_colon_keyword_returns_error(self):
-        """:native should return COLON + ERR (prefix label with keyword)."""
+        """:native should return COLON + ERR."""
         tok = make_tokenizer(":native")
         t1 = tok.token()
         assert t1.toktype == TT.COLON
@@ -368,11 +391,3 @@ class TestKeywordLabelInteraction:
         t = tok.token()
         assert t.toktype == TT.LABEL
         assert t.tokstr == "name"
-
-    def test_keyword_as_label_produces_label(self):
-        """Keywords followed by colon produce LABEL (caught later by type checker).
-        This is needed because some keywords (data, in, out) are legitimate field names."""
-        tok = make_tokenizer("data:")
-        t = tok.token()
-        assert t.toktype == TT.LABEL
-        assert t.tokstr == "data"

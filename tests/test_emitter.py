@@ -1297,10 +1297,10 @@ class TestEmitterClassDestructors:
         """Class with union field: destructor calls union destroy."""
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\n"
-            "myclass: class { data: myunion }\n"
+            "myclass: class { payload: myunion }\n"
             "main: function is { c: myclass }"
         )
-        assert "z_myunion_destroy(p->data);" in csource
+        assert "z_myunion_destroy(p->payload);" in csource
 
     def test_class_destructor_valtype_only(self):
         """Class with only valtype fields: just NULL check + free."""
@@ -1387,10 +1387,10 @@ class TestEmitterClassDestructorIntegration:
         """Class with union field: no leak under ASan."""
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\n"
-            "myclass: class { data: myunion\n x: i64 }\n"
+            "myclass: class { payload: myunion\n x: i64 }\n"
             "main: function is {\n"
             "  u: myunion.a 42\n"
-            "  c: myclass data: u.take x: 1\n"
+            "  c: myclass payload: u.take x: 1\n"
             '  print "ok"\n'
             "}"
         )
