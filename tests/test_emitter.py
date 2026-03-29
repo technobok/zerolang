@@ -4738,3 +4738,71 @@ class TestNativeEmitter:
             )
         )
         assert output.strip() == "yes"
+
+
+class TestIteratorPattern:
+    """Tests for the iterator-over-parent pattern with visibility."""
+
+    def test_callable_iterator_over_class(self):
+        """Iterator class iterates over a container with private state."""
+        output = compile_and_run(
+            emit_source(
+                "bag: class { a: i64 b: i64 c: i64 count: i64 } as {\n"
+                "    public: unit { :count :at }\n"
+                "    at: function {self: this index: i64} out i64 is {\n"
+                "        if index == 0 then { return self.a }\n"
+                "        if index == 1 then { return self.b }\n"
+                "        return self.c\n"
+                "    }\n"
+                "}\n"
+                "bagiter: class { pos: i64 max: i64 items: bag } as {\n"
+                "    call: function {it: this} out (optionval t: i64) is {\n"
+                "        if it.pos < it.max then {\n"
+                "            val: (bag.at self: it.items index: it.pos)\n"
+                "            it.pos = it.pos + 1\n"
+                "            return (optionval.some val)\n"
+                "        }\n"
+                "        return (optionval.none i64)\n"
+                "    }\n"
+                "}\n"
+                "main: function is {\n"
+                "    b: bag a: 10 b: 20 c: 30 count: 3\n"
+                "    it: bagiter pos: 0 max: b.count items: b.take\n"
+                '    for x: it loop { print "\\{x}" }\n'
+                '    print "done"\n'
+                "}"
+            )
+        )
+        lines = output.strip().split("\n")
+        assert lines == ["10", "20", "30", "done"]
+
+    def test_private_field_blocked(self):
+        """External access to private field produces type error."""
+        errors = []
+        try:
+            emit_source(
+                "bag: class { secret: i64 } as {\n"
+                "    public: unit {}\n"
+                "}\n"
+                'main: function is { b: bag secret: 1\n print "\\{b.secret}" }'
+            )
+        except AssertionError as e:
+            errors = [str(e)]
+        assert len(errors) > 0
+        assert "not public" in errors[0].lower() or "type error" in errors[0].lower()
+
+    def test_public_accessor_works(self):
+        """Public method can access private fields via this."""
+        output = compile_and_run(
+            emit_source(
+                "box: class { secret: i64 } as {\n"
+                "    public: unit { :reveal }\n"
+                "    reveal: function {self: this} out i64 is { return self.secret }\n"
+                "}\n"
+                "main: function is {\n"
+                "    b: box secret: 42\n"
+                '    print "\\{box.reveal self: b}"\n'
+                "}"
+            )
+        )
+        assert output.strip() == "42"

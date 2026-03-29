@@ -3884,6 +3884,17 @@ class CEmitter:
             return tmp
 
         args = self._emit_call_args(call)
+
+        # dotted path method call: prepend receiver as 'this' argument
+        if isinstance(call.callable, zast.DottedPath):
+            ftype = call.callable.type
+            if ftype and ftype.typetype == ZTypeType.FUNCTION:
+                # check if the function has a 'this' parameter (method)
+                has_this = "this" in ftype.children
+                if has_this:
+                    receiver = self._emit_path_value(call.callable.parent)
+                    args = f"{receiver}, {args}" if args else receiver
+
         cname = self._emit_callable_expr(call)
         result = f"{cname}({args})"
 
