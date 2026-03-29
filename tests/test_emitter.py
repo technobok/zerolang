@@ -223,16 +223,16 @@ class TestEmitterBasic:
         assert output.strip() == "42"
 
     def test_for_iterator_binding(self):
-        """For-loop with iterator binding: callable returning option."""
+        """For-loop with iterator binding: callable returning optionval."""
         csource = emit_source(
             "counter: class { i: i64 max: i64 } as {\n"
-            "  call: function {c: this} out (option t: i64) is {\n"
+            "  call: function {c: this} out (optionval t: i64) is {\n"
             "    if c.i < c.max then {\n"
-            "      result: option.some c.i\n"
+            "      result: optionval.some c.i\n"
             "      c.i = c.i + 1\n"
             "      return result\n"
             "    }\n"
-            "    result: option.none i64\n"
+            "    result: optionval.none i64\n"
             "    return result\n"
             "  }\n"
             "}\n"
@@ -3079,9 +3079,9 @@ class TestGenericsEmission:
         assert "z_myopt_f64_destroy" in csource
 
     def test_system_option_compiles(self):
-        """System option type compiles and runs."""
+        """System optionval type compiles and runs."""
         csource = emit_source(
-            'main: function is {\n    x: option.some 42\n    print "ok"\n}'
+            'main: function is {\n    x: optionval.some 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
@@ -3146,12 +3146,101 @@ class TestGenericsEmission:
         assert result.returncode == 0, f"ASan failure: {result.stderr}"
 
     def test_system_option_from_compiles(self):
-        """System option type with from: compiles and runs."""
+        """System optionval type with from: compiles and runs."""
         csource = emit_source(
-            'main: function is {\n    x: option.some from: 42\n    print "ok"\n}'
+            'main: function is {\n    x: optionval.some from: 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
+
+    def test_nullable_ptr_option_with_string(self):
+        """option.some with string (reftype) emits nullable pointer."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    x: option.some "hello"\n'
+            "    match (x) case some then {\n"
+            '        print "is some"\n'
+            "    } case none then {\n"
+            '        print "is none"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "is some"
+
+    def test_nullable_ptr_option_none_string(self):
+        """option.none string emits NULL."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    x: option.none string\n"
+            "    match (x) case some then {\n"
+            '        print "is some"\n'
+            "    } case none then {\n"
+            '        print "is none"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "is none"
+
+    def test_optionval_case_matching(self):
+        """optionval case matching with some/none."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    x: optionval.some 42\n"
+            "    match (x) case some then {\n"
+            '        print "is some"\n'
+            "    } case none then {\n"
+            '        print "is none"\n'
+            "    }\n"
+            "    y: optionval.none i64\n"
+            "    match (y) case some then {\n"
+            '        print "is some"\n'
+            "    } case none then {\n"
+            '        print "is none"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "is some\nis none"
+
+    def test_optionval_iterator(self):
+        """For-loop with optionval-returning callable iterator."""
+        csource = emit_source(
+            "counter: class { i: i64 max: i64 } as {\n"
+            "  call: function {c: this} out (optionval t: i64) is {\n"
+            "    if c.i < c.max then {\n"
+            "      result: optionval.some c.i\n"
+            "      c.i = c.i + 1\n"
+            "      return result\n"
+            "    }\n"
+            "    result: optionval.none i64\n"
+            "    return result\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  with iter: counter i: 0 max: 3 do for x: iter loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0\n1\n2"
+
+    def test_map_get_returns_optionval(self):
+        """Map.get() with valtype values returns optionval."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (map key: i64 value: i64)\n"
+            "    m.set key: 1 value: 42\n"
+            "    r: m.get key: 1\n"
+            '    match (r) case some then { print "found" } case none then { print "missing" }\n'
+            "    r2: m.get key: 99\n"
+            '    match (r2) case some then { print "found" } case none then { print "missing" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "found\nmissing"
 
     def test_nongeneric_union_from_compiles(self):
         """Non-generic union construction with from: compiles and runs."""

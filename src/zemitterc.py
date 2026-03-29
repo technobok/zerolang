@@ -153,6 +153,12 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return "void"
     if ztype.typedef_base is not None:
         return _ctype(ztype.typedef_base)
+    # nullable-ptr option: C type is the inner reftype's ctype (already a pointer)
+    if ztype.is_nullable_ptr:
+        some_type = ztype.children.get("some")
+        if some_type:
+            return _ctype(some_type)
+        return "void*"
     name = ztype.name
     if name in TYPEMAP:
         return TYPEMAP[name]
@@ -1625,6 +1631,8 @@ class CEmitter:
             return
         if mono_type.typetype == ZTypeType.UNION:
             self._emit_mono_union(mono_type, template_defn)
+        elif mono_type.typetype == ZTypeType.VARIANT:
+            self._emit_mono_variant(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.RECORD:
             self._emit_mono_record(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.CLASS:
@@ -1665,6 +1673,11 @@ class CEmitter:
         self, mono_type: ZType, template_defn: zast.TypeDefinition
     ) -> None:
         """Emit a monomorphized union type."""
+        # nullable-ptr option: emit only a destructor (no struct/tag needed)
+        if mono_type.is_nullable_ptr:
+            self._emit_nullable_ptr_option(mono_type)
+            return
+
         self.needs_stdint = True
         self.needs_stdlib = True
         name = mono_type.name
@@ -1720,6 +1733,96 @@ class CEmitter:
         lines.append("    free(u);\n")
         lines.append("}\n\n")
 
+        self.struct_defs.append("".join(lines))
+
+    def _emit_nullable_ptr_option(self, mono_type: ZType) -> None:
+        """Emit a nullable-ptr option type (no struct, just a destructor)."""
+        self.needs_stdlib = True
+        name = mono_type.name
+        some_type = mono_type.children.get("some")
+        if not some_type:
+            return
+        inner_ctype = _ctype(some_type)
+        lines: List[str] = []
+        # emit destructor: if non-null, destroy the inner value
+        lines.append(f"static void z_{name}_destroy({inner_ctype} v) {{\n")
+        lines.append("    if (!v) return;\n")
+        if some_type.needs_destructor and some_type.destructor_name:
+            lines.append(f"    {some_type.destructor_name}(v);\n")
+        else:
+            lines.append("    free(v);\n")
+        lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_variant(
+        self, mono_type: ZType, template_defn: zast.TypeDefinition
+    ) -> None:
+        """Emit a monomorphized variant type."""
+        self.needs_stdint = True
+        self.needs_stdbool = True
+        name = mono_type.name
+        lines: List[str] = []
+
+        # collect subtypes (non-special children)
+        subtype_items: list[tuple[str, ZType]] = []
+        for sname, stype in mono_type.children.items():
+            if sname.startswith(":") or sname == "tag":
+                continue
+            if stype.typetype in (
+                ZTypeType.FUNCTION,
+                ZTypeType.DATA,
+                ZTypeType.TAG,
+                ZTypeType.ENUM,
+            ):
+                continue
+            if getattr(stype, "generic_origin", None) == "tag":
+                continue
+            subtype_items.append((sname, stype))
+
+        # emit tag enum
+        lines.append("typedef enum {\n")
+        for sname, _ in subtype_items:
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            lines.append(f"    {tag},\n")
+        lines.append(f"}} z_{name}_tag_t;\n\n")
+
+        # check if all subtypes are null (enum pattern)
+        all_null = all(
+            stype.name == "null" and stype.typetype == ZTypeType.RECORD
+            for _, stype in subtype_items
+        )
+
+        # emit variant struct with inline union
+        lines.append("typedef struct {\n")
+        lines.append(f"    z_{name}_tag_t tag;\n")
+        if not all_null:
+            lines.append("    union {\n")
+            for sname, stype in subtype_items:
+                is_null = stype.name == "null" and stype.typetype == ZTypeType.RECORD
+                if not is_null:
+                    sub_ctype = _ctype(stype)
+                    if sub_ctype and sub_ctype != "void":
+                        lines.append(f"        {sub_ctype} {sname};\n")
+            lines.append("    } data;\n")
+        lines.append(f"}} z_{name}_t;\n\n")
+
+        # emit equality function
+        lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
+        lines.append("    if (a.tag != b.tag) return false;\n")
+        lines.append("    switch (a.tag) {\n")
+        for sname, stype in subtype_items:
+            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+            is_null = stype.name == "null" and stype.typetype == ZTypeType.RECORD
+            lines.append(f"        case {tag}:")
+            if is_null:
+                lines.append(" return true;\n")
+            else:
+                lines.append(f" return a.data.{sname} == b.data.{sname};\n")
+        lines.append("    }\n")
+        lines.append("    return false;\n")
+        lines.append("}\n\n")
+
+        # NO destructor — value type
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_record(
@@ -2273,33 +2376,26 @@ class CEmitter:
         lines.append("    _this->length++;\n")
         lines.append("}\n\n")
 
-        # get method — returns option
+        # get method — returns option (nullable ptr for reftype values) or optionval (variant for valtype values)
         get_type = mono_type.children.get("get")
         ret_type = get_type.return_type if get_type else None
         if ret_type:
             self.needs_stdlib = True
             ret_ctype = _ctype(ret_type)
             opt_name = ret_type.name
-            opt_struct = f"z_{opt_name}_t"
-            some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
-            none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
             get_fn = f"z_{name}_get"
-            lines.append(
-                f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key);\n"
-            )
-            lines.append(
-                f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
-            )
-            lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
-            lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
-            lines.append(
-                f"    {opt_struct}* _r = ({opt_struct}*)malloc(sizeof({opt_struct}));\n"
-            )
-            lines.append("    if (idx >= 0) {\n")
-            lines.append(f"        _r->tag = {some_tag};\n")
-            if val_is_reftype:
-                # reftype: store pointer directly (borrowed copy — caller must not free)
-                # For strings, make a copy so caller owns it
+
+            if ret_type.is_nullable_ptr:
+                # nullable-ptr option: return pointer or NULL
+                lines.append(
+                    f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key);\n"
+                )
+                lines.append(
+                    f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
+                )
+                lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
+                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+                lines.append("    if (idx >= 0) {\n")
                 if val_is_string:
                     lines.append(
                         "        ZStr* _copy = (ZStr*)malloc(sizeof(ZStr) + ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
@@ -2310,27 +2406,78 @@ class CEmitter:
                     lines.append(
                         "        memcpy(_copy->data, _this->buckets[idx].value->data, ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
                     )
-                    lines.append("        _r->data = _copy;\n")
+                    lines.append("        return _copy;\n")
                 else:
-                    # other reftypes: store pointer directly (borrowed)
-                    lines.append("        _r->data = _this->buckets[idx].value;\n")
-            else:
-                # valtype: box it
+                    lines.append("        return _this->buckets[idx].value;\n")
+                lines.append("    }\n")
+                lines.append("    return NULL;\n")
+                lines.append("}\n\n")
+            elif ret_type.typetype == ZTypeType.VARIANT:
+                # optionval variant: return struct by value
+                opt_struct = f"z_{opt_name}_t"
+                some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
+                none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                 lines.append(
-                    f"        {val_ctype}* _d = ({val_ctype}*)malloc(sizeof({val_ctype}));\n"
+                    f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key);\n"
                 )
-                lines.append("        *_d = _this->buckets[idx].value;\n")
-                lines.append("        _r->data = _d;\n")
-            lines.append("    } else {\n")
-            lines.append(f"        _r->tag = {none_tag};\n")
-            lines.append("        _r->data = NULL;\n")
-            lines.append("    }\n")
-            if key_is_string:
-                # free the lookup key if it was a string (caller passed ownership)
-                # Actually for get, key should be borrowed, not taken
-                pass
-            lines.append("    return _r;\n")
-            lines.append("}\n\n")
+                lines.append(
+                    f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
+                )
+                lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
+                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+                lines.append(f"    {opt_struct} _r;\n")
+                lines.append("    if (idx >= 0) {\n")
+                lines.append(f"        _r.tag = {some_tag};\n")
+                lines.append("        _r.data.some = _this->buckets[idx].value;\n")
+                lines.append("    } else {\n")
+                lines.append(f"        _r.tag = {none_tag};\n")
+                lines.append("    }\n")
+                lines.append("    return _r;\n")
+                lines.append("}\n\n")
+            else:
+                # regular tagged union (legacy path)
+                opt_struct = f"z_{opt_name}_t"
+                some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
+                none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+                lines.append(
+                    f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key);\n"
+                )
+                lines.append(
+                    f"static {ret_ctype} {get_fn}({ctype}* _this, {key_ctype} _key) {{\n"
+                )
+                lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
+                lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
+                lines.append(
+                    f"    {opt_struct}* _r = ({opt_struct}*)malloc(sizeof({opt_struct}));\n"
+                )
+                lines.append("    if (idx >= 0) {\n")
+                lines.append(f"        _r->tag = {some_tag};\n")
+                if val_is_reftype:
+                    if val_is_string:
+                        lines.append(
+                            "        ZStr* _copy = (ZStr*)malloc(sizeof(ZStr) + ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
+                        )
+                        lines.append(
+                            "        _copy->size = ZSTR_SIZE(_this->buckets[idx].value);\n"
+                        )
+                        lines.append(
+                            "        memcpy(_copy->data, _this->buckets[idx].value->data, ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
+                        )
+                        lines.append("        _r->data = _copy;\n")
+                    else:
+                        lines.append("        _r->data = _this->buckets[idx].value;\n")
+                else:
+                    lines.append(
+                        f"        {val_ctype}* _d = ({val_ctype}*)malloc(sizeof({val_ctype}));\n"
+                    )
+                    lines.append("        *_d = _this->buckets[idx].value;\n")
+                    lines.append("        _r->data = _d;\n")
+                lines.append("    } else {\n")
+                lines.append(f"        _r->tag = {none_tag};\n")
+                lines.append("        _r->data = NULL;\n")
+                lines.append("    }\n")
+                lines.append("    return _r;\n")
+                lines.append("}\n\n")
 
         # delete method — returns bool
         lines.append(f"static int z_{name}_delete({ctype}* _this, {key_ctype} _key);\n")
@@ -3634,9 +3781,22 @@ class CEmitter:
                 if method_name == "get" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
                     result = f"z_{map_type_name}_get({parent_val}, {key_val})"
-                    # .get returns option (union pointer) — track as temp
                     ret_type = call.type
+                    if ret_type and ret_type.is_nullable_ptr:
+                        # nullable-ptr option: track as temp for destroy
+                        tmp = self._temp_name("c")
+                        indent = self._indent()
+                        inner_ctype = _ctype(ret_type)
+                        self._temp.decls.append(
+                            f"{indent}{inner_ctype} {tmp} = {result};\n"
+                        )
+                        self._temp.frees.append(tmp)
+                        return tmp
+                    if ret_type and ret_type.typetype == ZTypeType.VARIANT:
+                        # optionval variant: no temp tracking needed (value type)
+                        return result
                     if ret_type and ret_type.typetype == ZTypeType.UNION:
+                        # regular union pointer: track as temp
                         tmp = self._temp_name("c")
                         indent = self._indent()
                         self._temp.decls.append(
@@ -4067,6 +4227,12 @@ class CEmitter:
 
     def _emit_union_construction(self, call: zast.Call) -> str:
         """Emit C code for union construction."""
+        call_type = call.type
+
+        # nullable-ptr option: .some val → val, .none → NULL
+        if call_type and call_type.is_nullable_ptr:
+            return self._emit_nullable_ptr_construction(call)
+
         self.needs_stdlib = True
         indent = self._indent()
         tmp = self._temp_name("c")
@@ -4080,7 +4246,6 @@ class CEmitter:
             return "NULL"
 
         # check for monomorphized union type (from type annotation)
-        call_type = call.type
         if (
             call_type
             and call_type.typetype == ZTypeType.UNION
@@ -4175,6 +4340,37 @@ class CEmitter:
         self._temp.frees.append(tmp)
         return tmp
 
+    def _emit_nullable_ptr_construction(self, call: zast.Call) -> str:
+        """Emit nullable-ptr option construction: .some val → val, .none → NULL."""
+        if isinstance(call.callable, zast.DottedPath):
+            subtype_name = call.callable.child.name
+        else:
+            return "NULL"
+
+        if subtype_name == "none":
+            return "NULL"
+
+        # .some val: emit the value directly (take ownership)
+        value_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                value_arg = arg
+                break
+        if value_arg is None:
+            for arg in call.arguments:
+                if not arg.name:
+                    value_arg = arg
+                    break
+
+        if value_arg is None:
+            return "NULL"
+
+        val = self._emit_operation_value(value_arg.valtype)
+        # take ownership: remove from frees list
+        if val in self._temp.frees:
+            self._temp.frees.remove(val)
+        return val
+
     def _get_subtype_ctype(self, subtype_path: Optional[zast.Path]) -> Optional[str]:
         """Get the C type for a union subtype path."""
         if not subtype_path:
@@ -4199,6 +4395,14 @@ class CEmitter:
 
     def _is_variant_construction(self, call: zast.Call) -> bool:
         """Check if a call is a variant construction (variant.subtype expr)."""
+        # check type annotation for monomorphized variant types
+        call_type = call.type
+        if (
+            call_type
+            and call_type.typetype == ZTypeType.VARIANT
+            and call_type.generic_origin
+        ):
+            return True
         if isinstance(call.callable, zast.DottedPath):
             if isinstance(call.callable.parent, zast.AtomId):
                 if self._typetype_of(call.callable.parent.name) == ZTypeType.VARIANT:
@@ -4216,8 +4420,20 @@ class CEmitter:
         if isinstance(call.callable, zast.DottedPath) and isinstance(
             call.callable.parent, zast.AtomId
         ):
-            variant_name = call.callable.parent.name
             subtype_name = call.callable.child.name
+        else:
+            return "(z_unknown_t){0}"
+
+        # check for monomorphized variant type (from type annotation)
+        call_type = call.type
+        if (
+            call_type
+            and call_type.typetype == ZTypeType.VARIANT
+            and call_type.generic_origin
+        ):
+            variant_name = call_type.name
+        elif isinstance(call.callable.parent, zast.AtomId):
+            variant_name = call.callable.parent.name
         else:
             return "(z_unknown_t){0}"
 
@@ -4227,22 +4443,41 @@ class CEmitter:
         self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
         self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
 
-        # determine if this is a null subtype
-        mainunit = self.program.units.get(self.program.mainunitname)
-        variant_defn = mainunit.body.get(variant_name) if mainunit else None
-        subtype_path = None
-        if isinstance(variant_defn, zast.Variant):
-            subtype_path = variant_defn.items.get(subtype_name)
+        # determine if this is a null subtype — check monomorphized type first
+        is_null = False
+        if call_type and call_type.generic_origin:
+            sub_ztype = call_type.children.get(subtype_name)
+            if sub_ztype:
+                is_null = (
+                    sub_ztype.name == "null" and sub_ztype.typetype == ZTypeType.RECORD
+                )
+        else:
+            mainunit = self.program.units.get(self.program.mainunitname)
+            variant_defn = mainunit.body.get(variant_name) if mainunit else None
+            subtype_path = None
+            if isinstance(variant_defn, zast.Variant):
+                subtype_path = variant_defn.items.get(subtype_name)
+            is_null = (
+                subtype_path is not None
+                and isinstance(subtype_path, zast.AtomId)
+                and subtype_path.name == "null"
+            )
 
-        is_null = (
-            subtype_path is not None
-            and isinstance(subtype_path, zast.AtomId)
-            and subtype_path.name == "null"
-        )
-
-        if not is_null and call.arguments:
-            val = self._emit_operation_value(call.arguments[0].valtype)
-            self._temp.decls.append(f"{indent}{tmp}.data.{subtype_name} = {val};\n")
+        if not is_null:
+            # find value arg: from: takes priority, then first positional
+            value_arg = None
+            for arg in call.arguments:
+                if arg.name == "from":
+                    value_arg = arg
+                    break
+            if value_arg is None:
+                for arg in call.arguments:
+                    if not arg.name:
+                        value_arg = arg
+                        break
+            if value_arg:
+                val = self._emit_operation_value(value_arg.valtype)
+                self._temp.decls.append(f"{indent}{tmp}.data.{subtype_name} = {val};\n")
 
         # no temp_frees — value type, no cleanup needed
         return tmp
@@ -4524,9 +4759,9 @@ class CEmitter:
 
         init_vars: List[str] = []
         cond_exprs: List[str] = []
-        # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_type)
+        # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_type, opt_type)
         iter_bindings: List[
-            Tuple[str, zast.Operation, str, str, str, Optional[str]]
+            Tuple[str, zast.Operation, str, str, str, Optional[str], Optional[ZType]]
         ] = []
         # each bindings: (name, limit_expr, from_expr, elem_ctype) — optimized C for loop
         each_bindings: List[Tuple[str, str, str, str]] = []
@@ -4593,15 +4828,32 @@ class CEmitter:
                             some_type = opt_type.children.get("some")
                             elem_ctype = _ctype(some_type) if some_type else "int64_t"
                             iter_bindings.append(
-                                (name, cond_op, opt_ctype, elem_ctype, opt_name, t.name)
+                                (
+                                    name,
+                                    cond_op,
+                                    opt_ctype,
+                                    elem_ctype,
+                                    opt_name,
+                                    t.name,
+                                    opt_type,
+                                )
                             )
                         else:
+                            opt_type = t
                             opt_ctype = _ctype(t)
                             opt_name = t.name
                             some_type = t.children.get("some")
                             elem_ctype = _ctype(some_type) if some_type else "int64_t"
                             iter_bindings.append(
-                                (name, cond_op, opt_ctype, elem_ctype, opt_name, None)
+                                (
+                                    name,
+                                    cond_op,
+                                    opt_ctype,
+                                    elem_ctype,
+                                    opt_name,
+                                    None,
+                                    opt_type,
+                                )
                             )
             else:
                 val = self._emit_operation_value(cond_op)
@@ -4657,6 +4909,7 @@ class CEmitter:
                 elem_ctype,
                 opt_name,
                 callable_type,
+                opt_type,
             ) in iter_bindings:
                 if callable_type:
                     obj_val = self._emit_operation_value(iop)
@@ -4664,16 +4917,31 @@ class CEmitter:
                     iter_val = f"{call_fn}({obj_val})"
                 else:
                     iter_val = self._emit_operation_value(iop)
-                none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                 tmp = f"__iter_{_mangle_var(iname)}"
-                parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
-                parts.append(
-                    f"{inner}if ({tmp}->tag == {none_tag}) {{ free({tmp}); break; }}\n"
-                )
-                parts.append(
-                    f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}->data;\n"
-                )
-                parts.append(f"{inner}free({tmp});\n")
+                if opt_type and opt_type.is_nullable_ptr:
+                    # nullable-ptr option: NULL = none
+                    parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
+                    parts.append(f"{inner}if ({tmp} == NULL) break;\n")
+                    parts.append(f"{inner}{elem_ctype} {_mangle_var(iname)} = {tmp};\n")
+                elif opt_type and opt_type.typetype == ZTypeType.VARIANT:
+                    # optionval variant: check tag, extract data.some
+                    none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+                    parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
+                    parts.append(f"{inner}if ({tmp}.tag == {none_tag}) break;\n")
+                    parts.append(
+                        f"{inner}{elem_ctype} {_mangle_var(iname)} = {tmp}.data.some;\n"
+                    )
+                else:
+                    # regular tagged union (legacy path)
+                    none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+                    parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
+                    parts.append(
+                        f"{inner}if ({tmp}->tag == {none_tag}) {{ free({tmp}); break; }}\n"
+                    )
+                    parts.append(
+                        f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}->data;\n"
+                    )
+                    parts.append(f"{inner}free({tmp});\n")
             if fornode.loop:
                 parts.append(self._emit_for_body(fornode))
             if has_post:
@@ -4842,6 +5110,10 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
+        # nullable-ptr option: if (ptr != NULL) / else
+        if union_type.is_nullable_ptr:
+            return self._emit_nullable_ptr_case(casenode, union_type)
+
         indent = self._indent()
         parts: List[str] = []
         union_name = union_type.name
@@ -4868,6 +5140,56 @@ class CEmitter:
             parts.append(f"{indent}    }}\n")
 
         parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_nullable_ptr_case(self, casenode: zast.Case, union_type: ZType) -> str:
+        """Emit case matching for nullable-ptr option: if (ptr != NULL) / else."""
+        indent = self._indent()
+        parts: List[str] = []
+        subject = self._emit_operation_value(casenode.subject)
+
+        # find some and none clauses
+        some_clause = None
+        none_clause = None
+        for clause in casenode.clauses:
+            if clause.match.name == "some":
+                some_clause = clause
+            elif clause.match.name == "none":
+                none_clause = clause
+
+        if some_clause and none_clause:
+            parts.append(f"{indent}if ({subject} != NULL) {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(some_clause.statement))
+            self.indent_level -= 1
+            parts.append(f"{indent}}} else {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(none_clause.statement))
+            self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+        elif some_clause:
+            parts.append(f"{indent}if ({subject} != NULL) {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(some_clause.statement))
+            self.indent_level -= 1
+            if casenode.elseclause:
+                parts.append(f"{indent}}} else {{\n")
+                self.indent_level += 1
+                parts.append(self._emit_statement(casenode.elseclause))
+                self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+        elif none_clause:
+            parts.append(f"{indent}if ({subject} == NULL) {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_statement(none_clause.statement))
+            self.indent_level -= 1
+            if casenode.elseclause:
+                parts.append(f"{indent}}} else {{\n")
+                self.indent_level += 1
+                parts.append(self._emit_statement(casenode.elseclause))
+                self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+
         return "".join(parts)
 
     def _emit_variant_case(self, casenode: zast.Case, variant_type: ZType) -> str:

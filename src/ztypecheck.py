@@ -1132,6 +1132,22 @@ class TypeChecker:
         _set_destructor_metadata(vtype)
         self._assign_cname_type(vtype)
 
+        # pass 1: detect generic params (in as_items)
+        generic_ctx: dict[str, ZType] = {}
+        for sname, spath in variant_defn.as_items.items():
+            st = self._resolve_typeref(spath)
+            if (
+                st
+                and st.typetype == ZTypeType.GENERIC_PARAM
+                and st.name == "__generic_param"
+            ):
+                constraint = st.parent if st.parent else self.t_null
+                vtype.generic_params[sname] = constraint
+                vtype.isgeneric = True
+                generic_ctx[sname] = constraint
+                if constraint.name in NUMERIC_RANGES:
+                    vtype.numeric_generic_params.add(sname)
+
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
             variant_defn.items, variant_defn.start
@@ -1155,7 +1171,9 @@ class TypeChecker:
                 {},
             )
 
-        # resolve each subtype item
+        # resolve each subtype item (with generic context if applicable)
+        if generic_ctx:
+            self._generic_context.append(generic_ctx)
         subtype_names = list(variant_defn.items.keys())
         for sname, spath in variant_defn.items.items():
             if isinstance(spath, zast.AtomId) and spath.name == "null":
@@ -1163,24 +1181,38 @@ class TypeChecker:
                 st.is_valtype = True
             else:
                 st = self._resolve_typeref(spath)
-                # reject non-valtypes
-                if st and st.is_valtype is not None and not st.is_valtype:
-                    self._error(
-                        f"Variant '{name}' subtype '{sname}' must be a value type",
-                        loc=variant_defn.start,
-                    )
-                elif st and st.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
-                    self._error(
-                        f"Variant '{name}' subtype '{sname}' must be a value type",
-                        loc=variant_defn.start,
-                    )
-                elif st and st.name == "string":
-                    self._error(
-                        f"Variant '{name}' subtype '{sname}' must be a value type",
-                        loc=variant_defn.start,
-                    )
+                # reject non-valtypes (skip for generic params — checked at instantiation)
+                if st and st.typetype != ZTypeType.GENERIC_PARAM:
+                    if st.is_valtype is not None and not st.is_valtype:
+                        self._error(
+                            f"Variant '{name}' subtype '{sname}' must be a value type",
+                            loc=variant_defn.start,
+                        )
+                    elif st.typetype in (ZTypeType.CLASS, ZTypeType.UNION):
+                        self._error(
+                            f"Variant '{name}' subtype '{sname}' must be a value type",
+                            loc=variant_defn.start,
+                        )
+                    elif st.name == "string":
+                        self._error(
+                            f"Variant '{name}' subtype '{sname}' must be a value type",
+                            loc=variant_defn.start,
+                        )
             if st:
                 vtype.children[sname] = st
+        if generic_ctx:
+            self._generic_context.pop()
+
+        # for generic variants, skip tag generation (done at monomorphization time)
+        if vtype.isgeneric:
+            for mname, mfunc in variant_defn.functions.items():
+                mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+                vtype.children[mname] = mt
+            for mname, mfunc in variant_defn.as_functions.items():
+                mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
+                vtype.children[mname] = mt
+            self._resolving.pop()
+            return vtype
 
         # resolve tag from as_items
         custom_tag_data = None
@@ -2557,6 +2589,8 @@ class TypeChecker:
         # recompute is_valtype based on concrete types
         if template_type.typetype == ZTypeType.UNION:
             mono.is_valtype = False
+        elif template_type.typetype == ZTypeType.VARIANT:
+            mono.is_valtype = True
         elif template_type.typetype == ZTypeType.RECORD:
             mono.is_valtype = True
         elif template_type.typetype == ZTypeType.CLASS:
@@ -2566,6 +2600,10 @@ class TypeChecker:
         elif template_type.typetype == ZTypeType.FACET:
             mono.is_valtype = True
         _set_destructor_metadata(mono)
+
+        # for nullable-ptr option (monomorphized option union): mark as nullable ptr
+        if template_type.typetype == ZTypeType.UNION and template_type.name == "option":
+            mono.is_nullable_ptr = True
 
         # for unions: rebuild tag enum with the monomorphized name
         if template_type.typetype == ZTypeType.UNION:
@@ -2585,6 +2623,33 @@ class TypeChecker:
                 tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             mono.children[":tag"] = tag_type
             # generate data type for .tag access
+            gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
+            gen_data.is_valtype = False
+            for i, sname in enumerate(subtype_names):
+                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+            gen_tag.is_valtype = True
+            gen_tag.generic_origin = "tag"
+            gen_data.children["tag"] = gen_tag
+            mono.children["tag"] = gen_data
+
+        # for variants: rebuild tag enum with the monomorphized name
+        if template_type.typetype == ZTypeType.VARIANT:
+            subtype_names = [
+                k
+                for k in mono.children
+                if not k.startswith(":")
+                and k != "tag"
+                and mono.children[k].typetype != ZTypeType.FUNCTION
+                and mono.children[k].typetype != ZTypeType.DATA
+                and mono.children[k].typetype != ZTypeType.TAG
+                and mono.children[k].typetype != ZTypeType.ENUM
+                and getattr(mono.children[k], "generic_origin", None) != "tag"
+            ]
+            tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
+            for i, sname in enumerate(subtype_names):
+                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            mono.children[":tag"] = tag_type
             gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
@@ -2718,17 +2783,20 @@ class TypeChecker:
                 set_type.param_ownership["key"] = ZParamOwnership.TAKE
                 set_type.param_ownership["value"] = ZParamOwnership.TAKE
                 mono.children["set"] = set_type
-                # synthesize .get method: function {key: K} out option of: V
+                # synthesize .get method: function {key: K} out option/optionval of: V
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
                 get_type.children["key"] = key_type
-                option_template = self._resolve_name("option")
-                if option_template and option_template.isgeneric:
-                    option_defn = self._find_generic_defn(option_template)
-                    if option_defn:
-                        option_mono = self._monomorphize(
-                            option_template, {"t": value_type}, option_defn
+                if _is_valtype(value_type):
+                    opt_template = self._resolve_name("optionval")
+                else:
+                    opt_template = self._resolve_name("option")
+                if opt_template and opt_template.isgeneric:
+                    opt_defn = self._find_generic_defn(opt_template)
+                    if opt_defn:
+                        opt_mono = self._monomorphize(
+                            opt_template, {"t": value_type}, opt_defn
                         )
-                        get_type.return_type = option_mono
+                        get_type.return_type = opt_mono
                 mono.children["get"] = get_type
                 # synthesize .delete method: function {key: K} out bool
                 delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
@@ -3473,14 +3541,14 @@ class TypeChecker:
             if parent_type and parent_type.name in _INTEGER_TYPES:
                 each_fn = _make_type(f"{parent_type.name}.each", ZTypeType.FUNCTION)
                 each_fn.children["from"] = parent_type
-                option_template = self._resolve_name("option")
-                if option_template and option_template.isgeneric:
-                    option_defn = self._find_generic_defn(option_template)
-                    if option_defn:
-                        option_mono = self._monomorphize(
-                            option_template, {"t": parent_type}, option_defn
+                optionval_template = self._resolve_name("optionval")
+                if optionval_template and optionval_template.isgeneric:
+                    optionval_defn = self._find_generic_defn(optionval_template)
+                    if optionval_defn:
+                        optionval_mono = self._monomorphize(
+                            optionval_template, {"t": parent_type}, optionval_defn
                         )
-                        each_fn.return_type = option_mono
+                        each_fn.return_type = optionval_mono
                 path.type = each_fn
                 return each_fn
 
@@ -3600,8 +3668,11 @@ class TypeChecker:
         ):
             parent_tagged = call.callable.parent_tagged_type
 
-            # generic union subtype construction
-            if parent_tagged.isgeneric and parent_tagged.typetype == ZTypeType.UNION:
+            # generic union/variant subtype construction
+            if parent_tagged.isgeneric and parent_tagged.typetype in (
+                ZTypeType.UNION,
+                ZTypeType.VARIANT,
+            ):
                 mono_type = self._infer_generic_union_construction(parent_tagged, call)
                 if mono_type:
                     call.type = mono_type
@@ -4359,6 +4430,18 @@ class TypeChecker:
             and t.generic_origin.name == "option"
         )
 
+    def _is_optionval_type(self, t: ZType) -> bool:
+        """Check if a type is a monomorphized optionval type."""
+        return (
+            t.typetype == ZTypeType.VARIANT
+            and isinstance(t.generic_origin, ZType)
+            and t.generic_origin.name == "optionval"
+        )
+
+    def _is_option_or_optionval_type(self, t: ZType) -> bool:
+        """Check if a type is a monomorphized option or optionval type."""
+        return self._is_option_type(t) or self._is_optionval_type(t)
+
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")
         # lock tracking for for-loop targets
@@ -4366,26 +4449,26 @@ class TypeChecker:
         for name, cond_op in fornode.conditions.items():
             t = self._check_operation(cond_op)
             if t and not name.startswith(" "):
-                # iterator binding: check if operation type is or returns option
+                # iterator binding: check if operation type is or returns option/optionval
                 iter_option_type = None
-                if self._is_option_type(t):
-                    # operation directly returns option (e.g., function call)
+                if self._is_option_or_optionval_type(t):
+                    # operation directly returns option/optionval (e.g., function call)
                     iter_option_type = t
                 elif (
                     t.typetype == ZTypeType.FUNCTION
                     and t.return_type
-                    and self._is_option_type(t.return_type)
+                    and self._is_option_or_optionval_type(t.return_type)
                 ):
-                    # function that returns option (e.g., .each on integers)
+                    # function that returns option/optionval (e.g., .each on integers)
                     iter_option_type = t.return_type
                 elif t.typetype != ZTypeType.FUNCTION:
-                    # check if it's a callable object whose call returns option
+                    # check if it's a callable object whose call returns option/optionval
                     call_method = t.children.get("call")
                     if (
                         call_method
                         and call_method.typetype == ZTypeType.FUNCTION
                         and call_method.return_type
-                        and self._is_option_type(call_method.return_type)
+                        and self._is_option_or_optionval_type(call_method.return_type)
                     ):
                         iter_option_type = call_method.return_type
 

@@ -3075,8 +3075,8 @@ class TestGenerics:
         assert len(i64_monos) == 1
 
     def test_system_option_available(self):
-        """System option type is available via core."""
-        program = check_ok("main: function is { x: option.some 42 }")
+        """System optionval type is available via core for valtypes."""
+        program = check_ok("main: function is { x: optionval.some 42 }")
         assert len(program.mono_types) >= 1
         mono, _ = program.mono_types[0]
         assert mono.generic_origin is not None
@@ -3158,11 +3158,48 @@ class TestGenerics:
         assert any("f64" in n for n in names)
 
     def test_system_option_from_syntax(self):
-        """System option type works with from: syntax."""
-        program = check_ok("main: function is { x: option.some from: 42 }")
+        """System optionval type works with from: syntax."""
+        program = check_ok("main: function is { x: optionval.some from: 42 }")
         assert len(program.mono_types) >= 1
         mono, _ = program.mono_types[0]
         assert mono.generic_origin is not None
+
+    def test_option_requires_reftype(self):
+        """option.some with valtype should error (requires any.reftype)."""
+        errors = check_errors("main: function is { x: option.some 42 }")
+        assert any("not a reference type" in e.msg for e in errors)
+
+    def test_optionval_requires_valtype(self):
+        """optionval with reftype should error (requires any.valtype)."""
+        errors = check_errors('main: function is { x: optionval.some "hello" }')
+        assert any("not a value type" in e.msg for e in errors)
+
+    def test_optionval_some_infers_i64(self):
+        """optionval.some 42 infers t=i64."""
+        program = check_ok("main: function is { x: optionval.some 42 }")
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+        assert mono.typetype == ZTypeType.VARIANT
+
+    def test_optionval_none_explicit_type(self):
+        """optionval.none i32 with explicit type argument."""
+        program = check_ok("main: function is { x: optionval.none i32 }")
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i32" in mono.name
+
+    def test_optionval_is_valtype(self):
+        """Monomorphized optionval is a value type."""
+        program = check_ok("main: function is { x: optionval.some 42 }")
+        mono, _ = program.mono_types[0]
+        assert mono.is_valtype is True
+
+    def test_option_nullable_ptr_flag(self):
+        """Monomorphized option(reftype) has is_nullable_ptr set."""
+        program = check_ok('main: function is { x: option.some "hello" }')
+        mono, _ = program.mono_types[0]
+        assert mono.is_nullable_ptr is True
 
     def test_error_generic_record_no_args(self):
         """Using generic record with no args emits error."""
