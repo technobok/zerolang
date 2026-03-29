@@ -4753,3 +4753,34 @@ class TestVisibility:
             "}\n"
             'main: function is { r: myrec x: 1 y: 2 z: 3\n print "\\{r.x} \\{r.z}" }'
         )
+
+    def test_error_private_redefinition(self):
+        """private: unit { ... } should be an error."""
+        errors = check_errors(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  private: unit { :x }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2\n print "\\{r.x}" }'
+        )
+        assert any(
+            "private" in e.msg and "cannot be redefined" in e.msg for e in errors
+        )
+
+    def test_public_renaming(self):
+        """public: unit { api_x: x } allows access via renamed name."""
+        check_ok(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  public: unit { api_x: x }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2\n print "\\{r.api_x}" }'
+        )
+
+    def test_public_renaming_blocks_internal_name(self):
+        """When renamed, the internal name is not directly accessible."""
+        errors = check_errors(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  public: unit { api_x: x }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2\n print "\\{r.x}" }'
+        )
+        assert any("not public" in e.msg for e in errors)

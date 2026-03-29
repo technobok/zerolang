@@ -173,11 +173,13 @@ def _set_destructor_metadata(ztype: ZType) -> None:
 _RESOLVING = object()
 
 
-def _extract_public_members(as_items: dict) -> Optional[set[str]]:
-    """Extract public member names from as_items if a public: unit is declared.
+def _extract_public_members(as_items: dict) -> Optional[dict[str, str]]:
+    """Extract public member mapping from as_items if a public: unit is declared.
 
     Returns None if no public restriction (all-public default).
-    Returns a set of member names if public is explicitly declared.
+    Returns a dict mapping external_name → internal_name if public is declared.
+    For label-value shorthand (:field), external and internal names are the same.
+    For renaming (api_name: internal_name), they differ.
     """
     public_unit = as_items.get("public")
     if public_unit is None:
@@ -185,8 +187,30 @@ def _extract_public_members(as_items: dict) -> Optional[set[str]]:
     # must be a Unit AST node
     if not isinstance(public_unit, zast.Unit):
         return None
-    # extract member names from the unit body
-    return set(public_unit.body.keys())
+    # build external → internal name mapping
+    members: dict[str, str] = {}
+    for ext_name, defn in public_unit.body.items():
+        if isinstance(defn, zast.LabelValue):
+            # :field shorthand — external and internal names are the same
+            members[ext_name] = ext_name
+        elif isinstance(defn, (zast.AtomId, zast.DottedPath)):
+            # renamed: api_name: internal_name
+            if isinstance(defn, zast.AtomId):
+                members[ext_name] = defn.name
+            elif isinstance(defn, zast.DottedPath):
+                members[ext_name] = defn.child.name
+        else:
+            # other definitions (functions, etc.) — same name
+            members[ext_name] = ext_name
+    return members
+
+
+def _check_private_redefinition(as_items: dict) -> Optional[zast.Unit]:
+    """Return the 'private' unit node if it exists in as_items (for error reporting)."""
+    private_unit = as_items.get("private")
+    if private_unit is not None and isinstance(private_unit, zast.Unit):
+        return private_unit
+    return None
 
 
 class TypeChecker:
@@ -890,6 +914,9 @@ class TypeChecker:
                 ctype.children["create"] = create_type
 
         ctype.public_members = _extract_public_members(cls.as_items)
+        priv = _check_private_redefinition(cls.as_items)
+        if priv:
+            self._error("'private' cannot be redefined", loc=priv.start)
         self._resolving.pop()
         return ctype
 
@@ -980,6 +1007,9 @@ class TypeChecker:
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 utype.children[mname] = mt
             utype.public_members = _extract_public_members(union_defn.as_items)
+            priv = _check_private_redefinition(union_defn.as_items)
+            if priv:
+                self._error("'private' cannot be redefined", loc=priv.start)
             self._resolving.pop()
             return utype
 
@@ -1131,6 +1161,9 @@ class TypeChecker:
                 self._check_function_body(f"{name}.{mname}", mfunc)
 
         utype.public_members = _extract_public_members(union_defn.as_items)
+        priv = _check_private_redefinition(union_defn.as_items)
+        if priv:
+            self._error("'private' cannot be redefined", loc=priv.start)
         self._resolving.pop()
         return utype
 
@@ -1231,6 +1264,9 @@ class TypeChecker:
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 vtype.children[mname] = mt
             vtype.public_members = _extract_public_members(variant_defn.as_items)
+            priv = _check_private_redefinition(variant_defn.as_items)
+            if priv:
+                self._error("'private' cannot be redefined", loc=priv.start)
             self._resolving.pop()
             return vtype
 
@@ -1374,6 +1410,9 @@ class TypeChecker:
                 self._check_function_body(f"{name}.{mname}", mfunc)
 
         vtype.public_members = _extract_public_members(variant_defn.as_items)
+        priv = _check_private_redefinition(variant_defn.as_items)
+        if priv:
+            self._error("'private' cannot be redefined", loc=priv.start)
         self._resolving.pop()
         return vtype
 
@@ -1548,6 +1587,9 @@ class TypeChecker:
             rtype.children["create"] = create_type
 
         rtype.public_members = _extract_public_members(rec.as_items)
+        priv = _check_private_redefinition(rec.as_items)
+        if priv:
+            self._error("'private' cannot be redefined", loc=priv.start)
         self._resolving.pop()
         return rtype
 
@@ -2304,7 +2346,11 @@ class TypeChecker:
                 return target_type
         # for unions/variants, store parent type on the path for construction detection
         if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
-            child = parent_type.children.get(child_name)
+            # resolve public name (may redirect renamed members)
+            resolved_name = self._resolve_public_name(parent_type, child_name, path)
+            child = parent_type.children.get(resolved_name)
+            if not child:
+                child = parent_type.children.get(child_name)
             if child:
                 # public access check
                 if self._is_non_public_access(parent_type, child_name, path):
@@ -2366,7 +2412,11 @@ class TypeChecker:
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
         # for records/enums, look up child in children
-        child = parent_type.children.get(child_name)
+        # resolve public name (may redirect renamed members)
+        resolved_name = self._resolve_public_name(parent_type, child_name, path)
+        child = parent_type.children.get(resolved_name)
+        if not child:
+            child = parent_type.children.get(child_name)
         if child:
             # null-hidden methods on typedefs
             if (
@@ -4468,6 +4518,15 @@ class TypeChecker:
         utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
         return utype
 
+    def _is_internal_access(self, parent_type: ZType, path: zast.DottedPath) -> bool:
+        """Check if access is from inside the type definition (private access)."""
+        if isinstance(path.parent, zast.AtomId) and path.parent.name == "this":
+            return True
+        for _, rtype in self._resolving:
+            if rtype is parent_type or rtype.name == parent_type.name:
+                return True
+        return False
+
     def _is_non_public_access(
         self, parent_type: ZType, child_name: str, path: zast.DottedPath
     ) -> bool:
@@ -4482,15 +4541,25 @@ class TypeChecker:
             return False  # internal/meta fields always accessible
         if child_name in ("tag",):
             return False  # tag accessor always accessible
-        # check if access is internal (via this)
-        if isinstance(path.parent, zast.AtomId) and path.parent.name == "this":
-            return False  # internal access — always allowed
-        # check if we're inside the type definition (resolving or checking methods)
-        for _, rtype in self._resolving:
-            if rtype is parent_type or rtype.name == parent_type.name:
-                return False
-        # external access: check public_members
+        if self._is_internal_access(parent_type, path):
+            return False
+        # external access: check public_members (keys are external names)
         return child_name not in parent_type.public_members
+
+    def _resolve_public_name(
+        self, parent_type: ZType, child_name: str, path: zast.DottedPath
+    ) -> str:
+        """Resolve a public external name to the internal member name.
+
+        For renamed members (api_name: internal_name), returns the internal name.
+        For non-renamed members, returns the same name.
+        For internal access, returns the same name (no redirection).
+        """
+        if parent_type.public_members is None:
+            return child_name
+        if self._is_internal_access(parent_type, path):
+            return child_name
+        return parent_type.public_members.get(child_name, child_name)
 
     def _check_box_construction(
         self, call: zast.Call, box_template: ZType
