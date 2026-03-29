@@ -4646,3 +4646,95 @@ class TestUnitLevelIf:
         )
         # should be a static const, no runtime if
         assert "if (1" not in csource
+
+
+class TestNativeEmitter:
+    """Tests that native system types and functions emit correct C code."""
+
+    def test_native_return(self):
+        """return (native) generates valid C."""
+        output = compile_and_run(emit_source("main: function out i64 is { return 42 }"))
+        # return produces no output, but program exits cleanly
+        assert output == ""
+
+    def test_native_break(self):
+        """break (native) generates valid C in a loop."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  x: 0\n"
+                "  for loop {\n"
+                "    if x == 3 then { break }\n"
+                "    x = x + 1\n"
+                "  }\n"
+                '  print "\\{x}"\n'
+                "}"
+            )
+        )
+        assert output.strip() == "3"
+
+    def test_native_error(self):
+        """error (native) generates a call in the C output."""
+        csource = emit_source('main: function is { error "test error" }')
+        # The emitter generates an error() call with the string argument
+        assert "error(" in csource
+
+    def test_native_string_operations(self):
+        """String operations via native string type work in generated C."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                '  x: "hello"\n'
+                '  y: "world"\n'
+                '  print "\\{x} \\{y}"\n'
+                "}"
+            )
+        )
+        assert output.strip() == "hello world"
+
+    def test_native_numeric_operations(self):
+        """Native numeric operations (+, -, *, /) generate correct C."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  a: 10 + 20\n"
+                "  b: 100 - 58\n"
+                "  c: 6 * 7\n"
+                '  print "\\{a} \\{b} \\{c}"\n'
+                "}"
+            )
+        )
+        assert output.strip() == "30 42 42"
+
+    def test_native_comparison_operations(self):
+        """Native comparison operations (==, <, >) generate correct C."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                '  if 10 > 5 then { print "gt" }\n'
+                '  if 3 < 7 then { print "lt" }\n'
+                '  if 42 == 42 then { print "eq" }\n'
+                "}"
+            )
+        )
+        lines = output.strip().split("\n")
+        assert lines == ["gt", "lt", "eq"]
+
+    def test_native_numeric_conversion(self):
+        """Native numeric conversion methods generate correct C."""
+        output = compile_and_run(
+            emit_source('main: function is {\n  x: 42\n  y: x.i32\n  print "\\{y}"\n}')
+        )
+        assert output.strip() == "42"
+
+    def test_native_bool_type(self):
+        """Native bool type works in conditions."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  x: 5 > 3\n"
+                '  if x then { print "yes" } else { print "no" }\n'
+                "}"
+            )
+        )
+        assert output.strip() == "yes"

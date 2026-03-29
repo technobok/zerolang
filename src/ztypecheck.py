@@ -434,6 +434,9 @@ class TypeChecker:
             self._resolve_unit_name(self.program.mainunitname, "main")
             self._check_function_body("main", main_func)
 
+        # check for native declarations in user code (not allowed)
+        self._check_native_in_user_code(mainunit)
+
         # also check other definitions in the main unit
         for name, defn in mainunit.body.items():
             if name == "main":
@@ -455,6 +458,48 @@ class TypeChecker:
                         self._check_function_body(name, defn)
 
         return self.errors
+
+    def _check_native_in_user_code(self, unit: zast.Unit) -> None:
+        """Report errors for native declarations in user code.
+
+        The 'native' keyword is reserved for system library definitions.
+        User code should not use 'is native' on functions or types.
+        """
+        for name, defn in unit.body.items():
+            if isinstance(defn, zast.Function) and defn.is_native:
+                self._error(
+                    f"'native' is reserved for system library definitions: '{name}'",
+                    loc=defn.start,
+                    err=ERR.TYPEERROR,
+                    hint="remove 'is native' and provide a function body",
+                )
+            elif isinstance(defn, (zast.Record, zast.Class, zast.Union, zast.Variant)):
+                if defn.is_native:
+                    self._error(
+                        f"'native' is reserved for system library definitions: '{name}'",
+                        loc=defn.start,
+                        err=ERR.TYPEERROR,
+                        hint="remove 'is native' and declare fields normally",
+                    )
+                # also check methods inside the type
+                for mname, mfunc in defn.as_functions.items():
+                    if mfunc.is_native:
+                        self._error(
+                            f"'native' is reserved for system library definitions: '{name}.{mname}'",
+                            loc=mfunc.start,
+                            err=ERR.TYPEERROR,
+                            hint="remove 'is native' and provide a function body",
+                        )
+                # check functions in the 'is' section too
+                if hasattr(defn, "functions"):
+                    for mname, mfunc in defn.functions.items():
+                        if mfunc.is_native:
+                            self._error(
+                                f"'native' is reserved for system library definitions: '{name}.{mname}'",
+                                loc=mfunc.start,
+                                err=ERR.TYPEERROR,
+                                hint="remove 'is native' and provide a function body",
+                            )
 
     # ---- Demand-driven name resolution ----
 
@@ -3548,7 +3593,7 @@ class TypeChecker:
                     ):
                         defn = self._lookup_definition(path.parent.name)
                         if isinstance(defn, zast.Function):
-                            if defn.body is None:
+                            if defn.body is None and not defn.is_native:
                                 # spec — no value to take
                                 self._error(
                                     f"Cannot take spec '{path.parent.name}': "

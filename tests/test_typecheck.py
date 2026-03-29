@@ -4784,3 +4784,74 @@ class TestVisibility:
             'main: function is { r: myrec x: 1 y: 2\n print "\\{r.x}" }'
         )
         assert any("not public" in e.msg for e in errors)
+
+
+class TestNativeTypeCheck:
+    """Tests for native keyword handling in the type checker."""
+
+    def test_system_native_function_resolves(self):
+        """System native functions (error, return, break, continue) resolve normally."""
+        program = check_ok('main: function is { print "hello" }')
+        # return/break/continue are resolved from system.z as native functions
+        assert program is not None
+
+    def test_system_native_types_resolve(self):
+        """System native types (bool, null, string) resolve and are usable."""
+        check_ok('main: function is { x: "hello"\n print x }')
+
+    def test_native_function_in_user_code_errors(self):
+        """Using 'is native' in user code should produce an error."""
+        errors = check_errors(
+            "f: function out i64 is native\nmain: function is { print f }"
+        )
+        assert any(
+            "native" in e.msg.lower() and "reserved" in e.msg.lower() for e in errors
+        )
+
+    def test_native_function_error_has_hint(self):
+        """Native function error should include a helpful hint."""
+        errors = check_errors(
+            "f: function {n: i64} out i64 is native\nmain: function is { print f }"
+        )
+        native_errors = [e for e in errors if "native" in e.msg.lower()]
+        assert len(native_errors) > 0
+        assert native_errors[0].hint is not None
+        assert "body" in native_errors[0].hint.lower()
+
+    def test_native_record_in_user_code_errors(self):
+        """Using 'record is native' in user code should produce an error."""
+        errors = check_errors("r: record is native\nmain: function is {}")
+        assert any("native" in e.msg.lower() for e in errors)
+
+    def test_native_class_in_user_code_errors(self):
+        """Using 'class is native' in user code should produce an error."""
+        errors = check_errors("c: class is native\nmain: function is {}")
+        assert any("native" in e.msg.lower() for e in errors)
+
+    def test_native_method_in_user_record_errors(self):
+        """Native method inside a user-defined record should produce an error."""
+        errors = check_errors(
+            "r: record { x: i64 } as { m: function {:this} out i64 is native }\n"
+            "main: function is {}"
+        )
+        assert any("native" in e.msg.lower() for e in errors)
+
+    def test_return_is_native_not_spec_error(self):
+        """return (native) should not trigger 'Cannot take spec' error."""
+        # This test verifies the fix: native functions have body=None but
+        # should not be treated as specs for error purposes
+        check_ok("main: function out i64 is { return 42 }")
+
+    def test_break_in_loop(self):
+        """break (native) works correctly in a loop."""
+        check_ok("main: function is { for loop { break } }")
+
+    def test_continue_in_loop(self):
+        """continue (native) works correctly in a loop."""
+        check_ok(
+            "main: function is { x: 0\n for while x < 10 loop { x = x + 1\n continue } }"
+        )
+
+    def test_error_function_native(self):
+        """error function (native) resolves and type-checks."""
+        check_ok('main: function is { error "test" }')
