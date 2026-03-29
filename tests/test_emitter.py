@@ -3254,6 +3254,47 @@ class TestGenericsEmission:
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
+    # ---- box type ----
+
+    def test_box_valtype_compiles(self):
+        """box from: valtype compiles and runs."""
+        csource = emit_source(
+            'main: function is {\n    b: box from: 42\n    print "ok"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_box_valtype_arithmetic(self):
+        """Arithmetic on boxed valtype auto-derefs."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    b: box from: 10\n"
+            "    r: b + 5\n"
+            '    print "\\{r}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_box_reftype_passthrough(self):
+        """box from: reftype is transparent passthrough."""
+        csource = emit_source(
+            'main: function is {\n    b: box from: "hello"\n    print b\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
+    def test_box_valtype_comparison(self):
+        """Comparison on boxed valtype auto-derefs."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    b: box from: 42\n"
+            '    if b == 42 then { print "yes" } else { print "no" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "yes"
+
     # ---- any.valtype / any.reftype constraints ----
 
     def test_valtype_constraint_record_compiles(self):

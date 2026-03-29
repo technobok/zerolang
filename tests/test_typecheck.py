@@ -3201,6 +3201,30 @@ class TestGenerics:
         mono, _ = program.mono_types[0]
         assert mono.is_nullable_ptr is True
 
+    def test_box_valtype_creates_reftype(self):
+        """box from: valtype creates a box reftype."""
+        program = check_ok("main: function is { b: box from: 42 }")
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert mono.is_box is True
+        assert mono.is_valtype is False
+
+    def test_box_reftype_passthrough(self):
+        """box from: reftype is a passthrough (type is the reftype)."""
+        program = check_ok('main: function is { b: box from: "hello" }')
+        # for reftype passthrough, the type is string, not box
+        # no box mono type should be created
+        for mono, _ in program.mono_types:
+            assert not mono.is_box
+
+    def test_box_valtype_has_inner_children(self):
+        """box(valtype) has children copied from inner type for transparent access."""
+        program = check_ok("main: function is { b: box from: 42 }")
+        mono, _ = program.mono_types[0]
+        assert mono.is_box is True
+        # should have i64's operator children
+        assert "+" in mono.children or len(mono.children) > 0
+
     def test_error_generic_record_no_args(self):
         """Using generic record with no args emits error."""
         errors = check_errors(

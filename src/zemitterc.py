@@ -159,6 +159,12 @@ def _ctype(ztype: Optional[ZType]) -> str:
         if some_type:
             return _ctype(some_type)
         return "void*"
+    # box(valtype): C type is pointer to the inner valtype's ctype
+    if ztype.is_box:
+        inner_type = ztype.generic_args.get("t")
+        if inner_type:
+            return f"{_ctype(inner_type)}*"
+        return "void*"
     name = ztype.name
     if name in TYPEMAP:
         return TYPEMAP[name]
@@ -1636,6 +1642,9 @@ class CEmitter:
         elif mono_type.typetype == ZTypeType.RECORD:
             self._emit_mono_record(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.CLASS:
+            if mono_type.is_box:
+                self._emit_mono_box(mono_type)
+                return
             self._emit_mono_class(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.PROTOCOL:
             self._emit_mono_protocol(mono_type, template_defn)
@@ -1823,6 +1832,22 @@ class CEmitter:
         lines.append("}\n\n")
 
         # NO destructor — value type
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_box(self, mono_type: ZType) -> None:
+        """Emit a monomorphized box(valtype) type — just a destructor."""
+        self.needs_stdlib = True
+        name = mono_type.name
+        inner_type = mono_type.generic_args.get("t")
+        if not inner_type:
+            return
+        inner_ctype = _ctype(inner_type)
+        ptr_ctype = f"{inner_ctype}*"
+        lines: List[str] = []
+        # destructor: free the heap-allocated value
+        lines.append(f"static void z_{name}_destroy({ptr_ctype} v) {{\n")
+        lines.append("    if (v) free(v);\n")
+        lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_record(
@@ -3825,6 +3850,12 @@ class CEmitter:
                     self._temp.decls.append(f"{indent}{tv} = NULL;\n")
             return result
 
+        # box construction: box from: val
+        if call.call_kind == zast.CallKind.BOX_CREATE:
+            return self._emit_box_create(call)
+        if call.call_kind == zast.CallKind.BOX_PASSTHROUGH:
+            return self._emit_box_passthrough(call)
+
         # union construction: union.subtype expr
         if self._is_union_construction(call):
             return self._emit_union_construction(call)
@@ -3906,6 +3937,19 @@ class CEmitter:
             return self._emit_const_value(binop)
         lhs = self._emit_operation_value(binop.lhs)
         rhs = self._emit_path_value(binop.rhs)
+        # auto-deref boxed valtypes in binary operations
+        if (
+            isinstance(binop.lhs, zast.AtomId)
+            and binop.lhs.type
+            and binop.lhs.type.is_box
+        ):
+            lhs = f"(*{lhs})"
+        if (
+            isinstance(binop.rhs, zast.AtomId)
+            and binop.rhs.type
+            and binop.rhs.type.is_box
+        ):
+            rhs = f"(*{rhs})"
         op = binop.operator.name
         cop = C_OPS.get(op, op)
         return f"({lhs} {cop} {rhs})"
@@ -4164,6 +4208,12 @@ class CEmitter:
             if parent_type and parent_type.name in TYPEMAP:
                 parent_val = self._emit_path_value(path.parent)
                 return self._emit_numeric_cast(parent_val, parent_type.name, child)
+            # box(numeric): auto-deref then cast
+            if parent_type and parent_type.is_box:
+                inner_type = parent_type.generic_args.get("t")
+                if inner_type and inner_type.name in TYPEMAP:
+                    parent_val = self._emit_path_value(path.parent)
+                    return self._emit_numeric_cast(parent_val, inner_type.name, child)
 
         parent = self._emit_path_value(path.parent)
         # use -> for class instances (pointer types)
@@ -4362,6 +4412,64 @@ class CEmitter:
                     value_arg = arg
                     break
 
+        if value_arg is None:
+            return "NULL"
+
+        val = self._emit_operation_value(value_arg.valtype)
+        # take ownership: remove from frees list
+        if val in self._temp.frees:
+            self._temp.frees.remove(val)
+        return val
+
+    def _emit_box_create(self, call: zast.Call) -> str:
+        """Emit box from: val for valtype — malloc + copy."""
+        self.needs_stdlib = True
+        indent = self._indent()
+        call_type = call.type
+        if not call_type:
+            return "NULL"
+        inner_type = call_type.generic_args.get("t")
+        if not inner_type:
+            return "NULL"
+        inner_ctype = _ctype(inner_type)
+        ptr_ctype = f"{inner_ctype}*"
+        tmp = self._temp_name("box")
+
+        # find the from: argument
+        value_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                value_arg = arg
+                break
+        if value_arg is None:
+            for arg in call.arguments:
+                if not arg.name:
+                    value_arg = arg
+                    break
+        if value_arg is None:
+            return "NULL"
+
+        val = self._emit_operation_value(value_arg.valtype)
+        self._temp.decls.append(
+            f"{indent}{ptr_ctype} {tmp} = ({ptr_ctype})malloc(sizeof({inner_ctype}));\n"
+        )
+        self._temp.decls.append(f"{indent}*{tmp} = {val};\n")
+        self._temp.frees.append(tmp)
+        return tmp
+
+    def _emit_box_passthrough(self, call: zast.Call) -> str:
+        """Emit box from: val for reftype — just take ownership."""
+        # find the from: argument
+        value_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                value_arg = arg
+                break
+        if value_arg is None:
+            for arg in call.arguments:
+                if not arg.name:
+                    value_arg = arg
+                    break
         if value_arg is None:
             return "NULL"
 

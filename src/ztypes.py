@@ -178,6 +178,10 @@ class ZType:
     # nullable pointer option: monomorphized option(reftype) emitted as bare pointer
     is_nullable_ptr: bool = field(default=False, init=False)
 
+    # box type: monomorphized box(valtype) emitted as heap-allocated pointer
+    # For box(reftype), the box is transparent (passthrough to inner type)
+    is_box: bool = field(default=False, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.

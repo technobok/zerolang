@@ -667,6 +667,8 @@ class CallKind(IntEnum):
     TYPEDEF_BORROW = 11  # typedef.borrow from: expr
     CALLABLE = 12  # callable object dispatch (object with 'call' method)
     UNIT_INSTANTIATE = 13  # generic unit instantiation: (myunit t: i64)
+    BOX_CREATE = 14  # box from: val (valtype boxing)
+    BOX_PASSTHROUGH = 15  # box from: val (reftype passthrough — just take ownership)
 
 
 @dataclass

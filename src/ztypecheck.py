@@ -3721,6 +3721,16 @@ class TypeChecker:
             call.call_kind = zast.CallKind.RECORD_CREATE
             return callee_type
 
+        # handle box construction: box from: val (system box only — empty class body)
+        if (
+            callee_type.typetype == ZTypeType.CLASS
+            and callee_type.isgeneric
+            and callee_type.name == "box"
+            and "t" in callee_type.generic_params
+            and not callee_type.children
+        ):
+            return self._check_box_construction(call, callee_type)
+
         # handle class construction: calling a class type creates a new owned instance
         if callee_type.typetype == ZTypeType.CLASS:
             if callee_type.isgeneric:
@@ -4421,6 +4431,58 @@ class TypeChecker:
         # replace the bare ZType with a fully resolved one
         utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
         return utype
+
+    def _check_box_construction(
+        self, call: zast.Call, box_template: ZType
+    ) -> Optional[ZType]:
+        """Handle box from: val construction.
+
+        For reftype T: result is T directly (zero-cost passthrough).
+        For valtype T: result is monomorphized box(T) reftype.
+        """
+        # find the from: argument (or first positional)
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        if from_arg is None:
+            for arg in call.arguments:
+                if not arg.name or arg.name == "t":
+                    # skip explicit type arg
+                    if arg.name == "t":
+                        continue
+                    from_arg = arg
+                    break
+
+        if from_arg is None:
+            self._error("box requires a 'from:' argument", loc=call.start)
+            return None
+
+        inner_type = self._check_operation(from_arg.valtype)
+        if not inner_type:
+            return None
+
+        if _is_valtype(inner_type):
+            # valtype: create monomorphized box type as reftype
+            defn = self._find_generic_defn(box_template)
+            if not defn:
+                return None
+            mono = self._monomorphize(box_template, {"t": inner_type}, defn)
+            if mono:
+                mono.is_box = True
+                # copy children from inner type for transparent access
+                for cname, ctype in inner_type.children.items():
+                    if cname not in mono.children:
+                        mono.children[cname] = ctype
+                call.type = mono
+                call.call_kind = zast.CallKind.BOX_CREATE
+            return mono
+        else:
+            # reftype: passthrough — result IS the inner type
+            call.type = inner_type
+            call.call_kind = zast.CallKind.BOX_PASSTHROUGH
+            return inner_type
 
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""
