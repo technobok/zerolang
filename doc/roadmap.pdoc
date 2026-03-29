@@ -2006,34 +2006,101 @@ values.
   #*: #+ Tests: #~"n.each", literal #~"3.each", #~"each from:",
     zero-iteration #~"0.each".
 
-#---: Phase 43b: Generic Units \[COMPLETE\]
+#---: Phase 44: Generic Units \[COMPLETE\]
 
 Units can be generic, with type parameters declared in the #~"as" body.
 Instantiation via assignment alias: #~"intmath: (mathops t: i64)".
 
 #ol:
-  #*: #+ Type checker: detect generic params in unit body (DottedPaths
+  [#*: #+ Type checker: detect generic params in unit body (DottedPaths
     to #~"any.generic"), mark unit as generic, push generic context for
-    body definition resolution.
-  #*: #+ Monomorphization: extend #~"_monomorphize" to handle UNIT types —
+    body definition resolution.]
+  [#*: #+ Monomorphization: extend #~"_monomorphize" to handle UNIT types —
     substitute generic params in function children, clone function bodies
     via #~"clone_function", type-check cloned bodies with concrete types
-    in symtab. Register in #~"unit_types" and #~"_cloned_methods".
-  #*: #+ Call dispatch: in #~"_check_call", detect generic UNIT callee and
-    redirect to #~"_resolve_typeref_call" for monomorphization.
-  #*: #+ Emitter: skip generic unit templates via #~"_is_generic_template",
+    in symtab. Register in #~"unit_types" and #~"_cloned_methods".]
+  [#*: #+ Call dispatch: in #~"_check_call", detect generic UNIT callee and
+    redirect to #~"_resolve_typeref_call" for monomorphization.]
+  [#*: #+ Emitter: skip generic unit templates via #~"_is_generic_template",
     emit monomorphized unit functions via #~"_emit_mono_unit", handle
     unit aliases in #~"_emit_assignment" (no-op) and #~"_get_callable_name"
-    (resolve alias to actual type name).
-  #*: #+ Spec fix: units have #~"as" not #~"is" in argument table.
-  #*: #+ Tests and examples: 3 inline unit tests, #~"genericunit.z" example.
-  #*: #+ File units: on-demand resolution via #~"_ensure_file_unit_resolved",
+    (resolve alias to actual type name).]
+  [#*: #+ Spec fix: units have #~"as" not #~"is" in argument table.]
+  [#*: #+ Tests and examples: 3 inline unit tests, #~"genericunit.z" example.]
+  [#*: #+ File units: on-demand resolution via #~"_ensure_file_unit_resolved",
     file unit names resolvable in #~"_resolve_name" step 5, generic file
     unit templates skipped during emission. #~"_find_generic_defn" extended
     to find file unit definitions. Multi-file test and
-    #~"genericfileunit.z" + #~"genmath.z" example.
+    #~"genericfileunit.z" + #~"genmath.z" example.]
 
-#---: Phase 44: C Runtime Library
+#---: Phase 45: Box type
+
+Objects may be defined to be generic over 'any' which could be either a valtype
+or a reftype when converted to a concrete type. To handle both situations in a
+similar way, introduce a new generic type called 'box'.
+
+#ol:
+  [#*: 'box' has a generic parameter 't' of type 'any.generic' and a 'from'
+  argument of type 't' which takes ownership]
+  [#*: when used, if the 'from' argument of type 't' is a reftype, the 'box'
+  returns that argument unchanged. This is a typesystem 'change' only. There is
+  no runtime cost. In subsequent code, the 'new' variable can be used exactly
+  as the original type could be used. The old variable name in invalid as is
+  usually done when an argument is taken]
+  [#*: when used, if the 'from' argument of type 't' is a valtype, an
+  allocation is done to store that valtype and the new 'boxed' variable becomes
+  a reftype. Destruction of the boxed type needs to free the undelying memory
+  that was allocated]
+  [#*: 'box' can also be used in normal concrete code as a simple way to
+  convert a valtype into a reftype. Note that this could also be done be
+  creating a 'class' with the reftype as a single field, which would give more
+  control (can create your own methods and could control access to the
+  underlying field)]
+
+#---: Phase 46: public / private accessibility
+
+'public' and 'private' are predefined identifiers for controlling access to the
+members (fields and methods) of objects.
+
+#ol:
+  [#*: public and private use a 'unit' construct to define their contents.]
+  [#*: private is automatically defined by the compiler to always include all
+  members of the current object. It cannot be redefined by the user]
+  [#*: public is automatically defined by the compiler to always include all
+  members of the current object but it can be redefined by the user]
+  [#*: the user can redefine public by using a 'unit' keyword inline within the
+  "as" section of the object eg 
+  "public: unit { method1: mymethod1 field1: myfield1 }"]
+  [#*: resolution of definitions within the public definition is done in the
+  usual way and would be expected to resolve to other fields/methods in the
+  'is' and 'as' section of the current object]
+  [#*: it would be expected that the shortened label declaration syntax would
+  often be used, but it would not be required if the user wanted to expose a
+  method/field publicly with a different name to the interal declaration.
+  Example of public with shortened syntax: "public: unit { :method1 :field1 }"]
+  [#*: inside the object, the 'this' definition always accesses the 'private'
+  namespace and can access all methods/fields]
+  [#*: 'this.private' can also be passed to an external function or object
+  definition. This allows creation of 'friend' objects similar to C++ that can
+  share access to the internals of an object. Note that both the receiver must
+  declare that it is receiving mytype.private as a parameter definition and
+  only the mytype object itself can pass this.private. There is no way to gain
+  access to the internals of an object without its cooperation]
+  [#*: from outside an object, only members listed in the 'public' definition
+  can be accessed. Remember that by default, this is all fields/members. But if
+  declared explicitly can be a subset of available methods and may have
+  different names than the internal members]
+  [#*: 'public' could also be a useful tool for managing backwards
+  compatibility. Members can be freely renamed internally while keeping the can
+  external 'API'. Both the new name and the old name could be exposed in the
+  public interface']
+  [#*: 'public' also applies to 'unit's for controlling access to definitions
+  within it.]
+  [#*: otherwise, 'public' and 'private' can be applied to all instantiable
+  object types: record, class, union, variant, protocol, facet]
+
+
+#---: Phase 47: C Runtime Library
 
 Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (#~"ZStr", #~"zstr_new",
@@ -2065,7 +2132,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
     union destructors, protocol vtable helpers, generic container
     support.
 
-#---: Phase 45: Expand to v3 (Full Language)
+#---: Phase 48: Expand to v3 (Full Language)
 
 #ol:
   #*: Generators/yield (state machine transformation).
@@ -2073,7 +2140,7 @@ static library (#~"libzrt.a"), and links it into the final executable.
   #*: Iterator protocol.
   #*: Full standard library.
 
-#---: Phase 46: Developer Tools
+#---: Phase 49: Developer Tools
 
 Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.
@@ -2093,7 +2160,7 @@ source files in IDEs and editors.
   #*: Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.
 
-#---: Phase 47: Self-Hosting
+#---: Phase 50: Self-Hosting
 
 #ol:
   #*: Write the zerolang compiler in zerolang.

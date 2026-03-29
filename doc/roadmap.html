@@ -197,15 +197,19 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-43-for-expression-improvements-complete">Phase 43: for-expression improvements [COMPLETE]</a>
 </li>
-<li><a href="#phase-43b-generic-units-complete">Phase 43b: Generic Units [COMPLETE]</a>
+<li><a href="#phase-44-generic-units-complete">Phase 44: Generic Units [COMPLETE]</a>
 </li>
-<li><a href="#phase-44-c-runtime-library">Phase 44: C Runtime Library</a>
+<li><a href="#phase-45-box-type">Phase 45: Box type</a>
 </li>
-<li><a href="#phase-45-expand-to-v3-full-language">Phase 45: Expand to v3 (Full Language)</a>
+<li><a href="#phase-46-public-private-accessibility">Phase 46: public / private accessibility</a>
 </li>
-<li><a href="#phase-46-developer-tools">Phase 46: Developer Tools</a>
+<li><a href="#phase-47-c-runtime-library">Phase 47: C Runtime Library</a>
 </li>
-<li><a href="#phase-47-self-hosting">Phase 47: Self-Hosting</a>
+<li><a href="#phase-48-expand-to-v3-full-language">Phase 48: Expand to v3 (Full Language)</a>
+</li>
+<li><a href="#phase-49-developer-tools">Phase 49: Developer Tools</a>
+</li>
+<li><a href="#phase-50-self-hosting">Phase 50: Self-Hosting</a>
 </li>
 </ul>
 </li>
@@ -1758,31 +1762,94 @@ values.</p>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Tests: <code>n.each</code>, literal <code>3.each</code>, <code>each from:</code>,</li>
 <code>0.each</code>
 </ol>
-<h3 id="phase-43b-generic-units-complete"><a href="#phase-43b-generic-units-complete">5.44. Phase 43b: Generic Units [COMPLETE]</a></h3>
+<h3 id="phase-44-generic-units-complete"><a href="#phase-44-generic-units-complete">5.44. Phase 44: Generic Units [COMPLETE]</a></h3>
 <p>Units can be generic, with type parameters declared in the <code>as</code> body.
 Instantiation via assignment alias: <code>intmath: (mathops t: i64)</code>.</p>
 <ol>
-<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Type checker: detect generic params in unit body (DottedPaths</li>
-<code>any.generic</code>
-<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Monomorphization: extend <code>_monomorphize</code> to handle UNIT types &#x2014;</li>
-<code>clone_function</code>
-<code>unit_types</code>
-<code>_cloned_methods</code>
-<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Call dispatch: in <code>_check_call</code>, detect generic UNIT callee and</li>
-<code>_resolve_typeref_call</code>
-<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emitter: skip generic unit templates via <code>_is_generic_template</code>,</li>
-<code>_emit_mono_unit</code>
-<code>_emit_assignment</code>
-<code>_get_callable_name</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Type checker: detect generic params in unit body (DottedPaths
+to <code>any.generic</code>), mark unit as generic, push generic context for
+body definition resolution.</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Monomorphization: extend <code>_monomorphize</code> to handle UNIT types &#x2014;
+substitute generic params in function children, clone function bodies
+via <code>clone_function</code>, type-check cloned bodies with concrete types
+in symtab. Register in <code>unit_types</code> and <code>_cloned_methods</code>.</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Call dispatch: in <code>_check_call</code>, detect generic UNIT callee and
+redirect to <code>_resolve_typeref_call</code> for monomorphization.</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Emitter: skip generic unit templates via <code>_is_generic_template</code>,
+emit monomorphized unit functions via <code>_emit_mono_unit</code>, handle
+unit aliases in <code>_emit_assignment</code> (no-op) and <code>_get_callable_name</code>
+(resolve alias to actual type name).</li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Spec fix: units have <code>as</code> not <code>is</code> in argument table.</li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Tests and examples: 3 inline unit tests, <code>genericunit.z</code> example.</li>
-<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> File units: on-demand resolution via <code>_ensure_file_unit_resolved</code>,</li>
-<code>_resolve_name</code>
-<code>_find_generic_defn</code>
-<code>genericfileunit.z</code>
-<code>genmath.z</code>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> File units: on-demand resolution via <code>_ensure_file_unit_resolved</code>,
+file unit names resolvable in <code>_resolve_name</code> step 5, generic file
+unit templates skipped during emission. <code>_find_generic_defn</code> extended
+to find file unit definitions. Multi-file test and
+<code>genericfileunit.z</code> + <code>genmath.z</code> example.</li>
 </ol>
-<h3 id="phase-44-c-runtime-library"><a href="#phase-44-c-runtime-library">5.45. Phase 44: C Runtime Library</a></h3>
+<h3 id="phase-45-box-type"><a href="#phase-45-box-type">5.45. Phase 45: Box type</a></h3>
+<p>Objects may be defined to be generic over 'any' which could be either a valtype
+or a reftype when converted to a concrete type. To handle both situations in a
+similar way, introduce a new generic type called 'box'.</p>
+<ol>
+<li>'box' has a generic parameter 't' of type 'any.generic' and a 'from'
+  argument of type 't' which takes ownership</li>
+<li>when used, if the 'from' argument of type 't' is a reftype, the 'box'
+  returns that argument unchanged. This is a typesystem 'change' only. There is
+  no runtime cost. In subsequent code, the 'new' variable can be used exactly
+  as the original type could be used. The old variable name in invalid as is
+  usually done when an argument is taken</li>
+<li>when used, if the 'from' argument of type 't' is a valtype, an
+  allocation is done to store that valtype and the new 'boxed' variable becomes
+  a reftype. Destruction of the boxed type needs to free the undelying memory
+  that was allocated</li>
+<li>'box' can also be used in normal concrete code as a simple way to
+  convert a valtype into a reftype. Note that this could also be done be
+  creating a 'class' with the reftype as a single field, which would give more
+  control (can create your own methods and could control access to the
+  underlying field)</li>
+</ol>
+<h3 id="phase-46-public-private-accessibility"><a href="#phase-46-public-private-accessibility">5.46. Phase 46: public / private accessibility</a></h3>
+<p>'public' and 'private' are predefined identifiers for controlling access to the
+members (fields and methods) of objects.</p>
+<ol>
+<li>public and private use a 'unit' construct to define their contents.</li>
+<li>private is automatically defined by the compiler to always include all
+  members of the current object. It cannot be redefined by the user</li>
+<li>public is automatically defined by the compiler to always include all
+  members of the current object but it can be redefined by the user</li>
+<li>the user can redefine public by using a 'unit' keyword inline within the
+  "as" section of the object eg 
+  "public: unit { method1: mymethod1 field1: myfield1 }"</li>
+<li>resolution of definitions within the public definition is done in the
+  usual way and would be expected to resolve to other fields/methods in the
+  'is' and 'as' section of the current object</li>
+<li>it would be expected that the shortened label declaration syntax would
+  often be used, but it would not be required if the user wanted to expose a
+  method/field publicly with a different name to the interal declaration.
+  Example of public with shortened syntax: "public: unit { :method1 :field1 }"</li>
+<li>inside the object, the 'this' definition always accesses the 'private'
+  namespace and can access all methods/fields</li>
+<li>'this.private' can also be passed to an external function or object
+  definition. This allows creation of 'friend' objects similar to C++ that can
+  share access to the internals of an object. Note that both the receiver must
+  declare that it is receiving mytype.private as a parameter definition and
+  only the mytype object itself can pass this.private. There is no way to gain
+  access to the internals of an object without its cooperation</li>
+<li>from outside an object, only members listed in the 'public' definition
+  can be accessed. Remember that by default, this is all fields/members. But if
+  declared explicitly can be a subset of available methods and may have
+  different names than the internal members</li>
+<li>'public' could also be a useful tool for managing backwards
+  compatibility. Members can be freely renamed internally while keeping the can
+  external 'API'. Both the new name and the old name could be exposed in the
+  public interface'</li>
+<li>'public' also applies to 'unit's for controlling access to definitions
+  within it.</li>
+<li>otherwise, 'public' and 'private' can be applied to all instantiable
+  object types: record, class, union, variant, protocol, facet</li>
+</ol>
+<h3 id="phase-47-c-runtime-library"><a href="#phase-47-c-runtime-library">5.47. Phase 47: C Runtime Library</a></h3>
 <p>Extract generated C helpers into a precompiled static library. Currently
 the emitter inlines string handling (<code>ZStr</code>, <code>zstr_new</code>,
 <code>zstr_cat</code>, etc.) into every generated <code>.c</code> file. This phase moves
@@ -1816,14 +1883,14 @@ static library (<code>libzrt.a</code>), and links it into the final executable.<
 <li>Verify all existing examples and tests still pass with the</li>
 <li>Future runtime candidates: format/print infrastructure, I/O,</li>
 </ol>
-<h3 id="phase-45-expand-to-v3-full-language"><a href="#phase-45-expand-to-v3-full-language">5.46. Phase 45: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-48-expand-to-v3-full-language"><a href="#phase-48-expand-to-v3-full-language">5.48. Phase 48: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-46-developer-tools"><a href="#phase-46-developer-tools">5.47. Phase 46: Developer Tools</a></h3>
+<h3 id="phase-49-developer-tools"><a href="#phase-49-developer-tools">5.49. Phase 49: Developer Tools</a></h3>
 <p>Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.</p>
 <ol>
@@ -1834,7 +1901,7 @@ source files in IDEs and editors.</p>
 <li>Formatter: canonical source formatter that reads <code>.z</code> files</li>
 <li>Editor integration: VS Code extension and/or tree-sitter grammar</li>
 </ol>
-<h3 id="phase-47-self-hosting"><a href="#phase-47-self-hosting">5.48. Phase 47: Self-Hosting</a></h3>
+<h3 id="phase-50-self-hosting"><a href="#phase-50-self-hosting">5.50. Phase 50: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>
