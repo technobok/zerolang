@@ -173,6 +173,22 @@ def _set_destructor_metadata(ztype: ZType) -> None:
 _RESOLVING = object()
 
 
+def _extract_public_members(as_items: dict) -> Optional[set[str]]:
+    """Extract public member names from as_items if a public: unit is declared.
+
+    Returns None if no public restriction (all-public default).
+    Returns a set of member names if public is explicitly declared.
+    """
+    public_unit = as_items.get("public")
+    if public_unit is None:
+        return None
+    # must be a Unit AST node
+    if not isinstance(public_unit, zast.Unit):
+        return None
+    # extract member names from the unit body
+    return set(public_unit.body.keys())
+
+
 class TypeChecker:
     """
     Single-pass demand-driven type checker.
@@ -873,6 +889,7 @@ class TypeChecker:
             if "create" not in ctype.children:
                 ctype.children["create"] = create_type
 
+        ctype.public_members = _extract_public_members(cls.as_items)
         self._resolving.pop()
         return ctype
 
@@ -962,6 +979,7 @@ class TypeChecker:
             for mname, mfunc in union_defn.as_functions.items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 utype.children[mname] = mt
+            utype.public_members = _extract_public_members(union_defn.as_items)
             self._resolving.pop()
             return utype
 
@@ -1112,6 +1130,7 @@ class TypeChecker:
             if mfunc.body:
                 self._check_function_body(f"{name}.{mname}", mfunc)
 
+        utype.public_members = _extract_public_members(union_defn.as_items)
         self._resolving.pop()
         return utype
 
@@ -1211,6 +1230,7 @@ class TypeChecker:
             for mname, mfunc in variant_defn.as_functions.items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 vtype.children[mname] = mt
+            vtype.public_members = _extract_public_members(variant_defn.as_items)
             self._resolving.pop()
             return vtype
 
@@ -1353,6 +1373,7 @@ class TypeChecker:
             if mfunc.body:
                 self._check_function_body(f"{name}.{mname}", mfunc)
 
+        vtype.public_members = _extract_public_members(variant_defn.as_items)
         self._resolving.pop()
         return vtype
 
@@ -1526,6 +1547,7 @@ class TypeChecker:
         if "create" not in rtype.children:
             rtype.children["create"] = create_type
 
+        rtype.public_members = _extract_public_members(rec.as_items)
         self._resolving.pop()
         return rtype
 
@@ -2284,6 +2306,13 @@ class TypeChecker:
         if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
             child = parent_type.children.get(child_name)
             if child:
+                # public access check
+                if self._is_non_public_access(parent_type, child_name, path):
+                    self._error(
+                        f"'{child_name}' is not public on type '{parent_type.name}'",
+                        loc=path.start,
+                    )
+                    return None
                 # non-subtype children (tag, :tag, methods) should not be
                 # treated as union/variant subtype construction
                 if (
@@ -2347,6 +2376,13 @@ class TypeChecker:
             ):
                 self._error(
                     f"Method '{child_name}' is not available on type '{parent_type.name}'",
+                    loc=path.start,
+                )
+                return None
+            # public access check: restrict external access to public members
+            if self._is_non_public_access(parent_type, child_name, path):
+                self._error(
+                    f"'{child_name}' is not public on type '{parent_type.name}'",
                     loc=path.start,
                 )
                 return None
@@ -4431,6 +4467,30 @@ class TypeChecker:
         # replace the bare ZType with a fully resolved one
         utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
         return utype
+
+    def _is_non_public_access(
+        self, parent_type: ZType, child_name: str, path: zast.DottedPath
+    ) -> bool:
+        """Check if accessing child_name on parent_type violates public access.
+
+        Returns True if the access should be rejected (non-public external access).
+        Returns False if the access is allowed.
+        """
+        if parent_type.public_members is None:
+            return False  # no restriction (all-public default)
+        if child_name.startswith(":"):
+            return False  # internal/meta fields always accessible
+        if child_name in ("tag",):
+            return False  # tag accessor always accessible
+        # check if access is internal (via this)
+        if isinstance(path.parent, zast.AtomId) and path.parent.name == "this":
+            return False  # internal access — always allowed
+        # check if we're inside the type definition (resolving or checking methods)
+        for _, rtype in self._resolving:
+            if rtype is parent_type or rtype.name == parent_type.name:
+                return False
+        # external access: check public_members
+        return child_name not in parent_type.public_members
 
     def _check_box_construction(
         self, call: zast.Call, box_template: ZType

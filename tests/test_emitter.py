@@ -3329,6 +3329,33 @@ class TestGenericsEmission:
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
+    # ---- Public/Private Access Control ----
+
+    def test_record_with_public_compiles(self):
+        """Record with public restriction compiles — public members accessible."""
+        csource = emit_source(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  public: unit { :x }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2\n    print "\\{r.x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "1"
+
+    def test_class_with_public_method(self):
+        """Class with public restriction: method accessible, field hidden."""
+        csource = emit_source(
+            "myclass: class { x: i64 secret: i64 } as {\n"
+            "  public: unit { :x :get_secret }\n"
+            "  get_secret: function {:this} out i64 is { return this.secret }\n"
+            "}\n"
+            "main: function is {\n"
+            '  with c: myclass x: 1 secret: 42 do print "\\{c.get_secret}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
     # ---- Generic Classes ----
 
     def test_generic_class_template_not_emitted(self):

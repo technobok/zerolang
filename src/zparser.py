@@ -1444,6 +1444,19 @@ class Parser:
                         promoteexterns(
                             addto=extern, addfrom=funcx.extern, local=localthis
                         )
+                    elif lex.peek().toktype == TT.UNIT:
+                        # inline unit definition (e.g., public: unit { ... })
+                        unitx = self._acceptsubunit(lex)
+                        if isinstance(unitx, zast.Error):
+                            return unitx
+                        if unitx:
+                            if label.tokstr in items or label.tokstr in functions:
+                                msg = f"Duplicate item name: {label.tokstr}"
+                                return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
+                            local.add(label.tokstr)
+                            items[label.tokstr] = unitx.node  # type: ignore[assignment]
+                            # don't promote externs — unit references parent type members
+                            # which are resolved by the type checker, not the parser
                     else:
                         # path/typeref/typeref_or_num
                         pathx = self._acceptpath(lex)

@@ -182,6 +182,11 @@ class ZType:
     # For box(reftype), the box is transparent (passthrough to inner type)
     is_box: bool = field(default=False, init=False)
 
+    # public/private access control: if set, only listed members are accessible
+    # externally. None = all-public (default). Set during type resolution when
+    # public: unit { ... } is declared in the as block.
+    public_members: "Optional[set[str]]" = field(default=None, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.

@@ -4690,3 +4690,66 @@ class TestUnitLevelIf:
                 break
         assert x_type is not None
         assert x_type.name == "i64"
+
+
+class TestVisibility:
+    """Tests for public/private access control."""
+
+    def test_default_all_public(self):
+        """Without public declaration, all members are accessible."""
+        check_ok(
+            "myrec: record { x: i64 y: i64 }\n"
+            'main: function is { r: myrec x: 1 y: 2\n print "\\{r.x} \\{r.y}" }'
+        )
+
+    def test_public_restricts_access(self):
+        """public: unit restricts external access to listed members."""
+        errors = check_errors(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  public: unit { :x }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2\n print "\\{r.y}" }'
+        )
+        assert any("not public" in e.msg for e in errors)
+
+    def test_public_allows_listed_members(self):
+        """Members listed in public are accessible."""
+        check_ok(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  public: unit { :x }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2\n print "\\{r.x}" }'
+        )
+
+    def test_this_accesses_all_members(self):
+        """this.field always accesses all members (private)."""
+        check_ok(
+            "myclass: class { x: i64 y: i64 } as {\n"
+            "  public: unit { :get_y }\n"
+            "  get_y: function {:this} out i64 is { return this.y }\n"
+            "}\n"
+            "main: function is {\n"
+            '  with c: myclass x: 1 y: 2 do print "\\{c.get_y}"\n'
+            "}"
+        )
+
+    def test_class_public_restricts_field(self):
+        """Class with public restriction prevents external field access."""
+        errors = check_errors(
+            "myclass: class { x: i64 secret: i64 } as {\n"
+            "  public: unit { :x }\n"
+            "}\n"
+            "main: function is {\n"
+            '  with c: myclass x: 1 secret: 42 do print "\\{c.secret}"\n'
+            "}"
+        )
+        assert any("not public" in e.msg for e in errors)
+
+    def test_public_with_multiple_members(self):
+        """Multiple members in public unit."""
+        check_ok(
+            "myrec: record { x: i64 y: i64 z: i64 } as {\n"
+            "  public: unit { :x :z }\n"
+            "}\n"
+            'main: function is { r: myrec x: 1 y: 2 z: 3\n print "\\{r.x} \\{r.z}" }'
+        )
