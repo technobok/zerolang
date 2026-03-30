@@ -189,7 +189,7 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-39-static-string-literals-zstr-header-modernization-complete">Phase 39: Static String Literals + ZStr Header Modernization [COMPLETE]</a>
 </li>
-<li><a href="#phase-40-compiler-console-output-and-error-messages">Phase 40: Compiler console output and error messages</a>
+<li><a href="#phase-40-compiler-console-output-and-error-messages-complete">Phase 40: Compiler console output and error messages [COMPLETE]</a>
 </li>
 <li><a href="#phase-41-constant-folding-complete">Phase 41: Constant folding [COMPLETE]</a>
 </li>
@@ -203,7 +203,7 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-46-public-private-accessibility-complete">Phase 46: public / private accessibility [COMPLETE]</a>
 </li>
-<li><a href="#phase-47-c-runtime-library">Phase 47: C Runtime Library</a>
+<li><a href="#phase-47-c-runtime-library-complete">Phase 47: C Runtime Library [COMPLETE]</a>
 </li>
 <li><a href="#phase-48-expand-to-v3-full-language">Phase 48: Expand to v3 (Full Language)</a>
 </li>
@@ -1599,7 +1599,7 @@ and ASan verification.</li>
 </ol>
 <p>Files: <code>src/zemitterc.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/strings.pdoc</code>, <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-40-compiler-console-output-and-error-messages"><a href="#phase-40-compiler-console-output-and-error-messages">5.40. Phase 40: Compiler console output and error messages</a></h3>
+<h3 id="phase-40-compiler-console-output-and-error-messages-complete"><a href="#phase-40-compiler-console-output-and-error-messages-complete">5.40. Phase 40: Compiler console output and error messages [COMPLETE]</a></h3>
 <p>Modernize the compiler CLI and error experience. Use rustc-style error
 format with error codes, ANSI color, and contextual notes/hints. Make
 the compiler quiet by default with <code>-v</code> for verbose output. All errors
@@ -2112,38 +2112,75 @@ members (fields and methods) of objects.</p>
     as blocks</li>
 <li>Public renaming: <code>public: unit { api_name: internal_name }</code> redirects
     external access through the renamed public name to the internal member</li>
-<li>Note: <code>this.private</code> friend function passing deferred to future phase</li>
+<li>Friend access via <code>this.private</code>: implemented. A field declared as
+    <code>mytype.private</code> grants the holder full access to all members of that
+    type. Only code with internal access (methods of the type itself, or
+    variables already holding a <code>.private</code> reference) can pass
+    <code>this.private</code>. The <code>.private</code> reference is always a borrow &#x2014; the
+    parent retains ownership. If the parent method returns a friend object
+    (eg. an iterator), it should take a lock on <code>this</code> (eg.
+    <code>{self: this.lock}</code>) so the parent cannot be mutated or destroyed
+    while the friend holds its reference. Zero runtime overhead &#x2014; same C
+    type, purely compile-time access control. Tracked via
+    <code>ZVariable.is_private_access</code> and <code>ZType.private_fields</code>.</li>
 </ol>
-<h3 id="phase-47-c-runtime-library"><a href="#phase-47-c-runtime-library">5.47. Phase 47: C Runtime Library</a></h3>
-<p>Extract generated C helpers into a precompiled static library. Currently
-the emitter inlines string handling (<code>ZStr</code>, <code>zstr_new</code>,
-<code>zstr_cat</code>, etc.) into every generated <code>.c</code> file. This phase moves
-runtime support code into separate source files, compiles them into a
-static library (<code>libzrt.a</code>), and links it into the final executable.</p>
+<h3 id="phase-47-c-runtime-library-complete"><a href="#phase-47-c-runtime-library-complete">5.47. Phase 47: C Runtime Library [COMPLETE]</a></h3>
+<p>Consolidate runtime C boilerplate into a dedicated Python module so the
+boundary between runtime support code and user program code is clear, and
+future extraction to a precompiled static library is straightforward.</p>
+<h4 id="47-1-runtime-module-stage-1"><a href="#47-1-runtime-module-stage-1">5.47.1. 47.1 Runtime module (<code>src/zemitterc_runtime.py</code>) &#x2014; stage 1</a></h4>
 <ol>
-<li>Create <code>runtime/</code> directory with <code>zrt_string.c</code> /
-    <code>zrt_string.h</code>: move <code>ZStr</code> struct, <code>zstr_new</code>,
-    <code>zstr_cat</code>, <code>zstr_from_i64</code>, <code>zstr_from_f64</code>,
-    <code>zstr_print</code> out of emitted code.</li>
-<li>Create <code>runtime/zrt_memory.c</code> / <code>zrt_memory.h</code>: wrapper
-    allocators (<code>zrt_malloc</code>, <code>zrt_free</code>) that can later be
-    swapped for arena or GC backends. Class construction and
-    scope-exit cleanup call these instead of raw <code>malloc</code>/<code>free</code>.</li>
-<li>Build system: <code>Makefile</code> target to compile <code>runtime/*.c</code>
-    into <code>libzrt.a</code> (static archive via <code>ar rcs</code>).</li>
-<li>Update <code>zemitterc.py</code>: emit <code>#include "zrt_string.h"</code>
-    and <code>#include "zrt_memory.h"</code> instead of inlining helpers.
-    Remove inline <code>ZStr</code> definitions from emitted code.</li>
-<li>Update compile/link step: <code>gcc -o prog prog.c -L. -lzrt</code>
-    (or pass <code>libzrt.a</code> directly).</li>
-<li>Update all tests: <code>compile_and_run</code> and
-    <code>compile_and_run_asan</code> helpers link against <code>libzrt.a</code>.</li>
-<li>Verify all existing examples and tests still pass with the
-    library-based build.</li>
-<li>Future runtime candidates: format/print infrastructure, I/O,
-    union destructors, protocol vtable helpers, generic container
-    support.</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Create <code>zemitterc_runtime.py</code> with pure functions (no AST
+access, no emitter state). All runtime C code lives here as string
+constants and builder functions.</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_runtime_includes()</code>: emit conditional <code>#include</code>
+directives for required C standard headers</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_runtime_zstr()</code>: emit <code>ZStr</code> struct, macros
+(<code>ZSTR_STATIC_FLAG</code>, <code>ZSTR_SIZE</code>, <code>ZSTR_IS_STATIC</code>,
+<code>ZSTR_STATIC</code>), and helper functions (<code>zstr_new</code>,
+<code>zstr_cat</code>, <code>zstr_from_i64</code>, <code>zstr_from_f64</code>,
+<code>zstr_print</code>, <code>zstr_free</code>)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_runtime()</code>: orchestrator that returns all runtime
+support code (includes + ZStr runtime)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_static_strings()</code>: per-program <code>ZSTR_STATIC</code>
+literal declarations (program data, not runtime)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_bounds_check()</code>: container bounds-check with
+<code>fprintf</code>/<code>exit</code> (unsigned index, runtime length)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_array_bounds_check()</code>: signed-index bounds-check
+for fixed-length arrays (compile-time length in message)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_empty_check()</code>: empty-container check with
+<code>fprintf</code>/<code>exit</code> (e.g. list pop)</li>
 </ol>
+<h4 id="47-2-emitter-integration"><a href="#47-2-emitter-integration">5.47.2. 47.2 Emitter integration</a></h4>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Update <code>zemitterc.py</code> to import <code>zemitterc_runtime</code> and
+delegate runtime code emission via <code>emit_runtime()</code> and
+<code>emit_static_strings()</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Replace inline array bounds checks with
+<code>emit_array_bounds_check()</code> calls</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Replace inline list-pop empty check with
+<code>emit_empty_check()</code> call</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Delegate existing <code>_emit_bounds_check()</code> to
+<code>zrt.emit_bounds_check()</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Verify all 1166 tests pass with zero output changes</li>
+</ol>
+<h4 id="47-3-future-stage-2-not-in-this-phase"><a href="#47-3-future-stage-2-not-in-this-phase">5.47.3. 47.3 Future &#x2014; stage 2 (not in this phase)</a></h4>
+<ul>
+<li>Extract <code>emit_runtime_zstr()</code> output to <code>runtime/zrt_string.c</code>
+    / <code>zrt_string.h</code></li>
+<li>Create <code>runtime/zrt_memory.c</code> / <code>zrt_memory.h</code>: wrapper
+    allocators (<code>zrt_malloc</code>, <code>zrt_free</code>) for arena or GC backends</li>
+<li>Create <code>runtime/zrt_error.c</code> / <code>zrt_error.h</code>: bounds-check
+    and error-exit helper functions</li>
+<li>Build system: <code>Makefile</code> target to compile <code>runtime/*.c</code>
+    into <code>libzrt.a</code> (static archive via <code>ar rcs</code>)</li>
+<li>Update emitter to <code>#include</code> runtime headers instead of
+    inlining. Update compile/link step to link <code>libzrt.a</code>.</li>
+<li>Tie to <code>native</code> keyword: map fully qualified native names
+    to runtime library implementations via name mangling convention</li>
+</ul>
+<p>Files: <code>src/zemitterc_runtime.py</code>, <code>src/zemitterc.py</code>,
+<code>doc/roadmap.pdoc</code></p>
 <h3 id="phase-48-expand-to-v3-full-language"><a href="#phase-48-expand-to-v3-full-language">5.48. Phase 48: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>

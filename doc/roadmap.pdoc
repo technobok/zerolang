@@ -1560,7 +1560,7 @@ support so string literals are never heap-allocated.
 Files: #~"src/zemitterc.py", #~"tests/test_emitter.py",
 #~"doc/strings.pdoc", #~"doc/roadmap.pdoc"
 
-#---: Phase 40: Compiler console output and error messages
+#---: Phase 40: Compiler console output and error messages \[COMPLETE\]
 
 Modernize the compiler CLI and error experience. Use rustc-style error
 format with error codes, ANSI color, and contextual notes/hints. Make
@@ -2151,41 +2151,68 @@ Implementation:
     #~"ZVariable.is_private_access" and #~"ZType.private_fields".]
 
 
-#---: Phase 47: C Runtime Library
+#---: Phase 47: C Runtime Library \[COMPLETE\]
 
-Extract generated C helpers into a precompiled static library. Currently
-the emitter inlines string handling (#~"ZStr", #~"zstr_new",
-#~"zstr_cat", etc.) into every generated #~".c" file. This phase moves
-runtime support code into separate source files, compiles them into a
-static library (#~"libzrt.a"), and links it into the final executable.
+Consolidate runtime C boilerplate into a dedicated Python module so the
+boundary between runtime support code and user program code is clear, and
+future extraction to a precompiled static library is straightforward.
+
+#----: 47.1 Runtime module (#~"src/zemitterc_runtime.py") — stage 1
 
 #ol:
-  [#*: Create #~"runtime/" directory with #~"zrt_string.c" /
-    #~"zrt_string.h": move #~"ZStr" struct, #~"zstr_new",
+  [#*: #+ Create #~"zemitterc_runtime.py" with pure functions (no AST
+    access, no emitter state). All runtime C code lives here as string
+    constants and builder functions.]
+  [#*: #+ #~"emit_runtime_includes()": emit conditional #~"#include"
+    directives for required C standard headers]
+  [#*: #+ #~"emit_runtime_zstr()": emit #~"ZStr" struct, macros
+    (#~"ZSTR_STATIC_FLAG", #~"ZSTR_SIZE", #~"ZSTR_IS_STATIC",
+    #~"ZSTR_STATIC"), and helper functions (#~"zstr_new",
     #~"zstr_cat", #~"zstr_from_i64", #~"zstr_from_f64",
-    #~"zstr_print" out of emitted code.]
+    #~"zstr_print", #~"zstr_free")]
+  [#*: #+ #~"emit_runtime()": orchestrator that returns all runtime
+    support code (includes + ZStr runtime)]
+  [#*: #+ #~"emit_static_strings()": per-program #~"ZSTR_STATIC"
+    literal declarations (program data, not runtime)]
+  [#*: #+ #~"emit_bounds_check()": container bounds-check with
+    #~"fprintf"/#~"exit" (unsigned index, runtime length)]
+  [#*: #+ #~"emit_array_bounds_check()": signed-index bounds-check
+    for fixed-length arrays (compile-time length in message)]
+  [#*: #+ #~"emit_empty_check()": empty-container check with
+    #~"fprintf"/#~"exit" (e.g. list pop)]
+
+#----: 47.2 Emitter integration
+
+#ol:
+  [#*: #+ Update #~"zemitterc.py" to import #~"zemitterc_runtime" and
+    delegate runtime code emission via #~"emit_runtime()" and
+    #~"emit_static_strings()"]
+  [#*: #+ Replace inline array bounds checks with
+    #~"emit_array_bounds_check()" calls]
+  [#*: #+ Replace inline list-pop empty check with
+    #~"emit_empty_check()" call]
+  [#*: #+ Delegate existing #~"_emit_bounds_check()" to
+    #~"zrt.emit_bounds_check()"]
+  [#*: #+ Verify all 1166 tests pass with zero output changes]
+
+#----: 47.3 Future — stage 2 (not in this phase)
+
+#ul:
+  [#*: Extract #~"emit_runtime_zstr()" output to #~"runtime/zrt_string.c"
+    / #~"zrt_string.h"]
   [#*: Create #~"runtime/zrt_memory.c" / #~"zrt_memory.h": wrapper
-    allocators (#~"zrt_malloc", #~"zrt_free") that can later be
-    swapped for arena or GC backends. Class construction and
-    scope-exit cleanup call these instead of raw #~"malloc"/#~"free".]
+    allocators (#~"zrt_malloc", #~"zrt_free") for arena or GC backends]
+  [#*: Create #~"runtime/zrt_error.c" / #~"zrt_error.h": bounds-check
+    and error-exit helper functions]
   [#*: Build system: #~"Makefile" target to compile #~"runtime/*.c"
-    into #~"libzrt.a" (static archive via #~"ar rcs").]
-  [#*: Update #~"zemitterc.py": emit #~"#include \"zrt_string.h\""
-    and #~"#include \"zrt_memory.h\"" instead of inlining helpers.
-    Remove inline #~"ZStr" definitions from emitted code.]
-  [#*: Update compile/link step: #~"gcc -o prog prog.c -L. -lzrt"
-    (or pass #~"libzrt.a" directly).]
-  [#*: Update all tests: #~"compile_and_run" and
-    #~"compile_and_run_asan" helpers link against #~"libzrt.a".]
-  [#*: Verify all existing examples and tests still pass with the
-    library-based build.]
-  [#*: Future runtime candidates: format/print infrastructure, I/O,
-    union destructors, protocol vtable helpers, generic container
-    support.]
-  [#*: Investigate how to tie this to the 'native' keyword work just completed]
-  [#*: ideally, have a structure that can simply map the fully qualified name
-  that contains the 'native' keyword to the implementation in the standard
-  static library]
+    into #~"libzrt.a" (static archive via #~"ar rcs")]
+  [#*: Update emitter to #~"#include" runtime headers instead of
+    inlining. Update compile/link step to link #~"libzrt.a".]
+  [#*: Tie to #~"native" keyword: map fully qualified native names
+    to runtime library implementations via name mangling convention]
+
+Files: #~"src/zemitterc_runtime.py", #~"src/zemitterc.py",
+#~"doc/roadmap.pdoc"
 
 #---: Phase 48: Expand to v3 (Full Language)
 
