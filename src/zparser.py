@@ -649,6 +649,8 @@ class Parser:
             node = self._acceptdata(lex)
         elif tt == TT.WITH:
             node = self._acceptwith(lex)
+        elif tt == TT.BRACEOPEN:
+            node = self._acceptbareblock(lex)
         # elif tt == TT.ARRAY:
         #     node = self._acceptarray(lex)
         # elif tt == TT.LIST:
@@ -2014,6 +2016,22 @@ class Parser:
             name=name, value=valuex.node, doexpr=doexprx.node, start=start
         )
         return NodeX(withnode, extern=extern)
+
+    def _acceptbareblock(self, lex: Lexer) -> Union[NodeX[zast.Do], zast.Error, None]:
+        """
+        acceptbareblock - accept a bare block as an expression
+
+            "{" [ blockline ] { ( eol | ";" ) [ blockline ] } "}"
+
+        Return a Do or Error or None for no opening brace
+        """
+        stmtx = self._acceptstatement(lex)
+        if isinstance(stmtx, zast.Error):
+            return stmtx
+        if not stmtx:
+            return None
+        do = zast.Do(statement=stmtx.node, start=stmtx.node.start)
+        return NodeX(do, extern=stmtx.extern)
 
     def _acceptdata(self, lex: Lexer) -> Union[NodeX[zast.Data], zast.Error, None]:
         """

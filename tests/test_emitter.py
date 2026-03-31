@@ -789,6 +789,27 @@ class TestEmitterStringOwnership:
         assert output.strip() == "hello"
 
 
+class TestBareBlockScope:
+    """Tests for bare block scoping — { ... } used as a statement."""
+
+    def test_bare_block_side_effects(self):
+        """Bare block executes for side effects and output is visible."""
+        csource = emit_source(
+            'main: function is {\n  { print "inside" }\n  print "outside"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip().split("\n") == ["inside", "outside"]
+
+    def test_bare_block_string_cleanup(self):
+        """String defined inside a bare block is freed at block exit."""
+        csource = emit_source(
+            'main: function is {\n  { s: "hello"\n  print s }\n  print "done"\n}'
+        )
+        assert "zstr_free(s);" in csource
+        output = compile_and_run(csource)
+        assert output.strip().split("\n") == ["hello", "done"]
+
+
 class TestEmitterStaticStrings:
     """Tests for ZSTR_STATIC string literal emission."""
 

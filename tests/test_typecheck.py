@@ -278,6 +278,28 @@ class TestWithDo:
         )
 
 
+class TestBareBlockScope:
+    def test_bare_block_scopes_variable(self):
+        """Variable defined inside a bare block is not visible outside."""
+        vfs, name = make_parser_vfs(
+            'main: function is {\n  { x: 42 }\n  print "\\{x}"\n}',
+            unitname="test",
+            src_dir=LIB_DIR,
+        )
+        p = Parser(vfs, name)
+        result = p.parse()
+        assert isinstance(result, zast.Error)
+        assert "x" in result.msg
+
+    def test_bare_block_does_not_shadow_outer(self):
+        """Outer variable remains accessible after a bare block."""
+        check_ok('main: function is {\n  x: 10\n  { y: 20 }\n  print "\\{x}"\n}')
+
+    def test_bare_block_reads_outer_scope(self):
+        """Code inside a bare block can read outer variables."""
+        check_ok('main: function is {\n  x: 42\n  { print "\\{x}" }\n}')
+
+
 class TestStringInterpolation:
     def test_interpolation_checks_expressions(self):
         check_ok('main: function is {\n  x: 42\n  print "value = \\{x}"\n}')
