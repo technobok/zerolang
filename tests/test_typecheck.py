@@ -121,11 +121,38 @@ class TestAssignment:
         )
 
 
-class TestNullAssignment:
+class TestNonRuntimeTypes:
     def test_null_assignment_error(self):
         """Cannot assign null directly to a variable."""
         errors = check_errors("main: function is { x: null }")
         assert any("null" in e.msg for e in errors)
+
+    def test_never_assignment_error(self):
+        """Cannot assign never (return result) to a variable."""
+        errors = check_errors(
+            "f: function out i64 is { return 42 }\nmain: function is { x: return 0 }"
+        )
+        assert any("never" in e.msg for e in errors)
+
+    def test_null_as_param_type_error(self):
+        """Cannot use null as a parameter type."""
+        errors = check_errors("f: function {x: null} is {}\nmain: function is {}")
+        assert any("null" in e.msg for e in errors)
+
+    def test_never_as_param_type_error(self):
+        """Cannot use never as a parameter type."""
+        errors = check_errors("f: function {x: never} is {}\nmain: function is {}")
+        assert any("never" in e.msg for e in errors)
+
+    def test_null_as_return_type_error(self):
+        """Cannot use null as a return type."""
+        errors = check_errors("f: function out null is {}\nmain: function is {}")
+        assert any("null" in e.msg for e in errors)
+
+    def test_never_as_return_type_error(self):
+        """Cannot use never as a return type."""
+        errors = check_errors("f: function out never is {}\nmain: function is {}")
+        assert any("never" in e.msg for e in errors)
 
     def test_null_in_union_is_ok(self):
         """Null as a union subtype (eg. option.none) is fine."""

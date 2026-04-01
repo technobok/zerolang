@@ -775,7 +775,16 @@ class TypeChecker:
         if func.returntype:
             rt = self._resolve_typeref(func.returntype)
             if rt:
-                ftype.return_type = rt
+                if not func.is_native and self._check_non_runtime_type(
+                    rt,
+                    "a return type",
+                    func.returntype.start
+                    if hasattr(func.returntype, "start")
+                    else func.start,
+                ):
+                    pass
+                else:
+                    ftype.return_type = rt
         for pname, ppath in func.parameters.items():
             pt = self._resolve_typeref(ppath)
             if (
@@ -787,6 +796,12 @@ class TypeChecker:
                     f"Generic parameters must be declared in the 'as' section, not 'in': '{pname}'",
                     loc=func.start,
                 )
+                continue
+            if pt and self._check_non_runtime_type(
+                pt,
+                "a parameter type",
+                ppath.start if hasattr(ppath, "start") else func.start,
+            ):
                 continue
             if pt:
                 ftype.children[pname] = pt
@@ -3448,17 +3463,34 @@ class TypeChecker:
         if inner.type is not None:
             sline.type = inner.type
 
+    # Phase 48c will add typed markers for null/never so these checks
+    # can use typetype instead of name strings.
+    _NON_RUNTIME_TYPES = frozenset({"null", "never"})
+
+    def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
+        """Check if a type is non-runtime (null/never). Returns True if error emitted."""
+        if t.name == "null":
+            self._error(
+                f"'null' cannot be used as {context} — null must be wrapped "
+                "in a union or variant (eg. option.none)",
+                loc=loc,
+            )
+            return True
+        if t.name == "never":
+            self._error(
+                f"'never' cannot be used as {context} — 'never' represents "
+                "a non-completing expression (return, break, continue)",
+                loc=loc,
+            )
+            return True
+        return False
+
     def _check_assignment(self, assign: zast.Assignment) -> None:
         self._pending_borrow_lock = None
         self._pending_private_access = False
         t = self._check_expression(assign.value)
         self._check_exhaustive_if(assign.value)
-        if t and t.name == "null":
-            self._error(
-                "cannot assign 'null' directly — null must be wrapped in a "
-                "union or variant (eg. option.none)",
-                loc=assign.start,
-            )
+        if t and self._check_non_runtime_type(t, "a value", assign.start):
             return
         if t:
             # check if this assignment is from a .borrow call
