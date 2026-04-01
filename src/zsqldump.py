@@ -194,7 +194,11 @@ def dump_sql(
 
     # Stage 2: tokens
     tokens = _collect_tokens(program)
-    for tok in sorted(tokens, key=lambda t: t.tokenid):
+
+    def _by_tokenid(t: Token) -> int:
+        return t.tokenid
+
+    for tok in sorted(tokens, key=_by_tokenid):
         lines.append(
             f"INSERT INTO tokens VALUES ("
             f"{tok.tokenid}, {_sql_int(tok.fsno)}, {tok.lineno}, {tok.colno}, "

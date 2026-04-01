@@ -22,7 +22,7 @@ check:
 	@$(MAKE) --no-print-directory bootstrap-lint
 
 # Baseline counts of existing violations (update when migrating away)
-# isinstance:459  comprehension:14  lambda:1  try/except:8
+# isinstance:459  comprehension:14  lambda:0  try/except:8
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
@@ -38,7 +38,7 @@ bootstrap-lint:
 		grep -rn '\[.*\bfor\b.*\bin\b' src/*.py | tail -5; fail=1; \
 	fi; \
 	count=$$(grep -rn 'lambda ' src/*.py | wc -l); \
-	if [ $$count -gt 1 ]; then \
+	if [ $$count -gt 0 ]; then \
 		echo "ERROR: lambda usage increased ($$count > 1 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn 'lambda ' src/*.py | tail -5; fail=1; \
