@@ -3411,6 +3411,20 @@ class TypeChecker:
         else:
             self._current_return_type = None
         self._check_statement(func.body)
+
+        # implicit return validation: last expression type must match 'out'
+        if self._current_return_type and func.body.statements:
+            last = func.body.statements[-1]
+            last_type = last.type if hasattr(last, "type") else None
+            if last_type is not None and last_type.name != "never":
+                if not self._types_compatible(last_type, self._current_return_type):
+                    self._error(
+                        f"implicit return type '{last_type.name}' does not match "
+                        f"declared return type '{self._current_return_type.name}'",
+                        loc=last.start,
+                        err=ERR.TYPEERROR,
+                    )
+
         self._current_return_type = prev_return_type
         self._current_func_ownership = prev_func_ownership
         self._current_func_return_ownership = prev_func_return_ownership
@@ -3430,6 +3444,9 @@ class TypeChecker:
             self._check_swap(inner)
         elif isinstance(inner, zast.Expression):
             self._check_expression(inner)
+        # propagate type to statement line wrapper
+        if inner.type is not None:
+            sline.type = inner.type
 
     def _check_assignment(self, assign: zast.Assignment) -> None:
         self._pending_borrow_lock = None
@@ -3521,28 +3538,35 @@ class TypeChecker:
 
     def _check_expression(self, expr: zast.Expression) -> Optional[ZType]:
         inner = expr.expression
+        t: Optional[ZType] = None
         if isinstance(inner, zast.Call):
-            return self._check_call(inner)
-        if isinstance(inner, zast.If):
-            return self._check_if(inner)
-        if isinstance(inner, zast.For):
-            return self._check_for(inner)
-        if isinstance(inner, zast.Do):
+            t = self._check_call(inner)
+        elif isinstance(inner, zast.If):
+            t = self._check_if(inner)
+        elif isinstance(inner, zast.For):
+            t = self._check_for(inner)
+        elif isinstance(inner, zast.Do):
             self._check_statement(inner.statement)
-            return self.t_null
-        if isinstance(inner, zast.With):
-            return self._check_with(inner)
-        if isinstance(inner, zast.Case):
-            return self._check_case(inner)
-        if isinstance(inner, zast.Data):
-            return None
-        if isinstance(inner, zast.Operation):
+            last_type = self._last_statement_type(inner.statement)
+            if isinstance(last_type, ZType) and last_type is not self._NORETURN:
+                t = last_type
+                inner.type = t
+            else:
+                t = self.t_null
+        elif isinstance(inner, zast.With):
+            t = self._check_with(inner)
+        elif isinstance(inner, zast.Case):
+            t = self._check_case(inner)
+        elif isinstance(inner, zast.Data):
+            t = None
+        elif isinstance(inner, zast.Operation):
             t = self._check_operation(inner)
             # propagate const_value from inner operation to expression wrapper
             if inner.const_value is not None:
                 expr.const_value = inner.const_value
-            return t
-        return None
+        if t is not None:
+            expr.type = t
+        return t
 
     def _check_operation(self, op: zast.Operation) -> Optional[ZType]:
         if isinstance(op, zast.BinOp):
@@ -4546,7 +4570,13 @@ class TypeChecker:
             # filter out non-completing branches (return/break/continue)
             completing = [t for t in branch_types if t is not self._NORETURN]
 
-            if completing:
+            if not completing:
+                # all branches are non-completing (return/break/continue)
+                never = self._resolve_name("never")
+                if never:
+                    result_type = never
+                    ifnode.type = never
+            elif completing:
                 first = completing[0]
                 if first is not None and isinstance(first, ZType):
                     all_ok = all(
@@ -4864,6 +4894,21 @@ class TypeChecker:
         # release match lock
         if match_lock_info:
             self.symtab.release_lock(match_lock_info[0], match_lock_info[1])
+
+        # detect when all branches are non-completing (return/break/continue)
+        branch_types = [
+            self._last_statement_type(clause.statement) for clause in casenode.clauses
+        ]
+        if casenode.elseclause:
+            branch_types.append(self._last_statement_type(casenode.elseclause))
+        completing = [t for t in branch_types if t is not self._NORETURN]
+        if not completing and branch_types:
+            never = self._resolve_name("never")
+            if never:
+                casenode.type = never
+                self.symtab.pop()
+                return never
+
         self.symtab.pop()
         return self.t_null
 

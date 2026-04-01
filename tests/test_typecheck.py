@@ -300,6 +300,74 @@ class TestBareBlockScope:
         check_ok('main: function is {\n  x: 42\n  { print "\\{x}" }\n}')
 
 
+class TestImplicitReturn:
+    def test_implicit_return_integer(self):
+        """Function implicitly returns an integer."""
+        check_ok("f: function out i64 is { 42 }\nmain: function is {}")
+
+    def test_implicit_return_expression(self):
+        """Arithmetic expression as implicit return."""
+        check_ok(
+            "f: function {a: i64 b: i64} out i64 is { a + b }\nmain: function is {}"
+        )
+
+    def test_implicit_return_type_mismatch(self):
+        """Implicit return type doesn't match declared return type."""
+        errors = check_errors(
+            'f: function out i64 is { "hello" }\nmain: function is {}'
+        )
+        assert any("implicit return type" in e.msg for e in errors)
+
+    def test_implicit_return_if_expression(self):
+        """if-expression in tail position as implicit return."""
+        check_ok(
+            "f: function {n: i64} out i64 is {\n"
+            "  if n > 0 then n else 0\n"
+            "}\nmain: function is {}"
+        )
+
+    def test_implicit_return_void_ignores(self):
+        """Void function ignores last expression value."""
+        check_ok("f: function is { 42 }\nmain: function is {}")
+
+    def test_explicit_return_still_works(self):
+        """Explicit return continues to work."""
+        check_ok("f: function out i64 is { return 42 }\nmain: function is {}")
+
+    def test_implicit_return_bare_block(self):
+        """Bare block in tail position provides implicit return."""
+        check_ok("f: function out i64 is { { 42 } }\nmain: function is {}")
+
+    def test_implicit_return_mixed(self):
+        """Early explicit return in branch, implicit return at end."""
+        check_ok(
+            "f: function {n: i64} out i64 is {\n"
+            "  if n <= 0 then return 0\n"
+            "  n + 1\n"
+            "}\nmain: function is {}"
+        )
+
+    def test_implicit_return_assignment_tail_error(self):
+        """Assignment in tail position with out type is not an implicit return."""
+        # Assignment type is null, which doesn't match i64
+        # This should not error because the function may have explicit returns elsewhere
+        # (no control flow analysis yet — see Phase 48b)
+        check_ok(
+            "f: function {n: i64} out i64 is {\n"
+            "  if n <= 0 then return 0\n"
+            "  x: n + 1\n"
+            "}\nmain: function is {}"
+        )
+
+    def test_all_branches_return_explicitly(self):
+        """All branches have explicit return — no implicit return error."""
+        check_ok(
+            "f: function {n: i64} out i64 is {\n"
+            "  if n < 0 then return 0 - n else return n\n"
+            "}\nmain: function is {}"
+        )
+
+
 class TestStringInterpolation:
     def test_interpolation_checks_expressions(self):
         check_ok('main: function is {\n  x: 42\n  print "value = \\{x}"\n}')

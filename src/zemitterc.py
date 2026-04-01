@@ -2759,8 +2759,16 @@ class CEmitter:
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
         self.indent_level = 1
         if func.body:
-            body_code = self._emit_statement(func.body)
-            lines.append(body_code)
+            implicit = self._is_implicit_return(func)
+            if implicit:
+                # emit all statements except the last
+                for sline in func.body.statements[:-1]:
+                    lines.append(self._emit_statement_line(sline))
+                # emit last expression as implicit return
+                lines.append(self._emit_implicit_return(func.body.statements[-1]))
+            else:
+                body_code = self._emit_statement(func.body)
+                lines.append(body_code)
 
         # scope-exit cleanup for string/class/union/protocol vars (void functions / fall-through)
         cleanup = self._emit_scope_cleanup(self._indent())
@@ -2772,6 +2780,66 @@ class CEmitter:
 
         # pop function scope
         self._scope_stack.pop()
+
+    def _is_implicit_return(self, func: zast.Function) -> bool:
+        """Check if the function's last statement is an implicit return candidate."""
+        if not func.returntype or not func.body or not func.body.statements:
+            return False
+        last = func.body.statements[-1].statementline
+        if not isinstance(last, zast.Expression):
+            return False
+        inner = last.expression
+        # explicit return, break, continue are not implicit returns
+        if isinstance(inner, zast.AtomId) and inner.name in ("break", "continue"):
+            return False
+        if isinstance(inner, zast.Call):
+            if inner.call_kind == zast.CallKind.RETURN:
+                return False
+            if (
+                isinstance(inner.callable, zast.AtomId)
+                and inner.callable.name == "return"
+            ):
+                return False
+        # never type means all paths already return explicitly
+        if hasattr(inner, "type") and inner.type and inner.type.name == "never":
+            return False
+        return True
+
+    def _emit_implicit_return(self, sline: zast.StatementLine) -> str:
+        """Emit the last statement line as an implicit return with scope cleanup."""
+        self._temp_stack.append(TempState())
+        expr = sline.statementline
+        assert isinstance(expr, zast.Expression)
+        val = self._emit_expression_value(expr)
+        indent = self._indent()
+
+        result = "".join(self._temp.decls)
+
+        # remove return value from temp frees (caller owns it)
+        if val in self._temp.frees:
+            self._temp.frees.remove(val)
+
+        # free remaining temps before return
+        for t in self._temp.frees:
+            if t in self._temp.string_set:
+                result += f"{indent}zstr_free({t});\n"
+            elif t in self._temp.class_set:
+                tname = self._temp.class_set[t]
+                if tname.startswith(":proto:"):
+                    proto_name = tname[7:]
+                    result += f"{indent}z_{proto_name}_destroy({t});\n"
+                else:
+                    result += f"{indent}{self._emit_class_free(t, tname)}\n"
+            else:
+                result += f"{indent}free({t});\n"
+        self._temp.frees.clear()
+
+        # scope cleanup (excluding return value)
+        result += self._emit_scope_cleanup(indent, exclude_var=val)
+        result += f"{indent}return {val};\n"
+
+        self._temp_stack.pop()
+        return result
 
     def _emit_statement(self, stmt: zast.Statement) -> str:
         parts: List[str] = []
@@ -3496,6 +3564,8 @@ class CEmitter:
             return self._emit_operation_value(inner)
         if isinstance(inner, zast.With):
             return self._emit_expression_value(inner.doexpr)
+        if isinstance(inner, zast.Do) and inner.type:
+            return self._emit_do_expression_value(inner)
         if isinstance(inner, zast.If):
             return self._emit_if_expression_value(inner)
         if isinstance(inner, zast.For) and inner.type:
@@ -5065,6 +5135,20 @@ class CEmitter:
 
     def _emit_do(self, donode: zast.Do) -> str:
         return self._emit_statement(donode.statement)
+
+    def _emit_do_expression_value(self, donode: zast.Do) -> str:
+        """Emit a bare block as an expression, returning the last expression's value."""
+        ctype = _ctype(donode.type)
+        tmp = self._temp_name("do")
+        indent = self._indent()
+        self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+        self._temp.decls.append(f"{indent}{{\n")
+        self.indent_level += 1
+        body = self._emit_branch_with_result(donode.statement, tmp)
+        self._temp.decls.append(body)
+        self.indent_level -= 1
+        self._temp.decls.append(f"{indent}}}\n")
+        return tmp
 
     def _emit_with(self, withnode: zast.With) -> str:
         indent = self._indent()

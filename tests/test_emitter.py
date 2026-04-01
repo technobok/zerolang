@@ -810,6 +810,93 @@ class TestBareBlockScope:
         assert output.strip().split("\n") == ["hello", "done"]
 
 
+class TestImplicitReturn:
+    """Tests for implicit return — last expression is the return value."""
+
+    def test_implicit_return_integer(self):
+        """Function implicitly returns an integer literal."""
+        csource = emit_source(
+            "f: function {n: i64} out i64 is { n }\n"
+            'main: function is { print "\\{f 42}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_implicit_return_arithmetic(self):
+        """Arithmetic expression as implicit return."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { a + b }\n"
+            'main: function is { print "\\{add a: 3 b: 4}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
+    def test_implicit_return_string(self):
+        """String as implicit return, no memory leak."""
+        csource = emit_source(
+            'greet: function {name: string} out string is { "hello" }\n'
+            'main: function is { print (greet "world") }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
+    def test_implicit_return_if_expression(self):
+        """if-expression in tail position as implicit return."""
+        csource = emit_source(
+            "abs: function {n: i64} out i64 is {\n"
+            "  if n < 0 then 0 - n else n\n"
+            "}\n"
+            'main: function is { print "\\{abs -5}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "5"
+
+    def test_implicit_return_function_call(self):
+        """Function call as last expression is implicitly returned."""
+        csource = emit_source(
+            "double: function {n: i64} out i64 is { n * 2 }\n"
+            "quad: function {n: i64} out i64 is { double (double n) }\n"
+            'main: function is { print "\\{quad 3}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "12"
+
+    def test_implicit_return_bare_block(self):
+        """Bare block in tail position provides implicit return."""
+        csource = emit_source(
+            "f: function {n: i64} out i64 is {\n  { n + 1 }\n}\n"
+            'main: function is { print "\\{f 41}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_implicit_return_mixed(self):
+        """Early explicit return + implicit return at end."""
+        csource = emit_source(
+            "clamp: function {n: i64} out i64 is {\n"
+            "  if n < 0 then return 0\n"
+            "  if n > 100 then return 100\n"
+            "  n\n"
+            "}\n"
+            "main: function is {\n"
+            '  print "\\{clamp -5} \\{clamp 50} \\{clamp 200}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0 50 100"
+
+    def test_void_function_discards_value(self):
+        """Void function with string last expression: value is discarded and freed."""
+        csource = emit_source(
+            'f: function {n: i64} is {\n  s: "hello"\n  print s\n}\n'
+            "main: function is { f 1 }"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+        # string should be freed at scope exit
+        assert "zstr_free" in csource
+
+
 class TestEmitterStaticStrings:
     """Tests for ZSTR_STATIC string literal emission."""
 
