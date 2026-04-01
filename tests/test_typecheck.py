@@ -121,6 +121,20 @@ class TestAssignment:
         )
 
 
+class TestNullAssignment:
+    def test_null_assignment_error(self):
+        """Cannot assign null directly to a variable."""
+        errors = check_errors("main: function is { x: null }")
+        assert any("null" in e.msg for e in errors)
+
+    def test_null_in_union_is_ok(self):
+        """Null as a union subtype (eg. option.none) is fine."""
+        check_ok(
+            "myopt: union { some: i64\n none: null }\n"
+            "main: function is { x: myopt.none }"
+        )
+
+
 class TestBinaryOperations:
     def test_integer_addition(self):
         check_ok("f: function {a: i64 b: i64} out i64 is { return a + b }")

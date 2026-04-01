@@ -3453,6 +3453,13 @@ class TypeChecker:
         self._pending_private_access = False
         t = self._check_expression(assign.value)
         self._check_exhaustive_if(assign.value)
+        if t and t.name == "null":
+            self._error(
+                "cannot assign 'null' directly — null must be wrapped in a "
+                "union or variant (eg. option.none)",
+                loc=assign.start,
+            )
+            return
         if t:
             # check if this assignment is from a .borrow call
             borrow_target = self._pending_borrow_lock
