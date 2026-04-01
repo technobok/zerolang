@@ -4895,22 +4895,81 @@ class TypeChecker:
         if match_lock_info:
             self.symtab.release_lock(match_lock_info[0], match_lock_info[1])
 
-        # detect when all branches are non-completing (return/break/continue)
-        branch_types = [
-            self._last_statement_type(clause.statement) for clause in casenode.clauses
-        ]
-        if casenode.elseclause:
-            branch_types.append(self._last_statement_type(casenode.elseclause))
-        completing = [t for t in branch_types if t is not self._NORETURN]
-        if not completing and branch_types:
-            never = self._resolve_name("never")
-            if never:
-                casenode.type = never
-                self.symtab.pop()
-                return never
+        # determine if match is exhaustive (else clause or all subtypes covered)
+        is_exhaustive = bool(casenode.elseclause)
+        if (
+            not is_exhaustive
+            and subject_type
+            and subject_type.typetype
+            in (
+                ZTypeType.UNION,
+                ZTypeType.VARIANT,
+            )
+        ):
+            subtypes_for_exhaust = {
+                k
+                for k, v in subject_type.children.items()
+                if not k.startswith(":")
+                and v.typetype
+                not in (
+                    ZTypeType.FUNCTION,
+                    ZTypeType.DATA,
+                    ZTypeType.TAG,
+                    ZTypeType.ENUM,
+                )
+                and getattr(v, "generic_origin", None) != "tag"
+            }
+            covered_for_exhaust = {clause.match.name for clause in casenode.clauses}
+            if not (subtypes_for_exhaust - covered_for_exhaust):
+                is_exhaustive = True
+
+        result_type = self.t_null
+
+        # match-as-expression: compute branch types when exhaustive
+        if is_exhaustive:
+            branch_types = [
+                self._last_statement_type(clause.statement)
+                for clause in casenode.clauses
+            ]
+            if casenode.elseclause:
+                branch_types.append(self._last_statement_type(casenode.elseclause))
+
+            completing = [t for t in branch_types if t is not self._NORETURN]
+
+            if not completing and branch_types:
+                never = self._resolve_name("never")
+                if never:
+                    result_type = never
+                    casenode.type = never
+            elif completing:
+                first = completing[0]
+                if first is not None and isinstance(first, ZType):
+                    all_ok = all(
+                        t is not None
+                        and isinstance(t, ZType)
+                        and self._types_compatible(first, t)
+                        for t in completing[1:]
+                    )
+                    if all_ok:
+                        result_type = first
+                        casenode.type = first
+                    else:
+                        for t in completing[1:]:
+                            if (
+                                t is None
+                                or not isinstance(t, ZType)
+                                or not self._types_compatible(first, t)
+                            ):
+                                tname = t.name if isinstance(t, ZType) else "null"
+                                self._error(
+                                    f"incompatible branch types in match-expression: "
+                                    f"'{first.name}' and '{tname}'",
+                                    loc=casenode.start,
+                                )
+                                break
 
         self.symtab.pop()
-        return self.t_null
+        return result_type
 
 
 def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:

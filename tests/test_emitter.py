@@ -897,6 +897,62 @@ class TestImplicitReturn:
         assert "zstr_free" in csource
 
 
+class TestMatchExpression:
+    """Tests for match/case as expression value."""
+
+    def test_match_expression_simple(self):
+        """Simple enum match assigned to variable, compile+run."""
+        csource = emit_source(
+            "north: 0\nsouth: 1\neast: 2\n"
+            "describe: function {d: i64} out i64 is {\n"
+            "  match d case north then 10 case south then 20 else 30\n"
+            "}\n"
+            'main: function is { print "\\{describe north} \\{describe south} \\{describe east}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10 20 30"
+
+    def test_match_expression_assigned(self):
+        """Match expression result assigned to a variable."""
+        csource = emit_source(
+            "north: 0\nsouth: 1\n"
+            "main: function is {\n"
+            "  d: north\n"
+            "  x: match d case north then 100 case south then 200 else 300\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "100"
+
+    def test_match_expression_implicit_return(self):
+        """Match expression as implicit return value."""
+        csource = emit_source(
+            "north: 0\nsouth: 1\n"
+            "f: function {d: i64} out i64 is {\n"
+            "  match d case north then 10 case south then 20 else 30\n"
+            "}\n"
+            'main: function is { print "\\{f north} \\{f south} \\{f 99}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10 20 30"
+
+    def test_match_expression_union(self):
+        """Union match as expression, compile+run."""
+        csource = emit_source(
+            "shape: union { circle: i64\n square: i64 }\n"
+            "area: function {s: shape} out i64 is {\n"
+            "  match s case circle then 314 case square then 100\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: shape.circle 5\n"
+            '  print "\\{area c}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "314"
+
+
 class TestEmitterStaticStrings:
     """Tests for ZSTR_STATIC string literal emission."""
 

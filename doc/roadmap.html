@@ -207,9 +207,11 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-48-implicit-return-complete">Phase 48: Implicit return [COMPLETE]</a>
 </li>
-<li><a href="#phase-48a-match-case-as-expression-value">Phase 48a: Match/case as expression value</a>
+<li><a href="#phase-48a-match-case-as-expression-value-complete">Phase 48a: Match/case as expression value [COMPLETE]</a>
 </li>
 <li><a href="#phase-48b-missing-return-control-flow-analysis">Phase 48b: Missing-return control flow analysis</a>
+</li>
+<li><a href="#phase-48c-typed-injected-identifiers-return-break-continue">Phase 48c: Typed injected identifiers (return, break, continue)</a>
 </li>
 <li><a href="#phase-49-expand-to-v3-full-language">Phase 49: Expand to v3 (Full Language)</a>
 </li>
@@ -2210,17 +2212,21 @@ return value.</p>
 <p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
 <code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/roadmap.pdoc</code>, <code>doc/grammar.pdoc</code>, <code>doc/spec.pdoc</code></p>
-<h3 id="phase-48a-match-case-as-expression-value"><a href="#phase-48a-match-case-as-expression-value">5.49. Phase 48a: Match/case as expression value</a></h3>
-<p>The typechecker's <code>_check_case</code> currently returns <code>t_null</code> and does not
-unify branch types. The emitter's <code>_emit_expression_value</code> does not handle
-<code>Case</code> nodes. To support match-expressions as values (and as implicit return
-values):</p>
+<h3 id="phase-48a-match-case-as-expression-value-complete"><a href="#phase-48a-match-case-as-expression-value-complete">5.49. Phase 48a: Match/case as expression value [COMPLETE]</a></h3>
+<p>Match expressions can now be used as values when exhaustive (all subtypes
+covered or else clause present). Branch types are unified and checked for
+compatibility. The emitter generates temp-variable patterns for all match
+variants (simple enum, union switch, variant switch, nullable-ptr).</p>
 <ol>
 <li>Typechecker: unify branch types in <code>_check_case</code> (parallel to
-    <code>_check_if</code>).</li>
-<li>Emitter: add <code>_emit_case_expression_value</code> (parallel to
-    <code>_emit_if_expression_value</code>).</li>
+    <code>_check_if</code>). Gate on exhaustiveness.</li>
+<li>Emitter: add <code>_emit_case_expression_value</code> with sub-methods for
+    simple enum, union, variant, and nullable-ptr match patterns.</li>
+<li>Tests and documentation.</li>
 </ol>
+<p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
+<code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>,
+<code>doc/roadmap.pdoc</code>, <code>doc/grammar.pdoc</code>, <code>doc/spec.pdoc</code></p>
 <h3 id="phase-48b-missing-return-control-flow-analysis"><a href="#phase-48b-missing-return-control-flow-analysis">5.50. Phase 48b: Missing-return control flow analysis</a></h3>
 <p>Currently, if a non-void function has code paths that produce no value (no
 explicit or implicit return), the generated C has undefined behaviour. This
@@ -2230,14 +2236,33 @@ phase adds control flow analysis to guarantee all paths return:</p>
 <li>Emit an error when a function with an <code>out</code> type has a code path
     that produces no value.</li>
 </ol>
-<h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.51. Phase 49: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-48c-typed-injected-identifiers-return-break-continue"><a href="#phase-48c-typed-injected-identifiers-return-break-continue">5.51. Phase 48c: Typed injected identifiers (return, break, continue)</a></h3>
+<p>Currently <code>return</code>, <code>break</code>, and <code>continue</code> are identified by string
+matching on the node name. This is fragile &#x2014; a user could define their own
+<code>return</code> or <code>break</code> that collides with the system version. These
+identifiers are injected into the environment when <code>function</code>, <code>for</code>,
+<code>if</code>, <code>with</code>, or <code>match</code> elements are processed. They should carry a
+typed marker (eg. a node flag or AST subtype) so that string matching is never
+needed, and a back-reference to the element that caused the injection so that
+the correct <code>return</code>, <code>break</code>, or <code>continue</code> is resolved in nested
+contexts.</p>
+<ol>
+<li>Add a marker or AST subtype for injected control-flow identifiers so
+    they are distinguishable from user definitions without string matching.</li>
+<li>Store a back-reference from each injected identifier to the enclosing
+    scope element (function, for-loop, etc.) for correct resolution in nested
+    contexts.</li>
+<li>Remove all string-based checks for <code>return</code>, <code>break</code>, <code>continue</code>
+    in the typechecker and emitter, replacing them with marker/type checks.</li>
+</ol>
+<h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.52. Phase 49: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-50-developer-tools"><a href="#phase-50-developer-tools">5.52. Phase 50: Developer Tools</a></h3>
+<h3 id="phase-50-developer-tools"><a href="#phase-50-developer-tools">5.53. Phase 50: Developer Tools</a></h3>
 <p>Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.</p>
 <ol>
@@ -2255,7 +2280,7 @@ source files in IDEs and editors.</p>
 <li>Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.</li>
 </ol>
-<h3 id="phase-51-self-hosting"><a href="#phase-51-self-hosting">5.53. Phase 51: Self-Hosting</a></h3>
+<h3 id="phase-51-self-hosting"><a href="#phase-51-self-hosting">5.54. Phase 51: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>

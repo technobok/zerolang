@@ -3570,6 +3570,8 @@ class CEmitter:
             return self._emit_if_expression_value(inner)
         if isinstance(inner, zast.For) and inner.type:
             return self._emit_for_expression_value(inner)
+        if isinstance(inner, zast.Case) and inner.type:
+            return self._emit_case_expression_value(inner)
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
@@ -5343,6 +5345,189 @@ class CEmitter:
             parts.append(f"{indent}    default: {{\n")
             self.indent_level += 2
             parts.append(self._emit_statement(casenode.elseclause))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_case_expression_value(self, casenode: zast.Case) -> str:
+        """Emit match-as-expression using temp variable pattern."""
+        ctype = "int64_t"
+        if casenode.type:
+            ctype = _ctype(casenode.type)
+
+        tmp = self._temp_name("match")
+        indent = self._indent()
+
+        # declare temp variable
+        self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+
+        subject_type = self._get_operation_type(casenode.subject)
+
+        if subject_type and subject_type.typetype == ZTypeType.UNION:
+            code = self._emit_union_case_expr(casenode, subject_type, tmp)
+        elif subject_type and subject_type.typetype == ZTypeType.VARIANT:
+            code = self._emit_variant_case_expr(casenode, subject_type, tmp)
+        else:
+            code = self._emit_simple_case_expr(casenode, tmp)
+
+        self._temp.decls.append(code)
+
+        # track reftype ownership
+        if casenode.type and casenode.type.needs_destructor:
+            self._temp.frees.append(tmp)
+            if ctype == "ZStr*":
+                self._temp.string_set.add(tmp)
+                self.needs_string = True
+
+        return tmp
+
+    def _emit_simple_case_expr(self, casenode: zast.Case, result_var: str) -> str:
+        """Emit simple enum match-as-expression using if/else-if chain."""
+        indent = self._indent()
+        parts: List[str] = []
+        subject = self._emit_operation_value(casenode.subject)
+
+        for i, clause in enumerate(casenode.clauses):
+            match_val = self._emit_atomid_value(clause.match)
+            keyword = "if" if i == 0 else "} else if"
+            parts.append(f"{indent}{keyword} ({subject} == {match_val}) {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_branch_with_result(clause.statement, result_var))
+            self.indent_level -= 1
+
+        if casenode.elseclause:
+            parts.append(f"{indent}}} else {{\n")
+            self.indent_level += 1
+            parts.append(self._emit_branch_with_result(casenode.elseclause, result_var))
+            self.indent_level -= 1
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_union_case_expr(
+        self, casenode: zast.Case, union_type: ZType, result_var: str
+    ) -> str:
+        """Emit union match-as-expression using switch on tag."""
+        if union_type.is_nullable_ptr:
+            return self._emit_nullable_ptr_case_expr(casenode, union_type, result_var)
+
+        indent = self._indent()
+        parts: List[str] = []
+        union_name = union_type.name
+        subject = self._emit_operation_value(casenode.subject)
+
+        parts.append(f"{indent}switch ({subject}->tag) {{\n")
+        for clause in casenode.clauses:
+            sname = clause.match.name
+            tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
+            parts.append(f"{indent}    case {tag}: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_branch_with_result(clause.statement, result_var))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        if casenode.elseclause:
+            parts.append(f"{indent}    default: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_branch_with_result(casenode.elseclause, result_var))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        parts.append(f"{indent}}}\n")
+        return "".join(parts)
+
+    def _emit_nullable_ptr_case_expr(
+        self, casenode: zast.Case, union_type: ZType, result_var: str
+    ) -> str:
+        """Emit nullable-ptr match-as-expression using if/else."""
+        indent = self._indent()
+        parts: List[str] = []
+        subject = self._emit_operation_value(casenode.subject)
+
+        some_clause = None
+        none_clause = None
+        for clause in casenode.clauses:
+            if clause.match.name == "some":
+                some_clause = clause
+            elif clause.match.name == "none":
+                none_clause = clause
+
+        if some_clause and none_clause:
+            parts.append(f"{indent}if ({subject} != NULL) {{\n")
+            self.indent_level += 1
+            parts.append(
+                self._emit_branch_with_result(some_clause.statement, result_var)
+            )
+            self.indent_level -= 1
+            parts.append(f"{indent}}} else {{\n")
+            self.indent_level += 1
+            parts.append(
+                self._emit_branch_with_result(none_clause.statement, result_var)
+            )
+            self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+        elif some_clause:
+            parts.append(f"{indent}if ({subject} != NULL) {{\n")
+            self.indent_level += 1
+            parts.append(
+                self._emit_branch_with_result(some_clause.statement, result_var)
+            )
+            self.indent_level -= 1
+            if casenode.elseclause:
+                parts.append(f"{indent}}} else {{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(casenode.elseclause, result_var)
+                )
+                self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+        elif none_clause:
+            parts.append(f"{indent}if ({subject} == NULL) {{\n")
+            self.indent_level += 1
+            parts.append(
+                self._emit_branch_with_result(none_clause.statement, result_var)
+            )
+            self.indent_level -= 1
+            if casenode.elseclause:
+                parts.append(f"{indent}}} else {{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(casenode.elseclause, result_var)
+                )
+                self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+
+        return "".join(parts)
+
+    def _emit_variant_case_expr(
+        self, casenode: zast.Case, variant_type: ZType, result_var: str
+    ) -> str:
+        """Emit variant match-as-expression using switch on tag."""
+        indent = self._indent()
+        parts: List[str] = []
+        variant_name = variant_type.name
+        subject = self._emit_operation_value(casenode.subject)
+
+        parts.append(f"{indent}switch ({subject}.tag) {{\n")
+        for clause in casenode.clauses:
+            sname = clause.match.name
+            tag = f"Z_{variant_name.upper()}_TAG_{sname.upper()}"
+            parts.append(f"{indent}    case {tag}: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_branch_with_result(clause.statement, result_var))
+            parts.append(f"{self._indent()}break;\n")
+            self.indent_level -= 2
+            parts.append(f"{indent}    }}\n")
+
+        if casenode.elseclause:
+            parts.append(f"{indent}    default: {{\n")
+            self.indent_level += 2
+            parts.append(self._emit_branch_with_result(casenode.elseclause, result_var))
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")

@@ -368,6 +368,64 @@ class TestImplicitReturn:
         )
 
 
+class TestMatchExpression:
+    def test_match_as_expression_simple(self):
+        """Simple enum match assigned to a variable."""
+        check_ok(
+            "north: 0\nsouth: 1\n"
+            "f: function {d: i64} out i64 is {\n"
+            "  match d case north then 10 case south then 20 else 30\n"
+            "}\nmain: function is {}"
+        )
+
+    def test_match_as_expression_union(self):
+        """Union match assigned to a variable."""
+        check_ok(
+            "shape: union { circle: i64\n square: i64 }\n"
+            "area: function {s: shape} out i64 is {\n"
+            "  match s case circle then 314 case square then 100\n"
+            "}\nmain: function is {}"
+        )
+
+    def test_match_branch_type_mismatch(self):
+        """Incompatible branch types in match-expression."""
+        errors = check_errors(
+            "north: 0\nsouth: 1\n"
+            "f: function {d: i64} out i64 is {\n"
+            '  match d case north then 10 case south then "bad" else 30\n'
+            "}\nmain: function is {}"
+        )
+        assert any("incompatible branch types" in e.msg for e in errors)
+
+    def test_match_non_exhaustive_no_value(self):
+        """Non-exhaustive match without else does not produce a value type."""
+        check_ok(
+            "north: 0\nsouth: 1\n"
+            "main: function is {\n"
+            "  x: 0\n"
+            '  match x case north then print "N"\n'
+            "}"
+        )
+
+    def test_match_all_branches_return(self):
+        """All branches return explicitly — match type is never."""
+        check_ok(
+            "north: 0\nsouth: 1\n"
+            "f: function {d: i64} out i64 is {\n"
+            "  match d case north then return 10 case south then return 20 else return 30\n"
+            "}\nmain: function is {}"
+        )
+
+    def test_match_as_implicit_return(self):
+        """Match expression as implicit return of function."""
+        check_ok(
+            "north: 0\nsouth: 1\n"
+            "f: function {d: i64} out i64 is {\n"
+            "  match d case north then 10 case south then 20 else 30\n"
+            "}\nmain: function is {}"
+        )
+
+
 class TestStringInterpolation:
     def test_interpolation_checks_expressions(self):
         check_ok('main: function is {\n  x: 42\n  print "value = \\{x}"\n}')
