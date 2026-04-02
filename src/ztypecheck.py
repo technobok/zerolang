@@ -5,10 +5,10 @@ Starts at main function, resolves names on demand, detects cycles.
 Includes ownership checking (Phase 4c).
 """
 
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, cast
 
 import zast
-from zast import ERR, clone_function
+from zast import ERR, NodeType, clone_function
 from zlexer import Token
 from zenv import SymbolTable
 import zasthash
@@ -3455,14 +3455,14 @@ class TypeChecker:
 
     def _check_statement_line(self, sline: zast.StatementLine) -> None:
         inner = sline.statementline
-        if isinstance(inner, zast.Assignment):
-            self._check_assignment(inner)
-        elif isinstance(inner, zast.Reassignment):
-            self._check_reassignment(inner)
-        elif isinstance(inner, zast.Swap):
-            self._check_swap(inner)
-        elif isinstance(inner, zast.Expression):
-            self._check_expression(inner)
+        if inner.nodetype == NodeType.ASSIGNMENT:
+            self._check_assignment(cast(zast.Assignment, inner))
+        elif inner.nodetype == NodeType.REASSIGNMENT:
+            self._check_reassignment(cast(zast.Reassignment, inner))
+        elif inner.nodetype == NodeType.SWAP:
+            self._check_swap(cast(zast.Swap, inner))
+        elif inner.nodetype == NodeType.EXPRESSION:
+            self._check_expression(cast(zast.Expression, inner))
         # propagate type to statement line wrapper
         if inner.type is not None:
             sline.type = inner.type
@@ -3582,38 +3582,48 @@ class TypeChecker:
     def _check_expression(self, expr: zast.Expression) -> Optional[ZType]:
         inner = expr.expression
         t: Optional[ZType] = None
-        if isinstance(inner, zast.Call):
-            t = self._check_call(inner)
-        elif isinstance(inner, zast.If):
-            t = self._check_if(inner)
-        elif isinstance(inner, zast.For):
-            t = self._check_for(inner)
-        elif isinstance(inner, zast.Do):
-            self._check_statement(inner.statement)
-            last_type = self._last_statement_type(inner.statement)
+        if inner.nodetype == NodeType.CALL:
+            t = self._check_call(cast(zast.Call, inner))
+        elif inner.nodetype == NodeType.IF:
+            t = self._check_if(cast(zast.If, inner))
+        elif inner.nodetype == NodeType.FOR:
+            t = self._check_for(cast(zast.For, inner))
+        elif inner.nodetype == NodeType.DO:
+            inner_do = cast(zast.Do, inner)
+            self._check_statement(inner_do.statement)
+            last_type = self._last_statement_type(inner_do.statement)
             if isinstance(last_type, ZType) and last_type is not self._NORETURN:
                 t = last_type
-                inner.type = t
+                inner_do.type = t
             else:
                 t = self.t_null
-        elif isinstance(inner, zast.With):
-            t = self._check_with(inner)
-        elif isinstance(inner, zast.Case):
-            t = self._check_case(inner)
-        elif isinstance(inner, zast.Data):
+        elif inner.nodetype == NodeType.WITH:
+            t = self._check_with(cast(zast.With, inner))
+        elif inner.nodetype == NodeType.CASE:
+            t = self._check_case(cast(zast.Case, inner))
+        elif inner.nodetype == NodeType.DATA:
             t = None
-        elif isinstance(inner, zast.Operation):
-            t = self._check_operation(inner)
+        elif inner.nodetype in (
+            NodeType.BINOP,
+            NodeType.DOTTEDPATH,
+            NodeType.ATOMID,
+            NodeType.ATOMSTRING,
+            NodeType.EXPRESSION,
+            NodeType.NAMEDOPERATION,
+            NodeType.LABELVALUE,
+        ):
+            inner_op = cast(zast.Operation, inner)
+            t = self._check_operation(inner_op)
             # propagate const_value from inner operation to expression wrapper
-            if inner.const_value is not None:
-                expr.const_value = inner.const_value
+            if inner_op.const_value is not None:
+                expr.const_value = inner_op.const_value
         if t is not None:
             expr.type = t
         return t
 
     def _check_operation(self, op: zast.Operation) -> Optional[ZType]:
-        if isinstance(op, zast.BinOp):
-            return self._check_binop(op)
+        if op.nodetype == NodeType.BINOP:
+            return self._check_binop(cast(zast.BinOp, op))
         if isinstance(op, zast.Path):
             t = self._check_path(op)
             if (
@@ -3629,8 +3639,8 @@ class TypeChecker:
                 )
             ):
                 type_desc = t.name
-                if isinstance(op, zast.DottedPath):
-                    type_desc = f"{t.name}.{op.child.name}"
+                if op.nodetype == NodeType.DOTTEDPATH:
+                    type_desc = f"{t.name}.{cast(zast.DottedPath, op).child.name}"
                 self._error(
                     f"cannot infer type arguments for generic type '{type_desc}'",
                     loc=op.start,
@@ -3640,19 +3650,21 @@ class TypeChecker:
         return None
 
     def _check_path(self, path: zast.Path) -> Optional[ZType]:
-        if isinstance(path, zast.Expression):
-            result = self._check_expression(path)
-            if result and not path.type:
-                path.type = result
+        if path.nodetype == NodeType.EXPRESSION:
+            path_expr = cast(zast.Expression, path)
+            result = self._check_expression(path_expr)
+            if result and not path_expr.type:
+                path_expr.type = result
             return result
-        if isinstance(path, zast.AtomString):
-            self._check_string_interpolation(path)
-            path.type = self._resolve_name("string")
-            return path.type
-        if isinstance(path, zast.AtomId):
-            return self._check_atomid(path)
-        if isinstance(path, zast.DottedPath):
-            return self._check_dotted_path(path)
+        if path.nodetype == NodeType.ATOMSTRING:
+            path_str = cast(zast.AtomString, path)
+            self._check_string_interpolation(path_str)
+            path_str.type = self._resolve_name("string")
+            return path_str.type
+        if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return self._check_atomid(cast(zast.AtomId, path))
+        if path.nodetype == NodeType.DOTTEDPATH:
+            return self._check_dotted_path(cast(zast.DottedPath, path))
         return None
 
     def _check_dotted_path(self, path: zast.DottedPath) -> Optional[ZType]:
@@ -4568,25 +4580,32 @@ class TypeChecker:
         if not stmt.statements:
             return None
         last = stmt.statements[-1].statementline
-        if isinstance(last, zast.Expression):
-            inner = last.expression
+        if last.nodetype == NodeType.EXPRESSION:
+            last_expr = cast(zast.Expression, last)
+            inner = last_expr.expression
             # check for non-completing expressions
-            if isinstance(inner, zast.AtomId) and inner.name in ("break", "continue"):
+            if inner.nodetype == NodeType.ATOMID and cast(zast.AtomId, inner).name in (
+                "break",
+                "continue",
+            ):
                 return self._NORETURN
-            if isinstance(inner, zast.Call) and inner.call_kind == zast.CallKind.RETURN:
+            if (
+                inner.nodetype == NodeType.CALL
+                and cast(zast.Call, inner).call_kind == zast.CallKind.RETURN
+            ):
                 return self._NORETURN
             # get type from the inner expression node (Expression wrapper .type may be None)
             if isinstance(inner, zast.Node) and inner.type is not None:
                 return inner.type
-            return last.type
-        if isinstance(last, zast.Assignment):
-            return last.type
+            return last_expr.type
+        if last.nodetype == NodeType.ASSIGNMENT:
+            return cast(zast.Assignment, last).type
         return None
 
     def _check_exhaustive_if(self, expr: zast.Expression) -> None:
         """Emit error if an if-expression is missing its else clause."""
         inner = expr.expression
-        if isinstance(inner, zast.If) and not inner.elseclause:
+        if inner.nodetype == NodeType.IF and not cast(zast.If, inner).elseclause:
             self._error(
                 "if-expression is not exhaustive (missing else clause)",
                 loc=inner.start,
