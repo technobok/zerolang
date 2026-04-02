@@ -6,7 +6,7 @@ Includes ownership-based memory management for strings (ZStr*).
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, cast
 
 import zast
 import zemitterc_runtime as zrt
@@ -2786,18 +2786,22 @@ class CEmitter:
         if not func.returntype or not func.body or not func.body.statements:
             return False
         last = func.body.statements[-1].statementline
-        if not isinstance(last, zast.Expression):
+        if last.nodetype != zast.NodeType.EXPRESSION:
             return False
-        inner = last.expression
+        inner = cast(zast.Expression, last).expression
         # explicit return, break, continue are not implicit returns
-        if isinstance(inner, zast.AtomId) and inner.name in ("break", "continue"):
+        if inner.nodetype == zast.NodeType.ATOMID and cast(zast.AtomId, inner).name in (
+            "break",
+            "continue",
+        ):
             return False
-        if isinstance(inner, zast.Call):
-            if inner.call_kind == zast.CallKind.RETURN:
+        if inner.nodetype == zast.NodeType.CALL:
+            call = cast(zast.Call, inner)
+            if call.call_kind == zast.CallKind.RETURN:
                 return False
             if (
-                isinstance(inner.callable, zast.AtomId)
-                and inner.callable.name == "return"
+                call.callable.nodetype == zast.NodeType.ATOMID
+                and cast(zast.AtomId, call.callable).name == "return"
             ):
                 return False
         # never type means all paths already return explicitly
@@ -2957,30 +2961,40 @@ class CEmitter:
         indent = self._indent()
         inner = expr.expression
         # handle break/continue as standalone statements
-        if isinstance(inner, zast.AtomId) and inner.name == "break":
+        if (
+            inner.nodetype == zast.NodeType.ATOMID
+            and cast(zast.AtomId, inner).name == "break"
+        ):
             return f"{indent}break;\n"
-        if isinstance(inner, zast.AtomId) and inner.name == "continue":
+        if (
+            inner.nodetype == zast.NodeType.ATOMID
+            and cast(zast.AtomId, inner).name == "continue"
+        ):
             return f"{indent}continue;\n"
-        if isinstance(inner, zast.Call):
-            return self._emit_call_stmt(inner, indent)
-        if isinstance(inner, zast.If):
-            return self._emit_if(inner)
-        if isinstance(inner, zast.For):
-            return self._emit_for(inner)
-        if isinstance(inner, zast.Do):
-            return self._emit_do(inner)
-        if isinstance(inner, zast.With):
-            return self._emit_with(inner)
-        if isinstance(inner, zast.Case):
-            return self._emit_case(inner)
-        if isinstance(inner, zast.DottedPath) and inner.child.name == "take":
+        if inner.nodetype == zast.NodeType.CALL:
+            return self._emit_call_stmt(cast(zast.Call, inner), indent)
+        if inner.nodetype == zast.NodeType.IF:
+            return self._emit_if(cast(zast.If, inner))
+        if inner.nodetype == zast.NodeType.FOR:
+            return self._emit_for(cast(zast.For, inner))
+        if inner.nodetype == zast.NodeType.DO:
+            return self._emit_do(cast(zast.Do, inner))
+        if inner.nodetype == zast.NodeType.WITH:
+            return self._emit_with(cast(zast.With, inner))
+        if inner.nodetype == zast.NodeType.CASE:
+            return self._emit_case(cast(zast.Case, inner))
+        if (
+            inner.nodetype == zast.NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, inner).child.name == "take"
+        ):
+            dp = cast(zast.DottedPath, inner)
             # function definitions are immutable — .take as statement is a no-op
-            if isinstance(inner.parent, zast.AtomId) and _is_definition_name(
-                inner.parent.name, self
+            if dp.parent.nodetype == zast.NodeType.ATOMID and _is_definition_name(
+                cast(zast.AtomId, dp.parent).name, self
             ):
                 return ""
-            var = self._emit_path_value(inner.parent)
-            var_type = inner.type
+            var = self._emit_path_value(dp.parent)
+            var_type = dp.type
             result = ""
             if var_type and var_type.name == "string":
                 result += f"{indent}zstr_free({var});\n"
@@ -2990,8 +3004,15 @@ class CEmitter:
                 result += f"{indent}z_{var_type.name}_destroy({var});\n"
             result += f"{indent}{var} = NULL;\n"
             return result
-        if isinstance(inner, zast.Operation):
-            val = self._emit_operation_value(inner)
+        if inner.nodetype in (
+            zast.NodeType.BINOP,
+            zast.NodeType.DOTTEDPATH,
+            zast.NodeType.ATOMID,
+            zast.NodeType.ATOMSTRING,
+            zast.NodeType.EXPRESSION,
+            zast.NodeType.LABELVALUE,
+        ):
+            val = self._emit_operation_value(cast(zast.Operation, inner))
             return f"{indent}{val};\n"
         return ""
 
@@ -3540,17 +3561,26 @@ class CEmitter:
 
     def _emit_expression_value(self, expr: zast.Expression) -> str:
         inner = expr.expression
-        if isinstance(inner, zast.Call):
-            return self._emit_call_value(inner)
-        if isinstance(inner, zast.Operation):
+        if inner.nodetype == zast.NodeType.CALL:
+            return self._emit_call_value(cast(zast.Call, inner))
+        if inner.nodetype in (
+            zast.NodeType.BINOP,
+            zast.NodeType.DOTTEDPATH,
+            zast.NodeType.ATOMID,
+            zast.NodeType.ATOMSTRING,
+            zast.NodeType.EXPRESSION,
+            zast.NodeType.LABELVALUE,
+        ):
             # bare function name = call with all-default args
             if (
-                isinstance(inner, zast.AtomId)
-                and self._typetype_of(inner.name) == ZTypeType.FUNCTION
+                inner.nodetype == zast.NodeType.ATOMID
+                and self._typetype_of(cast(zast.AtomId, inner).name)
+                == ZTypeType.FUNCTION
             ):
-                ftype = inner.type
+                atom = cast(zast.AtomId, inner)
+                ftype = atom.type
                 if ftype and ftype.param_defaults:
-                    cname = _mangle_func(inner.name)
+                    cname = _mangle_func(atom.name)
                     defaults: List[str] = []
                     for pname, _ in ftype.children.items():
                         if pname.startswith(":"):
@@ -3561,17 +3591,17 @@ class CEmitter:
                                 d = _mangle_func(d)
                             defaults.append(d)
                     return f"{cname}({', '.join(defaults)})"
-            return self._emit_operation_value(inner)
-        if isinstance(inner, zast.With):
-            return self._emit_expression_value(inner.doexpr)
-        if isinstance(inner, zast.Do) and inner.type:
-            return self._emit_do_expression_value(inner)
-        if isinstance(inner, zast.If):
-            return self._emit_if_expression_value(inner)
-        if isinstance(inner, zast.For) and inner.type:
-            return self._emit_for_expression_value(inner)
-        if isinstance(inner, zast.Case) and inner.type:
-            return self._emit_case_expression_value(inner)
+            return self._emit_operation_value(cast(zast.Operation, inner))
+        if inner.nodetype == zast.NodeType.WITH:
+            return self._emit_expression_value(cast(zast.With, inner).doexpr)
+        if inner.nodetype == zast.NodeType.DO and inner.type:
+            return self._emit_do_expression_value(cast(zast.Do, inner))
+        if inner.nodetype == zast.NodeType.IF:
+            return self._emit_if_expression_value(cast(zast.If, inner))
+        if inner.nodetype == zast.NodeType.FOR and inner.type:
+            return self._emit_for_expression_value(cast(zast.For, inner))
+        if inner.nodetype == zast.NodeType.CASE and inner.type:
+            return self._emit_case_expression_value(cast(zast.Case, inner))
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
@@ -4765,23 +4795,25 @@ class CEmitter:
             is_last = i == len(lines) - 1
             inner = sline.statementline
 
-            if is_last and isinstance(inner, zast.Expression):
-                expr_inner = inner.expression
+            if is_last and inner.nodetype == zast.NodeType.EXPRESSION:
+                expr_inner = cast(zast.Expression, inner).expression
                 # non-completing: emit normally (return/break/continue)
-                if isinstance(expr_inner, zast.AtomId) and expr_inner.name in (
+                if expr_inner.nodetype == zast.NodeType.ATOMID and cast(
+                    zast.AtomId, expr_inner
+                ).name in (
                     "break",
                     "continue",
                 ):
                     parts.append(self._emit_statement_line(sline))
                 elif (
-                    isinstance(expr_inner, zast.Call)
-                    and expr_inner.call_kind == zast.CallKind.RETURN
+                    expr_inner.nodetype == zast.NodeType.CALL
+                    and cast(zast.Call, expr_inner).call_kind == zast.CallKind.RETURN
                 ):
                     parts.append(self._emit_statement_line(sline))
                 else:
                     # value-producing: assign to result_var
                     self._temp_stack.append(TempState())
-                    val = self._emit_expression_value(inner)
+                    val = self._emit_expression_value(cast(zast.Expression, inner))
                     indent = self._indent()
                     code = f"{indent}{result_var} = {val};\n"
                     result = "".join(self._temp.decls) + code
