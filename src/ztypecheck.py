@@ -325,7 +325,11 @@ class TypeChecker:
                 err = ERR.CALLERROR
             else:
                 err = ERR.TYPEERROR
-        self.errors.append(zast.Error(err=err, msg=msg, loc=loc, note=note, hint=hint))
+        self.errors.append(
+            zast.Error(
+                start=loc or zast._ERROR_TOKEN, err=err, msg=msg, note=note, hint=hint
+            )
+        )
 
     def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
         """Assign a C identifier to a type, auto-resolving collisions.

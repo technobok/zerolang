@@ -10,7 +10,7 @@ from zvfs import ZVfs, DEntryID, DEntryType, ZVfsOpenFile
 from zlexer import Lexer, Tokenizer, Token, isvalidunitname
 from ztokentype import TT
 import zast
-from zast import ERR
+from zast import ERR, _ERROR_TOKEN
 from ztypes import ZParamOwnership
 
 # ownership annotation suffixes recognized on dotted type paths
@@ -279,14 +279,18 @@ class Parser:
                 if err.err == ERR.FILENOTFOUND and err.loc:
                     # could be a bad variable name as well as FILENOTFOUND
                     msg = f'Unknown reference "{err.loc.tokstr}" and {err.msg}'
-                    err = zast.Error(err=ERR.BADREFERENCE, msg=msg, loc=reftoken)
+                    err = zast.Error(
+                        start=reftoken or _ERROR_TOKEN, err=ERR.BADREFERENCE, msg=msg
+                    )
                     return err
                 return err  # propagate error - all other types
 
             if refname in definitions:
                 # can this happen?
                 msg = f"Unit {refname} already exists"
-                err = zast.Error(err=ERR.BADUNIT, msg=msg, loc=reftoken)
+                err = zast.Error(
+                    start=reftoken or _ERROR_TOKEN, err=ERR.BADUNIT, msg=msg
+                )
                 return err
 
             # push up any (new) unresolved refs (units allows None so has to be done manually)
@@ -337,7 +341,9 @@ class Parser:
                 + "Unit names must begin with a letter and contain only letters and digits\n"
                 + "Unit names must be lowercase ASCII only\n"
             )
-            return zast.Error(err=ERR.BADUNITNAME, msg=msg, loc=reference)
+            return zast.Error(
+                start=reference or _ERROR_TOKEN, err=ERR.BADUNITNAME, msg=msg
+            )
 
         openfile = self._unitfileopen(parentid, unitname, reference)
         if isinstance(openfile, zast.Error):
@@ -360,7 +366,7 @@ class Parser:
             # check EOF
             if not lex.accept(TT.EOF):
                 msg = "Expected EOF at end of Unit file"
-                err = zast.Error(err=ERR.BADUNIT, msg=msg, loc=lex.peek())
+                err = zast.Error(start=lex.peek(), err=ERR.BADUNIT, msg=msg)
                 return err
 
         # possible directory of same name as unit, for subunits
@@ -429,13 +435,15 @@ class Parser:
         if stat.entrytype == DEntryType.NOTFOUND:
             fullname = self.vfs.path(fsid)
             msg = f'Unit file "{fullname}" does not exist'
-            return zast.Error(err=ERR.FILENOTFOUND, msg=msg, loc=reference)
+            return zast.Error(
+                start=reference or _ERROR_TOKEN, err=ERR.FILENOTFOUND, msg=msg
+            )
 
         try:
             openfile = self.vfs.open(fsid)
         except IOError:
             msg = f"IO Error opening file [{fn}]"
-            return zast.Error(err=ERR.IOERROR, msg=msg, loc=reference)
+            return zast.Error(start=reference or _ERROR_TOKEN, err=ERR.IOERROR, msg=msg)
 
         # must have opened ok
         return openfile
@@ -498,7 +506,7 @@ class Parser:
                         f"Expected TypeDefinition after Definition name, got '{t.tokstr}' "
                         + repr(t)
                     )
-                    error = zast.Error(err=ERR.EXPECTEDTYPEDEF, msg=msg, loc=t)
+                    error = zast.Error(start=t, err=ERR.EXPECTEDTYPEDEF, msg=msg)
                     break
                 if isinstance(typedefinitionx, zast.Error):
                     error = typedefinitionx
@@ -508,9 +516,9 @@ class Parser:
             name = label.tokstr
             if name in definitions:
                 error = zast.Error(
-                    ERR.DUPLICATEDEF,
-                    f"Duplicate definition of {name}",
-                    definition.start,
+                    start=definition.start,
+                    err=ERR.DUPLICATEDEF,
+                    msg=f"Duplicate definition of {name}",
                 )
                 break
             # extern references that need to be push upwards....
@@ -762,7 +770,7 @@ class Parser:
         if isinstance(el, Token):
             # 'as' cannot be first, must be path/atom
             msg = "Expected an operand for the left hand side of operation"
-            return zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=el)
+            return zast.Error(start=el, err=ERR.BADEXPRESSION, msg=msg)
         start = el.node.start
 
         # operations: List[zast.OpArg] = []
@@ -780,7 +788,7 @@ class Parser:
             if not isinstance(path, zast.AtomId):
                 # print(repr(path))
                 msg = "Expected an operator (single identifier)"
-                return zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=el.node.start)
+                return zast.Error(start=el.node.start, err=ERR.BADEXPRESSION, msg=msg)
             # start = path.start
             # take the single Id out of the AtomId, nb: externs from here are
             # ignored (operator is a local ref againt the lhs)
@@ -789,7 +797,7 @@ class Parser:
             idx += 1
             if idx >= n:
                 msg = "Expected an operand for the right hand side of operation"
-                return zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=nexttoken)
+                return zast.Error(start=nexttoken, err=ERR.BADEXPRESSION, msg=msg)
             el = paths[idx]
 
             # el is a path, make a BinOp
@@ -854,7 +862,7 @@ class Parser:
                 break
             if label.tokstr in argnames:
                 msg = f"Duplicate argument name: {label.tokstr}"
-                return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg)
             argnames.add(label.tokstr)
 
             if is_label_value:
@@ -877,7 +885,9 @@ class Parser:
                     promoteexterns(addto=extern, addfrom=opx.extern)
                 else:
                     msg = f"Expected an Operation after label: {label.tokstr}"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                    )
 
         # got a call
         call = zast.Call(
@@ -947,12 +957,14 @@ class Parser:
             if lex.accept(TT.OUT):
                 if returntype:
                     msg = "Duplicate 'out'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
+                    return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
                 typeref = self._acceptpath(lex)
                 if typeref is None:
                     msg = "Expected type reference for 'out'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                    )
 
                 if isinstance(typeref, zast.Error):
                     return typeref  # propagate any other error
@@ -967,7 +979,7 @@ class Parser:
             elif lex.accept(TT.IS):
                 if body or is_native:
                     msg = "Duplicate 'is'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
+                    return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
                 if lex.accept(TT.NATIVE):
                     is_native = True
@@ -977,7 +989,9 @@ class Parser:
                     if statement is None:
                         msg = "Expected Statement for 'is'"
                         return zast.Error(
-                            err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany()
+                            start=lex.acceptany(),
+                            err=ERR.BADARGUMENT,
+                            msg=msg,
                         )
 
                     if isinstance(statement, zast.Error):
@@ -990,7 +1004,7 @@ class Parser:
             elif lex.accept(TT.AS):
                 if as_body is not None:
                     msg = "Duplicate 'as'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
+                    return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
                 b = self._getobjectbody(
                     lex,
@@ -1012,11 +1026,13 @@ class Parser:
 
                 if gotaccept:
                     msg = "Duplicate 'in'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=tok)
+                    return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
                 if not lex.accept(TT.BRACEOPEN):
                     msg = "Expected open brace '{' after 'in'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                    )
 
                 while True:
                     lex.accept(TT.EOL)  # optional newline
@@ -1027,7 +1043,7 @@ class Parser:
                         paramname = paramnametok.tokstr
                         if paramname in parameters:
                             msg = f"Duplicate parameter name: {paramname}"
-                            return zast.Error(err=ERR.BADPARAMETER, msg=msg, loc=tok)
+                            return zast.Error(start=tok, err=ERR.BADPARAMETER, msg=msg)
                         lvx = self._make_label_value(paramnametok)
                         parameters[paramname] = lvx.node
                         promoteexterns(addto=externparam, addfrom=lvx.extern)
@@ -1041,13 +1057,15 @@ class Parser:
                     paramname = paramnametok.tokstr
                     if paramname in parameters:
                         msg = f"Duplicate parameter name: {paramname}"
-                        return zast.Error(err=ERR.BADPARAMETER, msg=msg, loc=tok)
+                        return zast.Error(start=tok, err=ERR.BADPARAMETER, msg=msg)
 
                     val = self._acceptpath(lex)
                     if val is None:
                         msg = "Expected typeref or number for parameter type"
                         return zast.Error(
-                            err=ERR.BADPARAMETER, msg=msg, loc=lex.acceptany()
+                            start=lex.acceptany(),
+                            err=ERR.BADPARAMETER,
+                            msg=msg,
                         )
 
                     if isinstance(val, zast.Error):
@@ -1065,7 +1083,9 @@ class Parser:
                 if not lex.accept(TT.BRACECLOSE):
                     msg = "Expected closing brace '}' after function parameters"
                     return zast.Error(
-                        err=ERR.BADPARAMETERBLOCK, msg=msg, loc=lex.acceptany()
+                        start=lex.acceptany(),
+                        err=ERR.BADPARAMETERBLOCK,
+                        msg=msg,
                     )
 
                 gotaccept = True
@@ -1315,7 +1335,7 @@ class Parser:
                         None,
                         None,
                         None,
-                        zast.Error(err=ERR.BADITEM, msg=msg, loc=t),
+                        zast.Error(start=t, err=ERR.BADITEM, msg=msg),
                         False,
                     )
                 lex.acceptany()
@@ -1343,7 +1363,7 @@ class Parser:
                         None,
                         None,
                         None,
-                        zast.Error(err=ERR.BADITEM, msg=msg, loc=t),
+                        zast.Error(start=t, err=ERR.BADITEM, msg=msg),
                         False,
                     )
                 lex.acceptany()
@@ -1378,7 +1398,7 @@ class Parser:
                 None,
                 None,
                 None,
-                zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.peek()),
+                zast.Error(start=lex.peek(), err=ERR.BADARGUMENT, msg=msg),
                 False,
             )
 
@@ -1418,7 +1438,7 @@ class Parser:
         # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
         if not lex.accept(TT.BRACEOPEN):
             msg = "Expected open brace '{' for 'is' argument"
-            return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg)
 
         # items=items, islist=islist, functions=functions, tag=tag, extern=extern
         items: Dict[str, zast.Path] = {}  # generic and normal fields
@@ -1446,7 +1466,9 @@ class Parser:
                 typerefx = self._acceptpath(lex)
                 if typerefx is None:
                     msg = "Expected type reference for 'is'"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                    )
 
                 if isinstance(typerefx, zast.Error):
                     return typerefx  # propagate any other error
@@ -1460,7 +1482,7 @@ class Parser:
                 if tt == TT.LABELPRE:
                     if label.tokstr in items or label.tokstr in functions:
                         msg = f"Duplicate item name: {label.tokstr}"
-                        return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
+                        return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                     lvx = self._make_label_value(label)
                     local.add(label.tokstr)
                     items[label.tokstr] = lvx.node
@@ -1474,7 +1496,7 @@ class Parser:
                     if funcx:
                         if label.tokstr in items or label.tokstr in functions:
                             msg = f"Duplicate item name: {label.tokstr}"
-                            return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
+                            return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                         functions[label.tokstr] = funcx.node
                         # add directly to extern.. these cannot refer locally, except via 'this'
                         promoteexterns(
@@ -1488,7 +1510,7 @@ class Parser:
                         if unitx:
                             if label.tokstr in items or label.tokstr in functions:
                                 msg = f"Duplicate item name: {label.tokstr}"
-                                return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
+                                return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
                             items[label.tokstr] = unitx.node  # type: ignore[assignment]
                             # don't promote externs — unit references parent type members
@@ -1501,7 +1523,7 @@ class Parser:
                         if pathx:
                             if label.tokstr in items or label.tokstr in functions:
                                 msg = f"Duplicate item name: {label.tokstr}"
-                                return zast.Error(err=ERR.BADITEM, msg=msg, loc=label)
+                                return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
                             items[label.tokstr] = pathx.node
                             # promote to externitems (will be promoted to extern below, after locals)
@@ -1510,7 +1532,9 @@ class Parser:
                             # error
                             msg = f"Expected a function or expression for item: {label.tokstr}"
                             return zast.Error(
-                                err=ERR.BADITEM, msg=msg, loc=lex.acceptany()
+                                start=lex.acceptany(),
+                                err=ERR.BADITEM,
+                                msg=msg,
                             )
 
             elif unlabelledpath:
@@ -1531,13 +1555,17 @@ class Parser:
                             # cannot happen
                             msg = "Unknown DottedId type"
                             return zast.Error(
-                                err=ERR.BADITEM, msg=msg, loc=lex.acceptany()
+                                start=lex.acceptany(),
+                                err=ERR.BADITEM,
+                                msg=msg,
                             )
 
                         if name in items or name in functions:
                             msg = f"Duplicate item name: {name}"
                             return zast.Error(
-                                err=ERR.BADITEM, msg=msg, loc=dottedid.start
+                                start=dottedid.start,
+                                err=ERR.BADITEM,
+                                msg=msg,
                             )
                         local.add(name)
                         items[name] = dottedid
@@ -1548,7 +1576,7 @@ class Parser:
                         pass
                 else:
                     msg = "Expected a label, unlabelled expression or closing brace"
-                    return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
+                    return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
             elif unlabelledid:
                 # an unnamed id... for enum only
                 atomidx = self._acceptatomid(lex)
@@ -1560,11 +1588,11 @@ class Parser:
                     # do NOT promoteexterns... this is an enum item (not a reference)
                 else:
                     msg = "Expected a label, an id or closing brace"
-                    return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
+                    return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
             else:
                 # error - no other options
                 msg = "Expected a label, expression or closing brace"
-                return zast.Error(err=ERR.BADITEM, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
 
         # extern - add extern from items (skipping locals) since these can be self referntial
         promoteexterns(addto=extern, addfrom=externitems, local=local)
@@ -1590,7 +1618,7 @@ class Parser:
 
         if not lex.accept(TT.BRACEOPEN):
             msg = "Expected brace delimited 'is' argument for Unit body"
-            return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.peek())
+            return zast.Error(start=lex.peek(), err=ERR.BADARGUMENT, msg=msg)
 
         unitorerr = self._acceptunitbody(lex)
         if isinstance(unitorerr, zast.Error):
@@ -1600,7 +1628,7 @@ class Parser:
         # check '}'
         if not lex.accept(TT.BRACECLOSE):
             msg = "Expected '}' at end of sub-unit or new line between definitions"
-            err = zast.Error(err=ERR.BADUNIT, msg=msg, loc=lex.peek())
+            err = zast.Error(start=lex.peek(), err=ERR.BADUNIT, msg=msg)
             return err
 
         unitorerr.node.start = start  # change start to 'unit' keyword
@@ -1648,7 +1676,9 @@ class Parser:
                     return op  # propagate error
                 if not op:
                     msg = "Expected operation (condition) for 'if'"
-                    return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg
+                    )
 
                 # note leading space - cannot collide with real bindings
                 conditions[f" *{whenindex}"] = op.node
@@ -1660,7 +1690,7 @@ class Parser:
             elif t.toktype == TT.THEN:
                 if not conditions:
                     msg = "'then' must appear after at least one condition"
-                    return zast.Error(err=ERR.BADTHEN, msg=msg, loc=t)
+                    return zast.Error(start=t, err=ERR.BADTHEN, msg=msg)
                 lex.acceptany()
                 statementx = self._acceptstatement(lex)
                 if isinstance(statementx, zast.Error):
@@ -1668,7 +1698,9 @@ class Parser:
                 if not statementx:
                     msg = "Expected statement for 'then'"
                     return zast.Error(
-                        err=ERR.EXPECTEDSTATEMENT, msg=msg, loc=lex.acceptany()
+                        start=lex.acceptany(),
+                        err=ERR.EXPECTEDSTATEMENT,
+                        msg=msg,
                     )
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 ifclause = zast.IfClause(
@@ -1687,13 +1719,13 @@ class Parser:
 
         if conditions:
             msg = "Expected 'then' after conditions"
-            return zast.Error(err=ERR.BADELSE, msg=msg, loc=t)
+            return zast.Error(start=t, err=ERR.BADELSE, msg=msg)
 
         t = lex.peek()
         if t.toktype == TT.ELSE:
             if not clauses:
                 msg = "'else' must appear after at least one if/then clause"
-                return zast.Error(err=ERR.BADELSE, msg=msg, loc=t)
+                return zast.Error(start=t, err=ERR.BADELSE, msg=msg)
             lex.acceptany()
             statementx = self._acceptstatement(lex)
             if isinstance(statementx, zast.Error):
@@ -1701,7 +1733,9 @@ class Parser:
             if not statementx:
                 msg = "Expected statement for 'else'"
                 return zast.Error(
-                    err=ERR.EXPECTEDSTATEMENT, msg=msg, loc=lex.acceptany()
+                    start=lex.acceptany(),
+                    err=ERR.EXPECTEDSTATEMENT,
+                    msg=msg,
                 )
 
             # local not available for else
@@ -1746,7 +1780,7 @@ class Parser:
             return op  # propagate error
         if not op:
             msg = "Expected operation for 'match' (subject)"
-            return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
 
         subject = op.node
         promoteexterns(addto=extern, addfrom=op.extern)
@@ -1782,14 +1816,14 @@ class Parser:
                 curid = atomidx.node
             else:
                 msg = "Case match expression expected (simple id)"
-                return zast.Error(err=ERR.BADREFERENCE, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADREFERENCE, msg=msg)
 
             # ----- get then
 
             t = lex.peek()
             if t.toktype != TT.THEN:
                 msg = "Expected 'then' keyword for 'case'"
-                return zast.Error(err=ERR.BADCASE, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADCASE, msg=msg)
 
             lex.acceptany()  # 'then'
             statementx = self._acceptstatement(lex)
@@ -1798,7 +1832,9 @@ class Parser:
             if not statementx:
                 msg = "Expected statement for 'then'"
                 return zast.Error(
-                    err=ERR.EXPECTEDSTATEMENT, msg=msg, loc=lex.acceptany()
+                    start=lex.acceptany(),
+                    err=ERR.EXPECTEDSTATEMENT,
+                    msg=msg,
                 )
 
             promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
@@ -1814,7 +1850,9 @@ class Parser:
             if not statementx:
                 msg = "Expected statement after 'else' for 'case'"
                 return zast.Error(
-                    err=ERR.EXPECTEDSTATEMENT, msg=msg, loc=lex.acceptany()
+                    start=lex.acceptany(),
+                    err=ERR.EXPECTEDSTATEMENT,
+                    msg=msg,
                 )
 
             # local not available for else
@@ -1872,7 +1910,9 @@ class Parser:
                     return op  # propagate error
                 if not op:
                     msg = "Expected operation (condition) for 'for'"
-                    return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg
+                    )
 
                 if loop:
                     postconditions.append(op.node)
@@ -1895,7 +1935,9 @@ class Parser:
                     return op  # propagate error
                 if not op:
                     msg = f"Expected operation for 'for' binding label: {name}"
-                    return zast.Error(err=ERR.EXPECTEDOP, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg
+                    )
 
                 conditions[name] = op.node
                 # nb: local - can refer to prior bindings...
@@ -1906,7 +1948,7 @@ class Parser:
             elif t.toktype == TT.LOOP:
                 if loop:
                     msg = "Duplicate 'loop'"
-                    return zast.Error(err=ERR.BADFOR, msg=msg, loc=lex.acceptany())
+                    return zast.Error(start=lex.acceptany(), err=ERR.BADFOR, msg=msg)
 
                 lex.acceptany()
                 statementx = self._acceptstatement(lex)
@@ -1915,7 +1957,9 @@ class Parser:
                 if not statementx:
                     msg = "Expected statement for 'loop'"
                     return zast.Error(
-                        err=ERR.EXPECTEDSTATEMENT, msg=msg, loc=lex.acceptany()
+                        start=lex.acceptany(),
+                        err=ERR.EXPECTEDSTATEMENT,
+                        msg=msg,
                     )
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 loop = statementx.node
@@ -1926,7 +1970,7 @@ class Parser:
 
         if not conditions and not loop:
             msg = "Require at least one condition or a 'loop' specified for 'for'"
-            return zast.Error(err=ERR.BADFOR, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.BADFOR, msg=msg)
 
         fornode = zast.For(
             conditions=conditions, loop=loop, postconditions=postconditions, start=start
@@ -1956,7 +2000,7 @@ class Parser:
             return statementx  # propagate error
         if not statementx:
             msg = "Expected statement for 'do'"
-            return zast.Error(err=ERR.EXPECTEDSTATEMENT, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDSTATEMENT, msg=msg)
         promoteexterns(addto=extern, addfrom=statementx.extern)
 
         donode = zast.Do(statement=statementx.node, start=start)
@@ -1980,7 +2024,7 @@ class Parser:
         t = lex.peek()
         if t.toktype != TT.LABEL:
             msg = "Expected label after 'with'"
-            return zast.Error(err=ERR.EXPECTEDDEF, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDDEF, msg=msg)
         name = t.tokstr
         lex.acceptany()  # consume the label
 
@@ -1990,7 +2034,7 @@ class Parser:
             return valuex
         if not valuex:
             msg = "Expected expression for 'with' value"
-            return zast.Error(err=ERR.EXPECTEDEXP, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDEXP, msg=msg)
 
         # the name is locally defined, don't propagate it as extern
         promoteexterns(addto=extern, addfrom=valuex.extern)
@@ -1998,7 +2042,7 @@ class Parser:
         # expect 'do'
         if not lex.accept(TT.DO):
             msg = "Expected 'do' after 'with' definition"
-            return zast.Error(err=ERR.EXPECTEDEXP, msg=msg, loc=lex.peek())
+            return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
 
         # accept the do expression - the name is in scope here
         doexprx = self._acceptexpression(lex)
@@ -2006,7 +2050,7 @@ class Parser:
             return doexprx
         if not doexprx:
             msg = "Expected expression after 'do'"
-            return zast.Error(err=ERR.EXPECTEDEXP, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDEXP, msg=msg)
 
         # the locally defined name should not be promoted as extern
         promoteexterns(addto=extern, addfrom=doexprx.extern)
@@ -2054,7 +2098,7 @@ class Parser:
 
         if not lex.accept(TT.BRACEOPEN):
             msg = "Expected opening brace '{' for data body"
-            return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.BADDATA, msg=msg)
 
         datanames: Set[str] = set()
         while True:
@@ -2062,7 +2106,9 @@ class Parser:
                 label = lex.acceptany()
                 if label.tokstr in datanames:
                     msg = f"Duplicate data member name: {label.tokstr}"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                    )
                 datanames.add(label.tokstr)
                 lvx = self._make_label_value(label)
                 namedop = zast.NamedOperation(
@@ -2077,7 +2123,9 @@ class Parser:
                 label = lex.acceptany()
                 if label.tokstr in datanames:
                     msg = f"Duplicate data member name: {label.tokstr}"
-                    return zast.Error(err=ERR.BADARGUMENT, msg=msg, loc=lex.acceptany())
+                    return zast.Error(
+                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                    )
                 datanames.add(label.tokstr)
 
             pathx = self._acceptpath(lex)
@@ -2100,7 +2148,7 @@ class Parser:
 
         if not lex.accept(TT.BRACECLOSE):
             msg = "Expected closing brace '}' for data body"
-            return zast.Error(err=ERR.BADDATA, msg=msg, loc=lex.acceptany())
+            return zast.Error(start=lex.acceptany(), err=ERR.BADDATA, msg=msg)
 
         datanode = zast.Data(subtype=subtype, data=data, start=start)
         return NodeX(datanode, extern=extern)
@@ -2179,9 +2227,9 @@ class Parser:
                         # duplicate definition
                         msg = f'Duplicate definition of "{name}"'
                         error = zast.Error(
+                            start=statementline.statementline.start,
                             err=ERR.DUPLICATEDEF,
                             msg=msg,
-                            loc=statementline.statementline.start,
                         )
                         break
                     local.add(name)
@@ -2192,7 +2240,7 @@ class Parser:
 
             if not lex.accept(TT.BRACECLOSE):
                 msg = "Expected closing brace '}' for statement body"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
 
             statement = zast.Statement(statements=statements, start=start)
             return NodeX(statement, extern=extern)
@@ -2240,7 +2288,7 @@ class Parser:
                 return exprx  # propagate error
             if not exprx:
                 msg = "Expected expression for assignment statement"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
             assignment = zast.Assignment(
                 name=start.tokstr, value=exprx.node, start=start
             )
@@ -2256,11 +2304,11 @@ class Parser:
             # get LHS from oplist
             if not oplist:
                 msg = "Reassignment requires a left hand side"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
+                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
             lhsx = oplist[0]
             if len(oplist) != 1:
                 msg = "Reassignment must be to a single path on the LHS"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
+                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
             # lhsx is a pathx
             promoteexterns(addto=extern, addfrom=lhsx.extern)
 
@@ -2270,7 +2318,7 @@ class Parser:
                 return rhsx  # propagate error
             if not rhsx:
                 msg = "Expected an expression for the RHS of a reassignment"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=lex.acceptany())
+                return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
 
             promoteexterns(addto=extern, addfrom=rhsx.extern)
             reassignment = zast.Reassignment(
@@ -2282,11 +2330,11 @@ class Parser:
         if lex.accept(TT.SWAP):  # a swap
             if not oplist:
                 msg = "Swap requires a left hand side"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
+                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
             lhsx = oplist[0]
             if len(oplist) != 1:
                 msg = "Swap must be to a single path on the LHS"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
+                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
             # lhsx is a pathx
             promoteexterns(addto=extern, addfrom=lhsx.extern)
 
@@ -2296,7 +2344,7 @@ class Parser:
                 return rhsx  # propagate error
             if not rhsx:
                 msg = "Swap requires a right hand side"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
+                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
 
             promoteexterns(addto=extern, addfrom=rhsx.extern)
             swap = zast.Swap(lhs=lhsx.node, rhs=rhsx.node, start=start)
@@ -2308,7 +2356,7 @@ class Parser:
             if not oporcallx:
                 # this shouldn't happen, we know oplist is not empty
                 msg = "Bad statement"
-                return zast.Error(err=ERR.BADSTATEMENT, msg=msg, loc=start)
+                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
 
             if isinstance(oporcallx, zast.Error):
                 return oporcallx  # propagate error
@@ -2359,7 +2407,7 @@ class Parser:
             else:
                 # error
                 msg = "Expected ID after dot"
-                err = zast.Error(err=ERR.BADPATH, msg=msg, loc=lex.acceptany())
+                err = zast.Error(start=lex.acceptany(), err=ERR.BADPATH, msg=msg)
                 return err
 
         return NodeX(node=path, extern=atomx.extern)  # only atomx is extern
@@ -2434,7 +2482,7 @@ class Parser:
         while True:
             if expr is None:
                 msg = "Expected a valid expression within parentheses"
-                error = zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=t)
+                error = zast.Error(start=t, err=ERR.BADEXPRESSION, msg=msg)
                 break
 
             if isinstance(expr, zast.Error):
@@ -2448,7 +2496,7 @@ class Parser:
 
             if not lex.accept(TT.PARENCLOSE):
                 msg = "Expected closing parenthesis ')' after expression"
-                error = zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=lex.peek())
+                error = zast.Error(start=lex.peek(), err=ERR.BADEXPRESSION, msg=msg)
                 break
 
             break
@@ -2488,7 +2536,7 @@ class Parser:
             if tt == TT.STREND:
                 if t.tokstr != firsttoken.tokstr:
                     msg = "Unmatched string literal delimiter"
-                    return zast.Error(err=ERR.BADSTRING, msg=msg, loc=t)
+                    return zast.Error(start=t, err=ERR.BADSTRING, msg=msg)
 
                 lex.acceptany()
                 break  # end of string
@@ -2501,11 +2549,11 @@ class Parser:
                 # the lexer state machine (STRINGEXPR/STRINGEXPRBRACE)
                 if not lex.accept(TT.BRACEOPEN):
                     msg = "Expected '{' after '\\' in string interpolation"
-                    return zast.Error(err=ERR.BADSTRING, msg=msg, loc=lex.peek())
+                    return zast.Error(start=lex.peek(), err=ERR.BADSTRING, msg=msg)
                 expr = self._acceptexpression(lex)
                 if expr is None:
                     msg = "Bad expression in string interpolation"
-                    return zast.Error(err=ERR.BADEXPRESSION, msg=msg, loc=lex.peek())
+                    return zast.Error(start=lex.peek(), err=ERR.BADEXPRESSION, msg=msg)
                 if isinstance(expr, zast.Error):
                     return expr  # propagate error
                 stringparts.append(expr.node)
@@ -2514,12 +2562,12 @@ class Parser:
                 extern = expr.extern
                 if not lex.accept(TT.BRACECLOSE):
                     msg = "Expected '}' after string interpolation expression"
-                    return zast.Error(err=ERR.BADSTRING, msg=msg, loc=lex.peek())
+                    return zast.Error(start=lex.peek(), err=ERR.BADSTRING, msg=msg)
             else:
                 # error
                 t = lex.acceptany()
                 msg = "Unexpected token in string literal"
-                return zast.Error(err=ERR.BADSTRING, msg=msg, loc=t)
+                return zast.Error(start=t, err=ERR.BADSTRING, msg=msg)
 
         stringparts = _strip_string_whitespace(stringparts)
         atomstring = zast.AtomString(stringparts=stringparts, start=firsttoken)

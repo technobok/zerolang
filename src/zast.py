@@ -14,7 +14,8 @@ from itertools import count
 # from collections import OrderedDict  # pylint: disable=W0611
 # import ztypes
 import zvfs
-from zlexer import Token
+from zvfs import DEntryID
+from zlexer import Token, TT
 from ztypes import ZType, ZParamOwnership
 
 
@@ -78,23 +79,7 @@ class ERR(IntEnum):
     COMPILERERROR = 1  # E0001: should not happen
 
 
-@dataclass
-class Error:
-    """
-    Error - is not an AST Node
-
-    err = ERR numeric error code
-    msg = error message
-    loc = optional source location
-    note = optional context note (e.g. "ownership was transferred here")
-    hint = optional suggestion (e.g. "did you mean 'y'?")
-    """
-
-    err: ERR
-    msg: str
-    loc: Optional[Token]
-    note: Optional[str] = None
-    hint: Optional[str] = None
+_ERROR_TOKEN = Token(toktype=TT.EOL, tokstr="", fsno=DEntryID(0), lineno=0, colno=0)
 
 
 # ANSI color codes
@@ -106,7 +91,7 @@ _BOLD = "\033[1m"
 _RESET = "\033[0m"
 
 
-def errortomessage(err: Error, vfs: zvfs.ZVfs, color: bool = False) -> str:
+def errortomessage(err: "Error", vfs: zvfs.ZVfs, color: bool = False) -> str:
     """Format an error in rustc-style format.
 
     Example output:
@@ -240,6 +225,8 @@ class NodeType(IntEnum):
 
     ATOMSTRING = 84
 
+    ERROR = 99
+
 
 # @unique
 # class Context(IntEnum):
@@ -272,6 +259,7 @@ class Program:
 
     """
 
+    is_error: bool = field(default=False, init=False)
     vfs: zvfs.ZVfs  # vfs for reading source files. Needed to report errors
     units: Dict[
         str, "Unit"
@@ -325,6 +313,33 @@ class Node:
     const_value: Optional[typing.Union[int, bool]] = field(default=None, init=False)
 
     start: Token  # start location in the source for this Node
+
+
+@dataclass
+class Error(Node):
+    """
+    Error Node — represents a parse or compile error.
+
+    err = ERR numeric error code
+    msg = error message
+    note = optional context note (e.g. "ownership was transferred here")
+    hint = optional suggestion (e.g. "did you mean 'y'?")
+
+    The 'start' field (inherited from Node) serves as the error location.
+    Use the 'loc' property for backward compatibility.
+    """
+
+    nodetype: NodeType = field(default=NodeType.ERROR, init=False)
+    is_error: bool = field(default=True, init=False)
+    err: ERR = ERR.COMPILERERROR
+    msg: str = ""
+    note: Optional[str] = None
+    hint: Optional[str] = None
+
+    @property
+    def loc(self) -> Optional[Token]:
+        """Backward-compatible alias for start. Returns None if start is the sentinel."""
+        return self.start if self.start is not _ERROR_TOKEN else None
 
 
 # TypeDefinition - one of the following, real Node is not needed

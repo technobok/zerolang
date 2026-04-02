@@ -232,6 +232,7 @@ class ZVfsOpenFile:
     An open file handle.
     """
 
+    is_error: bool = field(default=False, init=False)
     entryid: DEntryID
     filehandle: IO[str]
 
