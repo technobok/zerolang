@@ -2298,6 +2298,41 @@ phase adds control flow analysis to guarantee all paths return:
     that produces no value.]
 
 
+#---: Phase 48d: Eliminate isinstance — field-based dispatch
+
+The compiler uses ~459 #~"isinstance()" calls for type dispatch, which is
+Python-specific and blocks self-hosting. These need to be replaced with
+field-based dispatch using #~"nodetype", #~"typetype", and similar enum fields.
+
+This is not a mechanical replacement — it requires grouping related checks,
+identifying where new fields or class consolidation would simplify dispatch,
+and ensuring the replacement is portable.
+
+Categories of #~"isinstance" usage (approximate counts):
+
+#ul:
+  [#*: AST node dispatch (AtomId: 92, DottedPath: 73, Expression: 36,
+    Call: 13, Function: 14, If: 8, etc.) — replace with #~"nodetype" checks.]
+  [#*: Error vs Node distinction (58) — #~"Error" is not a #~"Node";
+    add an #~"is_error" flag or use a tagged union wrapper.]
+  [#*: ZType checks (25) — used where #~"generic_origin" or similar fields
+    may be #~"ZType" or #~"str"; add a typed wrapper or tag field.]
+  [#*: Path subtype dispatch (AtomId: 92, DottedPath: 73, AtomString: 5,
+    BinOp: 7) — these are all #~"Path" subtypes; #~"nodetype" covers them.]
+  [#*: Python primitive checks (int: 5, float: 2, dict: 3, list: 3,
+    Token: 3) — replace with typed wrappers or explicit fields.]
+
+#ol:
+  [#*: Audit and group all 459 #~"isinstance" calls by pattern. Identify
+    which can use existing #~"nodetype"/#~"typetype" fields directly.]
+  [#*: Design new fields or class changes needed for cases where
+    #~"nodetype" is insufficient (Error, ZType, primitives).]
+  [#*: Migrate incrementally, updating the bootstrap-lint baseline in
+    #~"Makefile" after each batch. Run #~"make check" after each change.]
+  [#*: Remove the #~"isinstance" baseline from bootstrap-lint when
+    count reaches zero.]
+
+
 #---: Phase 49: Expand to v3 (Full Language)
 
 #ol:

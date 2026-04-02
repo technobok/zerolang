@@ -213,6 +213,8 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-48c-missing-return-control-flow-analysis">Phase 48c: Missing-return control flow analysis</a>
 </li>
+<li><a href="#phase-48d-eliminate-isinstance-field-based-dispatch">Phase 48d: Eliminate isinstance &#x2014; field-based dispatch</a>
+</li>
 <li><a href="#phase-49-expand-to-v3-full-language">Phase 49: Expand to v3 (Full Language)</a>
 </li>
 <li><a href="#phase-50-developer-tools">Phase 50: Developer Tools</a>
@@ -2258,14 +2260,44 @@ phase adds control flow analysis to guarantee all paths return:</p>
 <li>Emit an error when a function with an <code>out</code> type has a code path
     that produces no value.</li>
 </ol>
-<h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.52. Phase 49: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-48d-eliminate-isinstance-field-based-dispatch"><a href="#phase-48d-eliminate-isinstance-field-based-dispatch">5.52. Phase 48d: Eliminate isinstance &#x2014; field-based dispatch</a></h3>
+<p>The compiler uses ~459 <code>isinstance()</code> calls for type dispatch, which is
+Python-specific and blocks self-hosting. These need to be replaced with
+field-based dispatch using <code>nodetype</code>, <code>typetype</code>, and similar enum fields.</p>
+<p>This is not a mechanical replacement &#x2014; it requires grouping related checks,
+identifying where new fields or class consolidation would simplify dispatch,
+and ensuring the replacement is portable.</p>
+<p>Categories of <code>isinstance</code> usage (approximate counts):</p>
+<ul>
+<li>AST node dispatch (AtomId: 92, DottedPath: 73, Expression: 36,
+    Call: 13, Function: 14, If: 8, etc.) &#x2014; replace with <code>nodetype</code> checks.</li>
+<li>Error vs Node distinction (58) &#x2014; <code>Error</code> is not a <code>Node</code>;
+    add an <code>is_error</code> flag or use a tagged union wrapper.</li>
+<li>ZType checks (25) &#x2014; used where <code>generic_origin</code> or similar fields
+    may be <code>ZType</code> or <code>str</code>; add a typed wrapper or tag field.</li>
+<li>Path subtype dispatch (AtomId: 92, DottedPath: 73, AtomString: 5,
+    BinOp: 7) &#x2014; these are all <code>Path</code> subtypes; <code>nodetype</code> covers them.</li>
+<li>Python primitive checks (int: 5, float: 2, dict: 3, list: 3,
+    Token: 3) &#x2014; replace with typed wrappers or explicit fields.</li>
+</ul>
+<ol>
+<li>Audit and group all 459 <code>isinstance</code> calls by pattern. Identify
+    which can use existing <code>nodetype</code>/<code>typetype</code> fields directly.</li>
+<li>Design new fields or class changes needed for cases where
+    <code>nodetype</code> is insufficient (Error, ZType, primitives).</li>
+<li>Migrate incrementally, updating the bootstrap-lint baseline in
+    <code>Makefile</code> after each batch. Run <code>make check</code> after each change.</li>
+<li>Remove the <code>isinstance</code> baseline from bootstrap-lint when
+    count reaches zero.</li>
+</ol>
+<h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.53. Phase 49: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-50-developer-tools"><a href="#phase-50-developer-tools">5.53. Phase 50: Developer Tools</a></h3>
+<h3 id="phase-50-developer-tools"><a href="#phase-50-developer-tools">5.54. Phase 50: Developer Tools</a></h3>
 <p>Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.</p>
 <ol>
@@ -2283,7 +2315,7 @@ source files in IDEs and editors.</p>
 <li>Editor integration: VS Code extension and/or tree-sitter grammar
     for syntax highlighting. Wire LSP server into the extension.</li>
 </ol>
-<h3 id="phase-51-self-hosting"><a href="#phase-51-self-hosting">5.54. Phase 51: Self-Hosting</a></h3>
+<h3 id="phase-51-self-hosting"><a href="#phase-51-self-hosting">5.55. Phase 51: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>
