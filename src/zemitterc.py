@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple, cast
 
 import zast
+from zast import NodeType
 import zemitterc_runtime as zrt
 from ztypes import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
 
@@ -507,12 +508,14 @@ class CEmitter:
         Handles function pointer fields (struct field access) vs regular functions.
         """
         # check if this is a function pointer field call (e.g. c.op)
-        if isinstance(call.callable, zast.DottedPath):
-            ftype = call.callable.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            ftype = cast(zast.DottedPath, call.callable).type
             if ftype and ftype.typetype == ZTypeType.FUNCTION:
                 func_name = ftype.name
                 if func_name in self._is_func_fields:
-                    return self._emit_dotted_path_value(call.callable)
+                    return self._emit_dotted_path_value(
+                        cast(zast.DottedPath, call.callable)
+                    )
                 # use the resolved type name for proper qualification
                 # (handles subunit functions like mymod.helper.square)
                 if "." in func_name:
@@ -526,21 +529,31 @@ class CEmitter:
     def _is_generic_template(self, defn: zast.TypeDefinition) -> bool:
         """Check if a definition is a generic template (has .generic in items/as_items)."""
         items = None
-        if isinstance(defn, (zast.Record, zast.Union, zast.Variant, zast.Class)):
-            items = defn.as_items
-        elif isinstance(defn, zast.Function):
-            items = defn.parameters
-        elif isinstance(defn, zast.Protocol):
-            items = defn.parameters
-        elif isinstance(defn, zast.Unit):
-            items = defn.body
+        if defn.nodetype in (
+            NodeType.RECORD,
+            NodeType.UNION,
+            NodeType.VARIANT,
+            NodeType.CLASS,
+        ):
+            items = cast(zast.Record, defn).as_items
+        elif defn.nodetype == NodeType.FUNCTION:
+            items = cast(zast.Function, defn).parameters
+        elif defn.nodetype == NodeType.PROTOCOL:
+            items = cast(zast.Protocol, defn).parameters
+        elif defn.nodetype == NodeType.UNIT:
+            items = cast(zast.Unit, defn).body
         if items is None:
             return False
         for fpath in items.values():
-            if isinstance(fpath, zast.DottedPath) and isinstance(
-                fpath.child, zast.AtomId
+            if (
+                fpath.nodetype == NodeType.DOTTEDPATH
+                and cast(zast.DottedPath, fpath).child.nodetype == NodeType.ATOMID
             ):
-                if fpath.child.name in ("generic", "valtype", "reftype"):
+                if cast(zast.DottedPath, fpath).child.name in (
+                    "generic",
+                    "valtype",
+                    "reftype",
+                ):
                     return True
         return False
 
@@ -553,9 +566,9 @@ class CEmitter:
             return False
         fpath = next(iter(items.values()))
         return (
-            isinstance(fpath, zast.DottedPath)
-            and isinstance(fpath.child, zast.AtomId)
-            and fpath.child.name == "typedef"
+            fpath.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, fpath).child.nodetype == NodeType.ATOMID
+            and cast(zast.DottedPath, fpath).child.name == "typedef"
         )
 
     def _typedef_base_name(
@@ -563,10 +576,10 @@ class CEmitter:
     ) -> str:
         """Extract the base type name from a typedef definition."""
         fpath = next(iter(defn.items.values()))
-        assert isinstance(fpath, zast.DottedPath)
-        parent = fpath.parent
-        if isinstance(parent, zast.AtomId):
-            return parent.name
+        assert fpath.nodetype == NodeType.DOTTEDPATH
+        parent = cast(zast.DottedPath, fpath).parent
+        if parent.nodetype == NodeType.ATOMID:
+            return cast(zast.AtomId, parent).name
         return ""
 
     def _collect_pre_emission(self, prefix: str, body: dict) -> None:
@@ -586,7 +599,9 @@ class CEmitter:
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
                         proto_name = (
-                            apath.name if isinstance(apath, zast.AtomId) else None
+                            cast(zast.AtomId, apath).name
+                            if apath.nodetype == NodeType.ATOMID
+                            else None
                         )
                         if (
                             proto_name
@@ -617,10 +632,10 @@ class CEmitter:
         """Emit functions from a file unit body, recursing into subunits."""
         for name, defn in body.items():
             qname = f"{prefix}.{name}"
-            if isinstance(defn, zast.Function) and defn.body:
+            if defn.nodetype == NodeType.FUNCTION and cast(zast.Function, defn).body:
                 self._current_node_id = defn.nodeid
-                self._emit_function(qname, defn)
-            elif isinstance(defn, zast.Unit):
+                self._emit_function(qname, cast(zast.Function, defn))
+            elif defn.nodetype == NodeType.UNIT:
                 if not self._is_generic_template(defn):
                     self._emit_file_unit_functions(qname, defn.body)
 
@@ -681,10 +696,13 @@ class CEmitter:
                     self._emit_spec_typedef(qname, defn)
             elif defn_type == zast.Data:
                 self._emit_data(qname, defn)
-            elif defn_type == zast.Expression and isinstance(
-                defn.expression, zast.Data
+            elif (
+                defn_type == zast.Expression
+                and cast(zast.Expression, defn).expression.nodetype == NodeType.DATA
             ):
-                self._emit_data(qname, defn.expression)
+                self._emit_data(
+                    qname, cast(zast.Data, cast(zast.Expression, defn).expression)
+                )
             elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
             elif hasattr(defn, "const_value") and isinstance(defn.const_value, int):
@@ -717,7 +735,9 @@ class CEmitter:
                 if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
                         facet_name = (
-                            apath.name if isinstance(apath, zast.AtomId) else None
+                            cast(zast.AtomId, apath).name
+                            if apath.nodetype == NodeType.ATOMID
+                            else None
                         )
                         if (
                             facet_name
@@ -966,7 +986,7 @@ class CEmitter:
         proto = self._protocol_defs.get(proto_name)
         if not proto:
             return
-        is_class = isinstance(impl_defn, zast.Class)
+        is_class = impl_defn.nodetype == NodeType.CLASS
         impl_ctype = f"z_{impl_name}_t"
 
         lines: List[str] = []
@@ -1222,7 +1242,11 @@ class CEmitter:
                     self._emit_func_typedef(f"{name}.{mname}", mfunc)
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
             for label, apath in rec.as_items.items():
-                proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+                proto_name = (
+                    cast(zast.AtomId, apath).name
+                    if apath.nodetype == NodeType.ATOMID
+                    else None
+                )
                 if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, rec)
             return
@@ -1253,7 +1277,11 @@ class CEmitter:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit protocol implementations
         for label, apath in rec.as_items.items():
-            proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+            proto_name = (
+                cast(zast.AtomId, apath).name
+                if apath.nodetype == NodeType.ATOMID
+                else None
+            )
             if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, rec)
             # facet impls are deferred to _emit_deferred_facets
@@ -1306,25 +1334,35 @@ class CEmitter:
         """Extract C-level default values for fields and function pointer fields."""
         field_defaults: Dict[str, str] = {}
         for fname, fpath in items.items():
-            if isinstance(fpath, zast.AtomId) and _is_numeric_id(fpath.name):
-                field_defaults[fname] = self._emit_numeric_literal(fpath.name)
-            elif isinstance(fpath, zast.DottedPath):
-                if isinstance(fpath.parent, zast.AtomId) and _is_numeric_id(
-                    fpath.parent.name
+            if fpath.nodetype == NodeType.ATOMID and _is_numeric_id(
+                cast(zast.AtomId, fpath).name
+            ):
+                field_defaults[fname] = self._emit_numeric_literal(
+                    cast(zast.AtomId, fpath).name
+                )
+            elif fpath.nodetype == NodeType.DOTTEDPATH:
+                if cast(
+                    zast.DottedPath, fpath
+                ).parent.nodetype == NodeType.ATOMID and _is_numeric_id(
+                    cast(zast.AtomId, cast(zast.DottedPath, fpath).parent).name
                 ):
-                    child_name = fpath.child.name
+                    child_name = cast(zast.DottedPath, fpath).child.name
                     dct = TYPEMAP.get(child_name, "int64_t")
-                    typename, value, err = parse_number(fpath.parent.name + child_name)
+                    typename, value, err = parse_number(
+                        cast(zast.AtomId, cast(zast.DottedPath, fpath).parent).name
+                        + child_name
+                    )
                     if not err:
                         if typename.startswith("f"):
                             field_defaults[fname] = f"(({dct}){value})"
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
             elif (
-                isinstance(fpath, zast.AtomId)
-                and self._typetype_of(fpath.name) == ZTypeType.FUNCTION
+                fpath.nodetype == NodeType.ATOMID
+                and self._typetype_of(cast(zast.AtomId, fpath).name)
+                == ZTypeType.FUNCTION
             ):
-                field_defaults[fname] = _mangle_func(fpath.name)
+                field_defaults[fname] = _mangle_func(cast(zast.AtomId, fpath).name)
         for mname, mfunc in functions.items():
             if mfunc.body is not None:
                 field_defaults[mname] = _mangle_func(f"{name}.{mname}")
@@ -1376,19 +1414,24 @@ class CEmitter:
         Uses ZType.is_heap_allocated to select stack vs heap allocation.
         If lines is None, appends to self.struct_defs.
         """
-        assert isinstance(defn, (zast.Record, zast.Class))
+        assert defn.nodetype in (NodeType.RECORD, NodeType.CLASS)
+        rc_defn = cast(
+            zast.Record, defn
+        )  # Record and Class share items/functions/as_functions
         ztype = self._resolved_type(name)
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
         params, field_names, field_ctypes = self._collect_field_params(
-            name, defn.items, defn.functions
+            name, rc_defn.items, rc_defn.functions
         )
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
         self._type_field_defaults[name] = self._extract_field_defaults(
-            name, defn.items, defn.functions
+            name, rc_defn.items, rc_defn.functions
         )
-        has_user_create = "create" in defn.functions or "create" in defn.as_functions
+        has_user_create = (
+            "create" in rc_defn.functions or "create" in rc_defn.as_functions
+        )
         target: List[str] = lines if lines is not None else []
         self._emit_create_functions(
             name,
@@ -1410,7 +1453,11 @@ class CEmitter:
                     self._emit_func_typedef(f"{name}.{mname}", mfunc)
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
             for label, apath in cls.as_items.items():
-                proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+                proto_name = (
+                    cast(zast.AtomId, apath).name
+                    if apath.nodetype == NodeType.ATOMID
+                    else None
+                )
                 if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                     self._emit_protocol_impl(name, label, proto_name, cls)
             return
@@ -1453,7 +1500,11 @@ class CEmitter:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit protocol implementations
         for label, apath in cls.as_items.items():
-            proto_name = apath.name if isinstance(apath, zast.AtomId) else None
+            proto_name = (
+                cast(zast.AtomId, apath).name
+                if apath.nodetype == NodeType.ATOMID
+                else None
+            )
             if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, cls)
 
@@ -1462,11 +1513,16 @@ class CEmitter:
     ) -> Optional[Dict[str, int]]:
         """Resolve custom tag values from as_items if a .tag reference exists."""
         for as_name, as_path in union_defn.as_items.items():
-            if isinstance(as_path, zast.DottedPath) and as_path.child.name == "tag":
+            if (
+                as_path.nodetype == NodeType.DOTTEDPATH
+                and cast(zast.DottedPath, as_path).child.name == "tag"
+            ):
                 # find the data definition name from the parent
                 data_name = None
-                if isinstance(as_path.parent, zast.AtomId):
-                    data_name = as_path.parent.name
+                if cast(zast.DottedPath, as_path).parent.nodetype == NodeType.ATOMID:
+                    data_name = cast(
+                        zast.AtomId, cast(zast.DottedPath, as_path).parent
+                    ).name
                 if not data_name:
                     continue
                 # look up the data definition in the program
@@ -1475,22 +1531,29 @@ class CEmitter:
                     if defn is None:
                         continue
                     data_defn = None
-                    if isinstance(defn, zast.Data):
-                        data_defn = defn
-                    elif isinstance(defn, zast.Expression) and isinstance(
-                        defn.expression, zast.Data
+                    if defn.nodetype == NodeType.DATA:
+                        data_defn = cast(zast.Data, defn)
+                    elif (
+                        defn.nodetype == NodeType.EXPRESSION
+                        and cast(zast.Expression, defn).expression.nodetype
+                        == NodeType.DATA
                     ):
-                        data_defn = defn.expression
+                        data_defn = cast(
+                            zast.Data, cast(zast.Expression, defn).expression
+                        )
                     if data_defn:
                         values: Dict[str, int] = {}
                         ordinal = 0
                         for item in data_defn.data:
                             ename = item.name if item.name is not None else str(ordinal)
                             ordinal += 1
-                            if isinstance(item.valtype, zast.AtomId) and _is_numeric_id(
-                                item.valtype.name
+                            if (
+                                item.valtype.nodetype == NodeType.ATOMID
+                                and _is_numeric_id(cast(zast.AtomId, item.valtype).name)
                             ):
-                                _, val, err = parse_number(item.valtype.name)
+                                _, val, err = parse_number(
+                                    cast(zast.AtomId, item.valtype).name
+                                )
                                 if not err:
                                     values[ename] = int(val)
                         return values
@@ -1528,15 +1591,18 @@ class CEmitter:
         lines.append("    switch (u->tag) {\n")
         for sname, spath in union_defn.items.items():
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = isinstance(spath, zast.AtomId) and spath.name == "null"
+            is_null = (
+                spath.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, spath).name == "null"
+            )
             lines.append(f"        case {tag}:\n")
             if is_null:
                 lines.append("            break;\n")
             else:
                 stype = spath.type
                 if stype and stype.needs_destructor and stype.destructor_name:
-                    cast = f"({_ctype(stype)})u->data"
-                    lines.append(f"            {stype.destructor_name}({cast});\n")
+                    cast_expr = f"({_ctype(stype)})u->data"
+                    lines.append(f"            {stype.destructor_name}({cast_expr});\n")
                 else:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
@@ -1592,10 +1658,11 @@ class CEmitter:
         """Emit a monomorphized unit: emit its function definitions."""
         mangled = mono_type.name
         cloned_methods = getattr(self.program, "cloned_methods", {}).get(mangled, {})
-        if not isinstance(template_defn, zast.Unit):
+        if template_defn.nodetype != NodeType.UNIT:
             return
-        for dname, ddefn in template_defn.body.items():
-            if dname in (template_defn.body.keys() - cloned_methods.keys()):
+        unit_defn = cast(zast.Unit, template_defn)
+        for dname, ddefn in unit_defn.body.items():
+            if dname in (unit_defn.body.keys() - cloned_methods.keys()):
                 # skip generic param declarations and non-function items
                 pass
             if dname in cloned_methods:
@@ -1668,8 +1735,8 @@ class CEmitter:
                 lines.append("            break;\n")
             else:
                 if stype.needs_destructor and stype.destructor_name:
-                    cast = f"({_ctype(stype)})u->data"
-                    lines.append(f"            {stype.destructor_name}({cast});\n")
+                    cast_expr = f"({_ctype(stype)})u->data"
+                    lines.append(f"            {stype.destructor_name}({cast_expr});\n")
                 else:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
@@ -2490,8 +2557,8 @@ class CEmitter:
         # emit methods from cloned or template defn with mangled names
         cloned_methods = getattr(self.program, "cloned_methods", {}).get(name)
         func_aliases = getattr(self.program, "func_aliases", {})
-        if isinstance(template_defn, zast.Class):
-            for mname, mfunc in template_defn.as_functions.items():
+        if template_defn.nodetype == NodeType.CLASS:
+            for mname, mfunc in cast(zast.Class, template_defn).as_functions.items():
                 if mfunc.body:
                     qualified = f"{name}.{mname}"
                     if qualified in func_aliases:
@@ -2611,7 +2678,8 @@ class CEmitter:
 
         # check if all subtypes are null (enum pattern)
         all_null = all(
-            isinstance(spath, zast.AtomId) and spath.name == "null"
+            spath.nodetype == NodeType.ATOMID
+            and cast(zast.AtomId, spath).name == "null"
             for spath in variant_defn.items.values()
         )
 
@@ -2621,7 +2689,10 @@ class CEmitter:
         if not all_null:
             lines.append("    union {\n")
             for sname, spath in variant_defn.items.items():
-                is_null = isinstance(spath, zast.AtomId) and spath.name == "null"
+                is_null = (
+                    spath.nodetype == NodeType.ATOMID
+                    and cast(zast.AtomId, spath).name == "null"
+                )
                 if not is_null:
                     sub_ctype = self._get_subtype_ctype(spath)
                     if sub_ctype:
@@ -2635,7 +2706,10 @@ class CEmitter:
         lines.append("    switch (a.tag) {\n")
         for sname, spath in variant_defn.items.items():
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = isinstance(spath, zast.AtomId) and spath.name == "null"
+            is_null = (
+                spath.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, spath).name == "null"
+            )
             lines.append(f"        case {tag}:")
             if is_null:
                 lines.append(" return true;\n")
@@ -2680,8 +2754,10 @@ class CEmitter:
         values: List[str] = []
         for item in data.data:
             op = item.valtype
-            if isinstance(op, zast.AtomId) and _is_numeric_id(op.name):
-                _, val, err = parse_number(op.name)
+            if op.nodetype == NodeType.ATOMID and _is_numeric_id(
+                cast(zast.AtomId, op).name
+            ):
+                _, val, err = parse_number(cast(zast.AtomId, op).name)
                 if not err:
                     if isinstance(val, float):
                         values.append(str(val))
@@ -2813,8 +2889,8 @@ class CEmitter:
         """Emit the last statement line as an implicit return with scope cleanup."""
         self._temp_stack.append(TempState())
         expr = sline.statementline
-        assert isinstance(expr, zast.Expression)
-        val = self._emit_expression_value(expr)
+        assert expr.nodetype == NodeType.EXPRESSION
+        val = self._emit_expression_value(cast(zast.Expression, expr))
         indent = self._indent()
 
         result = "".join(self._temp.decls)
@@ -2856,14 +2932,14 @@ class CEmitter:
         self._temp_stack.append(TempState())
 
         inner = sline.statementline
-        if isinstance(inner, zast.Assignment):
-            code = self._emit_assignment(inner)
-        elif isinstance(inner, zast.Reassignment):
-            code = self._emit_reassignment(inner)
-        elif isinstance(inner, zast.Swap):
-            code = self._emit_swap(inner)
-        elif isinstance(inner, zast.Expression):
-            code = self._emit_expression_stmt(inner)
+        if inner.nodetype == NodeType.ASSIGNMENT:
+            code = self._emit_assignment(cast(zast.Assignment, inner))
+        elif inner.nodetype == NodeType.REASSIGNMENT:
+            code = self._emit_reassignment(cast(zast.Reassignment, inner))
+        elif inner.nodetype == NodeType.SWAP:
+            code = self._emit_swap(cast(zast.Swap, inner))
+        elif inner.nodetype == NodeType.EXPRESSION:
+            code = self._emit_expression_stmt(cast(zast.Expression, inner))
         else:
             code = ""
 
@@ -2911,15 +2987,17 @@ class CEmitter:
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = (
-            self._resolved_type(inner.name) if isinstance(inner, zast.AtomId) else None
+            self._resolved_type(cast(zast.AtomId, inner).name)
+            if inner.nodetype == NodeType.ATOMID
+            else None
         )
         if (
-            isinstance(inner, zast.AtomId)
+            inner.nodetype == NodeType.ATOMID
             and inner_resolved
             and inner_resolved.typetype == ZTypeType.RECORD
-            and inner_resolved.name == inner.name
+            and inner_resolved.name == cast(zast.AtomId, inner).name
         ):
-            ctype = f"z_{inner.name}_t"
+            ctype = f"z_{cast(zast.AtomId, inner).name}_t"
         result = f"{indent}{ctype} {cname} = {val};\n"
         # nullify source on .take for class pointers
         take_var = self._get_take_var_from_expr(assign.value)
@@ -3018,36 +3096,40 @@ class CEmitter:
 
     def _is_data_index_call(self, call: zast.Call) -> bool:
         """Check if this is a data.index call like primes.index i."""
-        if isinstance(call.callable, zast.DottedPath):
-            if isinstance(call.callable.parent, zast.AtomId):
-                pname = call.callable.parent.name
-                child = call.callable.child.name
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            if cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
+                pname = cast(
+                    zast.AtomId, cast(zast.DottedPath, call.callable).parent
+                ).name
+                child = cast(zast.DottedPath, call.callable).child.name
                 if self._typetype_of(pname) == ZTypeType.DATA and child == "index":
                     return True
         return False
 
     def _is_protocol_create(self, call: zast.Call) -> bool:
         """Check if call is protocol.create/take from: expr."""
-        if not isinstance(call.callable, zast.DottedPath):
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
             return False
-        if call.callable.child.name not in ("create", "take"):
+        dp = cast(zast.DottedPath, call.callable)
+        if dp.child.name not in ("create", "take"):
             return False
-        parent_type = call.callable.parent.type
+        parent_type = dp.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
 
     def _is_protocol_borrow(self, call: zast.Call) -> bool:
         """Check if call is protocol.borrow from: expr."""
-        if not isinstance(call.callable, zast.DottedPath):
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
             return False
-        if call.callable.child.name != "borrow":
+        dp = cast(zast.DottedPath, call.callable)
+        if dp.child.name != "borrow":
             return False
-        parent_type = call.callable.parent.type
+        parent_type = dp.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
 
     def _emit_protocol_create_call(self, call: zast.Call) -> str:
         """Emit owned protocol create: protocol.create from: expr."""
-        assert isinstance(call.callable, zast.DottedPath)
-        proto_type = call.callable.parent.type
+        assert call.callable.nodetype == NodeType.DOTTEDPATH
+        proto_type = cast(zast.DottedPath, call.callable).parent.type
         assert proto_type is not None
         proto_name = proto_type.name
 
@@ -3066,8 +3148,8 @@ class CEmitter:
         arg_type = from_arg.valtype.type
         if not arg_type:
             # try parent for dotted paths like f.take
-            if isinstance(from_arg.valtype, zast.DottedPath):
-                arg_type = from_arg.valtype.parent.type
+            if from_arg.valtype.nodetype == NodeType.DOTTEDPATH:
+                arg_type = cast(zast.DottedPath, from_arg.valtype).parent.type
         impl_name = arg_type.name if arg_type else ""
 
         # look up label
@@ -3093,8 +3175,8 @@ class CEmitter:
 
     def _emit_protocol_borrow_call(self, call: zast.Call) -> str:
         """Emit borrowed protocol create: protocol.borrow from: expr."""
-        assert isinstance(call.callable, zast.DottedPath)
-        proto_type = call.callable.parent.type
+        assert call.callable.nodetype == NodeType.DOTTEDPATH
+        proto_type = cast(zast.DottedPath, call.callable).parent.type
         assert proto_type is not None
         proto_name = proto_type.name
 
@@ -3112,8 +3194,8 @@ class CEmitter:
         # get impl type name from the argument's resolved type
         arg_type = from_arg.valtype.type
         if not arg_type:
-            if isinstance(from_arg.valtype, zast.DottedPath):
-                arg_type = from_arg.valtype.parent.type
+            if from_arg.valtype.nodetype == NodeType.DOTTEDPATH:
+                arg_type = cast(zast.DottedPath, from_arg.valtype).parent.type
         impl_name = arg_type.name if arg_type else ""
 
         # look up label
@@ -3142,26 +3224,28 @@ class CEmitter:
 
     def _is_facet_create(self, call: zast.Call) -> bool:
         """Check if call is facet.create/take from: expr."""
-        if not isinstance(call.callable, zast.DottedPath):
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
             return False
-        if call.callable.child.name not in ("create", "take"):
+        dp = cast(zast.DottedPath, call.callable)
+        if dp.child.name not in ("create", "take"):
             return False
-        parent_type = call.callable.parent.type
+        parent_type = dp.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.FACET
 
     def _is_facet_borrow(self, call: zast.Call) -> bool:
         """Check if call is facet.borrow from: expr."""
-        if not isinstance(call.callable, zast.DottedPath):
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
             return False
-        if call.callable.child.name != "borrow":
+        dp = cast(zast.DottedPath, call.callable)
+        if dp.child.name != "borrow":
             return False
-        parent_type = call.callable.parent.type
+        parent_type = dp.parent.type
         return parent_type is not None and parent_type.typetype == ZTypeType.FACET
 
     def _emit_facet_create_call(self, call: zast.Call) -> str:
         """Emit facet.create/take from: expr — returns a value (not pointer)."""
-        assert isinstance(call.callable, zast.DottedPath)
-        facet_type = call.callable.parent.type
+        assert call.callable.nodetype == NodeType.DOTTEDPATH
+        facet_type = cast(zast.DottedPath, call.callable).parent.type
         assert facet_type is not None
         facet_name = facet_type.name
 
@@ -3175,8 +3259,8 @@ class CEmitter:
         arg_val = self._emit_operation_value(from_arg.valtype)
         arg_type = from_arg.valtype.type
         if not arg_type:
-            if isinstance(from_arg.valtype, zast.DottedPath):
-                arg_type = from_arg.valtype.parent.type
+            if from_arg.valtype.nodetype == NodeType.DOTTEDPATH:
+                arg_type = cast(zast.DottedPath, from_arg.valtype).parent.type
         impl_name = arg_type.name if arg_type else ""
 
         label = self._proto_conformance.get((impl_name, facet_name), "")
@@ -3189,13 +3273,14 @@ class CEmitter:
 
     def _emit_facet_dispatch(self, call: zast.Call) -> Optional[str]:
         """If call is a facet method dispatch, return the C expression. Otherwise None."""
-        if not isinstance(call.callable, zast.DottedPath):
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
             return None
-        parent_type = call.callable.parent.type
+        dp = cast(zast.DottedPath, call.callable)
+        parent_type = dp.parent.type
         if not parent_type or parent_type.typetype != ZTypeType.FACET:
             return None
-        parent_val = self._emit_path_value(call.callable.parent)
-        method = call.callable.child.name
+        parent_val = self._emit_path_value(dp.parent)
+        method = dp.child.name
         args = [f"(void*)&{parent_val}.data"]
         for arg in call.arguments:
             args.append(self._emit_operation_value(arg.valtype))
@@ -3203,13 +3288,14 @@ class CEmitter:
 
     def _emit_protocol_dispatch(self, call: zast.Call) -> Optional[str]:
         """If call is a protocol method dispatch, return the C expression. Otherwise None."""
-        if not isinstance(call.callable, zast.DottedPath):
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
             return None
-        parent_type = call.callable.parent.type
+        dp = cast(zast.DottedPath, call.callable)
+        parent_type = dp.parent.type
         if not parent_type or parent_type.typetype != ZTypeType.PROTOCOL:
             return None
-        parent_val = self._emit_path_value(call.callable.parent)
-        method = call.callable.child.name
+        parent_val = self._emit_path_value(dp.parent)
+        method = dp.child.name
         args = [f"{parent_val}->data"]
         for arg in call.arguments:
             args.append(self._emit_operation_value(arg.valtype))
@@ -3286,11 +3372,16 @@ class CEmitter:
             return f"{indent}continue;\n"
 
         # data.index call -> array access
-        if self._is_data_index_call(call) and isinstance(
-            call.callable, zast.DottedPath
+        if (
+            self._is_data_index_call(call)
+            and call.callable.nodetype == NodeType.DOTTEDPATH
         ):
-            assert isinstance(call.callable.parent, zast.AtomId)
-            data_name = call.callable.parent.name
+            assert (
+                cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
+            )
+            data_name = cast(
+                zast.AtomId, cast(zast.DottedPath, call.callable).parent
+            ).name
             idx = (
                 self._emit_operation_value(call.arguments[0].valtype)
                 if call.arguments
@@ -3299,8 +3390,8 @@ class CEmitter:
             return f"{indent}{_mangle_func(data_name)}[{idx}];\n"
 
         # array method calls as statements
-        if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = call.callable.parent.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
             if dp_parent_type and _is_array_type(dp_parent_type):
                 val = self._emit_call_value(call)
                 return f"{indent}{val};\n"
@@ -3359,18 +3450,19 @@ class CEmitter:
             # check for inline class construction: return ClassName field: val ...
             first_arg = call.arguments[0].valtype
             if (
-                isinstance(first_arg, zast.AtomId)
+                first_arg.nodetype == NodeType.ATOMID
                 and first_arg.type
                 and first_arg.type.typetype == ZTypeType.CLASS
                 and len(call.arguments) > 1
             ):
                 # emit as meta.create call
                 self.needs_stdlib = True
+                fa_name = cast(zast.AtomId, first_arg).name
                 args_str, take_vars = self._build_meta_create_args(
-                    first_arg.name, call.arguments, skip_first=1
+                    fa_name, call.arguments, skip_first=1
                 )
-                result_expr = f"z_{first_arg.name}_create({args_str})"
-                ctype = f"z_{first_arg.name}_t"
+                result_expr = f"z_{fa_name}_create({args_str})"
+                ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
@@ -3414,18 +3506,21 @@ class CEmitter:
     def _get_take_var_from_expr(self, expr: zast.Expression) -> Optional[str]:
         """If expr is a var.take expression, return the mangled variable name."""
         inner = expr.expression
-        if isinstance(inner, zast.DottedPath):
-            return self._get_take_var(inner)
-        if isinstance(inner, zast.Call):
+        if inner.nodetype == NodeType.DOTTEDPATH:
+            return self._get_take_var(cast(zast.DottedPath, inner))
+        if inner.nodetype == NodeType.CALL:
             # could be a call with .take arg
             pass
         return None
 
     def _get_take_var(self, op: zast.Operation) -> Optional[str]:
         """If op is a var.take expression, return the mangled variable name."""
-        if isinstance(op, zast.DottedPath):
-            if op.child.name == "take" and isinstance(op.parent, zast.AtomId):
-                name = op.parent.name
+        if op.nodetype == NodeType.DOTTEDPATH:
+            if (
+                cast(zast.DottedPath, op).child.name == "take"
+                and cast(zast.DottedPath, op).parent.nodetype == NodeType.ATOMID
+            ):
+                name = cast(zast.AtomId, cast(zast.DottedPath, op).parent).name
                 if not _is_numeric_id(name):
                     # don't nullify function/spec definitions (immutable program text)
                     if _is_definition_name(name, self):
@@ -3435,8 +3530,8 @@ class CEmitter:
 
     def _get_implicit_take_var(self, op: zast.Operation) -> Optional[str]:
         """Get the variable name for implicit take (plain variable reference)."""
-        if isinstance(op, zast.AtomId):
-            name = op.name
+        if op.nodetype == NodeType.ATOMID:
+            name = cast(zast.AtomId, op).name
             if (
                 not _is_numeric_id(name)
                 and self._typetype_of(name) != ZTypeType.FUNCTION
@@ -3444,22 +3539,40 @@ class CEmitter:
                 and name not in self._const_names
             ):
                 return _mangle_var(name)
-        if isinstance(op, zast.Expression) and isinstance(
-            op.expression, zast.Operation
+        if op.nodetype == NodeType.EXPRESSION and cast(
+            zast.Expression, op
+        ).expression.nodetype in (
+            NodeType.ATOMID,
+            NodeType.LABELVALUE,
+            NodeType.ATOMSTRING,
+            NodeType.EXPRESSION,
+            NodeType.DOTTEDPATH,
+            NodeType.BINOP,
         ):
-            return self._get_implicit_take_var(op.expression)
+            return self._get_implicit_take_var(
+                cast(zast.Operation, cast(zast.Expression, op).expression)
+            )
         return None
 
     def _has_call(self, op: zast.Operation) -> bool:
         """Check if an operation contains a function call."""
-        if isinstance(op, zast.Expression):
-            inner = op.expression
-            if isinstance(inner, zast.Call):
+        if op.nodetype == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, op).expression
+            if inner.nodetype == NodeType.CALL:
                 return True
-            if isinstance(inner, zast.Operation):
-                return self._has_call(inner)
-        if isinstance(op, zast.BinOp):
-            return self._has_call(op.lhs) or self._has_call(op.rhs)
+            if inner.nodetype in (
+                NodeType.ATOMID,
+                NodeType.LABELVALUE,
+                NodeType.ATOMSTRING,
+                NodeType.EXPRESSION,
+                NodeType.DOTTEDPATH,
+                NodeType.BINOP,
+            ):
+                return self._has_call(cast(zast.Operation, inner))
+        if op.nodetype == NodeType.BINOP:
+            return self._has_call(cast(zast.BinOp, op).lhs) or self._has_call(
+                cast(zast.BinOp, op).rhs
+            )
         return False
 
     def _get_param_ctypes(self, call: zast.Call) -> List[str]:
@@ -3549,14 +3662,14 @@ class CEmitter:
         return ", ".join(parts), take_vars
 
     def _get_callable_name(self, path: zast.Path) -> str:
-        if isinstance(path, zast.AtomId):
+        if path.nodetype == NodeType.ATOMID:
             # resolve unit aliases to their actual type name
-            if path.name in self._unit_aliases:
-                return self._unit_aliases[path.name].name
-            return path.name
-        if isinstance(path, zast.DottedPath):
-            parent = self._get_callable_name(path.parent)
-            return f"{parent}.{path.child.name}"
+            if cast(zast.AtomId, path).name in self._unit_aliases:
+                return self._unit_aliases[cast(zast.AtomId, path).name].name
+            return cast(zast.AtomId, path).name
+        if path.nodetype == NodeType.DOTTEDPATH:
+            parent = self._get_callable_name(cast(zast.DottedPath, path).parent)
+            return f"{parent}.{cast(zast.DottedPath, path).child.name}"
         return "unknown"
 
     def _emit_expression_value(self, expr: zast.Expression) -> str:
@@ -3655,11 +3768,16 @@ class CEmitter:
             return facet_expr
 
         # data.index call -> array access
-        if self._is_data_index_call(call) and isinstance(
-            call.callable, zast.DottedPath
+        if (
+            self._is_data_index_call(call)
+            and call.callable.nodetype == NodeType.DOTTEDPATH
         ):
-            assert isinstance(call.callable.parent, zast.AtomId)
-            data_name = call.callable.parent.name
+            assert (
+                cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
+            )
+            data_name = cast(
+                zast.AtomId, cast(zast.DottedPath, call.callable).parent
+            ).name
             idx = (
                 self._emit_operation_value(call.arguments[0].valtype)
                 if call.arguments
@@ -3689,14 +3807,17 @@ class CEmitter:
             if from_arg is not None:
                 # check for string literal optimization
                 from_val_inner = from_arg.valtype
-                if isinstance(from_val_inner, zast.Expression):
-                    from_val_inner = from_val_inner.expression
-                if isinstance(from_val_inner, zast.AtomString) and not any(
-                    isinstance(p, zast.Expression) for p in from_val_inner.stringparts
+                if from_val_inner.nodetype == NodeType.EXPRESSION:
+                    from_val_inner = cast(zast.Expression, from_val_inner).expression
+                if from_val_inner.nodetype == NodeType.ATOMSTRING and not any(
+                    getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                    for p in cast(zast.AtomString, from_val_inner).stringparts
                 ):
                     # literal string — emit direct struct initialization
                     cap = _str_capacity(call.callable.type)
-                    literal = self._collect_string_literal(from_val_inner.stringparts)
+                    literal = self._collect_string_literal(
+                        cast(zast.AtomString, from_val_inner).stringparts
+                    )
                     lit_len = len(
                         literal.encode("utf-8").decode("unicode_escape").encode("utf-8")
                     )
@@ -3734,11 +3855,13 @@ class CEmitter:
             return f"z_{map_name}_create(0)"
 
         # array method calls: .get and .set
-        if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = call.callable.parent.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
             if dp_parent_type and _is_array_type(dp_parent_type):
-                method_name = call.callable.child.name
-                parent_val = self._emit_path_value(call.callable.parent)
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
                 arr_type_name = dp_parent_type.name
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
@@ -3749,22 +3872,26 @@ class CEmitter:
                     return f"z_{arr_type_name}_set(&{parent_val}, {idx_val}, {val_val})"
 
         # str method calls: .string
-        if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = call.callable.parent.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
             if dp_parent_type and _is_str_type(dp_parent_type):
-                method_name = call.callable.child.name
-                parent_val = self._emit_path_value(call.callable.parent)
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
                 str_type_name = dp_parent_type.name
                 if method_name == "string":
                     result = f"z_{str_type_name}_string({parent_val})"
                     return self._alloc_temp(result)
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
-        if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = call.callable.parent.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
             if dp_parent_type and _is_list_type(dp_parent_type):
-                method_name = call.callable.child.name
-                parent_val = self._emit_path_value(call.callable.parent)
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
                 list_type_name = dp_parent_type.name
                 if method_name == "append" and call.arguments:
                     from_arg = call.arguments[0]
@@ -3808,11 +3935,13 @@ class CEmitter:
                     return f"z_{list_type_name}_pop({parent_val})"
 
         # map method calls: .set, .get, .delete, .has
-        if isinstance(call.callable, zast.DottedPath):
-            dp_parent_type = call.callable.parent.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
             if dp_parent_type and _is_map_type(dp_parent_type):
-                method_name = call.callable.child.name
-                parent_val = self._emit_path_value(call.callable.parent)
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
                 map_type_name = dp_parent_type.name
                 if method_name == "set" and len(call.arguments) >= 2:
                     key_val = None
@@ -3910,13 +4039,15 @@ class CEmitter:
         args = self._emit_call_args(call)
 
         # dotted path method call: prepend receiver as 'this' argument
-        if isinstance(call.callable, zast.DottedPath):
-            ftype = call.callable.type
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            ftype = cast(zast.DottedPath, call.callable).type
             if ftype and ftype.typetype == ZTypeType.FUNCTION:
                 # check if the function has a 'this' parameter (method)
                 has_this = "this" in ftype.children
                 if has_this:
-                    receiver = self._emit_path_value(call.callable.parent)
+                    receiver = self._emit_path_value(
+                        cast(zast.DottedPath, call.callable).parent
+                    )
                     args = f"{receiver}, {args}" if args else receiver
 
         cname = self._emit_callable_expr(call)
@@ -3961,10 +4092,16 @@ class CEmitter:
     def _emit_operation_value(self, op: zast.Operation) -> str:
         if op.const_value is not None:
             return self._emit_const_value(op)
-        if isinstance(op, zast.BinOp):
-            return self._emit_binop_value(op)
-        if isinstance(op, zast.Path):
-            return self._emit_path_value(op)
+        if op.nodetype == NodeType.BINOP:
+            return self._emit_binop_value(cast(zast.BinOp, op))
+        if op.nodetype in (
+            NodeType.ATOMID,
+            NodeType.LABELVALUE,
+            NodeType.ATOMSTRING,
+            NodeType.EXPRESSION,
+            NodeType.DOTTEDPATH,
+        ):
+            return self._emit_path_value(cast(zast.Path, op))
         return "0"
 
     def _emit_binop_value(self, binop: zast.BinOp) -> str:
@@ -3974,13 +4111,13 @@ class CEmitter:
         rhs = self._emit_path_value(binop.rhs)
         # auto-deref boxed valtypes in binary operations
         if (
-            isinstance(binop.lhs, zast.AtomId)
+            binop.lhs.nodetype == NodeType.ATOMID
             and binop.lhs.type
             and binop.lhs.type.is_box
         ):
             lhs = f"(*{lhs})"
         if (
-            isinstance(binop.rhs, zast.AtomId)
+            binop.rhs.nodetype == NodeType.ATOMID
             and binop.rhs.type
             and binop.rhs.type.is_box
         ):
@@ -3990,14 +4127,14 @@ class CEmitter:
         return f"({lhs} {cop} {rhs})"
 
     def _emit_path_value(self, path: zast.Path) -> str:
-        if isinstance(path, zast.Expression):
-            return self._emit_expression_value(path)
-        if isinstance(path, zast.AtomString):
-            return self._emit_string_value(path)
-        if isinstance(path, zast.AtomId):
-            return self._emit_atomid_value(path)
-        if isinstance(path, zast.DottedPath):
-            return self._emit_dotted_path_value(path)
+        if path.nodetype == NodeType.EXPRESSION:
+            return self._emit_expression_value(cast(zast.Expression, path))
+        if path.nodetype == NodeType.ATOMSTRING:
+            return self._emit_string_value(cast(zast.AtomString, path))
+        if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return self._emit_atomid_value(cast(zast.AtomId, path))
+        if path.nodetype == NodeType.DOTTEDPATH:
+            return self._emit_dotted_path_value(cast(zast.DottedPath, path))
         return "0"
 
     def _emit_atomid_value(self, atom: zast.AtomId) -> str:
@@ -4062,14 +4199,14 @@ class CEmitter:
 
     def _extract_unit_path(self, path: zast.Path) -> Optional[str]:
         """If path resolves to an inline unit, return its dotted name. Otherwise None."""
-        if isinstance(path, zast.AtomId):
-            if self._typetype_of(path.name) == ZTypeType.UNIT:
-                return path.name
+        if path.nodetype == NodeType.ATOMID:
+            if self._typetype_of(cast(zast.AtomId, path).name) == ZTypeType.UNIT:
+                return cast(zast.AtomId, path).name
             return None
-        if isinstance(path, zast.DottedPath):
-            parent_path = self._extract_unit_path(path.parent)
+        if path.nodetype == NodeType.DOTTEDPATH:
+            parent_path = self._extract_unit_path(cast(zast.DottedPath, path).parent)
             if parent_path is not None:
-                qname = f"{parent_path}.{path.child.name}"
+                qname = f"{parent_path}.{cast(zast.DottedPath, path).child.name}"
                 if self._typetype_of(qname) == ZTypeType.UNIT:
                     return qname
         return None
@@ -4089,8 +4226,8 @@ class CEmitter:
         if child == "private":
             return self._emit_path_value(path.parent)
 
-        if isinstance(path.parent, zast.AtomId):
-            pname = path.parent.name
+        if path.parent.nodetype == NodeType.ATOMID:
+            pname = cast(zast.AtomId, path.parent).name
             # numeric dotted path: 0.u32, 42.i8, 0xff.u16
             if _is_numeric_id(pname):
                 child_name = path.child.name
@@ -4278,8 +4415,8 @@ class CEmitter:
         ):
             return True
         # local class/union/protocol variable tracked for cleanup
-        if isinstance(path, zast.AtomId):
-            cname = _mangle_var(path.name)
+        if path.nodetype == NodeType.ATOMID:
+            cname = _mangle_var(cast(zast.AtomId, path).name)
             for vname, vtype in self._scope.cleanup_vars:
                 if vname == cname and vtype.is_heap_allocated:
                     return True
@@ -4305,12 +4442,22 @@ class CEmitter:
             and call_type.generic_origin
         ):
             return True
-        if isinstance(call.callable, zast.DottedPath):
-            if isinstance(call.callable.parent, zast.AtomId):
-                if self._typetype_of(call.callable.parent.name) == ZTypeType.UNION:
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            if cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
+                if (
+                    self._typetype_of(
+                        cast(
+                            zast.AtomId, cast(zast.DottedPath, call.callable).parent
+                        ).name
+                    )
+                    == ZTypeType.UNION
+                ):
                     return True
-        if isinstance(call.callable, zast.AtomId):
-            if self._typetype_of(call.callable.name) == ZTypeType.UNION:
+        if call.callable.nodetype == NodeType.ATOMID:
+            if (
+                self._typetype_of(cast(zast.AtomId, call.callable).name)
+                == ZTypeType.UNION
+            ):
                 return True
         return False
 
@@ -4326,10 +4473,11 @@ class CEmitter:
         indent = self._indent()
         tmp = self._temp_name("c")
 
-        if isinstance(call.callable, zast.DottedPath) and isinstance(
-            call.callable.parent, zast.AtomId
+        if (
+            call.callable.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
         ):
-            subtype_name = call.callable.child.name
+            subtype_name = cast(zast.DottedPath, call.callable).child.name
         else:
             # bare union name — shouldn't happen for construction but handle gracefully
             return "NULL"
@@ -4341,8 +4489,10 @@ class CEmitter:
             and call_type.generic_origin
         ):
             union_name = call_type.name
-        elif isinstance(call.callable.parent, zast.AtomId):
-            union_name = call.callable.parent.name
+        elif cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
+            union_name = cast(
+                zast.AtomId, cast(zast.DottedPath, call.callable).parent
+            ).name
         else:
             return "NULL"
 
@@ -4371,12 +4521,12 @@ class CEmitter:
             mainunit = self.program.units.get(self.program.mainunitname)
             union_defn = mainunit.body.get(union_name) if mainunit else None
             subtype_path = None
-            if isinstance(union_defn, zast.Union):
-                subtype_path = union_defn.items.get(subtype_name)
+            if union_defn is not None and union_defn.nodetype == NodeType.UNION:
+                subtype_path = cast(zast.Union, union_defn).items.get(subtype_name)
             is_null = (
                 subtype_path is not None
-                and isinstance(subtype_path, zast.AtomId)
-                and subtype_path.name == "null"
+                and subtype_path.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, subtype_path).name == "null"
             )
             if not is_null and subtype_path:
                 subtype_ctype_resolved = self._get_subtype_ctype(subtype_path)
@@ -4431,8 +4581,8 @@ class CEmitter:
 
     def _emit_nullable_ptr_construction(self, call: zast.Call) -> str:
         """Emit nullable-ptr option construction: .some val → val, .none → NULL."""
-        if isinstance(call.callable, zast.DottedPath):
-            subtype_name = call.callable.child.name
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            subtype_name = cast(zast.DottedPath, call.callable).child.name
         else:
             return "NULL"
 
@@ -4550,12 +4700,22 @@ class CEmitter:
             and call_type.generic_origin
         ):
             return True
-        if isinstance(call.callable, zast.DottedPath):
-            if isinstance(call.callable.parent, zast.AtomId):
-                if self._typetype_of(call.callable.parent.name) == ZTypeType.VARIANT:
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            if cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
+                if (
+                    self._typetype_of(
+                        cast(
+                            zast.AtomId, cast(zast.DottedPath, call.callable).parent
+                        ).name
+                    )
+                    == ZTypeType.VARIANT
+                ):
                     return True
-        if isinstance(call.callable, zast.AtomId):
-            if self._typetype_of(call.callable.name) == ZTypeType.VARIANT:
+        if call.callable.nodetype == NodeType.ATOMID:
+            if (
+                self._typetype_of(cast(zast.AtomId, call.callable).name)
+                == ZTypeType.VARIANT
+            ):
                 return True
         return False
 
@@ -4564,10 +4724,11 @@ class CEmitter:
         indent = self._indent()
         tmp = self._temp_name("c")
 
-        if isinstance(call.callable, zast.DottedPath) and isinstance(
-            call.callable.parent, zast.AtomId
+        if (
+            call.callable.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID
         ):
-            subtype_name = call.callable.child.name
+            subtype_name = cast(zast.DottedPath, call.callable).child.name
         else:
             return "(z_unknown_t){0}"
 
@@ -4579,8 +4740,10 @@ class CEmitter:
             and call_type.generic_origin
         ):
             variant_name = call_type.name
-        elif isinstance(call.callable.parent, zast.AtomId):
-            variant_name = call.callable.parent.name
+        elif cast(zast.DottedPath, call.callable).parent.nodetype == NodeType.ATOMID:
+            variant_name = cast(
+                zast.AtomId, cast(zast.DottedPath, call.callable).parent
+            ).name
         else:
             return "(z_unknown_t){0}"
 
@@ -4602,12 +4765,12 @@ class CEmitter:
             mainunit = self.program.units.get(self.program.mainunitname)
             variant_defn = mainunit.body.get(variant_name) if mainunit else None
             subtype_path = None
-            if isinstance(variant_defn, zast.Variant):
-                subtype_path = variant_defn.items.get(subtype_name)
+            if variant_defn is not None and variant_defn.nodetype == NodeType.VARIANT:
+                subtype_path = cast(zast.Variant, variant_defn).items.get(subtype_name)
             is_null = (
                 subtype_path is not None
-                and isinstance(subtype_path, zast.AtomId)
-                and subtype_path.name == "null"
+                and subtype_path.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, subtype_path).name == "null"
             )
 
         if not is_null:
@@ -4646,7 +4809,10 @@ class CEmitter:
         self.needs_stdlib = True
         self.needs_stdio = True
 
-        has_interp = any(isinstance(p, zast.Expression) for p in atom.stringparts)
+        has_interp = any(
+            getattr(p, "nodetype", None) == NodeType.EXPRESSION
+            for p in atom.stringparts
+        )
 
         if not has_interp:
             literal = self._collect_string_literal(atom.stringparts)
@@ -4654,9 +4820,9 @@ class CEmitter:
 
         parts: List[str] = []
         for p in atom.stringparts:
-            if isinstance(p, zast.Expression):
-                val = self._emit_expression_value(p)
-                val_type = self._get_expression_type(p)
+            if getattr(p, "nodetype", None) == NodeType.EXPRESSION:
+                val = self._emit_expression_value(cast(zast.Expression, p))
+                val_type = self._get_expression_type(cast(zast.Expression, p))
                 if val_type and val_type.name in (
                     "i8",
                     "i16",
@@ -4680,7 +4846,7 @@ class CEmitter:
                 else:
                     parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
             else:
-                literal = self._escape_c_string(p.tokstr)
+                literal = self._escape_c_string(p.tokstr)  # type: ignore[union-attr]
                 if literal:
                     parts.append(self._static_string(literal))
 
@@ -4696,7 +4862,7 @@ class CEmitter:
     def _collect_string_literal(self, parts: list) -> str:
         result: List[str] = []
         for p in parts:
-            if not isinstance(p, zast.Expression):
+            if getattr(p, "nodetype", None) != NodeType.EXPRESSION:
                 result.append(self._escape_c_string(p.tokstr))
         return "".join(result)
 
@@ -4721,8 +4887,8 @@ class CEmitter:
         if op.type:
             return op.type
         # look inside Expression wrapper
-        if isinstance(op, zast.Expression):
-            return self._get_expression_type(op)
+        if op.nodetype == NodeType.EXPRESSION:
+            return self._get_expression_type(cast(zast.Expression, op))
         return None
 
     def _emit_if(self, ifnode: zast.If) -> str:
@@ -4922,23 +5088,29 @@ class CEmitter:
                 # check for .each on integer types (C for-loop optimization)
                 is_each = False
                 actual_op = cond_op
-                while isinstance(actual_op, zast.Expression):
-                    actual_op = actual_op.expression
-                if isinstance(actual_op, (zast.DottedPath, zast.Call)):
+                while actual_op.nodetype == NodeType.EXPRESSION:
+                    actual_op = cast(zast.Expression, actual_op).expression
+                if actual_op.nodetype in (NodeType.DOTTEDPATH, NodeType.CALL):
                     each_path = None
                     from_val = "0"
                     if (
-                        isinstance(actual_op, zast.DottedPath)
-                        and actual_op.child.name == "each"
+                        actual_op.nodetype == NodeType.DOTTEDPATH
+                        and cast(zast.DottedPath, actual_op).child.name == "each"
                     ):
-                        each_path = actual_op
+                        each_path = cast(zast.DottedPath, actual_op)
                     elif (
-                        isinstance(actual_op, zast.Call)
-                        and isinstance(actual_op.callable, zast.DottedPath)
-                        and actual_op.callable.child.name == "each"
+                        actual_op.nodetype == NodeType.CALL
+                        and cast(zast.Call, actual_op).callable.nodetype
+                        == NodeType.DOTTEDPATH
+                        and cast(
+                            zast.DottedPath, cast(zast.Call, actual_op).callable
+                        ).child.name
+                        == "each"
                     ):
-                        each_path = actual_op.callable
-                        for arg in actual_op.arguments:
+                        each_path = cast(
+                            zast.DottedPath, cast(zast.Call, actual_op).callable
+                        )
+                        for arg in cast(zast.Call, actual_op).arguments:
                             if arg.name == "from" or arg.name is None:
                                 from_val = self._emit_operation_value(arg.valtype)
                     if each_path:
@@ -5138,8 +5310,8 @@ class CEmitter:
         for sl in stmts[:-1]:
             parts.append(self._emit_statement_line(sl))
         last = stmts[-1].statementline
-        if isinstance(last, zast.Expression):
-            val = self._emit_expression_value(last)
+        if last.nodetype == NodeType.EXPRESSION:
+            val = self._emit_expression_value(cast(zast.Expression, last))
             indent = self._indent()
             parts.append(f"{indent}z_{list_name}_append({list_var}, {val});\n")
         else:

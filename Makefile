@@ -22,12 +22,12 @@ check:
 	@$(MAKE) --no-print-directory bootstrap-lint
 
 # Baseline counts of existing violations (update when migrating away)
-# isinstance:357  comprehension:14  lambda:0  try/except:8  hasattr:16
+# isinstance:134  comprehension:14  lambda:0  try/except:8  hasattr:16
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
-	if [ $$count -gt 357 ]; then \
-		echo "ERROR: isinstance() usage increased ($$count > 357 baseline)"; \
+	if [ $$count -gt 134 ]; then \
+		echo "ERROR: isinstance() usage increased ($$count > 134 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn 'isinstance(' src/*.py | tail -5; fail=1; \
 	fi; \
