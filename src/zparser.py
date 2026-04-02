@@ -4,8 +4,8 @@ ZeroLang parser
 """
 
 # pylint: disable=too-many-lines
-from typing import List, Dict, Optional, Union, TypeVar, Generic, Set
-from dataclasses import dataclass
+from typing import List, Dict, Optional, Union, TypeVar, Generic, Set, cast
+from dataclasses import dataclass, field
 from zvfs import ZVfs, DEntryID, DEntryType, ZVfsOpenFile
 from zlexer import Lexer, Tokenizer, Token, isvalidunitname
 from ztokentype import TT
@@ -33,6 +33,7 @@ class NodeX(Generic[TN]):
     node: TN
     # list of external references to be resolved
     extern: Dict[str, zast.AtomId]
+    is_error: bool = field(default=False, init=False)
 
 
 # a list of elements that are possible operation elements (operands and operators)
@@ -71,6 +72,7 @@ class ObjectBody:
     functions: Dict[str, zast.Function]
     tag: Optional[zast.Path]
     extern: Dict[str, zast.AtomId]
+    is_error: bool = field(default=False, init=False)
 
 
 def _is_ws_only(s: str) -> bool:
@@ -274,8 +276,8 @@ class Parser:
             unit = self._acceptunitfile(
                 self.rootid, unitname=refname, reference=reftoken, core=core
             )
-            if isinstance(unit, zast.Error):
-                err = unit
+            if unit.is_error:
+                err = cast(zast.Error, unit)
                 if err.err == ERR.FILENOTFOUND and err.loc:
                     # could be a bad variable name as well as FILENOTFOUND
                     msg = f'Unknown reference "{err.loc.tokstr}" and {err.msg}'
@@ -284,6 +286,7 @@ class Parser:
                     )
                     return err
                 return err  # propagate error - all other types
+            unit = cast(NodeX[zast.Unit], unit)
 
             if refname in definitions:
                 # can this happen?
@@ -346,8 +349,9 @@ class Parser:
             )
 
         openfile = self._unitfileopen(parentid, unitname, reference)
-        if isinstance(openfile, zast.Error):
-            return openfile  # propagate error
+        if openfile.is_error:
+            return cast(zast.Error, openfile)  # propagate error
+        openfile = cast(ZVfsOpenFile, openfile)
 
         with openfile:
             tokenizer = Tokenizer(openfile)
@@ -357,8 +361,9 @@ class Parser:
                 self._verbose_fn(f"  compiling: {self.vfs.path(fsid)}")
 
             unitorerr = self._acceptunitbody(lex)
-            if isinstance(unitorerr, zast.Error):
-                return unitorerr  # propagate error
+            if unitorerr.is_error:
+                return cast(zast.Error, unitorerr)  # propagate error
+            unitorerr = cast(NodeX[zast.Unit], unitorerr)
 
             unit = unitorerr.node
             toresolve = unitorerr.extern
@@ -396,14 +401,15 @@ class Parser:
                 subunitx = self._acceptunitfile(
                     parentid=dirid, unitname=refname, reference=start, core=core
                 )
-                if isinstance(subunitx, zast.Error):
-                    err = subunitx
+                if subunitx.is_error:
+                    err = cast(zast.Error, subunitx)
                     if err.err != ERR.FILENOTFOUND:
                         # propagate error
                         return err
                     # else FILENOTFOUND, not a subunit, keep looking
                 else:
                     # got a subunit (without error)
+                    subunitx = cast(NodeX[zast.Unit], subunitx)
                     # add externs to our list(they have already been checked against
                     # local and core definitions)
                     promoteexterns(addto=toresolve, addfrom=subunitx.extern)
@@ -508,9 +514,10 @@ class Parser:
                     )
                     error = zast.Error(start=t, err=ERR.EXPECTEDTYPEDEF, msg=msg)
                     break
-                if isinstance(typedefinitionx, zast.Error):
-                    error = typedefinitionx
+                if typedefinitionx.is_error:
+                    error = cast(zast.Error, typedefinitionx)
                     break
+            typedefinitionx = cast(NodeX[zast.TypeDefinition], typedefinitionx)
 
             definition = typedefinitionx.node
             name = label.tokstr
@@ -596,8 +603,9 @@ class Parser:
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """Wrap _acceptif result as an Expression for use at type definition level."""
         node = self._acceptif(lex)
-        if isinstance(node, zast.Error) or node is None:
-            return node
+        if node is None or node.is_error:
+            return cast(Union[zast.Error, None], node)
+        node = cast(NodeX[zast.If], node)
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
 
@@ -606,8 +614,9 @@ class Parser:
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """Wrap _acceptmatch result as an Expression for use at type definition level."""
         node = self._acceptmatch(lex)
-        if isinstance(node, zast.Error) or node is None:
-            return node
+        if node is None or node.is_error:
+            return cast(Union[zast.Error, None], node)
+        node = cast(NodeX[zast.Case], node)
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
 
@@ -616,8 +625,9 @@ class Parser:
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """Wrap _acceptdata result as an Expression for use at type definition level."""
         node = self._acceptdata(lex)
-        if isinstance(node, zast.Error) or node is None:
-            return node
+        if node is None or node.is_error:
+            return cast(Union[zast.Error, None], node)
+        node = cast(NodeX[zast.Data], node)
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
 
@@ -669,10 +679,11 @@ class Parser:
                 return oplist  # propagate error
             node = self._acceptoperationorcall(oplist, lex)
 
-        if isinstance(node, zast.Error):
-            return node
+        if node is not None and node.is_error:
+            return cast(zast.Error, node)
         if not node:
             return None
+        node = cast(NodeX[zast.ExpressionSubTypes], node)
 
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
@@ -735,11 +746,11 @@ class Parser:
         ret: List[NodeX[zast.Path]] = []
         while True:
             path = self._acceptpath(lex)
-            if isinstance(path, zast.Error):
-                return path  # propagate error
+            if path is not None and path.is_error:
+                return cast(zast.Error, path)  # propagate error
             if not path:
                 break
-            ret.append(path)
+            ret.append(cast(NodeX[zast.Path], path))
 
         return ret
 
@@ -839,8 +850,9 @@ class Parser:
         # assume the rest of paths is a first unnamed argument
         rest = paths[1:]
         opx = self._getop(rest, nexttoken=lex.peek())
-        if isinstance(opx, zast.Error):
-            return opx  # propagate error
+        if opx is not None and opx.is_error:
+            return cast(zast.Error, opx)  # propagate error
+        opx = cast(Optional[NodeX[zast.Operation]], opx)
         if opx and isinstance(opx.node, zast.Operation):
             opx = self._fixcalloperation(opx)  # correct single Id's
             namedop = zast.NamedOperation(
@@ -874,8 +886,9 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=lvx.extern)
             else:
                 opx = self._acceptoperation(lex)
-                if isinstance(opx, zast.Error):
-                    return opx  # propagate error
+                if opx is not None and opx.is_error:
+                    return cast(zast.Error, opx)  # propagate error
+                opx = cast(Optional[NodeX[zast.Operation]], opx)
                 if opx:
                     opx = self._fixcalloperation(opx)  # correct single Id's
                     namedop = zast.NamedOperation(
@@ -966,8 +979,9 @@ class Parser:
                         start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
                     )
 
-                if isinstance(typeref, zast.Error):
-                    return typeref  # propagate any other error
+                if typeref.is_error:
+                    return cast(zast.Error, typeref)  # propagate any other error
+                typeref = cast(NodeX[zast.Path], typeref)
 
                 # check for ownership annotation on the return type path
                 stripped_ret, ret_own = self._strip_ownership(typeref.node)
@@ -994,8 +1008,9 @@ class Parser:
                             msg=msg,
                         )
 
-                    if isinstance(statement, zast.Error):
-                        return statement  # propagate any other error
+                    if statement.is_error:
+                        return cast(zast.Error, statement)  # propagate any other error
+                    statement = cast(NodeX[zast.Statement], statement)
 
                     body = statement.node
                     externbody = statement.extern
@@ -1012,8 +1027,9 @@ class Parser:
                     unlabelledpath=False,
                     unlabelledid=False,
                 )
-                if isinstance(b, zast.Error):
-                    return b
+                if b.is_error:
+                    return cast(zast.Error, b)
+                b = cast(ObjectBody, b)
 
                 as_body = b
                 first = False
@@ -1068,8 +1084,9 @@ class Parser:
                             msg=msg,
                         )
 
-                    if isinstance(val, zast.Error):
-                        return val  # propagate error
+                    if val.is_error:
+                        return cast(zast.Error, val)  # propagate error
+                    val = cast(NodeX[zast.Path], val)
 
                     # params cann refer to other params, do local below
                     promoteexterns(addto=externparam, addfrom=val.extern)
@@ -1264,8 +1281,9 @@ class Parser:
         b = self._getobjectbody(
             lex, allowtag=False, unlabelledpath=False, unlabelledid=False
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if b.is_error:
+            return cast(zast.Error, b)  # propagate error
+        b = cast(ObjectBody, b)
 
         protocol = zast.Protocol(
             parameters=b.items,  # 'item's are the generic parameters for protocols
@@ -1293,8 +1311,9 @@ class Parser:
         b = self._getobjectbody(
             lex, allowtag=False, unlabelledpath=False, unlabelledid=False
         )
-        if isinstance(b, zast.Error):
-            return b  # propagate error
+        if b.is_error:
+            return cast(zast.Error, b)  # propagate error
+        b = cast(ObjectBody, b)
 
         facet = zast.Facet(
             parameters=b.items,  # 'item's are the generic parameters for facets
@@ -1348,8 +1367,9 @@ class Parser:
                         unlabelledpath=unlabelledpath,
                         unlabelledid=unlabelledid,
                     )
-                    if isinstance(b, zast.Error):
-                        return None, None, None, b, False
+                    if b.is_error:
+                        return None, None, None, cast(zast.Error, b), False
+                    b = cast(ObjectBody, b)
                     is_body = b
                     promoteexterns(addto=extern, addfrom=b.extern)
             elif t.toktype == TT.NATIVE and is_body is None and not is_native:
@@ -1373,8 +1393,9 @@ class Parser:
                     unlabelledpath=unlabelledpath,
                     unlabelledid=False,
                 )
-                if isinstance(b, zast.Error):
-                    return None, None, None, b, False
+                if b.is_error:
+                    return None, None, None, cast(zast.Error, b), False
+                b = cast(ObjectBody, b)
                 as_body = b
                 promoteexterns(addto=extern, addfrom=b.extern)
             elif t.toktype == TT.BRACEOPEN and is_body is None and not is_native:
@@ -1385,8 +1406,9 @@ class Parser:
                     unlabelledpath=unlabelledpath,
                     unlabelledid=unlabelledid,
                 )
-                if isinstance(b, zast.Error):
-                    return None, None, None, b, False
+                if b.is_error:
+                    return None, None, None, cast(zast.Error, b), False
+                b = cast(ObjectBody, b)
                 is_body = b
                 promoteexterns(addto=extern, addfrom=b.extern)
             else:
@@ -1470,8 +1492,9 @@ class Parser:
                         start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
                     )
 
-                if isinstance(typerefx, zast.Error):
-                    return typerefx  # propagate any other error
+                if typerefx.is_error:
+                    return cast(zast.Error, typerefx)  # propagate any other error
+                typerefx = cast(NodeX[zast.Path], typerefx)
 
                 islist.append(typerefx.node)
                 # add directly to extern.. these cannot refer locally
@@ -1491,8 +1514,9 @@ class Parser:
                     lex.accept(TT.EOL)  # optional newline
                     # function
                     funcx = self._acceptfunction(lex)
-                    if isinstance(funcx, zast.Error):
-                        return funcx  # propagate error
+                    if funcx is not None and funcx.is_error:
+                        return cast(zast.Error, funcx)  # propagate error
+                    funcx = cast(Optional[NodeX[zast.Function]], funcx)
                     if funcx:
                         if label.tokstr in items or label.tokstr in functions:
                             msg = f"Duplicate item name: {label.tokstr}"
@@ -1505,8 +1529,9 @@ class Parser:
                     elif lex.peek().toktype == TT.UNIT:
                         # inline unit definition (e.g., public: unit { ... })
                         unitx = self._acceptsubunit(lex)
-                        if isinstance(unitx, zast.Error):
-                            return unitx
+                        if unitx is not None and unitx.is_error:
+                            return cast(zast.Error, unitx)
+                        unitx = cast(Optional[NodeX[zast.Unit]], unitx)
                         if unitx:
                             if label.tokstr in items or label.tokstr in functions:
                                 msg = f"Duplicate item name: {label.tokstr}"
@@ -1518,8 +1543,9 @@ class Parser:
                     else:
                         # path/typeref/typeref_or_num
                         pathx = self._acceptpath(lex)
-                        if isinstance(pathx, zast.Error):
-                            return pathx  # propagate error
+                        if pathx is not None and pathx.is_error:
+                            return cast(zast.Error, pathx)  # propagate error
+                        pathx = cast(Optional[NodeX[zast.Path]], pathx)
                         if pathx:
                             if label.tokstr in items or label.tokstr in functions:
                                 msg = f"Duplicate item name: {label.tokstr}"
@@ -1541,8 +1567,9 @@ class Parser:
                 # try an unnamed path - path can only have an refid at the root...
                 if lex.peek().toktype == TT.REFID:
                     dottedidx = self._acceptpath(lex)
-                    if isinstance(dottedidx, zast.Error):
-                        return dottedidx  # propagate error
+                    if dottedidx is not None and dottedidx.is_error:
+                        return cast(zast.Error, dottedidx)  # propagate error
+                    dottedidx = cast(Optional[NodeX[zast.Path]], dottedidx)
                     if dottedidx is not None:
                         # if isinstance(atomid, zast.AtomId):
                         # name = atomid.node.ids[-1].name
@@ -1621,9 +1648,10 @@ class Parser:
             return zast.Error(start=lex.peek(), err=ERR.BADARGUMENT, msg=msg)
 
         unitorerr = self._acceptunitbody(lex)
-        if isinstance(unitorerr, zast.Error):
-            err = unitorerr
+        if unitorerr.is_error:
+            err = cast(zast.Error, unitorerr)
             return err
+        unitorerr = cast(NodeX[zast.Unit], unitorerr)
 
         # check '}'
         if not lex.accept(TT.BRACECLOSE):
@@ -1672,13 +1700,14 @@ class Parser:
                     lex.accept(TT.EOL)  # optional EOL
 
                 op = self._acceptoperation(lex)
-                if isinstance(op, zast.Error):
-                    return op  # propagate error
+                if op is not None and op.is_error:
+                    return cast(zast.Error, op)  # propagate error
                 if not op:
                     msg = "Expected operation (condition) for 'if'"
                     return zast.Error(
                         start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg
                     )
+                op = cast(NodeX[zast.Operation], op)
 
                 # note leading space - cannot collide with real bindings
                 conditions[f" *{whenindex}"] = op.node
@@ -1693,8 +1722,8 @@ class Parser:
                     return zast.Error(start=t, err=ERR.BADTHEN, msg=msg)
                 lex.acceptany()
                 statementx = self._acceptstatement(lex)
-                if isinstance(statementx, zast.Error):
-                    return statementx  # propagate error
+                if statementx is not None and statementx.is_error:
+                    return cast(zast.Error, statementx)  # propagate error
                 if not statementx:
                     msg = "Expected statement for 'then'"
                     return zast.Error(
@@ -1702,6 +1731,7 @@ class Parser:
                         err=ERR.EXPECTEDSTATEMENT,
                         msg=msg,
                     )
+                statementx = cast(NodeX[zast.Statement], statementx)
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 ifclause = zast.IfClause(
                     conditions=dict(conditions),
@@ -1728,8 +1758,8 @@ class Parser:
                 return zast.Error(start=t, err=ERR.BADELSE, msg=msg)
             lex.acceptany()
             statementx = self._acceptstatement(lex)
-            if isinstance(statementx, zast.Error):
-                return statementx  # propagate error
+            if statementx is not None and statementx.is_error:
+                return cast(zast.Error, statementx)  # propagate error
             if not statementx:
                 msg = "Expected statement for 'else'"
                 return zast.Error(
@@ -1737,6 +1767,7 @@ class Parser:
                     err=ERR.EXPECTEDSTATEMENT,
                     msg=msg,
                 )
+            statementx = cast(NodeX[zast.Statement], statementx)
 
             # local not available for else
             promoteexterns(addto=extern, addfrom=statementx.extern)
@@ -1776,11 +1807,12 @@ class Parser:
         # -- 'on'
         lex.accept(TT.ON)  # optional 'on'
         op = self._acceptoperation(lex)
-        if isinstance(op, zast.Error):
-            return op  # propagate error
+        if op is not None and op.is_error:
+            return cast(zast.Error, op)  # propagate error
         if not op:
             msg = "Expected operation for 'match' (subject)"
             return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
+        op = cast(NodeX[zast.Operation], op)
 
         subject = op.node
         promoteexterns(addto=extern, addfrom=op.extern)
@@ -1809,8 +1841,8 @@ class Parser:
 
             curid: zast.AtomId
             atomidx = self._acceptatomid(lex)
-            if isinstance(atomidx, zast.Error):
-                return atomidx  # propagate error
+            if atomidx is not None and atomidx.is_error:
+                return cast(zast.Error, atomidx)  # propagate error
             if atomidx:
                 # do NOT promoteexterns... the id must be a member of the 'in' operation
                 curid = atomidx.node
@@ -1827,8 +1859,8 @@ class Parser:
 
             lex.acceptany()  # 'then'
             statementx = self._acceptstatement(lex)
-            if isinstance(statementx, zast.Error):
-                return statementx  # propagate error
+            if statementx is not None and statementx.is_error:
+                return cast(zast.Error, statementx)  # propagate error
             if not statementx:
                 msg = "Expected statement for 'then'"
                 return zast.Error(
@@ -1836,6 +1868,7 @@ class Parser:
                     err=ERR.EXPECTEDSTATEMENT,
                     msg=msg,
                 )
+            statementx = cast(NodeX[zast.Statement], statementx)
 
             promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
             caseclause = zast.CaseClause(
@@ -1845,8 +1878,8 @@ class Parser:
 
         if lex.accept(TT.ELSE):
             statementx = self._acceptstatement(lex)
-            if isinstance(statementx, zast.Error):
-                return statementx  # propagate error
+            if statementx is not None and statementx.is_error:
+                return cast(zast.Error, statementx)  # propagate error
             if not statementx:
                 msg = "Expected statement after 'else' for 'case'"
                 return zast.Error(
@@ -1854,6 +1887,7 @@ class Parser:
                     err=ERR.EXPECTEDSTATEMENT,
                     msg=msg,
                 )
+            statementx = cast(NodeX[zast.Statement], statementx)
 
             # local not available for else
             promoteexterns(addto=extern, addfrom=statementx.extern)
@@ -1906,13 +1940,14 @@ class Parser:
                     lex.accept(TT.EOL)  # optional EOL
 
                 op = self._acceptoperation(lex)
-                if isinstance(op, zast.Error):
-                    return op  # propagate error
+                if op is not None and op.is_error:
+                    return cast(zast.Error, op)  # propagate error
                 if not op:
                     msg = "Expected operation (condition) for 'for'"
                     return zast.Error(
                         start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg
                     )
+                op = cast(NodeX[zast.Operation], op)
 
                 if loop:
                     postconditions.append(op.node)
@@ -1931,13 +1966,14 @@ class Parser:
                 name = lex.acceptany().tokstr
                 lex.accept(TT.EOL)  # optional EOL
                 op = self._acceptoperation(lex)
-                if isinstance(op, zast.Error):
-                    return op  # propagate error
+                if op is not None and op.is_error:
+                    return cast(zast.Error, op)  # propagate error
                 if not op:
                     msg = f"Expected operation for 'for' binding label: {name}"
                     return zast.Error(
                         start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg
                     )
+                op = cast(NodeX[zast.Operation], op)
 
                 conditions[name] = op.node
                 # nb: local - can refer to prior bindings...
@@ -1952,8 +1988,8 @@ class Parser:
 
                 lex.acceptany()
                 statementx = self._acceptstatement(lex)
-                if isinstance(statementx, zast.Error):
-                    return statementx  # propagate error
+                if statementx is not None and statementx.is_error:
+                    return cast(zast.Error, statementx)  # propagate error
                 if not statementx:
                     msg = "Expected statement for 'loop'"
                     return zast.Error(
@@ -1961,6 +1997,7 @@ class Parser:
                         err=ERR.EXPECTEDSTATEMENT,
                         msg=msg,
                     )
+                statementx = cast(NodeX[zast.Statement], statementx)
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 loop = statementx.node
                 first = False
@@ -1996,11 +2033,12 @@ class Parser:
             lex.acceptany()
 
         statementx = self._acceptstatement(lex)
-        if isinstance(statementx, zast.Error):
-            return statementx  # propagate error
+        if statementx is not None and statementx.is_error:
+            return cast(zast.Error, statementx)  # propagate error
         if not statementx:
             msg = "Expected statement for 'do'"
             return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDSTATEMENT, msg=msg)
+        statementx = cast(NodeX[zast.Statement], statementx)
         promoteexterns(addto=extern, addfrom=statementx.extern)
 
         donode = zast.Do(statement=statementx.node, start=start)
@@ -2030,11 +2068,12 @@ class Parser:
 
         # accept the value expression
         valuex = self._acceptexpression(lex)
-        if isinstance(valuex, zast.Error):
-            return valuex
+        if valuex is not None and valuex.is_error:
+            return cast(zast.Error, valuex)
         if not valuex:
             msg = "Expected expression for 'with' value"
             return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDEXP, msg=msg)
+        valuex = cast(NodeX[zast.Expression], valuex)
 
         # the name is locally defined, don't propagate it as extern
         promoteexterns(addto=extern, addfrom=valuex.extern)
@@ -2046,11 +2085,12 @@ class Parser:
 
         # accept the do expression - the name is in scope here
         doexprx = self._acceptexpression(lex)
-        if isinstance(doexprx, zast.Error):
-            return doexprx
+        if doexprx is not None and doexprx.is_error:
+            return cast(zast.Error, doexprx)
         if not doexprx:
             msg = "Expected expression after 'do'"
             return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDEXP, msg=msg)
+        doexprx = cast(NodeX[zast.Expression], doexprx)
 
         # the locally defined name should not be promoted as extern
         promoteexterns(addto=extern, addfrom=doexprx.extern)
@@ -2070,10 +2110,11 @@ class Parser:
         Return a Do or Error or None for no opening brace
         """
         stmtx = self._acceptstatement(lex)
-        if isinstance(stmtx, zast.Error):
-            return stmtx
+        if stmtx is not None and stmtx.is_error:
+            return cast(zast.Error, stmtx)
         if not stmtx:
             return None
+        stmtx = cast(NodeX[zast.Statement], stmtx)
         do = zast.Do(statement=stmtx.node, start=stmtx.node.start)
         return NodeX(do, extern=stmtx.extern)
 
@@ -2129,8 +2170,9 @@ class Parser:
                 datanames.add(label.tokstr)
 
             pathx = self._acceptpath(lex)
-            if isinstance(pathx, zast.Error):
-                return pathx  # propagate error
+            if pathx is not None and pathx.is_error:
+                return cast(zast.Error, pathx)  # propagate error
+            pathx = cast(Optional[NodeX[zast.Path]], pathx)
             if pathx:
                 if label:
                     namedop = zast.NamedOperation(
@@ -2209,11 +2251,12 @@ class Parser:
                 while lex.accept(TT.EOL) or lex.accept(TT.SEMICOLON):
                     pass
                 statementlinex = self._acceptstatementline(lex)
-                if isinstance(statementlinex, zast.Error):
-                    error = statementlinex  # propagate error
+                if statementlinex is not None and statementlinex.is_error:
+                    error = cast(zast.Error, statementlinex)  # propagate error
                     break
                 if not statementlinex:
                     break  # end of block (no final EOL?)
+                statementlinex = cast(NodeX[zast.StatementLine], statementlinex)
                 statementline = statementlinex.node
                 statements.append(statementline)
 
@@ -2247,10 +2290,11 @@ class Parser:
 
         # bare statement (no braces) - single statementline
         statementlinex = self._acceptstatementline(lex)
-        if isinstance(statementlinex, zast.Error):
-            return statementlinex
+        if statementlinex is not None and statementlinex.is_error:
+            return cast(zast.Error, statementlinex)
         if not statementlinex:
             return None
+        statementlinex = cast(NodeX[zast.StatementLine], statementlinex)
 
         promoteexterns(addto=extern, addfrom=statementlinex.extern)
         statement = zast.Statement(statements=[statementlinex.node], start=start)
@@ -2284,11 +2328,12 @@ class Parser:
             lex.acceptany()  # label
             lex.accept(TT.EOL)  # optional newline
             exprx = self._acceptexpression(lex)
-            if isinstance(exprx, zast.Error):
-                return exprx  # propagate error
+            if exprx is not None and exprx.is_error:
+                return cast(zast.Error, exprx)  # propagate error
             if not exprx:
                 msg = "Expected expression for assignment statement"
                 return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
+            exprx = cast(NodeX[zast.Expression], exprx)
             assignment = zast.Assignment(
                 name=start.tokstr, value=exprx.node, start=start
             )
@@ -2314,11 +2359,12 @@ class Parser:
 
             # get RHS
             rhsx = self._acceptexpression(lex)
-            if isinstance(rhsx, zast.Error):
-                return rhsx  # propagate error
+            if rhsx is not None and rhsx.is_error:
+                return cast(zast.Error, rhsx)  # propagate error
             if not rhsx:
                 msg = "Expected an expression for the RHS of a reassignment"
                 return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
+            rhsx = cast(NodeX[zast.Expression], rhsx)
 
             promoteexterns(addto=extern, addfrom=rhsx.extern)
             reassignment = zast.Reassignment(
@@ -2340,11 +2386,12 @@ class Parser:
 
             # get RHS
             rhsx = self._acceptpath(lex)
-            if isinstance(rhsx, zast.Error):
-                return rhsx  # propagate error
+            if rhsx is not None and rhsx.is_error:
+                return cast(zast.Error, rhsx)  # propagate error
             if not rhsx:
                 msg = "Swap requires a right hand side"
                 return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+            rhsx = cast(NodeX[zast.Path], rhsx)
 
             promoteexterns(addto=extern, addfrom=rhsx.extern)
             swap = zast.Swap(lhs=lhsx.node, rhs=rhsx.node, start=start)
@@ -2358,8 +2405,9 @@ class Parser:
                 msg = "Bad statement"
                 return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
 
-            if isinstance(oporcallx, zast.Error):
-                return oporcallx  # propagate error
+            if oporcallx.is_error:
+                return cast(zast.Error, oporcallx)  # propagate error
+            oporcallx = cast(Union[NodeX[zast.Operation], NodeX[zast.Call]], oporcallx)
 
             # must be Operation or Call
             promoteexterns(addto=extern, addfrom=oporcallx.extern)
@@ -2370,10 +2418,11 @@ class Parser:
         # haven't consumed anything yet..
         # must be an expression (but not a operation or call); or an error
         exprx = self._acceptexpression(lex)
-        if isinstance(exprx, zast.Error):
-            return exprx  # propagate error
+        if exprx is not None and exprx.is_error:
+            return cast(zast.Error, exprx)  # propagate error
         if not exprx:
             return None  # haven't consumed anything... not a statementline
+        exprx = cast(NodeX[zast.Expression], exprx)
         statementline = zast.StatementLine(statementline=exprx.node, start=start)
         return NodeX(node=statementline, extern=exprx.extern)
 
@@ -2391,8 +2440,9 @@ class Parser:
         if atomx is None:
             return None
 
-        if isinstance(atomx, zast.Error):
-            return atomx  # propagate error
+        if atomx.is_error:
+            return cast(zast.Error, atomx)  # propagate error
+        atomx = cast(NodeX[zast.Atom], atomx)
 
         if lex.peek().toktype != TT.DOT:
             return atomx  # atom only
@@ -2485,8 +2535,8 @@ class Parser:
                 error = zast.Error(start=t, err=ERR.BADEXPRESSION, msg=msg)
                 break
 
-            if isinstance(expr, zast.Error):
-                error = expr
+            if expr.is_error:
+                error = cast(zast.Error, expr)
                 break
 
             # restore EOL filtering BEFORE consuming ')' so that _advance
@@ -2506,7 +2556,7 @@ class Parser:
             return error
 
         # we have a valid expression that was surrounded by parens
-        return expr
+        return cast(NodeX[zast.Expression], expr)
 
     def _acceptatomstring(
         self, lex: Lexer
@@ -2554,8 +2604,9 @@ class Parser:
                 if expr is None:
                     msg = "Bad expression in string interpolation"
                     return zast.Error(start=lex.peek(), err=ERR.BADEXPRESSION, msg=msg)
-                if isinstance(expr, zast.Error):
-                    return expr  # propagate error
+                if expr.is_error:
+                    return cast(zast.Error, expr)  # propagate error
+                expr = cast(NodeX[zast.Expression], expr)
                 stringparts.append(expr.node)
                 # update new with old to retain old values
                 expr.extern.update(extern)

@@ -11,6 +11,8 @@ import argparse
 import ztypecheck
 import zemitterc
 import zsqldump
+from typing import cast
+
 import zast
 from zparser import Parser
 from zvfs import ZVfs, FSProvider, BindType, DEntryID
@@ -148,12 +150,14 @@ def main() -> None:
     verbose(f"parsing {unitname}...")
     p = Parser(vfs, unitname, verbose_fn=verbose if _verbose_enabled else None)
     program = p.parse()
-    if isinstance(program, zast.Error):
+    if program.is_error:
+        err = cast(zast.Error, program)
         sys.stderr.write(
-            zast.errortomessage(err=program, vfs=vfs, color=_color_enabled) + "\n"
+            zast.errortomessage(err=err, vfs=vfs, color=_color_enabled) + "\n"
         )
         sys.stderr.write("1 error found\n")
         sys.exit(1)
+    program = cast(zast.Program, program)
 
     # --- Type check ---
     verbose("type checking...")
