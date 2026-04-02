@@ -10,7 +10,7 @@ from zvfs import ZVfs, DEntryID, DEntryType, ZVfsOpenFile
 from zlexer import Lexer, Tokenizer, Token, isvalidunitname
 from ztokentype import TT
 import zast
-from zast import ERR, _ERROR_TOKEN
+from zast import ERR, NodeType, _ERROR_TOKEN
 from ztypes import ZParamOwnership
 
 # ownership annotation suffixes recognized on dotted type paths
@@ -546,7 +546,7 @@ class Parser:
             if dname in extern:
                 # only remove if the extern didn't originate as a LabelValue
                 # at THIS level (i.e., the definition itself is :x)
-                if not isinstance(definitions[dname], zast.LabelValue):
+                if definitions[dname].nodetype != NodeType.LABELVALUE:
                     del extern[dname]
 
         return NodeX(node=zast.Unit(start=start, body=definitions), extern=extern)
@@ -796,7 +796,7 @@ class Parser:
         while idx < n:
             el = paths[idx]
             path = el.node
-            if not isinstance(path, zast.AtomId):
+            if path.nodetype != NodeType.ATOMID:
                 # print(repr(path))
                 msg = "Expected an operator (single identifier)"
                 return zast.Error(start=el.node.start, err=ERR.BADEXPRESSION, msg=msg)
@@ -804,7 +804,7 @@ class Parser:
             # take the single Id out of the AtomId, nb: externs from here are
             # ignored (operator is a local ref againt the lhs)
             # operator = path.lhs.ids[0]  # too many dots
-            operator = path
+            operator = cast(zast.AtomId, path)
             idx += 1
             if idx >= n:
                 msg = "Expected an operand for the right hand side of operation"
@@ -918,7 +918,8 @@ class Parser:
         If the path is e.g. DottedPath(parent=AtomId("point"), child=AtomId("borrow")),
         returns (AtomId("point"), ZParamOwnership.BORROW).
         """
-        if isinstance(path, zast.DottedPath):
+        if path.nodetype == NodeType.DOTTEDPATH:
+            path = cast(zast.DottedPath, path)
             suffix = path.child.name
             own = _OWNERSHIP_SUFFIXES.get(suffix)
             if own is not None:
@@ -1574,10 +1575,12 @@ class Parser:
                         # if isinstance(atomid, zast.AtomId):
                         # name = atomid.node.ids[-1].name
                         dottedid = dottedidx.node
-                        if isinstance(dottedid, zast.AtomId):
-                            name = dottedid.name
-                        elif isinstance(dottedid, zast.DottedPath):
-                            name = dottedid.child.name  # name is after last dot
+                        if dottedid.nodetype == NodeType.ATOMID:
+                            name = cast(zast.AtomId, dottedid).name
+                        elif dottedid.nodetype == NodeType.DOTTEDPATH:
+                            name = cast(
+                                zast.DottedPath, dottedid
+                            ).child.name  # name is after last dot
                         else:
                             # cannot happen
                             msg = "Unknown DottedId type"
@@ -2264,8 +2267,8 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=statementlinex.extern, local=local)
 
                 # add any local definition
-                if isinstance(statementline.statementline, zast.Assignment):
-                    name = statementline.statementline.name
+                if statementline.statementline.nodetype == NodeType.ASSIGNMENT:
+                    name = cast(zast.Assignment, statementline.statementline).name
                     if name in local:
                         # duplicate definition
                         msg = f'Duplicate definition of "{name}"'

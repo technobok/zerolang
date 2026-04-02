@@ -7,9 +7,11 @@ Used during monomorphization to detect identical function bodies.
 """
 
 import hashlib
+from typing import cast
 
 import zast
 from zast import NodeType
+from zlexer import Token
 from ztypes import ZType, ZTypeType
 
 
@@ -98,14 +100,14 @@ def _hash_statementline(node: zast.StatementLine) -> str:
     h = hashlib.sha256()
     h.update(b"SLINE")
     inner = node.statementline
-    if isinstance(inner, zast.Assignment):
-        h.update(_hash_assignment(inner).encode())
-    elif isinstance(inner, zast.Reassignment):
-        h.update(_hash_reassignment(inner).encode())
-    elif isinstance(inner, zast.Swap):
-        h.update(_hash_swap(inner).encode())
-    elif isinstance(inner, zast.Expression):
-        h.update(_hash_expression(inner).encode())
+    if inner.nodetype == NodeType.ASSIGNMENT:
+        h.update(_hash_assignment(cast(zast.Assignment, inner)).encode())
+    elif inner.nodetype == NodeType.REASSIGNMENT:
+        h.update(_hash_reassignment(cast(zast.Reassignment, inner)).encode())
+    elif inner.nodetype == NodeType.SWAP:
+        h.update(_hash_swap(cast(zast.Swap, inner)).encode())
+    elif inner.nodetype == NodeType.EXPRESSION:
+        h.update(_hash_expression(cast(zast.Expression, inner)).encode())
     return h.hexdigest()
 
 
@@ -139,48 +141,47 @@ def _hash_expression(node: zast.Expression) -> str:
     if node.type:
         h.update(_hash_type(node.type).encode())
     inner = node.expression
-    if isinstance(inner, zast.Call):
-        h.update(_hash_call(inner).encode())
-    elif isinstance(inner, zast.If):
-        h.update(_hash_if(inner).encode())
-    elif isinstance(inner, zast.For):
-        h.update(_hash_for(inner).encode())
-    elif isinstance(inner, zast.Do):
-        h.update(_hash_do(inner).encode())
-    elif isinstance(inner, zast.Case):
-        h.update(_hash_case(inner).encode())
-    elif isinstance(inner, zast.Data):
-        h.update(_hash_data(inner).encode())
-    elif isinstance(inner, zast.With):
-        h.update(_hash_with(inner).encode())
-    elif isinstance(inner, (zast.Operation, zast.Path)):
-        h.update(_hash_operation(inner).encode())
+    if inner.nodetype == NodeType.CALL:
+        h.update(_hash_call(cast(zast.Call, inner)).encode())
+    elif inner.nodetype == NodeType.IF:
+        h.update(_hash_if(cast(zast.If, inner)).encode())
+    elif inner.nodetype == NodeType.FOR:
+        h.update(_hash_for(cast(zast.For, inner)).encode())
+    elif inner.nodetype == NodeType.DO:
+        h.update(_hash_do(cast(zast.Do, inner)).encode())
+    elif inner.nodetype == NodeType.CASE:
+        h.update(_hash_case(cast(zast.Case, inner)).encode())
+    elif inner.nodetype == NodeType.DATA:
+        h.update(_hash_data(cast(zast.Data, inner)).encode())
+    elif inner.nodetype == NodeType.WITH:
+        h.update(_hash_with(cast(zast.With, inner)).encode())
+    else:
+        h.update(_hash_operation(cast(zast.Operation, inner)).encode())
     return h.hexdigest()
 
 
 def _hash_path(path: zast.Path) -> str:
-    if isinstance(path, zast.DottedPath):
-        return _hash_dottedpath(path)
-    if isinstance(path, zast.AtomId):
-        return _hash_atomid(path)
-    if isinstance(path, zast.LabelValue):
-        return _hash_atomid(path)
-    if isinstance(path, zast.AtomString):
-        return _hash_atomstring(path)
-    if isinstance(path, zast.Expression):
-        return _hash_expression(path)
-    if isinstance(path, zast.BinOp):
-        return _hash_binop(path)
+    if path.nodetype == NodeType.DOTTEDPATH:
+        return _hash_dottedpath(cast(zast.DottedPath, path))
+    if path.nodetype == NodeType.ATOMID:
+        return _hash_atomid(cast(zast.AtomId, path))
+    if path.nodetype == NodeType.LABELVALUE:
+        return _hash_atomid(cast(zast.AtomId, path))
+    if path.nodetype == NodeType.ATOMSTRING:
+        return _hash_atomstring(cast(zast.AtomString, path))
+    if path.nodetype == NodeType.EXPRESSION:
+        return _hash_expression(cast(zast.Expression, path))
+    if path.nodetype == NodeType.BINOP:
+        return _hash_binop(cast(zast.BinOp, path))
     # fallback
     return _hash_node(path)
 
 
 def _hash_operation(node: zast.Operation) -> str:
-    if isinstance(node, zast.BinOp):
-        return _hash_binop(node)
-    if isinstance(node, zast.Path):
-        return _hash_path(node)
-    return _hash_node(node)
+    if node.nodetype == NodeType.BINOP:
+        return _hash_binop(cast(zast.BinOp, node))
+    # All Path subclasses (DottedPath, AtomId, AtomString, Expression, LabelValue)
+    return _hash_path(cast(zast.Path, node))
 
 
 def _hash_call(node: zast.Call) -> str:
@@ -304,11 +305,11 @@ def _hash_atomstring(node: zast.AtomString) -> str:
     h = hashlib.sha256()
     h.update(b"ATOMSTR")
     for part in node.stringparts:
-        if isinstance(part, zast.Expression):
-            h.update(_hash_expression(part).encode())
+        if getattr(part, "nodetype", None) == NodeType.EXPRESSION:
+            h.update(_hash_expression(cast(zast.Expression, part)).encode())
         else:
             # Token — hash its string content
-            h.update(part.tokstr.encode())
+            h.update(cast(Token, part).tokstr.encode())
     return h.hexdigest()
 
 

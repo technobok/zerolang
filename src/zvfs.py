@@ -8,7 +8,7 @@ dir-like and file-like objects to the compiler.
 import os
 from abc import ABC, abstractmethod
 from enum import IntEnum
-from typing import IO, Optional, List, Dict, Tuple, NewType
+from typing import IO, Optional, List, Dict, Tuple, NewType, cast
 from dataclasses import dataclass, field
 
 
@@ -322,7 +322,7 @@ class ZVfs:
             newentryid = self.rootid
 
         for p in path:
-            if isinstance(entry, (DEntryDirectory, DEntryNotFound, DEntryFile)):
+            if entry.entrytype != DEntryType.UNION:
                 # always try to walk (even from File or None) so we get path for error
                 cachedentryid = entry.cache.get(p, None)
                 if cachedentryid is not None:
@@ -331,26 +331,27 @@ class ZVfs:
                     continue  # got it from cache
 
                 # try to look it up in Provider
-                provider = self._providertable[entry.providerid]
-                newnodeid = provider.walk(p, entry.nodeid)
+                fentry = cast(DEntryFile, entry)  # all non-union have providerid/nodeid
+                provider = self._providertable[fentry.providerid]
+                newnodeid = provider.walk(p, fentry.nodeid)
                 newnodeidstat = provider.stat(newnodeid)
                 if newnodeidstat == ProviderNodeType.FILE:
                     newentryid = self.entrytable.file(
                         parentid=newentryid,
-                        providerid=entry.providerid,
+                        providerid=fentry.providerid,
                         nodeid=newnodeid,
                     )
                     self._file_names[newentryid] = p
                 elif newnodeidstat == ProviderNodeType.DIR:
                     newentryid = self.entrytable.directory(
                         parentid=newentryid,
-                        providerid=entry.providerid,
+                        providerid=fentry.providerid,
                         nodeid=newnodeid,
                     )
                 else:  # ProviderNodeType.NONE
                     newentryid = self.entrytable.none(
                         parentid=newentryid,
-                        providerid=entry.providerid,
+                        providerid=fentry.providerid,
                         nodeid=newnodeid,
                     )
 
@@ -358,27 +359,28 @@ class ZVfs:
                 entry = self.entrytable[newentryid]
                 continue
 
-            if isinstance(entry, DEntryUnion):
+            if entry.entrytype == DEntryType.UNION:
+                uentry = cast(DEntryUnion, entry)
                 # check union cache first
-                cachedentryid = entry.cache.get(p, None)
+                cachedentryid = uentry.cache.get(p, None)
                 if cachedentryid is not None:
                     newentryid = cachedentryid
                     entry = self.entrytable[newentryid]
                     continue
 
                 # walk in first
-                newentryid = self.walk(path=[p], parentid=entry.first)
+                newentryid = self.walk(path=[p], parentid=uentry.first)
                 newentry = self.entrytable[newentryid]
 
-                if not isinstance(newentry, DEntryNotFound) or (entry.second is None):
+                if newentry.entrytype != DEntryType.NOTFOUND or (uentry.second is None):
                     # got something or no second, return what we got
-                    entry.cache[p] = newentryid
+                    uentry.cache[p] = newentryid
                     entry = newentry
                     continue
 
                 # walk in second, and return whatever is returned
-                newentryid = self.walk(path=[p], parentid=entry.second)
-                entry.cache[p] = newentryid
+                newentryid = self.walk(path=[p], parentid=uentry.second)
+                uentry.cache[p] = newentryid
                 entry = self.entrytable[newentryid]
                 continue
 
@@ -500,15 +502,13 @@ class ZVfs:
 
         """
         entry = self.entrytable[entryid]
-        if isinstance(entry, (DEntryFile, DEntryDirectory, DEntryNotFound)):
+        if entry.entrytype != DEntryType.UNION:
             # even if DEntryNotFound, we still have the path
-            provider = self._providertable[entry.providerid]
-            return provider.path(entry.nodeid)
+            fentry = cast(DEntryFile, entry)  # all non-union have providerid/nodeid
+            provider = self._providertable[fentry.providerid]
+            return provider.path(fentry.nodeid)
 
-        if isinstance(entry, DEntryUnion):
-            return "[UNION]"  # no underlying path for a union
-
-        raise IOError("This cannot happen")
+        return "[UNION]"  # no underlying path for a union
 
     def open(self, entryid: DEntryID) -> ZVfsOpenFile:
         """
@@ -519,11 +519,12 @@ class ZVfs:
         """
         entry = self.entrytable[entryid]
 
-        if not isinstance(entry, DEntryFile):
+        if entry.entrytype != DEntryType.FILE:
             raise IOError("Not a file")
 
-        provider = self._providertable[entry.providerid]
-        filehandle = provider.open(entry.nodeid)
+        fentry = cast(DEntryFile, entry)
+        provider = self._providertable[fentry.providerid]
+        filehandle = provider.open(fentry.nodeid)
         return ZVfsOpenFile(entryid=entryid, filehandle=filehandle)
 
     def getline(self, entryid: DEntryID, lineno: int) -> Optional[str]:

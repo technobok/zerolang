@@ -3,10 +3,11 @@
 ZeroLang pretty (?) printer
 """
 
-from typing import List, Dict
+from typing import List, Dict, cast
 
 import zast
-from zast import Node, NodeType, Token
+from zast import Node, NodeType
+from zlexer import Token
 
 
 def pprintprogram(program: zast.Program) -> None:
@@ -45,9 +46,9 @@ def pprintnode(node: Node, depth: int) -> str:
 
 
 def _pprintunit(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.Unit):
+    if node.nodetype != NodeType.UNIT:
         raise Exception("Error: wrong node type")
-    unit = node
+    unit = cast(zast.Unit, node)
     sep = depth * "  "
 
     # s = f"{sep}*UNIT {{\n"
@@ -75,8 +76,9 @@ def _pprintunitbody(body: Dict[str, zast.TypeDefinition], depth: int) -> str:
 
 
 def _pprintrecord(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.Record):
+    if node.nodetype != NodeType.RECORD:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Record, node)
     sep = depth * "  "
 
     o: List[str] = []
@@ -152,8 +154,9 @@ def _pprintifclause(ifclause: zast.IfClause, depth: int) -> str:
 
 def _pprintnamedoperation(node: Node, depth: int) -> str:
     """ """
-    if not isinstance(node, zast.NamedOperation):
+    if node.nodetype != NodeType.NAMEDOPERATION:
         raise Exception("Error: wrong node type")
+    node = cast(zast.NamedOperation, node)
     o: List[str] = []
     sep = depth * "  "
     o.append(f"{sep}{node.name}:")
@@ -203,8 +206,9 @@ def _pprintnamedoperation(node: Node, depth: int) -> str:
 
 def _pprintassignment(node: Node, depth: int) -> str:
     # if node.nodetype != NodeType.ASSIGNMENT:
-    if not isinstance(node, zast.Assignment):
+    if node.nodetype != NodeType.ASSIGNMENT:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Assignment, node)
     o: List[str] = []
     o.append(f"*ASSIGNMENT {{ {node.name}:\n")
     sepinner = (depth + 1) * "  "
@@ -240,8 +244,9 @@ def _pprintassignment(node: Node, depth: int) -> str:
 
 
 def _pprintcall(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.Call):
+    if node.nodetype != NodeType.CALL:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Call, node)
     o: List[str] = []
     o.append("*CALL (")
     sepinner = (depth + 1) * "  "
@@ -257,8 +262,9 @@ def _pprintcall(node: Node, depth: int) -> str:
 
 
 def _pprintfunction(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.Function):
+    if node.nodetype != NodeType.FUNCTION:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Function, node)
     sepinner = (depth + 1) * "  "
     o: List[str] = []
     o.append("*FUNCTION {")
@@ -302,14 +308,16 @@ def _pprintparameters(params: Dict[str, zast.Path], depth: int) -> str:
 
 
 def _pprintexpression(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.Expression):
+    if node.nodetype != NodeType.EXPRESSION:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Expression, node)
     return pprintnode(node.expression, depth + 1)
 
 
 def _pprintbinop(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.BinOp):
+    if node.nodetype != NodeType.BINOP:
         raise Exception("Error: wrong node type")
+    node = cast(zast.BinOp, node)
 
     s = pprintnode(node.lhs, depth + 1)
     s += f" {node.operator.name} "
@@ -328,8 +336,9 @@ def _pprintbinop(node: Node, depth: int) -> str:
 
 
 def _pprintif(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.If):
+    if node.nodetype != NodeType.IF:
         raise Exception("Error: wrong node type")
+    node = cast(zast.If, node)
 
     o: List[str] = []
     o.append("*if {")
@@ -350,8 +359,9 @@ def _pprintif(node: Node, depth: int) -> str:
 
 
 def _pprintfor(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.For):
+    if node.nodetype != NodeType.FOR:
         raise Exception("Error: wrong node type")
+    node = cast(zast.For, node)
 
     o: List[str] = []
     o.append("*for {")
@@ -379,8 +389,9 @@ def _pprintfor(node: Node, depth: int) -> str:
 
 
 def _pprintdo(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.Do):
+    if node.nodetype != NodeType.DO:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Do, node)
 
     o: List[str] = []
     o.append("*do {")
@@ -418,15 +429,17 @@ def _pprintdo(node: Node, depth: int) -> str:
 def _pprintatomid(node: Node, depth: int) -> str:
     del depth
     # if node.nodetype != NodeType.MEMBER:
-    if not isinstance(node, zast.AtomId):
+    if node.nodetype != NodeType.ATOMID:
         raise Exception("Error: wrong node type")
+    node = cast(zast.AtomId, node)
     return f"*ATOMID({node.name})"
 
 
 def _pprintatomstring(node: Node, depth: int) -> str:
     # if node.nodetype != NodeType.MEMBER:
-    if not isinstance(node, zast.AtomString):
+    if node.nodetype != NodeType.ATOMSTRING:
         raise Exception("Error: wrong node type")
+    node = cast(zast.AtomString, node)
 
     o: List[str] = []
     o.append('*ATOMSTRING("')
@@ -434,11 +447,11 @@ def _pprintatomstring(node: Node, depth: int) -> str:
     del sepinner
     # output.append(sepinner)
     for s in node.stringparts:
-        if isinstance(s, Token):
-            o.append(f'"{s.tokstr}"')
+        if getattr(s, "nodetype", None) != NodeType.EXPRESSION:
+            o.append(f'"{cast(Token, s).tokstr}"')
         else:
             o.append("(")
-            o.append(pprintnode(s, depth))
+            o.append(pprintnode(cast(zast.Expression, s), depth))
             o.append(")")
     o.append('")')
     return "".join(o)
@@ -488,8 +501,9 @@ def _pprintatomstring(node: Node, depth: int) -> str:
 
 
 def _pprintdottedpath(node: Node, depth: int) -> str:
-    if not isinstance(node, zast.DottedPath):
+    if node.nodetype != NodeType.DOTTEDPATH:
         raise Exception(f"Error: wrong node type got {node!r}")
+    node = cast(zast.DottedPath, node)
 
     o: List[str] = []
     o.append("*DOTTEDPATH(")
@@ -502,8 +516,9 @@ def _pprintdottedpath(node: Node, depth: int) -> str:
 
 def _pprintstatement(node: Node, depth: int) -> str:
     """ """
-    if not isinstance(node, zast.Statement):
+    if node.nodetype != NodeType.STATEMENT:
         raise Exception("Error: wrong node type")
+    node = cast(zast.Statement, node)
 
     o: List[str] = []
     sep = depth * "  "
