@@ -853,7 +853,15 @@ class Parser:
         if opx is not None and opx.is_error:
             return cast(zast.Error, opx)  # propagate error
         opx = cast(Optional[NodeX[zast.Operation]], opx)
-        if opx and isinstance(opx.node, zast.Operation):
+        if opx and opx.node.nodetype in (
+            NodeType.BINOP,
+            NodeType.DOTTEDPATH,
+            NodeType.ATOMID,
+            NodeType.ATOMSTRING,
+            NodeType.EXPRESSION,
+            NodeType.NAMEDOPERATION,
+            NodeType.LABELVALUE,
+        ):
             opx = self._fixcalloperation(opx)  # correct single Id's
             namedop = zast.NamedOperation(
                 name=None, valtype=opx.node, start=opx.node.start

@@ -145,8 +145,6 @@ def _pprintifclause(ifclause: zast.IfClause, depth: int) -> str:
 # def _pprintdefinition(node: Node, output: List[str], depth: int) -> None:
 #     """
 #     """
-#     if not isinstance(node, zast.Definition):
-#         raise Exception("Error: wrong node type")
 #     sep = depth * "  "
 #     output.append(f"{sep}{node.name}: ")
 #     pprintnode(node.definition, output, depth + 1)
@@ -165,9 +163,6 @@ def _pprintnamedoperation(node: Node, depth: int) -> str:
 
 
 # def _pprintblock(node: Node, output: List[str], depth: int):
-#     # if node.nodetype != NodeType.BLOCK:
-#     if not isinstance(node, zast.Block):
-#         raise Exception("Error: wrong node type")
 #     errstr = ""
 #     if node.error:
 #         errstr = " ERROR!"
@@ -187,9 +182,6 @@ def _pprintnamedoperation(node: Node, depth: int) -> str:
 
 
 # def _pprintdefinition(node: Node, output: List[str], depth: int):
-#     # if node.nodetype != NodeType.DEFINITION:
-#     if not isinstance(node, zast.Definition):
-#         raise Exception("Error: wrong node type")
 #     errstr = ""
 #     if node.error:
 #         errstr = " ERROR!"
@@ -221,8 +213,6 @@ def _pprintassignment(node: Node, depth: int) -> str:
 
 
 # def _pprintbinop(node: Node, output: List[str], depth: int) -> None:
-#     if not isinstance(node, zast.Binop):
-#         raise Exception("Error: wrong node type")
 #     output.append(f"*BINOP {{\n")
 #     sepinner = (depth + 1) * "  "
 
@@ -326,9 +316,6 @@ def _pprintbinop(node: Node, depth: int) -> str:
 
 
 # def _pprintasop(node: Node, depth: int) -> str:
-#     if not isinstance(node, zast.AsOp):
-#         raise Exception("Error: wrong node type")
-#
 #     s = pprintnode(node.lhs, depth + 1)
 #     s += " as "
 #     s += pprintnode(node.rhs, depth + 1)
@@ -406,9 +393,6 @@ def _pprintdo(node: Node, depth: int) -> str:
 
 
 # def _pprintargument(node: Node, output: List[str], depth: int):
-#     # if node.nodetype != NodeType.MEMBER:
-#     if not isinstance(node, zast.Argument):
-#         raise Exception("Error: wrong node type")
 #     sepinner = (depth + 1) * "  "
 #     errstr = ""
 #     output.append(f"*ARG (\n")
@@ -458,9 +442,6 @@ def _pprintatomstring(node: Node, depth: int) -> str:
 
 
 # def _pprintatomexpression(node: Node, output: List[str], depth: int) -> None:
-#     # if node.nodetype != NodeType.MEMBER:
-#     if not isinstance(node, zast.AtomExpr):
-#         raise Exception("Error: wrong node type")
 #     output.append("*ATOMEXPR(\n")
 #     # sepinner = (depth + 1) * "  "
 #     # output.append(sepinner)
@@ -475,9 +456,6 @@ def _pprintatomstring(node: Node, depth: int) -> str:
 
 
 # def _pprintatomblock(node: Node, output: List[str], depth: int):
-#     # if node.nodetype != NodeType.MEMBER:
-#     if not isinstance(node, zast.AtomBlock):
-#         raise Exception("Error: wrong node type")
 #     errstr = ""
 #     output.append(f"*ATOMBLOCK ")
 #     # sepinner = (depth + 1) * "  "
@@ -492,9 +470,6 @@ def _pprintatomstring(node: Node, depth: int) -> str:
 
 
 # def _pprinterror(node: Node, output: List[str], depth: int):
-#     # if node.nodetype != NodeType.ERROR:
-#     if not isinstance(node, zast.Error):
-#         raise Exception("Error: wrong node type")
 #     output.append(f"*ERROR({node.message} ")
 #     # output.append(f"At: {node.token.lineno}:{node.token.colno})\n")
 #     output.append(f"At: {node.token!r})\n")
