@@ -21,6 +21,7 @@ from ztypes import (
     ZVariable,
     ZLockState,
     NUMERIC_RANGES,
+    TAG_ORIGIN,
     parse_number,
 )
 
@@ -77,7 +78,9 @@ def _make_type(name: str, typetype: ZTypeType, parent: Optional[ZType] = None) -
 def _is_array_type(ztype: ZType) -> bool:
     """Check if a type is a monomorphized array type."""
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "array"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "array"
     )
 
 
@@ -97,7 +100,9 @@ def _array_length(ztype: ZType) -> Optional[int]:
 def _is_str_type(ztype: ZType) -> bool:
     """Check if a type is a monomorphized str type."""
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "str"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "str"
     )
 
 
@@ -112,7 +117,9 @@ def _str_capacity(ztype: ZType) -> Optional[int]:
 def _is_list_type(ztype: ZType) -> bool:
     """Check if a type is a monomorphized list type."""
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "list"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "list"
     )
 
 
@@ -124,7 +131,9 @@ def _list_element_type(ztype: ZType) -> Optional[ZType]:
 def _is_map_type(ztype: ZType) -> bool:
     """Check if a type is a monomorphized map type."""
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "map"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "map"
     )
 
 
@@ -185,15 +194,18 @@ def _extract_public_members(as_items: dict) -> Optional[dict[str, str]]:
     if public_unit is None:
         return None
     # must be a Unit AST node
-    if not isinstance(public_unit, zast.Node) or public_unit.nodetype != NodeType.UNIT:
+    if (
+        not getattr(public_unit, "is_node", False)
+        or public_unit.nodetype != NodeType.UNIT
+    ):
         return None
     # build external → internal name mapping
     members: dict[str, str] = {}
     for ext_name, defn in cast(zast.Unit, public_unit).body.items():
-        if isinstance(defn, zast.Node) and defn.nodetype == NodeType.LABELVALUE:
+        if getattr(defn, "is_node", False) and defn.nodetype == NodeType.LABELVALUE:
             # :field shorthand — external and internal names are the same
             members[ext_name] = ext_name
-        elif isinstance(defn, zast.Node) and defn.nodetype in (
+        elif getattr(defn, "is_node", False) and defn.nodetype in (
             NodeType.ATOMID,
             NodeType.DOTTEDPATH,
         ):
@@ -213,7 +225,7 @@ def _check_private_redefinition(as_items: dict) -> Optional[zast.Unit]:
     private_unit = as_items.get("private")
     if (
         private_unit is not None
-        and isinstance(private_unit, zast.Node)
+        and getattr(private_unit, "is_node", False)
         and private_unit.nodetype == NodeType.UNIT
     ):
         return private_unit
@@ -444,7 +456,7 @@ class TypeChecker:
         main_func = mainunit.body.get("main")
         if (
             main_func
-            and isinstance(main_func, zast.Node)
+            and getattr(main_func, "is_node", False)
             and main_func.nodetype == NodeType.FUNCTION
         ):
             # resolve main first to trigger demand-driven resolution
@@ -588,7 +600,10 @@ class TypeChecker:
             current_body = unit.body
             for i, part in enumerate(parts[:-1]):
                 inner = current_body.get(part)
-                if isinstance(inner, zast.Node) and inner.nodetype == NodeType.UNIT:
+                if (
+                    getattr(inner, "is_node", False)
+                    and cast(zast.Node, inner).nodetype == NodeType.UNIT
+                ):
                     current_body = cast(zast.Unit, inner).body
                 else:
                     return None
@@ -679,7 +694,7 @@ class TypeChecker:
                 # constant folding: set const_value on the definition node
                 if t:
                     _, value, err = parse_number(defn_atom.name)
-                    if not err and isinstance(value, int):
+                    if not err and type(value) is int:
                         defn_atom.const_value = value
                 return t
             key = f"{unitname}.{name}"
@@ -749,7 +764,7 @@ class TypeChecker:
 
         # get type from the taken branch's last expression
         t = self._last_statement_type(taken_stmt)
-        if t is self._NORETURN or t is None or not isinstance(t, ZType):
+        if t is self._NORETURN or t is None or not getattr(t, "is_ztype", False):
             self._error(
                 "unit-level if branch must produce a value",
                 loc=ifnode.start,
@@ -757,7 +772,8 @@ class TypeChecker:
             self._resolving.pop()
             return None
 
-        ifnode.type = t
+        t_ztype = cast(ZType, t)
+        ifnode.type = t_ztype
 
         # propagate const_value from taken branch if available
         if taken_stmt.statements:
@@ -771,7 +787,7 @@ class TypeChecker:
                     defn.const_value = inner_expr.const_value
 
         self._resolving.pop()
-        return t
+        return t_ztype
 
     def _resolve_function_type(
         self, unitname: str, name: str, func: zast.Function
@@ -1174,7 +1190,7 @@ class TypeChecker:
             )
             is_tag = (
                 (as_type and as_type.typetype == ZTypeType.TAG)
-                or (as_type and getattr(as_type, "generic_origin", None) == "tag")
+                or (as_type and as_type.generic_origin is TAG_ORIGIN)
                 or (as_type and as_type.isgeneric and as_type.name == "tag")
             )
             if is_tag:
@@ -1267,7 +1283,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = "tag"
+            gen_tag.generic_origin = TAG_ORIGIN
             gen_data.children["tag"] = gen_tag
             utype.children["tag"] = gen_data
 
@@ -1292,7 +1308,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = "tag"
+            gen_tag.generic_origin = TAG_ORIGIN
             gen_data.children["tag"] = gen_tag
             utype.children["tag"] = gen_data
 
@@ -1437,7 +1453,7 @@ class TypeChecker:
             )
             is_tag = (
                 (as_type and as_type.typetype == ZTypeType.TAG)
-                or (as_type and getattr(as_type, "generic_origin", None) == "tag")
+                or (as_type and as_type.generic_origin is TAG_ORIGIN)
                 or (as_type and as_type.isgeneric and as_type.name == "tag")
             )
             if is_tag:
@@ -1524,7 +1540,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = "tag"
+            gen_tag.generic_origin = TAG_ORIGIN
             gen_data.children["tag"] = gen_tag
             vtype.children["tag"] = gen_data
 
@@ -1547,7 +1563,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = "tag"
+            gen_tag.generic_origin = TAG_ORIGIN
             gen_data.children["tag"] = gen_tag
             vtype.children["tag"] = gen_data
 
@@ -1613,7 +1629,7 @@ class TypeChecker:
                 # parse the actual numeric value for storage
                 _, val, err = parse_number(item_valtype_atom.name)
                 if not err:
-                    val_str = str(int(val)) if not isinstance(val, float) else str(val)
+                    val_str = str(int(val)) if type(val) is not float else str(val)
                     vt = _make_type(val_str, ZTypeType.RECORD)
                     vt.is_valtype = True
                     dtype.children[ename] = vt
@@ -1636,7 +1652,7 @@ class TypeChecker:
         et_name = element_type.name if element_type else "i64"
         tag_type = _make_type(f"tag__{et_name}", ZTypeType.RECORD, parent=dtype)
         tag_type.is_valtype = True
-        tag_type.generic_origin = "tag"
+        tag_type.generic_origin = TAG_ORIGIN
         dtype.children["tag"] = tag_type
 
         self._resolving.pop()
@@ -2765,7 +2781,7 @@ class TypeChecker:
                         and v.typetype != ZTypeType.DATA
                         and v.typetype != ZTypeType.TAG
                         and v.typetype != ZTypeType.ENUM
-                        and getattr(v, "generic_origin", None) != "tag"
+                        and v.generic_origin is not TAG_ORIGIN
                     }
                     if concrete_type.name not in subtype_names:
                         self._error(
@@ -2829,7 +2845,8 @@ class TypeChecker:
                     mono.children[child_name] = child_type
             elif (
                 child_type.isgeneric
-                and isinstance(child_type.generic_origin, ZType)
+                and child_type.generic_origin is not None
+                and child_type.generic_origin is not TAG_ORIGIN
                 and not is_partial
                 and child_type.typetype != ZTypeType.UNIT
             ):
@@ -2844,10 +2861,11 @@ class TypeChecker:
                         child_args[gp_name] = generic_args[gp_arg.name]
                     else:
                         child_args[gp_name] = gp_arg
-                child_defn = self._find_generic_defn(child_type.generic_origin)
+                child_origin = cast(ZType, child_type.generic_origin)
+                child_defn = self._find_generic_defn(child_origin)
                 if child_defn:
                     mono.children[child_name] = self._monomorphize(
-                        child_type.generic_origin, child_args, child_defn
+                        child_origin, child_args, child_defn
                     )
                 else:
                     mono.children[child_name] = child_type
@@ -2898,7 +2916,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
-                and getattr(mono.children[k], "generic_origin", None) != "tag"
+                and mono.children[k].generic_origin is not TAG_ORIGIN
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -2911,7 +2929,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = "tag"
+            gen_tag.generic_origin = TAG_ORIGIN
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
 
@@ -2926,7 +2944,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
-                and getattr(mono.children[k], "generic_origin", None) != "tag"
+                and mono.children[k].generic_origin is not TAG_ORIGIN
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -2938,7 +2956,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = "tag"
+            gen_tag.generic_origin = TAG_ORIGIN
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
 
@@ -3293,9 +3311,9 @@ class TypeChecker:
         if "." in name:
             parts = name.rsplit(".", 1)
             origin = template_type.generic_origin
-            if origin and isinstance(origin, ZType):
+            if origin is not None and origin is not TAG_ORIGIN:
                 # the generic origin IS the original definition
-                origin_defn = self._find_generic_defn(origin)
+                origin_defn = self._find_generic_defn(cast(ZType, origin))
                 if origin_defn is not None:
                     return origin_defn
             # also search all unit bodies recursively for the leaf name
@@ -3321,7 +3339,7 @@ class TypeChecker:
         if defn is not None:
             return defn
         for dname, ddefn in body.items():
-            if isinstance(ddefn, zast.Node) and ddefn.nodetype == NodeType.UNIT:
+            if getattr(ddefn, "is_node", False) and ddefn.nodetype == NodeType.UNIT:
                 result = self._search_body_recursive(cast(zast.Unit, ddefn).body, name)
                 if result is not None:
                     return result
@@ -3723,8 +3741,11 @@ class TypeChecker:
             inner_do = cast(zast.Do, inner)
             self._check_statement(inner_do.statement)
             last_type = self._last_statement_type(inner_do.statement)
-            if isinstance(last_type, ZType) and last_type is not self._NORETURN:
-                t = last_type
+            if (
+                getattr(last_type, "is_ztype", False)
+                and last_type is not self._NORETURN
+            ):
+                t = cast(ZType, last_type)
                 inner_do.type = t
             else:
                 t = self.t_null
@@ -3983,7 +4004,7 @@ class TypeChecker:
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
         for part in atom.stringparts:
-            if isinstance(part, zast.Node) and part.nodetype == NodeType.EXPRESSION:
+            if part.is_expression:
                 part_expr = cast(zast.Expression, part)
                 self._check_expression(part_expr)
                 self._check_exhaustive_if(part_expr)
@@ -3996,7 +4017,7 @@ class TypeChecker:
                 atom.type = t
                 # constant folding: set const_value for integer literals
                 _, value, err = parse_number(name)
-                if not err and isinstance(value, int):
+                if not err and type(value) is int:
                     atom.const_value = value
             return t
 
@@ -4711,9 +4732,9 @@ class TypeChecker:
                 # constant folding: evaluate when both operands are constant integers
                 lhs_cv = binop.lhs.const_value
                 rhs_cv = binop.rhs.const_value
-                if isinstance(lhs_cv, int) and isinstance(rhs_cv, int):
+                if lhs_cv is not None and rhs_cv is not None:
                     folded = self._fold_binop(op_name, lhs_cv, rhs_cv)
-                    if folded is not None and isinstance(folded, int):
+                    if folded is not None and type(folded) is int:
                         # overflow check for integer results
                         rng = NUMERIC_RANGES.get(ret.name)
                         if rng:
@@ -4726,7 +4747,7 @@ class TypeChecker:
                                 )
                                 return ret
                         binop.const_value = folded
-                    elif folded is not None and isinstance(folded, bool):
+                    elif folded is not None and type(folded) is bool:
                         binop.const_value = folded
                 return ret
 
@@ -4763,7 +4784,7 @@ class TypeChecker:
             ):
                 return self._NORETURN
             # get type from the inner expression node (Expression wrapper .type may be None)
-            if isinstance(inner, zast.Node) and inner.type is not None:
+            if getattr(inner, "is_node", False) and inner.type is not None:
                 return inner.type
             return last_expr.type
         if last.nodetype == NodeType.ASSIGNMENT:
@@ -4807,12 +4828,13 @@ class TypeChecker:
                     result_type = never
                     ifnode.type = never
             elif completing:
-                first = completing[0]
-                if first is not None and isinstance(first, ZType):
+                first_raw = completing[0]
+                if first_raw is not None and getattr(first_raw, "is_ztype", False):
+                    first = cast(ZType, first_raw)
                     all_ok = all(
                         t is not None
-                        and isinstance(t, ZType)
-                        and self._types_compatible(first, t)
+                        and getattr(t, "is_ztype", False)
+                        and self._types_compatible(first, cast(ZType, t))
                         for t in completing[1:]
                     )
                     if all_ok:
@@ -4823,10 +4845,14 @@ class TypeChecker:
                         for t in completing[1:]:
                             if (
                                 t is None
-                                or not isinstance(t, ZType)
-                                or not self._types_compatible(first, t)
+                                or not getattr(t, "is_ztype", False)
+                                or not self._types_compatible(first, cast(ZType, t))
                             ):
-                                tname = t.name if isinstance(t, ZType) else "null"
+                                tname = (
+                                    cast(ZType, t).name
+                                    if getattr(t, "is_ztype", False)
+                                    else "null"
+                                )
                                 self._error(
                                     f"incompatible branch types in if-expression: "
                                     f"'{first.name}' and '{tname}'",
@@ -4984,7 +5010,8 @@ class TypeChecker:
         """Check if a type is a monomorphized option type."""
         return (
             t.typetype == ZTypeType.UNION
-            and isinstance(t.generic_origin, ZType)
+            and t.generic_origin is not None
+            and t.generic_origin is not TAG_ORIGIN
             and t.generic_origin.name == "option"
         )
 
@@ -4992,7 +5019,8 @@ class TypeChecker:
         """Check if a type is a monomorphized optionval type."""
         return (
             t.typetype == ZTypeType.VARIANT
-            and isinstance(t.generic_origin, ZType)
+            and t.generic_origin is not None
+            and t.generic_origin is not TAG_ORIGIN
             and t.generic_origin.name == "optionval"
         )
 
@@ -5114,7 +5142,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
-                and getattr(v, "generic_origin", None) != "tag"
+                and v.generic_origin is not TAG_ORIGIN
             }
             covered = {clause.match.name for clause in casenode.clauses}
             missing = subtypes - covered
@@ -5156,7 +5184,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
-                and getattr(v, "generic_origin", None) != "tag"
+                and v.generic_origin is not TAG_ORIGIN
             }
             covered_for_exhaust = {clause.match.name for clause in casenode.clauses}
             if not (subtypes_for_exhaust - covered_for_exhaust):
@@ -5181,12 +5209,13 @@ class TypeChecker:
                     result_type = never
                     casenode.type = never
             elif completing:
-                first = completing[0]
-                if first is not None and isinstance(first, ZType):
+                first_raw = completing[0]
+                if first_raw is not None and getattr(first_raw, "is_ztype", False):
+                    first = cast(ZType, first_raw)
                     all_ok = all(
                         t is not None
-                        and isinstance(t, ZType)
-                        and self._types_compatible(first, t)
+                        and getattr(t, "is_ztype", False)
+                        and self._types_compatible(first, cast(ZType, t))
                         for t in completing[1:]
                     )
                     if all_ok:
@@ -5196,10 +5225,14 @@ class TypeChecker:
                         for t in completing[1:]:
                             if (
                                 t is None
-                                or not isinstance(t, ZType)
-                                or not self._types_compatible(first, t)
+                                or not getattr(t, "is_ztype", False)
+                                or not self._types_compatible(first, cast(ZType, t))
                             ):
-                                tname = t.name if isinstance(t, ZType) else "null"
+                                tname = (
+                                    cast(ZType, t).name
+                                    if getattr(t, "is_ztype", False)
+                                    else "null"
+                                )
                                 self._error(
                                     f"incompatible branch types in match-expression: "
                                     f"'{first.name}' and '{tname}'",
@@ -5274,21 +5307,21 @@ def audit_type_annotations(program: zast.Program) -> List[str]:
                 val = getattr(node, fname, None)
                 if val is None:
                     continue
-                if isinstance(val, zast.Node):
+                if getattr(val, "is_node", False):
                     _walk(val, f"{context}.{fname}")
-                elif isinstance(val, dict):
+                elif type(val) is dict:
                     for k, v in val.items():
-                        if isinstance(v, zast.Node):
+                        if getattr(v, "is_node", False):
                             _walk(v, f"{context}.{fname}[{k}]")
-                elif isinstance(val, list):
+                elif type(val) is list:
                     for i, v in enumerate(val):
-                        if isinstance(v, zast.Node):
+                        if getattr(v, "is_node", False):
                             _walk(v, f"{context}.{fname}[{i}]")
 
     mainunit = program.units.get(program.mainunitname)
     if mainunit:
         for name, defn in mainunit.body.items():
-            if isinstance(defn, zast.Node):
+            if getattr(defn, "is_node", False):
                 _walk(defn, name)
 
     return missing

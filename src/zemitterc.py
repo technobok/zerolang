@@ -11,7 +11,14 @@ from typing import Optional, List, Dict, Tuple, cast
 import zast
 from zast import NodeType
 import zemitterc_runtime as zrt
-from ztypes import ZType, ZTypeType, parse_number, ZParamOwnership, NUMERIC_RANGES
+from ztypes import (
+    ZType,
+    ZTypeType,
+    parse_number,
+    ZParamOwnership,
+    NUMERIC_RANGES,
+    TAG_ORIGIN,
+)
 
 
 @dataclass
@@ -83,7 +90,9 @@ def _is_array_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "array"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "array"
     )
 
 
@@ -105,7 +114,9 @@ def _is_str_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "str"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "str"
     )
 
 
@@ -122,7 +133,9 @@ def _is_list_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "list"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "list"
     )
 
 
@@ -136,7 +149,9 @@ def _is_map_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return (
-        isinstance(ztype.generic_origin, ZType) and ztype.generic_origin.name == "map"
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "map"
     )
 
 
@@ -265,6 +280,8 @@ def _mangle_var(name: str) -> str:
 class TrackedList(list):
     """A list that records the emitter's _current_node_id alongside each appended item."""
 
+    is_tracked_list: bool = True
+
     def __init__(self, emitter: "CEmitter"):
         super().__init__()
         self._emitter = emitter
@@ -364,7 +381,7 @@ class CEmitter:
         # build a set of (line_start_offset, node_id) from tracked sections
         offset_to_node: List[tuple] = []
         for section in (self.struct_defs, self.func_defs, self.data_defs):
-            if isinstance(section, TrackedList):
+            if getattr(section, "is_tracked_list", False):
                 for text, nid in zip(section, section.node_ids):
                     pos = output.find(text)
                     if pos >= 0:
@@ -705,7 +722,7 @@ class CEmitter:
                 )
             elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
-            elif hasattr(defn, "const_value") and isinstance(defn.const_value, int):
+            elif hasattr(defn, "const_value") and type(defn.const_value) is int:
                 # unit-level expression that folded to an integer constant
                 self._emit_folded_constant(qname, defn)
 
@@ -1706,7 +1723,7 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
-            if getattr(stype, "generic_origin", None) == "tag":
+            if stype.generic_origin is TAG_ORIGIN:
                 continue
             subtype_items.append((sname, stype))
 
@@ -1786,7 +1803,7 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
-            if getattr(stype, "generic_origin", None) == "tag":
+            if stype.generic_origin is TAG_ORIGIN:
                 continue
             subtype_items.append((sname, stype))
 
@@ -2759,7 +2776,7 @@ class CEmitter:
             ):
                 _, val, err = parse_number(cast(zast.AtomId, op).name)
                 if not err:
-                    if isinstance(val, float):
+                    if type(val) is float:
                         values.append(str(val))
                     else:
                         values.append(str(int(val)))
@@ -4080,7 +4097,7 @@ class CEmitter:
         v = node.const_value
         assert v is not None
         self.needs_stdint = True
-        if isinstance(v, bool):
+        if type(v) is bool:
             return "1" if v else "0"
         raw = str(int(v))
         if node.type and node.type.name != "i64":

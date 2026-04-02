@@ -5,11 +5,11 @@ Walks the compiled program and emitter output, producing SQL INSERT
 statements that match the schema from the code review document.
 """
 
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, cast
 
 import zast
 from zlexer import Token
-from ztypes import ZType
+from ztypes import ZType, TAG_ORIGIN
 import zemitterc
 
 
@@ -112,7 +112,7 @@ def _collect_tokens(program: zast.Program) -> List[Token]:
         if nid in visited:
             return
         visited.add(nid)
-        if isinstance(node, zast.Node) and hasattr(node, "start") and node.start:
+        if getattr(node, "is_node", False) and hasattr(node, "start") and node.start:
             tok = node.start
             tokens[tok.tokenid] = tok
         if hasattr(node, "__dataclass_fields__"):
@@ -120,17 +120,17 @@ def _collect_tokens(program: zast.Program) -> List[Token]:
                 val = getattr(node, fname, None)
                 if val is None:
                     continue
-                if isinstance(val, zast.Node):
+                if getattr(val, "is_node", False):
                     _walk(val)
-                elif isinstance(val, Token):
+                elif getattr(val, "is_token", False):
                     tokens[val.tokenid] = val
-                elif isinstance(val, dict):
+                elif type(val) is dict:
                     for v in val.values():
-                        if isinstance(v, zast.Node):
+                        if getattr(v, "is_node", False):
                             _walk(v)
-                elif isinstance(val, list):
+                elif type(val) is list:
                     for v in val:
-                        if isinstance(v, zast.Node):
+                        if getattr(v, "is_node", False):
                             _walk(v)
 
     for unit in program.units.values():
@@ -148,23 +148,23 @@ def _collect_ast_nodes(program: zast.Program) -> List[Tuple[zast.Node, str]]:
         if nid in visited:
             return
         visited.add(nid)
-        if isinstance(node, zast.Node):
+        if getattr(node, "is_node", False):
             nodes.append((node, name))
         if hasattr(node, "__dataclass_fields__"):
             for fname in node.__dataclass_fields__:
                 val = getattr(node, fname, None)
                 if val is None:
                     continue
-                if isinstance(val, zast.Node):
+                if getattr(val, "is_node", False):
                     _walk(val, name)
-                elif isinstance(val, dict):
+                elif type(val) is dict:
                     for k, v in val.items():
-                        if isinstance(v, zast.Node):
+                        if getattr(v, "is_node", False):
                             child_name = f"{name}.{k}" if name else k
                             _walk(v, child_name)
-                elif isinstance(val, list):
+                elif type(val) is list:
                     for v in val:
-                        if isinstance(v, zast.Node):
+                        if getattr(v, "is_node", False):
                             _walk(v, name)
 
     for uname, unit in program.units.items():
@@ -236,12 +236,12 @@ def dump_sql(
             _register_type(ctype)
         if zt.return_type:
             _register_type(zt.return_type)
-        if zt.parent and isinstance(zt.parent, ZType):
+        if zt.parent is not None:
             _register_type(zt.parent)
         if zt.typedef_base:
             _register_type(zt.typedef_base)
-        if isinstance(zt.generic_origin, ZType):
-            _register_type(zt.generic_origin)
+        if zt.generic_origin is not None and zt.generic_origin is not TAG_ORIGIN:
+            _register_type(cast(ZType, zt.generic_origin))
 
     # from resolved dict
     for ztype in program.resolved.values():
@@ -257,7 +257,7 @@ def dump_sql(
             _sql_int(ztype.typedef_base.nodeid) if ztype.typedef_base else "NULL"
         )
         origin_id = "NULL"
-        if isinstance(ztype.generic_origin, ZType):
+        if ztype.generic_origin is not None and ztype.generic_origin is not TAG_ORIGIN:
             origin_id = _sql_int(ztype.generic_origin.nodeid)
         lines.append(
             f"INSERT OR IGNORE INTO types VALUES ("

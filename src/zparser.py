@@ -96,14 +96,15 @@ def _strip_string_whitespace(
     # Step 1: strip blank first line (whitespace-only tokens followed by EOL)
     first_eol = -1
     for i, p in enumerate(parts):
-        if isinstance(p, zast.Expression):
+        if p.is_expression:
             break
-        if p.toktype == TT.EOL:
+        tok = cast(Token, p)
+        if tok.toktype == TT.EOL:
             first_eol = i
             break
-        if p.toktype == TT.STRMID and _is_ws_only(p.tokstr):
+        if tok.toktype == TT.STRMID and _is_ws_only(tok.tokstr):
             continue
-        if p.toktype == TT.STRCHR:
+        if tok.toktype == TT.STRCHR:
             break
         break
     if first_eol >= 0:
@@ -118,14 +119,15 @@ def _strip_string_whitespace(
     last_eol = -1
     for i in range(len(parts) - 1, -1, -1):
         p = parts[i]
-        if isinstance(p, zast.Expression):
+        if p.is_expression:
             break
-        if p.toktype == TT.EOL:
+        tok = cast(Token, p)
+        if tok.toktype == TT.EOL:
             last_eol = i
             break
-        if p.toktype == TT.STRMID and _is_ws_only(p.tokstr):
+        if tok.toktype == TT.STRMID and _is_ws_only(tok.tokstr):
             continue
-        if p.toktype == TT.STRCHR:
+        if tok.toktype == TT.STRCHR:
             break
         break
 
@@ -134,15 +136,15 @@ def _strip_string_whitespace(
         # everything after last_eol should be whitespace-only
         trailing = parts[last_eol + 1 :]
         all_ws = all(
-            not isinstance(p, zast.Expression)
-            and p.toktype == TT.STRMID
-            and _is_ws_only(p.tokstr)
+            not p.is_expression
+            and cast(Token, p).toktype == TT.STRMID
+            and _is_ws_only(cast(Token, p).tokstr)
             for p in trailing
         )
         if all_ws or not trailing:
             # extract the whitespace prefix from the last line
             prefix = "".join(
-                p.tokstr for p in trailing if not isinstance(p, zast.Expression)
+                cast(Token, p).tokstr for p in trailing if not p.is_expression
             )
             # remove the trailing EOL and whitespace
             parts = parts[:last_eol]
@@ -158,15 +160,16 @@ def _strip_string_whitespace(
     can_strip = True
     at_line_start = True
     for p in parts:
-        if isinstance(p, zast.Expression):
+        if p.is_expression:
             at_line_start = False
             continue
-        if p.toktype == TT.EOL:
+        tok = cast(Token, p)
+        if tok.toktype == TT.EOL:
             at_line_start = True
             continue
-        if at_line_start and p.toktype == TT.STRMID:
+        if at_line_start and tok.toktype == TT.STRMID:
             # check if this starts a blank line (just whitespace before next EOL)
-            if not _is_ws_only(p.tokstr) and not p.tokstr.startswith(prefix):
+            if not _is_ws_only(tok.tokstr) and not tok.tokstr.startswith(prefix):
                 can_strip = False
                 break
             at_line_start = False
@@ -181,32 +184,37 @@ def _strip_string_whitespace(
     at_line_start = True
     prefix_len = len(prefix)
     for p in parts:
-        if isinstance(p, zast.Expression):
+        if p.is_expression:
             result.append(p)
             at_line_start = False
             continue
-        if p.toktype == TT.EOL:
-            result.append(p)
+        tok = cast(Token, p)
+        if tok.toktype == TT.EOL:
+            result.append(tok)
             at_line_start = True
             continue
-        if at_line_start and p.toktype == TT.STRMID:
-            if _is_ws_only(p.tokstr):
+        if at_line_start and tok.toktype == TT.STRMID:
+            if _is_ws_only(tok.tokstr):
                 # blank line content — keep as-is
-                result.append(p)
-            elif p.tokstr.startswith(prefix):
-                stripped = p.tokstr[prefix_len:]
+                result.append(tok)
+            elif tok.tokstr.startswith(prefix):
+                stripped = tok.tokstr[prefix_len:]
                 if stripped:
                     result.append(
                         Token(
-                            p.toktype, stripped, p.fsno, p.lineno, p.colno + prefix_len
+                            tok.toktype,
+                            stripped,
+                            tok.fsno,
+                            tok.lineno,
+                            tok.colno + prefix_len,
                         )
                     )
                 # else: the token was exactly the prefix, drop it
             else:
-                result.append(p)
+                result.append(tok)
             at_line_start = False
         else:
-            result.append(p)
+            result.append(tok)
             at_line_start = False
 
     return result
@@ -675,9 +683,10 @@ class Parser:
         #     node = self._acceptlist(lex)
         else:
             oplist = self._getoplist(lex)
-            if isinstance(oplist, zast.Error):
-                return oplist  # propagate error
-            node = self._acceptoperationorcall(oplist, lex)
+            if getattr(oplist, "is_error", False):
+                return cast(zast.Error, oplist)  # propagate error
+            oplist_ok = cast(List[NodeX[zast.Path]], oplist)
+            node = self._acceptoperationorcall(oplist_ok, lex)
 
         if node is not None and node.is_error:
             return cast(zast.Error, node)
@@ -716,7 +725,7 @@ class Parser:
         #   Let the typechecker do further checking
 
         # oplist = self._getoplist(lex)
-        # if isinstance(oplist, zast.Error):
+        # if getattr(oplist, 'is_error', False):
         #     return oplist  # propagate error
 
         if not oplist:  # len(oplist) == 0
@@ -778,10 +787,10 @@ class Parser:
 
         el = paths[0]
 
-        if isinstance(el, Token):
+        if getattr(el, "is_token", False):
             # 'as' cannot be first, must be path/atom
             msg = "Expected an operand for the left hand side of operation"
-            return zast.Error(start=el, err=ERR.BADEXPRESSION, msg=msg)
+            return zast.Error(start=cast(Token, el), err=ERR.BADEXPRESSION, msg=msg)
         start = el.node.start
 
         # operations: List[zast.OpArg] = []
@@ -1580,8 +1589,6 @@ class Parser:
                         return cast(zast.Error, dottedidx)  # propagate error
                     dottedidx = cast(Optional[NodeX[zast.Path]], dottedidx)
                     if dottedidx is not None:
-                        # if isinstance(atomid, zast.AtomId):
-                        # name = atomid.node.ids[-1].name
                         dottedid = dottedidx.node
                         if dottedid.nodetype == NodeType.ATOMID:
                             name = cast(zast.AtomId, dottedid).name
@@ -2217,9 +2224,11 @@ class Parser:
 
         """
         oplist = self._getoplist(lex)
-        if isinstance(oplist, zast.Error):
-            return oplist  # propagate error
-        return self._getop(paths=oplist, nexttoken=lex.peek())
+        if getattr(oplist, "is_error", False):
+            return cast(zast.Error, oplist)  # propagate error
+        return self._getop(
+            paths=cast(List[NodeX[zast.Path]], oplist), nexttoken=lex.peek()
+        )
 
     @staticmethod
     def _fixcalloperation(opx: NodeX[zast.Operation]) -> NodeX[zast.Operation]:
@@ -2352,9 +2361,10 @@ class Parser:
             return NodeX(node=statementline, extern=exprx.extern)
 
         # now for the hard ones....
-        oplist = self._getoplist(lex)
-        if isinstance(oplist, zast.Error):
-            return oplist  # propagate error
+        oplist_or_err = self._getoplist(lex)
+        if getattr(oplist_or_err, "is_error", False):
+            return cast(zast.Error, oplist_or_err)  # propagate error
+        oplist = cast(List[NodeX[zast.Path]], oplist_or_err)
 
         if lex.accept(TT.EQUALS):  # Reassignment
             # get LHS from oplist

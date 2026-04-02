@@ -102,6 +102,20 @@ def _alloc_type_id() -> int:
     return tid
 
 
+class _TagOrigin:
+    """Sentinel for generic_origin when the origin is a tag discriminator type."""
+
+    is_ztype: bool = False
+    name: str = "tag"
+    nodeid: int = -1
+
+    def __repr__(self) -> str:
+        return "TAG_ORIGIN"
+
+
+TAG_ORIGIN = _TagOrigin()
+
+
 @dataclass
 class ZType:
     """
@@ -124,6 +138,7 @@ class ZType:
     semantics.
     """
 
+    is_ztype: bool = field(default=True, init=False)
     nodeid: int = field(default_factory=_alloc_type_id, init=False)
 
     name: str
@@ -155,8 +170,8 @@ class ZType:
     # generic type parameters: param name → constraint ZType (for template types)
     generic_params: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
-    # for monomorphized types: points to the original template type (or "tag" sentinel)
-    generic_origin: "Optional[ZType | str]" = field(default=None, init=False)
+    # for monomorphized types: points to the original template type (or TAG_ORIGIN sentinel)
+    generic_origin: "Optional[ZType | _TagOrigin]" = field(default=None, init=False)
 
     # for monomorphized types: maps param name → concrete ZType
     generic_args: "dict[str, ZType]" = field(default_factory=dict, init=False)

@@ -298,6 +298,7 @@ class Node:
     directly
     """
 
+    is_node: bool = field(default=True, init=False)
     nodeid: NodeID = field(
         default_factory=cast(Callable[[], NodeID], count().__next__), init=False
     )
@@ -562,6 +563,7 @@ class Expression(Atom):
     separate AST node, it is just slightly different syntax for an Expression)
     """
 
+    is_expression: bool = field(default=True, init=False)
     nodetype: NodeType = field(default=NodeType.EXPRESSION, init=False)
     expression: ExpressionSubTypes
 

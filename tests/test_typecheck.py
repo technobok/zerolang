@@ -16,6 +16,7 @@ from ztypes import (
     ZVariable,
     ZNaming,
     LockEntry,
+    TAG_ORIGIN,
 )
 import zast
 
@@ -1705,7 +1706,7 @@ class TestDataTypeResolution:
         assert "tag" in dt.children
         tag = dt.children["tag"]
         assert tag.typetype == ZTypeType.RECORD
-        assert tag.generic_origin == "tag"
+        assert tag.generic_origin is TAG_ORIGIN
         assert tag.name == "tag__i64"
 
     def test_data_tag_parent_is_data(self):
@@ -1903,7 +1904,7 @@ class TestUnionCustomTag:
         tc.check()
         dt = tc._resolved.get("test.mydata")
         tag = dt.children["tag"]
-        assert tag.generic_origin == "tag"
+        assert tag.generic_origin is TAG_ORIGIN
         assert tag.name == "tag__i64"
         assert tag.parent is dt
 
