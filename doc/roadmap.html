@@ -213,7 +213,7 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-48c-missing-return-control-flow-analysis">Phase 48c: Missing-return control flow analysis</a>
 </li>
-<li><a href="#phase-48d-eliminate-isinstance-field-based-dispatch">Phase 48d: Eliminate isinstance &#x2014; field-based dispatch</a>
+<li><a href="#phase-48d-eliminate-isinstance-field-based-dispatch-in-progress">Phase 48d: Eliminate isinstance &#x2014; field-based dispatch [IN PROGRESS]</a>
 </li>
 <li><a href="#phase-49-expand-to-v3-full-language">Phase 49: Expand to v3 (Full Language)</a>
 </li>
@@ -2260,36 +2260,45 @@ phase adds control flow analysis to guarantee all paths return:</p>
 <li>Emit an error when a function with an <code>out</code> type has a code path
     that produces no value.</li>
 </ol>
-<h3 id="phase-48d-eliminate-isinstance-field-based-dispatch"><a href="#phase-48d-eliminate-isinstance-field-based-dispatch">5.52. Phase 48d: Eliminate isinstance &#x2014; field-based dispatch</a></h3>
-<p>The compiler uses ~459 <code>isinstance()</code> calls for type dispatch, which is
-Python-specific and blocks self-hosting. These need to be replaced with
-field-based dispatch using <code>nodetype</code>, <code>typetype</code>, and similar enum fields.</p>
-<p>This is not a mechanical replacement &#x2014; it requires grouping related checks,
-identifying where new fields or class consolidation would simplify dispatch,
-and ensuring the replacement is portable.</p>
-<p>Categories of <code>isinstance</code> usage (approximate counts):</p>
-<ul>
-<li>AST node dispatch (AtomId: 92, DottedPath: 73, Expression: 36,
-    Call: 13, Function: 14, If: 8, etc.) &#x2014; replace with <code>nodetype</code> checks.</li>
-<li>Error vs Node distinction (58) &#x2014; <code>Error</code> is not a <code>Node</code>;
-    add an <code>is_error</code> flag or use a tagged union wrapper.</li>
-<li>ZType checks (25) &#x2014; used where <code>generic_origin</code> or similar fields
-    may be <code>ZType</code> or <code>str</code>; add a typed wrapper or tag field.</li>
-<li>Path subtype dispatch (AtomId: 92, DottedPath: 73, AtomString: 5,
-    BinOp: 7) &#x2014; these are all <code>Path</code> subtypes; <code>nodetype</code> covers them.</li>
-<li>Python primitive checks (int: 5, float: 2, dict: 3, list: 3,
-    Token: 3) &#x2014; replace with typed wrappers or explicit fields.</li>
-</ul>
+<h3 id="phase-48d-eliminate-isinstance-field-based-dispatch-in-progress"><a href="#phase-48d-eliminate-isinstance-field-based-dispatch-in-progress">5.52. Phase 48d: Eliminate isinstance &#x2014; field-based dispatch [IN PROGRESS]</a></h3>
+<p>Replaced 384 of 459 <code>isinstance()</code> calls (459 &#x2192; 75) with field-based
+dispatch using <code>nodetype</code> + <code>cast()</code>, <code>is_error</code>, and <code>entrytype</code>.</p>
+<p>Completed:</p>
 <ol>
-<li>Audit and group all 459 <code>isinstance</code> calls by pattern. Identify
-    which can use existing <code>nodetype</code>/<code>typetype</code> fields directly.</li>
-<li>Design new fields or class changes needed for cases where
-    <code>nodetype</code> is insufficient (Error, ZType, primitives).</li>
-<li>Migrate incrementally, updating the bootstrap-lint baseline in
-    <code>Makefile</code> after each batch. Run <code>make check</code> after each change.</li>
-<li>Remove the <code>isinstance</code> baseline from bootstrap-lint when
-    count reaches zero.</li>
+<li>Error made a Node subclass with <code>nodetype = ERROR</code> and
+    <code>is_error = True</code>. Parser Error checks use <code>is_error</code> + <code>cast()</code>.</li>
+<li>AST node dispatch replaced with <code>nodetype</code> + <code>cast()</code> across
+    parser, typechecker, emitter, prettyprinter, AST hasher.</li>
+<li>VFS DEntry dispatch replaced with <code>entrytype</code> field checks.</li>
 </ol>
+<p>Remaining 75 <code>isinstance</code> calls by category:</p>
+<ul>
+<li><code>ZType</code> checks (12): <code>isinstance(x, ZType)</code> where
+<code>generic_origin</code> may be <code>ZType</code> or <code>str</code>. Need <code>is_ztype</code>
+bool field on <code>ZType</code>, or split <code>generic_origin</code> into typed
+fields.</li>
+<li><code>Node</code> base class checks (13): <code>isinstance(x, zast.Node)</code>
+  guards before <code>nodetype</code> access, in tree walkers and unit body
+  dicts where values are <code>UnionNode, ...]". Need a way to tag
+    all Node-like objects without <code>isinstance</code>.
+  [#*: Python primitive checks (11): #~</code>isinstance(x, int)",
+  #~"isinstance(x, float)", #~"isinstance(x, bool)" in constant
+  folding and numeric handling. Need #~"const_value_kind" enum or
+  typed wrapper.]
+[#*: Container checks (6): #~"isinstance(val, dict)" and
+  #~"isinstance(val, list)" in AST tree walkers (#~"zsqldump.py",
+  #~"ztypecheck.py"). Need structural approach for heterogeneous
+  field walking.]
+[#*: Token/Expression string parts (8): mixed
+  #~"List[Union[Token, Expression]]" in string interpolation.
+  Need discriminator on #~"Token" or wrapper type.]
+[#*: Error oplist (5): #~"Union[List, Error]" returns from
+  #~"_getoplist". Need wrapper type for the list.]
+[#*: TrackedList (1): emitter-specific #~"isinstance(section,
+  TrackedList)". Minor.</li>
+<li><code>hasattr</code> calls (16 baseline): also need replacing with
+typed fields as part of this work.</li>
+</ul>
 <h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.53. Phase 49: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>

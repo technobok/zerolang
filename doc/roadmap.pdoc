@@ -2298,39 +2298,48 @@ phase adds control flow analysis to guarantee all paths return:
     that produces no value.]
 
 
-#---: Phase 48d: Eliminate isinstance — field-based dispatch
+#---: Phase 48d: Eliminate isinstance — field-based dispatch \[IN PROGRESS\]
 
-The compiler uses ~459 #~"isinstance()" calls for type dispatch, which is
-Python-specific and blocks self-hosting. These need to be replaced with
-field-based dispatch using #~"nodetype", #~"typetype", and similar enum fields.
+Replaced 384 of 459 #~"isinstance()" calls (459 → 75) with field-based
+dispatch using #~"nodetype" + #~"cast()", #~"is_error", and #~"entrytype".
 
-This is not a mechanical replacement — it requires grouping related checks,
-identifying where new fields or class consolidation would simplify dispatch,
-and ensuring the replacement is portable.
-
-Categories of #~"isinstance" usage (approximate counts):
-
-#ul:
-  [#*: AST node dispatch (AtomId: 92, DottedPath: 73, Expression: 36,
-    Call: 13, Function: 14, If: 8, etc.) — replace with #~"nodetype" checks.]
-  [#*: Error vs Node distinction (58) — #~"Error" is not a #~"Node";
-    add an #~"is_error" flag or use a tagged union wrapper.]
-  [#*: ZType checks (25) — used where #~"generic_origin" or similar fields
-    may be #~"ZType" or #~"str"; add a typed wrapper or tag field.]
-  [#*: Path subtype dispatch (AtomId: 92, DottedPath: 73, AtomString: 5,
-    BinOp: 7) — these are all #~"Path" subtypes; #~"nodetype" covers them.]
-  [#*: Python primitive checks (int: 5, float: 2, dict: 3, list: 3,
-    Token: 3) — replace with typed wrappers or explicit fields.]
+Completed:
 
 #ol:
-  [#*: Audit and group all 459 #~"isinstance" calls by pattern. Identify
-    which can use existing #~"nodetype"/#~"typetype" fields directly.]
-  [#*: Design new fields or class changes needed for cases where
-    #~"nodetype" is insufficient (Error, ZType, primitives).]
-  [#*: Migrate incrementally, updating the bootstrap-lint baseline in
-    #~"Makefile" after each batch. Run #~"make check" after each change.]
-  [#*: Remove the #~"isinstance" baseline from bootstrap-lint when
-    count reaches zero.]
+  [#*: Error made a Node subclass with #~"nodetype = ERROR" and
+    #~"is_error = True". Parser Error checks use #~"is_error" + #~"cast()".]
+  [#*: AST node dispatch replaced with #~"nodetype" + #~"cast()" across
+    parser, typechecker, emitter, prettyprinter, AST hasher.]
+  [#*: VFS DEntry dispatch replaced with #~"entrytype" field checks.]
+
+Remaining 75 #~"isinstance" calls by category:
+
+#ul:
+  [#*: #~"ZType" checks (12): #~"isinstance(x, ZType)" where
+    #~"generic_origin" may be #~"ZType" or #~"str". Need #~"is_ztype"
+    bool field on #~"ZType", or split #~"generic_origin" into typed
+    fields.]
+  [#*: #~"Node" base class checks (13): #~"isinstance(x, zast.Node)"
+    guards before #~"nodetype" access, in tree walkers and unit body
+    dicts where values are #~"Union\[Node, ...\]". Need a way to tag
+    all Node-like objects without #~"isinstance".]
+  [#*: Python primitive checks (11): #~"isinstance(x, int)",
+    #~"isinstance(x, float)", #~"isinstance(x, bool)" in constant
+    folding and numeric handling. Need #~"const_value_kind" enum or
+    typed wrapper.]
+  [#*: Container checks (6): #~"isinstance(val, dict)" and
+    #~"isinstance(val, list)" in AST tree walkers (#~"zsqldump.py",
+    #~"ztypecheck.py"). Need structural approach for heterogeneous
+    field walking.]
+  [#*: Token/Expression string parts (8): mixed
+    #~"List\[Union\[Token, Expression\]\]" in string interpolation.
+    Need discriminator on #~"Token" or wrapper type.]
+  [#*: Error oplist (5): #~"Union\[List, Error\]" returns from
+    #~"_getoplist". Need wrapper type for the list.]
+  [#*: TrackedList (1): emitter-specific #~"isinstance(section,
+    TrackedList)". Minor.]
+  [#*: #~"hasattr" calls (16 baseline): also need replacing with
+    typed fields as part of this work.]
 
 
 #---: Phase 49: Expand to v3 (Full Language)
