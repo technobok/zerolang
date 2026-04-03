@@ -470,23 +470,10 @@ commands, architecture, and conventions specific to zerolang.
 
 ---
 
-### Finding 11: Missing Unary Operator Support
+### Finding 11: ~~Missing Unary Operator Support~~ — Won't Implement
 
-**File**: system.z, ztypecheck.py, zemitterc.py
-**Severity**: Medium — language expressiveness gap
-
-The language currently has no unary minus (`-x`), bitwise NOT (`~x`), or logical NOT (`!x`).
-Binary operations are declared in system.z but there is no mechanism for unary prefix operators.
-
-For a systems language targeting zero-overhead C generation, bitwise operations and unary operators
-are essential. The current workaround (`0 - x` for negation) is verbose and may not optimize
-identically.
-
-**Action items:**
-- [ ] Design unary operator syntax (prefix operators? method calls like `x.negate`?)
-- [ ] Add to system.z numeric type declarations
-- [ ] Implement in parser, type checker, and emitter
-- [ ] Add bitwise operations (AND, OR, XOR, shift) — critical for systems programming
+Zerolang will not have unary operators. Negation uses `0 - x`, logical NOT
+uses method calls or pattern matching.
 
 ---
 
@@ -661,9 +648,7 @@ but appears to be just `print`. Reading files is not yet available.
 
 ### Phase 5: Language Extensions (Future)
 
-16. **Unary operators** (Finding 11)
-    - Design syntax, implement parser/typecheck/emitter
-    - Estimated: 1-2 days
+16. ~~**Unary operators**~~ — Won't implement.
 
 17. **Bitwise operations**
     - AND, OR, XOR, shift left/right
@@ -696,7 +681,7 @@ but appears to be just `print`. Reading files is not yet available.
 | 13 | Update Design-OPEN.pdoc | Low | Small | Open |
 | 14 | Create CLAUDE.md | Low | Tiny | **Done** |
 | 15 | Update compiler.pdoc | Low | Medium | Open |
-| 16 | Unary operators | Medium | Medium | Open |
+| 16 | ~~Unary operators~~ | — | — | **Won't do** |
 | 17 | Bitwise operations | Medium | Medium | Open |
 | 18 | File I/O for self-hosting | Medium | Medium | Open |
 
