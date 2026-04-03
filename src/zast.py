@@ -566,6 +566,9 @@ class Expression(Atom):
     is_expression: bool = field(default=True, init=False)
     nodetype: NodeType = field(default=NodeType.EXPRESSION, init=False)
     expression: ExpressionSubTypes
+    # set by the type checker for control flow expressions (break, continue, error)
+    # Uses int to avoid forward reference to CallKind; values match CallKind enum
+    call_kind: int = field(default=0, init=False)
 
 
 @dataclass
@@ -692,6 +695,9 @@ class CallKind(IntEnum):
     UNIT_INSTANTIATE = 13  # generic unit instantiation: (myunit t: i64)
     BOX_CREATE = 14  # box from: val (valtype boxing)
     BOX_PASSTHROUGH = 15  # box from: val (reftype passthrough — just take ownership)
+    BREAK = 16  # break statement
+    CONTINUE = 17  # continue statement
+    ERROR = 18  # error statement
 
 
 @dataclass

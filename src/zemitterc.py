@@ -14,6 +14,7 @@ import zemitterc_runtime as zrt
 from ztypes import (
     ZType,
     ZTypeType,
+    ControlKind,
     parse_number,
     ZParamOwnership,
     NUMERIC_RANGES,
@@ -2809,24 +2810,17 @@ class CEmitter:
         last = func.body.statements[-1].statementline
         if last.nodetype != zast.NodeType.EXPRESSION:
             return False
-        inner = cast(zast.Expression, last).expression
-        # explicit return, break, continue are not implicit returns
-        if inner.nodetype == zast.NodeType.ATOMID and cast(zast.AtomId, inner).name in (
-            "break",
-            "continue",
+        last_expr = cast(zast.Expression, last)
+        # check call_kind on Expression wrapper for control flow
+        if last_expr.call_kind in (
+            zast.CallKind.RETURN,
+            zast.CallKind.BREAK,
+            zast.CallKind.CONTINUE,
+            zast.CallKind.ERROR,
         ):
             return False
-        if inner.nodetype == zast.NodeType.CALL:
-            call = cast(zast.Call, inner)
-            if call.call_kind == zast.CallKind.RETURN:
-                return False
-            if (
-                call.callable.nodetype == zast.NodeType.ATOMID
-                and cast(zast.AtomId, call.callable).name == "return"
-            ):
-                return False
         # never type means all paths already return explicitly
-        if hasattr(inner, "type") and inner.type and inner.type.name == "never":
+        if last_expr.type and last_expr.type.is_never:
             return False
         return True
 
@@ -2997,15 +2991,9 @@ class CEmitter:
         indent = self._indent()
         inner = expr.expression
         # handle break/continue as standalone statements
-        if (
-            inner.nodetype == zast.NodeType.ATOMID
-            and cast(zast.AtomId, inner).name == "break"
-        ):
+        if expr.call_kind == zast.CallKind.BREAK:
             return f"{indent}break;\n"
-        if (
-            inner.nodetype == zast.NodeType.ATOMID
-            and cast(zast.AtomId, inner).name == "continue"
-        ):
+        if expr.call_kind == zast.CallKind.CONTINUE:
             return f"{indent}continue;\n"
         if inner.nodetype == zast.NodeType.CALL:
             return self._emit_call_stmt(cast(zast.Call, inner), indent)
@@ -3321,12 +3309,22 @@ class CEmitter:
             t = self._static_string("")
             return f"{indent}zstr_print({t});\n"
 
-        if callable_name == "return":
-            return self._emit_return(call, indent)
+        # check call_kind first, then fallback to callable type's control_kind
+        _ck = call.call_kind
+        if _ck == zast.CallKind.UNKNOWN and call.callable.type:
+            _ctrl = call.callable.type.control_kind
+            if _ctrl == ControlKind.RETURN:
+                _ck = zast.CallKind.RETURN
+            elif _ctrl == ControlKind.BREAK:
+                _ck = zast.CallKind.BREAK
+            elif _ctrl == ControlKind.CONTINUE:
+                _ck = zast.CallKind.CONTINUE
 
-        if callable_name == "break":
+        if _ck == zast.CallKind.RETURN:
+            return self._emit_return(call, indent)
+        if _ck == zast.CallKind.BREAK:
             return f"{indent}break;\n"
-        if callable_name == "continue":
+        if _ck == zast.CallKind.CONTINUE:
             return f"{indent}continue;\n"
 
         # data.index call -> array access
@@ -4920,18 +4918,13 @@ class CEmitter:
             inner = sline.statementline
 
             if is_last and inner.nodetype == zast.NodeType.EXPRESSION:
-                expr_inner = cast(zast.Expression, inner).expression
+                last_expr = cast(zast.Expression, inner)
                 # non-completing: emit normally (return/break/continue)
-                if expr_inner.nodetype == zast.NodeType.ATOMID and cast(
-                    zast.AtomId, expr_inner
-                ).name in (
-                    "break",
-                    "continue",
-                ):
-                    parts.append(self._emit_statement_line(sline))
-                elif (
-                    expr_inner.nodetype == zast.NodeType.CALL
-                    and cast(zast.Call, expr_inner).call_kind == zast.CallKind.RETURN
+                if last_expr.call_kind in (
+                    zast.CallKind.RETURN,
+                    zast.CallKind.BREAK,
+                    zast.CallKind.CONTINUE,
+                    zast.CallKind.ERROR,
                 ):
                     parts.append(self._emit_statement_line(sline))
                 else:

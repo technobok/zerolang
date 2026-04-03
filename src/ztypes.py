@@ -35,6 +35,17 @@ class ZTypeType(IntEnum):
 
 
 @unique
+class ControlKind(IntEnum):
+    """Identifies compiler control flow functions (return, break, continue, error)."""
+
+    NONE = 0
+    RETURN = 1
+    BREAK = 2
+    CONTINUE = 3
+    ERROR = 4
+
+
+@unique
 class ZOwnership(IntEnum):
     """
     Ownership - 2-state model (v2)
@@ -196,6 +207,12 @@ class ZType:
     # box type: monomorphized box(valtype) emitted as heap-allocated pointer
     # For box(reftype), the box is transparent (passthrough to inner type)
     is_box: bool = field(default=False, init=False)
+
+    # never type: marks a type that represents non-completion (return/break/continue)
+    is_never: bool = field(default=False, init=False)
+
+    # control flow kind: identifies system control flow functions
+    control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
 
     # public/private access control: maps external name → internal name for
     # publicly accessible members. None = all-public (default). Set during type

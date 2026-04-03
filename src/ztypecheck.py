@@ -20,6 +20,7 @@ from ztypes import (
     ZNaming,
     ZVariable,
     ZLockState,
+    ControlKind,
     NUMERIC_RANGES,
     TAG_ORIGIN,
     parse_number,
@@ -732,6 +733,16 @@ class TypeChecker:
         ftype = _make_type(name, ZTypeType.FUNCTION)
         self._resolved[key] = ftype  # early register for self-reference
         self._resolving.append((key, ftype))
+
+        # tag control flow functions by name (resolved from system.z)
+        _CONTROL_KINDS = {
+            "return": ControlKind.RETURN,
+            "break": ControlKind.BREAK,
+            "continue": ControlKind.CONTINUE,
+            "error": ControlKind.ERROR,
+        }
+        if func.is_native and name in _CONTROL_KINDS:
+            ftype.control_kind = _CONTROL_KINDS[name]
 
         # pass 1: detect generic params from 'as' clause
         generic_ctx: dict[str, ZType] = {}
@@ -1502,6 +1513,10 @@ class TypeChecker:
         self._resolving.append((key, rtype))
 
         rtype.is_valtype = True  # records are value types
+        if rec.is_native and name == "never":
+            rtype.is_never = True
+        if rec.is_native and name == "null":
+            rtype.typetype = ZTypeType.NULL
         _set_destructor_metadata(rtype)
         self._assign_cname_type(rtype)
 
@@ -1703,6 +1718,12 @@ class TypeChecker:
             borrow_type.children["from"] = base_type
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             rtype.children["borrow"] = borrow_type
+
+        # typecheck method bodies (non-generic only)
+        if not rtype.isgeneric:
+            for mname, mfunc in as_functions.items():
+                if mfunc.body:
+                    self._check_function_body(f"{name}.{mname}", mfunc)
 
         self._resolving.pop()
         return rtype
@@ -3419,7 +3440,7 @@ class TypeChecker:
         if self._current_return_type and func.body.statements:
             last = func.body.statements[-1]
             last_type = last.type if hasattr(last, "type") else None
-            if last_type is not None and last_type.name != "never":
+            if last_type is not None and not last_type.is_never:
                 if not self._types_compatible(last_type, self._current_return_type):
                     self._error(
                         f"implicit return type '{last_type.name}' does not match "
@@ -3451,20 +3472,16 @@ class TypeChecker:
         if inner.type is not None:
             sline.type = inner.type
 
-    # Phase 48c will add typed markers for null/never so these checks
-    # can use typetype instead of name strings.
-    _NON_RUNTIME_TYPES = frozenset({"null", "never"})
-
     def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
         """Check if a type is non-runtime (null/never). Returns True if error emitted."""
-        if t.name == "null":
+        if t.typetype == ZTypeType.NULL:
             self._error(
                 f"'null' cannot be used as {context} — null must be wrapped "
                 "in a union or variant (eg. option.none)",
                 loc=loc,
             )
             return True
-        if t.name == "never":
+        if t.is_never:
             self._error(
                 f"'never' cannot be used as {context} — 'never' represents "
                 "a non-completing expression (return, break, continue)",
@@ -3608,9 +3625,23 @@ class TypeChecker:
                 expr.const_value = inner_op.const_value
         if t is not None:
             expr.type = t
+            # tag control flow expressions using resolved type's control_kind
+            if t.control_kind != ControlKind.NONE:
+                _CK_MAP = {
+                    ControlKind.RETURN: zast.CallKind.RETURN,
+                    ControlKind.BREAK: zast.CallKind.BREAK,
+                    ControlKind.CONTINUE: zast.CallKind.CONTINUE,
+                    ControlKind.ERROR: zast.CallKind.ERROR,
+                }
+                expr.call_kind = _CK_MAP.get(t.control_kind, zast.CallKind.UNKNOWN)
+            elif inner.nodetype == NodeType.CALL:
+                # propagate call_kind from Call to Expression wrapper
+                expr.call_kind = cast(zast.Call, inner).call_kind
         return t
 
     def _check_operation(self, op: zast.Operation) -> Optional[ZType]:
+        if op.nodetype == NodeType.CALL:
+            return self._check_call(cast(zast.Call, op))
         if op.nodetype == NodeType.BINOP:
             return self._check_binop(cast(zast.BinOp, op))
         if op.nodetype in (
@@ -3905,10 +3936,16 @@ class TypeChecker:
         if not callee_type:
             return None
 
-        # handle return statement: check expression type against function return type
-        if callee_type.name == "return" and callee_type.typetype == ZTypeType.FUNCTION:
+        # handle control flow: return, break, continue, error
+        if callee_type.control_kind == ControlKind.RETURN:
             call.call_kind = zast.CallKind.RETURN
             return self._check_return_call(call)
+        if callee_type.control_kind == ControlKind.BREAK:
+            call.call_kind = zast.CallKind.BREAK
+            return callee_type
+        if callee_type.control_kind == ControlKind.CONTINUE:
+            call.call_kind = zast.CallKind.CONTINUE
+            return callee_type
 
         # handle union/variant subtype construction: dotted path parent is a tagged type
         # (must be before record/class checks since subtypes may be records)
@@ -4559,9 +4596,12 @@ class TypeChecker:
         if not lhs_type or not rhs_type:
             return None
 
-        # look up operator as method on lhs type
+        # look up operator as method on lhs type (fall through typedef base)
         op_name = binop.operator.name
-        method = lhs_type.children.get(op_name)
+        lookup_type = lhs_type
+        if not lookup_type.children.get(op_name) and lookup_type.typedef_base:
+            lookup_type = lookup_type.typedef_base
+        method = lookup_type.children.get(op_name)
         if method and method.typetype == ZTypeType.FUNCTION:
             ret = method.return_type
             if ret:
@@ -4609,15 +4649,12 @@ class TypeChecker:
         if last.nodetype == NodeType.EXPRESSION:
             last_expr = cast(zast.Expression, last)
             inner = last_expr.expression
-            # check for non-completing expressions
-            if inner.nodetype == NodeType.ATOMID and cast(zast.AtomId, inner).name in (
-                "break",
-                "continue",
-            ):
-                return self._NORETURN
-            if (
-                inner.nodetype == NodeType.CALL
-                and cast(zast.Call, inner).call_kind == zast.CallKind.RETURN
+            # check for non-completing expressions (return/break/continue/error)
+            if last_expr.call_kind in (
+                zast.CallKind.RETURN,
+                zast.CallKind.BREAK,
+                zast.CallKind.CONTINUE,
+                zast.CallKind.ERROR,
             ):
                 return self._NORETURN
             # get type from the inner expression node (Expression wrapper .type may be None)

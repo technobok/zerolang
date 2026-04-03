@@ -3834,7 +3834,7 @@ class TestTypedefs:
         program = check_ok(
             "meters: record { val: i64.typedef } as {\n"
             "    double: function {a: this} out meters is {\n"
-            "        return meters.create from: (a.val + a.val)\n"
+            "        return (meters.create from: (a.val + a.val))\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
