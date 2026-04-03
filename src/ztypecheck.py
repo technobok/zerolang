@@ -1018,6 +1018,152 @@ class TypeChecker:
         self._resolving.pop()
         return ctype
 
+    def _resolve_tag(
+        self,
+        type_kind: str,
+        name: str,
+        ztype: ZType,
+        as_items: dict,
+        subtype_names: list,
+        loc: Token,
+    ) -> None:
+        """Resolve tag discriminator for a union or variant type.
+
+        Scans as_items for a .tag type reference, validates it against
+        subtype_names, and populates ztype.children[":tag"] and
+        ztype.children["tag"].
+
+        type_kind is "Union" or "Variant" (for error messages).
+        """
+        custom_tag_data = None
+        tag_count = 0
+
+        for as_name, as_path in as_items.items():
+            as_type = (
+                self._resolve_dotted_path(cast(zast.DottedPath, as_path))
+                if as_path.nodetype == NodeType.DOTTEDPATH
+                else self._resolve_typeref(as_path)
+            )
+            is_tag = (
+                (as_type and as_type.typetype == ZTypeType.TAG)
+                or (as_type and as_type.generic_origin is TAG_ORIGIN)
+                or (as_type and as_type.isgeneric and as_type.name == "tag")
+            )
+            if is_tag:
+                assert as_type is not None
+                tag_count += 1
+                if tag_count > 1:
+                    self._error(
+                        f"{type_kind} '{name}' has multiple .tag items in 'as' block",
+                        loc=loc,
+                    )
+                    break
+                if as_type.parent:
+                    custom_tag_data = as_type.parent
+                elif as_path.nodetype == NodeType.DOTTEDPATH and cast(
+                    zast.DottedPath, as_path
+                ).parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+                    as_path_dp = cast(zast.DottedPath, as_path)
+                    custom_tag_data = getattr(as_path_dp.parent, "type", None)
+                    if not custom_tag_data:
+                        custom_tag_data = self._resolve_name(
+                            cast(zast.AtomId, as_path_dp.parent).name
+                        )
+
+        if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
+            # validate: data labels must match subtypes 1:1
+            data_labels = [
+                k
+                for k in custom_tag_data.children
+                if not k.startswith(":") and k != "tag"
+            ]
+            if sorted(data_labels) != sorted(subtype_names):
+                missing_in_data = set(subtype_names) - set(data_labels)
+                missing_in_type = set(data_labels) - set(subtype_names)
+                msg_parts = []
+                if missing_in_data:
+                    msg_parts.append(
+                        f"missing in data: {', '.join(sorted(missing_in_data))}"
+                    )
+                if missing_in_type:
+                    lk = type_kind.lower()
+                    msg_parts.append(
+                        f"missing in {lk}: {', '.join(sorted(missing_in_type))}"
+                    )
+                self._error(
+                    f"{type_kind} '{name}' tag data labels do not match subtypes: "
+                    + "; ".join(msg_parts),
+                    loc=loc,
+                )
+            # validate: data values must be unique
+            seen_values: dict = {}
+            for dl in data_labels:
+                child = custom_tag_data.children[dl]
+                val = child.name if child else None
+                if val in seen_values:
+                    self._error(
+                        f"{type_kind} '{name}' tag data has duplicate value "
+                        f"'{val}' for labels '{seen_values[val]}' and '{dl}'",
+                        loc=loc,
+                    )
+                seen_values[val] = dl
+
+            # use custom data values as discriminators
+            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+            for sname in subtype_names:
+                child = custom_tag_data.children.get(sname)
+                val = child.name if child else str(subtype_names.index(sname))
+                tag_type.children[sname] = _make_type(val, ZTypeType.RECORD)
+            ztype.children[":tag"] = tag_type
+            ztype.children["tag"] = custom_tag_data
+
+        elif custom_tag_data and custom_tag_data.typetype == ZTypeType.RECORD:
+            # numeric type tag (e.g., u16.tag) — auto-generate sequential values
+            num_subtypes = len(subtype_names)
+            if custom_tag_data.name == "u8" and num_subtypes > 256:
+                self._error(
+                    f"{type_kind} '{name}' has {num_subtypes} subtypes, "
+                    f"exceeds u8 tag capacity (max 256)",
+                    loc=loc,
+                )
+            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+            for i, sname in enumerate(subtype_names):
+                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            ztype.children[":tag"] = tag_type
+            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
+            gen_data.is_valtype = False
+            for i, sname in enumerate(subtype_names):
+                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+            gen_tag.is_valtype = True
+            gen_tag.generic_origin = TAG_ORIGIN
+            gen_data.children["tag"] = gen_tag
+            ztype.children["tag"] = gen_data
+
+        else:
+            # no custom tag: auto-generate with u8 default
+            num_subtypes = len(subtype_names)
+            if num_subtypes > 256:
+                self._error(
+                    f"{type_kind} '{name}' has {num_subtypes} subtypes, "
+                    f"exceeds default u8 tag capacity (max 256). "
+                    f"Specify a custom tag type via 'as' block",
+                    loc=loc,
+                )
+            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
+            for i, sname in enumerate(subtype_names):
+                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            ztype.children[":tag"] = tag_type
+            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
+            gen_data.is_valtype = False
+            for i, sname in enumerate(subtype_names):
+                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+            gen_tag.is_valtype = True
+            gen_tag.generic_origin = TAG_ORIGIN
+            gen_data.children["tag"] = gen_tag
+            ztype.children["tag"] = gen_data
+
     def _resolve_union_type(
         self, unitname: str, name: str, union_defn: zast.Union
     ) -> ZType:
@@ -1114,139 +1260,10 @@ class TypeChecker:
             self._resolving.pop()
             return utype
 
-        # resolve tag from as_items: look for tag type (monomorphized or generic)
-        custom_tag_data = None  # the parent DATA/RECORD type of the .tag
-        tag_count = 0
-
-        for as_name, as_path in union_defn.as_items.items():
-            as_type = (
-                self._resolve_dotted_path(cast(zast.DottedPath, as_path))
-                if as_path.nodetype == NodeType.DOTTEDPATH
-                else self._resolve_typeref(as_path)
-            )
-            is_tag = (
-                (as_type and as_type.typetype == ZTypeType.TAG)
-                or (as_type and as_type.generic_origin is TAG_ORIGIN)
-                or (as_type and as_type.isgeneric and as_type.name == "tag")
-            )
-            if is_tag:
-                assert as_type is not None
-                tag_count += 1
-                if tag_count > 1:
-                    self._error(
-                        f"Union '{name}' has multiple .tag items in 'as' block",
-                        loc=union_defn.start,
-                    )
-                    break
-                if as_type.parent:
-                    custom_tag_data = as_type.parent
-                elif as_path.nodetype == NodeType.DOTTEDPATH and cast(
-                    zast.DottedPath, as_path
-                ).parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                    # generic tag from numeric type: u16.tag → parent is u16
-                    as_path_dp = cast(zast.DottedPath, as_path)
-                    custom_tag_data = getattr(as_path_dp.parent, "type", None)
-                    if not custom_tag_data:
-                        custom_tag_data = self._resolve_name(
-                            cast(zast.AtomId, as_path_dp.parent).name
-                        )
-
-        if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
-            # validate: data labels must match union subtypes 1:1
-            data_labels = [
-                k
-                for k in custom_tag_data.children
-                if not k.startswith(":") and k != "tag"
-            ]
-            if sorted(data_labels) != sorted(subtype_names):
-                missing_in_data = set(subtype_names) - set(data_labels)
-                missing_in_union = set(data_labels) - set(subtype_names)
-                msg_parts = []
-                if missing_in_data:
-                    msg_parts.append(
-                        f"missing in data: {', '.join(sorted(missing_in_data))}"
-                    )
-                if missing_in_union:
-                    msg_parts.append(
-                        f"missing in union: {', '.join(sorted(missing_in_union))}"
-                    )
-                self._error(
-                    f"Union '{name}' tag data labels do not match subtypes: "
-                    + "; ".join(msg_parts),
-                    loc=union_defn.start,
-                )
-            # validate: data values must be unique
-            seen_values: dict = {}
-            for dl in data_labels:
-                child = custom_tag_data.children[dl]
-                val = child.name if child else None
-                if val in seen_values:
-                    self._error(
-                        f"Union '{name}' tag data has duplicate value "
-                        f"'{val}' for labels '{seen_values[val]}' and '{dl}'",
-                        loc=union_defn.start,
-                    )
-                seen_values[val] = dl
-
-            # use custom data values as discriminators
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for sname in subtype_names:
-                child = custom_tag_data.children.get(sname)
-                val = child.name if child else str(subtype_names.index(sname))
-                tag_type.children[sname] = _make_type(val, ZTypeType.RECORD)
-            utype.children[":tag"] = tag_type
-            # store the data type so MyUnion.tag returns it
-            utype.children["tag"] = custom_tag_data
-
-        elif custom_tag_data and custom_tag_data.typetype == ZTypeType.RECORD:
-            # numeric type tag (e.g., u16.tag) — auto-generate sequential values
-            num_subtypes = len(subtype_names)
-            # check fits in the type (basic check for u8)
-            if custom_tag_data.name == "u8" and num_subtypes > 256:
-                self._error(
-                    f"Union '{name}' has {num_subtypes} subtypes, "
-                    f"exceeds u8 tag capacity (max 256)",
-                    loc=union_defn.start,
-                )
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            utype.children[":tag"] = tag_type
-            # generate a data type for MyUnion.tag
-            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
-            gen_data.is_valtype = False
-            for i, sname in enumerate(subtype_names):
-                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
-            gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
-            gen_data.children["tag"] = gen_tag
-            utype.children["tag"] = gen_data
-
-        else:
-            # no custom tag: auto-generate with u8 default
-            num_subtypes = len(subtype_names)
-            if num_subtypes > 256:
-                self._error(
-                    f"Union '{name}' has {num_subtypes} subtypes, "
-                    f"exceeds default u8 tag capacity (max 256). "
-                    f"Specify a custom tag type via 'as' block",
-                    loc=union_defn.start,
-                )
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            utype.children[":tag"] = tag_type
-            # generate a data type for MyUnion.tag
-            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
-            gen_data.is_valtype = False
-            for i, sname in enumerate(subtype_names):
-                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
-            gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
-            gen_data.children["tag"] = gen_tag
-            utype.children["tag"] = gen_data
+        # resolve tag from as_items
+        self._resolve_tag(
+            "Union", name, utype, union_defn.as_items, subtype_names, union_defn.start
+        )
 
         # resolve methods
         for mname, mfunc in union_defn.functions.items():
@@ -1378,130 +1395,14 @@ class TypeChecker:
             return vtype
 
         # resolve tag from as_items
-        custom_tag_data = None
-        tag_count = 0
-
-        for as_name, as_path in variant_defn.as_items.items():
-            as_type = (
-                self._resolve_dotted_path(cast(zast.DottedPath, as_path))
-                if as_path.nodetype == NodeType.DOTTEDPATH
-                else self._resolve_typeref(as_path)
-            )
-            is_tag = (
-                (as_type and as_type.typetype == ZTypeType.TAG)
-                or (as_type and as_type.generic_origin is TAG_ORIGIN)
-                or (as_type and as_type.isgeneric and as_type.name == "tag")
-            )
-            if is_tag:
-                assert as_type is not None
-                tag_count += 1
-                if tag_count > 1:
-                    self._error(
-                        f"Variant '{name}' has multiple .tag items in 'as' block",
-                        loc=variant_defn.start,
-                    )
-                    break
-                if as_type.parent:
-                    custom_tag_data = as_type.parent
-                elif as_path.nodetype == NodeType.DOTTEDPATH and cast(
-                    zast.DottedPath, as_path
-                ).parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                    as_path_dp = cast(zast.DottedPath, as_path)
-                    custom_tag_data = getattr(as_path_dp.parent, "type", None)
-                    if not custom_tag_data:
-                        custom_tag_data = self._resolve_name(
-                            cast(zast.AtomId, as_path_dp.parent).name
-                        )
-
-        if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
-            # validate: data labels must match variant subtypes 1:1
-            data_labels = [
-                k
-                for k in custom_tag_data.children
-                if not k.startswith(":") and k != "tag"
-            ]
-            if sorted(data_labels) != sorted(subtype_names):
-                missing_in_data = set(subtype_names) - set(data_labels)
-                missing_in_variant = set(data_labels) - set(subtype_names)
-                msg_parts = []
-                if missing_in_data:
-                    msg_parts.append(
-                        f"missing in data: {', '.join(sorted(missing_in_data))}"
-                    )
-                if missing_in_variant:
-                    msg_parts.append(
-                        f"missing in variant: {', '.join(sorted(missing_in_variant))}"
-                    )
-                self._error(
-                    f"Variant '{name}' tag data labels do not match subtypes: "
-                    + "; ".join(msg_parts),
-                    loc=variant_defn.start,
-                )
-            # validate: data values must be unique
-            seen_values: dict = {}
-            for dl in data_labels:
-                child = custom_tag_data.children[dl]
-                val = child.name if child else None
-                if val in seen_values:
-                    self._error(
-                        f"Variant '{name}' tag data has duplicate value "
-                        f"'{val}' for labels '{seen_values[val]}' and '{dl}'",
-                        loc=variant_defn.start,
-                    )
-                seen_values[val] = dl
-
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for sname in subtype_names:
-                child = custom_tag_data.children.get(sname)
-                val = child.name if child else str(subtype_names.index(sname))
-                tag_type.children[sname] = _make_type(val, ZTypeType.RECORD)
-            vtype.children[":tag"] = tag_type
-            vtype.children["tag"] = custom_tag_data
-
-        elif custom_tag_data and custom_tag_data.typetype == ZTypeType.RECORD:
-            num_subtypes = len(subtype_names)
-            if custom_tag_data.name == "u8" and num_subtypes > 256:
-                self._error(
-                    f"Variant '{name}' has {num_subtypes} subtypes, "
-                    f"exceeds u8 tag capacity (max 256)",
-                    loc=variant_defn.start,
-                )
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            vtype.children[":tag"] = tag_type
-            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
-            gen_data.is_valtype = False
-            for i, sname in enumerate(subtype_names):
-                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
-            gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
-            gen_data.children["tag"] = gen_tag
-            vtype.children["tag"] = gen_data
-
-        else:
-            num_subtypes = len(subtype_names)
-            if num_subtypes > 256:
-                self._error(
-                    f"Variant '{name}' has {num_subtypes} subtypes, "
-                    f"exceeds default u8 tag capacity (max 256). "
-                    f"Specify a custom tag type via 'as' block",
-                    loc=variant_defn.start,
-                )
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            vtype.children[":tag"] = tag_type
-            gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
-            gen_data.is_valtype = False
-            for i, sname in enumerate(subtype_names):
-                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
-            gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
-            gen_data.children["tag"] = gen_tag
-            vtype.children["tag"] = gen_data
+        self._resolve_tag(
+            "Variant",
+            name,
+            vtype,
+            variant_defn.as_items,
+            subtype_names,
+            variant_defn.start,
+        )
 
         # resolve methods
         for mname, mfunc in variant_defn.functions.items():

@@ -203,8 +203,8 @@ With the `native` directive, these could instead check a flag on the ZType (e.g.
 `ztype.is_collection_type` or `ztype.generic_origin.typetype == ZTypeType.COLLECTION`).
 
 **Action items:**
-- [ ] Move the 11 shared helper functions to ztypes.py or a new shared module (e.g., ztypeutil.py)
-- [ ] Import them in both ztypecheck.py and zemitterc.py
+- [x] Move the 11 shared helper functions to ztypes.py or a new shared module (e.g., ztypeutil.py)
+- [x] Import them in both ztypecheck.py and zemitterc.py
 - [ ] Consider adding `is_container` or similar metadata to ZType during resolution
 
 ---
@@ -226,9 +226,9 @@ The only differences are the error message strings ("Union" vs "Variant") and th
 (`utype` vs `vtype`).
 
 **Action items:**
-- [ ] Extract a shared `_resolve_tag(type_name: str, ztype: ZType, as_items, subtype_names, loc)` method
-- [ ] Call it from both `_resolve_union_type` and `_resolve_variant_type`
-- [ ] This would eliminate ~130 lines of duplication
+- [x] Extract a shared `_resolve_tag(type_name: str, ztype: ZType, as_items, subtype_names, loc)` method
+- [x] Call it from both `_resolve_union_type` and `_resolve_variant_type`
+- [x] This would eliminate ~130 lines of duplication
 
 ---
 
@@ -681,8 +681,8 @@ but appears to be just `print`. Reading files is not yet available.
 
 | # | Finding | Priority | Effort | Status |
 |---|---------|----------|--------|--------|
-| 1 | Extract shared type helpers to shared module | High | Small | Open |
-| 2 | Extract tag resolution for union/variant | Medium | Small | Open |
+| 1 | Extract shared type helpers to shared module | High | Small | **Done** |
+| 2 | Extract tag resolution for union/variant | Medium | Small | **Done** |
 | 3 | Convert isinstance cascades to dispatch tables | High | Medium | **Done** (Phase 48d) |
 | 4 | Implement native directive in parser | High | Medium | **Done** |
 | 5 | native in type checker (skip body check) | High | Small | **Done** |
