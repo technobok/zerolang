@@ -15,6 +15,7 @@ import zasthash
 from ztypes import (
     ZType,
     ZTypeType,
+    ZSubType,
     ZParamOwnership,
     ZOwnership,
     ZNaming,
@@ -101,7 +102,7 @@ def _is_valtype(ztype: ZType) -> bool:
 
 def _set_destructor_metadata(ztype: ZType) -> None:
     """Set needs_destructor, destructor_name, is_heap_allocated based on type."""
-    if ztype.name == "string":
+    if ztype.subtype == ZSubType.STRING:
         ztype.needs_destructor = True
         ztype.destructor_name = "zstr_free"
         ztype.is_heap_allocated = True
@@ -900,6 +901,8 @@ class TypeChecker:
         self._resolving.append((key, ctype))
 
         ctype.is_valtype = False  # classes are reference types
+        if cls.is_native and name == "string":
+            ctype.subtype = ZSubType.STRING
         _set_destructor_metadata(ctype)
         self._assign_cname_type(ctype)
 
@@ -1246,7 +1249,7 @@ class TypeChecker:
                 spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 and cast(zast.AtomId, spath).name == "null"
             ):
-                st = _make_type("null", ZTypeType.RECORD)
+                st = _make_type("null", ZTypeType.NULL)
                 st.is_valtype = True
             else:
                 st = self._resolve_typeref(spath)
@@ -1364,7 +1367,7 @@ class TypeChecker:
                 spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 and cast(zast.AtomId, spath).name == "null"
             ):
-                st = _make_type("null", ZTypeType.RECORD)
+                st = _make_type("null", ZTypeType.NULL)
                 st.is_valtype = True
             else:
                 st = self._resolve_typeref(spath)
@@ -1380,7 +1383,7 @@ class TypeChecker:
                             f"Variant '{name}' subtype '{sname}' must be a value type",
                             loc=variant_defn.start,
                         )
-                    elif st.name == "string":
+                    elif st.subtype == ZSubType.STRING:
                         self._error(
                             f"Variant '{name}' subtype '{sname}' must be a value type",
                             loc=variant_defn.start,
@@ -1513,10 +1516,11 @@ class TypeChecker:
         self._resolving.append((key, rtype))
 
         rtype.is_valtype = True  # records are value types
-        if rec.is_native and name == "never":
-            rtype.is_never = True
-        if rec.is_native and name == "null":
-            rtype.typetype = ZTypeType.NULL
+        if rec.is_native:
+            if name == "never":
+                rtype.typetype = ZTypeType.NEVER
+            elif name == "null":
+                rtype.typetype = ZTypeType.NULL
         _set_destructor_metadata(rtype)
         self._assign_cname_type(rtype)
 
@@ -1693,7 +1697,7 @@ class TypeChecker:
                 and at.name == "__generic_param"
             ):
                 continue  # generic params already handled in pass 1
-            if at and at.name == "null":
+            if at and at.typetype == ZTypeType.NULL:
                 null_type = _make_type("null", ZTypeType.NULL)
                 rtype.children[label] = null_type  # marks method as hidden
                 continue
@@ -2489,11 +2493,7 @@ class TypeChecker:
             child = parent_type.children.get(child_name)
         if child:
             # null-hidden methods on typedefs
-            if (
-                parent_type.typedef_base
-                and child.typetype == ZTypeType.NULL
-                and child.name == "null"
-            ):
+            if parent_type.typedef_base and child.typetype == ZTypeType.NULL:
                 self._error(
                     f"Method '{child_name}' is not available on type '{parent_type.name}'",
                     loc=path.start,
@@ -2549,7 +2549,7 @@ class TypeChecker:
         if a.typetype == ZTypeType.FUNCTION and b.typetype == ZTypeType.FUNCTION:
             return self._function_types_equivalent(a, b)
         # str types are compatible with string (print, function params)
-        if _is_str_type(a) and b.name == "string":
+        if _is_str_type(a) and b.subtype == ZSubType.STRING:
             return True
         # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
         base = a.typedef_base
@@ -3220,9 +3220,7 @@ class TypeChecker:
         # check if this is a null subtype with explicit type arg
         subtype_child = template.children.get(subtype_name)
         is_null_subtype = (
-            subtype_child is not None
-            and subtype_child.typetype == ZTypeType.RECORD
-            and subtype_child.name == "null"
+            subtype_child is not None and subtype_child.typetype == ZTypeType.NULL
         )
 
         # separate named args: explicit generic type args vs from: value vs positional
@@ -3440,7 +3438,7 @@ class TypeChecker:
         if self._current_return_type and func.body.statements:
             last = func.body.statements[-1]
             last_type = last.type if hasattr(last, "type") else None
-            if last_type is not None and not last_type.is_never:
+            if last_type is not None and last_type.typetype != ZTypeType.NEVER:
                 if not self._types_compatible(last_type, self._current_return_type):
                     self._error(
                         f"implicit return type '{last_type.name}' does not match "
@@ -3481,7 +3479,7 @@ class TypeChecker:
                 loc=loc,
             )
             return True
-        if t.is_never:
+        if t.typetype == ZTypeType.NEVER:
             self._error(
                 f"'never' cannot be used as {context} — 'never' represents "
                 "a non-completing expression (return, break, continue)",

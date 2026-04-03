@@ -14,6 +14,7 @@ import zemitterc_runtime as zrt
 from ztypes import (
     ZType,
     ZTypeType,
+    ZSubType,
     ControlKind,
     parse_number,
     ZParamOwnership,
@@ -1675,7 +1676,7 @@ class CEmitter:
         lines.append("    switch (u->tag) {\n")
         for sname, stype in subtype_items:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = stype.name == "null" and stype.typetype == ZTypeType.RECORD
+            is_null = stype.typetype == ZTypeType.NULL
             lines.append(f"        case {tag}:\n")
             if is_null:
                 lines.append("            break;\n")
@@ -1744,10 +1745,7 @@ class CEmitter:
         lines.append(f"}} z_{name}_tag_t;\n\n")
 
         # check if all subtypes are null (enum pattern)
-        all_null = all(
-            stype.name == "null" and stype.typetype == ZTypeType.RECORD
-            for _, stype in subtype_items
-        )
+        all_null = all(stype.typetype == ZTypeType.NULL for _, stype in subtype_items)
 
         # emit variant struct with inline union
         lines.append("typedef struct {\n")
@@ -1755,7 +1753,7 @@ class CEmitter:
         if not all_null:
             lines.append("    union {\n")
             for sname, stype in subtype_items:
-                is_null = stype.name == "null" and stype.typetype == ZTypeType.RECORD
+                is_null = stype.typetype == ZTypeType.NULL
                 if not is_null:
                     sub_ctype = _ctype(stype)
                     if sub_ctype and sub_ctype != "void":
@@ -1769,7 +1767,7 @@ class CEmitter:
         lines.append("    switch (a.tag) {\n")
         for sname, stype in subtype_items:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = stype.name == "null" and stype.typetype == ZTypeType.RECORD
+            is_null = stype.typetype == ZTypeType.NULL
             lines.append(f"        case {tag}:")
             if is_null:
                 lines.append(" return true;\n")
@@ -2820,7 +2818,7 @@ class CEmitter:
         ):
             return False
         # never type means all paths already return explicitly
-        if last_expr.type and last_expr.type.is_never:
+        if last_expr.type and last_expr.type.typetype == ZTypeType.NEVER:
             return False
         return True
 
@@ -3020,7 +3018,7 @@ class CEmitter:
             var = self._emit_path_value(dp.parent)
             var_type = dp.type
             result = ""
-            if var_type and var_type.name == "string":
+            if var_type and var_type.subtype == ZSubType.STRING:
                 result += f"{indent}zstr_free({var});\n"
             elif var_type and var_type.typetype == ZTypeType.CLASS:
                 result += f"{indent}z_{var_type.name}_destroy({var});\n"
@@ -3678,7 +3676,7 @@ class CEmitter:
         if call.call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
             if call.type:
-                if call.type.name == "string":
+                if call.type.subtype == ZSubType.STRING:
                     return self._alloc_temp(result)
                 if call.type.typetype == ZTypeType.CLASS:
                     ctype = f"z_{call.type.name}_t"
@@ -4011,7 +4009,7 @@ class CEmitter:
 
         # if call returns a reftype, wrap in temp for cleanup
         if call.type:
-            if call.type.name == "string":
+            if call.type.subtype == ZSubType.STRING:
                 return self._alloc_temp(result)
             if call.type.typetype == ZTypeType.CLASS:
                 ctype = f"z_{call.type.name}_t"
@@ -4467,9 +4465,7 @@ class CEmitter:
             # monomorphized: look up subtype from the mono ZType
             sub_ztype = call_type.children.get(subtype_name)
             if sub_ztype:
-                is_null = (
-                    sub_ztype.name == "null" and sub_ztype.typetype == ZTypeType.RECORD
-                )
+                is_null = sub_ztype.typetype == ZTypeType.NULL
                 if not is_null:
                     subtype_ctype_resolved = _ctype(sub_ztype)
         else:
@@ -4714,9 +4710,7 @@ class CEmitter:
         if call_type and call_type.generic_origin:
             sub_ztype = call_type.children.get(subtype_name)
             if sub_ztype:
-                is_null = (
-                    sub_ztype.name == "null" and sub_ztype.typetype == ZTypeType.RECORD
-                )
+                is_null = sub_ztype.typetype == ZTypeType.NULL
         else:
             mainunit = self.program.units.get(self.program.mainunitname)
             variant_defn = mainunit.body.get(variant_name) if mainunit else None
@@ -4792,7 +4786,7 @@ class CEmitter:
                     parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
                 elif val_type and val_type.name in ("f32", "f64"):
                     parts.append(self._alloc_temp(f"zstr_from_f64((double){val})"))
-                elif val_type and val_type.name == "string":
+                elif val_type and val_type.subtype == ZSubType.STRING:
                     # string variable reference — no temp needed
                     parts.append(val)
                 elif val_type and _is_str_type(val_type):

@@ -1385,7 +1385,7 @@ class TestStringMigration:
     """Phase 4g: string resolves via class path, not record special-case."""
 
     def test_string_resolves_as_class_type(self):
-        """string should now resolve as ZTypeType.CLASS."""
+        """string should resolve as ZTypeType.CLASS."""
         program = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()

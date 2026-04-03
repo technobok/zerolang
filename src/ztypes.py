@@ -33,6 +33,22 @@ class ZTypeType(IntEnum):
     DATA = 60  # constant array data
     TAG = 61  # tag discriminator type (placeholder until generics)
 
+    # system types (set during resolution of native types from system.z)
+    NEVER = 70  # never type (non-completing expression)
+
+
+@unique
+class ZSubType(IntEnum):
+    """Sub-classification for system types that share a ZTypeType.
+
+    For example, string is a CLASS but needs special handling for
+    memory management. The subtype distinguishes it without changing
+    the typetype (so all CLASS-level checks still work).
+    """
+
+    NONE = 0
+    STRING = 1  # string class — ZStr* with zstr_free destructor
+
 
 @unique
 class ControlKind(IntEnum):
@@ -155,6 +171,7 @@ class ZType:
     name: str
     typetype: ZTypeType
     parent: "Optional[ZType]"
+    subtype: ZSubType = ZSubType.NONE
 
     # plain dict (insertion-ordered since Python 3.7+, replaces OrderedDict)
     children: "dict[str, ZType]" = field(default_factory=dict, init=False)
@@ -207,9 +224,6 @@ class ZType:
     # box type: monomorphized box(valtype) emitted as heap-allocated pointer
     # For box(reftype), the box is transparent (passthrough to inner type)
     is_box: bool = field(default=False, init=False)
-
-    # never type: marks a type that represents non-completion (return/break/continue)
-    is_never: bool = field(default=False, init=False)
 
     # control flow kind: identifies system control flow functions
     control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
