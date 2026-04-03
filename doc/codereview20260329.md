@@ -305,7 +305,7 @@ Similarly for `map`, `array`, `str`, and `string`.
 
 **Action items:**
 - [x] Implement the `native` directive (see Theme 1)
-- [ ] Expand collections.z with full method signatures for list, map, array, str
+- [x] Expand collections.z with full method signatures for list, map, array, str
 - [ ] Expand system.z string class with method signatures (length, ==, +, etc.)
 - [ ] The emitter's C generators would key off the qualified name + `native` flag
   rather than checking generic_origin.name
@@ -688,7 +688,7 @@ but appears to be just `print`. Reading files is not yet available.
 | 5 | native in type checker (skip body check) | High | Small | **Done** |
 | 6 | native dispatch table in emitter | High | Medium | **Done** |
 | 7 | Expand system.z method signatures | High | Small | **Partial** (numerics done, string missing) |
-| 8 | Expand collections.z method signatures | High | Small | Open |
+| 8 | Expand collections.z method signatures | High | Small | **Done** |
 | 9 | Refactor emitter collection generators | Medium | Large | Open |
 | 10 | Extract ZStr to libzrt.h | Medium | Small | Open |
 | 11 | Extract collection core to libzrt | Medium | Medium | Open |
