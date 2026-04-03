@@ -24,6 +24,19 @@ from ztypes import (
     TAG_ORIGIN,
     parse_number,
 )
+from ztypeutil import (
+    is_numeric_id as _is_numeric_id,
+    is_array_type as _is_array_type,
+    array_element_type as _array_element_type,
+    array_length as _array_length,
+    is_str_type as _is_str_type,
+    str_capacity as _str_capacity,
+    is_list_type as _is_list_type,
+    list_element_type as _list_element_type,
+    is_map_type as _is_map_type,
+    map_key_type as _map_key_type,
+    map_value_type as _map_value_type,
+)
 
 
 def _levenshtein(a: str, b: str) -> int:
@@ -66,85 +79,8 @@ def _suggest_similar(name: str, candidates, max_distance: int = 2) -> Optional[s
     return None
 
 
-def _is_numeric_id(name: str) -> bool:
-    c0 = name[0]
-    return c0.isdigit() or (c0 in ("+", "-") and len(name) > 1 and name[1].isdigit())
-
-
 def _make_type(name: str, typetype: ZTypeType, parent: Optional[ZType] = None) -> ZType:
     return ZType(name=name, typetype=typetype, parent=parent)
-
-
-def _is_array_type(ztype: ZType) -> bool:
-    """Check if a type is a monomorphized array type."""
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "array"
-    )
-
-
-def _array_element_type(ztype: ZType) -> Optional[ZType]:
-    """Get the element type of an array type."""
-    return ztype.generic_args.get("of")
-
-
-def _array_length(ztype: ZType) -> Optional[int]:
-    """Get the length of an array type."""
-    to_arg = ztype.generic_args.get("to")
-    if to_arg and to_arg.numeric_value is not None:
-        return to_arg.numeric_value
-    return None
-
-
-def _is_str_type(ztype: ZType) -> bool:
-    """Check if a type is a monomorphized str type."""
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "str"
-    )
-
-
-def _str_capacity(ztype: ZType) -> Optional[int]:
-    """Get the capacity of a str type."""
-    to_arg = ztype.generic_args.get("to")
-    if to_arg and to_arg.numeric_value is not None:
-        return to_arg.numeric_value
-    return None
-
-
-def _is_list_type(ztype: ZType) -> bool:
-    """Check if a type is a monomorphized list type."""
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "list"
-    )
-
-
-def _list_element_type(ztype: ZType) -> Optional[ZType]:
-    """Get the element type of a list type."""
-    return ztype.generic_args.get("of")
-
-
-def _is_map_type(ztype: ZType) -> bool:
-    """Check if a type is a monomorphized map type."""
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "map"
-    )
-
-
-def _map_key_type(ztype: ZType) -> Optional[ZType]:
-    """Get the key type of a map type."""
-    return ztype.generic_args.get("key")
-
-
-def _map_value_type(ztype: ZType) -> Optional[ZType]:
-    """Get the value type of a map type."""
-    return ztype.generic_args.get("value")
 
 
 def _is_valtype(ztype: ZType) -> bool:
