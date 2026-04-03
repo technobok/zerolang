@@ -2988,7 +2988,20 @@ class CEmitter:
             return ""
         ctype = "int64_t"
         if assign.type:
-            ctype = _ctype(assign.type)
+            # typedef method calls: type is FUNCTION but variable holds the
+            # return value, not a function pointer
+            _is_typedef_call = False
+            if (
+                assign.type.typetype == ZTypeType.FUNCTION
+                and assign.type.return_type
+                and assign.value.expression.nodetype == NodeType.DOTTEDPATH
+            ):
+                _pt = cast(zast.DottedPath, assign.value.expression).parent.type
+                _is_typedef_call = _pt is not None and _pt.typedef_base is not None
+            if _is_typedef_call:
+                ctype = _ctype(assign.type.return_type)
+            else:
+                ctype = _ctype(assign.type)
         cname = _mangle_var(assign.name)
         self._in_named_assignment = True
         val = self._emit_expression_value(assign.value)
