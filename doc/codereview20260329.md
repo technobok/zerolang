@@ -692,7 +692,7 @@ but appears to be just `print`. Reading files is not yet available.
 | 9 | Refactor emitter collection generators | Medium | Large | Open |
 | 10 | Extract ZStr to libzrt.h | Medium | Small | Open |
 | 11 | Extract collection core to libzrt | Medium | Medium | Open |
-| 12 | Update roadmap.pdoc | Low | Small | Open |
+| 12 | Update roadmap.pdoc | Low | Small | **Done** |
 | 13 | Update Design-OPEN.pdoc | Low | Small | Open |
 | 14 | Create CLAUDE.md | Low | Tiny | **Done** |
 | 15 | Update compiler.pdoc | Low | Medium | Open |
