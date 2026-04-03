@@ -687,14 +687,14 @@ but appears to be just `print`. Reading files is not yet available.
 | 4 | Implement native directive in parser | High | Medium | **Done** |
 | 5 | native in type checker (skip body check) | High | Small | **Done** |
 | 6 | native dispatch table in emitter | High | Medium | **Done** |
-| 7 | Expand system.z method signatures | High | Small | **Partial** (numerics done, string missing) |
+| 7 | Expand system.z method signatures | High | Small | **Partial** (numerics done; string has no user-callable methods yet) |
 | 8 | Expand collections.z method signatures | High | Small | **Done** |
 | 9 | Refactor emitter collection generators | Medium | Large | Open |
 | 10 | Extract ZStr to libzrt.h | Medium | Small | Open |
 | 11 | Extract collection core to libzrt | Medium | Medium | Open |
 | 12 | Update roadmap.pdoc | Low | Small | Open |
 | 13 | Update Design-OPEN.pdoc | Low | Small | Open |
-| 14 | Create CLAUDE.md | Low | Tiny | Open |
+| 14 | Create CLAUDE.md | Low | Tiny | **Done** |
 | 15 | Update compiler.pdoc | Low | Medium | Open |
 | 16 | Unary operators | Medium | Medium | Open |
 | 17 | Bitwise operations | Medium | Medium | Open |
