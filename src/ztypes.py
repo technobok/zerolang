@@ -244,6 +244,10 @@ class ZType:
     # (structural equality for records, tag+payload for variants)
     is_autogen_eq: bool = field(default=False, init=False)
 
+    # memcmp-safe equality: True when auto-generated == can use memcmp
+    # instead of field-by-field comparison (no floats, no user overrides)
+    is_memcmp_eq: bool = field(default=False, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.

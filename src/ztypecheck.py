@@ -1719,17 +1719,25 @@ class TypeChecker:
         self._resolving.pop()
         return rtype
 
+    _FLOAT_TYPES = frozenset({"f32", "f64", "f128"})
+
     def _synthesize_eq(self, ztype: ZType) -> None:
         """Auto-generate == and != for a valtype if all fields support ==.
 
         Skips synthesis if == is already defined (user override) or null-hidden.
         For records: checks all is-section fields support ==.
         For variants: checks all non-null subtypes support ==.
+
+        Sets is_memcmp_eq on the synthesized == type when memcmp can be used
+        instead of field-by-field comparison (no floats, no user overrides
+        recursively). Relies on zerolang's zero-initialization guarantee
+        for struct padding safety.
         """
         if "==" in ztype.children:
             return  # user-defined or null-hidden
 
-        # check all fields/subtypes support ==
+        # check all fields/subtypes support == and track memcmp eligibility
+        memcmp_safe = True
         for fname, ftype in ztype.children.items():
             if fname.startswith(":"):
                 continue  # internal (e.g., :tag, :meta.create)
@@ -1747,12 +1755,29 @@ class TypeChecker:
                 return  # cannot verify, skip synthesis
             if ftype.generic_origin is TAG_ORIGIN:
                 continue  # tag access helper
+            # float fields disqualify memcmp (NaN != NaN, -0.0 == +0.0)
+            if ftype.name in self._FLOAT_TYPES:
+                memcmp_safe = False
             # field must have == (native, user-defined, or will be auto-generated)
             if "==" not in ftype.children:
                 # accept records/variants that will get == synthesized
                 if ftype.typetype in (ZTypeType.RECORD, ZTypeType.VARIANT):
+                    memcmp_safe = False  # can't verify nested yet
                     continue
                 return  # field lacks ==, skip synthesis
+            else:
+                # nested type has ==; check if it's memcmp-safe
+                nested_eq = ftype.children["=="]
+                if nested_eq.is_autogen_eq:
+                    # auto-generated: safe only if the nested type is also memcmp-safe
+                    if not nested_eq.is_memcmp_eq:
+                        memcmp_safe = False
+                elif not nested_eq.is_autogen_eq:
+                    # native == on primitives: safe for non-float types
+                    # (floats already disqualified above)
+                    # user-defined == on non-primitives: not safe
+                    if ftype.name not in NUMERIC_RANGES and ftype.name != "bool":
+                        memcmp_safe = False
 
         t_bool = self._resolve_name("bool")
         if not t_bool:
@@ -1762,12 +1787,14 @@ class TypeChecker:
         eq_type.return_type = t_bool
         eq_type.children["rhs"] = ztype
         eq_type.is_autogen_eq = True
+        eq_type.is_memcmp_eq = memcmp_safe
         ztype.children["=="] = eq_type
 
         neq_type = _make_type(f"{ztype.name}.!=", ZTypeType.FUNCTION)
         neq_type.return_type = t_bool
         neq_type.children["rhs"] = ztype
         neq_type.is_autogen_eq = True
+        neq_type.is_memcmp_eq = memcmp_safe
         ztype.children["!="] = neq_type
 
     def _detect_typedef(self, items: dict, start: Token) -> tuple:

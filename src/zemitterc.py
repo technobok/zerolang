@@ -1294,23 +1294,26 @@ class CEmitter:
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
-        comparisons: List[str] = []
-        # data fields
-        for fname, fpath in items.items():
-            ft = getattr(fpath, "type", None)
-            if ft and self._needs_eq_call(ft):
-                tname = ft.name.replace(".", "_")
-                comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
-            else:
-                comparisons.append(f"(a.{fname} == b.{fname})")
-        # function pointer fields
-        for mname_f, _mfunc in functions.items():
-            comparisons.append(f"(a.{mname_f} == b.{mname_f})")
-
-        if comparisons:
-            lines.append(f"    return {' && '.join(comparisons)};\n")
+        if eq_method.is_memcmp_eq:
+            self.needs_string = True  # memcmp is in string.h
+            lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
         else:
-            lines.append("    return true;\n")
+            comparisons: List[str] = []
+            # data fields
+            for fname, fpath in items.items():
+                ft = getattr(fpath, "type", None)
+                if ft and self._needs_eq_call(ft):
+                    tname = ft.name.replace(".", "_")
+                    comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+                else:
+                    comparisons.append(f"(a.{fname} == b.{fname})")
+            # function pointer fields
+            for mname_f, _mfunc in functions.items():
+                comparisons.append(f"(a.{mname_f} == b.{mname_f})")
+            if comparisons:
+                lines.append(f"    return {' && '.join(comparisons)};\n")
+            else:
+                lines.append("    return true;\n")
         lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
@@ -1340,19 +1343,22 @@ class CEmitter:
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
-        comparisons: List[str] = []
-        for fname, ct in field_items:
-            ftype = mono_type.children.get(fname)
-            if ftype and self._needs_eq_call(ftype):
-                tname = ftype.name.replace(".", "_")
-                comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
-            else:
-                comparisons.append(f"(a.{fname} == b.{fname})")
-
-        if comparisons:
-            lines.append(f"    return {' && '.join(comparisons)};\n")
+        if eq_method.is_memcmp_eq:
+            self.needs_string = True
+            lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
         else:
-            lines.append("    return true;\n")
+            comparisons: List[str] = []
+            for fname, ct in field_items:
+                ftype = mono_type.children.get(fname)
+                if ftype and self._needs_eq_call(ftype):
+                    tname = ftype.name.replace(".", "_")
+                    comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+                else:
+                    comparisons.append(f"(a.{fname} == b.{fname})")
+            if comparisons:
+                lines.append(f"    return {' && '.join(comparisons)};\n")
+            else:
+                lines.append("    return true;\n")
         lines.append("}\n\n")
 
     def _func_pointer_field_decl(
@@ -1890,9 +1896,13 @@ class CEmitter:
         # emit equality function (if auto-generated)
         eq_method = mono_type.children.get("==")
         if eq_method and eq_method.is_autogen_eq:
-            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b);\n")
-            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
-            if all_null:
+            ctype = f"z_{name}_t"
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            if eq_method.is_memcmp_eq:
+                self.needs_string = True
+                lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
+            elif all_null:
                 lines.append("    return a.tag == b.tag;\n")
             else:
                 lines.append("    if (a.tag != b.tag) return false;\n")
@@ -2039,24 +2049,28 @@ class CEmitter:
         lines.append("    return _old;\n")
         lines.append("}\n\n")
 
-        # emit equality function (element-wise comparison)
+        # emit equality function
         eq_method = mono_type.children.get("==")
         if eq_method and eq_method.is_autogen_eq:
             self.needs_stdbool = True
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            if self._needs_eq_call(elem_type):
+            if eq_method.is_memcmp_eq:
+                self.needs_string = True
+                lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
+            elif self._needs_eq_call(elem_type):
                 ename = elem_type.name.replace(".", "_")
                 lines.append(
                     f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
                     f"if (!z_{ename}_eq(a.data[_i], b.data[_i])) return false; }}\n"
                 )
+                lines.append("    return true;\n")
             else:
                 lines.append(
                     f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
                     f"if (a.data[_i] != b.data[_i]) return false; }}\n"
                 )
-            lines.append("    return true;\n")
+                lines.append("    return true;\n")
             lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -2817,10 +2831,15 @@ class CEmitter:
 
         # emit equality function (if auto-generated)
         vtype = self._resolved_type(name)
-        if vtype and vtype.children.get("==") and vtype.children["=="].is_autogen_eq:
-            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b);\n")
-            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
-            if all_null:
+        eq_method = vtype.children.get("==") if vtype else None
+        if eq_method and eq_method.is_autogen_eq:
+            ctype = f"z_{name}_t"
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            if eq_method.is_memcmp_eq:
+                self.needs_string = True
+                lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
+            elif all_null:
                 lines.append("    return a.tag == b.tag;\n")
             else:
                 lines.append("    if (a.tag != b.tag) return false;\n")
