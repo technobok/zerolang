@@ -3973,6 +3973,14 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
+        # identical: pointer comparison for reftypes
+        callable_name = self._get_callable_name(call.callable)
+        if callable_name == "identical" and len(call.arguments) >= 2:
+            self.needs_stdbool = True
+            lhs = self._emit_operation_value(call.arguments[0].valtype)
+            rhs = self._emit_operation_value(call.arguments[1].valtype)
+            return f"({lhs} == {rhs})"
+
         # callable object dispatch: obj(args) -> z_type_call(obj, args)
         if call.call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
@@ -4384,6 +4392,13 @@ class CEmitter:
             if eq_method and eq_method.is_autogen_eq:
                 tname = binop.lhs.type.name.replace(".", "_")
                 call = f"z_{tname}_eq({lhs}, {rhs})"
+                if op == "!=":
+                    return f"(!{call})"
+                return call
+            # string content comparison (native == on string class)
+            if binop.lhs.type.subtype == ZSubType.STRING:
+                self.needs_stdbool = True
+                call = f"zstr_eq({lhs}, {rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call

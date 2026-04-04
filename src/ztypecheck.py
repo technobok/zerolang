@@ -4315,6 +4315,15 @@ class TypeChecker:
             call.call_kind = zast.CallKind.CONTINUE
             return callee_type
 
+        # handle identical: native generic function for reftype identity
+        if (
+            call.callable.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+            and cast(zast.AtomId, call.callable).name == "identical"
+            and callee_type.typetype == ZTypeType.FUNCTION
+            and callee_type.isgeneric
+        ):
+            return self._check_identical_call(call)
+
         # handle union/variant subtype construction: dotted path parent is a tagged type
         # (must be before record/class checks since subtypes may be records)
         if (
@@ -4925,6 +4934,38 @@ class TypeChecker:
         never = self._resolve_name("never")
         call.type = never if never else self.t_null
         return call.type
+
+    def _check_identical_call(self, call: zast.Call) -> Optional[ZType]:
+        """Check an identical call: both args must be the same reftype."""
+        if len(call.arguments) != 2:
+            self._error("identical requires exactly 2 arguments", loc=call.start)
+            return None
+        lhs_type = self._check_operation(call.arguments[0].valtype)
+        rhs_type = self._check_operation(call.arguments[1].valtype)
+        if not lhs_type or not rhs_type:
+            return None
+        if _is_valtype(lhs_type):
+            self._error(
+                f"identical requires reference types, got value type '{lhs_type.name}'",
+                loc=call.arguments[0].start,
+            )
+            return None
+        if _is_valtype(rhs_type):
+            self._error(
+                f"identical requires reference types, got value type '{rhs_type.name}'",
+                loc=call.arguments[1].start,
+            )
+            return None
+        if not self._types_compatible(lhs_type, rhs_type):
+            self._error(
+                f"identical requires same type for both arguments, "
+                f"got '{lhs_type.name}' and '{rhs_type.name}'",
+                loc=call.start,
+            )
+            return None
+        t_bool = self._resolve_name("bool")
+        call.type = t_bool
+        return t_bool
 
     @staticmethod
     def _fold_binop(

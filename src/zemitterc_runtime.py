@@ -78,6 +78,11 @@ _ZSTR_RUNTIME = (
     "static void zstr_free(ZStr* s) {\n"
     "    if (s && !ZSTR_IS_STATIC(s)) free(s);\n"
     "}\n\n"
+    "static bool zstr_eq(ZStr* a, ZStr* b) {\n"
+    "    if (a == b) return true;\n"
+    "    uint64_t sa = ZSTR_SIZE(a), sb = ZSTR_SIZE(b);\n"
+    "    return sa == sb && memcmp(a->data, b->data, sa) == 0;\n"
+    "}\n\n"
 )
 
 
@@ -100,13 +105,14 @@ def emit_runtime(
     needs_string: bool,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
-    # ZStr runtime uses malloc/free (stdlib.h) and strlen/memcpy (string.h)
+    # ZStr runtime uses malloc/free (stdlib.h), strlen/memcpy (string.h),
+    # and bool (stdbool.h) for zstr_eq
     has_zstr = needs_string or needs_stdio
     return emit_runtime_includes(
         needs_stdio=needs_stdio,
         needs_stdint=needs_stdint,
         needs_stdlib=needs_stdlib or has_zstr,
-        needs_stdbool=needs_stdbool,
+        needs_stdbool=needs_stdbool or has_zstr,
         needs_string=needs_string or has_zstr,
     ) + emit_runtime_zstr(needs_string=needs_string, needs_stdio=needs_stdio)
 

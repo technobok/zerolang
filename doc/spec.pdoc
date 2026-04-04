@@ -3891,6 +3891,74 @@ Records containing float fields (#~"f32", #~"f64") use IEEE 754 comparison:
 #~"NaN != NaN". This matches the behaviour of C, Rust, and Go.
 
 
+#---: Reference Type Equality
+
+Reference types (classes, unions) do not have a default #~"==" operator.
+Using #~"==" on a reference type without explicitly defining it is a compile
+error.
+
+This is deliberate: identity comparison (same pointer) is rarely what the
+programmer intends, and structural comparison on reference types is complex
+due to potential cycles, deep object graphs, and ownership semantics. Rather
+than provide a default that is almost always wrong, zerolang requires the
+programmer to define #~"==" explicitly when needed.
+
+To add #~"==" to a class, define it in the #~"as" section:
+
+#code language=zerolang: """
+  counter: class { value: i64 } as {
+      ==: function {a: this b: counter} out bool is {
+          return a.value == b.value
+      }
+  }
+  """
+
+#b: String Equality.
+String is the exception: it has a built-in #~"==" that compares contents
+(byte-by-byte), not pointer identity. Two separately created strings with the
+same content are equal:
+
+#code language=zerolang: """
+  a: "hello"
+  b: "hello"
+  if a == b then print "equal"   # prints "equal"
+  """
+
+#b: Identity Comparison.
+The #~"identical" function checks whether two references point to the same
+heap-allocated object (pointer equality). It is generic over any reference
+type. Both arguments must be the same type.
+
+#code language=zerolang: """
+  identical: function {lhs: t rhs: t} out bool is native
+      as { t: any.reftype }
+  """
+
+Usage:
+
+#code language=zerolang: """
+  a: "hello"
+  b: "hello"
+  same: identical lhs: a rhs: a    # true  (same object)
+  diff: identical lhs: a rhs: b    # false (different objects)
+  """
+
+#~"identical" can be used inside a user-defined #~"==" to implement identity
+semantics:
+
+#code language=zerolang: """
+  handle: class { fd: i64 } as {
+      ==: function {a: this b: handle} out bool is {
+          return identical lhs: a rhs: b
+      }
+  }
+  """
+
+Note: #~"identical" is currently special-cased in the type checker. When
+generic parameter inference for standalone functions is implemented, it will
+be resolved through the standard generic function mechanism.
+
+
 #--: Compile Time Operations
 
 #---: Constant Folding

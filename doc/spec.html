@@ -177,6 +177,8 @@ Table of Contents</div>
 </li>
 <li><a href="#auto-generated-equality">Auto-Generated Equality</a>
 </li>
+<li><a href="#reference-type-equality">Reference Type Equality</a>
+</li>
 </ul>
 </li>
 <li><a href="#compile-time-operations">Compile Time Operations</a>
@@ -3346,6 +3348,49 @@ to use <code>==</code> on such a type produces a compile error:</p>
 <p><strong>Float Fields.</strong></p>
 <p>Records containing float fields (<code>f32</code>, <code>f64</code>) use IEEE 754 comparison:
 <code>NaN != NaN</code>. This matches the behaviour of C, Rust, and Go.</p>
+<h3 id="reference-type-equality"><a href="#reference-type-equality">5.21. Reference Type Equality</a></h3>
+<p>Reference types (classes, unions) do not have a default <code>==</code> operator.
+Using <code>==</code> on a reference type without explicitly defining it is a compile
+error.</p>
+<p>This is deliberate: identity comparison (same pointer) is rarely what the
+programmer intends, and structural comparison on reference types is complex
+due to potential cycles, deep object graphs, and ownership semantics. Rather
+than provide a default that is almost always wrong, zerolang requires the
+programmer to define <code>==</code> explicitly when needed.</p>
+<p>To add <code>==</code> to a class, define it in the <code>as</code> section:</p>
+<pre><code class="language-zerolang">counter: class { value: i64 } as {
+    ==: function {a: this b: counter} out bool is {
+        return a.value == b.value
+    }
+}</code></pre>
+<p><strong>String Equality.</strong></p>
+<p>String is the exception: it has a built-in <code>==</code> that compares contents
+(byte-by-byte), not pointer identity. Two separately created strings with the
+same content are equal:</p>
+<pre><code class="language-zerolang">a: "hello"
+b: "hello"
+if a == b then print "equal"   # prints "equal"</code></pre>
+<p><strong>Identity Comparison.</strong></p>
+<p>The <code>identical</code> function checks whether two references point to the same
+heap-allocated object (pointer equality). It is generic over any reference
+type. Both arguments must be the same type.</p>
+<pre><code class="language-zerolang">identical: function {lhs: t rhs: t} out bool is native
+    as { t: any.reftype }</code></pre>
+<p>Usage:</p>
+<pre><code class="language-zerolang">a: "hello"
+b: "hello"
+same: identical lhs: a rhs: a    # true  (same object)
+diff: identical lhs: a rhs: b    # false (different objects)</code></pre>
+<p><code>identical</code> can be used inside a user-defined <code>==</code> to implement identity
+semantics:</p>
+<pre><code class="language-zerolang">handle: class { fd: i64 } as {
+    ==: function {a: this b: handle} out bool is {
+        return identical lhs: a rhs: b
+    }
+}</code></pre>
+<p>Note: <code>identical</code> is currently special-cased in the type checker. When
+generic parameter inference for standalone functions is implemented, it will
+be resolved through the standard generic function mechanism.</p>
 <h2 id="compile-time-operations"><a href="#compile-time-operations">6. Compile Time Operations</a></h2>
 <h3 id="constant-folding"><a href="#constant-folding">6.1. Constant Folding</a></h3>
 <p>Operations on compile time integer constants are evaluated at compile time.
