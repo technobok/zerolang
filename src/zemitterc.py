@@ -81,6 +81,28 @@ TYPEMAP: Dict[str, str] = {
 
 NUMERIC_CAST_TYPES = set(TYPEMAP.keys()) - {"null", "bool", "never"}
 
+# Estimated sizes of C types (bytes) for equality threshold decisions.
+CTYPE_SIZES: Dict[str, int] = {
+    "int8_t": 1,
+    "uint8_t": 1,
+    "int16_t": 2,
+    "uint16_t": 2,
+    "int32_t": 4,
+    "uint32_t": 4,
+    "float": 4,
+    "int64_t": 8,
+    "uint64_t": 8,
+    "double": 8,
+    "__int128": 16,
+    "unsigned __int128": 16,
+    "long double": 16,
+    "int": 4,  # bool maps to C int
+}
+
+# Types larger than this threshold (bytes) use memcmp for simple equality.
+# Smaller types use field-by-field comparison (avoids memcmp call overhead).
+_EQ_MEMCMP_THRESHOLD = 16
+
 C_OPS: Dict[str, str] = {
     "+": "+",
     "-": "-",
@@ -1294,7 +1316,7 @@ class CEmitter:
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
-        if eq_method.is_memcmp_eq:
+        if self._use_memcmp_eq(name, eq_method):
             self.needs_string = True  # memcmp is in string.h
             lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
         else:
@@ -1326,6 +1348,89 @@ class CEmitter:
             return True
         return False
 
+    def _use_memcmp_eq(self, name: str, eq_method: ZType) -> bool:
+        """Check if a type should use memcmp for equality.
+
+        True when is_simple_eq and estimated size exceeds the threshold.
+        """
+        if not eq_method.is_simple_eq:
+            return False
+        return self._estimate_type_size(name) > _EQ_MEMCMP_THRESHOLD
+
+    def _estimate_type_size(self, name: str) -> int:
+        """Estimate byte size of a type from its C fields.
+
+        Returns 0 if the size cannot be determined (conservative: caller
+        should fall back to field-by-field comparison).
+        """
+        # check cached field ctypes from mono/record emission
+        field_ctypes = self._type_field_ctypes.get(name)
+        if field_ctypes:
+            total = 0
+            for ct in field_ctypes:
+                sz = CTYPE_SIZES.get(ct, 0)
+                if sz == 0:
+                    # nested struct type: z_foo_t -> foo, recurse
+                    if ct.startswith("z_") and ct.endswith("_t"):
+                        inner_name = ct[2:-2]
+                        sz = self._estimate_type_size(inner_name)
+                    if sz == 0:
+                        return 0  # unknown size
+                total += sz
+            return total
+        # try resolved type's children for non-cached types
+        ztype = self._resolved_type(name)
+        if not ztype:
+            return 0
+        if ztype.typetype == ZTypeType.VARIANT:
+            # variant: tag enum (4 bytes) + max(subtype sizes)
+            max_sub = 0
+            for fname, ftype in ztype.children.items():
+                if fname.startswith(":"):
+                    continue
+                if ftype.typetype in (
+                    ZTypeType.FUNCTION,
+                    ZTypeType.TAG,
+                    ZTypeType.ENUM,
+                    ZTypeType.DATA,
+                    ZTypeType.NULL,
+                ):
+                    continue
+                if ftype.generic_origin is TAG_ORIGIN:
+                    continue
+                ct = _ctype(ftype)
+                sz = CTYPE_SIZES.get(ct, 0)
+                if sz == 0 and ct.startswith("z_") and ct.endswith("_t"):
+                    sz = self._estimate_type_size(ct[2:-2])
+                if sz > max_sub:
+                    max_sub = sz
+            return 4 + max_sub  # tag + largest union member
+        # record: sum of field sizes
+        total = 0
+        for fname, ftype in ztype.children.items():
+            if fname.startswith(":"):
+                continue
+            if ftype.typetype == ZTypeType.FUNCTION:
+                total += 8  # function pointer
+                continue
+            if ftype.typetype in (
+                ZTypeType.TAG,
+                ZTypeType.ENUM,
+                ZTypeType.DATA,
+                ZTypeType.NULL,
+            ):
+                continue
+            if ftype.generic_origin is TAG_ORIGIN:
+                continue
+            ct = _ctype(ftype)
+            sz = CTYPE_SIZES.get(ct, 0)
+            if sz == 0 and ct.startswith("z_") and ct.endswith("_t"):
+                sz = self._estimate_type_size(ct[2:-2])
+            if sz == 0:
+                return 0
+            total += sz
+        return total
+
     def _emit_autogen_eq_from_fields(
         self,
         name: str,
@@ -1343,7 +1448,7 @@ class CEmitter:
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
-        if eq_method.is_memcmp_eq:
+        if self._use_memcmp_eq(name, eq_method):
             self.needs_string = True
             lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
         else:
@@ -1899,7 +2004,7 @@ class CEmitter:
             ctype = f"z_{name}_t"
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            if eq_method.is_memcmp_eq:
+            if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
             elif all_null:
@@ -2055,7 +2160,7 @@ class CEmitter:
             self.needs_stdbool = True
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            if eq_method.is_memcmp_eq:
+            if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
             elif self._needs_eq_call(elem_type):
@@ -2836,7 +2941,7 @@ class CEmitter:
             ctype = f"z_{name}_t"
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            if eq_method.is_memcmp_eq:
+            if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
                 lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
             elif all_null:
