@@ -2649,6 +2649,15 @@ class TestAsConstants:
         output = compile_and_run(csource)
         assert output.strip() == "2048"
 
+    def test_string_constant_runtime(self):
+        """String constant in 'as' section compiles and runs."""
+        csource = emit_source(
+            'r: record { x: i64 } as { name: "hello" }\n'
+            "main: function is { print r.name }"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
 
 class TestDefaults:
     def test_function_all_defaults_omitted(self):

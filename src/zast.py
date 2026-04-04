@@ -311,7 +311,8 @@ class Node:
     type: Optional[ZType] = field(default=None, init=False)
     # compile-time constant value, filled during type checking (constant folding)
     # int for integer arithmetic, float for float arithmetic, bool for comparisons
-    const_value: Optional[typing.Union[int, float, bool]] = field(
+    # str for string constants in 'as' sections
+    const_value: Optional[typing.Union[int, float, bool, str]] = field(
         default=None, init=False
     )
 

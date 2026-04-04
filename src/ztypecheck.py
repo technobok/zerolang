@@ -1831,6 +1831,40 @@ class TypeChecker:
                         rtype.children[label] = at
                 continue
 
+            # string constant in 'as' section (pure literal, no interpolation)
+            if apath.nodetype == NodeType.ATOMSTRING:
+                apath_str = cast(zast.AtomString, apath)
+                # only allow pure literals (no interpolated expressions)
+                has_interpolation = any(
+                    p.is_node and cast(zast.Node, p).nodetype == NodeType.EXPRESSION
+                    for p in apath_str.stringparts
+                )
+                if has_interpolation:
+                    self._error(
+                        "String constants in 'as' must be pure literals"
+                        " (no interpolation)",
+                        loc=start,
+                    )
+                else:
+                    string_type = self._resolve_name("string")
+                    if string_type:
+                        # collect the raw string content from token parts
+                        raw = "".join(
+                            cast(Token, p).tokstr
+                            for p in apath_str.stringparts
+                            if not p.is_node
+                        )
+                        ct = _make_type(string_type.name, string_type.typetype)
+                        ct.children = string_type.children
+                        ct.subtype = string_type.subtype
+                        ct.const_value = raw
+                        ct.is_valtype = False
+                        ct.needs_destructor = False  # static, not freed
+                        apath_str.type = ct
+                        apath_str.const_value = raw
+                        rtype.children[label] = ct
+                continue
+
             # computed constant expression (e.g., max: 2 * 1024)
             if apath.nodetype == NodeType.BINOP:
                 t = self._check_binop(cast(zast.BinOp, apath))
@@ -4853,8 +4887,13 @@ class TypeChecker:
                 # constant folding: evaluate when both operands are constant integers
                 lhs_cv = binop.lhs.const_value
                 rhs_cv = binop.rhs.const_value
-                if lhs_cv is not None and rhs_cv is not None:
-                    folded = self._fold_binop(op_name, lhs_cv, rhs_cv)
+                if (
+                    lhs_cv is not None
+                    and rhs_cv is not None
+                    and type(lhs_cv) in (int, float)
+                    and type(rhs_cv) in (int, float)
+                ):
+                    folded = self._fold_binop(op_name, lhs_cv, rhs_cv)  # type: ignore[arg-type]
                     if folded is not None and type(folded) is int:
                         # overflow check for integer results
                         rng = NUMERIC_RANGES.get(ret.name)

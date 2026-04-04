@@ -5536,6 +5536,25 @@ class TestAsConstants:
             "}"
         )
 
+    def test_string_constant_in_as(self):
+        """String constant in 'as' section type-checks successfully."""
+        check_ok(
+            'r: record { x: i64 } as { name: "hello" }\n'
+            "main: function is {\n"
+            "  print r.name\n"
+            "}"
+        )
+
+    def test_string_constant_cannot_be_reassigned(self):
+        """Reassigning a string constant from 'as' is a compile error."""
+        errors = check_errors(
+            'r: record { x: i64 } as { name: "hello" }\n'
+            "main: function is {\n"
+            '  r.name = "world"\n'
+            "}"
+        )
+        assert any("static constant" in e.msg for e in errors)
+
 
 class TestMatchTake:
     """Take ownership of match subject inside arms."""

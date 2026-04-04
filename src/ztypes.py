@@ -210,8 +210,8 @@ class ZType:
     # for numeric generic value-carrying ZTypes: the constant integer value
     numeric_value: "Optional[int]" = field(default=None, init=False)
 
-    # compile-time constant value (for 'as' section constants: int or float)
-    const_value: "Optional[int | float]" = field(default=None, init=False)
+    # compile-time constant value (for 'as' section constants)
+    const_value: "Optional[int | float | str]" = field(default=None, init=False)
 
     # for typedef types: points to the immediate base type being wrapped
     typedef_base: "Optional[ZType]" = field(default=None, init=False)

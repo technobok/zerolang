@@ -682,15 +682,25 @@ class CEmitter:
         for label, apath in as_items.items():
             if apath.const_value is not None:
                 v = apath.const_value
-                self.needs_stdint = True
                 qname = f"{type_name}.{label}"
                 cname = _mangle_func(qname)
-                ctype = "int64_t"
-                if apath.type:
-                    ctype = TYPEMAP.get(apath.type.name, "int64_t")
-                if type(v) is float:
+                if type(v) is str:
+                    # string constant: emit ZSTR_STATIC + pointer alias
+                    self.needs_string = True
+                    escaped = self._escape_c_string(v)
+                    sname = self._static_string(escaped)
+                    self.data_defs.append(f"#define {cname} {sname}\n")
+                elif type(v) is float:
+                    self.needs_stdint = True
+                    ctype = "int64_t"
+                    if apath.type:
+                        ctype = TYPEMAP.get(apath.type.name, "int64_t")
                     self.data_defs.append(f"static const {ctype} {cname} = {v};\n")
                 else:
+                    self.needs_stdint = True
+                    ctype = "int64_t"
+                    if apath.type:
+                        ctype = TYPEMAP.get(apath.type.name, "int64_t")
                     self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
 
     def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
