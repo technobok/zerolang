@@ -42,6 +42,71 @@ from ztypeutil import (
 )
 
 
+# -- Constant fold registry ---------------------------------------------------
+# Maps operator name to a fold function (lhs, rhs) -> result.
+# Extensible: add entries for new foldable native operations.
+
+
+def _fold_add(lhs: "int | float", rhs: "int | float") -> "int | float":
+    return lhs + rhs
+
+
+def _fold_sub(lhs: "int | float", rhs: "int | float") -> "int | float":
+    return lhs - rhs
+
+
+def _fold_mul(lhs: "int | float", rhs: "int | float") -> "int | float":
+    return lhs * rhs
+
+
+def _fold_div(lhs: "int | float", rhs: "int | float") -> "int | float | None":
+    if rhs == 0:
+        return None
+    if type(lhs) is float or type(rhs) is float:
+        return lhs / rhs
+    # integer: truncation toward zero (C semantics)
+    result = lhs / rhs
+    return int(result) if result >= 0 else -int(-result)
+
+
+def _fold_lt(lhs: "int | float", rhs: "int | float") -> bool:
+    return lhs < rhs
+
+
+def _fold_le(lhs: "int | float", rhs: "int | float") -> bool:
+    return lhs <= rhs
+
+
+def _fold_gt(lhs: "int | float", rhs: "int | float") -> bool:
+    return lhs > rhs
+
+
+def _fold_ge(lhs: "int | float", rhs: "int | float") -> bool:
+    return lhs >= rhs
+
+
+def _fold_eq(lhs: "int | float", rhs: "int | float") -> bool:
+    return lhs == rhs
+
+
+def _fold_ne(lhs: "int | float", rhs: "int | float") -> bool:
+    return lhs != rhs
+
+
+_FOLD_OPS: dict = {
+    "+": _fold_add,
+    "-": _fold_sub,
+    "*": _fold_mul,
+    "/": _fold_div,
+    "<": _fold_lt,
+    "<=": _fold_le,
+    ">": _fold_gt,
+    ">=": _fold_ge,
+    "==": _fold_eq,
+    "!=": _fold_ne,
+}
+
+
 def _levenshtein(a: str, b: str) -> int:
     """Compute Levenshtein edit distance between two strings."""
     if len(a) < len(b):
@@ -639,8 +704,10 @@ class TypeChecker:
                 t = self._resolve_numeric(defn_atom.name, loc=defn_atom.start)
                 # constant folding: set const_value on the definition node
                 if t:
-                    _, value, err = parse_number(defn_atom.name)
+                    typename, value, err = parse_number(defn_atom.name)
                     if not err and type(value) is int:
+                        defn_atom.const_value = value
+                    elif not err and type(value) is float and typename == "f64":
                         defn_atom.const_value = value
                 return t
             key = f"{unitname}.{name}"
@@ -4251,9 +4318,11 @@ class TypeChecker:
             t = self._resolve_numeric(name, loc=atom.start)
             if t:
                 atom.type = t
-                # constant folding: set const_value for integer literals
-                _, value, err = parse_number(name)
+                # constant folding: set const_value for integer and f64 literals
+                typename, value, err = parse_number(name)
                 if not err and type(value) is int:
+                    atom.const_value = value
+                elif not err and type(value) is float and typename == "f64":
                     atom.const_value = value
             return t
 
@@ -4974,31 +5043,11 @@ class TypeChecker:
         """Evaluate a binary operation on constant values at compile time.
 
         Returns int/float for arithmetic, bool for comparisons, None if not foldable.
+        Uses _FOLD_OPS registry for dispatch.
         """
-        if op == "+":
-            return lhs + rhs
-        if op == "-":
-            return lhs - rhs
-        if op == "*":
-            return lhs * rhs
-        if op == "/":
-            if rhs == 0:
-                return None
-            # truncation toward zero (C semantics)
-            result = lhs / rhs
-            return int(result) if result >= 0 else -int(-result)
-        if op == "<=":
-            return lhs <= rhs
-        if op == "<":
-            return lhs < rhs
-        if op == ">":
-            return lhs > rhs
-        if op == ">=":
-            return lhs >= rhs
-        if op == "==":
-            return lhs == rhs
-        if op == "!=":
-            return lhs != rhs
+        fn = _FOLD_OPS.get(op)
+        if fn is not None:
+            return fn(lhs, rhs)
         return None
 
     def _check_binop(self, binop: zast.BinOp) -> Optional[ZType]:
@@ -5026,22 +5075,37 @@ class TypeChecker:
                     and type(lhs_cv) in (int, float)
                     and type(rhs_cv) in (int, float)
                 ):
-                    folded = self._fold_binop(op_name, lhs_cv, rhs_cv)  # type: ignore[arg-type]
-                    if folded is not None and type(folded) is int:
-                        # overflow check for integer results
-                        rng = NUMERIC_RANGES.get(ret.name)
-                        if rng:
-                            lo, hi = rng
-                            if folded < lo or folded > hi:
-                                self._error(
-                                    f"constant expression overflows type '{ret.name}' "
-                                    f"(result: {folded}, range: {lo}..{hi})",
-                                    loc=binop.start,
-                                )
-                                return ret
-                        binop.const_value = folded
-                    elif folded is not None and type(folded) is bool:
-                        binop.const_value = folded
+                    # division by zero: compile-time error
+                    if op_name == "/" and rhs_cv == 0:
+                        self._error(
+                            "division by zero in constant expression",
+                            loc=binop.start,
+                        )
+                        return ret
+                    # skip float folding for f32 (precision mismatch with host)
+                    if (
+                        type(lhs_cv) is float or type(rhs_cv) is float
+                    ) and ret.name not in ("f64", "bool"):
+                        pass  # f32/f128: do not fold
+                    else:
+                        folded = self._fold_binop(op_name, lhs_cv, rhs_cv)  # type: ignore[arg-type]
+                        if folded is not None and type(folded) is int:
+                            # overflow check for integer results
+                            rng = NUMERIC_RANGES.get(ret.name)
+                            if rng:
+                                lo, hi = rng
+                                if folded < lo or folded > hi:
+                                    self._error(
+                                        f"constant expression overflows type '{ret.name}' "
+                                        f"(result: {folded}, range: {lo}..{hi})",
+                                        loc=binop.start,
+                                    )
+                                    return ret
+                            binop.const_value = folded
+                        elif folded is not None and type(folded) is float:
+                            binop.const_value = folded
+                        elif folded is not None and type(folded) is bool:
+                            binop.const_value = folded
                 return ret
 
         self._error(

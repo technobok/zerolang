@@ -4803,6 +4803,70 @@ class TestConstantFolding:
         assign_lines = [ln for ln in lines if "= 3;" in ln or "= 3 " in ln]
         assert len(assign_lines) > 0, f"Expected folded '= 3' in C output:\n{csource}"
 
+    # -- Division by zero ---
+
+    def test_constant_division_by_zero_error(self):
+        """Division by constant zero should be a compile-time error."""
+        vfs, name = make_parser_vfs(
+            "main: function is { x: 1 / 0 }", unitname="test", src_dir=LIB_DIR
+        )
+        p = Parser(vfs, name)
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert any("division by zero" in e.msg.lower() for e in errors)
+
+    # -- Float (f64) folding ---
+
+    def test_f64_fold_arithmetic(self):
+        """f64 constant arithmetic should fold and produce correct output."""
+        csource = emit_source('main: function is {\n  x: 1.5 + 2.5\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "4"
+
+    def test_f64_fold_subtraction(self):
+        """f64 subtraction folds correctly."""
+        csource = emit_source('main: function is {\n  x: 5.0 - 1.5\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "3.5"
+
+    def test_f64_fold_multiplication(self):
+        """f64 multiplication folds correctly."""
+        csource = emit_source('main: function is {\n  x: 2.0 * 3.0\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "6"
+
+    def test_f64_fold_division(self):
+        """f64 division folds correctly (no truncation)."""
+        csource = emit_source('main: function is {\n  x: 7.0 / 2.0\n  print "\\{x}"\n}')
+        output = compile_and_run(csource)
+        assert output.strip() == "3.5"
+
+    def test_f64_fold_c_output(self):
+        """Verify f64 folded value appears as literal, not expression."""
+        csource = emit_source('main: function is {\n  x: 1.5 + 2.5\n  print "\\{x}"\n}')
+        # should contain 4.0 as a literal, not (1.5 + 2.5)
+        assert "4.0" in csource
+
+    def test_f64_comparison_dead_branch(self):
+        """f64 comparison should enable dead branch elimination."""
+        csource = emit_source(
+            'main: function is {\n  if 1.0 < 2.0 then print "yes" else print "no"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "yes"
+        # the constant condition should not emit a runtime if-else in main
+        assert "} else {" not in csource
+
+    def test_unit_level_f64_constant_expression(self):
+        """Unit-level f64 expression should emit as static const."""
+        csource = emit_source(
+            'PI_APPROX: 3.0 + 0.14\nmain: function is {\n  print "\\{PI_APPROX}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "3.14"
+        assert "static const" in csource
+
 
 class TestIfExpression:
     """Tests for if-as-expression (Phase 42)."""

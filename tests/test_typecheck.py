@@ -4710,11 +4710,9 @@ class TestConstantFolding:
         assert inner.const_value is None
 
     def test_const_value_division_by_zero(self):
-        """1 / 0 should NOT fold (division by zero)."""
-        program = check_ok("main: function is { x: 1 / 0 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is None
+        """1 / 0 should be a compile-time error."""
+        errors = check_errors("main: function is { x: 1 / 0 }")
+        assert any("division by zero" in e.msg.lower() for e in errors)
 
     def test_const_value_named_constant(self):
         """Reference to a named constant should propagate const_value."""
@@ -4739,9 +4737,16 @@ class TestConstantFolding:
         errors = check_errors("main: function is { x: 255u8 + 1u8 }")
         assert any("overflow" in e.msg.lower() for e in errors)
 
-    def test_const_value_float_not_folded(self):
-        """Float operations should not be folded."""
+    def test_const_value_f64_folded(self):
+        """f64 operations should be folded."""
         program = check_ok("main: function is { x: 1.5f64 + 2.5f64 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 4.0
+
+    def test_const_value_f32_not_folded(self):
+        """f32 operations should not be folded (precision mismatch with host)."""
+        program = check_ok("main: function is { x: 1.5f32 + 2.5f32 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
         assert inner.const_value is None
@@ -4762,6 +4767,76 @@ class TestConstantFolding:
         rhs = self._get_rhs(program)
         assert isinstance(rhs, zast.Expression)
         assert rhs.const_value == 3
+
+    # -- Division by zero ---
+
+    def test_const_division_by_zero_error(self):
+        """Division by constant zero should be a compile-time error."""
+        errors = check_errors("main: function is { x: 10 / 0 }")
+        assert any("division by zero" in e.msg.lower() for e in errors)
+
+    def test_const_division_by_zero_f64_error(self):
+        """Float division by constant zero should be a compile-time error."""
+        errors = check_errors("main: function is { x: 10.0f64 / 0.0f64 }")
+        assert any("division by zero" in e.msg.lower() for e in errors)
+
+    # -- Float (f64) folding ---
+
+    def test_f64_addition(self):
+        """f64 addition should fold."""
+        program = check_ok("main: function is { x: 1.5 + 2.5 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 4.0
+
+    def test_f64_subtraction(self):
+        """f64 subtraction should fold."""
+        program = check_ok("main: function is { x: 5.0 - 1.5 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 3.5
+
+    def test_f64_multiplication(self):
+        """f64 multiplication should fold."""
+        program = check_ok("main: function is { x: 2.0 * 3.5 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 7.0
+
+    def test_f64_division(self):
+        """f64 division should fold (no truncation)."""
+        program = check_ok("main: function is { x: 7.0 / 2.0 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 3.5
+
+    def test_f64_comparison(self):
+        """f64 comparison should fold to bool."""
+        program = check_ok("main: function is { x: 1.0 < 2.0 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is True
+
+    def test_f64_comparison_false(self):
+        """f64 comparison should fold to False."""
+        program = check_ok("main: function is { x: 3.0 < 2.0 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value is False
+
+    def test_f64_chained(self):
+        """Chained f64 operations should fold."""
+        program = check_ok("main: function is { x: 1.0 + 2.0 + 3.0 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.BinOp)
+        assert inner.const_value == 6.0
+
+    def test_f64_literal_const_value(self):
+        """f64 literal should have const_value set."""
+        program = check_ok("main: function is { x: 3.14 }")
+        inner = self._get_rhs_inner(program)
+        assert isinstance(inner, zast.AtomId)
+        assert inner.const_value == 3.14
 
 
 class TestIfExpression:

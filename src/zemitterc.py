@@ -684,8 +684,11 @@ class CEmitter:
                 )
             elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
-            elif hasattr(defn, "const_value") and type(defn.const_value) is int:
-                # unit-level expression that folded to an integer constant
+            elif hasattr(defn, "const_value") and type(defn.const_value) in (
+                int,
+                float,
+            ):
+                # unit-level expression that folded to a constant
                 self._emit_folded_constant(qname, defn)
 
     def _emit_folded_constant(self, name: str, node: zast.Node) -> None:
@@ -697,7 +700,10 @@ class CEmitter:
         ctype = "int64_t"
         if node.type:
             ctype = TYPEMAP.get(node.type.name, "int64_t")
-        self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
+        if type(v) is float:
+            self.data_defs.append(f"static const {ctype} {cname} = {repr(v)};\n")
+        else:
+            self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
 
     def _emit_as_constants(self, type_name: str, as_items: dict) -> None:
         """Emit static constants defined in an 'as' section."""
@@ -4345,6 +4351,9 @@ class CEmitter:
         self.needs_stdint = True
         if type(v) is bool:
             return "1" if v else "0"
+        if type(v) is float:
+            # emit with full precision for f64
+            return repr(v)
         raw = str(int(v))
         if node.type and node.type.name != "i64":
             ctype = TYPEMAP.get(node.type.name, "int64_t")

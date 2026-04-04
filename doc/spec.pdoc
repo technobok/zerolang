@@ -3963,32 +3963,45 @@ be resolved through the standard generic function mechanism.
 
 #---: Constant Folding
 
-Operations on compile time integer constants are evaluated at compile time.
+Operations on compile time constants are evaluated at compile time.
 The compiler tracks a #~"const_value" on AST nodes during type checking.
-Numeric literals, named numeric constants, and the results of integer
-arithmetic and comparison operations on constant operands are all candidates
-for folding.
+Numeric literals (integer and #~"f64"), named numeric constants, and the
+results of arithmetic and comparison operations on constant operands are
+all candidates for folding.
 
 Supported operations: #~"+" #~"-" #~"*" #~"/" #~"<" #~">" #~"<=" #~">="
 #~"==" #~"!=". Integer division uses truncation toward zero (matching C
-semantics). Comparisons produce #~"bool" values (#~"true"/#~"false").
+semantics). Float (#~"f64") division produces a float result without
+truncation. Comparisons produce #~"bool" values (#~"true"/#~"false").
 
-Float operations are not folded (deferred to a future phase). If the result
-of a constant integer operation overflows the target type, a compile time
-error is reported.
+Division by a constant zero is a compile time error (for both integer
+and float types). If the result of a constant integer operation overflows
+the target type, a compile time error is reported.
+
+#~"f32" operations are not folded. The host compiler (Python) uses 64 bit
+floats internally, so folding #~"f32" arithmetic could produce results that
+differ from native #~"f32" computation on the target. This limitation will
+be addressed when zerolang becomes self hosting.
 
 Named constants propagate: if #~"a: 1" and #~"b: a + 2" are defined at
 unit level, then #~"b" has a compile time constant value of #~"3". Chains
-of constant definitions are fully resolved.
+of constant definitions are fully resolved. Float constants propagate the
+same way.
+
+Foldable operations are maintained in an internal registry within the
+compiler. All foldable operations are on native types. The registry is
+extensible for future operations.
 
 #code language=zerolang: """
   OFFSET: 10
   SCALE: 3
   COMBINED: OFFSET + SCALE    # folded to 13 at compile time
+  TAU: 3.14159 * 2.0          # f64 folded to 6.28318 at compile time
 
   main: function is {
       x: 1 + 2                # folded to 3
       y: COMBINED * 2          # folded to 26
+      z: 1.5 + 2.5            # f64 folded to 4.0
   }
   """
 

@@ -3393,27 +3393,38 @@ generic parameter inference for standalone functions is implemented, it will
 be resolved through the standard generic function mechanism.</p>
 <h2 id="compile-time-operations"><a href="#compile-time-operations">6. Compile Time Operations</a></h2>
 <h3 id="constant-folding"><a href="#constant-folding">6.1. Constant Folding</a></h3>
-<p>Operations on compile time integer constants are evaluated at compile time.
+<p>Operations on compile time constants are evaluated at compile time.
 The compiler tracks a <code>const_value</code> on AST nodes during type checking.
-Numeric literals, named numeric constants, and the results of integer
-arithmetic and comparison operations on constant operands are all candidates
-for folding.</p>
+Numeric literals (integer and <code>f64</code>), named numeric constants, and the
+results of arithmetic and comparison operations on constant operands are
+all candidates for folding.</p>
 <p>Supported operations: <code>+</code> <code>-</code> <code>*</code> <code>/</code> <code>&lt;</code> <code>&gt;</code> <code>&lt;=</code> <code>&gt;=</code>
 <code>==</code> <code>!=</code>. Integer division uses truncation toward zero (matching C
-semantics). Comparisons produce <code>bool</code> values (<code>true</code>/<code>false</code>).</p>
-<p>Float operations are not folded (deferred to a future phase). If the result
-of a constant integer operation overflows the target type, a compile time
-error is reported.</p>
+semantics). Float (<code>f64</code>) division produces a float result without
+truncation. Comparisons produce <code>bool</code> values (<code>true</code>/<code>false</code>).</p>
+<p>Division by a constant zero is a compile time error (for both integer
+and float types). If the result of a constant integer operation overflows
+the target type, a compile time error is reported.</p>
+<p><code>f32</code> operations are not folded. The host compiler (Python) uses 64 bit
+floats internally, so folding <code>f32</code> arithmetic could produce results that
+differ from native <code>f32</code> computation on the target. This limitation will
+be addressed when zerolang becomes self hosting.</p>
 <p>Named constants propagate: if <code>a: 1</code> and <code>b: a + 2</code> are defined at
 unit level, then <code>b</code> has a compile time constant value of <code>3</code>. Chains
-of constant definitions are fully resolved.</p>
+of constant definitions are fully resolved. Float constants propagate the
+same way.</p>
+<p>Foldable operations are maintained in an internal registry within the
+compiler. All foldable operations are on native types. The registry is
+extensible for future operations.</p>
 <pre><code class="language-zerolang">OFFSET: 10
 SCALE: 3
 COMBINED: OFFSET + SCALE    # folded to 13 at compile time
+TAU: 3.14159 * 2.0          # f64 folded to 6.28318 at compile time
 
 main: function is {
     x: 1 + 2                # folded to 3
     y: COMBINED * 2          # folded to 26
+    z: 1.5 + 2.5            # f64 folded to 4.0
 }</code></pre>
 <h3 id="conditional-compilation"><a href="#conditional-compilation">6.2. Conditional Compilation</a></h3>
 <p>Normal if expressions with constant conditions are evaluated at compile
