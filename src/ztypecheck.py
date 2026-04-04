@@ -171,6 +171,10 @@ def _check_private_redefinition(as_items: dict) -> Optional[zast.Unit]:
     return None
 
 
+# Names in 'as' that are structural, not user-defined members
+_AS_SPECIAL_NAMES = frozenset({"public", "private", "tag"})
+
+
 class TypeChecker:
     """
     Single-pass demand-driven type checker.
@@ -898,6 +902,43 @@ class TypeChecker:
                 hint="add .lock to a parameter to borrow from it",
             )
 
+    def _check_is_as_name_collision(
+        self,
+        name: str,
+        is_items: dict,
+        as_items: dict,
+        is_functions: dict,
+        as_functions: dict,
+        loc: Token,
+    ) -> None:
+        """Check for name collisions between 'is' and 'as' sections."""
+        # function name in both sections
+        for mname in is_functions.keys() & as_functions.keys():
+            self._error(
+                f"'{mname}' is defined in both 'is' and 'as' sections of '{name}'",
+                loc=loc,
+            )
+        # field in 'is' clashes with function in 'as'
+        for mname in is_items.keys() & as_functions.keys():
+            self._error(
+                f"'{mname}' is defined in both 'is' and 'as' sections of '{name}'",
+                loc=loc,
+            )
+        # function in 'is' clashes with item in 'as' (skip special names and generics)
+        for mname in is_functions.keys() & as_items.keys():
+            if mname not in _AS_SPECIAL_NAMES:
+                self._error(
+                    f"'{mname}' is defined in both 'is' and 'as' sections of '{name}'",
+                    loc=loc,
+                )
+        # field in 'is' clashes with item in 'as' (skip special names and generics)
+        for mname in is_items.keys() & as_items.keys():
+            if mname not in _AS_SPECIAL_NAMES:
+                self._error(
+                    f"'{mname}' is defined in both 'is' and 'as' sections of '{name}'",
+                    loc=loc,
+                )
+
     def _resolve_class_type(self, unitname: str, name: str, cls: zast.Class) -> ZType:
         key = f"{unitname}.{name}"
         ctype = _make_type(name, ZTypeType.CLASS)
@@ -1000,6 +1041,10 @@ class TypeChecker:
                         ctype.param_defaults[fname] = cast(zast.AtomId, fpath).name
         if generic_ctx:
             self._generic_context.pop()
+
+        self._check_is_as_name_collision(
+            name, cls.items, cls.as_items, cls.functions, cls.as_functions, cls.start
+        )
 
         # for generic classes, defer method resolution and meta.create to monomorphization
         if not ctype.isgeneric:
@@ -1262,6 +1307,15 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.pop()
 
+        self._check_is_as_name_collision(
+            name,
+            union_defn.items,
+            union_defn.as_items,
+            union_defn.functions,
+            union_defn.as_functions,
+            union_defn.start,
+        )
+
         # for generic unions, skip tag generation (done at monomorphization time)
         if utype.isgeneric:
             # resolve methods
@@ -1396,6 +1450,15 @@ class TypeChecker:
                 vtype.children[sname] = st
         if generic_ctx:
             self._generic_context.pop()
+
+        self._check_is_as_name_collision(
+            name,
+            variant_defn.items,
+            variant_defn.as_items,
+            variant_defn.functions,
+            variant_defn.as_functions,
+            variant_defn.start,
+        )
 
         # for generic variants, skip tag generation (done at monomorphization time)
         if vtype.isgeneric:
@@ -1612,6 +1675,9 @@ class TypeChecker:
                         rtype.param_defaults[fname] = cast(zast.AtomId, fpath).name
         if generic_ctx:
             self._generic_context.pop()
+        self._check_is_as_name_collision(
+            name, rec.items, rec.as_items, rec.functions, rec.as_functions, rec.start
+        )
         for mname, mfunc in rec.functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
@@ -1739,8 +1805,32 @@ class TypeChecker:
     def _process_as_items_protocols(
         self, name: str, rtype: ZType, as_items: dict, start: Token
     ) -> None:
-        """Process as_items for protocol satisfaction (labeled protocol refs)."""
+        """Process as_items for protocol satisfaction, constants, and other static items."""
         for label, apath in as_items.items():
+            # constant value: numeric literal in 'as' section
+            if apath.nodetype in (
+                NodeType.ATOMID,
+                NodeType.LABELVALUE,
+            ) and _is_numeric_id(cast(zast.AtomId, apath).name):
+                apath_atom = cast(zast.AtomId, apath)
+                at = self._resolve_numeric(apath_atom.name, loc=apath_atom.start)
+                if at:
+                    _, value, err = parse_number(apath_atom.name)
+                    if not err and type(value) is int:
+                        apath_atom.const_value = value
+                        # create a type that inherits from the canonical numeric type
+                        # so operators work, but carries const_value for the emitter
+                        ct = _make_type(at.name, at.typetype)
+                        ct.children = at.children  # share operator methods
+                        ct.const_value = value
+                        ct.is_valtype = True
+                        apath.type = ct
+                        rtype.children[label] = ct
+                    else:
+                        apath.type = at
+                        rtype.children[label] = at
+                continue
+
             at = self._resolve_typeref(apath)
             if (
                 at
@@ -3625,6 +3715,15 @@ class TypeChecker:
                 f"Cannot assign {new_t.name} to variable of type {existing.name}",
                 loc=reassign.start,
             )
+
+        # static constant check: cannot reassign 'as' section constants
+        if existing and existing.const_value is not None:
+            if reassign.topath.nodetype == NodeType.DOTTEDPATH:
+                child_name = cast(zast.DottedPath, reassign.topath).child.name
+                self._error(
+                    f"Cannot reassign static constant '{child_name}'",
+                    loc=reassign.start,
+                )
 
         # ownership check: reftype fields can only be changed with swap
         if existing and not _is_valtype(existing):

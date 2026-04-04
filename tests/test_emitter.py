@@ -2520,6 +2520,42 @@ class TestSpecs:
         output = compile_and_run(csource)
         assert output.strip() == "7"
 
+    def test_record_func_pointer_reassignment(self):
+        """Function pointer field in record 'is' section can be reassigned."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "mul: function {a: i64 b: i64} out i64 is { return a * b }\n"
+            "calculator: record {\n"
+            "    op: function {a: i64 b: i64} out i64\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: calculator op: add.take\n"
+            '  print "\\{c.op a: 3 b: 4}"\n'
+            "  c.op = mul.take\n"
+            '  print "\\{c.op a: 3 b: 4}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7\n12"
+
+    def test_class_func_pointer_reassignment(self):
+        """Function pointer field in class 'is' section can be reassigned."""
+        csource = emit_source(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "mul: function {a: i64 b: i64} out i64 is { return a * b }\n"
+            "calc: class {\n"
+            "    op: function {a: i64 b: i64} out i64\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: calc op: add.take\n"
+            '  print "\\{c.op a: 5 b: 6}"\n'
+            "  c.op = mul.take\n"
+            '  print "\\{c.op a: 5 b: 6}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "11\n30"
+
     def test_spec_asan(self):
         """No memory issues with function references (ASan)."""
         csource = emit_source(
@@ -2534,6 +2570,56 @@ class TestSpecs:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0
         assert result.stdout.strip() == "7"
+
+
+class TestAsConstants:
+    """Constants defined in 'as' sections of records and classes."""
+
+    def test_record_as_constant_runtime(self):
+        """Record with integer constant in 'as' section compiles and runs."""
+        csource = emit_source(
+            "r: record { x: i64 } as { max_val: 100 }\n"
+            'main: function is { print "\\{r.max_val}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "100"
+
+    def test_class_as_constant_runtime(self):
+        """Class with integer constant in 'as' section compiles and runs."""
+        csource = emit_source(
+            "c: class { x: i64 } as { default_x: 42 }\n"
+            'main: function is { print "\\{c.default_x}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+    def test_record_as_constant_used_in_expression(self):
+        """Constant from 'as' section can be used in an expression."""
+        csource = emit_source(
+            "r: record { x: i64 } as { offset: 10 }\n"
+            "main: function is {\n"
+            "  val: r.offset + 5\n"
+            '  print "\\{val}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "15"
+
+    def test_record_as_constant_with_method(self):
+        """Record with both constant and method in 'as' section."""
+        csource = emit_source(
+            "r: record { x: i64 } as {\n"
+            "  max_val: 100\n"
+            "  get_x: function {p: this} out i64 is { return p.x }\n"
+            "}\n"
+            "main: function is {\n"
+            "  p: r x: 5\n"
+            '  print "\\{r.max_val}"\n'
+            '  print "\\{r.get_x p}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "100\n5"
 
 
 class TestDefaults:

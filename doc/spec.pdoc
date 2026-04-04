@@ -3261,6 +3261,67 @@ How to do this?
   """
 
 
+#---: 'is' and 'as' Sections
+
+Records, classes, unions and variants have two sections: #~"is" (instance
+members) and #~"as" (static/shared members). Names in both sections share a
+single namespace -- the same name cannot appear in both sections.
+
+The #~"is" section contains per-instance data:
+
+#ul:
+  [#*: Fields (data stored in each instance)]
+  [#*: Function pointer fields (stored per-instance, can be replaced)]
+  [#*: Protocol implementation declarations]
+
+The #~"as" section contains type-level static members:
+
+#ul:
+  [#*: Methods (shared functions, not stored per-instance)]
+  [#*: Generic type parameters]
+  [#*: Integer constants (immutable, accessed via #~"TypeName.const_name")]
+  [#*: Protocol/facet conformance labels]
+  [#*: Visibility declarations (#~"public", #~"private")]
+
+Functions defined in the #~"is" section are stored as function pointer fields
+in the instance struct. Each instance carries its own copy and these can be
+replaced with any function of the same signature:
+
+#code language=zerolang: """
+  calculator: record {
+      op: function {a: i64 b: i64} out i64
+  }
+  main: function is {
+      c: calculator op: add.take
+      c.op = mul.take    # replace the function pointer
+  }
+  """
+
+Functions defined in the #~"as" section are compiled as standalone functions
+shared by all instances. They are called via #~"TypeName.method instance":
+
+#code language=zerolang: """
+  point: record { x: f64  y: f64 } as {
+      distance: function {p: this} out f64 is {
+          return (p.x * p.x) + (p.y * p.y)
+      }
+  }
+  """
+
+Integer constants in the #~"as" section are type-level immutable values:
+
+#code language=zerolang: """
+  config: record { x: i64 } as {
+      max_val: 100
+      version: 1
+  }
+  main: function is {
+      print "\{config.max_val}"   # prints 100
+      # config.max_val = 200      # compile error: cannot reassign static constant
+  }
+  """
+
+
 #---: protocol
 
 A protocol is defined as a list of function specs. Each spec must include a

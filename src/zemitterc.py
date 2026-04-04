@@ -563,6 +563,16 @@ class CEmitter:
                             self._facet_conformers.setdefault(proto_name, []).append(
                                 qname
                             )
+                        # constant in 'as' section
+                        if apath.const_value is not None:
+                            self._const_names.add(f"{qname}.{label}")
+            elif defn_type in (zast.Union, zast.Variant):
+                if not self._is_generic_template(defn):
+                    for mname in defn.functions:
+                        self._is_func_fields.add(f"{qname}.{mname}")
+                    for label, apath in defn.as_items.items():
+                        if apath.const_value is not None:
+                            self._const_names.add(f"{qname}.{label}")
             elif defn_type == zast.Protocol:
                 if not self._is_generic_template(defn):
                     self._protocol_defs[qname] = defn
@@ -666,6 +676,19 @@ class CEmitter:
         if node.type:
             ctype = TYPEMAP.get(node.type.name, "int64_t")
         self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
+
+    def _emit_as_constants(self, type_name: str, as_items: dict) -> None:
+        """Emit static constants defined in an 'as' section."""
+        for label, apath in as_items.items():
+            if apath.const_value is not None:
+                v = apath.const_value
+                self.needs_stdint = True
+                qname = f"{type_name}.{label}"
+                cname = _mangle_func(qname)
+                ctype = "int64_t"
+                if apath.type:
+                    ctype = TYPEMAP.get(apath.type.name, "int64_t")
+                self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
 
     def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
         """Emit facet definitions and impls (deferred to after all conforming types)."""
@@ -1232,6 +1255,8 @@ class CEmitter:
             if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, rec)
             # facet impls are deferred to _emit_deferred_facets
+        # emit 'as' constants
+        self._emit_as_constants(name, rec.as_items)
 
     def _func_pointer_field_decl(
         self, parent_name: str, mname: str, mfunc: zast.Function
@@ -1454,6 +1479,8 @@ class CEmitter:
             )
             if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
                 self._emit_protocol_impl(name, label, proto_name, cls)
+        # emit 'as' constants
+        self._emit_as_constants(name, cls.as_items)
 
     def _resolve_tag_values(
         self, union_defn: "zast.Union | zast.Variant"
@@ -1566,6 +1593,8 @@ class CEmitter:
         for mname, mfunc in all_funcs:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+        # emit 'as' constants
+        self._emit_as_constants(name, union_defn.as_items)
 
     def _emit_mono_type(
         self, mono_type: ZType, template_defn: zast.TypeDefinition
@@ -2692,6 +2721,8 @@ class CEmitter:
         for mname, mfunc in all_funcs:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
+        # emit 'as' constants
+        self._emit_as_constants(name, variant_defn.as_items)
 
     def _emit_data(self, name: str, data: zast.Data) -> None:
         self.needs_stdint = True
@@ -4282,6 +4313,14 @@ class CEmitter:
                     f"{{ {tmp}.data[_i] = {parent}[_i]; }}\n"
                 )
                 return tmp
+        # check if the dotted path resolves to a constant (from 'as' section)
+        if path.type and path.type.const_value is not None:
+            parent_type_dp = path.parent.type
+            if parent_type_dp:
+                const_qname = f"{parent_type_dp.name}.{child}"
+                if const_qname in self._const_names:
+                    return _mangle_func(const_qname)
+
         # check if the dotted path resolves to a function (method call or field access)
         if path.type and path.type.typetype == ZTypeType.FUNCTION:
             func_name = path.type.name  # e.g. "calculator.op" or "point.distance"

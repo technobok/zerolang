@@ -5365,3 +5365,135 @@ class TestTypeNarrowing:
             "  }\n"
             "}"
         )
+
+
+class TestIsAsNamespaceCollision:
+    """Names cannot appear in both 'is' and 'as' sections of an object."""
+
+    def test_record_function_in_both_is_and_as(self):
+        """Same function name in 'is' and 'as' of record is an error."""
+        errors = check_errors(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "r: record {\n"
+            "  f: function {a: i64 b: i64} out i64\n"
+            "} as {\n"
+            "  f: function {p: this} out i64 is { return 0 }\n"
+            "}\n"
+            "main: function is { x: r f: add.take }"
+        )
+        assert any("'f'" in e.msg and "'is' and 'as'" in e.msg for e in errors)
+
+    def test_class_function_in_both_is_and_as(self):
+        """Same function name in 'is' and 'as' of class is an error."""
+        errors = check_errors(
+            "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
+            "c: class {\n"
+            "  f: function {a: i64 b: i64} out i64\n"
+            "} as {\n"
+            "  f: function {p: this} out i64 is { return 0 }\n"
+            "}\n"
+            "main: function is { x: c f: add.take }"
+        )
+        assert any("'f'" in e.msg and "'is' and 'as'" in e.msg for e in errors)
+
+    def test_union_no_collision_when_names_differ(self):
+        """Union with different names in 'is' subtypes and 'as' methods is fine."""
+        check_ok(
+            "u: union {\n"
+            "  a: i64\n"
+            "  b: null\n"
+            "} as {\n"
+            "  f: function {p: this} out i64 is { return 0 }\n"
+            "}\n"
+            "main: function is { x: u.a 1 }"
+        )
+
+    def test_union_function_name_collision(self):
+        """Function in 'is' and 'as' of union with same name is an error."""
+        errors = check_errors(
+            "u: union {\n"
+            "  a: i64\n"
+            "  b: null\n"
+            "  f: function {x: i64} out i64\n"
+            "} as {\n"
+            "  f: function {p: this} out i64 is { return 0 }\n"
+            "}\n"
+            "main: function is { x: u.a 1 }"
+        )
+        assert any("'f'" in e.msg and "'is' and 'as'" in e.msg for e in errors)
+
+    def test_different_names_in_is_and_as_ok(self):
+        """Different names in 'is' and 'as' is fine."""
+        check_ok(
+            "r: record {\n"
+            "  x: i64\n"
+            "} as {\n"
+            "  get_x: function {p: this} out i64 is { return p.x }\n"
+            "}\n"
+            "main: function is {\n"
+            "  p: r x: 1\n"
+            '  print "\\{r.get_x p}"\n'
+            "}"
+        )
+
+    def test_generic_param_in_as_no_collision_with_field(self):
+        """Generic param in 'as' doesn't collide with field in 'is'."""
+        # 'val' is in 'is', 't' is in 'as' — different names, no collision
+        check_ok(
+            "box: record { val: t } as { t: any.generic }\n"
+            "main: function is {\n"
+            "  b: box val: 42\n"
+            '  print "\\{b.val}"\n'
+            "}"
+        )
+
+    def test_field_in_is_clashes_with_function_in_as(self):
+        """Field in 'is' with same name as function in 'as' is an error."""
+        errors = check_errors(
+            "r: record {\n"
+            "  x: i64\n"
+            "} as {\n"
+            "  x: function {p: this} out i64 is { return 0 }\n"
+            "}\n"
+            "main: function is { p: r x: 1 }"
+        )
+        assert any("'x'" in e.msg and "'is' and 'as'" in e.msg for e in errors)
+
+
+class TestAsConstants:
+    """Constants in the 'as' section of records and classes."""
+
+    def test_record_as_constant_typechecks(self):
+        """Integer constant in 'as' section type-checks successfully."""
+        check_ok(
+            "r: record { x: i64 } as { max_val: 100 }\n"
+            "main: function is {\n"
+            '  print "\\{r.max_val}"\n'
+            "}"
+        )
+
+    def test_class_as_constant_typechecks(self):
+        """Integer constant in 'as' section of class type-checks."""
+        check_ok(
+            "c: class { x: i64 } as { default_x: 42 }\n"
+            "main: function is {\n"
+            '  print "\\{c.default_x}"\n'
+            "}"
+        )
+
+    def test_as_constant_collision_with_is_field(self):
+        """Constant in 'as' with same name as 'is' field is a collision error."""
+        errors = check_errors(
+            "r: record { x: i64 } as { x: 100 }\nmain: function is { p: r x: 1 }"
+        )
+        assert any("'x'" in e.msg and "'is' and 'as'" in e.msg for e in errors)
+
+    def test_as_constant_cannot_be_reassigned(self):
+        """Reassigning a constant from 'as' section is a compile error."""
+        errors = check_errors(
+            "r: record { x: i64 } as { max_val: 100 }\n"
+            "main: function is {\n"
+            "  r.max_val = 200\n"
+            "}"
+        )
+        assert any("static constant" in e.msg for e in errors)

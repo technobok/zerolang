@@ -163,6 +163,8 @@ Table of Contents</div>
 </li>
 <li><a href="#class">class</a>
 </li>
+<li><a href="#is-and-as-sections">'is' and 'as' Sections</a>
+</li>
 <li><a href="#protocol">protocol</a>
 </li>
 <li><a href="#facet">facet</a>
@@ -1200,15 +1202,29 @@ type.</p>
 <a href="#generic-types">generic parameter</a> constraints.</p>
 <h5 id="type-narrowing">Type Narrowing</h5>
 <p>The compiler keeps track of the type of every expression at every point in the
-program source.</p>
+program source via a flow-typing system (TypeState). This tracking is
+intra-function only and does not cross function call boundaries.</p>
 <p><a href="#sum-types">Sum types</a> can be 'narrowed' back to their specific child types
-by using <a href="#match">match</a> expressions.</p>
+by using <a href="#match">match</a> expressions or by assignment to a specific subtype.</p>
 <p>Within a successful <code>then</code> clause of a <code>match</code>, the target variable will be
-narrowed to the type(s) listed in the related <code>of</code> clause(s).</p>
+narrowed to the type(s) listed in the related <code>of</code> clause(s). Accessing a
+different subtype within the arm is a compile error.</p>
 <p>Also, a <code>match</code> clause that exits the current scope (using a <code>return</code>, <code>break</code>
 or <code>continue</code>) will also 'narrow' a named target for the remainder of that
 scope -- ie. the type of that named target will exclude the subtypes where a
 matching <code>of</code> clause has resulted in exiting the current scope.</p>
+<p>Assignment-based narrowing: when a variable of union or variant type is assigned
+a specific subtype value (eg. <code>x: result.ok 42</code>), the compiler narrows the
+variable to that subtype. Reassignment resets narrowing and optionally re-narrows
+if the new value is also a specific subtype.</p>
+<p>An <code>else</code> clause of a <code>match</code> sees the union/variant type with all explicit
+<code>case</code> subtypes excluded.</p>
+<p>If all branches of an <code>if</code> or <code>match</code> exit the current scope (return, break,
+continue), any statements following that expression are unreachable and are
+flagged as a compile error.</p>
+<p>Narrowing is purely a compile-time concept. The runtime representation of a
+variable is not changed by narrowing -- a union/variant variable retains its
+full tagged representation regardless of narrowing.</p>
 <h4 id="interface-types"><a href="#interface-types">5.1.5. Interface types</a></h4>
 <p>Interface types specify a list of methods names and signatures. Items may
 implement an interface by supplying implementations of each those methods
@@ -2830,7 +2846,51 @@ mynode: class {
     left: (this t)
     right: (this t)
 }</code></pre>
-<h3 id="protocol"><a href="#protocol">5.14. protocol</a></h3>
+<h3 id="is-and-as-sections"><a href="#is-and-as-sections">5.14. 'is' and 'as' Sections</a></h3>
+<p>Records, classes, unions and variants have two sections: <code>is</code> (instance
+members) and <code>as</code> (static/shared members). Names in both sections share a
+single namespace -- the same name cannot appear in both sections.</p>
+<p>The <code>is</code> section contains per-instance data:</p>
+<ul>
+<li>Fields (data stored in each instance)</li>
+<li>Function pointer fields (stored per-instance, can be replaced)</li>
+<li>Protocol implementation declarations</li>
+</ul>
+<p>The <code>as</code> section contains type-level static members:</p>
+<ul>
+<li>Methods (shared functions, not stored per-instance)</li>
+<li>Generic type parameters</li>
+<li>Integer constants (immutable, accessed via <code>TypeName.const_name</code>)</li>
+<li>Protocol/facet conformance labels</li>
+<li>Visibility declarations (<code>public</code>, <code>private</code>)</li>
+</ul>
+<p>Functions defined in the <code>is</code> section are stored as function pointer fields
+in the instance struct. Each instance carries its own copy and these can be
+replaced with any function of the same signature:</p>
+<pre><code class="language-zerolang">calculator: record {
+    op: function {a: i64 b: i64} out i64
+}
+main: function is {
+    c: calculator op: add.take
+    c.op = mul.take    # replace the function pointer
+}</code></pre>
+<p>Functions defined in the <code>as</code> section are compiled as standalone functions
+shared by all instances. They are called via <code>TypeName.method instance</code>:</p>
+<pre><code class="language-zerolang">point: record { x: f64  y: f64 } as {
+    distance: function {p: this} out f64 is {
+        return (p.x * p.x) + (p.y * p.y)
+    }
+}</code></pre>
+<p>Integer constants in the <code>as</code> section are type-level immutable values:</p>
+<pre><code class="language-zerolang">config: record { x: i64 } as {
+    max_val: 100
+    version: 1
+}
+main: function is {
+    print "\{config.max_val}"   # prints 100
+    # config.max_val = 200      # compile error: cannot reassign static constant
+}</code></pre>
+<h3 id="protocol"><a href="#protocol">5.15. protocol</a></h3>
 <p>A protocol is defined as a list of function specs. Each spec must include a
 <code>this</code> parameter (the receiver). Static methods can also be part of a
 protocol. A protocol cannot include constructors or destructors because they
@@ -2865,7 +2925,7 @@ writer: protocol {
 #     read: function {:this b: buffer} out boolean
 #     write: function {:this b: buffer} out boolean
 # }</code></pre>
-<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.14.1. Protocol Instance Creation</a></h4>
+<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.15.1. Protocol Instance Creation</a></h4>
 <p>Fields, variables and parameters can be declared to be instances of a named
 protocol. Protocol instances can then be assigned to those fields, variables or
 call arguments.</p>
@@ -2927,7 +2987,7 @@ main: function is {
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>
-<h3 id="facet"><a href="#facet">5.15. facet</a></h3>
+<h3 id="facet"><a href="#facet">5.16. facet</a></h3>
 <p>A facet is the value-type equivalent of a protocol. Where protocol instances
 contain a pointer to the underlying data, facet instances contain a copy of the
 data itself, making them value types.</p>
@@ -2937,7 +2997,7 @@ implement. Only value types (records, variants) can implement facets.</p>
 <pre><code class="language-zerolang">measurable: facet {
     measure: function {:this b: i64} out i64
 }</code></pre>
-<h4 id="conformance"><a href="#conformance">5.15.1. Conformance</a></h4>
+<h4 id="conformance"><a href="#conformance">5.16.1. Conformance</a></h4>
 <p>A value type declares conformance to a facet via a labeled entry in its
 <code>as</code> section, the same pattern used for protocols:</p>
 <pre><code class="language-zerolang">point: record { x: i64 } as {
@@ -2950,7 +3010,7 @@ implement. Only value types (records, variants) can implement facets.</p>
 matching signatures (parameter names, types, and return type).</p>
 <p>Only value types may implement facets. Attempting to implement a facet on
 a class or union produces a compile-time error.</p>
-<h4 id="constructors"><a href="#constructors">5.15.2. Constructors</a></h4>
+<h4 id="constructors"><a href="#constructors">5.16.2. Constructors</a></h4>
 <p>The compiler generates three constructors for non-generic facets:</p>
 <ul>
 <li><code>create</code> and <code>take</code> copy the source value into the facet
@@ -2962,7 +3022,7 @@ Signature: <code>borrow: function {from: T.lock} out facettype.borrow</code></li
 <p>Although the data is always copied, <code>borrow</code> still locks the source to
 maintain consistent ownership semantics with protocols. This is important
 when facets and protocols are used interchangeably in generic code.</p>
-<h4 id="runtime-layout"><a href="#runtime-layout">5.15.3. Runtime layout</a></h4>
+<h4 id="runtime-layout"><a href="#runtime-layout">5.16.3. Runtime layout</a></h4>
 <p>Facet instances are stack-allocated value types. The C representation is:</p>
 <ul>
 <li>A pointer to the vtable (constant offset, first field)</li>
@@ -2972,15 +3032,15 @@ when facets and protocols are used interchangeably in generic code.</p>
 the vtable, the same as protocols.</p>
 <pre><code class="language-zerolang">f: measurable.create from: p
 r: f.measure b: 10    # dispatches through vtable</code></pre>
-<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.15.4. Facets as generic constraints</a></h4>
+<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.16.4. Facets as generic constraints</a></h4>
 <p>Facets can be used as generic constraints, the same as protocols. A
 generic parameter constrained by a facet accepts any type that conforms
 to that facet.</p>
-<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.15.5. Facets as typedef base</a></h4>
+<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.16.5. Facets as typedef base</a></h4>
 <p>A record typedef can wrap a facet type, just as a class typedef can wrap
 a protocol type. Both are kind-compatible (record wraps facet because
 both are value types).</p>
-<h3 id="union"><a href="#union">5.16. union</a></h3>
+<h3 id="union"><a href="#union">5.17. union</a></h3>
 <p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
 <p>Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
@@ -3016,7 +3076,7 @@ providing a name and a type.</p>
     u4: string
     u5: myclass    # a class defined elsewhere
 }</code></pre>
-<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.16.1. Constructing union instances</a></h4>
+<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.17.1. Constructing union instances</a></h4>
 <p>After a union type has been defined, instances are constructed using a
 per-subtype constructor accessed via dot notation: <code>myunion.subtype expr</code>.
 Each subtype automatically gets a constructor. Null subtypes take no argument.
@@ -3034,7 +3094,7 @@ c: result.none                      # null subtype: no argument
 
 # named argument form
 d: result.err from: mystr.take      # explicit .take transfers ownership</code></pre>
-<h4 id="ownership-2"><a href="#ownership-2">5.16.2. Ownership</a></h4>
+<h4 id="ownership-2"><a href="#ownership-2">5.17.2. Ownership</a></h4>
 <p>Union instances are owned reference types. The same ownership rules that apply
 to classes also apply to unions:</p>
 <ul>
@@ -3047,7 +3107,7 @@ to classes also apply to unions:</p>
 <p>The compiler generates a per-union destructor that switches on the tag to
 correctly free each subtype's payload: <code>free()</code> for boxed valtypes,
 the appropriate destructor for reftype payloads, and nothing for null subtypes.</p>
-<h4 id="match-on-unions"><a href="#match-on-unions">5.16.3. Match on unions</a></h4>
+<h4 id="match-on-unions"><a href="#match-on-unions">5.17.3. Match on unions</a></h4>
 <p>The <code>match</code> statement dispatches on the union's tag. All subtypes must be
 covered by case clauses, or an <code>else</code> clause must be present. Inside a case
 clause, the payload is accessed via dotted path on the union variable.</p>
@@ -3070,7 +3130,7 @@ clause, the payload is accessed via dotted path on the union variable.</p>
 }</code></pre>
 <p>Accessing subtype data outside of a <code>match</code> clause is a compile error &#x2014;
 the union must be narrowed first.</p>
-<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.16.4. Creating sum-type instances</a></h4>
+<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.17.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
 <pre><code class="language-zerolang">myclass: class {a: u32 b: u32}
 
@@ -3100,7 +3160,7 @@ myvariant: variant {
 system defined union that includes all possible types used in the current
 program.</p>
 <pre><code class="language-zerolang">smallint: union { i8: null u8: null }</code></pre>
-<h3 id="variant"><a href="#variant">5.17. variant</a></h3>
+<h3 id="variant"><a href="#variant">5.18. variant</a></h3>
 <p>Variants are sum-types that can contain only one of it's child types at any
 given time. A descriminator is usually generated or set for each case. A
 variant is a value type and all child types must be value types. A variant is
@@ -3122,7 +3182,7 @@ always as large as its largest containing type plus the descriminator.</p>
 </table>
 <p>See also the <a href="#union">union</a> section. Other than variants being a value type, all
 other instructions for a union also apply to a variant.</p>
-<h4 id="enumerated-types"><a href="#enumerated-types">5.17.1. Enumerated Types</a></h4>
+<h4 id="enumerated-types"><a href="#enumerated-types">5.18.1. Enumerated Types</a></h4>
 <p>TODO: enums are also variants/unions... Fix this section.... Move it within union and variant</p>
 <p>A variant or union without additional data on each variation creates an
 enumerated type based on an underlying numeric type. To specify that there is
@@ -3188,7 +3248,7 @@ operators.</p>
 boolean: variant { FALSE TRUE }
 true: boolean.TRUE
 false: boolean.FALSE</code></pre>
-<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.17.2. Using sum-type instances</a></h4>
+<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.18.2. Using sum-type instances</a></h4>
 <p>A sum type instance can be tested to see if it is a specific subtype. A
 predicate <code>method</code> is generated for each member named as the member name
 followed by a question mark. The method returns a boolean. </p>
@@ -3223,14 +3283,14 @@ if y: x.t2 then {
 if y: x.t3 then {    # ERROR: syntax error, cannot assign myunion.t3 to y
     # ...
 }</code></pre>
-<h3 id="operations-2"><a href="#operations-2">5.18. Operations</a></h3>
-<h4 id="constants-and-variables"><a href="#constants-and-variables">5.18.1. Constants and Variables</a></h4>
+<h3 id="operations-2"><a href="#operations-2">5.19. Operations</a></h3>
+<h4 id="constants-and-variables"><a href="#constants-and-variables">5.19.1. Constants and Variables</a></h4>
 <p>Literals
 Top level definitions</p>
 <p>Names - identifiers</p>
 <p>Declaration and Initialisation (happen at the same time, must be initialised)
 Includes functions definitions/literals.</p>
-<h4 id="binary-operations"><a href="#binary-operations">5.18.2. Binary operations</a></h4>
+<h4 id="binary-operations"><a href="#binary-operations">5.19.2. Binary operations</a></h4>
 <p>All operations are binary. There are no unary operations. Operation syntax is
 an alternate function call syntax for methods with a receiver and a single
 parameter.</p>

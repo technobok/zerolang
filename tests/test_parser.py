@@ -554,6 +554,50 @@ class TestAsClause:
         assert "y" in u.as_items
 
 
+class TestDuplicateDefinitions:
+    """Test duplicate definition error handling in 'is' and 'as' sections."""
+
+    def test_duplicate_is_clause_record(self):
+        """Duplicate 'is' clause on record is an error."""
+        result = parse_unit("p: record is { x: f64 } is { y: f64 }")
+        assert isinstance(result, zast.Error)
+
+    def test_duplicate_as_clause_record(self):
+        """Duplicate 'as' clause on record is an error."""
+        result = parse_unit("p: record { x: f64 } as { y: f64 } as { z: f64 }")
+        assert isinstance(result, zast.Error)
+
+    def test_duplicate_is_clause_class(self):
+        """Duplicate 'is' clause on class is an error."""
+        result = parse_unit("c: class is { x: f64 } is { y: f64 }")
+        assert isinstance(result, zast.Error)
+
+    def test_duplicate_as_clause_class(self):
+        """Duplicate 'as' clause on class is an error."""
+        result = parse_unit("c: class { x: f64 } as { y: f64 } as { z: f64 }")
+        assert isinstance(result, zast.Error)
+
+    def test_duplicate_item_within_is_body(self):
+        """Duplicate item name within a single 'is' body is an error."""
+        result = parse_unit("p: record { x: f64  x: i64 }")
+        assert isinstance(result, zast.Error)
+
+    def test_duplicate_item_within_as_body(self):
+        """Duplicate item name within a single 'as' body is an error."""
+        result = parse_unit(
+            "p: record { x: f64 } as {\n"
+            "  f: function {a: this} out f64 is { return a.x }\n"
+            "  f: function {a: this} out f64 is { return a.x }\n"
+            "}"
+        )
+        assert isinstance(result, zast.Error)
+
+    def test_duplicate_item_name_field_and_func_within_is(self):
+        """Field and function with same name within 'is' is an error."""
+        result = parse_unit("p: record { x: f64\n x: function {a: i64} out i64 }")
+        assert isinstance(result, zast.Error)
+
+
 class TestDataAsTagParsing:
     """Test parsing data as tag source (Phase 18)."""
 
