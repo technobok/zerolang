@@ -5497,3 +5497,87 @@ class TestAsConstants:
             "}"
         )
         assert any("static constant" in e.msg for e in errors)
+
+
+class TestMatchTake:
+    """Take ownership of match subject inside arms."""
+
+    def test_union_take_in_one_arm(self):
+        """Take subject in one arm of union match — no error."""
+        check_ok(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    x: u.take\n"
+            '    print "\\{x.ok}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}"
+        )
+
+    def test_union_take_in_all_arms(self):
+        """Take subject in all arms — no error."""
+        check_ok(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    x: u.take\n"
+            '    print "\\{x.ok}"\n'
+            "  } case err then {\n"
+            "    y: u.take\n"
+            '    print "\\{y.err}"\n'
+            "  }\n"
+            "}"
+        )
+
+    def test_union_use_after_match_take_is_error(self):
+        """Using subject after match where take occurred is an error."""
+        errors = check_errors(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    x: u.take\n"
+            '    print "\\{x.ok}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            '  print "\\{u.ok}"\n'
+            "}"
+        )
+        assert errors != []
+
+    def test_union_no_take_subject_still_valid(self):
+        """Match without take — subject still valid after match."""
+        check_ok(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            '    print "\\{u.ok}"\n'
+            "  } case err then {\n"
+            '    print "\\{u.err}"\n'
+            "  }\n"
+            '  print "done"\n'
+            "}"
+        )
+
+    def test_take_in_arm_with_else(self):
+        """Take in one arm with else clause — subject invalid after match."""
+        errors = check_errors(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    x: u.take\n"
+            '    print "\\{x.ok}"\n'
+            "  } else {\n"
+            '    print "other"\n'
+            "  }\n"
+            '  print "\\{u.ok}"\n'
+            "}"
+        )
+        assert errors != []

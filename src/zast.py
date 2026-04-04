@@ -616,6 +616,8 @@ class Case(Node):
     subject: "Operation"
     clauses: typing.List["CaseClause"]
     elseclause: Optional["Statement"]
+    # set by type checker: subject was .take'd in at least one arm
+    subject_taken: bool = field(default=False, init=False)
 
 
 @dataclass

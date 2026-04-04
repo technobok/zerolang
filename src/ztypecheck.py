@@ -4058,9 +4058,21 @@ class TypeChecker:
         # regular dotted path resolution
         # ensure parent type is set for emitter (needed for class -> vs . dispatch)
         if path.parent.nodetype == NodeType.ATOMID:
-            parent_type = self._resolve_name(cast(zast.AtomId, path.parent).name)
+            parent_atom = cast(zast.AtomId, path.parent)
+            parent_type = self._resolve_name(parent_atom.name)
             if parent_type:
                 path.parent.type = parent_type
+            else:
+                taken_loc = self.symtab.get_taken_location(parent_atom.name)
+                if taken_loc:
+                    tline, tcol, _ = taken_loc
+                    self._error(
+                        f"cannot use '{parent_atom.name}' after ownership transfer",
+                        loc=path.start,
+                        err=ERR.OWNERERROR,
+                        note=f"ownership of '{parent_atom.name}' was transferred at line {tline}, column {tcol}",
+                    )
+                    return None
         elif path.parent.nodetype == NodeType.DOTTEDPATH:
             self._check_dotted_path(cast(zast.DottedPath, path.parent))
         t = self._resolve_dotted_path(path)
@@ -5214,15 +5226,11 @@ class TypeChecker:
     def _check_case(self, casenode: zast.Case) -> Optional[ZType]:
         self.symtab.push("match")
         subject_type = self._check_operation(casenode.subject)
-        # lock the match subject to prevent mutation in branches
-        match_lock_info: Optional[Tuple[str, str]] = None
-        if subject_type and not _is_valtype(subject_type):
-            subject_name = self._get_arg_root_name(casenode.subject)
-            if subject_name:
-                holder = f"__match_{id(casenode)}"
-                err = self.symtab.try_lock(subject_name, ZLockState.EXCLUSIVE, holder)
-                if not err:
-                    match_lock_info = (subject_name, holder)
+
+        # match does NOT lock its subject (unlike 'for' and function calls).
+        # Arms are mutually exclusive and the subject is evaluated once, so
+        # there is no aliasing or re-evaluation concern. This allows .take
+        # inside arms for ownership transfer.
 
         # determine if subject is a union/variant and get target name for narrowing
         is_sum_type = subject_type is not None and subject_type.typetype in (
@@ -5230,6 +5238,15 @@ class TypeChecker:
             ZTypeType.VARIANT,
         )
         target_name = self._get_arg_root_name(casenode.subject) if is_sum_type else None
+
+        # save subject variable info for take-in-arms tracking (reftypes only)
+        subject_name = self._get_arg_root_name(casenode.subject)
+        subject_var: Optional[ZVariable] = None
+        subject_sym_type: Optional[ZType] = None
+        subject_taken_in_arm: Optional[str] = None  # arm name where take occurred
+        if subject_name and subject_type and not _is_valtype(subject_type):
+            subject_var = self.symtab.lookup_var(subject_name)
+            subject_sym_type = self.symtab.lookup(subject_name)
 
         # union/variant exhaustiveness check
         if is_sum_type and subject_type:
@@ -5284,6 +5301,19 @@ class TypeChecker:
 
             self._check_statement(clause.statement)
 
+            # track take-in-arms: if the subject was taken during this arm,
+            # restore it for subsequent arms (each arm sees the original state)
+            if subject_name and subject_var and subject_sym_type:
+                if self.symtab.lookup(subject_name) is None:
+                    # subject was taken in this arm — record and restore
+                    if subject_taken_in_arm is None:
+                        subject_taken_in_arm = clause.match.name
+                    # restore the variable so the next arm can reference it
+                    self.symtab.define_var(subject_name, subject_var)
+                    # clear the taken record so the next arm starts fresh
+                    if subject_name in self.symtab._taken:
+                        del self.symtab._taken[subject_name]
+
             # post-match narrowing: if arm diverges, exclude that subtype
             if target_name and subject_type:
                 arm_type = self._last_statement_type(clause.statement)
@@ -5307,6 +5337,15 @@ class TypeChecker:
                 self._type_state = pre_match_state
             self._check_statement(casenode.elseclause)
 
+            # track take-in-arms for else clause
+            if subject_name and subject_var and subject_sym_type:
+                if self.symtab.lookup(subject_name) is None:
+                    if subject_taken_in_arm is None:
+                        subject_taken_in_arm = "else"
+                    self.symtab.define_var(subject_name, subject_var)
+                    if subject_name in self.symtab._taken:
+                        del self.symtab._taken[subject_name]
+
             # if else clause diverges, all remaining subtypes are excluded
             # (but the else covers everything not explicitly matched, so this
             # means the post-match state has all subtypes excluded = unreachable)
@@ -5323,9 +5362,25 @@ class TypeChecker:
         # apply post-match narrowing
         self._type_state = post_match_state
 
-        # release match lock
-        if match_lock_info:
-            self.symtab.release_lock(match_lock_info[0], match_lock_info[1])
+        # post-match ownership: if subject was taken in any arm, invalidate it
+        if subject_taken_in_arm and subject_name:
+            casenode.subject_taken = True
+            take_loc = (
+                casenode.subject.start
+                if getattr(casenode.subject, "start", None)
+                else None
+            )
+            loc_tuple = (
+                (take_loc.lineno, take_loc.colno, take_loc.fsno) if take_loc else None
+            )
+            self.symtab.invalidate(subject_name, loc=loc_tuple)
+            # override the taken message for better error reporting
+            if subject_name in self.symtab._taken and take_loc:
+                self.symtab._taken[subject_name] = (
+                    take_loc.lineno,
+                    take_loc.colno,
+                    take_loc.fsno,
+                )
 
         # determine if match is exhaustive (else clause or all subtypes covered)
         is_exhaustive = bool(casenode.elseclause)

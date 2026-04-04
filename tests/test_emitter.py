@@ -5056,3 +5056,63 @@ class TestIteratorPattern:
             )
         )
         assert output.strip() == "42"
+
+
+class TestMatchTake:
+    """Take ownership of match subject inside arms."""
+
+    def test_union_match_take_one_arm(self):
+        """Take in one arm, not the other — compiles and runs correctly."""
+        csource = emit_source(
+            "r: union { ok: i64  err: i64 }\n"
+            "consume: function {x: r.take} is {\n"
+            '  print "consumed"\n'
+            "}\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    consume u\n"
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "consumed"
+
+    def test_union_match_take_all_arms(self):
+        """Take in all arms — compiles and runs correctly."""
+        csource = emit_source(
+            "r: union { ok: i64  err: i64 }\n"
+            "consume: function {x: r.take} is {\n"
+            '  print "consumed"\n'
+            "}\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    consume u\n"
+            "  } case err then {\n"
+            "    consume u\n"
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "consumed"
+
+    def test_union_match_take_asan(self):
+        """No memory leaks when taking in match arm (ASan)."""
+        csource = emit_source(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u) case ok then {\n"
+            "    u.take\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "ok"

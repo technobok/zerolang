@@ -5459,6 +5459,16 @@ class CEmitter:
             parts.append(f"{indent}    }}\n")
 
         parts.append(f"{indent}}}\n")
+
+        # post-match cleanup: destroy subject if taken in any arm but not all
+        if casenode.subject_taken:
+            parts.append(
+                f"{indent}if ({subject} != NULL) {{\n"
+                f"{indent}    z_{union_name}_destroy({subject});\n"
+                f"{indent}}}\n"
+                f"{indent}{subject} = NULL;\n"
+            )
+
         return "".join(parts)
 
     def _emit_nullable_ptr_case(self, casenode: zast.Case, union_type: ZType) -> str:
@@ -5508,6 +5518,16 @@ class CEmitter:
                 parts.append(self._emit_statement(casenode.elseclause))
                 self.indent_level -= 1
             parts.append(f"{indent}}}\n")
+
+        # post-match cleanup for nullable-ptr
+        if casenode.subject_taken:
+            union_name = union_type.name
+            parts.append(
+                f"{indent}if ({subject} != NULL) {{\n"
+                f"{indent}    z_{union_name}_destroy({subject});\n"
+                f"{indent}}}\n"
+                f"{indent}{subject} = NULL;\n"
+            )
 
         return "".join(parts)
 
