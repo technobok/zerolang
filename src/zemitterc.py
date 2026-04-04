@@ -688,7 +688,10 @@ class CEmitter:
                 ctype = "int64_t"
                 if apath.type:
                     ctype = TYPEMAP.get(apath.type.name, "int64_t")
-                self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
+                if type(v) is float:
+                    self.data_defs.append(f"static const {ctype} {cname} = {v};\n")
+                else:
+                    self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
 
     def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
         """Emit facet definitions and impls (deferred to after all conforming types)."""

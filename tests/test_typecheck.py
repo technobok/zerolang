@@ -5498,6 +5498,44 @@ class TestAsConstants:
         )
         assert any("static constant" in e.msg for e in errors)
 
+    def test_float_constant_in_as(self):
+        """Float constant in 'as' section type-checks successfully."""
+        check_ok(
+            "r: record { x: i64 } as { pi: 3.14 }\n"
+            "main: function is {\n"
+            '  print "\\{r.pi}"\n'
+            "}"
+        )
+
+    def test_float_constant_in_expression(self):
+        """Float constant from 'as' can be used in expressions."""
+        check_ok(
+            "r: record { x: i64 } as { scale: 2.5 }\n"
+            "main: function is {\n"
+            "  val: r.scale * 4.0\n"
+            '  print "\\{val}"\n'
+            "}"
+        )
+
+    def test_reference_to_unit_constant(self):
+        """Reference to unit-level constant in 'as' section."""
+        check_ok(
+            "max_size: 100\n"
+            "config: record { x: i64 } as { limit: max_size }\n"
+            "main: function is {\n"
+            '  print "\\{config.limit}"\n'
+            "}"
+        )
+
+    def test_computed_constant_expression(self):
+        """Computed constant expression in 'as' section."""
+        check_ok(
+            "r: record { x: i64 } as { max: 2 * 1024 }\n"
+            "main: function is {\n"
+            '  print "\\{r.max}"\n'
+            "}"
+        )
+
 
 class TestMatchTake:
     """Take ownership of match subject inside arms."""

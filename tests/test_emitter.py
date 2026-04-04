@@ -2621,6 +2621,34 @@ class TestAsConstants:
         output = compile_and_run(csource)
         assert output.strip() == "100\n5"
 
+    def test_float_constant_runtime(self):
+        """Float constant in 'as' section compiles and runs."""
+        csource = emit_source(
+            "r: record { x: i64 } as { pi: 3.14 }\n"
+            'main: function is { print "\\{r.pi}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip().startswith("3.14")
+
+    def test_reference_to_unit_constant_runtime(self):
+        """Reference to unit-level constant in 'as' compiles and runs."""
+        csource = emit_source(
+            "max_size: 100\n"
+            "config: record { x: i64 } as { limit: max_size }\n"
+            'main: function is { print "\\{config.limit}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "100"
+
+    def test_computed_constant_runtime(self):
+        """Computed constant expression compiles and runs."""
+        csource = emit_source(
+            "r: record { x: i64 } as { max: 2 * 1024 }\n"
+            'main: function is { print "\\{r.max}" }'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2048"
+
 
 class TestDefaults:
     def test_function_all_defaults_omitted(self):

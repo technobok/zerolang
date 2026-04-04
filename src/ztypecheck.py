@@ -1816,7 +1816,7 @@ class TypeChecker:
                 at = self._resolve_numeric(apath_atom.name, loc=apath_atom.start)
                 if at:
                     _, value, err = parse_number(apath_atom.name)
-                    if not err and type(value) is int:
+                    if not err and type(value) in (int, float):
                         apath_atom.const_value = value
                         # create a type that inherits from the canonical numeric type
                         # so operators work, but carries const_value for the emitter
@@ -1829,6 +1829,17 @@ class TypeChecker:
                     else:
                         apath.type = at
                         rtype.children[label] = at
+                continue
+
+            # computed constant expression (e.g., max: 2 * 1024)
+            if apath.nodetype == NodeType.BINOP:
+                t = self._check_binop(cast(zast.BinOp, apath))
+                if t and apath.const_value is not None:
+                    ct = _make_type(t.name, t.typetype)
+                    ct.children = t.children
+                    ct.const_value = apath.const_value
+                    ct.is_valtype = True
+                    rtype.children[label] = ct
                 continue
 
             at = self._resolve_typeref(apath)
@@ -1874,6 +1885,16 @@ class TypeChecker:
                 # non-protocol as_item (existing behavior: tag refs, etc.)
                 if at:
                     rtype.children[label] = at
+                    # propagate const_value from referenced definition
+                    if at.const_value is not None and apath.const_value is None:
+                        apath.const_value = at.const_value
+                    elif (
+                        apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                        and apath.const_value is None
+                    ):
+                        defn = self._lookup_definition(cast(zast.AtomId, apath).name)
+                        if defn is not None and defn.const_value is not None:
+                            apath.const_value = defn.const_value
 
     def _check_protocol_signature(
         self,
@@ -4780,10 +4801,12 @@ class TypeChecker:
         return call.type
 
     @staticmethod
-    def _fold_binop(op: str, lhs: int, rhs: int) -> Optional[object]:
-        """Evaluate a binary operation on constant integer values at compile time.
+    def _fold_binop(
+        op: str, lhs: "int | float", rhs: "int | float"
+    ) -> Optional[object]:
+        """Evaluate a binary operation on constant values at compile time.
 
-        Returns int for arithmetic, bool for comparisons, None if not foldable.
+        Returns int/float for arithmetic, bool for comparisons, None if not foldable.
         """
         if op == "+":
             return lhs + rhs

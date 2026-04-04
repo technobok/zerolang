@@ -310,8 +310,10 @@ class Node:
     # TODO: maybe Union(None, ZType, ZTypeCheckInProgress)
     type: Optional[ZType] = field(default=None, init=False)
     # compile-time constant value, filled during type checking (constant folding)
-    # int for integer arithmetic results, bool for comparison/boolean results
-    const_value: Optional[typing.Union[int, bool]] = field(default=None, init=False)
+    # int for integer arithmetic, float for float arithmetic, bool for comparisons
+    const_value: Optional[typing.Union[int, float, bool]] = field(
+        default=None, init=False
+    )
 
     start: Token  # start location in the source for this Node
 

@@ -1559,19 +1559,19 @@ class Parser:
                             # don't promote externs — unit references parent type members
                             # which are resolved by the type checker, not the parser
                     else:
-                        # path/typeref/typeref_or_num
-                        pathx = self._acceptpath(lex)
-                        if pathx is not None and pathx.is_error:
-                            return cast(zast.Error, pathx)  # propagate error
-                        pathx = cast(Optional[NodeX[zast.Path]], pathx)
-                        if pathx:
+                        # path/typeref/typeref_or_num or constant expression
+                        opx = self._acceptoperation(lex)
+                        if opx is not None and opx.is_error:
+                            return cast(zast.Error, opx)  # propagate error
+                        opx = cast(Optional[NodeX[zast.Operation]], opx)
+                        if opx:
                             if label.tokstr in items or label.tokstr in functions:
                                 msg = f"Duplicate item name: {label.tokstr}"
                                 return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
-                            items[label.tokstr] = pathx.node
+                            items[label.tokstr] = opx.node  # type: ignore[assignment]
                             # promote to externitems (will be promoted to extern below, after locals)
-                            promoteexterns(addto=externitems, addfrom=pathx.extern)
+                            promoteexterns(addto=externitems, addfrom=opx.extern)
                         else:
                             # error
                             msg = f"Expected a function or expression for item: {label.tokstr}"
