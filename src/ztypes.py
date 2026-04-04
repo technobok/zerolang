@@ -240,6 +240,10 @@ class ZType:
     # access to the referenced type. Set during type resolution.
     private_fields: "set[str]" = field(default_factory=set, init=False)
 
+    # auto-generated equality: True when == and != are compiler-synthesized
+    # (structural equality for records, tag+payload for variants)
+    is_autogen_eq: bool = field(default=False, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.

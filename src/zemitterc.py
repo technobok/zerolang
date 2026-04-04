@@ -1250,6 +1250,9 @@ class CEmitter:
         # emit meta.create constructor
         self._emit_meta_create(name, rec)
 
+        # emit auto-generated equality function
+        self._emit_autogen_eq(name, rec.items, rec.functions)
+
         # emit 'is' functions with body as regular C functions (for default values)
         for mname, mfunc in rec.functions.items():
             if mfunc.body:
@@ -1270,6 +1273,87 @@ class CEmitter:
             # facet impls are deferred to _emit_deferred_facets
         # emit 'as' constants
         self._emit_as_constants(name, rec.as_items)
+
+    def _emit_autogen_eq(
+        self,
+        name: str,
+        items: dict,
+        functions: dict,
+    ) -> None:
+        """Emit a static z_{name}_eq() function for auto-generated == on records."""
+        ztype = self._resolved_type(name)
+        if not ztype:
+            return
+        eq_method = ztype.children.get("==")
+        if not eq_method or not eq_method.is_autogen_eq:
+            return
+
+        self.needs_stdbool = True
+        ctype = f"z_{name}_t"
+        lines: List[str] = []
+        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
+        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+
+        comparisons: List[str] = []
+        # data fields
+        for fname, fpath in items.items():
+            ft = getattr(fpath, "type", None)
+            if ft and self._needs_eq_call(ft):
+                tname = ft.name.replace(".", "_")
+                comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+            else:
+                comparisons.append(f"(a.{fname} == b.{fname})")
+        # function pointer fields
+        for mname_f, _mfunc in functions.items():
+            comparisons.append(f"(a.{mname_f} == b.{mname_f})")
+
+        if comparisons:
+            lines.append(f"    return {' && '.join(comparisons)};\n")
+        else:
+            lines.append("    return true;\n")
+        lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _needs_eq_call(self, ztype: ZType) -> bool:
+        """Check if a type needs z_{name}_eq() call instead of C ==."""
+        if not ztype:
+            return False
+        eq = ztype.children.get("==")
+        if eq and eq.is_autogen_eq:
+            return True
+        return False
+
+    def _emit_autogen_eq_from_fields(
+        self,
+        name: str,
+        mono_type: ZType,
+        field_items: list,
+        lines: List[str],
+    ) -> None:
+        """Emit z_{name}_eq() for a monomorphized record/variant from field_items."""
+        eq_method = mono_type.children.get("==")
+        if not eq_method or not eq_method.is_autogen_eq:
+            return
+
+        self.needs_stdbool = True
+        ctype = f"z_{name}_t"
+        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
+        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+
+        comparisons: List[str] = []
+        for fname, ct in field_items:
+            ftype = mono_type.children.get(fname)
+            if ftype and self._needs_eq_call(ftype):
+                tname = ftype.name.replace(".", "_")
+                comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+            else:
+                comparisons.append(f"(a.{fname} == b.{fname})")
+
+        if comparisons:
+            lines.append(f"    return {' && '.join(comparisons)};\n")
+        else:
+            lines.append("    return true;\n")
+        lines.append("}\n\n")
 
     def _func_pointer_field_decl(
         self, parent_name: str, mname: str, mfunc: zast.Function
@@ -1803,21 +1887,32 @@ class CEmitter:
             lines.append("    } data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # emit equality function
-        lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
-        lines.append("    if (a.tag != b.tag) return false;\n")
-        lines.append("    switch (a.tag) {\n")
-        for sname, stype in subtype_items:
-            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = stype.typetype == ZTypeType.NULL
-            lines.append(f"        case {tag}:")
-            if is_null:
-                lines.append(" return true;\n")
+        # emit equality function (if auto-generated)
+        eq_method = mono_type.children.get("==")
+        if eq_method and eq_method.is_autogen_eq:
+            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b);\n")
+            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
+            if all_null:
+                lines.append("    return a.tag == b.tag;\n")
             else:
-                lines.append(f" return a.data.{sname} == b.data.{sname};\n")
-        lines.append("    }\n")
-        lines.append("    return false;\n")
-        lines.append("}\n\n")
+                lines.append("    if (a.tag != b.tag) return false;\n")
+                lines.append("    switch (a.tag) {\n")
+                for sname, stype in subtype_items:
+                    tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+                    is_null = stype.typetype == ZTypeType.NULL
+                    lines.append(f"        case {tag}:")
+                    if is_null:
+                        lines.append(" return true;\n")
+                    elif self._needs_eq_call(stype):
+                        tname = stype.name.replace(".", "_")
+                        lines.append(
+                            f" return z_{tname}_eq(a.data.{sname}, b.data.{sname});\n"
+                        )
+                    else:
+                        lines.append(f" return a.data.{sname} == b.data.{sname};\n")
+                lines.append("    }\n")
+                lines.append("    return false;\n")
+            lines.append("}\n\n")
 
         # NO destructor — value type
         self.struct_defs.append("".join(lines))
@@ -1874,6 +1969,9 @@ class CEmitter:
         # register field info for call emission
         self._type_field_ctypes[name] = [ct for _, ct in field_items]
         self._type_field_names[name] = field_names
+
+        # emit auto-generated equality function
+        self._emit_autogen_eq_from_fields(name, mono_type, field_items, lines)
 
         self.struct_defs.append("".join(lines))
 
@@ -1941,6 +2039,26 @@ class CEmitter:
         lines.append("    return _old;\n")
         lines.append("}\n\n")
 
+        # emit equality function (element-wise comparison)
+        eq_method = mono_type.children.get("==")
+        if eq_method and eq_method.is_autogen_eq:
+            self.needs_stdbool = True
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            if self._needs_eq_call(elem_type):
+                ename = elem_type.name.replace(".", "_")
+                lines.append(
+                    f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
+                    f"if (!z_{ename}_eq(a.data[_i], b.data[_i])) return false; }}\n"
+                )
+            else:
+                lines.append(
+                    f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
+                    f"if (a.data[_i] != b.data[_i]) return false; }}\n"
+                )
+            lines.append("    return true;\n")
+            lines.append("}\n\n")
+
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_str(self, mono_type: ZType) -> None:
@@ -1989,6 +2107,17 @@ class CEmitter:
         lines.append("    z->data[_this.len] = '\\0';\n")
         lines.append("    return z;\n")
         lines.append("}\n\n")
+
+        # emit equality function (byte-wise comparison)
+        eq_method = mono_type.children.get("==")
+        if eq_method and eq_method.is_autogen_eq:
+            self.needs_stdbool = True
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
+            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            lines.append(
+                "    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n"
+            )
+            lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
 
@@ -2686,43 +2815,47 @@ class CEmitter:
             lines.append("    } data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # emit equality function
-        lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
-        lines.append("    if (a.tag != b.tag) return false;\n")
-        lines.append("    switch (a.tag) {\n")
-        for sname, spath in variant_defn.items.items():
-            tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = (
-                spath.nodetype == NodeType.ATOMID
-                and cast(zast.AtomId, spath).name == "null"
-            )
-            lines.append(f"        case {tag}:")
-            if is_null:
-                lines.append(" return true;\n")
+        # emit equality function (if auto-generated)
+        vtype = self._resolved_type(name)
+        if vtype and vtype.children.get("==") and vtype.children["=="].is_autogen_eq:
+            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b);\n")
+            lines.append(f"static bool z_{name}_eq(z_{name}_t a, z_{name}_t b) {{\n")
+            if all_null:
+                lines.append("    return a.tag == b.tag;\n")
             else:
-                sub_ctype = self._get_subtype_ctype(spath)
-                if (
-                    sub_ctype
-                    and sub_ctype.startswith("z_")
-                    and sub_ctype.endswith("_t")
-                ):
-                    sub_name = sub_ctype[2:-2]  # z_foo_t -> foo
-                    if self._typetype_of(sub_name) == ZTypeType.VARIANT:
-                        # variant subtype: use its eq function
-                        lines.append(
-                            f" return z_{sub_name}_eq(a.data.{sname}, b.data.{sname});\n"
-                        )
+                lines.append("    if (a.tag != b.tag) return false;\n")
+                lines.append("    switch (a.tag) {\n")
+                for sname, spath in variant_defn.items.items():
+                    tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
+                    is_null = (
+                        spath.nodetype == NodeType.ATOMID
+                        and cast(zast.AtomId, spath).name == "null"
+                    )
+                    lines.append(f"        case {tag}:")
+                    if is_null:
+                        lines.append(" return true;\n")
                     else:
-                        # record subtype: compare with memcmp
-                        lines.append(
-                            f" return memcmp(&a.data.{sname}, &b.data.{sname}, sizeof({sub_ctype})) == 0;\n"
-                        )
-                        self.needs_string = True  # memcmp is in string.h
-                else:
-                    lines.append(f" return a.data.{sname} == b.data.{sname};\n")
-        lines.append("    }\n")
-        lines.append("    return false;\n")
-        lines.append("}\n\n")
+                        sub_ctype = self._get_subtype_ctype(spath)
+                        sub_type = getattr(spath, "type", None)
+                        if sub_type and self._needs_eq_call(sub_type):
+                            tname = sub_type.name.replace(".", "_")
+                            lines.append(
+                                f" return z_{tname}_eq(a.data.{sname}, b.data.{sname});\n"
+                            )
+                        elif (
+                            sub_ctype
+                            and sub_ctype.startswith("z_")
+                            and sub_ctype.endswith("_t")
+                        ):
+                            sub_name = sub_ctype[2:-2]  # z_foo_t -> foo
+                            lines.append(
+                                f" return z_{sub_name}_eq(a.data.{sname}, b.data.{sname});\n"
+                            )
+                        else:
+                            lines.append(f" return a.data.{sname} == b.data.{sname};\n")
+                lines.append("    }\n")
+                lines.append("    return false;\n")
+            lines.append("}\n\n")
 
         # NO destructor — value type
         self.struct_defs.append("".join(lines))
@@ -4121,6 +4254,15 @@ class CEmitter:
         ):
             rhs = f"(*{rhs})"
         op = binop.operator.name
+        # route == and != through z_{name}_eq() for autogen equality types
+        if op in ("==", "!=") and binop.lhs.type:
+            eq_method = binop.lhs.type.children.get("==")
+            if eq_method and eq_method.is_autogen_eq:
+                tname = binop.lhs.type.name.replace(".", "_")
+                call = f"z_{tname}_eq({lhs}, {rhs})"
+                if op == "!=":
+                    return f"(!{call})"
+                return call
         cop = C_OPS.get(op, op)
         return f"({lhs} {cop} {rhs})"
 

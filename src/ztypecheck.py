@@ -1501,6 +1501,9 @@ class TypeChecker:
             if mfunc.body:
                 self._check_function_body(f"{name}.{mname}", mfunc)
 
+        # auto-generate == and != for non-generic variants
+        self._synthesize_eq(vtype)
+
         vtype.public_members = _extract_public_members(variant_defn.as_items)
         priv = _check_private_redefinition(variant_defn.as_items)
         if priv:
@@ -1705,12 +1708,67 @@ class TypeChecker:
         if "create" not in rtype.children:
             rtype.children["create"] = create_type
 
+        # auto-generate == and != for non-generic records
+        if not rtype.isgeneric and not rec.is_native:
+            self._synthesize_eq(rtype)
+
         rtype.public_members = _extract_public_members(rec.as_items)
         priv = _check_private_redefinition(rec.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
         self._resolving.pop()
         return rtype
+
+    def _synthesize_eq(self, ztype: ZType) -> None:
+        """Auto-generate == and != for a valtype if all fields support ==.
+
+        Skips synthesis if == is already defined (user override) or null-hidden.
+        For records: checks all is-section fields support ==.
+        For variants: checks all non-null subtypes support ==.
+        """
+        if "==" in ztype.children:
+            return  # user-defined or null-hidden
+
+        # check all fields/subtypes support ==
+        for fname, ftype in ztype.children.items():
+            if fname.startswith(":"):
+                continue  # internal (e.g., :tag, :meta.create)
+            if ftype.typetype == ZTypeType.FUNCTION:
+                continue  # function pointers compared by address in C
+            if ftype.typetype == ZTypeType.TAG:
+                continue  # tag discriminator
+            if ftype.typetype == ZTypeType.ENUM:
+                continue  # tag enum
+            if ftype.typetype == ZTypeType.DATA:
+                continue  # data/tag data
+            if ftype.typetype == ZTypeType.NULL:
+                continue  # null subtypes in variants (compared by tag)
+            if ftype.typetype == ZTypeType.GENERIC_PARAM:
+                return  # cannot verify, skip synthesis
+            if ftype.generic_origin is TAG_ORIGIN:
+                continue  # tag access helper
+            # field must have == (native, user-defined, or will be auto-generated)
+            if "==" not in ftype.children:
+                # accept records/variants that will get == synthesized
+                if ftype.typetype in (ZTypeType.RECORD, ZTypeType.VARIANT):
+                    continue
+                return  # field lacks ==, skip synthesis
+
+        t_bool = self._resolve_name("bool")
+        if not t_bool:
+            return  # bool not resolved yet (shouldn't happen)
+
+        eq_type = _make_type(f"{ztype.name}.==", ZTypeType.FUNCTION)
+        eq_type.return_type = t_bool
+        eq_type.children["rhs"] = ztype
+        eq_type.is_autogen_eq = True
+        ztype.children["=="] = eq_type
+
+        neq_type = _make_type(f"{ztype.name}.!=", ZTypeType.FUNCTION)
+        neq_type.return_type = t_bool
+        neq_type.children["rhs"] = ztype
+        neq_type.is_autogen_eq = True
+        ztype.children["!="] = neq_type
 
     def _detect_typedef(self, items: dict, start: Token) -> tuple:
         """Check if items contain a single .typedef field. Returns (base_type, field_name) or (None, None)."""
@@ -3211,6 +3269,13 @@ class TypeChecker:
 
             # store cloned methods for emitter use
             self._cloned_methods[mangled] = cloned_methods
+
+        # auto-generate == and != for monomorphized valtypes
+        if not is_partial and mono.typetype in (
+            ZTypeType.RECORD,
+            ZTypeType.VARIANT,
+        ):
+            self._synthesize_eq(mono)
 
         # cache and register
         self._mono_cache[cache_key] = mono
