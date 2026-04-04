@@ -24,6 +24,7 @@ from ztypes import (
     ControlKind,
     NUMERIC_RANGES,
     TAG_ORIGIN,
+    TypeState,
     parse_number,
 )
 from ztypeutil import (
@@ -236,6 +237,9 @@ class TypeChecker:
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
+
+        # flow typing: tracks compile-time type narrowing at each program point
+        self._type_state = TypeState()
 
     # Keywords used to auto-categorise errors when no explicit code is given
     _OWNERSHIP_KEYWORDS = (
@@ -2433,6 +2437,37 @@ class TypeChecker:
                         loc=path.start,
                     )
                     return None
+                # type narrowing: check if this subtype access is on a variable
+                # with excluded subtypes (not a type construction)
+                if (
+                    path.parent.nodetype == NodeType.ATOMID
+                    and child_name not in ("tag", ":tag")
+                    and child.typetype != ZTypeType.FUNCTION
+                ):
+                    pname = cast(zast.AtomId, path.parent).name
+                    if self.symtab.lookup_var(pname) is not None:
+                        # this is a variable access, not a type construction
+                        # check narrowing: is this subtype excluded?
+                        if self._type_state.is_excluded(pname, child_name):
+                            self._error(
+                                f"Cannot access '{child_name}' on '{pname}': "
+                                f"type has been narrowed to exclude '{child_name}'",
+                                loc=path.start,
+                            )
+                            return None
+                        # check narrowing: is variable narrowed to a different
+                        # single subtype?
+                        narrowed_subtype_name = self._type_state.get_subtype_name(pname)
+                        if (
+                            narrowed_subtype_name
+                            and child_name != narrowed_subtype_name
+                        ):
+                            self._error(
+                                f"Cannot access '{child_name}' on '{pname}': "
+                                f"type has been narrowed to '{narrowed_subtype_name}'",
+                                loc=path.start,
+                            )
+                            return None
                 # non-subtype children (tag, :tag, methods) should not be
                 # treated as union/variant subtype construction
                 if (
@@ -3407,6 +3442,9 @@ class TypeChecker:
         # save/restore ownership context
         prev_func_ownership = self._current_func_ownership
         prev_func_return_ownership = self._current_func_return_ownership
+        # save/restore type state (TypeState is intra-function only)
+        prev_type_state = self._type_state
+        self._type_state = TypeState()
         self._current_func_ownership = dict(func.param_ownership)
         self._current_func_return_ownership = func.return_ownership
 
@@ -3450,11 +3488,31 @@ class TypeChecker:
         self._current_return_type = prev_return_type
         self._current_func_ownership = prev_func_ownership
         self._current_func_return_ownership = prev_func_return_ownership
+        self._type_state = prev_type_state
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
         for sline in stmt.statements:
+            # dead code detection: if TypeState is unreachable, remaining
+            # statements are dead code
+            if self._type_state.unreachable:
+                self._error(
+                    "Unreachable code",
+                    loc=sline.start if hasattr(sline, "start") else None,
+                )
+                return
             self._check_statement_line(sline)
+            # after a non-completing expression, mark state as unreachable
+            inner = sline.statementline
+            if inner.nodetype == NodeType.EXPRESSION:
+                expr = cast(zast.Expression, inner)
+                if expr.call_kind in (
+                    zast.CallKind.RETURN,
+                    zast.CallKind.BREAK,
+                    zast.CallKind.CONTINUE,
+                    zast.CallKind.ERROR,
+                ):
+                    self._type_state = self._type_state.mark_unreachable()
 
     def _check_statement_line(self, sline: zast.StatementLine) -> None:
         inner = sline.statementline
@@ -3524,6 +3582,40 @@ class TypeChecker:
                 self.symtab.define_var(assign.name, var)
             assign.type = t
 
+            # assignment-based narrowing: if RHS is a union/variant subtype
+            # construction, narrow the variable to that subtype
+            subtype_name = self._get_construction_subtype_name(assign.value)
+            if subtype_name and t.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
+                arm_subtype = t.children.get(subtype_name)
+                if arm_subtype:
+                    self._type_state = self._type_state.narrow(
+                        assign.name, arm_subtype, subtype_name
+                    )
+
+    def _get_construction_subtype_name(
+        self, value: zast.ExpressionSubTypes
+    ) -> Optional[str]:
+        """Extract the subtype name if value is a union/variant subtype construction.
+
+        Returns the subtype name (e.g., 'ok' for result.ok 42) or None.
+        """
+        # unwrap Expression wrapper
+        inner = value
+        if getattr(inner, "nodetype", None) == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, inner).expression
+        # check for Call with UNION_CREATE call_kind
+        if getattr(inner, "nodetype", None) == NodeType.CALL:
+            call = cast(zast.Call, inner)
+            if call.call_kind == zast.CallKind.UNION_CREATE:
+                if call.callable.nodetype == NodeType.DOTTEDPATH:
+                    return cast(zast.DottedPath, call.callable).child.name
+        # check for DottedPath with parent_tagged_type (null subtype construction)
+        if getattr(inner, "nodetype", None) == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, inner)
+            if dp.parent_tagged_type:
+                return dp.child.name
+        return None
+
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
         existing = self._check_path(reassign.topath)
         new_t = self._check_expression(reassign.value)
@@ -3542,6 +3634,26 @@ class TypeChecker:
                     f"with '='; use 'swap' instead",
                     loc=reassign.start,
                 )
+
+        # reassignment narrowing: reset and optionally re-narrow
+        if reassign.topath.nodetype == NodeType.ATOMID:
+            var_name = cast(zast.AtomId, reassign.topath).name
+            self._type_state = self._type_state.reset(var_name)
+            subtype_name = self._get_construction_subtype_name(reassign.value)
+            if (
+                subtype_name
+                and existing
+                and existing.typetype
+                in (
+                    ZTypeType.UNION,
+                    ZTypeType.VARIANT,
+                )
+            ):
+                arm_subtype = existing.children.get(subtype_name)
+                if arm_subtype:
+                    self._type_state = self._type_state.narrow(
+                        var_name, arm_subtype, subtype_name
+                    )
 
     def _check_swap(self, swap: zast.Swap) -> None:
         lhs_t = self._check_path(swap.lhs)
@@ -4674,12 +4786,28 @@ class TypeChecker:
 
     def _check_if(self, ifnode: zast.If) -> Optional[ZType]:
         self.symtab.push("if")
+        pre_if_state = self._type_state
+        all_branches_diverge = True
         for clause in ifnode.clauses:
+            self._type_state = pre_if_state
             for _, cond_op in clause.conditions.items():
                 self._check_operation(cond_op)
             self._check_statement(clause.statement)
+            if not self._type_state.unreachable:
+                all_branches_diverge = False
         if ifnode.elseclause:
+            self._type_state = pre_if_state
             self._check_statement(ifnode.elseclause)
+            if not self._type_state.unreachable:
+                all_branches_diverge = False
+        else:
+            all_branches_diverge = False  # missing else = not all paths diverge
+
+        # restore TypeState: if all branches diverge, mark unreachable
+        if all_branches_diverge:
+            self._type_state = pre_if_state.mark_unreachable()
+        else:
+            self._type_state = pre_if_state
 
         result_type = self.t_null
 
@@ -4996,11 +5124,16 @@ class TypeChecker:
                 err = self.symtab.try_lock(subject_name, ZLockState.EXCLUSIVE, holder)
                 if not err:
                     match_lock_info = (subject_name, holder)
-        # union/variant exhaustiveness check
-        if subject_type and subject_type.typetype in (
+
+        # determine if subject is a union/variant and get target name for narrowing
+        is_sum_type = subject_type is not None and subject_type.typetype in (
             ZTypeType.UNION,
             ZTypeType.VARIANT,
-        ):
+        )
+        target_name = self._get_arg_root_name(casenode.subject) if is_sum_type else None
+
+        # union/variant exhaustiveness check
+        if is_sum_type and subject_type:
             kind = "union" if subject_type.typetype == ZTypeType.UNION else "variant"
             # collect subtype names (exclude :tag, tag data, and methods)
             subtypes = {
@@ -5026,10 +5159,71 @@ class TypeChecker:
                     if hasattr(casenode.subject, "start")
                     else None,
                 )
+
+        # type narrowing: save pre-match state for post-match exclusion
+        pre_match_state = self._type_state
+        # post-match exclusion operates on the declared type (reset any
+        # existing narrowing for the match target)
+        if target_name:
+            post_match_state = pre_match_state.reset(target_name)
+        else:
+            post_match_state = pre_match_state
+
         for clause in casenode.clauses:
+            # within-arm: reset target narrowing and narrow to this arm's subtype
+            if target_name and subject_type:
+                arm_subtype = subject_type.children.get(clause.match.name)
+                if arm_subtype:
+                    arm_state = pre_match_state.reset(target_name)
+                    self._type_state = arm_state.narrow(
+                        target_name, arm_subtype, clause.match.name
+                    )
+                else:
+                    self._type_state = pre_match_state
+            else:
+                self._type_state = pre_match_state
+
             self._check_statement(clause.statement)
+
+            # post-match narrowing: if arm diverges, exclude that subtype
+            if target_name and subject_type:
+                arm_type = self._last_statement_type(clause.statement)
+                if arm_type is self._NORETURN:
+                    post_match_state = post_match_state.exclude(
+                        target_name, clause.match.name, subject_type
+                    )
+
         if casenode.elseclause:
+            # else clause: narrow to union minus all explicit case subtypes
+            if target_name and subject_type:
+                # reset any existing narrowing for the target before
+                # computing else exclusions (match operates on declared type)
+                else_state = pre_match_state.reset(target_name)
+                for clause in casenode.clauses:
+                    else_state = else_state.exclude(
+                        target_name, clause.match.name, subject_type
+                    )
+                self._type_state = else_state
+            else:
+                self._type_state = pre_match_state
             self._check_statement(casenode.elseclause)
+
+            # if else clause diverges, all remaining subtypes are excluded
+            # (but the else covers everything not explicitly matched, so this
+            # means the post-match state has all subtypes excluded = unreachable)
+            else_type = self._last_statement_type(casenode.elseclause)
+            if else_type is self._NORETURN and target_name and subject_type:
+                # all explicit arms + else diverge — mark unreachable
+                all_diverge = all(
+                    self._last_statement_type(c.statement) is self._NORETURN
+                    for c in casenode.clauses
+                )
+                if all_diverge:
+                    post_match_state = post_match_state.mark_unreachable()
+
+        # apply post-match narrowing
+        self._type_state = post_match_state
+
         # release match lock
         if match_lock_info:
             self.symtab.release_lock(match_lock_info[0], match_lock_info[1])

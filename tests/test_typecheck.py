@@ -5111,3 +5111,257 @@ class TestPrivateFriendAccess:
             "  h: (bag.get self: b)\n"
             '  print "\\{holder.read h: h}" }'
         )
+
+
+class TestTypeNarrowing:
+    """Tests for type narrowing (flow typing) — Phase 49a."""
+
+    # -- Assignment-based narrowing --
+
+    def test_narrow_on_variant_subtype_construction(self):
+        """Variable assigned a specific variant subtype is narrowed."""
+        check_ok(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            '  print "\\{x.ok}"\n'
+            "}"
+        )
+
+    def test_narrow_wrong_subtype_access_after_assignment(self):
+        """Accessing wrong subtype after narrowing assignment is an error."""
+        errors = check_errors(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            '  print "\\{x.err}"\n'
+            "}"
+        )
+        assert any("narrowed" in e.msg for e in errors)
+
+    def test_narrow_on_union_subtype_construction(self):
+        """Variable assigned a specific union subtype is narrowed."""
+        check_ok(
+            "r: union { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            '  print "\\{x.ok}"\n'
+            "}"
+        )
+
+    def test_narrow_wrong_subtype_on_union_after_assignment(self):
+        """Accessing wrong subtype on union after narrowing is an error."""
+        errors = check_errors(
+            "r: union { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            '  print "\\{x.err}"\n'
+            "}"
+        )
+        assert any("narrowed" in e.msg for e in errors)
+
+    def test_narrow_reassignment_resets(self):
+        """Reassignment to different subtype resets narrowing."""
+        check_ok(
+            "r: variant { a: i64  b: i64 }\n"
+            "main: function is {\n"
+            "  x: r.a 1\n"
+            "  x = r.b 2\n"
+            '  print "\\{x.b}"\n'
+            "}"
+        )
+
+    def test_narrow_reassignment_changes_narrowing(self):
+        """Reassignment narrows to new subtype; old subtype is invalid."""
+        errors = check_errors(
+            "r: variant { a: i64  b: i64 }\n"
+            "main: function is {\n"
+            "  x: r.a 1\n"
+            "  x = r.b 2\n"
+            '  print "\\{x.a}"\n'
+            "}"
+        )
+        assert any("narrowed" in e.msg for e in errors)
+
+    # -- Match arm narrowing --
+
+    def test_narrow_within_match_arm(self):
+        """Within a match arm, the variable is narrowed to that arm's subtype."""
+        check_ok(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            "  match (\n    x\n  ) case ok then {\n"
+            '    print "\\{x.ok}"\n'
+            "  } case err then {\n"
+            '    print "\\{x.err}"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+
+    def test_narrow_wrong_subtype_in_match_arm(self):
+        """Accessing wrong subtype inside a match arm is an error."""
+        errors = check_errors(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            "  match (\n    x\n  ) case ok then {\n"
+            '    print "\\{x.err}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+        assert any("narrowed" in e.msg for e in errors)
+
+    def test_narrow_else_clause(self):
+        """Else clause sees union minus all explicit case subtypes."""
+        check_ok(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            "  match (\n    x\n  ) case ok then {\n"
+            '    print "ok"\n'
+            '  } else print "other"\n'
+            "}"
+        )
+
+    def test_narrow_excluded_in_else(self):
+        """Accessing excluded subtype in else clause is an error."""
+        errors = check_errors(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            "  match (\n    x\n  ) case ok then {\n"
+            '    print "ok"\n'
+            "  } else {\n"
+            '    print "\\{x.ok}"\n'
+            "  }\n"
+            "}"
+        )
+        assert any("excluded" in e.msg or "narrowed" in e.msg for e in errors)
+
+    # -- Post-match narrowing (guard clause) --
+
+    def test_narrow_post_match_diverging_arm(self):
+        """After a match arm that returns, the subtype is excluded."""
+        check_ok(
+            "r: variant { ok: i64  err: i64 }\n"
+            "f: function {x: r} is {\n"
+            "  match (\n    x\n  ) case err then {\n"
+            "    return\n"
+            "  } else {}\n"
+            '  print "\\{x.ok}"\n'
+            "}"
+        )
+
+    def test_narrow_post_match_excluded_access_error(self):
+        """After a diverging arm, accessing the excluded subtype is an error."""
+        errors = check_errors(
+            "r: variant { ok: i64  err: i64 }\n"
+            "f: function {x: r} is {\n"
+            "  match (\n    x\n  ) case err then {\n"
+            "    return\n"
+            "  } else {}\n"
+            '  print "\\{x.err}"\n'
+            "}"
+        )
+        assert any("excluded" in e.msg or "narrowed" in e.msg for e in errors)
+
+    def test_narrow_multiple_diverging_arms(self):
+        """Multiple diverging arms accumulate exclusions."""
+        check_ok(
+            "r: variant { ok: i64  err: i64  none: null }\n"
+            "f: function {x: r} is {\n"
+            "  match (\n    x\n  ) case err then {\n"
+            "    return\n"
+            "  } case none then {\n"
+            "    return\n"
+            "  } else {}\n"
+            '  print "\\{x.ok}"\n'
+            "}"
+        )
+
+    # -- Dead code detection --
+
+    def test_dead_code_after_return(self):
+        """Statements after return are flagged as dead code."""
+        errors = check_errors('main: function is {\n  return\n  print "unreachable"\n}')
+        assert any("Unreachable" in e.msg for e in errors)
+
+    def test_dead_code_after_all_branches_return(self):
+        """Statements after if where all branches return are dead code."""
+        errors = check_errors(
+            "f: function {x: i64} out i64 is {\n"
+            "  if x > 0 then { return 1 } else { return 0 }\n"
+            '  print "dead"\n'
+            "}"
+        )
+        assert any("Unreachable" in e.msg for e in errors)
+
+    def test_no_dead_code_when_branch_completes(self):
+        """No dead code error when some branches don't return."""
+        check_ok(
+            "main: function is {\n"
+            "  x: 5\n"
+            '  if x > 3 then { return } else print "small"\n'
+            '  print "reachable"\n'
+            "}"
+        )
+
+    # -- Function boundary --
+
+    def test_narrow_does_not_cross_function_boundary(self):
+        """Narrowing is intra-function: callee sees full type."""
+        check_ok(
+            "r: variant { ok: i64  err: i64 }\n"
+            "f: function {x: r} is {\n"
+            "  match (\n    x\n  ) case ok then {\n"
+            '    print "\\{x.ok}"\n'
+            "  } case err then {\n"
+            '    print "\\{x.err}"\n'
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  x: r.ok 42\n"
+            "  f x: x\n"
+            "}"
+        )
+
+    # -- Nested match --
+
+    def test_narrow_nested_match(self):
+        """Inner match narrows independently of outer."""
+        check_ok(
+            "r: variant { a: i64  b: i64  c: i64 }\n"
+            "main: function is {\n"
+            "  x: r.a 1\n"
+            "  match (\n    x\n  ) case a then {\n"
+            '    print "\\{x.a}"\n'
+            "  } case b then {\n"
+            '    print "\\{x.b}"\n'
+            "  } case c then {\n"
+            '    print "\\{x.c}"\n'
+            "  }\n"
+            "}"
+        )
+
+    # -- Non-addressable target --
+
+    def test_narrow_non_addressable_no_narrowing(self):
+        """Match on expression (not variable) doesn't crash or error on narrowing."""
+        check_ok(
+            "r: variant { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  x: r.ok 1\n"
+            "  match (\n    x\n  ) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}"
+        )

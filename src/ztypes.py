@@ -291,6 +291,170 @@ class ZVariable:
     is_private_access: bool = False
 
 
+class TypeState:
+    """
+    TypeState - tracks compile-time type narrowing at each program point.
+
+    Flow typing for union/variant types: within match arms, after
+    diverging match arms, and on subtype assignment. TypeState is
+    intra-function only and does not cross function call boundaries.
+
+    Immutable-style: narrow/exclude/merge return new TypeState instances.
+
+    _refined maps variable names to their narrowed ZType (either a specific
+    subtype ZType or the full union/variant when partial exclusion applies).
+
+    _excluded maps variable names to sets of excluded subtype names.
+    When all subtypes except one are excluded, the variable collapses to
+    that single remaining subtype in _refined.
+    """
+
+    __slots__ = ("_refined", "_excluded", "_narrowed_subtype", "_unreachable")
+
+    def __init__(
+        self,
+        refined: "Optional[dict[str, ZType]]" = None,
+        excluded: "Optional[dict[str, frozenset[str]]]" = None,
+        narrowed_subtype: "Optional[dict[str, str]]" = None,
+        unreachable: bool = False,
+    ) -> None:
+        self._refined: dict[str, ZType] = refined if refined is not None else {}
+        self._excluded: dict[str, frozenset[str]] = (
+            excluded if excluded is not None else {}
+        )
+        # maps variable name -> subtype name (e.g., "x" -> "ok")
+        self._narrowed_subtype: dict[str, str] = (
+            narrowed_subtype if narrowed_subtype is not None else {}
+        )
+        self._unreachable: bool = unreachable
+
+    @property
+    def unreachable(self) -> bool:
+        return self._unreachable
+
+    def lookup(self, name: str) -> "Optional[ZType]":
+        """Return refined type for name, or None to fall back to declared type."""
+        if self._unreachable:
+            return None
+        return self._refined.get(name)
+
+    def is_excluded(self, name: str, subtype_name: str) -> bool:
+        """Check if a subtype has been excluded for a variable."""
+        return subtype_name in self._excluded.get(name, frozenset())
+
+    def get_subtype_name(self, name: str) -> "Optional[str]":
+        """Return the subtype name a variable is narrowed to, or None."""
+        return self._narrowed_subtype.get(name)
+
+    def narrow(
+        self, name: str, to_type: "ZType", subtype_name: str = ""
+    ) -> "TypeState":
+        """Return new TypeState with name narrowed to to_type."""
+        new_refined = dict(self._refined)
+        new_refined[name] = to_type
+        new_subtypes = dict(self._narrowed_subtype)
+        if subtype_name:
+            new_subtypes[name] = subtype_name
+        return TypeState(
+            new_refined, dict(self._excluded), new_subtypes, self._unreachable
+        )
+
+    def exclude(self, name: str, subtype_name: str, full_type: "ZType") -> "TypeState":
+        """Return new TypeState excluding a subtype from name's known type.
+
+        If only one subtype remains after exclusion, collapses to that subtype.
+        """
+        # Collect all subtypes of the full union/variant
+        all_subtypes = _union_subtype_names(full_type)
+
+        # Determine currently known possible subtypes
+        known_subtype = self._narrowed_subtype.get(name)
+        if known_subtype:
+            # Already narrowed to a single named subtype
+            if subtype_name == known_subtype:
+                return TypeState(
+                    dict(self._refined),
+                    dict(self._excluded),
+                    dict(self._narrowed_subtype),
+                    unreachable=True,
+                )
+            # Excluding a different subtype — no effect
+            return self
+
+        # Accumulate exclusions
+        prev_excluded = self._excluded.get(name, frozenset())
+        new_excluded_set = prev_excluded | {subtype_name}
+
+        remaining = {k: v for k, v in all_subtypes.items() if k not in new_excluded_set}
+
+        if not remaining:
+            return TypeState(
+                dict(self._refined),
+                dict(self._excluded),
+                dict(self._narrowed_subtype),
+                unreachable=True,
+            )
+
+        new_refined = dict(self._refined)
+        new_excluded = dict(self._excluded)
+        new_subtypes = dict(self._narrowed_subtype)
+        new_excluded[name] = frozenset(new_excluded_set)
+
+        if len(remaining) == 1:
+            # Collapse to single remaining subtype
+            sname, single_type = next(iter(remaining.items()))
+            new_refined[name] = single_type
+            new_subtypes[name] = sname
+
+        return TypeState(new_refined, new_excluded, new_subtypes, self._unreachable)
+
+    def reset(self, name: str) -> "TypeState":
+        """Return new TypeState with narrowing removed for name."""
+        if (
+            name not in self._refined
+            and name not in self._excluded
+            and name not in self._narrowed_subtype
+        ):
+            return self
+        new_refined = dict(self._refined)
+        new_refined.pop(name, None)
+        new_excluded = dict(self._excluded)
+        new_excluded.pop(name, None)
+        new_subtypes = dict(self._narrowed_subtype)
+        new_subtypes.pop(name, None)
+        return TypeState(new_refined, new_excluded, new_subtypes, self._unreachable)
+
+    def mark_unreachable(self) -> "TypeState":
+        """Return new TypeState marked as unreachable (all paths diverged)."""
+        return TypeState(
+            dict(self._refined),
+            dict(self._excluded),
+            dict(self._narrowed_subtype),
+            unreachable=True,
+        )
+
+    def copy(self) -> "TypeState":
+        """Return a shallow copy."""
+        return TypeState(
+            dict(self._refined),
+            dict(self._excluded),
+            dict(self._narrowed_subtype),
+            self._unreachable,
+        )
+
+
+def _union_subtype_names(full_type: "ZType") -> "dict[str, ZType]":
+    """Extract subtype name -> ZType mapping from a union/variant type."""
+    return {
+        k: v
+        for k, v in full_type.children.items()
+        if not k.startswith(":")
+        and v.typetype
+        not in (ZTypeType.FUNCTION, ZTypeType.DATA, ZTypeType.TAG, ZTypeType.ENUM)
+        and getattr(v, "generic_origin", None) is not TAG_ORIGIN
+    }
+
+
 class TypeTable:
     """
     TypeTable - table of all types for a program.
