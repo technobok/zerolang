@@ -5068,6 +5068,111 @@ class TestNativeEmitter:
         # each inner: 1+2+4+5 = 12, outer: 3 * 12 = 36
         assert output.strip() == "36"
 
+    def test_do_break_early_exit_none(self):
+        """Do block with break that fires returns none."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  x: {\n"
+                "    if 1 < 2 then { break }\n"
+                "    42\n"
+                "  }\n"
+                "  match (x) case some then {"
+                '    print "some"'
+                "  } case none then {"
+                '    print "none"'
+                "  }\n"
+                "}"
+            )
+        )
+        assert output.strip() == "none"
+
+    def test_do_break_normal_completion_some(self):
+        """Do block with break that doesn't fire returns some(value)."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  x: {\n"
+                "    if 1 > 2 then { break }\n"
+                "    42\n"
+                "  }\n"
+                "  match (x) case some then {"
+                '    print "some"'
+                "  } case none then {"
+                '    print "none"'
+                "  }\n"
+                "}"
+            )
+        )
+        assert output.strip() == "some"
+
+    def test_do_break_emits_do_while_0(self):
+        """Do block with break uses do { } while(0) in C output."""
+        csource = emit_source(
+            "main: function is {\n  x: {\n    if 1 > 2 then { break }\n    42\n  }\n}"
+        )
+        assert "do {" in csource
+        assert "} while (0);" in csource
+
+    def test_do_break_nested_for_binds_correctly(self):
+        """break in for inside do binds to for, do continues normally."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  x: {\n"
+                "    for loop {\n"
+                "      if 1 < 2 then { break }\n"
+                "    }\n"
+                "    42\n"
+                "  }\n"
+                '  print "\\{x}"\n'
+                "}"
+            )
+        )
+        # break targets the for loop, do block completes normally with 42
+        # do block has no break of its own, so type is plain i64
+        assert output.strip() == "42"
+
+    def test_do_break_in_do_inside_for(self):
+        """break in do inside for binds to do, not the for."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  total: 0\n"
+                "  for i: 0 while i < 3 loop {\n"
+                "    x: {\n"
+                "      if 1 < 2 then { break }\n"
+                "      10\n"
+                "    }\n"
+                "    match (x) case some then {"
+                "      total = total + 1\n"
+                "    } case none then {"
+                "      total = total + 100\n"
+                "    }\n"
+                "    i = i + 1\n"
+                "  }\n"
+                '  print "\\{total}"\n'
+                "}"
+            )
+        )
+        # break targets do (none), for runs 3 times, each adds 100
+        assert output.strip() == "300"
+
+    def test_do_break_statement_context(self):
+        """Do block break in statement context (not expression) works."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  {\n"
+                "    if 1 < 2 then { break }\n"
+                '    print "should not print"\n'
+                "  }\n"
+                '  print "after"\n'
+                "}"
+            )
+        )
+        assert output.strip() == "after"
+
     def test_native_error(self):
         """error (native) generates a call in the C output."""
         csource = emit_source('main: function is { error "test error" }')

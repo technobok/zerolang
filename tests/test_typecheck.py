@@ -5162,6 +5162,81 @@ class TestNativeTypeCheck:
         check_ok('main: function is { error "test" }')
 
 
+class TestDoBreak:
+    """Tests for break in do/bare-brace blocks."""
+
+    def test_do_break_makes_type_optionval(self):
+        """Do block with break wraps return type in optionval."""
+        program = check_ok(
+            "main: function is {\n  x: {\n    if 1 > 2 then { break }\n    42\n  }\n}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        # x should have optionval type
+        t = tc._resolve_unit_name("test", "main")
+        assert t is not None
+
+    def test_do_without_break_unchanged(self):
+        """Do block without break keeps plain type (no optional wrapping)."""
+        program = check_ok("main: function is { x: { 42 } }")
+        tc = TypeChecker(program)
+        tc.check()
+
+    def test_do_break_nested_for_binds_to_for(self):
+        """break inside for inside do binds to the for, not the do."""
+        program = check_ok(
+            "main: function is {\n"
+            "  x: {\n"
+            "    for loop {\n"
+            "      if 1 < 2 then { break }\n"
+            "    }\n"
+            "    42\n"
+            "  }\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+
+    def test_do_break_nested_do_binds_to_inner(self):
+        """break inside inner do binds to inner do only."""
+        check_ok(
+            "main: function is {\n"
+            "  x: {\n"
+            "    y: {\n"
+            "      if 1 > 2 then { break }\n"
+            "      10\n"
+            "    }\n"
+            "    42\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_continue_in_do_block_undefined(self):
+        """continue in bare do block (outside for) is undefined."""
+        errors = check_errors("main: function is { { continue } }")
+        assert any("undefined" in e.msg.lower() and "continue" in e.msg for e in errors)
+
+    def test_do_break_in_if(self):
+        """break inside if inside do sets has_break on do."""
+        check_ok(
+            "main: function is {\n  x: {\n    if 1 > 2 then { break }\n    42\n  }\n}"
+        )
+
+    def test_break_in_do_inside_for_binds_to_do(self):
+        """break in do block inside for loop binds to the do, not the for."""
+        check_ok(
+            "main: function is {\n"
+            "  for loop {\n"
+            "    x: {\n"
+            "      if 1 > 2 then { break }\n"
+            "      42\n"
+            "    }\n"
+            "    break\n"
+            "  }\n"
+            "}"
+        )
+
+
 class TestPrivateFriendAccess:
     """Tests for .private friend access mechanism."""
 

@@ -5284,6 +5284,42 @@ class CEmitter:
 
         return "".join(parts)
 
+    def _emit_branch_with_result_optional(
+        self, stmt: zast.Statement, result_var: str, some_tag: str
+    ) -> str:
+        """Emit a branch body, wrapping the last value in an optional some."""
+        parts: List[str] = []
+        lines = stmt.statements
+        for i, sline in enumerate(lines):
+            is_last = i == len(lines) - 1
+            inner = sline.statementline
+
+            if is_last and inner.nodetype == zast.NodeType.EXPRESSION:
+                last_expr = cast(zast.Expression, inner)
+                if last_expr.call_kind in (
+                    zast.CallKind.RETURN,
+                    zast.CallKind.BREAK,
+                    zast.CallKind.CONTINUE,
+                    zast.CallKind.ERROR,
+                ):
+                    parts.append(self._emit_statement_line(sline))
+                else:
+                    # value-producing: wrap in some
+                    self._temp_stack.append(TempState())
+                    val = self._emit_expression_value(cast(zast.Expression, inner))
+                    indent = self._indent()
+                    code = (
+                        f"{indent}{result_var}.tag = {some_tag};\n"
+                        f"{indent}{result_var}.data.some = {val};\n"
+                    )
+                    result = "".join(self._temp.decls) + code
+                    self._temp_stack.pop()
+                    parts.append(result)
+            else:
+                parts.append(self._emit_statement_line(sline))
+
+        return "".join(parts)
+
     def _emit_if_expression_value(self, ifnode: zast.If) -> str:
         """Emit if-as-expression using temp variable pattern."""
         ctype = "int64_t"
@@ -5634,6 +5670,14 @@ class CEmitter:
         return tmp
 
     def _emit_do(self, donode: zast.Do) -> str:
+        if donode.has_break:
+            indent = self._indent()
+            parts = [f"{indent}do {{\n"]
+            self.indent_level += 1
+            parts.append(self._emit_statement(donode.statement))
+            self.indent_level -= 1
+            parts.append(f"{indent}}} while (0);\n")
+            return "".join(parts)
         return self._emit_statement(donode.statement)
 
     def _emit_do_expression_value(self, donode: zast.Do) -> str:
@@ -5641,13 +5685,30 @@ class CEmitter:
         ctype = _ctype(donode.type)
         tmp = self._temp_name("do")
         indent = self._indent()
-        self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
-        self._temp.decls.append(f"{indent}{{\n")
-        self.indent_level += 1
-        body = self._emit_branch_with_result(donode.statement, tmp)
-        self._temp.decls.append(body)
-        self.indent_level -= 1
-        self._temp.decls.append(f"{indent}}}\n")
+        if donode.has_break:
+            # optional result: default to none, set to some on normal completion
+            opt_type = donode.type
+            opt_name = opt_type.name if opt_type else ""
+            none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+            some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
+            self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+            self._temp.decls.append(f"{indent}{tmp}.tag = {none_tag};\n")
+            self._temp.decls.append(f"{indent}do {{\n")
+            self.indent_level += 1
+            body = self._emit_branch_with_result_optional(
+                donode.statement, tmp, some_tag
+            )
+            self._temp.decls.append(body)
+            self.indent_level -= 1
+            self._temp.decls.append(f"{indent}}} while (0);\n")
+        else:
+            self._temp.decls.append(f"{indent}{ctype} {tmp};\n")
+            self._temp.decls.append(f"{indent}{{\n")
+            self.indent_level += 1
+            body = self._emit_branch_with_result(donode.statement, tmp)
+            self._temp.decls.append(body)
+            self.indent_level -= 1
+            self._temp.decls.append(f"{indent}}}\n")
         return tmp
 
     def _emit_with(self, withnode: zast.With) -> str:

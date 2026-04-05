@@ -297,6 +297,10 @@ class TypeChecker:
         # generic context stack: list of dicts mapping generic param name -> ZType
         self._generic_context: list[dict[str, ZType]] = []
 
+        # break target stack: tracks which construct a break binds to
+        # Do node = break targets this do block; None = break targets a for loop
+        self._break_targets: list[Optional[zast.Do]] = []
+
         # dedup: hash -> (canonical_qualified_name, canonical_Function)
         self._func_hashes: dict[str, tuple[str, zast.Function]] = {}
         # dedup aliases: alias_qualified_name -> canonical_qualified_name
@@ -3515,6 +3519,18 @@ class TypeChecker:
             self.unit_types[sub_name] = sub_unit
             self._partially_instantiate_subunits(sub_unit, sub_name, args)
 
+    def _make_optional_type(self, value_type: ZType) -> Optional[ZType]:
+        """Wrap a type in option (reftype) or optionval (valtype)."""
+        if _is_valtype(value_type):
+            template = self._resolve_name("optionval")
+        else:
+            template = self._resolve_name("option")
+        if template and template.isgeneric:
+            defn = self._find_generic_defn(template)
+            if defn:
+                return self._monomorphize(template, {"t": value_type}, defn)
+        return None
+
     def _find_generic_defn(self, template_type: ZType) -> Optional[zast.TypeDefinition]:
         """Find the AST definition node for a generic template type."""
         name = template_type.name
@@ -4039,9 +4055,34 @@ class TypeChecker:
             t = self._check_for(cast(zast.For, inner))
         elif inner.nodetype == NodeType.DO:
             inner_do = cast(zast.Do, inner)
+            self.symtab.push("do")
+            # introduce break (but not continue) for early exit
+            t_never = self._resolve_name("never")
+            if t_never:
+                break_type = _make_type("break", ZTypeType.FUNCTION)
+                break_type.return_type = t_never
+                break_type.control_kind = ControlKind.BREAK
+                self.symtab.define("break", break_type)
+            self._break_targets.append(inner_do)
             self._check_statement(inner_do.statement)
+            self._break_targets.pop()
             last_type = self._last_statement_type(inner_do.statement)
-            if (
+            if inner_do.has_break:
+                # break makes the do expression type optional
+                if (
+                    getattr(last_type, "is_ztype", False)
+                    and last_type is not self._NORETURN
+                    and cast(ZType, last_type).name != "null"
+                ):
+                    opt_t = self._make_optional_type(cast(ZType, last_type))
+                    if opt_t:
+                        t = opt_t
+                        inner_do.type = opt_t
+                    else:
+                        t = self.t_null
+                else:
+                    t = self.t_null
+            elif (
                 getattr(last_type, "is_ztype", False)
                 and last_type is not self._NORETURN
             ):
@@ -4049,6 +4090,7 @@ class TypeChecker:
                 inner_do.type = t
             else:
                 t = self.t_null
+            self.symtab.pop()
         elif inner.nodetype == NodeType.WITH:
             t = self._check_with(cast(zast.With, inner))
         elif inner.nodetype == NodeType.CASE:
@@ -4124,6 +4166,11 @@ class TypeChecker:
                     ControlKind.ERROR: zast.CallKind.ERROR,
                 }
                 expr.call_kind = _CK_MAP.get(t.control_kind, zast.CallKind.UNKNOWN)
+                # flag enclosing do block if break targets it
+                if t.control_kind == ControlKind.BREAK and self._break_targets:
+                    target = self._break_targets[-1]
+                    if target is not None:
+                        target.has_break = True
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
                 expr.call_kind = cast(zast.Call, inner).call_kind
@@ -4446,6 +4493,11 @@ class TypeChecker:
             return self._check_return_call(call)
         if callee_type.control_kind == ControlKind.BREAK:
             call.call_kind = zast.CallKind.BREAK
+            # flag enclosing do block if break targets it (not a for loop)
+            if self._break_targets:
+                target = self._break_targets[-1]
+                if target is not None:
+                    target.has_break = True
             return callee_type
         if callee_type.control_kind == ControlKind.CONTINUE:
             call.call_kind = zast.CallKind.CONTINUE
@@ -5554,6 +5606,8 @@ class TypeChecker:
             continue_type.return_type = t_never
             continue_type.control_kind = ControlKind.CONTINUE
             self.symtab.define("continue", continue_type)
+        # for loops mask do-block break targets (break binds to the for, not enclosing do)
+        self._break_targets.append(None)
         # lock tracking for for-loop targets
         locked_targets: List[Tuple[str, str]] = []
         for name, cond_op in fornode.conditions.items():
@@ -5613,6 +5667,7 @@ class TypeChecker:
         # release for-loop locks
         for target_name, holder in locked_targets:
             self.symtab.release_lock(target_name, holder)
+        self._break_targets.pop()
         self.symtab.pop()
         # for-as-expression: return list of elem_type (non-null values only)
         if elem_type and elem_type != self.t_null and elem_type.name != "null":

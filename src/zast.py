@@ -666,6 +666,9 @@ class Do(Node):
     nodetype: NodeType = field(default=NodeType.DO, init=False)
     statement: "Statement"
 
+    # set by type checker: True if the block contains a break expression
+    has_break: bool = field(default=False, init=False)
+
 
 @dataclass
 class With(Node):
