@@ -228,6 +228,9 @@ class ZType:
     # For box(reftype), the box is transparent (passthrough to inner type)
     is_box: bool = field(default=False, init=False)
 
+    # native type: compiler-provided implementation (system types like i64, string, etc.)
+    is_native: bool = field(default=False, init=False)
+
     # control flow kind: identifies system control flow functions
     control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
 

@@ -1013,8 +1013,10 @@ class TypeChecker:
         self._resolving.append((key, ctype))
 
         ctype.is_valtype = False  # classes are reference types
-        if cls.is_native and name == "string":
-            ctype.subtype = ZSubType.STRING
+        if cls.is_native:
+            ctype.is_native = True
+            if name == "string":
+                ctype.subtype = ZSubType.STRING
         _set_destructor_metadata(ctype)
         self._assign_cname_type(ctype)
 
@@ -1136,7 +1138,10 @@ class TypeChecker:
 
             # generate meta.create constructor type
             is_func_names = set(cls.functions.keys())
-            create_type = self._make_meta_create_type(name, ctype, is_func_names)
+            field_names = set(cls.items.keys()) | is_func_names
+            create_type = self._make_meta_create_type(
+                name, ctype, is_func_names, field_names
+            )
             ctype.children[":meta.create"] = create_type
             if "create" not in ctype.children:
                 ctype.children["create"] = create_type
@@ -1654,6 +1659,7 @@ class TypeChecker:
 
         rtype.is_valtype = True  # records are value types
         if rec.is_native:
+            rtype.is_native = True
             if name == "never":
                 rtype.typetype = ZTypeType.NEVER
             elif name == "null":
@@ -1770,7 +1776,10 @@ class TypeChecker:
 
         # generate meta.create constructor type
         is_func_names = set(rec.functions.keys())
-        create_type = self._make_meta_create_type(name, rtype, is_func_names)
+        field_names = set(rec.items.keys()) | is_func_names
+        create_type = self._make_meta_create_type(
+            name, rtype, is_func_names, field_names
+        )
         rtype.children[":meta.create"] = create_type
         if "create" not in rtype.children:
             rtype.children["create"] = create_type
@@ -2270,16 +2279,25 @@ class TypeChecker:
         name: str,
         parent_type: ZType,
         is_func_names: Optional[set] = None,
+        field_names: Optional[set] = None,
     ) -> ZType:
         """Build a FUNCTION ZType for the compiler-generated meta.create constructor.
 
         is_func_names: set of function names from the 'is' section that should
         be included as constructor parameters (function pointer fields).
+        field_names: set of actual instance field names (from 'is' section).
+        When provided, only these names are included as constructor parameters.
         """
         ftype = _make_type(f"{name}.create", ZTypeType.FUNCTION)
         ftype.return_type = parent_type
         for fname, ft in parent_type.children.items():
             if fname.startswith(":"):
+                continue
+            # skip non-field children (as constants, protocol satisfaction, etc.)
+            if field_names is not None and fname not in field_names:
+                continue
+            # skip tag fields — managed by the compiler, not user-provided
+            if ft.name == "tag" and fname == "tag":
                 continue
             if ft.typetype == ZTypeType.FUNCTION:
                 # only include function-typed children from the 'is' section
@@ -2988,6 +3006,7 @@ class TypeChecker:
         mono.generic_origin = template_type
         mono.generic_args = dict(generic_args)
         mono.is_valtype = template_type.is_valtype
+        mono.is_native = template_type.is_native
         _set_destructor_metadata(mono)
         self._assign_cname_type(mono)
 
@@ -3305,10 +3324,14 @@ class TypeChecker:
             and not _is_list_type(mono)
             and not _is_map_type(mono)
         ):
-            is_func_names = set()
+            is_func_names: set = set()
+            field_names: Optional[set] = None
             if defn.nodetype == NodeType.CLASS:
                 is_func_names = set(cast(zast.Class, defn).functions.keys())
-            create_type = self._make_meta_create_type(mangled, mono, is_func_names)
+                field_names = set(cast(zast.Class, defn).items.keys()) | is_func_names
+            create_type = self._make_meta_create_type(
+                mangled, mono, is_func_names, field_names
+            )
             mono.children[":meta.create"] = create_type
             if "create" not in mono.children:
                 mono.children["create"] = create_type
@@ -4046,6 +4069,50 @@ class TypeChecker:
             # propagate const_value from inner operation to expression wrapper
             if inner_op.const_value is not None:
                 expr.const_value = inner_op.const_value
+            # bare function name as value: all params must have defaults
+            # (skip control flow: return, break, continue, error)
+            # only check when the atom refers to a function definition, not a local var
+            if (
+                t is not None
+                and t.typetype == ZTypeType.FUNCTION
+                and t.control_kind == ControlKind.NONE
+                and inner.nodetype == NodeType.ATOMID
+                and t.children
+                and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
+            ):
+                for pname, ptype in t.children.items():
+                    if pname.startswith(":"):
+                        continue
+                    if pname not in t.param_defaults:
+                        self._error(
+                            f"missing required argument '{pname}' (type: {ptype.name})",
+                            loc=inner.start,
+                            err=ERR.CALLERROR,
+                        )
+                        break
+            # bare record/class name as value: all data fields must have defaults
+            if (
+                t is not None
+                and t.typetype in (ZTypeType.RECORD, ZTypeType.CLASS)
+                and not t.is_native
+                and inner.nodetype == NodeType.ATOMID
+                and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
+            ):
+                create_type = t.children.get(":meta.create")
+                if create_type:
+                    for pname, ptype in create_type.children.items():
+                        if pname.startswith(":"):
+                            continue
+                        if ptype.typetype == ZTypeType.FUNCTION:
+                            continue
+                        if pname not in create_type.param_defaults:
+                            self._error(
+                                f"missing required field '{pname}' "
+                                f"(type: {ptype.name})",
+                                loc=inner.start,
+                                err=ERR.CALLERROR,
+                            )
+                            break
         if t is not None:
             expr.type = t
             # tag control flow expressions using resolved type's control_kind
@@ -4448,12 +4515,22 @@ class TypeChecker:
                     call.type = mono_type
                     call.callable.type = mono_type
                     call.call_kind = zast.CallKind.RECORD_CREATE
+                    # only check missing fields when value args are present
+                    # (pure generic instantiation like (myrec n: 10) defers to outer call)
+                    has_value_args = any(
+                        arg.name not in callee_type.generic_params
+                        for arg in call.arguments
+                        if arg.name
+                    ) or any(not arg.name for arg in call.arguments)
+                    if has_value_args:
+                        self._check_missing_create_args(mono_type, call)
                     return mono_type
                 return None  # error already emitted
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
             call.call_kind = zast.CallKind.RECORD_CREATE
+            self._check_missing_create_args(callee_type, call)
             return callee_type
 
         # handle box construction: box from: val (system box only — empty class body)
@@ -4474,12 +4551,20 @@ class TypeChecker:
                     call.type = mono_type
                     call.callable.type = mono_type
                     call.call_kind = zast.CallKind.CLASS_CREATE
+                    has_value_args = any(
+                        arg.name not in callee_type.generic_params
+                        for arg in call.arguments
+                        if arg.name
+                    ) or any(not arg.name for arg in call.arguments)
+                    if has_value_args:
+                        self._check_missing_create_args(mono_type, call)
                     return mono_type
                 return None
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
             call.call_kind = zast.CallKind.CLASS_CREATE
+            self._check_missing_create_args(callee_type, call)
             return callee_type
 
         # handle union construction: union.subtype expr
@@ -4656,6 +4741,30 @@ class TypeChecker:
                 for target_name, holder in locks:
                     call_locks.append((target_name, holder, pname_for_lock))
 
+        # check for missing required arguments (no default value)
+        if params:
+            provided: set = set()
+            for i, arg in enumerate(call.arguments):
+                if arg.name:
+                    provided.add(arg.name)
+                elif i < len(params):
+                    provided.add(params[i][0])
+            # 'this' is implicitly provided by the receiver in method calls
+            if (
+                call.callable.nodetype == NodeType.DOTTEDPATH
+                and "this" in callee_type.children
+            ):
+                provided.add("this")
+            for pname, ptype in params:
+                if pname.startswith(":"):
+                    continue
+                if pname not in provided and pname not in callee_type.param_defaults:
+                    self._error(
+                        f"missing required argument '{pname}' (type: {ptype.name})",
+                        loc=call.start,
+                        err=ERR.CALLERROR,
+                    )
+
         # lock the receiver (dotted chain on the callable)
         self._lock_receiver(call.callable, call)
 
@@ -4679,6 +4788,40 @@ class TypeChecker:
         if call.call_kind == zast.CallKind.UNKNOWN:
             call.call_kind = zast.CallKind.REGULAR
         return call.type
+
+    def _check_missing_create_args(self, type_def: ZType, call: zast.Call) -> None:
+        """Check for missing required fields in record/class construction."""
+        # skip native/collection types — construction is compiler-managed
+        if (
+            type_def.is_native
+            or _is_str_type(type_def)
+            or _is_array_type(type_def)
+            or _is_list_type(type_def)
+            or _is_map_type(type_def)
+        ):
+            return
+        create_type = type_def.children.get(":meta.create")
+        if not create_type:
+            return
+        # collect non-function params (user-visible data fields only)
+        data_params = [
+            (pname, ptype)
+            for pname, ptype in create_type.children.items()
+            if not pname.startswith(":") and ptype.typetype != ZTypeType.FUNCTION
+        ]
+        if not data_params:
+            return
+        provided: set = set()
+        for arg in call.arguments:
+            if arg.name:
+                provided.add(arg.name)
+        for pname, ptype in data_params:
+            if pname not in provided and pname not in create_type.param_defaults:
+                self._error(
+                    f"missing required field '{pname}' (type: {ptype.name})",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
 
     def _take_arg_locks(
         self, op: zast.Operation, call: zast.Call, loc: Token

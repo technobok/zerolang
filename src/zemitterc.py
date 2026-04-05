@@ -3954,17 +3954,24 @@ class CEmitter:
                 atom = cast(zast.AtomId, inner)
                 ftype = atom.type
                 if ftype and ftype.param_defaults:
-                    cname = _mangle_func(atom.name)
-                    defaults: List[str] = []
-                    for pname, _ in ftype.children.items():
-                        if pname.startswith(":"):
-                            continue
-                        if pname in ftype.param_defaults:
+                    # only emit bare call when ALL params have defaults
+                    real_params = [
+                        (k, v)
+                        for k, v in ftype.children.items()
+                        if not k.startswith(":")
+                    ]
+                    all_defaulted = all(
+                        p in ftype.param_defaults for p, _ in real_params
+                    )
+                    if all_defaulted:
+                        cname = _mangle_func(atom.name)
+                        defaults: List[str] = []
+                        for pname, _ in real_params:
                             d = ftype.param_defaults[pname]
                             if self._typetype_of(d) == ZTypeType.FUNCTION:
                                 d = _mangle_func(d)
                             defaults.append(d)
-                    return f"{cname}({', '.join(defaults)})"
+                        return f"{cname}({', '.join(defaults)})"
             return self._emit_operation_value(cast(zast.Operation, inner))
         if inner.nodetype == zast.NodeType.WITH:
             return self._emit_expression_value(cast(zast.With, inner).doexpr)

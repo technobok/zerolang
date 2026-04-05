@@ -1209,7 +1209,7 @@ class TestEmitterClasses:
     def test_class_struct_emitted(self):
         """Class should emit a typedef struct."""
         csource = emit_source(
-            "myclass: class { x: i64\n y: f64 }\nmain: function is { c: myclass }"
+            "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
         )
         assert "typedef struct {" in csource
         assert "z_myclass_t" in csource
@@ -1234,21 +1234,21 @@ class TestEmitterClasses:
     def test_class_scope_cleanup(self):
         """Class variables destroyed at function exit."""
         csource = emit_source(
-            "myclass: class { x: i64 }\nmain: function is { c: myclass }"
+            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
         )
         assert "z_myclass_destroy(c);" in csource
 
     def test_class_take_nullifies(self):
         """After .take, source variable should be nullified."""
         csource = emit_source(
-            "myclass: class { x: i64 }\nmain: function is { c: myclass\n d: c.take }"
+            "myclass: class { x: 0 }\nmain: function is { c: myclass\n d: c.take }"
         )
         assert "= NULL;" in csource
 
     def test_class_method_uses_pointer(self):
         """Class methods should take pointer parameter."""
         csource = emit_source(
-            "myclass: class { x: i64 } as {\n"
+            "myclass: class { x: 0 } as {\n"
             "  get: function {c: this} out i64 is { return c.x }\n"
             "}\n"
             "main: function is { c: myclass }"
@@ -1443,7 +1443,7 @@ class TestEmitterClassDestructors:
     def test_class_destructor_with_string_field(self):
         """Class with string field: destructor frees string."""
         csource = emit_source(
-            "myclass: class { name: string\n x: i64 }\nmain: function is { c: myclass }"
+            'myclass: class { name: string\n x: 0 }\nmain: function is { c: myclass name: "" }'
         )
         assert "z_myclass_destroy" in csource
         assert "zstr_free(p->name);" in csource
@@ -1451,9 +1451,9 @@ class TestEmitterClassDestructors:
     def test_class_destructor_with_class_field(self):
         """Class with class field: destructor recurses."""
         csource = emit_source(
-            "inner: class { x: i64 }\n"
+            "inner: class { x: 0 }\n"
             "outer: class { child: inner }\n"
-            "main: function is { o: outer }"
+            "main: function is { o: outer child: inner }"
         )
         assert "z_inner_destroy(p->child);" in csource
 
@@ -1462,14 +1462,14 @@ class TestEmitterClassDestructors:
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\n"
             "myclass: class { payload: myunion }\n"
-            "main: function is { c: myclass }"
+            "main: function is { c: myclass payload: myunion.b }"
         )
         assert "z_myunion_destroy(p->payload);" in csource
 
     def test_class_destructor_valtype_only(self):
         """Class with only valtype fields: just NULL check + free."""
         csource = emit_source(
-            "myclass: class { x: i64\n y: f64 }\nmain: function is { c: myclass }"
+            "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
         )
         assert "z_myclass_destroy" in csource
         # destructor should NOT contain zstr_free or z_*_destroy for fields
@@ -1484,7 +1484,7 @@ class TestEmitterClassDestructors:
     def test_scope_exit_calls_destructor(self):
         """Scope-exit cleanup calls z_{name}_destroy."""
         csource = emit_source(
-            "myclass: class { name: string }\nmain: function is { c: myclass }"
+            'myclass: class { name: string }\nmain: function is { c: myclass name: "" }'
         )
         # should call destructor, not bare free
         assert "z_myclass_destroy(c);" in csource
@@ -2059,7 +2059,7 @@ class TestEmitterConstructors:
     def test_class_meta_create_emitted(self):
         """Class should emit both meta.create and create functions."""
         csource = emit_source(
-            "counter: class { value: i64 }\nmain: function is { c: counter }"
+            "counter: class { value: 0 }\nmain: function is { c: counter }"
         )
         assert "z_counter_meta_create" in csource
         assert "z_counter_create" in csource
@@ -2107,21 +2107,21 @@ class TestEmitterConstructors:
     def test_bare_class_calls_create(self):
         """Bare class name should call .create with zeros."""
         csource = emit_source(
-            "myclass: class { x: i64 }\nmain: function is { c: myclass }"
+            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
         )
         assert "z_myclass_create(0)" in csource
 
     def test_bare_record_calls_create(self):
         """Bare record name should call .create with zeros."""
         csource = emit_source(
-            "point: record { x: i64\n y: i64 }\nmain: function is { p: point }"
+            "point: record { x: 0\n y: 0 }\nmain: function is { p: point }"
         )
         assert "z_point_create(0, 0)" in csource
 
     def test_out_this_return_type(self):
         """Method with 'out this' return type should resolve correctly."""
         csource = emit_source(
-            "myclass: class { x: i64 } as {\n"
+            "myclass: class { x: 0 } as {\n"
             "  make: function {v: i64} out this is { return myclass x: v }\n"
             "}\n"
             "main: function is { c: myclass }"
@@ -4291,7 +4291,7 @@ class TestStr:
         csource = emit_source(
             "entry: record { name: (str to: 16)\n age: i64 }\n"
             "main: function is {\n"
-            '    e: (entry) name: ((str to: 16) from: "bob")\n'
+            '    e: entry name: ((str to: 16) from: "bob") age: 0\n'
             '    print "\\{e.name.length} \\{e.age}"\n'
             "}"
         )
@@ -5226,7 +5226,7 @@ class TestAutoGeneratedEquality:
     def test_record_eq_c_output(self):
         """Small record (<=16 bytes) uses field-by-field comparison."""
         csource = emit_source(
-            "point: record { x: i64  y: i64 }\n"
+            "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
             "  a: point\n"
             "  b: point\n"
@@ -5241,7 +5241,7 @@ class TestAutoGeneratedEquality:
     def test_record_eq_binop(self):
         """== on records emits z_point_eq() call."""
         csource = emit_source(
-            "point: record { x: i64  y: i64 }\n"
+            "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
             "  a: point\n"
             "  b: point\n"
@@ -5254,7 +5254,7 @@ class TestAutoGeneratedEquality:
     def test_record_neq_binop(self):
         """!= on records emits !z_point_eq()."""
         csource = emit_source(
-            "point: record { x: i64  y: i64 }\n"
+            "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
             "  a: point\n"
             "  b: point\n"
@@ -5266,7 +5266,7 @@ class TestAutoGeneratedEquality:
     def test_record_eq_compiles_and_runs(self):
         """Record equality compiles and produces correct result."""
         csource = emit_source(
-            "point: record { x: i64  y: i64 }\n"
+            "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
             "  a: point\n"
             "  a.x = 1\n"
@@ -5329,11 +5329,11 @@ class TestAutoGeneratedEquality:
     def test_nested_record_eq_c_output(self):
         """Small nested integer records use field-by-field."""
         csource = emit_source(
-            "inner: record { v: i64 }\n"
-            "outer: record { a: inner  b: i64 }\n"
+            "inner: record { v: 0 }\n"
+            "outer: record { a: inner  b: 0 }\n"
             "main: function is {\n"
-            "  x: outer\n"
-            "  y: outer\n"
+            "  x: outer a: inner\n"
+            "  y: outer a: inner\n"
             "  if x == y then return 0\n"
             "}"
         )
@@ -5345,11 +5345,11 @@ class TestAutoGeneratedEquality:
     def test_nested_record_float_uses_field_compare(self):
         """Nested record with float field falls back to field-by-field."""
         csource = emit_source(
-            "inner: record { v: f64 }\n"
-            "outer: record { a: inner  b: i64 }\n"
+            "inner: record { v: 0.0 }\n"
+            "outer: record { a: inner  b: 0 }\n"
             "main: function is {\n"
-            "  x: outer\n"
-            "  y: outer\n"
+            "  x: outer a: inner\n"
+            "  y: outer a: inner\n"
             "  if x == y then return 0\n"
             "}"
         )
@@ -5359,7 +5359,7 @@ class TestAutoGeneratedEquality:
     def test_simple_eq_small_record_field_compare(self):
         """Small simple record (<=16 bytes) uses field-by-field."""
         csource = emit_source(
-            "small: record { a: i64 }\n"
+            "small: record { a: 0 }\n"
             "main: function is {\n"
             "  x: small\n"
             "  y: small\n"
@@ -5372,7 +5372,7 @@ class TestAutoGeneratedEquality:
     def test_simple_eq_large_record_memcmp(self):
         """Large simple record (>16 bytes) uses memcmp."""
         csource = emit_source(
-            "big: record { a: i64  b: i64  c: i64 }\n"
+            "big: record { a: 0  b: 0  c: 0 }\n"
             "main: function is {\n"
             "  x: big\n"
             "  y: big\n"
@@ -5384,7 +5384,7 @@ class TestAutoGeneratedEquality:
     def test_simple_eq_float_always_field_compare(self):
         """Float record always uses field-by-field regardless of size."""
         csource = emit_source(
-            "big: record { a: f64  b: f64  c: f64 }\n"
+            "big: record { a: 0.0  b: 0.0  c: 0.0 }\n"
             "main: function is {\n"
             "  x: big\n"
             "  y: big\n"
@@ -5397,7 +5397,7 @@ class TestAutoGeneratedEquality:
     def test_simple_eq_large_record_compiles_and_runs(self):
         """Large record memcmp equality compiles and works correctly."""
         csource = emit_source(
-            "big: record { a: i64  b: i64  c: i64 }\n"
+            "big: record { a: 0  b: 0  c: 0 }\n"
             "main: function is {\n"
             "  x: big\n"
             "  x.a = 1\n"
@@ -5433,7 +5433,7 @@ class TestAutoGeneratedEquality:
     def test_float_eq_compiles_and_runs(self):
         """Float field-by-field equality compiles and works correctly."""
         csource = emit_source(
-            "point: record { x: f64  y: f64 }\n"
+            "point: record { x: 0.0  y: 0.0 }\n"
             "main: function is {\n"
             "  a: point\n"
             "  a.x = 1.0\n"

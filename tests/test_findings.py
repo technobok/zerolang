@@ -93,7 +93,7 @@ class TestFinding1TypeAnnotations:
 
     def test_record_field_types_annotated(self):
         program = parse_and_check(
-            "point: record is { x: f64  y: f64 }\n"
+            "point: record is { x: 0.0  y: 0.0 }\n"
             'main: function is {\n    p: point\n    print "ok"\n}'
         )
         # find the record definition
@@ -210,7 +210,7 @@ class TestFinding3DestructorMetadata:
 
     def test_record_no_destructor(self):
         program = parse_and_check(
-            "point: record is { x: f64  y: f64 }\n"
+            "point: record is { x: 0.0  y: 0.0 }\n"
             'main: function is {\n    p: point\n    print "ok"\n}'
         )
         t = None
@@ -504,7 +504,7 @@ class TestFinding10TypeAnnotationAudit:
 
     def test_audit_clean_for_record_fields(self):
         program = parse_and_check(
-            "point: record is { x: f64  y: f64 }\n"
+            "point: record is { x: 0.0  y: 0.0 }\n"
             'main: function is {\n    p: point\n    print "ok"\n}'
         )
         missing = audit_type_annotations(program)
