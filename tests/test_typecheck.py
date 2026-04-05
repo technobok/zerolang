@@ -5158,8 +5158,83 @@ class TestNativeTypeCheck:
         )
 
     def test_error_function_native(self):
-        """error function (native) resolves and type-checks."""
-        check_ok('main: function is { error "test" }')
+        """error function (native) produces a compile-time error."""
+        errors = check_errors('main: function is { error "test" }')
+        assert any(e.msg == "test" for e in errors)
+
+
+class TestCompileTimeError:
+    """Tests for compile-time error via the error builtin."""
+
+    def test_error_unconditional(self):
+        """Unconditional error produces compile-time error with message."""
+        errors = check_errors('main: function is { error "boom" }')
+        assert any(e.msg == "boom" for e in errors)
+
+    def test_error_in_const_true_branch(self):
+        """error in a constant-true if branch triggers compile-time error."""
+        errors = check_errors(
+            'SIZE: 0\nmain: function is { if SIZE == 0 then { error "bad" } }'
+        )
+        assert any(e.msg == "bad" for e in errors)
+
+    def test_error_in_const_false_branch(self):
+        """error in a constant-false if branch is suppressed."""
+        check_ok('SIZE: 1\nmain: function is { if SIZE == 0 then { error "bad" } }')
+
+    def test_error_in_const_false_else_taken(self):
+        """error in else clause when all if clauses are const-false triggers."""
+        errors = check_errors(
+            "SIZE: 1\nmain: function is {\n"
+            '  if SIZE == 0 then { x: 1 } else { error "fallthrough" }\n}'
+        )
+        assert any(e.msg == "fallthrough" for e in errors)
+
+    def test_error_in_const_true_else_suppressed(self):
+        """error in else clause when a const-true clause was taken is suppressed."""
+        check_ok(
+            "SIZE: 1\nmain: function is {\n"
+            '  if SIZE == 1 then { x: 1 } else { error "never" }\n}'
+        )
+
+    def test_error_runtime_branch(self):
+        """error in a runtime-conditional branch triggers compile-time error."""
+        errors = check_errors(
+            'main: function {x: i32} is { if x == 0 then { error "bad" } }'
+        )
+        assert any(e.msg == "bad" for e in errors)
+
+    def test_error_preserves_unreachable_detection(self):
+        """Code after error is flagged as unreachable."""
+        errors = check_errors('main: function is { error "stop"\n  x: 1 }')
+        assert any("stop" in e.msg for e in errors)
+        assert any("nreachable" in e.msg for e in errors)
+
+    def test_error_generic_fallback_message(self):
+        """error with interpolated string uses generic fallback message."""
+        errors = check_errors('N: 0\nmain: function is { error "value is \\{N}" }')
+        assert any(e.msg == "compile-time error" for e in errors)
+
+    def test_error_numeric_generic_triggered(self):
+        """error triggered via numeric generic param in monomorphized code."""
+        errors = check_errors(
+            "buf: record { val: u8 } as { cap: u32.generic }\n"
+            "main: function is {\n"
+            "  b: (buf cap: 0)\n"
+            '  if b.cap == 0 then { error "cap must be > 0" }\n'
+            "}"
+        )
+        assert any("cap must be > 0" in e.msg for e in errors)
+
+    def test_error_numeric_generic_ok(self):
+        """error suppressed when numeric generic param makes condition false."""
+        check_ok(
+            "buf: record { val: u8 } as { cap: u32.generic }\n"
+            "main: function is {\n"
+            "  b: (buf cap: 16)\n"
+            '  if b.cap == 0 then { error "cap must be > 0" }\n'
+            "}"
+        )
 
 
 class TestDoBreak:

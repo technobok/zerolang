@@ -4041,9 +4041,66 @@ braces at the unit level.
   x: if A > 5 then { A } else { 0 }
   """
 
-#---: Error Directive 
+#---: Compile-Time Error
 
-TODO: put this at #~"meta.error"?
+The #~"error" builtin produces a compile-time error. When the compiler
+can prove that an #~"error" call is reachable, compilation fails and the
+user's message is reported as the error. This is the primary mechanism
+for compile-time assertions and constraint validation.
+
+#code language=zerolang: """
+  error "this always fails"
+  """
+
+When #~"error" appears inside an #~"if" branch whose condition is a
+compile-time constant, the compiler evaluates the condition statically.
+If the condition is false, the branch (and its #~"error") is dead code
+and is suppressed. If the condition is true, the error triggers at
+compile time.
+
+#code language=zerolang: """
+  MODE: 1
+
+  main: function is {
+      if MODE == 0 then {
+          error "MODE must not be zero"
+      }
+      # compiles successfully because MODE is 1
+  }
+  """
+
+This interacts naturally with numeric generic parameters. When a generic
+type is monomorphised with a concrete numeric value, the condition becomes
+a compile-time constant and the error is either triggered or eliminated.
+
+#code language=zerolang: """
+  buffer: record {
+      used: u32
+  } as {
+      cap: u32.generic
+  }
+
+  fill: function {b: buffer} is {
+      if b.cap == 0 then {
+          error "buffer capacity must not be zero"
+      }
+  }
+
+  main: function is {
+      ok: (buffer cap: 8)
+      fill ok                     # compiles: 8 != 0
+
+      # bad: (buffer cap: 0)
+      # fill bad                  # would fail: "buffer capacity must not be zero"
+  }
+  """
+
+If the #~"error" message contains string interpolation, the compiler
+reports a generic "compile-time error" message because interpolation
+cannot be evaluated at compile time.
+
+Code following an #~"error" call is unreachable and flagged by the
+compiler.
 
 The #~"error" directive forces a compilation error (during code generation?).
 This would usually be within a conditionally compiled section (otherwise

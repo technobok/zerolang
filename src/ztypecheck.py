@@ -314,6 +314,10 @@ class TypeChecker:
         # flow typing: tracks compile-time type narrowing at each program point
         self._type_state = TypeState()
 
+        # compile-time error suppression: when > 0, error() calls do not
+        # emit compile-time errors (used inside constant-false if branches)
+        self._suppress_compile_error: int = 0
+
     # Keywords used to auto-categorise errors when no explicit code is given
     _OWNERSHIP_KEYWORDS = (
         "take",
@@ -4406,6 +4410,12 @@ class TypeChecker:
         t = self._resolve_dotted_path(path)
         if t:
             path.type = t
+            # propagate const_value for numeric generic param fields
+            parent_type = getattr(path.parent, "type", None)
+            if parent_type and parent_type.generic_args:
+                garg = parent_type.generic_args.get(child_name)
+                if garg and garg.numeric_value is not None:
+                    path.const_value = garg.numeric_value
             # protocol/facet borrow: lock the source variable
             if (
                 t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET)
@@ -4501,6 +4511,17 @@ class TypeChecker:
             return callee_type
         if callee_type.control_kind == ControlKind.CONTINUE:
             call.call_kind = zast.CallKind.CONTINUE
+            return callee_type
+        if callee_type.control_kind == ControlKind.ERROR:
+            call.call_kind = zast.CallKind.ERROR
+            # type-check the message argument
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            # compile-time error unless suppressed (constant-false if branch)
+            if self._suppress_compile_error == 0:
+                msg = self._extract_error_message(call)
+                self._error(msg, loc=call.start)
+            call.type = callee_type
             return callee_type
 
         # handle identical: native generic function for reftype identity
@@ -5309,6 +5330,28 @@ class TypeChecker:
         )
         return None
 
+    def _extract_error_message(self, node: zast.Node) -> str:
+        """Extract the string literal from an error() call's first argument.
+
+        Returns the literal text or a generic fallback for interpolated strings.
+        """
+        if node.nodetype != NodeType.CALL:
+            return "compile-time error"
+        call = cast(zast.Call, node)
+        if not call.arguments:
+            return "compile-time error"
+        msg_op = call.arguments[0].valtype
+        if msg_op.nodetype == NodeType.ATOMSTRING:
+            atom_str = cast(zast.AtomString, msg_op)
+            parts: list[str] = []
+            for part in atom_str.stringparts:
+                if not getattr(part, "is_node", False):
+                    parts.append(cast(Token, part).tokstr)
+                else:
+                    return "compile-time error"
+            return "".join(parts)
+        return "compile-time error"
+
     # sentinel for branches that don't complete (return/break/continue)
     _NORETURN = object()
 
@@ -5353,16 +5396,35 @@ class TypeChecker:
         self.symtab.push("if")
         pre_if_state = self._type_state
         all_branches_diverge = True
+        const_true_taken = False
         for clause in ifnode.clauses:
             self._type_state = pre_if_state
             for _, cond_op in clause.conditions.items():
                 self._check_operation(cond_op)
+            # suppress compile-time errors in constant-false branches
+            all_const = all(
+                cond_op.const_value is not None
+                for _, cond_op in clause.conditions.items()
+            )
+            all_false = all_const and not all(
+                bool(cond_op.const_value) for _, cond_op in clause.conditions.items()
+            )
+            if all_false or const_true_taken:
+                self._suppress_compile_error += 1
             self._check_statement(clause.statement)
+            if all_false or const_true_taken:
+                self._suppress_compile_error -= 1
+            if all_const and not all_false and not const_true_taken:
+                const_true_taken = True
             if not self._type_state.unreachable:
                 all_branches_diverge = False
         if ifnode.elseclause:
             self._type_state = pre_if_state
+            if const_true_taken:
+                self._suppress_compile_error += 1
             self._check_statement(ifnode.elseclause)
+            if const_true_taken:
+                self._suppress_compile_error -= 1
             if not self._type_state.unreachable:
                 all_branches_diverge = False
         else:

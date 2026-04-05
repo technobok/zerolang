@@ -5173,11 +5173,12 @@ class TestNativeEmitter:
         )
         assert output.strip() == "after"
 
-    def test_native_error(self):
-        """error (native) generates a call in the C output."""
-        csource = emit_source('main: function is { error "test error" }')
-        # The emitter generates an error() call with the string argument
-        assert "error(" in csource
+    def test_native_error_in_const_false_branch(self):
+        """error in a constant-false if branch is eliminated from C output."""
+        csource = emit_source(
+            'SIZE: 1\nmain: function is { if SIZE == 0 then { error "bad" } }'
+        )
+        assert "error(" not in csource
 
     def test_native_string_operations(self):
         """String operations via native string type work in generated C."""
