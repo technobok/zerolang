@@ -5543,6 +5543,17 @@ class TypeChecker:
 
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")
+        # introduce break and continue bindings for this loop
+        t_never = self._resolve_name("never")
+        if t_never:
+            break_type = _make_type("break", ZTypeType.FUNCTION)
+            break_type.return_type = t_never
+            break_type.control_kind = ControlKind.BREAK
+            self.symtab.define("break", break_type)
+            continue_type = _make_type("continue", ZTypeType.FUNCTION)
+            continue_type.return_type = t_never
+            continue_type.control_kind = ControlKind.CONTINUE
+            self.symtab.define("continue", continue_type)
         # lock tracking for for-loop targets
         locked_targets: List[Tuple[str, str]] = []
         for name, cond_op in fornode.conditions.items():

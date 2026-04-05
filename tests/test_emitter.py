@@ -5025,6 +5025,49 @@ class TestNativeEmitter:
         )
         assert output.strip() == "3"
 
+    def test_nested_for_break_inner(self):
+        """break in inner loop only breaks inner, outer continues."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  total: 0\n"
+                "  for i: 0 while i < 3 loop {\n"
+                "    for j: 0 while j < 10 loop {\n"
+                "      if j == 2 then { break }\n"
+                "      j = j + 1\n"
+                "    }\n"
+                "    total = total + 1\n"
+                "    i = i + 1\n"
+                "  }\n"
+                '  print "\\{total}"\n'
+                "}"
+            )
+        )
+        assert output.strip() == "3"
+
+    def test_nested_for_continue_inner(self):
+        """continue in inner loop only affects inner, outer unaffected."""
+        output = compile_and_run(
+            emit_source(
+                "main: function is {\n"
+                "  total: 0\n"
+                "  for i: 0 while i < 3 loop {\n"
+                "    sum: 0\n"
+                "    for j: 0 while j < 5 loop {\n"
+                "      j = j + 1\n"
+                "      if j == 3 then { continue }\n"
+                "      sum = sum + j\n"
+                "    }\n"
+                "    total = total + sum\n"
+                "    i = i + 1\n"
+                "  }\n"
+                '  print "\\{total}"\n'
+                "}"
+            )
+        )
+        # each inner: 1+2+4+5 = 12, outer: 3 * 12 = 36
+        assert output.strip() == "36"
+
     def test_native_error(self):
         """error (native) generates a call in the C output."""
         csource = emit_source('main: function is { error "test error" }')

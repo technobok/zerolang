@@ -5113,6 +5113,50 @@ class TestNativeTypeCheck:
             "main: function is { x: 0\n for while x < 10 loop { x = x + 1\n continue } }"
         )
 
+    def test_break_outside_loop_error(self):
+        """break outside a loop is undefined (only exists inside for scopes)."""
+        errors = check_errors("main: function is { break }")
+        assert any("undefined" in e.msg.lower() and "break" in e.msg for e in errors)
+
+    def test_continue_outside_loop_error(self):
+        """continue outside a loop is undefined (only exists inside for scopes)."""
+        errors = check_errors("main: function is { continue }")
+        assert any("undefined" in e.msg.lower() and "continue" in e.msg for e in errors)
+
+    def test_break_in_nested_loop(self):
+        """break in nested loop should type-check ok."""
+        check_ok(
+            "main: function is {\n"
+            "  for loop {\n"
+            "    for loop {\n"
+            "      if 1 < 2 then { break }\n"
+            "    }\n"
+            "    break\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_continue_in_nested_loop(self):
+        """continue in nested loop should type-check ok."""
+        check_ok(
+            "main: function is {\n"
+            "  x: 0\n"
+            "  for while x < 5 loop {\n"
+            "    x = x + 1\n"
+            "    for loop {\n"
+            "      if 1 < 2 then { continue }\n"
+            "      break\n"
+            "    }\n"
+            "  }\n"
+            "}"
+        )
+
+    def test_break_in_if_inside_loop(self):
+        """break inside if inside loop is valid."""
+        check_ok(
+            "main: function is {\n  for loop {\n    if 1 < 2 then { break }\n  }\n}"
+        )
+
     def test_error_function_native(self):
         """error function (native) resolves and type-checks."""
         check_ok('main: function is { error "test" }')
