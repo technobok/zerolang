@@ -5223,6 +5223,23 @@ class TestNativeEmitter:
         output = compile_and_run(csource)
         assert output.strip() == "20"
 
+    def test_generic_type_match_emits_correct_arm(self):
+        """Generic type match emits only the matching arm in C."""
+        csource = emit_source(
+            "mybox: class { val: t } as {\n"
+            "  t: any.generic\n"
+            "  check: function {b: this} is {\n"
+            '    match t case i32 then { print "32" }'
+            ' case i64 then { print "64" } else { print "other" }\n'
+            "  }\n"
+            "}\n"
+            "main: function is { b: mybox val: 42 }"
+        )
+        # the i64 arm should be present, dead i32/other arms eliminated
+        assert '"64"' in csource
+        assert '"32"' not in csource
+        assert '"other"' not in csource
+
     def test_native_string_operations(self):
         """String operations via native string type work in generated C."""
         output = compile_and_run(

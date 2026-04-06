@@ -5300,6 +5300,76 @@ class TestCompileTimeErrorMatch:
         assert any(e.msg == "bad" for e in errors)
 
 
+class TestGenericTypeMatch:
+    """Tests for compile-time match on generic type parameters."""
+
+    def test_generic_type_match_basic(self):
+        """match t in monomorphized method resolves to the correct arm."""
+        check_ok(
+            "mybox: class { val: t } as {\n"
+            "  t: any.generic\n"
+            "  bits: function {b: this} out i64 is {\n"
+            "    match t case i32 then { return 32 }"
+            " case i64 then { return 64 } else { return 0 }\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: mybox val: 42\n  x: b.bits }"
+        )
+
+    def test_generic_type_match_error_suppressed(self):
+        """error in non-matching generic arm is suppressed."""
+        check_ok(
+            "mybox: class { val: t } as {\n"
+            "  t: any.generic\n"
+            "  check: function {b: this} is {\n"
+            '    match t case i32 then { error "i32 not supported" }'
+            ' case i64 then { x: 1 } else { error "unsupported" }\n'
+            "  }\n"
+            "}\n"
+            "main: function is { b: mybox val: 42\n  b.check }"
+        )
+
+    def test_generic_type_match_error_triggers(self):
+        """error in matching generic arm triggers."""
+        errors = check_errors(
+            "mybox: class { val: t } as {\n"
+            "  t: any.generic\n"
+            "  check: function {b: this} is {\n"
+            '    match t case i32 then { error "i32 not supported" }'
+            " case i64 then { x: 1 }\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: mybox val: 42.i32\n  b.check }"
+        )
+        assert any("i32 not supported" in e.msg for e in errors)
+
+    def test_generic_type_match_else_suppressed(self):
+        """else suppressed when a generic type arm matches."""
+        check_ok(
+            "mybox: class { val: t } as {\n"
+            "  t: any.generic\n"
+            "  check: function {b: this} is {\n"
+            '    match t case i64 then { x: 1 } else { error "unsupported" }\n'
+            "  }\n"
+            "}\n"
+            "main: function is { b: mybox val: 42\n  b.check }"
+        )
+
+    def test_generic_type_match_else_triggers(self):
+        """else triggers when no generic type arm matches."""
+        errors = check_errors(
+            "mybox: class { val: t } as {\n"
+            "  t: any.generic\n"
+            "  check: function {b: this} is {\n"
+            "    match t case i32 then { x: 1 }"
+            ' case i64 then { x: 2 } else { error "unsupported" }\n'
+            "  }\n"
+            "}\n"
+            "main: function is { b: mybox val: 3.14\n  b.check }"
+        )
+        assert any("unsupported" in e.msg for e in errors)
+
+
 class TestDoBreak:
     """Tests for break in do/bare-brace blocks."""
 

@@ -5753,8 +5753,86 @@ class TypeChecker:
         self.symtab.pop()
         return result
 
+    def _check_generic_type_match(
+        self, casenode: zast.Case, concrete_type: ZType
+    ) -> Optional[ZType]:
+        """Handle match on a generic type parameter (compile-time type switch).
+
+        When the concrete type is known (monomorphized context), the matching
+        arm is determined at compile time and dead arms suppress errors.
+        """
+        concrete_name = concrete_type.name
+        const_match_taken = False
+
+        pre_match_state = self._type_state
+
+        for clause in casenode.clauses:
+            self._type_state = pre_match_state
+            arm_matches = clause.match.name == concrete_name
+            # tag each clause with its type name for emitter const folding
+            clause.match.const_value = clause.match.name
+            if const_match_taken or not arm_matches:
+                self._suppress_compile_error += 1
+            self._check_statement(clause.statement)
+            if const_match_taken or not arm_matches:
+                self._suppress_compile_error -= 1
+            if arm_matches and not const_match_taken:
+                const_match_taken = True
+
+        if casenode.elseclause:
+            self._type_state = pre_match_state
+            if const_match_taken:
+                self._suppress_compile_error += 1
+            self._check_statement(casenode.elseclause)
+            if const_match_taken:
+                self._suppress_compile_error -= 1
+
+        self._type_state = pre_match_state
+
+        # mark the match as a generic type switch for the emitter
+        casenode.subject.const_value = concrete_name
+
+        # compute result type for match-as-expression
+        result_type = self.t_null
+        is_exhaustive = bool(casenode.elseclause) or const_match_taken
+        if is_exhaustive:
+            branch_types: list[object] = []
+            for c in casenode.clauses:
+                branch_types.append(self._last_statement_type(c.statement))
+            if casenode.elseclause:
+                branch_types.append(self._last_statement_type(casenode.elseclause))
+            completing: list[object] = []
+            for bt in branch_types:
+                if bt is not self._NORETURN:
+                    completing.append(bt)
+            if not completing and branch_types:
+                never = self._resolve_name("never")
+                if never:
+                    result_type = never
+                    casenode.type = never
+            elif completing:
+                first_raw = completing[0]
+                if first_raw is not None and getattr(first_raw, "is_ztype", False):
+                    result_type = cast(ZType, first_raw)
+                    casenode.type = result_type
+
+        self.symtab.pop()
+        return result_type
+
     def _check_case(self, casenode: zast.Case) -> Optional[ZType]:
         self.symtab.push("match")
+
+        # generic type parameter match: match on t where t is a generic param
+        if casenode.subject.nodetype == NodeType.ATOMID and self._generic_context:
+            gp_name = cast(zast.AtomId, casenode.subject).name
+            for ctx in reversed(self._generic_context):
+                if gp_name in ctx:
+                    concrete = ctx[gp_name]
+                    # only fold when concrete type is known (not still generic)
+                    if concrete.typetype != ZTypeType.GENERIC_PARAM:
+                        return self._check_generic_type_match(casenode, concrete)
+                    break
+
         subject_type = self._check_operation(casenode.subject)
 
         # match does NOT lock its subject (unlike 'for' and function calls).
