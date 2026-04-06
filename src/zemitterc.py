@@ -3238,11 +3238,6 @@ class CEmitter:
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
-        # unit instantiation is compile-time only — no C code needed
-        if assign.type and assign.type.typetype == ZTypeType.UNIT:
-            # register the unit alias so dotted path resolution works
-            self._unit_aliases[assign.name] = assign.type
-            return ""
         ctype = "int64_t"
         if assign.type:
             # typedef method calls: type is FUNCTION but variable holds the

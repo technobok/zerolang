@@ -3319,6 +3319,29 @@ class TestGenerics:
         )
         assert any("cannot infer" in e.msg.lower() for e in errors)
 
+    # ---- Error: compile-time-only instantiation in code ----
+
+    def test_unit_instantiation_in_code_error(self):
+        """Unit instantiation inside function body → error."""
+        errors = check_errors(
+            "mathops: unit as {\n"
+            "  t: any.generic\n"
+            "  add: function {a: t b: t} out t is { return a + b }\n"
+            "}\n"
+            "main: function is { u: (mathops t: i64) }"
+        )
+        assert any(
+            "unit" in e.msg.lower() and "unit level" in e.msg.lower() for e in errors
+        )
+
+    def test_generic_function_type_args_only_error(self):
+        """Generic function call with only type args (no value args) → missing args."""
+        errors = check_errors(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id t: i64 }"
+        )
+        assert any("missing required" in e.msg.lower() for e in errors)
+
     # ---- Generic default type tests ----
 
     def test_generic_function_default_used(self):

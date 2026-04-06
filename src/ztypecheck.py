@@ -701,6 +701,7 @@ class TypeChecker:
             zast.Expression, defn
         ).expression.nodetype in (
             NodeType.BINOP,
+            NodeType.CALL,
             NodeType.DOTTEDPATH,
             NodeType.ATOMID,
             NodeType.ATOMSTRING,
@@ -3952,6 +3953,22 @@ class TypeChecker:
                         err=ERR.CALLERROR,
                     )
 
+        # check for missing required value arguments
+        provided_value_params: set = set()
+        for param_name, _, _ in checked_value_args:
+            if param_name:
+                provided_value_params.add(param_name)
+        for pname, ptype in mono_params:
+            if (
+                pname not in provided_value_params
+                and pname not in mono_ftype.param_defaults
+            ):
+                self._error(
+                    f"missing required argument '{pname}' (type: {ptype.name})",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+
         return mono_ftype
 
     def _monomorphize_function(
@@ -4236,7 +4253,7 @@ class TypeChecker:
             sline.type = inner.type
 
     def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
-        """Check if a type is non-runtime (null/never). Returns True if error emitted."""
+        """Check if a type is non-runtime (null/never/unit). Returns True if error emitted."""
         if t.typetype == ZTypeType.NULL:
             self._error(
                 f"'null' cannot be used as {context} — null must be wrapped "
@@ -4248,6 +4265,13 @@ class TypeChecker:
             self._error(
                 f"'never' cannot be used as {context} — 'never' represents "
                 "a non-completing expression (return, break, continue)",
+                loc=loc,
+            )
+            return True
+        if t.typetype == ZTypeType.UNIT:
+            self._error(
+                f"generic unit instantiation cannot be used as {context} — "
+                "define the instantiation at the unit level instead",
                 loc=loc,
             )
             return True
@@ -4899,16 +4923,6 @@ class TypeChecker:
             if not mono_ftype:
                 return None  # error already emitted
             call.callable.type = mono_ftype
-            # check if this is a pure instantiation (no value args)
-            has_value_args = any(
-                not (arg.name and arg.name in callee_type.generic_params)
-                for arg in call.arguments
-            )
-            if not has_value_args:
-                # pure instantiation: (id i64) → return the function type itself
-                call.type = mono_ftype
-                return mono_ftype
-            # actual call: return the monomorphized function's return type
             call.type = mono_ftype.return_type
             return mono_ftype.return_type
 
@@ -5028,12 +5042,14 @@ class TypeChecker:
             return callee_type
 
         # generic unit instantiation: (mathops t: i64) → monomorphized unit
+        # (valid at unit level; _check_non_runtime_type catches misuse in code)
         if callee_type.typetype == ZTypeType.UNIT and callee_type.isgeneric:
             mono = self._resolve_typeref_call(call)
             if mono:
                 call.type = mono
                 call.call_kind = zast.CallKind.UNIT_INSTANTIATE
                 return mono
+            return None
             return None
 
         if callee_type.typetype != ZTypeType.FUNCTION:

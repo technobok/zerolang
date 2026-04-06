@@ -313,8 +313,8 @@ class TestEmitterBasic:
             "  t: any.generic\n"
             "  add: function {a: t b: t} out t is { return a + b }\n"
             "}\n"
+            "intmath: (mathops t: i64)\n"
             "main: function is {\n"
-            "  intmath: (mathops t: i64)\n"
             "  result: intmath.add a: 3 b: 5\n"
             '  print "\\{result}"\n'
             "}"
@@ -329,9 +329,9 @@ class TestEmitterBasic:
             "  t: any.generic\n"
             "  double: function {v: t} out t is { return v + v }\n"
             "}\n"
+            "iops: (ops t: i64)\n"
+            "i32ops: (ops t: i32)\n"
             "main: function is {\n"
-            "  iops: (ops t: i64)\n"
-            "  i32ops: (ops t: i32)\n"
             '  print "\\{iops.double 21}"\n'
             '  print "\\{i32ops.double 16.i32}"\n'
             "}"
@@ -347,8 +347,8 @@ class TestEmitterBasic:
             "  identity: function {v: t} out t is { return v }\n"
             "  sum: function {a: t b: t} out t is { return a + b }\n"
             "}\n"
+            "u: (utils t: i64)\n"
             "main: function is {\n"
-            "  u: (utils t: i64)\n"
             '  print "\\{u.identity 99}"\n'
             '  print "\\{u.sum a: 10 b: 20}"\n'
             "}"
@@ -367,10 +367,10 @@ class TestEmitterBasic:
             "  }\n"
             "  add: function {a: t b: t} out t is { return a + b }\n"
             "}\n"
+            "iops: (outer t: i64)\n"
+            "iops2: (iops.inner u: i32)\n"
             "main: function is {\n"
-            "  iops: (outer t: i64)\n"
             '  print "\\{iops.add a: 3 b: 5}"\n'
-            "  iops2: (iops.inner u: i32)\n"
             '  print "\\{iops2.add_both a: 10 b: 5.i32}"\n'
             "}"
         )
@@ -394,10 +394,10 @@ class TestEmitterBasic:
             "  }\n"
             "  inc: function {x: a} out a is { return x + 1 }\n"
             "}\n"
+            "l1: (level1 a: i64)\n"
+            "l2: (l1.level2 b: i32)\n"
+            "l3: (l2.level3 c: i16)\n"
             "main: function is {\n"
-            "  l1: (level1 a: i64)\n"
-            "  l2: (l1.level2 b: i32)\n"
-            "  l3: (l2.level3 c: i16)\n"
             '  print "\\{l1.inc 9}"\n'
             '  print "\\{l2.sum2 x: 10 y: 5.i32}"\n'
             '  print "\\{l3.sum3 x: 1 y: 2.i32 z: 3.i16}"\n'
@@ -417,8 +417,8 @@ class TestEmitterBasic:
             StringProvider(
                 files={
                     "test.z": (
+                        "intmath: (mathutil t: i64)\n"
                         "main: function is {\n"
-                        "  intmath: (mathutil t: i64)\n"
                         "  result: intmath.add a: 3 b: 5\n"
                         '  print "\\{result}"\n'
                         "}"

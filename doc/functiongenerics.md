@@ -109,18 +109,22 @@ transformer: function as { t: any.generic u: any.generic } in { val: t } out u
 
 ### Instantiation at call sites
 
-Generic parameters follow the same call convention as regular arguments — the first
-can be positional, the rest require names:
+In code, generic type arguments are specified inline with value arguments.
+The compiler infers generic types from concrete value arguments where possible:
 
 ```zerolang
 # given: as { t: any.generic u: any.generic }
 
-# explicit generic args
-result: (map i64 u: str) list: mylist f: to_string
-
-# inferred from value arguments (where possible)
+# inferred from value arguments (preferred)
 result: map list: mylist f: to_string
+
+# explicit generic args inline with value args
+result: map t: i64 u: str list: mylist f: to_string
 ```
+
+Note: parenthesized instantiation like `(map i64 u: str)` is not valid in
+code — every expression in code must be executable. Generic instantiation
+without a call belongs at the unit level.
 
 ### Explicit `as` is required
 
