@@ -5779,6 +5779,34 @@ class CEmitter:
         if subject_type and subject_type.typetype == ZTypeType.VARIANT:
             return self._emit_variant_case(casenode, subject_type)
 
+        # constant folding: if subject has const_value, emit only matching arm
+        subject_cv = casenode.subject.const_value
+        if subject_cv is not None:
+            matched_clause = None
+            for clause in casenode.clauses:
+                if (
+                    clause.match.const_value is not None
+                    and subject_cv == clause.match.const_value
+                ):
+                    matched_clause = clause
+                    break
+            if matched_clause is not None:
+                parts.append(f"{indent}{{\n")
+                self.indent_level += 1
+                parts.append(self._emit_statement(matched_clause.statement))
+                self.indent_level -= 1
+                parts.append(f"{indent}}}\n")
+                return "".join(parts)
+            if all(c.match.const_value is not None for c in casenode.clauses):
+                # all patterns const, none matched — emit else if present
+                if casenode.elseclause:
+                    parts.append(f"{indent}{{\n")
+                    self.indent_level += 1
+                    parts.append(self._emit_statement(casenode.elseclause))
+                    self.indent_level -= 1
+                    parts.append(f"{indent}}}\n")
+                return "".join(parts)
+
         subject = self._emit_operation_value(casenode.subject)
 
         # use if/else if chain (case values may not be compile-time constants in C)
@@ -5967,6 +5995,38 @@ class CEmitter:
         """Emit simple enum match-as-expression using if/else-if chain."""
         indent = self._indent()
         parts: List[str] = []
+
+        # constant folding: emit only the matching arm's result
+        subject_cv = casenode.subject.const_value
+        if subject_cv is not None:
+            matched_clause = None
+            for clause in casenode.clauses:
+                if (
+                    clause.match.const_value is not None
+                    and subject_cv == clause.match.const_value
+                ):
+                    matched_clause = clause
+                    break
+            if matched_clause is not None:
+                parts.append(f"{indent}{{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(matched_clause.statement, result_var)
+                )
+                self.indent_level -= 1
+                parts.append(f"{indent}}}\n")
+                return "".join(parts)
+            if all(c.match.const_value is not None for c in casenode.clauses):
+                if casenode.elseclause:
+                    parts.append(f"{indent}{{\n")
+                    self.indent_level += 1
+                    parts.append(
+                        self._emit_branch_with_result(casenode.elseclause, result_var)
+                    )
+                    self.indent_level -= 1
+                    parts.append(f"{indent}}}\n")
+                return "".join(parts)
+
         subject = self._emit_operation_value(casenode.subject)
 
         for i, clause in enumerate(casenode.clauses):

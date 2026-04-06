@@ -5180,6 +5180,49 @@ class TestNativeEmitter:
         )
         assert "error(" not in csource
 
+    def test_constant_match_dead_arm_elimination(self):
+        """Constant match eliminates dead arms from C output."""
+        csource = emit_source(
+            "MODE: 1\nmain: function is {\n"
+            '  match MODE case 0 then { print "no" }'
+            ' case 1 then { print "yes" }\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "yes"
+        # dead arm should not appear in C output
+        assert '"no"' not in csource
+
+    def test_constant_match_else_elimination(self):
+        """Constant match eliminates else when an arm matches."""
+        csource = emit_source(
+            "MODE: 1\nmain: function is {\n"
+            '  match MODE case 1 then { print "ok" }'
+            ' else { print "bad" }\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+    def test_constant_match_all_miss_emits_else(self):
+        """Constant match emits only else when all arms miss."""
+        csource = emit_source(
+            "MODE: 5\nmain: function is {\n"
+            '  match MODE case 0 then { print "a" }'
+            ' case 1 then { print "b" }'
+            ' else { print "c" }\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "c"
+
+    def test_constant_match_expression_fold(self):
+        """Match-as-expression with constant subject folds."""
+        csource = emit_source(
+            "MODE: 1\nmain: function is {\n"
+            "  x: (match MODE case 0 then 10 case 1 then 20 else 30)\n"
+            '  print "\\{x}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "20"
+
     def test_native_string_operations(self):
         """String operations via native string type work in generated C."""
         output = compile_and_run(

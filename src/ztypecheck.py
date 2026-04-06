@@ -5806,6 +5806,15 @@ class TypeChecker:
                     else None,
                 )
 
+        # compile-time constant match: for scalar matches, resolve subject
+        # const_value to suppress errors in dead arms
+        subject_const: object = None
+        if not is_sum_type and casenode.subject.const_value is not None:
+            cv = casenode.subject.const_value
+            if type(cv) is int or type(cv) is bool:
+                subject_const = cv
+        const_match_taken = False
+
         # type narrowing: save pre-match state for post-match exclusion
         pre_match_state = self._type_state
         # post-match exclusion operates on the declared type (reset any
@@ -5829,7 +5838,35 @@ class TypeChecker:
             else:
                 self._type_state = pre_match_state
 
+            # resolve match pattern const_value for scalar const folding
+            suppress_arm = False
+            if subject_const is not None:
+                match_cv = None
+                mname = clause.match.name
+                if _is_numeric_id(mname):
+                    _, mval, merr = parse_number(mname)
+                    if not merr and type(mval) is int:
+                        match_cv = mval
+                else:
+                    # demand-resolve the name to ensure const_value is set
+                    self._resolve_name(mname)
+                    mdefn = self._lookup_definition(mname)
+                    if mdefn is not None:
+                        mcv = getattr(mdefn, "const_value", None)
+                        if mcv is not None:
+                            match_cv = mcv
+                if match_cv is not None:
+                    clause.match.const_value = match_cv
+                    if const_match_taken or subject_const != match_cv:
+                        suppress_arm = True
+                    elif subject_const == match_cv:
+                        const_match_taken = True
+
+            if suppress_arm:
+                self._suppress_compile_error += 1
             self._check_statement(clause.statement)
+            if suppress_arm:
+                self._suppress_compile_error -= 1
 
             # track take-in-arms: if the subject was taken during this arm,
             # restore it for subsequent arms (each arm sees the original state)
@@ -5865,7 +5902,11 @@ class TypeChecker:
                 self._type_state = else_state
             else:
                 self._type_state = pre_match_state
+            if const_match_taken:
+                self._suppress_compile_error += 1
             self._check_statement(casenode.elseclause)
+            if const_match_taken:
+                self._suppress_compile_error -= 1
 
             # track take-in-arms for else clause
             if subject_name and subject_var and subject_sym_type:

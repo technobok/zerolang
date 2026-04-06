@@ -5237,6 +5237,69 @@ class TestCompileTimeError:
         )
 
 
+class TestCompileTimeErrorMatch:
+    """Tests for compile-time error suppression in match statements."""
+
+    def test_error_in_const_match_dead_arm(self):
+        """error in non-matching scalar match arm is suppressed."""
+        check_ok(
+            "MODE: 1\nmain: function is {\n"
+            '  match MODE case 0 then { error "bad" } case 1 then { x: 1 }\n}'
+        )
+
+    def test_error_in_const_match_live_arm(self):
+        """error in matching scalar match arm triggers."""
+        errors = check_errors(
+            "MODE: 0\nmain: function is {\n"
+            '  match MODE case 0 then { error "bad" } case 1 then { x: 1 }\n}'
+        )
+        assert any(e.msg == "bad" for e in errors)
+
+    def test_error_in_const_match_else_suppressed(self):
+        """error in else suppressed when a const arm matches."""
+        check_ok(
+            "MODE: 1\nmain: function is {\n"
+            '  match MODE case 1 then { x: 1 } else { error "unknown" }\n}'
+        )
+
+    def test_error_in_const_match_else_triggers(self):
+        """error in else triggers when no const arm matches."""
+        errors = check_errors(
+            "MODE: 5\nmain: function is {\n"
+            "  match MODE case 0 then { x: 1 } case 1 then { x: 2 }"
+            ' else { error "unknown" }\n}'
+        )
+        assert any(e.msg == "unknown" for e in errors)
+
+    def test_error_in_const_match_named_constants(self):
+        """match patterns are named constants with const_value."""
+        check_ok(
+            "MODE: 1\nOK: 1\nBAD: 0\nmain: function is {\n"
+            '  match MODE case BAD then { error "bad" } case OK then { x: 1 }\n}'
+        )
+
+    def test_error_in_const_match_numeric_generic(self):
+        """numeric generic field as match subject."""
+        check_ok(
+            "buf: record { val: u8 } as { mode: u32.generic }\n"
+            "main: function is {\n"
+            "  b: (buf mode: 1)\n"
+            '  match b.mode case 0 then { error "bad" } case 1 then { x: 1 }\n'
+            "}"
+        )
+
+    def test_error_in_const_match_numeric_generic_triggers(self):
+        """numeric generic field match triggers error in matching arm."""
+        errors = check_errors(
+            "buf: record { val: u8 } as { mode: u32.generic }\n"
+            "main: function is {\n"
+            "  b: (buf mode: 0)\n"
+            '  match b.mode case 0 then { error "bad" } case 1 then { x: 1 }\n'
+            "}"
+        )
+        assert any(e.msg == "bad" for e in errors)
+
+
 class TestDoBreak:
     """Tests for break in do/bare-brace blocks."""
 
