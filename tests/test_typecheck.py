@@ -3212,6 +3212,197 @@ class TestGenerics:
         assert helper.isgeneric is True
         assert "t" in helper.generic_params
 
+    # ---- Generic function call tests ----
+
+    def test_generic_function_infer_single_arg(self):
+        """Generic function call infers type from single value arg."""
+        program = check_ok(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+        assert mono.generic_origin is not None
+
+    def test_generic_function_infer_multiple_same_param(self):
+        """Multiple args of the same generic param must agree."""
+        program = check_ok(
+            "pair: function as { t: any.generic } in { a: t\n b: t } out t is { return a }\n"
+            "main: function is { x: pair 1 b: 2 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+
+    def test_generic_function_conflict_error(self):
+        """Same generic param with conflicting value types → error."""
+        errors = check_errors(
+            "pair: function as { t: any.generic } in { a: t\n b: t } out t is { return a }\n"
+            "main: function is { x: pair 1 b: 3.14 }"
+        )
+        assert any("conflicting types" in e.msg.lower() for e in errors)
+
+    def test_generic_function_explicit_type_arg(self):
+        """Explicit generic arg in function call."""
+        program = check_ok(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id t: i64 val: 42 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+
+    def test_generic_function_explicit_conflicts_with_inferred(self):
+        """Explicit generic arg conflicts with inferred type → error."""
+        errors = check_errors(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id t: i32 val: 42 }"
+        )
+        assert any("conflicting types" in e.msg.lower() for e in errors)
+
+    def test_generic_function_multiple_params_inferred(self):
+        """Multiple generic params, both inferred from args."""
+        program = check_ok(
+            "pick: function as { a: any.generic\n b: any.generic }\n"
+            "  in { x: a\n y: b } out b is { return y }\n"
+            'main: function is { r: pick 42 y: "hello" }'
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+        assert "string" in mono.name
+
+    def test_generic_function_constraint_violation(self):
+        """Generic function with valtype constraint rejects reftype arg."""
+        errors = check_errors(
+            "id: function as { t: any.valtype } in { val: t } out t is { return val }\n"
+            'main: function is { x: id "hello" }'
+        )
+        assert any("not a value type" in e.msg.lower() for e in errors)
+
+    def test_generic_function_monomorphization_cached(self):
+        """Same instantiation produces one cached mono function."""
+        program = check_ok(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42\n y: id 99 }"
+        )
+        i64_monos = [m for m, _ in program.mono_functions if "i64" in m.name]
+        assert len(i64_monos) == 1
+
+    def test_generic_function_different_instantiations(self):
+        """Different type args produce different mono functions."""
+        program = check_ok(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42\n y: id 3.14 }"
+        )
+        names = {m.name for m, _ in program.mono_functions}
+        assert any("i64" in n for n in names)
+        assert any("f64" in n for n in names)
+
+    def test_generic_function_return_type_resolved(self):
+        """Monomorphized function has resolved return type."""
+        program = check_ok(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        mono, _ = program.mono_functions[0]
+        assert mono.return_type is not None
+        assert mono.return_type.name == "i64"
+
+    def test_generic_function_no_inferrable_args_error(self):
+        """Generic function call with non-generic args only → cannot infer."""
+        errors = check_errors(
+            "id: function as { t: any.generic } in { val: t\n x: i64 } out t\n"
+            "  is { return val }\n"
+            "main: function is { r: id x: 42 }"
+        )
+        assert any("cannot infer" in e.msg.lower() for e in errors)
+
+    # ---- Generic default type tests ----
+
+    def test_generic_function_default_used(self):
+        """Default type is used when generic param cannot be inferred."""
+        program = check_ok(
+            "id: function as { t: (any.generic default: i64) } in { val: t } out t\n"
+            "  is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+
+    def test_generic_record_default_used(self):
+        """Default type fills in when not inferred for records."""
+        program = check_ok(
+            "myrec: record { x: t\n y: i64 } as { t: (any.generic default: i64) }\n"
+            "main: function is { r: myrec x: 42 y: 1 }"
+        )
+        assert len(program.mono_types) >= 1
+        mono, _ = program.mono_types[0]
+        assert "i64" in mono.name
+
+    def test_generic_default_overridden_by_explicit(self):
+        """Explicit generic arg overrides default."""
+        program = check_ok(
+            "id: function as { t: (any.generic default: i64) } in { val: t } out t\n"
+            "  is { return val }\n"
+            "main: function is { x: id t: f64 val: 3.14 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "f64" in mono.name
+
+    def test_generic_default_overridden_by_inference(self):
+        """Inferred type takes priority over default."""
+        program = check_ok(
+            "id: function as { t: (any.generic default: i32) } in { val: t } out t\n"
+            "  is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        # i64 inferred from 42, not default i32
+        assert "i64" in mono.name
+
+    # ---- Inline generic args in function calls ----
+
+    def test_inline_generic_and_value_args(self):
+        """Generic arg inline with value args in function call."""
+        program = check_ok(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id t: i64 val: 42 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+
+    def test_inline_multiple_generic_args(self):
+        """Multiple generic args inline with value args."""
+        program = check_ok(
+            "pick: function as { a: any.generic\n b: any.generic }\n"
+            "  in { x: a\n y: b } out b is { return y }\n"
+            "main: function is { r: pick a: i64 b: f64 x: 42 y: 3.14 }"
+        )
+        assert len(program.mono_functions) >= 1
+        mono, _ = program.mono_functions[0]
+        assert "i64" in mono.name
+        assert "f64" in mono.name
+
+    def test_generic_default_stored_on_type(self):
+        """Default type is stored in generic_defaults dict."""
+        program = check_ok(
+            "id: function as { t: (any.generic default: i64) } in { val: t } out t\n"
+            "  is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        ftype = tc._resolved.get("test.id")
+        assert ftype is not None
+        assert "t" in ftype.generic_defaults
+        assert ftype.generic_defaults["t"].name == "i64"
+
     def test_option_some_infers_i64(self):
         """option.some 42 infers t=i64."""
         program = check_ok(

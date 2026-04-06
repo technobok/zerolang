@@ -190,40 +190,33 @@ with parent `this`). If so, emits the error. This check is in
 `_resolve_function_type` itself so it applies regardless of where the method is
 defined.
 
-### Phase 5: Monomorphization — support function-level generics
+### Phase 5: Monomorphization — support function-level generics [done]
 
-**File**: `src/ztypecheck.py`, method `_monomorphize()` (line 2309)
+**File**: `src/ztypecheck.py`
 
-The existing monomorphization machinery handles generic types. Extend it to handle
-generic functions:
+Added `_infer_generic_function_call()` and `_monomorphize_function()` methods.
+When a generic function is called:
 
-1. When a generic function is called with explicit type arguments, build the
-   `generic_args` dict from the call site arguments and invoke `_monomorphize()`.
+1. Explicit type arguments (named args matching `generic_params`) are extracted.
+2. Remaining value arguments infer generic params from their types.
+3. Default types fill in any still-unresolved params.
+4. Conflicts between explicit and inferred types produce errors.
+5. The monomorphized function gets a mangled name (`funcname_arg1_arg2`), cloned
+   body, and is type-checked with the concrete generic context.
+6. Results are cached and stored in `program.mono_functions`.
 
-2. When a generic function is called with inferable types (concrete values provided
-   for generic-typed parameters), infer the generic args and then monomorphize.
+Generic function bodies are not type-checked at definition time (only during
+monomorphization), since parameter types reference unresolved generic params.
 
-3. The monomorphized function gets a mangled name (same scheme as types:
-   `funcname_arg1_arg2`) and its own `cname` for C emission.
-
-This is the most complex phase. The existing monomorphization code handles compound
-types; function monomorphization follows the same pattern but creates a new `ZType`
-with `typetype=FUNCTION` and resolved parameter/return types.
-
-### Phase 6: Emitter — emit monomorphized functions
+### Phase 6: Emitter — emit monomorphized functions [done]
 
 **File**: `src/zemitterc.py`
 
-When emitting a monomorphized function:
-
-1. Emit a separate C function for each monomorphized instance (same as how
-   monomorphized types get separate struct definitions).
-
-2. Use the function's `cname` (computed during monomorphization) for the C function
-   name.
-
-3. Call sites that were previously calling the generic function now call the
-   monomorphized variant.
+1. Each monomorphized function instance is emitted as a separate C function.
+2. `_emit_callable_expr()` detects calls to monomorphized functions (via
+   `generic_origin`) and uses the mangled name.
+3. `_is_generic_template()` updated to detect generics in `as_items` (not just
+   `parameters`) and to handle the `(constraint.generic default: type)` call form.
 
 ### Phase 7: Grammar and spec documentation [done]
 
@@ -253,8 +246,16 @@ Added 5 type checker tests:
 - Method with `as` produces error
 - Static function in type's `as` with own `as` is allowed
 
-Monomorphization and emitter tests (phases 5-6) to be added when those phases
-are implemented.
+Added 14 type checker tests for generic function calls:
+- Single/multiple arg inference, conflict detection, explicit args
+- Constraint violation, monomorphization caching, return type resolution
+- Inline generic + value args, multiple inline generic args
+- Default types: used, overridden by explicit, overridden by inference
+
+Added 5 emitter tests for generic function emission:
+- Template not emitted, monomorphized function emitted
+- Call site uses mangled name, multiple instantiations
+- Compile and run end-to-end test
 
 ### Phase 9: Migration [done]
 

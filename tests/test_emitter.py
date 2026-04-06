@@ -3720,6 +3720,57 @@ class TestGenericsEmission:
         assert output.strip() == "ok"
 
 
+class TestGenericFunctionEmission:
+    """Tests for generic function monomorphization and emission."""
+
+    def test_generic_function_template_not_emitted(self):
+        """Generic function template should not produce C function."""
+        csource = emit_source(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        # template cname should NOT appear as a function definition
+        assert "z_test_id(void)" not in csource
+
+    def test_monomorphized_function_emitted(self):
+        """Monomorphized generic function emits a C function."""
+        csource = emit_source(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        assert "z_id_i64" in csource
+
+    def test_monomorphized_function_called(self):
+        """Generic function call emits call to monomorphized C function."""
+        csource = emit_source(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42 }"
+        )
+        # main should call z_id_i64
+        assert "z_id_i64(" in csource
+
+    def test_multiple_instantiations(self):
+        """Different type args produce different C functions."""
+        csource = emit_source(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is { x: id 42\n y: id 3.14 }"
+        )
+        assert "z_id_i64" in csource
+        assert "z_id_f64" in csource
+
+    def test_generic_function_compiles_and_runs(self):
+        """Generic function compiles to working C binary."""
+        csource = emit_source(
+            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "main: function is {\n"
+            "    x: id 42\n"
+            '    print "ok"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok"
+
+
 # ---- Phase 29: Typedef Emitter Tests ----
 
 

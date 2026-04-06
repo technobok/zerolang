@@ -207,6 +207,9 @@ class ZType:
     # names of generic params that are numeric (constraint is a numeric type)
     numeric_generic_params: "set[str]" = field(default_factory=set, init=False)
 
+    # default types for generic params: param name → default ZType
+    generic_defaults: "dict[str, ZType]" = field(default_factory=dict, init=False)
+
     # for numeric generic value-carrying ZTypes: the constant integer value
     numeric_value: "Optional[int]" = field(default=None, init=False)
 

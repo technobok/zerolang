@@ -476,6 +476,15 @@ class CEmitter:
 
         Handles function pointer fields (struct field access) vs regular functions.
         """
+        # monomorphized generic function call: use the mangled name
+        ftype = call.callable.type
+        if (
+            ftype
+            and ftype.typetype == ZTypeType.FUNCTION
+            and ftype.generic_origin is not None
+        ):
+            return _mangle_func(ftype.name)
+
         # check if this is a function pointer field call (e.g. c.op)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             ftype = cast(zast.DottedPath, call.callable).type
@@ -506,7 +515,8 @@ class CEmitter:
         ):
             items = cast(zast.Record, defn).as_items
         elif defn.nodetype == NodeType.FUNCTION:
-            items = cast(zast.Function, defn).parameters
+            func = cast(zast.Function, defn)
+            items = func.as_items if func.as_items else func.parameters
         elif defn.nodetype == NodeType.PROTOCOL:
             items = cast(zast.Protocol, defn).parameters
         elif defn.nodetype == NodeType.UNIT:
@@ -514,6 +524,7 @@ class CEmitter:
         if items is None:
             return False
         for fpath in items.values():
+            # direct form: any.generic
             if (
                 fpath.nodetype == NodeType.DOTTEDPATH
                 and cast(zast.DottedPath, fpath).child.nodetype == NodeType.ATOMID
@@ -524,6 +535,19 @@ class CEmitter:
                     "reftype",
                 ):
                     return True
+            # call form: (any.generic default: type)
+            if fpath.nodetype == NodeType.EXPRESSION:
+                inner = cast(zast.Expression, fpath).expression
+                if inner.nodetype == NodeType.CALL:
+                    callable_node = cast(zast.Call, inner).callable
+                    if (
+                        callable_node.nodetype == NodeType.DOTTEDPATH
+                        and cast(zast.DottedPath, callable_node).child.nodetype
+                        == NodeType.ATOMID
+                        and cast(zast.DottedPath, callable_node).child.name
+                        in ("generic", "valtype", "reftype")
+                    ):
+                        return True
         return False
 
     def _is_typedef_defn(
@@ -846,6 +870,12 @@ class CEmitter:
                 continue
             self._current_node_id = mono_type.nodeid
             self._emit_mono_type(mono_type, template_defn)
+
+        # emit monomorphized generic functions
+        for mono_ftype, cloned_func in getattr(self.program, "mono_functions", []):
+            if cloned_func.body:
+                self._current_node_id = cloned_func.nodeid
+                self._emit_function(mono_ftype.name, cloned_func)
 
         for unitname, unit in self.program.units.items():
             if unitname in ("system", "core", "io", self.program.mainunitname):
@@ -3848,14 +3878,33 @@ class CEmitter:
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
         param_ctypes = self._get_param_ctypes(call)
+
+        # determine which arg names are generic type args (to skip in emission)
+        generic_param_names: set = set()
+        ftype = call.callable.type
+        origin_gp = getattr(ftype, "generic_origin", None)
+        if origin_gp is not None:
+            gp = getattr(origin_gp, "generic_params", None)
+            if gp:
+                generic_param_names = set(gp.keys())
+
+        ctype_idx = 0
         for i, arg in enumerate(call.arguments):
+            # skip generic type args (they are compile-time only)
+            if arg.name and arg.name in generic_param_names:
+                continue
             val = self._emit_operation_value(arg.valtype)
             if self._has_call(arg.valtype):
-                ctype = param_ctypes[i] if i < len(param_ctypes) else "int64_t"
+                ctype = (
+                    param_ctypes[ctype_idx]
+                    if ctype_idx < len(param_ctypes)
+                    else "int64_t"
+                )
                 # string-returning calls are already temped by _alloc_temp
                 if ctype != "ZStr*":
                     val = self._alloc_arg_temp(ctype, val)
             parts.append(val)
+            ctype_idx += 1
 
         # fill defaults for missing trailing params
         ftype = call.callable.type

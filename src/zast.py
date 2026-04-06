@@ -270,6 +270,10 @@ class Program:
     # populated by the type checker after monomorphization
     mono_types: typing.List = field(default_factory=list)
 
+    # monomorphized generic functions: list of (mono_ztype, cloned_function) tuples
+    # populated by the type checker after function generic monomorphization
+    mono_functions: typing.List = field(default_factory=list)
+
     # dedup aliases: {qualified_alias_name: qualified_canonical_name}
     # populated by type checker during monomorphization dedup
     func_aliases: Dict[str, str] = field(default_factory=dict)
