@@ -4564,13 +4564,13 @@ class TestStr:
         assert "length" in mono.children
         assert mono.children["length"].name == "u64"
 
-    def test_str_capacity_field(self):
-        """.capacity is synthesized with correct default value."""
+    def test_str_size_field(self):
+        """.size is synthesized with correct default value."""
         program = check_ok("main: function is { s: (str to: 32) }")
         monos = [m for m, _ in program.mono_types if m.name == "str_32"]
         mono = monos[0]
-        assert "capacity" in mono.children
-        assert mono.param_defaults.get("capacity") == "32"
+        assert "size" in mono.children
+        assert mono.param_defaults.get("size") == "32"
 
     def test_str_string_method(self):
         """.string method is synthesized returning string type."""
@@ -4594,21 +4594,44 @@ class TestStr:
         assert "str_32" in names
 
     def test_str_from_string_literal(self):
-        """str with from: string literal."""
-        check_ok('main: function is { s: (str to: 32) from: "hello" }')
+        """str via .str method on string literal."""
+        check_ok('main: function is { s: "hello".str to: 32 }')
 
     def test_str_from_string_variable(self):
-        """str with from: string variable."""
-        check_ok(
-            'main: function is {\n    msg: "hello"\n    s: (str to: 32) from: msg\n}'
-        )
+        """str via .str method on string variable."""
+        check_ok('main: function is {\n    msg: "hello"\n    s: msg.str to: 32\n}')
 
     def test_str_in_record(self):
         """str can be used as a record field (valtype)."""
         check_ok(
             "entry: record { name: (str to: 16)\n age: 0 }\n"
-            'main: function is { e: entry name: ((str to: 16) from: "") }'
+            'main: function is { e: entry name: ("".str to: 16) }'
         )
+
+    def test_string_str_method_resolves(self):
+        """string.str to: N resolves to str_N type."""
+        program = check_ok('main: function is { s: "hello".str to: 32 }')
+        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        assert len(monos) >= 1
+
+    def test_str_str_method_resolves(self):
+        """str.str to: N resolves to different str type."""
+        program = check_ok(
+            'main: function is {\n    a: "hi".str to: 16\n    b: a.str to: 32\n}'
+        )
+        names = [m.name for m, _ in program.mono_types]
+        assert "str_16" in names
+        assert "str_32" in names
+
+    def test_str_str_narrowing_resolves(self):
+        """str.str to: smaller capacity type-checks ok."""
+        check_ok(
+            'main: function is {\n    a: "hello".str to: 32\n    b: a.str to: 4\n}'
+        )
+
+    def test_str_constructor_no_args(self):
+        """str to: N with no arguments creates empty str."""
+        check_ok("main: function is { s: str to: 32 }")
 
 
 class TestList:

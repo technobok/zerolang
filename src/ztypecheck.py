@@ -2736,6 +2736,10 @@ class TypeChecker:
             parent_type = self._resolve_name(pname)
         elif path.parent.nodetype == NodeType.DOTTEDPATH:
             parent_type = self._resolve_dotted_path(cast(zast.DottedPath, path.parent))
+        elif path.parent.nodetype == NodeType.EXPRESSION:
+            parent_type = getattr(path.parent, "type", None)
+        elif path.parent.nodetype == NodeType.ATOMSTRING:
+            parent_type = self._resolve_name("string")
         if not parent_type:
             return None
         # check for .typedef — creates a marker detected by type resolvers
@@ -2882,6 +2886,14 @@ class TypeChecker:
         # for str types: .string returns the string type directly (not the function)
         if _is_str_type(parent_type) and child_name == "string":
             return self._resolve_name("string")
+        # .str conversion method on string and str types
+        # returns a marker function type; actual resolution happens in _check_call
+        if child_name == "str" and (
+            (parent_type.subtype == ZSubType.STRING) or _is_str_type(parent_type)
+        ):
+            marker = _make_type("__str_convert", ZTypeType.FUNCTION)
+            marker.is_native = True
+            return marker
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
@@ -3247,23 +3259,21 @@ class TypeChecker:
                 set_type.return_type = elem_type
                 mono.children["set"] = set_type
 
-        # for str types: set valtype, remove from field, synthesize length/capacity/string
+        # for str types: set valtype, synthesize length/size/string
         if _is_str_type(mono) and not is_partial:
             mono.is_valtype = True
             _set_destructor_metadata(mono)
             str_cap = _str_capacity(mono)
-            # remove 'from' from children — it's a constructor arg, not a persistent field
-            mono.children.pop("from", None)
             # synthesize .length field (runtime, u64)
             length_type = _make_type("u64", ZTypeType.RECORD)
             length_type.is_valtype = True
             mono.children["length"] = length_type
-            # synthesize .capacity constant (compile-time)
-            cap_type = _make_type("u64", ZTypeType.RECORD)
-            cap_type.is_valtype = True
-            mono.children["capacity"] = cap_type
+            # synthesize .size constant (compile-time)
+            size_type = _make_type("u64", ZTypeType.RECORD)
+            size_type.is_valtype = True
+            mono.children["size"] = size_type
             if str_cap is not None:
-                mono.param_defaults["capacity"] = str(str_cap)
+                mono.param_defaults["size"] = str(str_cap)
             # synthesize .string method: function {} out string
             string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
             string_method.return_type = self._resolve_name("string") or self.t_null
@@ -4791,6 +4801,12 @@ class TypeChecker:
                     return None
         elif path.parent.nodetype == NodeType.DOTTEDPATH:
             self._check_dotted_path(cast(zast.DottedPath, path.parent))
+        elif path.parent.nodetype == NodeType.ATOMSTRING:
+            atom_str = cast(zast.AtomString, path.parent)
+            self._check_string_interpolation(atom_str)
+            atom_str.type = self._resolve_name("string")
+        elif path.parent.nodetype == NodeType.EXPRESSION:
+            self._check_expression(cast(zast.Expression, path.parent))
         t = self._resolve_dotted_path(path)
         if t:
             path.type = t
@@ -4916,6 +4932,13 @@ class TypeChecker:
             and callee_type.isgeneric
         ):
             return self._check_identical_call(call)
+
+        # handle .str conversion: string.str to: N or str.str to: N
+        if (
+            callee_type.name == "__str_convert"
+            and call.callable.nodetype == NodeType.DOTTEDPATH
+        ):
+            return self._check_str_convert_call(call)
 
         # handle generic function call: infer type args and monomorphize
         if callee_type.isgeneric and callee_type.typetype == ZTypeType.FUNCTION:
@@ -5646,6 +5669,44 @@ class TypeChecker:
         t_bool = self._resolve_name("bool")
         call.type = t_bool
         return t_bool
+
+    def _check_str_convert_call(self, call: zast.Call) -> Optional[ZType]:
+        """Check a .str conversion call: string.str to: N or str.str to: N."""
+        # find the to: argument
+        to_arg = None
+        for arg in call.arguments:
+            if arg.name == "to":
+                to_arg = arg
+                break
+        if to_arg is None:
+            # positional: first argument is the capacity
+            if call.arguments:
+                to_arg = call.arguments[0]
+            else:
+                self._error(
+                    ".str requires a 'to:' capacity argument",
+                    loc=call.start,
+                )
+                return None
+        # resolve the numeric value
+        to_type = self._resolve_numeric_generic_arg(
+            to_arg.valtype, "u64", loc=call.start
+        )
+        if not to_type:
+            return None
+        # find the str template and monomorphize
+        str_template = self._resolve_name("str")
+        if not str_template or not str_template.isgeneric:
+            self._error("str type not found", loc=call.start)
+            return None
+        defn = self._find_generic_defn(str_template)
+        if not defn:
+            return None
+        mono = self._monomorphize(str_template, {"to": to_type}, defn)
+        if not mono:
+            return None
+        call.type = mono
+        return mono
 
     @staticmethod
     def _fold_binop(

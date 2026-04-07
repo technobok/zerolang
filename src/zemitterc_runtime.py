@@ -83,6 +83,15 @@ _ZSTR_RUNTIME = (
     "    uint64_t sa = ZSTR_SIZE(a), sb = ZSTR_SIZE(b);\n"
     "    return sa == sb && memcmp(a->data, b->data, sa) == 0;\n"
     "}\n\n"
+    "static inline void zstr_copy_to_buf(\n"
+    "    char* dst, uint64_t* dst_len, uint64_t dst_cap,\n"
+    "    const char* src, uint64_t src_len\n"
+    ") {\n"
+    "    uint64_t n = src_len < dst_cap ? src_len : dst_cap;\n"
+    "    *dst_len = n;\n"
+    "    memcpy(dst, src, n);\n"
+    "    dst[n] = '\\0';\n"
+    "}\n\n"
 )
 
 

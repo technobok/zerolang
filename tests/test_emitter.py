@@ -4263,10 +4263,10 @@ class TestStr:
         csource = emit_source("main: function is { s: (str to: 32) }")
         assert "z_str_32_create" in csource
 
-    def test_str_capacity_emitted(self):
-        """Str capacity define is emitted."""
+    def test_str_size_emitted(self):
+        """Str size define is emitted."""
         csource = emit_source("main: function is { s: (str to: 32) }")
-        assert "#define z_str_32_capacity 32" in csource
+        assert "#define z_str_32_size 32" in csource
 
     def test_str_empty_length_zero(self):
         """Create empty str, verify length = 0."""
@@ -4277,29 +4277,29 @@ class TestStr:
         assert output.strip() == "0"
 
     def test_str_from_literal_length(self):
-        """Create str from literal, read length."""
+        """Create str from string literal via .str method, read length."""
         csource = emit_source(
             "main: function is {\n"
-            '    s: (str to: 32) from: "hello"\n'
+            '    s: "hello".str to: 32\n'
             '    print "\\{s.length}"\n'
             "}"
         )
         output = compile_and_run(csource)
         assert output.strip() == "5"
 
-    def test_str_capacity_access(self):
-        """.capacity returns the buffer capacity."""
+    def test_str_size_access(self):
+        """.size returns the buffer capacity."""
         csource = emit_source(
-            'main: function is {\n    s: (str to: 32)\n    print "\\{s.capacity}"\n}'
+            'main: function is {\n    s: (str to: 32)\n    print "\\{s.size}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "32"
 
     def test_str_truncation(self):
-        """Long string truncated to str capacity."""
+        """Long string truncated to str capacity via .str method."""
         csource = emit_source(
             "main: function is {\n"
-            '    s: (str to: 4) from: "hello world"\n'
+            '    s: "hello world".str to: 4\n'
             '    print "\\{s.length}"\n'
             "}"
         )
@@ -4310,7 +4310,7 @@ class TestStr:
         """.string converts to heap-allocated ZStr*."""
         csource = emit_source(
             "main: function is {\n"
-            '    s: (str to: 32) from: "hello"\n'
+            '    s: "hello".str to: 32\n'
             "    h: s.string\n"
             "    print h\n"
             "}"
@@ -4321,7 +4321,7 @@ class TestStr:
     def test_str_print(self):
         """Print with str value uses printf directly."""
         csource = emit_source(
-            'main: function is {\n    s: (str to: 32) from: "hi there"\n    print s\n}'
+            'main: function is {\n    s: "hi there".str to: 32\n    print s\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "hi there"
@@ -4329,10 +4329,7 @@ class TestStr:
     def test_str_interpolation(self):
         """String interpolation containing str."""
         csource = emit_source(
-            "main: function is {\n"
-            '    s: (str to: 32) from: "world"\n'
-            '    print "hello \\{s}"\n'
-            "}"
+            'main: function is {\n    s: "world".str to: 32\n    print "hello \\{s}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "hello world"
@@ -4342,7 +4339,7 @@ class TestStr:
         csource = emit_source(
             "entry: record { name: (str to: 16)\n age: i64 }\n"
             "main: function is {\n"
-            '    e: entry name: ((str to: 16) from: "bob") age: 0\n'
+            '    e: entry name: ("bob".str to: 16) age: 0\n'
             '    print "\\{e.name.length} \\{e.age}"\n'
             "}"
         )
@@ -4354,19 +4351,114 @@ class TestStr:
         csource = emit_source(
             "getlen: function { s: (str to: 32) } out u64 is { return s.length }\n"
             "main: function is {\n"
-            '    s: (str to: 32) from: "test"\n'
+            '    s: "test".str to: 32\n'
             '    print "\\{getlen s}"\n'
             "}"
         )
         output = compile_and_run(csource)
         assert output.strip() == "4"
 
-    def test_str_from_literal_optimization(self):
-        """from: literal uses direct struct init (no malloc)."""
-        csource = emit_source('main: function is { s: (str to: 32) from: "hello" }')
-        # should NOT contain z_str_32_create call for this variable
-        # instead should have direct compound literal
+    def test_str_literal_optimization(self):
+        """string.str with literal uses direct struct init (no malloc)."""
+        csource = emit_source('main: function is { s: "hello".str to: 32 }')
+        # should have direct compound literal
         assert '(z_str_32_t){5, "hello"}' in csource
+
+    def test_string_to_str_method(self):
+        """string.str to: N converts heap string to str."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    msg: "hello world"\n'
+            "    s: msg.str to: 8\n"
+            '    print "\\{s.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "8"
+
+    def test_str_to_str_wider(self):
+        """str.str to: larger capacity preserves data."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s16: "hello".str to: 16\n'
+            "    s64: s16.str to: 64\n"
+            '    print "\\{s64.length} \\{s64.size}"\n'
+            "    print s64\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "5 64"
+        assert lines[1] == "hello"
+
+    def test_str_to_str_narrower(self):
+        """str.str to: smaller capacity truncates."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s32: "hello world".str to: 32\n'
+            "    s4: s32.str to: 4\n"
+            '    print "\\{s4.length}"\n'
+            "    print s4\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "4"
+        assert lines[1] == "hell"
+
+    def test_str_to_str_same_capacity(self):
+        """str.str to: same capacity is identity copy."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    a: "hello".str to: 32\n'
+            "    b: a.str to: 32\n"
+            '    print "\\{b.length}"\n'
+            "    print b\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "5"
+        assert lines[1] == "hello"
+
+    def test_str_empty_constructor(self):
+        """str to: N with no from creates empty str."""
+        csource = emit_source(
+            'main: function is {\n    s: str to: 32\n    print "\\{s.length}"\n}'
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0"
+
+    def test_str_field_reassignment(self):
+        """Reassign str field in record."""
+        csource = emit_source(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '    e: entry name: ("alice".str to: 16) age: 30\n'
+            '    e.name = "bob".str to: 16\n'
+            '    print "\\{e.name.length}"\n'
+            "    print e.name\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "3"
+        assert lines[1] == "bob"
+
+    def test_zstr_to_str_deduplication(self):
+        """One zstr_to_str_N function per target capacity regardless of sources."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    a: "hello".str to: 32\n'
+            "    b: a.str to: 32\n"
+            '    msg: "world"\n'
+            "    c: msg.str to: 32\n"
+            "}"
+        )
+        # only one zstr_to_str_32 function should be emitted
+        assert csource.count("zstr_to_str_32(") >= 2  # call sites
+        # the definition should appear exactly once
+        assert csource.count("static z_str_32_t zstr_to_str_32(") == 2  # fwd decl + def
 
 
 class TestList:

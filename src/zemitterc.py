@@ -2233,21 +2233,14 @@ class CEmitter:
         lines.append(f"    char data[{cap + 1}];\n")
         lines.append(f"}} {ctype};\n\n")
 
-        # capacity define
-        lines.append(f"#define z_{name}_capacity {cap}\n\n")
+        # size define
+        lines.append(f"#define z_{name}_size {cap}\n\n")
 
-        # create constructor
+        # create constructor (empty str)
         create_name = f"z_{name}_create"
-        lines.append(f"static {ctype} {create_name}(ZStr* _from);\n")
-        lines.append(f"static {ctype} {create_name}(ZStr* _from) {{\n")
+        lines.append(f"static {ctype} {create_name}(void);\n")
+        lines.append(f"static {ctype} {create_name}(void) {{\n")
         lines.append(f"    {ctype} _this = {{0}};\n")
-        lines.append("    if (_from) {\n")
-        lines.append("        uint64_t slen = ZSTR_SIZE(_from);\n")
-        lines.append(f"        if (slen > {cap}) slen = {cap};\n")
-        lines.append("        _this.len = slen;\n")
-        lines.append("        memcpy(_this.data, _from->data, slen);\n")
-        lines.append("        _this.data[slen] = '\\0';\n")
-        lines.append("    }\n")
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
@@ -2261,6 +2254,19 @@ class CEmitter:
         lines.append("    memcpy(z->data, _this.data, _this.len);\n")
         lines.append("    z->data[_this.len] = '\\0';\n")
         lines.append("    return z;\n")
+        lines.append("}\n\n")
+
+        # .str conversion: zstr_to_str_N(data, len) — shared by string.str and str.str
+        convert_name = f"zstr_to_{name}"
+        lines.append(
+            f"static {ctype} {convert_name}(const char* data, uint64_t len);\n"
+        )
+        lines.append(
+            f"static {ctype} {convert_name}(const char* data, uint64_t len) {{\n"
+        )
+        lines.append(f"    {ctype} r = {{0}};\n")
+        lines.append(f"    zstr_copy_to_buf(r.data, &r.len, {cap}, data, len);\n")
+        lines.append("    return r;\n")
         lines.append("}\n\n")
 
         # emit equality function (byte-wise comparison)
@@ -4115,38 +4121,10 @@ class CEmitter:
         if call.callable.type and _is_array_type(call.callable.type):
             return f"z_{call.callable.type.name}_create()"
 
-        # str construction: (str to: N) or (str to: N) from: expr
+        # str construction: (str to: N) — always empty
         if call.callable.type and _is_str_type(call.callable.type):
             str_name = call.callable.type.name
-            # find from: argument
-            from_arg = None
-            for arg in call.arguments:
-                if arg.name == "from":
-                    from_arg = arg
-                    break
-            if from_arg is not None:
-                # check for string literal optimization
-                from_val_inner = from_arg.valtype
-                if from_val_inner.nodetype == NodeType.EXPRESSION:
-                    from_val_inner = cast(zast.Expression, from_val_inner).expression
-                if from_val_inner.nodetype == NodeType.ATOMSTRING and not any(
-                    getattr(p, "nodetype", None) == NodeType.EXPRESSION
-                    for p in cast(zast.AtomString, from_val_inner).stringparts
-                ):
-                    # literal string — emit direct struct initialization
-                    cap = _str_capacity(call.callable.type)
-                    literal = self._collect_string_literal(
-                        cast(zast.AtomString, from_val_inner).stringparts
-                    )
-                    lit_len = len(
-                        literal.encode("utf-8").decode("unicode_escape").encode("utf-8")
-                    )
-                    if cap is not None and lit_len <= cap:
-                        ctype = f"z_{str_name}_t"
-                        return f'({ctype}){{{lit_len}, "{literal}"}}'
-                from_val = self._emit_operation_value(from_arg.valtype)
-                return f"z_{str_name}_create({from_val})"
-            return f"z_{str_name}_create(NULL)"
+            return f"z_{str_name}_create()"
 
         # list construction: (list of: T) or (list of: T) capacity: N
         if call.callable.type and _is_list_type(call.callable.type):
@@ -4203,6 +4181,55 @@ class CEmitter:
                 if method_name == "string":
                     result = f"z_{str_type_name}_string({parent_val})"
                     return self._alloc_temp(result)
+
+        # .str conversion method on string and str types
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, call.callable)
+            dp_parent_type = dp.parent.type
+            method_name = dp.child.name
+            if (
+                method_name == "str"
+                and dp_parent_type
+                and (
+                    dp_parent_type.subtype == ZSubType.STRING
+                    or _is_str_type(dp_parent_type)
+                )
+            ):
+                target_type = call.type
+                if target_type and _is_str_type(target_type):
+                    target_name = target_type.name
+                    parent_val = self._emit_path_value(dp.parent)
+                    # string literal optimization: direct struct init
+                    inner = dp.parent
+                    if inner.nodetype == NodeType.EXPRESSION:
+                        inner = cast(zast.Expression, inner).expression
+                    if inner.nodetype == NodeType.ATOMSTRING and not any(
+                        getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                        for p in cast(zast.AtomString, inner).stringparts
+                    ):
+                        cap = _str_capacity(target_type)
+                        literal = self._collect_string_literal(
+                            cast(zast.AtomString, inner).stringparts
+                        )
+                        lit_len = len(
+                            literal.encode("utf-8")
+                            .decode("unicode_escape")
+                            .encode("utf-8")
+                        )
+                        if cap is not None and lit_len <= cap:
+                            ctype = f"z_{target_name}_t"
+                            return f'({ctype}){{{lit_len}, "{literal}"}}'
+                    # emit call to shared converter
+                    if dp_parent_type.subtype == ZSubType.STRING:
+                        return (
+                            f"zstr_to_{target_name}"
+                            f"({parent_val}->data, ZSTR_SIZE({parent_val}))"
+                        )
+                    else:
+                        return (
+                            f"zstr_to_{target_name}"
+                            f"({parent_val}.data, {parent_val}.len)"
+                        )
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -4620,9 +4647,9 @@ class CEmitter:
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
             return f"{parent}.len"
-        # str: .capacity constant access
-        if parent_type_dp and _is_str_type(parent_type_dp) and child == "capacity":
-            return f"z_{parent_type_dp.name}_capacity"
+        # str: .size constant access
+        if parent_type_dp and _is_str_type(parent_type_dp) and child == "size":
+            return f"z_{parent_type_dp.name}_size"
         # str: .string conversion (str -> ZStr*)
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "string":
             parent = self._emit_path_value(path.parent)
