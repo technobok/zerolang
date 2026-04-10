@@ -1,0 +1,915 @@
+#doc.lang: en
+
+#//: Zerolang Ownership Design
+
+#doc.title: Zero Language Ownership Design
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-04-09
+#doc.version: v0.2
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zero Language Ownership Design
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+This document describes the ownership and locking model for Zerolang. It
+consolidates the design for owned and borrowed variables, locking, borrowed
+valtypes, escape analysis and iterators.
+
+
+#--: For Most Code
+
+For most code, ownership works automatically. Valtypes (records, numbers) are
+copied freely -- each copy is an independent value. Reftypes (classes, unions)
+are borrowed by default in function parameters and owned when returned. The
+compiler handles this without annotation. A programmer writing normal functions,
+records and classes rarely needs to think about ownership at all.
+
+The defaults:
+
+#ul:
+  #*: Pass a record to a function? It is copied (taken). The original is still valid.
+  #*: Pass a class to a function? It is borrowed. The function can use it, and the caller still owns it.
+  #*: Return a new object? It is owned by the caller.
+  #*: Variable falls out of scope? Classes are destroyed and freed. Records are forgotten.
+
+The advanced concepts below -- borrowed valtypes, #~".lock" fields, escape
+analysis -- are needed only when writing iterators, views, or other types that
+hold references to external data. Most code never needs them. When ownership
+rules are violated, the compiler provides specific error messages with hints
+suggesting how to fix the problem.
+
+
+#--: Ownership Overview
+
+Every variable in Zerolang has an ownership state tracked by the compiler at
+compile time. There are exactly two ownership states:
+
+#ul:
+  [#*: #+ owned (taken) -- the variable owns its value. It is responsible for
+  the value's lifetime. When the variable falls out of scope the value is
+  destroyed (for reftypes) or forgotten (for valtypes). An owned variable has
+  full permission: it may be stored, swapped, passed to any parameter type,
+  returned, or explicitly destroyed.]
+  [#*: #+ borrowed -- the variable has temporary access to a value it does not
+  own. It cannot copy, take, store, swap, or destroy the value. It can call
+  methods on it, read and write fields, and pass it to other #~".borrow"
+  parameters. When the borrowed variable falls out of scope the borrow ends:
+  the reference (for reftypes) or the stack value (for borrowed valtypes) is
+  simply forgotten without destruction, and any locks held by this variable are
+  released.]
+
+Ownership forms a permission hierarchy: #+ take > borrow. An owned variable can
+always be used in a context that expects a borrow (automatic downgrade). A
+borrowed variable can never be used in a context that expects a take (error:
+insufficient permission).
+
+#~"this" within object methods is always borrowed.
+
+
+#---: Defaults
+
+Each type family has a natural default ownership for function parameters and
+return values:
+
+#table cols="3 3 3":
+  Context            |Valtype default |Reftype default
+  In parameters      |take (copy)     |borrow (reference)
+  Out return values  |take            |take
+
+The defaults can always be overridden by explicitly specifying #~".take",
+#~".borrow" or #~".lock".
+
+These defaults reflect the natural semantics of each type family: valtypes are
+small and stack-allocated so copying is cheap and safe; reftypes are
+heap-allocated and copying would duplicate ownership.
+
+
+#---: Passing Conventions
+
+#ul:
+  [#*: Valtypes are always passed by value (the full value is copied). The
+  exception is #~"this" in methods which is passed by reference so that methods
+  can act on the fields in the value directly.]
+  [#*: Reftypes are always passed by reference (a pointer to the
+  heap-allocated instance).]
+
+
+#--: Owned Variables
+
+An owned (taken) variable has full permission over its value.
+
+#---: What an owned variable can do
+
+#ul:
+  #*: Pass to a #~".take" parameter -- transfers ownership to the callee
+  #*: Pass to a #~".borrow" parameter -- temporary loan, ownership returns after the call
+  #*: Assign to a new name -- transfers ownership to the new name (old name is invalidated for reftypes; for valtypes, a copy is made and both names are valid)
+  #*: Store in a field of an object
+  #*: Swap with another owned variable of the same type
+  #*: Return from a function (as #~".take" or #~".borrow")
+  #*: Destroy explicitly via #~".take" as an unused expression
+
+#---: Implicit take
+
+When a variable is passed to a #~".take" parameter, the compiler automatically
+applies #~".take" at the call site even if the programmer does not write it
+explicitly. The programmer can write #~".take" explicitly to make the transfer
+visible in the source. After the call, the variable name is invalidated (for
+reftypes) or a copy was made (for valtypes).
+
+#---: Scope exit
+
+When an owned variable falls out of scope without being consumed:
+
+#ul:
+  [#*: Reftype: the instance is destroyed (destructor called, memory freed)]
+  [#*: Valtype: the stack value is simply forgotten (no action needed)]
+
+
+#--: Borrowed Variables
+
+A borrowed variable has temporary, restricted access to a value it does not own.
+
+#---: What a borrowed variable can do
+
+#ul:
+  #*: Call methods on the value (including mutating methods via #~"this")
+  #*: Read and write fields (through the borrowed reference)
+  #*: Pass to a #~".borrow" parameter in a function call
+  #*: Pass to a #~".lock" parameter in a function call
+
+#---: What a borrowed variable cannot do
+
+#ul:
+  #*: Cannot be passed to a #~".take" parameter (error: insufficient permission)
+  #*: Cannot call #~".take" on it (error: cannot take a borrowed variable)
+  #*: Cannot be copied (for valtypes -- a copy would create an independent owned value which violates the borrow semantics)
+  #*: Cannot be stored in a field of another object
+  #*: Cannot be swapped
+  #*: Cannot be reassigned -- the name must remain bound to the same borrowed value for its full scope (shadowing in inner scopes is permitted)
+
+#---: Scope exit
+
+When a borrowed variable falls out of scope:
+
+#ul:
+  [#*: The borrow ends. The reference (reftype) or stack value (valtype) is
+  forgotten. The underlying object is #_*"not" destroyed.]
+  [#*: Any locks held by this variable are released. The locked targets become
+  available for use again.]
+
+
+#--: The Ownership Methods
+
+Ownership is controlled by three compiler-generated 'methods': #~".take",
+#~".borrow" and #~".lock". These appear in two contexts: as type attributes on
+function parameters/returns, and as inline methods on runtime instances.
+
+#---: .take
+
+As a parameter attribute (#~"type.take"): the function takes ownership from the
+caller. The caller must provide an owned variable. The function body may do
+anything with the value: store, swap, pass on, return, or destroy it.
+Destruction happens at scope exit if the value is not otherwise consumed.
+
+As a return attribute (#~"out type.take" or just #~"out type" since take is the
+default): the function returns a new owned value to the caller.
+
+As an inline method (#~"x.take"): takes ownership from the variable #~"x".
+The name #~"x" is invalidated after the call. If the result is not assigned or
+passed, the instance is destroyed. #~".take" can only be called on an owned
+variable. Calling #~".take" on a borrowed variable is always an error.
+
+#---: .borrow
+
+As a parameter attribute (#~"type.borrow" or just #~"type" for reftypes since
+borrow is the default): the function borrows the argument. The function body
+can call methods and access fields but cannot store, take, or destroy the value.
+Ownership remains with the caller.
+
+As a return attribute (#~"out type.borrow"): the function returns a borrowed
+value. At least one input parameter must be marked #~".lock" so the returned
+value has a locked parent to live in. For reftypes, the returned reference
+points into the locked parameter's data. For valtypes, the returned value is
+on the caller's stack with borrowed restrictions.
+
+As an inline method (#~"x.borrow"): returns a borrowed reference to #~"x".
+The variable #~"x" is exclusively locked for the lifetime of the borrowed
+reference. #~".borrow" can be called on either owned or borrowed variables.
+
+#---: .lock
+
+As a parameter attribute (#~"type.lock"): indicates that this parameter will be
+locked by the return value for the lifetime of that return value. Within the
+function body, a #~".lock" parameter is treated identically to a #~".borrow"
+parameter. The difference is what happens after the call: the locks are
+transferred to the return value rather than being released.
+
+Multiple parameters may be marked #~".lock". All locks transfer to the return
+value.
+
+It is illegal to specify #~".lock" on a return value. It is illegal to have
+#~".lock" parameters when the function has no return value (because there is
+nothing to assign the locks to).
+
+#~".lock" is not an inline method on instances. It is only used on function
+parameter declarations.
+
+
+#--: Locking
+
+Locking is an orthogonal compile-time mechanism that prevents aliasing and data
+races. It has zero runtime overhead.
+
+#---: Lock States
+
+Each variable can have locks placed on it by other variables:
+
+#ul:
+  [#*: unlocked -- no locks held (default)]
+  [#*: exclusive -- an exclusive lock is held. No other locks may be taken.]
+  [#*: shared -- a shared lock is held. Other shared locks are permitted but
+  exclusive locks are not.]
+
+#---: Locking Algorithm During Calls
+
+When a function is called, locks are taken on arguments and the receiver:
+
+#ol:
+  [#*: Each argument is processed left to right.]
+  [#*: If the argument is a top-level #~"data" item, no lock is taken (immutable,
+  freely shared).]
+  [#*: Otherwise, an exclusive lock is taken on the argument.]
+  [#*: If the argument is a dotted chain, a shared lock is taken on each parent
+  and grandparent in that chain.]
+  [#*: Additional shared locks on already-shared-locked parents are permitted.]
+  [#*: If there is already an exclusive or shared lock on the argument being
+  passed, it is an error (prevents aliasing).]
+  [#*: If the argument is a sub-call, locking is applied recursively. After the
+  sub-call, its argument locks are cleared or assigned to the sub-call result.]
+  [#*: After all arguments are processed, the receiver is locked (exclusive lock
+  on each component of the receiver chain).]
+  [#*: The call is made.]
+  [#*: After the call, for any #~".lock" parameters, their exclusive locks (plus
+  shared locks on parent items) are assigned to the returned value. All other
+  argument locks are freed.]
+
+Locks are also taken on targets in #~"if" and #~"for" as required to prevent
+mutation in the body.
+
+#~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
+and the subject is evaluated once. #~".take" is allowed on the match subject
+inside arm bodies for ownership transfer.
+
+#---: Lock Release on Scope Exit
+
+When a variable falls out of scope, all locks it holds on other variables are
+released. If the variable is borrowed, the borrow ends. If the variable is
+owned, it is destroyed (reftypes) or forgotten (valtypes).
+
+#---: Temporary Variables for Locked Expressions
+
+Ideally, locked parameters are named variables in the caller. But the compiler
+can assign temporary names to expressions if used in a lock context. The
+compiler is responsible for keeping those temporaries alive until the locks are
+released and then destroying them.
+
+
+#--: Borrowed Valtypes
+
+Normally, valtypes are copied on every assignment and function call. Each copy
+is an independent owned value. This means borrowing a valtype has historically
+been equivalent to taking it -- the copy is always owned.
+
+Borrowed valtypes change this. When a valtype is borrowed, it is subject to all
+the restrictions of a borrowed variable: it cannot be copied, taken, stored, or
+swapped. This enables valtypes to hold locked references to external data --
+something that was previously only possible with reftypes (classes).
+
+The primary motivation is #+ stack-allocated iterators: a record that holds a
+locked reference to a container and maintains iteration state, without requiring
+heap allocation.
+
+#---: Born-Borrowed Valtypes (#~"this.borrow")
+
+A valtype can be declared as always-borrowed by having its constructors return
+#~"this.borrow" instead of #~"this".
+
+#code language=zerolang: """
+  myiter: record {
+    state: i64
+    target: container.private.lock
+  } as {
+    create: function {target: container.private.lock} out this.borrow is {
+      return meta.create state: 0 target: target
+    }
+  }
+  """
+
+Rules for #~"this.borrow" constructors:
+
+#ul:
+  [#*: If any constructor of a valtype returns #~"this.borrow", all constructors
+  must return #~"this.borrow". This is a type-level property: the type is always
+  borrowed.]
+  [#*: A #~"this.borrow" constructor may accept #~".lock" parameters and store
+  them in #~".lock" fields.]
+  [#*: If a constructor attempts to store locked reftypes in fields but does not
+  return #~"this.borrow", the compiler will report an error.]
+
+Every instance of a born-borrowed valtype is borrowed from the moment of
+construction. It cannot be copied, taken, or stored.
+
+#---: .lock Fields on Records
+
+Record fields can be declared with a #~".lock" type modifier:
+
+#code language=zerolang: """
+  target: myclass.private.lock
+  """
+
+This means the field stores a locked reference to external data. The reference
+is locked for the lifetime of the record. When the record falls out of scope,
+the locks held by its #~".lock" fields are released.
+
+Rules for #~".lock" fields:
+
+#ul:
+  [#*: A record with any #~".lock" fields must have all constructors return
+  #~"this.borrow".]
+  [#*: The #~".lock" field type must match the corresponding constructor
+  parameter type. If the field is #~"myclass.private.lock", the constructor
+  parameter must also be #~"myclass.private.lock".]
+  [#*: #~".private" controls access level (friend access to private members).
+  #~".lock" controls ownership (the reference is locked). These are orthogonal
+  and can be combined.]
+
+#---: C Representation
+
+Borrowed valtypes are returned by value at the C level, exactly like owned
+valtypes. The struct is copied to the caller's stack. The 'borrowed' status is
+purely a compile-time enforcement -- it controls what operations the compiler
+permits, but produces no different runtime code for the return itself.
+
+The #~".lock" annotation has no special C-level encoding. A #~".lock" field has
+the same C representation as a non-#~".lock" field of the same type:
+
+#ul:
+  [#*: A #~".lock" field storing a #+ reftype is a stored pointer -- the normal
+  C representation for reftypes (which are always pointers).]
+  [#*: A #~".lock" field storing a #+ valtype is an inline value -- the normal
+  C representation for valtypes (passed and stored by value as usual).]
+
+In both cases the field layout is identical to a non-#~".lock" field. The
+#~".lock" annotation tells the compiler to track a lock on the source variable
+for the lifetime of the record, and prevents the field from being reassigned.
+There is no runtime encoding of "this is locked" anywhere -- the locked status
+is tracked entirely by the compiler.
+
+Similarly, the C call convention for #~".lock" parameters is unchanged from
+non-#~".lock" parameters of the same type:
+
+#ul:
+  [#*: Reftype #~".lock" parameter -- the pointer is passed by value (the
+  reftype's normal C calling convention).]
+  [#*: Valtype #~".lock" parameter -- the value is passed by value (the
+  valtype's normal C calling convention; identical to #~".take" and the
+  default for valtypes).]
+
+#code language=zerolang: """
+  # C emit for a borrowed valtype return.
+  # 'container' is a class (reftype), so its C type is z_container_t*.
+  # 'target' is a .lock field storing a z_container_t* -- the same as any
+  # reftype field would be.
+  #
+  # z_myiter_t z_container_iterate(z_container_t* t, uint8_t ivar) {
+  #     z_myiter_t it = { .state = 0, .target = t };
+  #     return it;   /* struct returned by value */
+  # }
+  #
+  # At the call site:
+  # z_myiter_t it = z_container_iterate(container, ivar);
+  # /* 'container' is already a pointer (it's a class) */
+  # /* 'it' is on the caller's stack */
+  # /* compiler marks 'it' as borrowed and tracks the lock on 'container' */
+  """
+
+This is distinct from reftype borrow returns, where the C return value is the
+reftype pointer itself -- typically a pointer to a child reftype that lives
+inside the locked parameter.
+
+#---: Borrowed Valtypes as Fields
+
+A born-borrowed valtype (one whose constructors return #~"this.borrow") can
+appear as a field in another record. In this case, the containing record must
+also have all constructors return #~"this.borrow", since it transitively holds
+locked references. This propagates through nesting.
+
+A born-borrowed valtype cannot be stored in a field of a class (reftype) because
+the class may outlive the lock scope. If a class needs to hold an iterator, use
+a class-based iterator instead.
+
+#---: .lock Field Immutability
+
+A #~".lock" field is set at construction time and cannot be reassigned. The
+locked reference must remain valid for the entire lifetime of the record. Normal
+(non-lock) valtype fields such as iteration counters can be freely mutated.
+
+#---: Restrictions with Generics
+
+A born-borrowed valtype cannot be used as a generic type argument for types that
+copy their elements. For example, #~"list(myiter)" is a compile error if
+#~"myiter" is born-borrowed, because #~"list" stores copies of its elements and
+a born-borrowed valtype cannot be copied.
+
+Generic functions that only #~".borrow" their generic parameter are fine. The
+restriction only applies when the generic type or function would need to copy
+or take ownership of the born-borrowed value.
+
+#---: Protocol and Facet Restrictions
+
+A born-borrowed valtype cannot be used with #~"protocol.create" or
+#~"facet.create" because these constructors copy (for facets) or take (for
+protocols) the source value, and born-borrowed valtypes cannot be copied or
+taken.
+
+A born-borrowed valtype #_*"can" implement a protocol or facet in its #~"as"
+section (declaring method conformance). But creating a runtime protocol/facet
+instance from a born-borrowed value is not permitted. If dynamic dispatch over
+the iterator is needed, use a class-based iterator instead.
+
+
+#--: Escape Analysis for Locks
+
+The compiler must verify that borrowed return values trace back to #~".lock"
+parameters. This ensures that the locked data stays alive for the lifetime of
+the returned borrow.
+
+#---: Reftype Borrow Returns
+
+For a reftype borrow return, the returned reference must point to data living
+inside a #~".lock" parameter. The compiler traces the return expression back
+through field accesses to verify it originates from a locked parameter.
+
+#code language=zerolang: """
+  # OK -- return value is a field of the locked parameter
+  get_child: function {t: myclass.lock} out child.borrow is {
+    return t.child
+  }
+
+  # ERROR -- cannot return local variable as borrowed
+  bad: function {t: myclass.lock} out child.borrow is {
+    c: child
+    return c
+  }
+
+  # ERROR -- no .lock parameter
+  bad2: function {t: myclass} out child.borrow is {
+    return t.child
+  }
+  """
+
+#---: Valtype Borrow Returns
+
+For a valtype borrow return (including born-borrowed valtypes), the compiler
+must verify that all #~".lock" fields in the returned value trace back to
+#~".lock" parameters of the current function.
+
+#code language=zerolang: """
+  # OK -- target field traces to t which is .lock
+  iterate: function {t: this.lock} out myiter.borrow is {
+    i: myiter t.private
+    return i
+  }
+
+  # ERROR -- t is not .lock
+  bad_iterate: function {t: this} out myiter.borrow is {
+    i: myiter t.private
+    return i
+  }
+  """
+
+#---: Cross-Function Lock Chains
+
+When a function returns a borrowed value that holds locks, and the caller passes
+that value to another function, the lock chain must be maintained. The compiler
+verifies that each link in the chain connects to a #~".lock" parameter.
+
+#code language=zerolang: """
+  # OK -- both functions lock their input and return a borrow
+  inner: function {t: myclass.lock} out child.borrow is {
+    return t.child
+  }
+
+  outer: function {t: myclass.lock} out grandchild.borrow is {
+    x: inner t         # x borrows from t, lock on t
+    y: x.grandchild    # y borrows from x
+    return y            # OK: lock chain traces to t which is .lock
+  }
+  """
+
+
+#--: Simple Ownership Examples
+
+Before the advanced iterator pattern, here are the common ownership scenarios
+that cover most code.
+
+#---: Owned Valtypes (the common case)
+
+#code language=zerolang: """
+  point: record { x: i64 y: i64 }
+
+  # Valtype default: take (copy). Both p and q are independent owned values.
+  p: point x: 1 y: 2
+  q: p                 # copy -- p is still valid
+  q.x = 99             # does not affect p
+
+  # Passing to a function: copied by default
+  print_point: function {pt: point} is {
+    print "\{pt.x}, \{pt.y}"
+  }
+  print_point p        # p is copied into the function, p still valid
+  """
+
+#---: Owned and Borrowed Reftypes
+
+#code language=zerolang: """
+  box: class { label: string value: i64 }
+
+  a: box label: "alpha" value: 1   # a is OWNED
+
+  # Reftype default: borrow. peek does not take ownership.
+  peek: function {b: box} out i64 is {
+    return b.value
+  }
+  v: peek a                        # a is borrowed, still valid after call
+
+  # Explicit .take transfers ownership. a is invalid after this line.
+  consume: function {b: box.take} is {
+    print b.label
+  }
+  consume a                        # a is implicitly taken (ownership transferred)
+  # a is invalid here -- compile error if used
+
+  # Explicit .take to destroy
+  b: box label: "beta" value: 2
+  b.take                           # destroys b immediately
+
+  # Borrow with lock: return a reference into the locked parameter
+  peek_label: function {b: box.lock} out string.borrow is {
+    return b.label
+  }
+  c: box label: "gamma" value: 3
+  s: peek_label c                  # s borrows from c, c is locked
+  print s                          # OK
+  # c cannot be used here (locked by s)
+  # when s falls out of scope, c is unlocked
+  """
+
+#---: Compiler Error Messages
+
+The compiler provides specific error messages for ownership violations,
+including the location of the conflicting operation and a hint suggesting how to
+fix it. For example:
+
+#ul:
+  [#*: Attempting to use a variable after it has been taken reports which call
+  consumed it and suggests using #~".borrow" if the variable is still needed.]
+  [#*: Attempting to pass a borrowed variable to a #~".take" parameter reports
+  that the variable is borrowed and suggests restructuring ownership.]
+  [#*: Attempting to use a locked variable reports which variable holds the lock
+  and where the lock will be released (scope exit).]
+  [#*: A constructor that stores #~".lock" fields without returning
+  #~"this.borrow" reports the specific field and suggests adding
+  #~"this.borrow" to the constructor return.]
+
+
+#--: Iterator Pattern
+
+The iterator pattern is the most common complex use of the ownership system.
+It demonstrates borrowed valtypes, locking, private access, and scope-based
+lock lifecycle.
+
+#---: Components
+
+An iterator system has three components:
+
+#ol:
+  [#*: #+ Container -- the iterable object (typically a class). It has an
+  #~"iterate" method that returns an iterator. The method locks #~"this" so the
+  container cannot be modified while iteration is in progress.]
+  [#*: #+ Iterator -- maintains iteration state. Can be a class (reftype,
+  heap-allocated) or a borrowed record (valtype, stack-allocated). Holds a
+  #~".private.lock" reference to the container for access to internal state.
+  Has a #~"call" method that returns the next item.]
+  [#*: #+ Iterated value -- the value produced on each iteration. Can be owned
+  (a copy) or borrowed (a reference into the container that locks the
+  iterator).]
+
+#---: Full Example
+
+#code language=zerolang: """
+  # --- Container ---
+  bag: class {
+    a: i64
+    b: i64
+    c: i64
+    count: i64
+  } as {
+    public: unit { :count }
+
+    create: function {a: i64 b: i64 c: i64} out this is {
+      return meta.create a: a b: b c: c count: 3
+    }
+
+    # Factory method: locks 'this', returns a borrowed iterator.
+    # The lock on 'this' transfers to the returned iterator.
+    iterate: function {b: this.lock} out bagiter.borrow is {
+      it: bagiter b.private
+      return it
+    }
+  }
+
+  # --- Iterator (borrowed record) ---
+  # The 'target' field is .private.lock: it holds a locked reference
+  # to the container's private namespace.
+  # All constructors return this.borrow because of the .lock field.
+  bagiter: record {
+    pos: i64
+    target: bag.private.lock
+  } as {
+    create: function {target: bag.private.lock} out this.borrow is {
+      return meta.create pos: 0 target: target
+    }
+
+    # Returns an owned i64 (copy from container).
+    # No lock needed on 'this' because the return is owned.
+    call: function {it: this} out (optionval t: i64) is {
+      if it.pos < it.target.count then {
+        if it.pos == 0 then {
+          it.pos = it.pos + 1
+          return optionval.some it.target.a
+        }
+        if it.pos == 1 then {
+          it.pos = it.pos + 1
+          return optionval.some it.target.b
+        }
+        it.pos = it.pos + 1
+        return optionval.some it.target.c
+      }
+      return optionval.none i64
+    }
+  }
+
+  # --- Usage ---
+  main: function is {
+    b: bag a: 10 b: 20 c: 30
+
+    # The iterator must be created explicitly with 'with'.
+    # 'with' creates the iterator and scopes its lifetime.
+    # The 'for' loop then calls the iterator on each iteration.
+    with iter: b.iterate do for x: iter loop {
+      print x
+    }
+
+    # After the with/for:
+    # - iter fell out of scope (stack cleanup, no free)
+    # - lock on b released
+    # - b is available again
+    print b.count
+  }
+  """
+
+#---: Lock Lifecycle in the For-Loop
+
+The iterator must be created explicitly using #~"with" before the #~"for" loop.
+The #~"for" loop only accepts a callable after a label -- it does not have
+special handling for iterables. A future version may add syntactic sugar for
+this, but for now the pattern is:
+
+#code language=zerolang:
+  with iter: container.iterate do for x: iter loop { ... }
+
+The lock lifecycle step by step:
+
+#code language=zerolang: """
+  with iter: b.iterate do {
+    # iter: BORROWED bagiter on caller's stack
+    # b: EXCLUSIVELY LOCKED by iter (via its .lock field)
+    # b cannot be used directly while iter is alive
+
+    for x: iter loop {
+      # Entry:
+      #   iter.call is invoked (iter is the receiver)
+      #   exclusive lock on iter during the call
+      #   result (optionval) checked -- none terminates the loop
+      #   x: OWNED i64 (copy from optionval.some)
+      #   lock on iter released (call complete)
+
+      print x
+
+      # End of loop body:
+      #   x falls out of scope (i64, no cleanup)
+      #   next iteration begins -- iter.call invoked again
+    }
+  }
+  # iter falls out of scope:
+  #   borrowed valtype -- stack value forgotten (no destructor)
+  #   lock on b released
+  # b is available again
+  """
+
+If the iterator's #~"call" method returned a #_*"borrowed" value instead (eg. a
+reference to a container element), the lifecycle would differ: the returned
+value would hold a lock on the iterator, preventing the next call until the
+value falls out of scope at the end of each loop iteration. This is what allows
+the lock to be released before the next #~"call" invocation.
+
+#---: Iterator Variants
+
+The iterator can also be a class (reftype) instead of a borrowed record. In this
+case it is heap-allocated and ownership works via the normal reftype rules. The
+iterator class would hold a #~".private" field (always borrowed as a field of
+the class) and be returned as an owned reftype from the factory. The factory's
+#~".lock" on #~"this" would transfer to the returned class instance.
+
+Using a borrowed record avoids heap allocation but requires the #~"this.borrow"
+constructor pattern. The choice depends on the complexity of the iterator state
+and whether heap allocation is acceptable.
+
+
+#--: Common Errors
+
+#table cols="4 4 4":
+  What you wrote                                            |Error                                              |Fix
+  #~"f borrowed_var.take"                                   |Cannot take a borrowed variable                    |Pass as #~".borrow" or restructure ownership
+  #~"x: borrowed_var" (copy)                                |Cannot copy a borrowed valtype                     |Use #~".borrow" to create a borrowed reference
+  #~"return localvar" (as #~".borrow")                      |Cannot return local as borrowed without .lock param |Add #~".lock" to the relevant parameter
+  #~".lock" param with no return value                      |Lock param with no return value                    |Remove #~".lock" or add a return value
+  #~"out type.borrow" with no #~".lock" param               |Borrow return requires a lock parameter             |Add #~".lock" to input parameter
+  Constructor stores .lock field without #~"this.borrow"    |Lock field requires this.borrow constructor         |Change constructor return to #~"this.borrow"
+  Some constructors return #~"this.borrow" and others don't |All constructors must agree on ownership            |Make all constructors return #~"this.borrow"
+  #~"list(borrowed_type)"                                   |Cannot use born-borrowed type as list element       |Use a class-based type or restructure
+  #~"protocol.create from: borrowed_var"                    |Cannot take/copy a born-borrowed valtype             |Use a class-based type for protocol instances
+
+
+#--: Implementation Ordering
+
+This section defines the implementation phases for the ownership features
+described in this document. Each phase builds on the previous one.
+
+#---: Phase A: Enforce Borrow Restrictions on Valtypes
+
+#+ Goal: Make #~".borrow" meaningful for valtypes. Currently borrowing a
+valtype is a no-op because valtypes are always copied.
+
+Files: #~"src/ztypecheck.py", #~"tests/test_typecheck.py"
+
+#ol:
+  [#*: In the type checker, when a valtype variable has ownership
+  #~"BORROWED", enforce restrictions: cannot assign to a new name (copy),
+  cannot pass to a #~".take" parameter, cannot call #~".take" on it, cannot
+  store in a field, cannot swap.]
+  [#*: Allow explicit #~".borrow" on valtype function parameters. The parameter
+  is marked #~"BORROWED" in the function body. The caller can pass an owned
+  valtype to a #~".borrow" parameter (automatic downgrade).]
+  [#*: Allow #~"x.borrow" as an inline method on valtype variables. The result
+  is a borrowed variable. The source is exclusively locked.]
+  [#*: Verify that #~"this" in valtype methods is already treated as borrowed
+  (it should be -- this is existing behaviour).]
+  [#*: Tests: borrow enforcement tests for valtypes -- cannot copy, cannot
+  take, cannot store, cannot swap. Verify owned-to-borrow downgrade works.
+  Verify #~".borrow" inline method locks the source.]
+
+#---: Phase B: .lock Fields and this.borrow Constructors
+
+#+ Goal: Allow records to declare #~".lock" fields and constructors to return
+#~"this.borrow", enabling born-borrowed valtypes.
+
+Files: #~"src/zparser.py", #~"src/ztypecheck.py", #~"src/ztypes.py",
+#~"tests/test_typecheck.py"
+
+#ol:
+  [#*: Parser: accept #~".lock" as a type modifier on record field declarations,
+  in addition to its existing use on function parameters. Accept
+  #~".private.lock" as a combined modifier.]
+  [#*: Parser: accept #~"this.borrow" as a constructor return type for
+  valtypes.]
+  [#*: Type checker: when resolving a record type, detect #~".lock" fields
+  and store this as a type-level property (eg. #~"has_lock_fields: bool" on
+  #~"ZType").]
+  [#*: Type checker: when resolving a constructor that returns #~"this.borrow",
+  mark the type as born-borrowed. Verify all constructors of the type agree.]
+  [#*: Type checker: if a record has #~".lock" fields but no constructor
+  returns #~"this.borrow", report an error with a hint.]
+  [#*: Type checker: if a constructor returns #~"this.borrow" but the record
+  has no #~".lock" fields, report a warning (pointless borrow).]
+  [#*: Type checker: instances of born-borrowed types are always marked
+  #~"BORROWED" after construction. All borrow restrictions from Phase A apply.]
+  [#*: Type checker: #~".lock" fields cannot be reassigned after construction.]
+  [#*: Type checker: born-borrowed valtypes cannot appear as fields in a class
+  (reftype). They can appear as fields in another record only if that record
+  is also born-borrowed.]
+  [#*: Tests: .lock field declaration, this.borrow constructor, error cases
+  (missing this.borrow, constructor disagreement, lock field reassignment,
+  born-borrowed in class field).]
+
+#---: Phase C: Escape Analysis for Valtype Borrow Returns
+
+#+ Goal: Allow functions to return born-borrowed valtypes as #~".borrow" and
+verify that the lock chain traces back to #~".lock" parameters.
+
+Files: #~"src/ztypecheck.py", #~"tests/test_typecheck.py"
+
+#ol:
+  [#*: Extend the existing return-borrow check (#~"_check_return_call") to
+  handle valtype borrow returns. Currently it only checks that the return
+  name matches a #~".lock" parameter. For valtype borrows, it must trace
+  #~".lock" fields in the returned value back to #~".lock" parameters.]
+  [#*: When a function returns a born-borrowed valtype, verify: the return
+  type is explicitly #~".borrow", at least one parameter is #~".lock", and
+  every #~".lock" field in the returned value traces to a #~".lock" parameter.]
+  [#*: When a born-borrowed valtype is returned, the locks from #~".lock"
+  parameters transfer to the returned variable in the caller (existing lock
+  transfer mechanism).]
+  [#*: Verify cross-function lock chains: when a borrowed return value is
+  passed to another function as #~".lock", the chain extends correctly.]
+  [#*: Tests: valtype borrow returns with lock tracing, error cases (missing
+  .lock parameter, .lock field not tracing to .lock param), cross-function
+  chains.]
+
+#---: Phase D: C Emitter Updates
+
+#+ Goal: Emit correct C code for born-borrowed valtypes.
+
+Files: #~"src/zemitterc.py", #~"tests/test_emitter.py"
+
+#ol:
+  [#*: Born-borrowed valtypes are emitted as normal C structs (same as regular
+  records). The #~".lock" fields are emitted as pointers to the locked type.]
+  [#*: Born-borrowed valtype returns are struct-by-value returns (same as
+  regular record returns). No special C emit is needed for the return itself.]
+  [#*: On scope exit of a born-borrowed valtype: no destructor call, no free.
+  The stack value is simply abandoned. Lock release is compile-time only.]
+  [#*: Verify that the existing lock-transfer and scope-exit mechanisms work
+  correctly with the new type-level properties.]
+  [#*: Tests: compile and run iterator examples using borrowed records.
+  Verify ASan clean (no leaks, no use-after-free). Compare output with
+  class-based iterator equivalents.]
+
+#---: Phase E: Generic and Protocol Restrictions
+
+#+ Goal: Enforce restrictions on born-borrowed valtypes in generic and protocol
+contexts.
+
+Files: #~"src/ztypecheck.py", #~"tests/test_typecheck.py"
+
+#ol:
+  [#*: When monomorphizing a generic type, check if any generic type argument
+  is born-borrowed. If the generic type would copy or take the argument (eg.
+  #~"list" stores copies), report an error.]
+  [#*: When creating a protocol or facet instance (#~"protocol.create",
+  #~"facet.create"), check if the source is born-borrowed. If so, report an
+  error (cannot copy/take a born-borrowed valtype).]
+  [#*: Born-borrowed valtypes can still declare protocol/facet conformance in
+  their #~"as" section (the conformance itself is compile-time only).]
+  [#*: Tests: error cases for generics and protocols with born-borrowed types.]
+
+#---: Phase F: Update Examples and Documentation
+
+#+ Goal: Update existing examples and documentation to reflect the new
+ownership features.
+
+Files: #~"examples/listiter.z", #~"doc/ownership.pdoc", #~"doc/spec.pdoc"
+
+#ol:
+  [#*: Rewrite #~"examples/listiter.z" to use a borrowed record iterator
+  instead of the current class-based workaround with #~".take".]
+  [#*: Add a new example #~"examples/borrowed_record.z" demonstrating
+  born-borrowed valtypes outside the iterator context (eg. a view or slice
+  type).]
+  [#*: Update #~"doc/ownership.pdoc" to incorporate the borrowed valtype
+  design from this document.]
+  [#*: Update #~"doc/spec.pdoc": fill in the #~"private" section, expand the
+  iterator section, add borrowed valtype rules to the ownership section.]
+  [#*: Update #~"doc/spec.pdoc": add #~".lock" field syntax to the record
+  definition section and #~"this.borrow" to the constructor section.]
