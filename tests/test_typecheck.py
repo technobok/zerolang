@@ -961,6 +961,328 @@ class TestSwapOwnership:
         check_ok("main: function is {\n  a: 10\n  b: 20\n  a swap b\n}")
 
 
+class TestBorrowedValtypeRestrictions:
+    """Phase A: borrow restrictions for valtypes.
+
+    Once a valtype is BORROWED (via .borrow inline method or a .borrow/.lock
+    function parameter), it cannot be copied to a new name, taken, swapped,
+    reassigned, or passed where a copy/take is expected.
+    """
+
+    def test_borrowed_valtype_cannot_be_copied(self):
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n  z: y\n}")
+        assert any("borrowed valtype" in e.msg.lower() for e in errors)
+
+    def test_borrowed_valtype_can_be_borrowed_again(self):
+        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n  z: y.borrow\n}")
+
+    def test_borrowed_valtype_cannot_be_taken(self):
+        errors = check_errors(
+            "main: function is {\n  x: 42\n  y: x.borrow\n  y.take\n}"
+        )
+        assert any(
+            "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_valtype_cannot_be_swapped(self):
+        errors = check_errors(
+            "main: function is {\n  x: 42\n  y: 10\n  z: x.borrow\n  z swap y\n}"
+        )
+        assert any(
+            "swap" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_valtype_cannot_be_reassigned(self):
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n  y = 7\n}")
+        assert any(
+            "reassign" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_valtype_cannot_be_passed_to_default_take(self):
+        # default for valtype params is take (copy); the source must not be borrowed.
+        errors = check_errors(
+            "f: function {a: i64} is {}\n"
+            "main: function is {\n"
+            "  x: 42\n"
+            "  y: x.borrow\n"
+            "  f y\n"
+            "}"
+        )
+        assert any(
+            "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_valtype_can_be_passed_to_borrow_param(self):
+        check_ok(
+            "f: function {a: i64.borrow} is {}\n"
+            "main: function is {\n"
+            "  x: 42\n"
+            "  y: x.borrow\n"
+            "  f y\n"
+            "}"
+        )
+
+    def test_owned_valtype_passed_to_borrow_is_downgrade(self):
+        check_ok(
+            "f: function {a: i64.borrow} is {}\nmain: function is {\n  x: 42\n  f x\n}"
+        )
+
+    def test_borrow_param_body_is_borrowed(self):
+        # Inside the body, an .borrow parameter is BORROWED — copying it
+        # to a new name is forbidden.
+        errors = check_errors(
+            "f: function {a: i64.borrow} is {\n  b: a\n}\nmain: function is {}"
+        )
+        assert any("borrowed valtype" in e.msg.lower() for e in errors)
+
+    def test_lock_param_body_is_borrowed(self):
+        # .lock parameters are also borrowed in the body. Returning the
+        # original is fine; copying is not.
+        check_ok(
+            "f: function {a: i64.lock} out i64.borrow is { return a }\n"
+            "main: function is {}"
+        )
+        errors = check_errors(
+            "f: function {a: i64.lock} out i64 is {\n"
+            "  b: a\n"
+            "  return b\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any("borrowed valtype" in e.msg.lower() for e in errors)
+
+    def test_field_read_from_borrowed_class_ok(self):
+        # Reading a valtype field through a borrowed class produces a fresh
+        # value and is freely passable.
+        check_ok(
+            "box: class { v: i64 }\n"
+            "f: function {b: box} out i64 is { return b.v }\n"
+            "main: function is {\n"
+            "  c: box v: 5\n"
+            "  r: f c\n"
+            "}"
+        )
+
+
+class TestLockFieldsAndBornBorrowed:
+    """Phase B: .lock fields, this.borrow constructors, born-borrowed valtypes."""
+
+    def _born_borrowed_iterator(self) -> str:
+        """Source for the canonical born-borrowed iterator pattern."""
+        return (
+            "bag: class { a: i64 b: i64 c: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  pos: i64\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return bagiter pos: 0 target: target\n"
+            "  }\n"
+            "}\n"
+        )
+
+    def test_lock_field_with_this_borrow_constructor_ok(self):
+        program = check_ok(
+            self._born_borrowed_iterator()
+            + "main: function is { b: bag a: 1 b: 2 c: 3; it: b.iterate }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        rtype = tc._resolved.get("test.bagiter")
+        assert rtype is not None
+        assert rtype.has_lock_fields is True
+        assert "target" in rtype.lock_field_names
+        assert rtype.is_born_borrowed is True
+
+    def test_lock_field_without_this_borrow_constructor_error(self):
+        errors = check_errors(
+            "bag: class { a: i64 }\n"
+            "badrec: record { target: bag.private.lock } as {\n"
+            "  create: function {target: bag.private.lock} out this is {\n"
+            "    return badrec target: target\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: bag a: 1; r: badrec target: b.private }"
+        )
+        assert any("lock" in e.msg.lower() and "this.borrow" in e.msg for e in errors)
+
+    def test_constructor_agreement_required(self):
+        errors = check_errors(
+            "v: record { x: i64 } as {\n"
+            "  c1: function out this is { return v x: 0 }\n"
+            "  c2: function out this.borrow is { return v x: 0 }\n"
+            "}\n"
+            "main: function is { r: v.c1 }"
+        )
+        assert any(
+            "mixed constructor" in e.msg or "must agree" in e.msg for e in errors
+        )
+
+    def test_lock_field_on_class_error(self):
+        errors = check_errors(
+            "bag: class { a: i64 }\n"
+            "bad: class { target: bag.lock } as {\n"
+            "  create: function {target: bag.lock} out this is {\n"
+            "    return bad target: target\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: bag a: 1; c: bad target: b }"
+        )
+        assert any("Class" in e.msg and "lock" in e.msg.lower() for e in errors)
+
+    def test_take_field_modifier_on_record_error(self):
+        # Only .lock is permitted on field types; .take/.borrow are not.
+        errors = check_errors(
+            "v: record { f: i64.take }\nmain: function is { x: v f: 0 }"
+        )
+        assert any("only '.lock'" in e.msg.lower() for e in errors)
+
+    def test_born_borrowed_record_in_class_field_error(self):
+        errors = check_errors(
+            self._born_borrowed_iterator() + "holder: class { it: bagiter }\n"
+            "main: function is { b: bag a: 1 b: 2 c: 3; h: holder it: b.iterate }"
+        )
+        assert any(
+            "born-borrowed" in e.msg.lower() and "class" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_lock_field_reassignment_error(self):
+        # The reassignment must be reachable from somewhere with private
+        # access, so put it inside a method on bag itself.
+        errors = check_errors(
+            "bag: class { a: i64 } as {\n"
+            "  reset: function {b: this.lock other: this.lock} "
+            "out bagiter.borrow is {\n"
+            "    it: bagiter pos: 0 target: b.private\n"
+            "    it.target = other.private\n"
+            "    return it\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  pos: i64\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return bagiter pos: 0 target: target\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: bag a: 1 }"
+        )
+        assert any(
+            "lock" in e.msg.lower() and "immutable" in e.msg.lower() for e in errors
+        )
+
+    def test_born_borrowed_instance_is_borrowed(self):
+        # Born-borrowed instances should be BORROWED, so copying them should
+        # fail (covered by the Phase A check in _check_assignment). Use the
+        # explicit named-argument call form (`bag.iterate b: b`) since a
+        # bare `b.iterate` parses as a function reference, not a method call.
+        errors = check_errors(
+            self._born_borrowed_iterator() + "main: function is {\n"
+            "  b: bag a: 1 b: 2 c: 3\n"
+            "  it: bag.iterate b: b\n"
+            "  it2: it\n"
+            "}"
+        )
+        assert any("borrowed valtype" in e.msg.lower() for e in errors)
+
+
+class TestValtypeBorrowEscape:
+    """Phase C: escape analysis for valtype borrow returns."""
+
+    def _types(self) -> str:
+        return (
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return bagiter target: target\n"
+            "  }\n"
+            "}\n"
+        )
+
+    def test_borrow_return_traces_lock_param_ok(self):
+        check_ok(self._types() + "main: function is { b: bag a: 1 }")
+
+    def test_borrow_return_traces_local_var_error(self):
+        # Returning a born-borrowed constructed from a local variable (not
+        # a .lock parameter) is rejected.
+        errors = check_errors(
+            "bag: class { a: i64 } as {\n"
+            "  bad: function {b: this.lock} out bagiter.borrow is {\n"
+            "    other: bag a: 5\n"
+            "    return bagiter target: other.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return bagiter target: target\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: bag a: 1 }"
+        )
+        assert any(
+            "Borrowed return" in e.msg and "lock" in e.msg.lower() for e in errors
+        )
+
+    def test_borrow_return_parenthesised_construction_ok(self):
+        check_ok(
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return (bagiter target: b.private)\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return bagiter target: target\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: bag a: 1 }"
+        )
+
+    def test_borrow_return_with_no_lock_param_error(self):
+        # Function declares borrow return but has no .lock parameter at all.
+        errors = check_errors(
+            "bag: class { a: i64 }\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return bagiter target: target\n"
+            "  }\n"
+            "}\n"
+            "noparam: function out bagiter.borrow is {\n"
+            "  b: bag a: 1\n"
+            "  return bagiter target: b.private\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "no 'lock' parameter" in e.msg or "lock parameter" in e.msg.lower()
+            for e in errors
+        )
+
+
 class TestExampleProgramsOwnership:
     """Verify all v1 example programs still pass with ownership checking."""
 

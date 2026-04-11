@@ -3092,12 +3092,31 @@ class CEmitter:
 
         ret_ctype = self._return_ctype(func)
 
+        # born-borrowed record methods pass the `this` receiver by pointer so
+        # mutations via `it.field = ...` persist across calls (needed for
+        # stack-allocated iterators).
+        record_type = self._resolved_type(record_name) if record_name else None
+        born_borrowed_record = bool(
+            record_type
+            and record_type.typetype == ZTypeType.RECORD
+            and getattr(record_type, "is_born_borrowed", False)
+        )
+
         params: List[str] = []
+        pointer_params: List[str] = []
         for pname, ppath in func.parameters.items():
             # skip hidden :this parameter (unnamed first param of methods)
             if pname.startswith(":"):
                 continue
             ptype_str = _ctype(ppath.type)
+            # born-borrowed record this-receiver: pass by pointer
+            if (
+                born_borrowed_record
+                and ppath.type is record_type
+                and not ptype_str.endswith("*")
+            ):
+                ptype_str = f"{ptype_str}*"
+                pointer_params.append(_mangle_var(pname))
             params.append(f"{ptype_str} {_mangle_var(pname)}")
 
         param_str = ", ".join(params) if params else "void"
@@ -3117,6 +3136,10 @@ class CEmitter:
                 ptype_str = _ctype(ppath.type)
                 if ptype_str.endswith("*") and ptype_str.startswith("z_"):
                     self._scope.class_params.add(_mangle_var(pname))
+        # born-borrowed record this-receiver is a pointer too — field access
+        # should use `->` like a class pointer.
+        for pp in pointer_params:
+            self._scope.class_params.add(pp)
 
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
@@ -3588,6 +3611,18 @@ class CEmitter:
         type_name = call.callable_type_name
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
+        # born-borrowed record methods expect a pointer receiver so mutations
+        # via `it.field = ...` persist. Wrap the variable with & when the
+        # receiver's type is a born-borrowed record and the receiver is a
+        # plain atom (not already a pointer).
+        rec_t = self._resolved_type(type_name) if type_name is not None else None
+        if (
+            rec_t is not None
+            and rec_t.typetype == ZTypeType.RECORD
+            and getattr(rec_t, "is_born_borrowed", False)
+            and not receiver.startswith("&")
+        ):
+            receiver = f"&{receiver}"
         args = self._emit_call_args(call)
         arg_str = f"{receiver}, {args}" if args else receiver
         return f"{cname}({arg_str})"
@@ -3739,7 +3774,10 @@ class CEmitter:
     def _emit_return(self, call: zast.Call, indent: str) -> str:
         """Emit a return statement with proper string cleanup."""
         if call.arguments:
-            # check for inline class construction: return ClassName field: val ...
+            # check for inline construction shorthand:
+            #   return Type field: val ...
+            # for both classes (heap-allocated, returns pointer) and records
+            # (stack-allocated, returns by value).
             first_arg = call.arguments[0].valtype
             if (
                 first_arg.nodetype == NodeType.ATOMID
@@ -3747,7 +3785,7 @@ class CEmitter:
                 and first_arg.type.typetype == ZTypeType.CLASS
                 and len(call.arguments) > 1
             ):
-                # emit as meta.create call
+                # emit as create call (heap)
                 self.needs_stdlib = True
                 fa_name = cast(zast.AtomId, first_arg).name
                 args_str, take_vars = self._build_meta_create_args(
@@ -3757,6 +3795,34 @@ class CEmitter:
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
+                for fname, tv in take_vars.items():
+                    if tv:
+                        self._temp.decls.append(f"{indent}{tv} = NULL;\n")
+                val = tmp
+            elif (
+                first_arg.nodetype == NodeType.ATOMID
+                and first_arg.type
+                and first_arg.type.typetype == ZTypeType.RECORD
+                and len(call.arguments) > 1
+            ):
+                # emit as meta_create call (stack-allocated record). Born-
+                # borrowed records have user-defined create functions whose
+                # signature differs from meta_create's full field list, so
+                # always go via meta_create here.
+                fa_name = cast(zast.AtomId, first_arg).name
+                args_str, take_vars = self._build_meta_create_args(
+                    fa_name, call.arguments, skip_first=1
+                )
+                rec_t = first_arg.type
+                create_fn = (
+                    f"z_{fa_name}_meta_create"
+                    if getattr(rec_t, "is_born_borrowed", False)
+                    else f"z_{fa_name}_create"
+                )
+                result_expr = f"{create_fn}({args_str})"
+                ctype = f"z_{fa_name}_t"
+                tmp = self._temp_name("c")
+                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
                     if tv:
                         self._temp.decls.append(f"{indent}{tv} = NULL;\n")
@@ -4342,7 +4408,17 @@ class CEmitter:
             args_str, take_vars = self._build_meta_create_args(
                 rec_type.name, call.arguments
             )
-            result = f"z_{rec_type.name}_create({args_str})"
+            # For born-borrowed records the user defines their own create
+            # function whose signature may differ from meta_create's full
+            # field list. Call meta_create directly so the field-ordered args
+            # always match. For ordinary records, keep calling _create
+            # (which is the auto-generated wrapper around _meta_create).
+            create_fn = (
+                f"z_{rec_type.name}_meta_create"
+                if getattr(rec_type, "is_born_borrowed", False)
+                else f"z_{rec_type.name}_create"
+            )
+            result = f"{create_fn}({args_str})"
             # handle .take nullification
             for fname, tv in take_vars.items():
                 if tv:
@@ -4795,7 +4871,15 @@ class CEmitter:
                 if vname == cname and vtype.is_heap_allocated:
                     return True
             # class method parameter (this/type resolves to class pointer)
-            if self._typetype_of(self._scope.record_name) == ZTypeType.CLASS:
+            # or born-borrowed record method receiver (pointer too)
+            scope_rec = self._resolved_type(self._scope.record_name)
+            if scope_rec is not None and (
+                scope_rec.typetype == ZTypeType.CLASS
+                or (
+                    scope_rec.typetype == ZTypeType.RECORD
+                    and getattr(scope_rec, "is_born_borrowed", False)
+                )
+            ):
                 if cname in self._scope.class_params:
                     return True
         return False
@@ -5636,6 +5720,15 @@ class CEmitter:
                 if callable_type:
                     obj_val = self._emit_operation_value(iop)
                     call_fn = _mangle_func(f"{callable_type}.call")
+                    # born-borrowed record iterators take a pointer receiver.
+                    rec_t = self._resolved_type(callable_type)
+                    if (
+                        rec_t is not None
+                        and rec_t.typetype == ZTypeType.RECORD
+                        and getattr(rec_t, "is_born_borrowed", False)
+                        and not obj_val.startswith("&")
+                    ):
+                        obj_val = f"&{obj_val}"
                     iter_val = f"{call_fn}({obj_val})"
                 else:
                     iter_val = self._emit_operation_value(iop)

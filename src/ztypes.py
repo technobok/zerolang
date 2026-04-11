@@ -246,6 +246,19 @@ class ZType:
     # access to the referenced type. Set during type resolution.
     private_fields: "set[str]" = field(default_factory=set, init=False)
 
+    # set of field names declared with the .lock type modifier — the field
+    # stores a locked reference to external data. Lock fields are immutable
+    # after construction and force the enclosing record to be born-borrowed.
+    lock_field_names: "set[str]" = field(default_factory=set, init=False)
+
+    # True iff this record has at least one .lock field. Implies the type is
+    # born-borrowed and propagates the borrowed restriction.
+    has_lock_fields: bool = field(default=False, init=False)
+
+    # True iff every constructor of this record returns this.borrow (the type
+    # is born-borrowed). Instances are BORROWED from the moment of creation.
+    is_born_borrowed: bool = field(default=False, init=False)
+
     # auto-generated equality: True when == and != are compiler-synthesized
     # (structural equality for records, tag+payload for variants)
     is_autogen_eq: bool = field(default=False, init=False)

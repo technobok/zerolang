@@ -72,6 +72,9 @@ class ObjectBody:
     functions: Dict[str, zast.Function]
     tag: Optional[zast.Path]
     extern: Dict[str, zast.AtomId]
+    # field name -> ownership annotation stripped from the field's type path
+    # (currently only .lock is permitted on fields)
+    field_ownership: Dict[str, ZParamOwnership] = field(default_factory=dict)
     is_error: bool = field(default=False, init=False)
 
 
@@ -1182,6 +1185,7 @@ class Parser:
             as_functions=as_body.functions if as_body else {},
             start=start,
             is_native=native,
+            field_ownership=is_body.field_ownership if is_body else {},
         )
         return NodeX(node=record, extern=extern)
 
@@ -1212,6 +1216,7 @@ class Parser:
             as_functions=as_body.functions if as_body else {},
             start=start,
             is_native=native,
+            field_ownership=is_body.field_ownership if is_body else {},
         )
         return NodeX(node=c, extern=extern)
 
@@ -1486,6 +1491,7 @@ class Parser:
         functions: Dict[str, zast.Function] = {}
         tag: Optional[zast.Path] = None
         extern: Dict[str, zast.AtomId] = {}
+        field_ownership: Dict[str, ZParamOwnership] = {}
 
         # externs from each item typedefinition
         local: Set[str] = set()  # set of locally defined items
@@ -1569,7 +1575,17 @@ class Parser:
                                 msg = f"Duplicate item name: {label.tokstr}"
                                 return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
-                            items[label.tokstr] = opx.node  # type: ignore[assignment]
+                            # if the field type is a simple Path, strip any
+                            # ownership annotation (.lock) from it. Only .lock
+                            # is permitted on field types; .take/.borrow on
+                            # field types are rejected by the type checker.
+                            field_node: zast.Operation = opx.node
+                            if isinstance(field_node, zast.Path):
+                                stripped, own = self._strip_ownership(field_node)
+                                if own is not None:
+                                    field_ownership[label.tokstr] = own
+                                    field_node = stripped
+                            items[label.tokstr] = field_node  # type: ignore[assignment]
                             # promote to externitems (will be promoted to extern below, after locals)
                             promoteexterns(addto=externitems, addfrom=opx.extern)
                         else:
@@ -1590,6 +1606,11 @@ class Parser:
                     dottedidx = cast(Optional[NodeX[zast.Path]], dottedidx)
                     if dottedidx is not None:
                         dottedid = dottedidx.node
+                        # strip any ownership annotation (.lock) so the
+                        # remaining path's leaf gives the field name and the
+                        # type alone is stored as the field type.
+                        stripped_path, field_own = self._strip_ownership(dottedid)
+                        dottedid = stripped_path
                         if dottedid.nodetype == NodeType.ATOMID:
                             name = cast(zast.AtomId, dottedid).name
                         elif dottedid.nodetype == NodeType.DOTTEDPATH:
@@ -1614,6 +1635,8 @@ class Parser:
                             )
                         local.add(name)
                         items[name] = dottedid
+                        if field_own is not None:
+                            field_ownership[name] = field_own
                         # cannot refer to locals
                         promoteexterns(addto=externitems, addfrom=dottedidx.extern)
                     else:
@@ -1643,7 +1666,12 @@ class Parser:
         promoteexterns(addto=extern, addfrom=externitems, local=local)
 
         return ObjectBody(
-            items=items, islist=islist, functions=functions, tag=tag, extern=extern
+            items=items,
+            islist=islist,
+            functions=functions,
+            tag=tag,
+            extern=extern,
+            field_ownership=field_ownership,
         )
 
     def _acceptsubunit(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error, None]:

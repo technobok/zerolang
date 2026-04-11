@@ -1124,6 +1124,39 @@ class TypeChecker:
                     and cast(zast.DottedPath, fpath).child.name == "private"
                 ):
                     ctype.private_fields.add(fname)
+                # Phase B: .lock fields are not allowed on classes (the class
+                # may outlive the lock scope). Born-borrowed valtypes are also
+                # rejected as class fields.
+                f_own = cls.field_ownership.get(fname)
+                if f_own == ZParamOwnership.LOCK:
+                    self._error(
+                        f"Class '{name}' field '{fname}' cannot have a "
+                        f"'.lock' type — only records (valtypes) may store "
+                        f"locked references.",
+                        loc=cls.start,
+                        err=ERR.TYPEERROR,
+                        hint=(
+                            "use a record (valtype) for types that hold "
+                            "locked references, since classes can outlive "
+                            "the lock scope"
+                        ),
+                    )
+                elif f_own is not None:
+                    self._error(
+                        f"Only '.lock' is permitted as a field type modifier; "
+                        f"got '.{f_own.name.lower()}' on field '{fname}'",
+                        loc=cls.start,
+                        err=ERR.TYPEERROR,
+                    )
+                if getattr(ft, "is_born_borrowed", False):
+                    self._error(
+                        f"Class '{name}' field '{fname}' has born-borrowed "
+                        f"type '{ft.name}'; born-borrowed valtypes cannot be "
+                        f"stored in class fields (the class may outlive the "
+                        f"lock scope)",
+                        loc=cls.start,
+                        err=ERR.TYPEERROR,
+                    )
                 # detect field defaults
                 if fpath.nodetype in (
                     NodeType.ATOMID,
@@ -1771,6 +1804,29 @@ class TypeChecker:
                 continue
             if ft:
                 rtype.children[fname] = ft
+                # detect .private field type (friend access)
+                if (
+                    fpath.nodetype == NodeType.DOTTEDPATH
+                    and cast(zast.DottedPath, fpath).child.name == "private"
+                ):
+                    rtype.private_fields.add(fname)
+                # detect .lock field annotation (Phase B)
+                f_own = rec.field_ownership.get(fname)
+                if f_own == ZParamOwnership.LOCK:
+                    rtype.lock_field_names.add(fname)
+                    rtype.has_lock_fields = True
+                elif f_own is not None:
+                    self._error(
+                        f"Only '.lock' is permitted as a field type modifier; "
+                        f"got '.{f_own.name.lower()}' on field '{fname}'",
+                        loc=rec.start,
+                        err=ERR.TYPEERROR,
+                    )
+                # detect transitive born-borrowed: storing a born-borrowed
+                # valtype as a field forces the enclosing record to be
+                # born-borrowed too.
+                if getattr(ft, "is_born_borrowed", False):
+                    rtype.has_lock_fields = True
                 # detect field defaults
                 if fpath.nodetype in (
                     NodeType.ATOMID,
@@ -1812,6 +1868,12 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
 
+        # Phase B: detect this.borrow constructors and validate agreement.
+        # A constructor is any function whose declared return type path is
+        # 'this'. If any constructor has return_ownership BORROW, the record
+        # is born-borrowed and ALL constructors must agree.
+        self._check_born_borrowed_record(name, rec, rtype)
+
         # typecheck method bodies (non-generic only)
         if not rtype.isgeneric:
             for mname, mfunc in rec.functions.items():
@@ -1844,6 +1906,79 @@ class TypeChecker:
             self._error("'private' cannot be redefined", loc=priv.start)
         self._resolving.pop()
         return rtype
+
+    def _is_this_return(self, func: zast.Function) -> bool:
+        """Check if a function's return type is the bare 'this' identifier."""
+        rt = func.returntype
+        if rt is None:
+            return False
+        if rt.nodetype == NodeType.ATOMID:
+            return cast(zast.AtomId, rt).name == "this"
+        return False
+
+    def _check_born_borrowed_record(
+        self, name: str, rec: zast.Record, rtype: ZType
+    ) -> None:
+        """Phase B: validate this.borrow constructor agreement and lock fields.
+
+        Rules:
+        - If any constructor returns this.borrow, ALL constructors of the
+          record must return this.borrow (mark the type as born-borrowed).
+        - If the record has any .lock fields, it must be born-borrowed.
+        - If the record is born-borrowed but has no .lock fields, it's
+          allowed (a view that locks nothing is rare but legal).
+        - .lock fields are not permitted on classes (handled in class resolver).
+        """
+        constructors: list[tuple[str, zast.Function]] = []
+        for mname, mfunc in rec.functions.items():
+            if self._is_this_return(mfunc):
+                constructors.append((mname, mfunc))
+        for mname, mfunc in rec.as_functions.items():
+            if self._is_this_return(mfunc):
+                constructors.append((mname, mfunc))
+
+        any_borrow = any(
+            f.return_ownership == ZParamOwnership.BORROW for _, f in constructors
+        )
+        all_borrow = all(
+            f.return_ownership == ZParamOwnership.BORROW for _, f in constructors
+        )
+
+        if any_borrow and not all_borrow:
+            offending = [
+                cname
+                for cname, f in constructors
+                if f.return_ownership != ZParamOwnership.BORROW
+            ]
+            self._error(
+                f"Record '{name}' has mixed constructor return types: "
+                f"some return 'this.borrow' and some return 'this'. All "
+                f"constructors must agree.",
+                loc=rec.start,
+                err=ERR.TYPEERROR,
+                hint=(
+                    f"add '.borrow' to: {', '.join(offending)} — or remove "
+                    "'.borrow' from the others"
+                ),
+            )
+
+        if any_borrow:
+            rtype.is_born_borrowed = True
+
+        # constructors that return this.borrow imply lock fields are expected;
+        # constructors that omit it but the record has .lock fields are an error.
+        if rtype.has_lock_fields and not rtype.is_born_borrowed:
+            self._error(
+                f"Record '{name}' has '.lock' field(s) "
+                f"({', '.join(sorted(rtype.lock_field_names))}) but no "
+                f"constructor returns 'this.borrow'.",
+                loc=rec.start,
+                err=ERR.TYPEERROR,
+                hint=(
+                    "records that hold locked references must be born-borrowed; "
+                    "change all constructor returns to 'this.borrow'"
+                ),
+            )
 
     _FLOAT_TYPES = frozenset({"f32", "f64", "f128"})
 
@@ -4189,8 +4324,14 @@ class TypeChecker:
                 param_own = func.param_ownership.get(pname)
                 if param_own == ZParamOwnership.TAKE:
                     ownership = ZOwnership.OWNED
+                elif param_own in (
+                    ZParamOwnership.BORROW,
+                    ZParamOwnership.LOCK,
+                ):
+                    # explicit .borrow / .lock — body sees a borrowed binding
+                    ownership = ZOwnership.BORROWED
                 else:
-                    # default: borrow for reftypes, owned for valtypes
+                    # default: take for valtypes (copy), borrow for reftypes
                     if _is_valtype(pt):
                         ownership = ZOwnership.OWNED
                     else:
@@ -4302,6 +4443,26 @@ class TypeChecker:
             private_access = self._pending_private_access
             self._pending_private_access = False
 
+            # Phase A: cannot copy a borrowed valtype to a new owned name.
+            # The .borrow inline method (which sets borrow_target) is allowed
+            # because it produces a new borrowed binding.
+            if not borrow_target and _is_valtype(t):
+                src_name = self._get_simple_var_source(assign.value)
+                if src_name is not None:
+                    src_var = self.symtab.lookup_var(src_name)
+                    if src_var and src_var.ownership == ZOwnership.BORROWED:
+                        self._error(
+                            f"Cannot copy borrowed valtype '{src_name}' to new "
+                            f"name '{assign.name}'",
+                            loc=assign.start,
+                            err=ERR.OWNERERROR,
+                            hint=(
+                                f"use '{src_name}.borrow' to create another "
+                                f"borrowed reference"
+                            ),
+                        )
+                        return
+
             if borrow_target:
                 # the new variable is borrowed and holds an exclusive lock on the target
                 var = ZVariable(
@@ -4315,10 +4476,14 @@ class TypeChecker:
                 if err:
                     self._error(err, loc=assign.start)
             else:
-                # new local variables are always owned
-                var = ZVariable(
-                    ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED
-                )
+                # new local variables are owned by default. Born-borrowed
+                # valtypes (records with this.borrow constructors) start
+                # life as BORROWED — every instance is a borrowed view.
+                if getattr(t, "is_born_borrowed", False):
+                    var_own = ZOwnership.BORROWED
+                else:
+                    var_own = ZOwnership.OWNED
+                var = ZVariable(ztype=t, ownership=var_own, named=ZNaming.NAMED)
                 var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
             assign.type = t
@@ -4383,6 +4548,35 @@ class TypeChecker:
                     f"Cannot reassign reftype field '{cast(zast.DottedPath, reassign.topath).child.name}' "
                     f"with '='; use 'swap' instead",
                     loc=reassign.start,
+                )
+
+        # Phase B: .lock fields are immutable after construction.
+        if reassign.topath.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, reassign.topath)
+            parent_t = getattr(dp.parent, "type", None)
+            child_name = dp.child.name
+            if parent_t and child_name in getattr(parent_t, "lock_field_names", set()):
+                self._error(
+                    f"Cannot reassign '.lock' field '{child_name}' — lock "
+                    f"fields are set at construction time and immutable",
+                    loc=reassign.start,
+                    err=ERR.OWNERERROR,
+                )
+
+        # Phase A: a borrowed variable cannot be reassigned (the name must
+        # remain bound to the same borrowed value for its full scope).
+        if reassign.topath.nodetype == NodeType.ATOMID:
+            tname = cast(zast.AtomId, reassign.topath).name
+            tvar = self.symtab.lookup_var(tname)
+            if tvar and tvar.ownership == ZOwnership.BORROWED:
+                self._error(
+                    f"Cannot reassign borrowed variable '{tname}'",
+                    loc=reassign.start,
+                    err=ERR.OWNERERROR,
+                    hint=(
+                        "borrowed names are bound for their full scope; "
+                        "shadow in an inner scope instead"
+                    ),
                 )
 
         # reassignment narrowing: reset and optionally re-narrow
@@ -5206,18 +5400,54 @@ class TypeChecker:
                 pname, _ = params[i]
                 pname_for_lock = pname
                 param_own = callee_type.param_ownership.get(pname)
-                if param_own == ZParamOwnership.TAKE:
-                    # invalidate the caller's name
-                    arg_root = self._get_arg_root_name(arg.valtype)
-                    if arg_root:
+                # determine the effective ownership: explicit annotation if
+                # present, otherwise the default for the type (take for
+                # valtypes, borrow for reftypes).
+                effective_own = param_own
+                if effective_own is None:
+                    effective_own = (
+                        ZParamOwnership.TAKE
+                        if _is_valtype(arg_type)
+                        else ZParamOwnership.BORROW
+                    )
+                if effective_own == ZParamOwnership.TAKE:
+                    # detect borrowed valtype passed by name (whole-variable
+                    # copy/take). Field reads through a borrowed parent are
+                    # fine — they produce a fresh value.
+                    simple_src = self._get_simple_var_source(arg.valtype)
+                    if simple_src is not None and _is_valtype(arg_type):
+                        src_var = self.symtab.lookup_var(simple_src)
+                        if src_var and src_var.ownership == ZOwnership.BORROWED:
+                            self._error(
+                                f"Cannot pass borrowed valtype '{simple_src}' "
+                                f"to 'take' parameter '{pname}'",
+                                loc=arg.start,
+                                err=ERR.OWNERERROR,
+                                hint=(
+                                    "borrowed valtypes cannot be copied; "
+                                    f"use '{simple_src}.borrow' or change "
+                                    f"the parameter to '{pname}.borrow'"
+                                ),
+                            )
+                            # don't fall through to invalidation
+                            arg_root = None
+                        else:
+                            arg_root = simple_src
+                    else:
+                        arg_root = self._get_arg_root_name(arg.valtype)
+                    if arg_root and param_own == ZParamOwnership.TAKE:
                         var = self.symtab.lookup_var(arg_root)
                         if var and var.ownership == ZOwnership.BORROWED:
                             self._error(
                                 f"Cannot pass borrowed variable '{arg_root}' to "
                                 f"'take' parameter '{pname}'",
                                 loc=arg.start,
+                                err=ERR.OWNERERROR,
                             )
                         else:
+                            # explicit .take on a reftype invalidates the
+                            # caller's name. Default-take on valtypes is just
+                            # a copy and must not invalidate.
                             self.symtab.release_held_locks(arg_root)
                             take_loc = (
                                 (arg.start.lineno, arg.start.colno, arg.start.fsno)
@@ -5420,6 +5650,24 @@ class TypeChecker:
             self._error(err, loc=call.start)
         # receiver locks are released after the call
         self.symtab.release_lock(root, holder)
+
+    def _get_simple_var_source(self, value: zast.ExpressionSubTypes) -> Optional[str]:
+        """If `value` is a plain variable reference (no call, dotted path,
+        .borrow, .take, etc.), return that variable's name. Otherwise return
+        None.
+
+        Used by the borrowed-valtype copy check to detect `y: x` style copies
+        from a borrowed source. Calls, constructors and field accesses produce
+        fresh values and are not flagged.
+        """
+        inner: zast.Node = value
+        if getattr(inner, "nodetype", None) == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, inner).expression
+        if getattr(inner, "nodetype", None) == NodeType.ATOMID:
+            atom = cast(zast.AtomId, inner)
+            if not _is_numeric_id(atom.name):
+                return atom.name
+        return None
 
     def _get_arg_root_name(self, op: zast.Operation) -> Optional[str]:
         """Get the root variable name from an operation (for aliasing checks)."""
@@ -5633,10 +5881,167 @@ class TypeChecker:
                             loc=call.start,
                         )
 
+            # Phase C: born-borrowed valtype escape analysis. When the return
+            # type is <born-borrowed>.borrow, every .lock field of the
+            # returned value must trace back to a .lock parameter of the
+            # current function.
+            if (
+                ret_type is not None
+                and getattr(ret_type, "is_born_borrowed", False)
+                and ret_type.lock_field_names
+            ):
+                self._check_born_borrowed_return_escape(ret_type, call, call.start)
+
+        # Phase C: even if the function does not declare 'out type.borrow'
+        # explicitly, returning a born-borrowed valtype is implicitly a
+        # borrow return — verify the lock chain. (The type checker requires
+        # such functions to have at least one .lock parameter.)
+        if (
+            ret_own != ZParamOwnership.BORROW
+            and ret_type is not None
+            and getattr(ret_type, "is_born_borrowed", False)
+            and ret_type.lock_field_names
+            and call.arguments
+        ):
+            self._error(
+                f"Function returns born-borrowed type '{ret_type.name}' but "
+                f"return type is not declared '.borrow'",
+                loc=call.start,
+                err=ERR.TYPEERROR,
+                hint=(
+                    "add '.borrow' to the return type and a '.lock' "
+                    "parameter that the borrow can trace to"
+                ),
+            )
+
         # return has type 'never' (control flow doesn't continue)
         never = self._resolve_name("never")
         call.type = never if never else self.t_null
         return call.type
+
+    def _check_born_borrowed_return_escape(
+        self,
+        ret_type: ZType,
+        ret_call: zast.Call,
+        loc: Token,
+    ) -> None:
+        """Verify each .lock field of a returned born-borrowed valtype traces
+        back to a .lock parameter of the current function.
+
+        ret_call is the synthetic 'return' call node. Its arguments are the
+        return value(s). Three return forms are recognised:
+
+        1. Direct constructor call as the first argument:
+              return (mytype field1: x.lockparam)
+           — arguments[0].valtype is a Call.
+        2. Construction shorthand:
+              return mytype field1: x.lockparam
+           — arguments[0] is an AtomId naming the type, the remaining args
+             are the field values. The emitter folds this into a meta.create.
+        3. Plain local variable:
+              return localvar
+           — the local must hold locks that trace to .lock parameters.
+        """
+        if not ret_call.arguments:
+            return
+
+        # case 2: construction shorthand. arguments[0] is the type id,
+        # arguments[1..] are the field args.
+        first_arg = ret_call.arguments[0].valtype
+        first_inner: zast.Node = first_arg
+        if getattr(first_inner, "nodetype", None) == NodeType.EXPRESSION:
+            first_inner = cast(zast.Expression, first_inner).expression
+
+        if (
+            getattr(first_inner, "nodetype", None) == NodeType.ATOMID
+            and len(ret_call.arguments) > 1
+        ):
+            self._trace_construction_lock_fields(ret_type, ret_call.arguments[1:], loc)
+            return
+
+        # case 1: a Call expression as the first argument (parenthesised
+        # construction)
+        if getattr(first_inner, "nodetype", None) == NodeType.CALL:
+            inner_call = cast(zast.Call, first_inner)
+            self._trace_construction_lock_fields(ret_type, inner_call.arguments, loc)
+            return
+
+        # case 3: plain local variable
+        if getattr(first_inner, "nodetype", None) == NodeType.ATOMID:
+            local_name = cast(zast.AtomId, first_inner).name
+            local_var = self.symtab.lookup_var(local_name)
+            if local_var is None:
+                return
+            if not local_var.held_locks:
+                self._error(
+                    f"Cannot return born-borrowed '{local_name}': it does "
+                    f"not hold any locks on '.lock' parameters",
+                    loc=loc,
+                    err=ERR.OWNERERROR,
+                )
+                return
+            for held in local_var.held_locks:
+                if not self._is_lock_param_or_chain(held):
+                    self._error(
+                        f"Borrowed return: '{local_name}' holds a lock on "
+                        f"'{held}' which is not a '.lock' parameter of this "
+                        f"function",
+                        loc=loc,
+                        err=ERR.OWNERERROR,
+                    )
+
+    def _trace_construction_lock_fields(
+        self,
+        ret_type: ZType,
+        ctor_args: list,
+        loc: Token,
+    ) -> None:
+        """For each .lock field of ret_type, find the matching ctor_arg by
+        name and verify it roots at a .lock parameter."""
+        for fname in ret_type.lock_field_names:
+            matched_arg = None
+            for arg in ctor_args:
+                if arg.name == fname:
+                    matched_arg = arg
+                    break
+            if matched_arg is None:
+                # missing field error fires elsewhere
+                continue
+            arg_root = self._get_arg_root_name(matched_arg.valtype)
+            if arg_root is None:
+                self._error(
+                    f"Cannot trace borrowed return: '.lock' field '{fname}' "
+                    f"has no root variable",
+                    loc=loc,
+                    err=ERR.OWNERERROR,
+                )
+                continue
+            if not self._is_lock_param_or_chain(arg_root):
+                self._error(
+                    f"Borrowed return: '.lock' field '{fname}' traces to "
+                    f"'{arg_root}' which is not a '.lock' parameter of "
+                    f"this function",
+                    loc=loc,
+                    err=ERR.OWNERERROR,
+                    hint=(
+                        f"mark '{arg_root}' as '.lock' in the parameter "
+                        f"list, or pass a value that originates from a "
+                        f"'.lock' parameter"
+                    ),
+                )
+
+    def _is_lock_param_or_chain(self, name: str) -> bool:
+        """Return True if `name` is a .lock parameter of the current function,
+        or a local variable whose locks all trace to .lock parameters."""
+        if self._current_func_ownership.get(name) == ZParamOwnership.LOCK:
+            return True
+        # follow the chain through borrowed locals
+        var = self.symtab.lookup_var(name)
+        if var is None:
+            return False
+        if not var.held_locks:
+            return False
+        return all(self._is_lock_param_or_chain(h) for h in var.held_locks)
 
     def _check_identical_call(self, call: zast.Call) -> Optional[ZType]:
         """Check an identical call: both args must be the same reftype."""

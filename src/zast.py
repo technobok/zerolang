@@ -418,6 +418,8 @@ class Record(Node):
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
     is_native: bool = False  # native type: instance state is compiler-provided
+    # field name -> ZParamOwnership (only LOCK currently allowed on fields)
+    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
 
 @dataclass
@@ -435,6 +437,8 @@ class Class(Node):
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
     is_native: bool = False  # native type: instance state is compiler-provided
+    # field name -> ZParamOwnership (only LOCK currently allowed on fields)
+    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
 
 @dataclass
