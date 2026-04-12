@@ -4564,6 +4564,19 @@ class TypeChecker:
         self._check_exhaustive_if(assign.value)
         if t and self._check_non_runtime_type(t, "a value", assign.start):
             return
+        # .release cannot be used as a value
+        inner_expr = assign.value.expression
+        if (
+            getattr(inner_expr, "nodetype", None) == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, inner_expr).child.name == "release"
+        ):
+            self._error(
+                "'.release' cannot be used as a value; "
+                "use '.take' to transfer ownership",
+                loc=assign.start,
+                err=ERR.OWNERERROR,
+            )
+            return
         if t:
             # check if this assignment is from a .borrow call
             borrow_target = self._pending_borrow_lock
@@ -4952,7 +4965,7 @@ class TypeChecker:
         return None
 
     def _check_dotted_path(self, path: zast.DottedPath) -> Optional[ZType]:
-        """Check a dotted path, handling .take and .borrow compiler methods."""
+        """Check a dotted path, handling .take, .release, and .borrow compiler methods."""
         child_name = path.child.name
 
         # handle .take compiler method (but not protocol/typedef.take constructor)
@@ -5008,6 +5021,58 @@ class TypeChecker:
                             self.symtab.invalidate(take_parent_name, loc=take_loc)
                     path.type = parent_type
                     return parent_type
+
+        # handle .release compiler method (early scope-exit for a variable)
+        if child_name == "release":
+            parent_type = self._check_path(path.parent)
+            if parent_type:
+                # .release only valid on simple variable names
+                if path.parent.nodetype != NodeType.ATOMID:
+                    self._error(
+                        "'.release' can only be applied to a variable name",
+                        loc=path.start,
+                        err=ERR.OWNERERROR,
+                    )
+                    return parent_type
+
+                release_name = cast(zast.AtomId, path.parent).name
+
+                # cannot release a top-level definition
+                defn = self._lookup_definition(release_name)
+                if defn is not None:
+                    self._error(
+                        f"Cannot release top-level definition '{release_name}'",
+                        loc=path.start,
+                        err=ERR.OWNERERROR,
+                    )
+                    return parent_type
+
+                var = self.symtab.lookup_var(release_name)
+                if var:
+                    # cannot release if someone holds a lock on this variable
+                    if var.locks:
+                        entry = var.locks[0]
+                        self._error(
+                            f"Cannot release '{release_name}': "
+                            f"{entry.lock_type.name.lower()} lock held by "
+                            f"'{entry.holder}'",
+                            loc=path.start,
+                            err=ERR.OWNERERROR,
+                        )
+                        return parent_type
+
+                    # release any locks this variable holds on others
+                    self.symtab.release_held_locks(release_name)
+
+                # invalidate the variable
+                release_loc = (
+                    (path.start.lineno, path.start.colno, path.start.fsno)
+                    if path.start
+                    else None
+                )
+                self.symtab.invalidate(release_name, loc=release_loc)
+                path.type = parent_type
+                return parent_type
 
         # handle .borrow compiler method (but not protocol/typedef.borrow constructor)
         if child_name == "borrow":

@@ -279,6 +279,45 @@ nothing to assign the locks to).
 #~".lock" is not an inline method on instances. It is only used on function
 parameter declarations.
 
+#---: .release
+
+An inline method only (not a parameter or return attribute). #~"x.release" ends
+the lifetime of variable #~"x" immediately, as if it fell out of scope at that
+point. The name #~"x" is invalidated and any subsequent use is a compile error.
+
+For owned reftypes (classes, unions, strings): the destructor runs and the
+pointer is set to NULL (scope-exit cleanup becomes a safe no-op).
+
+For owned valtypes (records, enums, integers): just invalidates the name.
+No destructor call is needed.
+
+For borrowed variables (any type): ends the borrow and releases any locks the
+variable holds on other variables. The source variable becomes unlocked and
+available again. No destructor is called (the owner is responsible for cleanup).
+
+  #*: #~".release" is always a statement, never a value expression.
+  #*: #~"y: x.release" is a compile error.
+  #*: Use #~".take" when you need to transfer the value to a new name.
+  #*: Use #~".release" when you want to end a lifetime without producing a value.
+
+Error conditions:
+  #*: Cannot release a variable that has active locks held by another variable.
+  #*: Cannot release a top-level definition (static lifetime).
+  #*: Cannot use #~".release" on a non-variable path like #~"x.field.release".
+
+Example -- early cleanup without nesting:
+
+  #*code/z:
+    h: box label: "hotel" value: 8
+    print "h alive: \{h.label}"
+    h.release
+    print "h released -- no 'with' nesting needed"
+
+Comparison with #~".take": both coexist. Standalone #~"x.take" continues to work
+for destroying an owned value. #~".release" additionally works on borrowed
+variables (ending the borrow), whereas #~".take" on a borrowed variable is always
+an error.
+
 
 #--: Locking
 

@@ -3395,6 +3395,29 @@ class CEmitter:
                 result += f"{indent}z_{var_type.name}_destroy({var});\n"
             result += f"{indent}{var} = NULL;\n"
             return result
+        if (
+            inner.nodetype == zast.NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, inner).child.name == "release"
+        ):
+            dp = cast(zast.DottedPath, inner)
+            var = self._emit_path_value(dp.parent)
+            var_type = dp.type
+            result = ""
+            # owned reftypes: call destructor + nullify
+            if var_type and var_type.subtype == ZSubType.STRING:
+                result += f"{indent}zstr_free({var});\n"
+            elif var_type and var_type.typetype == ZTypeType.CLASS:
+                result += f"{indent}z_{var_type.name}_destroy({var});\n"
+            elif var_type and var_type.typetype == ZTypeType.UNION:
+                result += f"{indent}z_{var_type.name}_destroy({var});\n"
+            # nullify pointer so scope-exit destroy is a no-op
+            if var_type and (
+                var_type.subtype == ZSubType.STRING
+                or var_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
+            ):
+                result += f"{indent}{var} = NULL;\n"
+            # borrowed variables and valtypes: no C code needed
+            return result
         if inner.nodetype in (
             zast.NodeType.BINOP,
             zast.NodeType.DOTTEDPATH,

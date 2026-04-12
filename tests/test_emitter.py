@@ -1981,6 +1981,47 @@ class TestStandaloneTake:
         assert "ok" in result.stdout
 
 
+class TestStandaloneRelease:
+    """Tests for standalone .release (early scope-exit for a variable)."""
+
+    def test_release_class(self):
+        """x.release on class → destroy + NULL."""
+        csource = emit_source(
+            "myclass: class { x: i64 }\n"
+            "main: function is {\n"
+            "  c: myclass x: 42\n"
+            "  c.release\n"
+            "}"
+        )
+        assert "z_myclass_destroy(c);" in csource
+        assert "c = NULL;" in csource
+
+    def test_release_string(self):
+        """s.release on string → free + NULL."""
+        csource = emit_source('main: function is {\n  s: "hello"\n  s.release\n}')
+        assert "zstr_free(s);" in csource
+        assert "s = NULL;" in csource
+
+    def test_release_valtype_no_destroy(self):
+        """x.release on valtype → no destroy call in C output."""
+        csource = emit_source("main: function is {\n  x: 42\n  x.release\n}")
+        assert "destroy" not in csource.split("int main")[1]
+
+    def test_release_class_asan(self):
+        """Standalone .release on class → no leak, no double-free."""
+        csource = emit_source(
+            "myclass: class { name: string }\n"
+            "main: function is {\n"
+            '  c: myclass name: "hello"\n'
+            "  c.release\n"
+            '  print "ok"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert "ok" in result.stdout
+
+
 class TestImplicitTake:
     """Tests for implicit take (function parameter declared .take)."""
 

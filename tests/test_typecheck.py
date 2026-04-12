@@ -953,6 +953,78 @@ class TestTakeBorrowCompilerMethods:
         )
 
 
+class TestReleaseCompilerMethod:
+    """.release compiler method."""
+
+    def test_release_owned_valtype(self):
+        """x.release on an owned valtype should succeed."""
+        check_ok("main: function is {\n  x: 42\n  x.release\n}")
+
+    def test_release_invalidates_name(self):
+        """After x.release, x should be invalid."""
+        errors = check_errors("main: function is {\n  x: 42\n  x.release\n  y: x\n}")
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
+
+    def test_release_borrowed_valtype(self):
+        """Releasing a borrowed valtype ends the borrow."""
+        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n  y.release\n}")
+
+    def test_source_unlocked_after_borrow_release(self):
+        """After releasing a borrow, the source is unlocked and usable."""
+        check_ok(
+            "main: function is {\n  x: 42\n  y: x.borrow\n  y.release\n  z: x.take\n}"
+        )
+
+    def test_release_parameter_ok(self):
+        """Releasing a parameter is allowed (same as .take on a parameter)."""
+        check_ok("main: function {a: i64} is {\n  a.release\n}")
+
+    def test_cannot_release_locked_variable(self):
+        """Cannot release a variable that has a lock held by someone else."""
+        errors = check_errors(
+            "main: function is {\n  x: 42\n  y: x.borrow\n  x.release\n}"
+        )
+        assert any(
+            "release" in e.msg.lower() and "lock" in e.msg.lower() for e in errors
+        )
+
+    def test_cannot_release_top_level_definition(self):
+        """Cannot release a top-level definition."""
+        errors = check_errors("f: function is {}\nmain: function is {\n  f.release\n}")
+        assert any(
+            "release" in e.msg.lower() and "top-level" in e.msg.lower() for e in errors
+        )
+
+    def test_release_as_value_is_error(self):
+        """y: x.release should be an error."""
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.release\n}")
+        assert any(
+            "release" in e.msg.lower() and "value" in e.msg.lower() for e in errors
+        )
+
+    def test_release_non_variable_path_is_error(self):
+        """field.release on a non-simple variable should be an error."""
+        errors = check_errors(
+            "point: record { x: i64 y: i64 }\n"
+            "main: function is {\n"
+            "  p: point x: 1 y: 2\n"
+            "  p.x.release\n"
+            "}"
+        )
+        assert any("release" in e.msg.lower() for e in errors)
+
+    def test_double_release(self):
+        """Releasing a variable twice is an error (second sees undefined name)."""
+        errors = check_errors(
+            "main: function is {\n  x: 42\n  x.release\n  x.release\n}"
+        )
+        assert any(
+            "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
+        )
+
+
 class TestSwapOwnership:
     """Test swap ownership rules."""
 
