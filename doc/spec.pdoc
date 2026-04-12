@@ -1674,6 +1674,50 @@ runtime instances:
   [#*: #~"x.borrow" - returns a borrowed reference to #~"x". The variable #~"x"
     is exclusively locked for the lifetime of the borrowed reference.]
 
+#-----: Borrowed Valtypes and Lock Fields
+
+A borrowed valtype is subject to the same restrictions as a borrowed reftype:
+it cannot be copied, taken, swapped, stored in a field, or passed to a
+#~".take" parameter. This makes #~".borrow" meaningful for valtypes and
+enables records that hold locked references to external data.
+
+Records may declare fields with a #~".lock" type modifier:
+
+#code language=zerolang: """
+  iter: record {
+    pos: i64
+    target: container.private.lock
+  } as {
+    create: function {target: container.private.lock} out this.borrow is {
+      return iter pos: 0 target: target
+    }
+  }
+  """
+
+A record with any #~".lock" field is #_*"born-borrowed": every constructor
+must return #~"this.borrow", every instance is borrowed from the moment of
+construction, and the locks held by the #~".lock" fields are released when
+the instance falls out of scope. #~".lock" is the only field-type modifier
+permitted (#~".take" and #~".borrow" on field types are rejected) and it is
+permitted only on records, never on classes (a class may outlive the lock
+scope).
+
+A function may return a born-borrowed record as #~"<type>.borrow". The type
+checker performs escape analysis: every #~".lock" field of the returned
+value must trace back to a #~".lock" parameter of the current function. The
+locks held by those parameters transfer to the caller's variable holding the
+result.
+
+Born-borrowed records cannot live in class fields, cannot live in records
+that are not themselves born-borrowed, cannot be elements of copy-by-value
+generic containers (#~"list of: born_borrowed_type" is rejected), and
+cannot be sources for #~"protocol.create" / #~"protocol.take" /
+#~"protocol.borrow" / #~"facet.create" / #~"facet.take". They #_*"can"
+declare protocol or facet conformance in their #~"as" block (compile-time
+only).
+
+See #~"doc/ownership.pdoc" for the full design and worked examples.
+
 #----: Locking
 
 Locking is an orthogonal attribute tracked alongside ownership. It prevents
@@ -2318,6 +2362,21 @@ Defaults to all contents of the current item.
 
 
 #----: private
+
+A type's #~"private" member exposes friend access to that type's non-public
+members. Writing the field type as #~"<type>.private" in a record or function
+parameter declaration produces a borrowed view that can read and mutate the
+target's private fields.
+
+#~".private" is itself a borrowed reference: it cannot be copied, taken or
+stored as an owned value, and it participates in the locking algorithm like
+any other reference. Combined with #~".lock" (#~"<type>.private.lock"), it
+becomes a friend reference whose lock is held for the lifetime of the
+containing variable -- this is how born-borrowed record iterators access
+their container's internal state.
+
+See #~"doc/ownership.pdoc" for the full ownership and locking model.
+
 
 #----: Numeric Types
 
@@ -2973,26 +3032,28 @@ qualified name to the corresponding C implementation.
 
 #----: Iterators
 
-An 'iterator' defines a function that can yield a series of values. This is a
-function with a #~"yield" argument specifying the type of each value. It must not
-have an #~"to" argument.
+An iterator in Zerolang is any callable object: a #~"record" or #~"class"
+that defines a #~"call" method returning #~"(optionval t: T)". The #~"for"
+loop drives an iterator by repeatedly invoking #~"call" until the result is
+#~"optionval.none".
 
-Creates an object definition that can iterate over a set of values. Instances
-can not be created directly, rather they are created by using the generator in
-a #~"for" loop. The yielded object is borrowed only for the body of the #~"for"
-loop.
+Iterators are created explicitly with #~"with" before the #~"for" loop.
+The #~"with" form scopes the iterator's lifetime; the #~"for" loop binds a
+label to the next yielded value:
 
-The #~"is" block should contain one or more #~"yield" statements to return
-intermediate values. Any #~"return" statement or the end of the definition will
-end the iteration and the calling do loop. A #~"return" statement in an interator
-must not have a return value.
+#code language=zerolang:
+  with iter: container.iterate c: c do for x: iter loop { ... }
 
-The generator is implemented by creating a state machine to track variable
-state including the progress through the generator between subsequent calls.
-The created object has a single #~"next" method that returns an optional instance
-of the type specified in the generator's #~"yield" argument.
+The recommended zero-allocation form is a born-borrowed record iterator: a
+record with a #~".lock" field referencing the container's private members
+and a #~"this.borrow" constructor. The container is locked for the
+iterator's lifetime; the iterator falls out of scope at the end of the
+#~"for" body and the lock on the container is released. See
+#~"examples/listiter.z" for the canonical pattern and
+#~"doc/ownership.pdoc" for the lock-lifecycle walkthrough.
 
-TODO: can have a generator spec?
+A class-based iterator is also supported when heap allocation is acceptable
+or when the iterator state is too complex for a stack record.
 
 #----: Methods
 
@@ -3023,16 +3084,26 @@ fail) so should be used with caution.
 
 #----: Constructor
 
-There is only one true low-level constructor for an object and it is defined
-automatically by the compiler at #~"meta.create". It will provide the memory for
-the object and set any members directly from parameters supplied or from any
-default field values. #~"meta.create" is only available directly within the
-object definition but if no user defined constructor is defined with the name
-#~"create", then the #~"meta.create" will be exposed as object.create.
+There is only one true low-level constructor for an object and it is
+#~"meta.create" -- the compiler-internal raw allocator. #~"meta.create"
+reserves the memory for the instance and sets each member directly from
+parameters supplied (or from field defaults). It is the #_*"only" way to
+construct a new object.
 
-User defined constructors can be defined on an object. These constructors
-return type #~"this" and create instances by calling #~"meta.create" directly, or
-by calling other user defined constructors which eventually call #~"meta.create".
+#~"meta.create" is accessible only from inside the enclosing type's
+method bodies. Outside those methods it is an error. The compiler
+generates a default #~"create" wrapper around #~"meta.create" and exposes
+it as #~"object.create" so external callers have a valid constructor. If
+the user defines their own #~"create" method, that user function replaces
+the generated wrapper; the user body #_*"must" call #~"meta.create"
+directly (or another constructor that eventually calls #~"meta.create")
+to produce the instance.
+
+Calling a user-defined constructor recursively -- either explicitly as
+#~"Type.create args..." or implicitly via bare-name #~"Type args..." --
+from inside that same constructor is a compile-time error with a hint
+pointing at #~"meta.create". See #> to=implicit-construction: Implicit Construction
+for the full dispatch rule.
 
 Constructors #_*"must" expose (as parameters) any generic fields in the
 object. It must be able to be determined at the call site the actual type of
@@ -3051,9 +3122,76 @@ level by passing a generic variable at the call site into the constructor.
   }
   """
 
+A valtype constructor may also return #~"out this.borrow" instead of
+#~"out this". This declares the type as born-borrowed: every constructor
+must agree on #~"this.borrow", and every instance is borrowed from the
+moment of construction. A born-borrowed constructor may accept #~".lock"
+parameters and store them in #~".lock" fields. A record with any #~".lock"
+field is required to use #~"out this.borrow". See
+#> to=borrowed-valtypes-and-lock-fields: Borrowed Valtypes and Lock Fields
+and #~"doc/ownership.pdoc".
+
 Note that constructors are not executed for value types that are copied as
 those values are a clone of the original. Contructors for value types are only
 run when the value type is created explicitly.
+
+#-----: Implicit Construction
+
+When a type appears in a runtime expression in callable position, the
+compiler routes the call through the type's #~"create" method. This is
+uniform for every type family: records, classes, protocols, facets and
+typedefs all resolve construction via #~"<type>.create".
+
+The full call resolution rule is:
+
+#ol:
+  [#*: If the callee is a function, call it directly.]
+  [#*: Otherwise, if the callee is a runtime instance whose type has a
+  #~"call" method, dispatch to that #~"call" method.]
+  [#*: Otherwise, if the callee is a type, look up the type's
+  #~"create" method and call that.]
+  [#*: Otherwise, error.]
+
+Step 3 means bare-name construction (#~"mytype arg1: v1 arg2: v2") is
+equivalent to #~"mytype.create arg1: v1 arg2: v2". Both forms validate
+against the #_*"actual" #~"create" signature, which is either
+user-defined or the compiler's default wrapper around #~"meta.create".
+When a type has a user-defined #~"create" with an alternate parameter
+list, both the bare-name and explicit forms use that signature.
+
+The implicit construction rule does not apply inside a #~"data" clause
+or as a generic parameter (both of which are type references, not
+runtime expressions).
+
+#-----: Disabling Default Construction (create: null)
+
+Writing #~"create: null" in a type's #~"as" block suppresses the
+compiler-generated default constructor. After this, any attempt to
+construct the type via #~"mytype args..." or #~"mytype.create args..."
+is a compile-time error. Only user-defined constructors with other
+names (e.g. #~"mytype.build") remain callable.
+
+Unions and variants automatically behave as though they have
+#~"create: null" because construction requires selecting a specific
+subtype (#~"myunion.subtype value"). Attempting to construct a union
+or variant via the bare-name form produces a targeted error pointing
+at the subtype construction form.
+
+#code language=zerolang: """
+  secret: class { value: i64 } as {
+      create: null
+
+      build: function {seed: i64} out this is {
+          return meta.create value: seed * 7
+      }
+  }
+
+  main: function is {
+      # s1: secret value: 42          # error: create disabled
+      # s2: secret.create value: 42   # error: create disabled
+      s3: secret.build seed: 6        # OK -- user-defined constructor
+  }
+  """
 
 
 #code language=zerolang: """
@@ -3290,6 +3428,26 @@ Generic types can also be used in records:
       t: generic any
       k: t
       v: t
+  }
+  """
+
+Record fields may be declared with a #~".lock" type modifier to hold a
+locked reference to external data. A record with any #~".lock" field is
+born-borrowed: every constructor must return #~"this.borrow" and every
+instance is borrowed from the moment of construction. #~".lock" is the only
+field-type modifier permitted on records (#~".take" and #~".borrow" are
+rejected) and it is not permitted on classes -- see
+#> to=borrowed-valtypes-and-lock-fields: Borrowed Valtypes and Lock Fields
+and #~"doc/ownership.pdoc".
+
+#code language=zerolang: """
+  bagiter: record {
+      pos: i64
+      target: bag.private.lock
+  } as {
+      create: function {target: bag.private.lock} out this.borrow is {
+          return bagiter pos: 0 target: target
+      }
   }
   """
 

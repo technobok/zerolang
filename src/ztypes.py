@@ -259,6 +259,13 @@ class ZType:
     # is born-borrowed). Instances are BORROWED from the moment of creation.
     is_born_borrowed: bool = field(default=False, init=False)
 
+    # True iff the type's 'create' method is disabled — either by the user
+    # writing 'create: null' in the 'as' block, or by the compiler for types
+    # where bare-name construction is not meaningful (unions and variants
+    # require subtype selection). When set, the unified call dispatch reports
+    # a targeted error instead of falling through to 'cannot call' generic.
+    create_disabled: bool = field(default=False, init=False)
+
     # auto-generated equality: True when == and != are compiler-synthesized
     # (structural equality for records, tag+payload for variants)
     is_autogen_eq: bool = field(default=False, init=False)

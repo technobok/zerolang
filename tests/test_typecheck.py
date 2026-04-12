@@ -1081,7 +1081,7 @@ class TestLockFieldsAndBornBorrowed:
             "} as {\n"
             "  create: function {target: bag.private.lock} "
             "out this.borrow is {\n"
-            "    return bagiter pos: 0 target: target\n"
+            "    return meta.create pos: 0 target: target\n"
             "  }\n"
             "}\n"
         )
@@ -1104,7 +1104,7 @@ class TestLockFieldsAndBornBorrowed:
             "bag: class { a: i64 }\n"
             "badrec: record { target: bag.private.lock } as {\n"
             "  create: function {target: bag.private.lock} out this is {\n"
-            "    return badrec target: target\n"
+            "    return meta.create target: target\n"
             "  }\n"
             "}\n"
             "main: function is { b: bag a: 1; r: badrec target: b.private }"
@@ -1114,8 +1114,8 @@ class TestLockFieldsAndBornBorrowed:
     def test_constructor_agreement_required(self):
         errors = check_errors(
             "v: record { x: i64 } as {\n"
-            "  c1: function out this is { return v x: 0 }\n"
-            "  c2: function out this.borrow is { return v x: 0 }\n"
+            "  c1: function out this is { return meta.create x: 0 }\n"
+            "  c2: function out this.borrow is { return meta.create x: 0 }\n"
             "}\n"
             "main: function is { r: v.c1 }"
         )
@@ -1128,7 +1128,7 @@ class TestLockFieldsAndBornBorrowed:
             "bag: class { a: i64 }\n"
             "bad: class { target: bag.lock } as {\n"
             "  create: function {target: bag.lock} out this is {\n"
-            "    return bad target: target\n"
+            "    return meta.create target: target\n"
             "  }\n"
             "}\n"
             "main: function is { b: bag a: 1; c: bad target: b }"
@@ -1170,7 +1170,7 @@ class TestLockFieldsAndBornBorrowed:
             "} as {\n"
             "  create: function {target: bag.private.lock} "
             "out this.borrow is {\n"
-            "    return bagiter pos: 0 target: target\n"
+            "    return meta.create pos: 0 target: target\n"
             "  }\n"
             "}\n"
             "main: function is { b: bag a: 1 }"
@@ -1209,7 +1209,7 @@ class TestValtypeBorrowEscape:
             "} as {\n"
             "  create: function {target: bag.private.lock} "
             "out this.borrow is {\n"
-            "    return bagiter target: target\n"
+            "    return meta.create target: target\n"
             "  }\n"
             "}\n"
         )
@@ -1232,7 +1232,7 @@ class TestValtypeBorrowEscape:
             "} as {\n"
             "  create: function {target: bag.private.lock} "
             "out this.borrow is {\n"
-            "    return bagiter target: target\n"
+            "    return meta.create target: target\n"
             "  }\n"
             "}\n"
             "main: function is { b: bag a: 1 }"
@@ -1253,7 +1253,7 @@ class TestValtypeBorrowEscape:
             "} as {\n"
             "  create: function {target: bag.private.lock} "
             "out this.borrow is {\n"
-            "    return bagiter target: target\n"
+            "    return meta.create target: target\n"
             "  }\n"
             "}\n"
             "main: function is { b: bag a: 1 }"
@@ -1268,7 +1268,7 @@ class TestValtypeBorrowEscape:
             "} as {\n"
             "  create: function {target: bag.private.lock} "
             "out this.borrow is {\n"
-            "    return bagiter target: target\n"
+            "    return meta.create target: target\n"
             "  }\n"
             "}\n"
             "noparam: function out bagiter.borrow is {\n"
@@ -1281,6 +1281,319 @@ class TestValtypeBorrowEscape:
             "no 'lock' parameter" in e.msg or "lock parameter" in e.msg.lower()
             for e in errors
         )
+
+
+class TestBornBorrowedGenericsAndProtocols:
+    """Phase E: born-borrowed valtypes are rejected as generic container
+    elements and as sources for protocol/facet creation."""
+
+    BAG = (
+        "bag: class { a: i64 } as {\n"
+        "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+        "    return bagiter target: b.private\n"
+        "  }\n"
+        "}\n"
+        "bagiter: record {\n"
+        "  target: bag.private.lock\n"
+        "} as {\n"
+        "  create: function {target: bag.private.lock} "
+        "out this.borrow is {\n"
+        "    return bagiter target: target\n"
+        "  }\n"
+        "}\n"
+    )
+
+    def test_list_of_born_borrowed_error(self):
+        errors = check_errors(self.BAG + "main: function is { xs: (list of: bagiter) }")
+        assert any(
+            "born-borrowed" in e.msg.lower() and "bagiter" in e.msg for e in errors
+        )
+
+    def test_list_of_normal_record_ok(self):
+        check_ok(
+            "point: record { x: i64 y: i64 }\n"
+            "main: function is {\n"
+            "  xs: (list of: point)\n"
+            "  xs.append from: (point x: 1 y: 2)\n"
+            "}"
+        )
+
+    def test_protocol_create_from_born_borrowed_error(self):
+        errors = check_errors(
+            "reader: protocol {\n"
+            "  read: function {:this} out i64\n"
+            "}\n"
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  myreader: reader\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "  read: function {it: this} out i64 is {\n"
+            "    return it.target.a\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 5\n"
+            "  it: bag.iterate b: b\n"
+            "  r: reader.create from: it\n"
+            "}\n"
+        )
+        assert any(
+            "born-borrowed" in e.msg.lower() and "reader" in e.msg for e in errors
+        )
+
+    def test_protocol_take_from_born_borrowed_error(self):
+        errors = check_errors(
+            "reader: protocol {\n"
+            "  read: function {:this} out i64\n"
+            "}\n"
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  myreader: reader\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "  read: function {it: this} out i64 is {\n"
+            "    return it.target.a\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 5\n"
+            "  it: bag.iterate b: b\n"
+            "  r: reader.take from: it\n"
+            "}\n"
+        )
+        assert any("born-borrowed" in e.msg.lower() for e in errors)
+
+    def test_protocol_borrow_from_born_borrowed_error(self):
+        errors = check_errors(
+            "reader: protocol {\n"
+            "  read: function {:this} out i64\n"
+            "}\n"
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  myreader: reader\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "  read: function {it: this} out i64 is {\n"
+            "    return it.target.a\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 5\n"
+            "  it: bag.iterate b: b\n"
+            "  r: reader.borrow from: it\n"
+            "}\n"
+        )
+        assert any("born-borrowed" in e.msg.lower() for e in errors)
+
+    def test_born_borrowed_protocol_conformance_declaration_ok(self):
+        """Declaring protocol conformance in `as` is permitted -- the
+        conformance itself is compile-time only. Only construction
+        (.create / .take / .borrow) is rejected."""
+        check_ok(
+            "reader: protocol {\n"
+            "  read: function {:this} out i64\n"
+            "}\n"
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  myreader: reader\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "  read: function {it: this} out i64 is {\n"
+            "    return it.target.a\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 5\n"
+            "  it: bag.iterate b: b\n"
+            "}\n"
+        )
+
+
+class TestImplicitConstruction:
+    """Unified call-dispatch for types in callable position.
+
+    Rule: a type in callable position dispatches through children["create"].
+    If the type is a record/class with a user-defined create, that function
+    is invoked. If the type is a union/variant (create_disabled), bare-name
+    construction is rejected with a subtype hint. If the type's create has
+    been explicitly disabled with 'create: null', bare-name and explicit
+    .create both error. Inside a type's own create body, calling the type's
+    own create (directly or via bare-name shorthand) is compile-time
+    recursion — users must use 'meta.create' instead.
+    """
+
+    def test_bare_name_record_default_fields(self):
+        """Regression: bare-name construction with default meta-create."""
+        check_ok(
+            "point: record { x: i64 y: i64 }\nmain: function is { p: point x: 1 y: 2 }"
+        )
+
+    def test_bare_name_record_custom_create_signature(self):
+        """Bare-name validates against the custom create signature."""
+        check_ok(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  create: function {seed: i64} out this is {\n"
+            "    return meta.create x: seed y: seed\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec seed: 5 }"
+        )
+
+    def test_bare_name_record_custom_create_wrong_arg_error(self):
+        """Calling a custom create with a wrong arg name errors."""
+        errors = check_errors(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  create: function {seed: i64} out this is {\n"
+            "    return meta.create x: seed y: seed\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec.create wrong: 5 }"
+        )
+        assert errors != []
+
+    def test_bare_name_class_custom_create_signature(self):
+        """Bare-name on a class also validates against custom create."""
+        check_ok(
+            "thing: class { val: i64 } as {\n"
+            "  create: function {seed: i64} out this is {\n"
+            "    return meta.create val: seed\n"
+            "  }\n"
+            "}\n"
+            "main: function is { t: thing seed: 5 }"
+        )
+
+    def test_union_bare_name_rejected(self):
+        """Bare-name on a union type is rejected with a subtype hint."""
+        errors = check_errors(
+            "myunion: union { A: i64 B: i64 }\nmain: function is { u: myunion 42 }"
+        )
+        assert any(
+            "union" in e.msg.lower() and "subtype" in e.msg.lower() for e in errors
+        )
+
+    def test_variant_bare_name_rejected(self):
+        """Bare-name on a variant type is rejected with a subtype hint."""
+        errors = check_errors(
+            "myvariant: variant { A: i64 B: i64 }\n"
+            "main: function is { v: myvariant 42 }"
+        )
+        assert any(
+            "variant" in e.msg.lower() and "subtype" in e.msg.lower() for e in errors
+        )
+
+    def test_create_null_disables_bare_name(self):
+        """`create: null` rejects bare-name construction."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as { create: null }\n"
+            "main: function is { r: myrec x: 1 }"
+        )
+        assert any(
+            "disabled" in e.msg.lower() or "create" in e.msg.lower() for e in errors
+        )
+
+    def test_create_null_disables_explicit_create(self):
+        """`create: null` also rejects the explicit .create form."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as {\n"
+            "  create: null\n"
+            "  build: function {v: i64} out this is {\n"
+            "    return meta.create x: v\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec.create x: 1 }"
+        )
+        assert errors != []
+
+    def test_create_null_alternate_constructor_ok(self):
+        """With create: null, a named alternate constructor still works."""
+        check_ok(
+            "myrec: record { x: i64 } as {\n"
+            "  create: null\n"
+            "  build: function {v: i64} out this is {\n"
+            "    return meta.create x: v\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec.build v: 5 }"
+        )
+
+    def test_recursion_detection_explicit(self):
+        """Calling Type.create inside Type.create is compile-time recursion."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as {\n"
+            "  create: function {v: i64} out this is {\n"
+            "    return myrec.create v: v\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec.create v: 1 }"
+        )
+        assert any(
+            "recursively" in e.msg.lower() or "meta.create" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_recursion_detection_bare_name(self):
+        """Bare-name Type inside Type.create is also recursion."""
+        errors = check_errors(
+            "myrec: record { x: i64 } as {\n"
+            "  create: function {v: i64} out this is {\n"
+            "    return myrec x: v\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec.create v: 1 }"
+        )
+        assert any(
+            "recursively" in e.msg.lower() or "meta.create" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_meta_create_inside_body_ok(self):
+        """meta.create inside a custom create body resolves to the raw allocator."""
+        check_ok(
+            "myrec: record { x: i64 y: i64 } as {\n"
+            "  create: function {seed: i64} out this is {\n"
+            "    return meta.create x: seed y: seed + 1\n"
+            "  }\n"
+            "}\n"
+            "main: function is { r: myrec seed: 5 }"
+        )
+
+    def test_meta_create_top_level_error(self):
+        """meta.create outside any type body is an error."""
+        errors = check_errors("main: function is { r: meta.create x: 1 }")
+        assert any("meta.create" in e.msg for e in errors)
 
 
 class TestExampleProgramsOwnership:

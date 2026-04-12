@@ -488,7 +488,9 @@ class Parser:
         definitions: Dict[str, zast.TypeDefinition] = {}
         extern: Dict[str, zast.AtomId] = {}
         # TODO: this and type are predefined for units (?)
-        localdefs: Set[str] = set(("this", "type"))
+        # meta is also predefined — it is the compiler's internal allocator
+        # (meta.create) available inside type method bodies.
+        localdefs: Set[str] = set(("this", "type", "meta"))
 
         start = lex.peek()
 
@@ -1495,9 +1497,10 @@ class Parser:
 
         # externs from each item typedefinition
         local: Set[str] = set()  # set of locally defined items
-        # 'this' and 'type' are predefined for
-        # record, class, variant, enum, protocol(?)
-        localthis: Set[str] = set(("this", "type"))
+        # 'this', 'type' and 'meta' are predefined for
+        # record, class, variant, enum, protocol(?).
+        # 'meta.create' is the compiler-internal allocator.
+        localthis: Set[str] = set(("this", "type", "meta"))
         externitems: Dict[str, zast.AtomId] = {}
 
         while not lex.accept(TT.BRACECLOSE):

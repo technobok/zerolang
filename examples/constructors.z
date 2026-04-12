@@ -1,5 +1,14 @@
-# constructors.z -- Constructor infrastructure (meta.create)
-# Demonstrates implicit and explicit constructors for classes and records
+# constructors.z -- Constructors, meta.create, and implicit construction
+#
+# Demonstrates:
+# - Default construction via the compiler-generated `create` (wrapper around
+#   the internal `meta.create` raw allocator)
+# - Implicit construction: using a type name as a callable routes through
+#   the type's `.create` method (see doc/spec.pdoc "Implicit Construction")
+# - Explicit `.create` is equivalent to bare-name construction
+# - User-defined `create` with a non-default signature
+# - `meta.create` as the only way to allocate raw fields; called explicitly
+#   inside the user-defined create body
 
 counter: class {
     value: i64
@@ -10,20 +19,40 @@ point: record {
     y: 0
 }
 
+# A record with a user-defined `create` that takes a single seed and
+# derives both fields from it. The body uses `meta.create` -- the internal
+# raw allocator of the enclosing type -- to set the final field values.
+# Calling `myrec` as a constructor (bare-name or explicit `.create`) now
+# routes through this user function.
+myrec: record { x: i64 y: i64 } as {
+    create: function {seed: i64} out this is {
+        return meta.create x: seed y: seed + 100
+    }
+}
+
 main: function is {
-    # Implicit constructor via sugar (ClassName args = ClassName.create args)
+    # Default construction via the generated `.create` (compiler wrapper
+    # around meta.create).
     c1: counter value: 42
     print "c1 = \{c1.value}"
 
-    # Explicit .create call (same result)
+    # Explicit .create is identical to bare-name construction.
     c2: counter.create value: 99
     print "c2 = \{c2.value}"
 
-    # Record construction via meta.create
+    # Bare name with all default fields.
     p1: point x: 3 y: 7
     print "p1 = (\{p1.x}, \{p1.y})"
 
-    # Bare construction (all fields have defaults)
+    # Record with all-default fields -- both x and y are 0.
     p2: point
     print "p2 = (\{p2.x}, \{p2.y})"
+
+    # User-defined create: bare-name form uses the custom signature.
+    r1: myrec seed: 5
+    print "r1 = (\{r1.x}, \{r1.y})"
+
+    # Explicit .create form is equivalent.
+    r2: myrec.create seed: 9
+    print "r2 = (\{r2.x}, \{r2.y})"
 }

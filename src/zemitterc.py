@@ -266,6 +266,9 @@ class CEmitter:
         self.func_aliases: List[str] = []  # #define aliases for deduped functions
         # current AST node ID being emitted (set before emission blocks)
         self._current_node_id: Optional[int] = None
+        # current enclosing type name (set in _emit_function when record_name
+        # is non-empty). Used to resolve `meta.create` at emission time.
+        self._current_enclosing_type_name: str = ""
         # final source map: C output line (1-based) → AST node ID
         self.source_map: List[Optional[int]] = []
         # track numeric constant names (no distinct ZTypeType for these)
@@ -3128,6 +3131,10 @@ class CEmitter:
         self._scope_stack.append(
             ScopeState(record_name=record_name, func_nodeid=func_nid)
         )
+        # track enclosing type for meta.create resolution in the body
+        prev_enclosing = self._current_enclosing_type_name
+        if record_name:
+            self._current_enclosing_type_name = record_name
         # track parameters that are class pointers
         if self._typetype_of(record_name) == ZTypeType.CLASS:
             for pname, ppath in func.parameters.items():
@@ -3166,6 +3173,7 @@ class CEmitter:
 
         # pop function scope
         self._scope_stack.pop()
+        self._current_enclosing_type_name = prev_enclosing
 
     def _is_implicit_return(self, func: zast.Function) -> bool:
         """Check if the function's last statement is an implicit return candidate."""
@@ -3779,7 +3787,38 @@ class CEmitter:
             # for both classes (heap-allocated, returns pointer) and records
             # (stack-allocated, returns by value).
             first_arg = call.arguments[0].valtype
+            # `return meta.create field: val ...` — raw allocator of the
+            # lexically enclosing type. Emits z_<type>_meta_create(...).
             if (
+                first_arg.nodetype == NodeType.DOTTEDPATH
+                and cast(zast.DottedPath, first_arg).parent.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, cast(zast.DottedPath, first_arg).parent).name
+                == "meta"
+                and cast(zast.DottedPath, first_arg).child.name == "create"
+                and self._current_enclosing_type_name
+            ):
+                fa_name = self._current_enclosing_type_name
+                args_str, take_vars = self._build_meta_create_args(
+                    fa_name, call.arguments, skip_first=1
+                )
+                enclosing_t = self._resolved_type(fa_name)
+                is_class = (
+                    enclosing_t is not None and enclosing_t.typetype == ZTypeType.CLASS
+                )
+                result_expr = f"z_{fa_name}_meta_create({args_str})"
+                ctype = f"z_{fa_name}_t"
+                tmp = self._temp_name("c")
+                if is_class:
+                    self._temp.decls.append(
+                        f"{indent}{ctype}* {tmp} = {result_expr};\n"
+                    )
+                else:
+                    self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
+                for fname, tv in take_vars.items():
+                    if tv:
+                        self._temp.decls.append(f"{indent}{tv} = NULL;\n")
+                val = tmp
+            elif (
                 first_arg.nodetype == NodeType.ATOMID
                 and first_arg.type
                 and first_arg.type.typetype == ZTypeType.CLASS
@@ -3805,21 +3844,15 @@ class CEmitter:
                 and first_arg.type.typetype == ZTypeType.RECORD
                 and len(call.arguments) > 1
             ):
-                # emit as meta_create call (stack-allocated record). Born-
-                # borrowed records have user-defined create functions whose
-                # signature differs from meta_create's full field list, so
-                # always go via meta_create here.
+                # emit as `z_<type>_create(args)` using the order of the
+                # type's children["create"] parameters (which is either
+                # user-defined or the default meta-create wrapper).
                 fa_name = cast(zast.AtomId, first_arg).name
-                args_str, take_vars = self._build_meta_create_args(
-                    fa_name, call.arguments, skip_first=1
-                )
                 rec_t = first_arg.type
-                create_fn = (
-                    f"z_{fa_name}_meta_create"
-                    if getattr(rec_t, "is_born_borrowed", False)
-                    else f"z_{fa_name}_create"
+                args_str, take_vars = self._build_create_args(
+                    fa_name, rec_t, call.arguments, skip_first=1
                 )
-                result_expr = f"{create_fn}({args_str})"
+                result_expr = f"z_{fa_name}_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
@@ -3999,6 +4032,69 @@ class CEmitter:
             else:
                 parts.append("0")
         return ", ".join(parts)
+
+    def _build_create_args(
+        self,
+        type_name: str,
+        type_obj: Optional[ZType],
+        arguments: list,
+        skip_first: int = 0,
+    ) -> tuple:
+        """Build ordered arguments for a type's `create` call.
+
+        When the type has a user-defined `create` (distinct from the compiler's
+        `:meta.create` wrapper), use the user's parameter order. Otherwise
+        fall back to the default meta-create arg builder which orders by the
+        full field declaration list (including function-pointer fields).
+        """
+        create_fn = None
+        meta_fn = None
+        if type_obj is not None:
+            create_fn = type_obj.children.get("create")
+            meta_fn = type_obj.children.get(":meta.create")
+        # Default case: no user override — delegate to the meta-create builder.
+        if (
+            create_fn is None
+            or create_fn.typetype != ZTypeType.FUNCTION
+            or create_fn is meta_fn
+        ):
+            return self._build_meta_create_args(type_name, arguments, skip_first)
+
+        # User-defined create: use its parameter order. Include function-typed
+        # params (function-pointer field params) since the user's signature is
+        # the authoritative source.
+        param_names: List[str] = []
+        param_ctypes: Dict[str, str] = {}
+        for pname, ptype in create_fn.children.items():
+            if pname.startswith(":"):
+                continue
+            param_names.append(pname)
+            param_ctypes[pname] = _ctype(ptype)
+
+        field_defaults = self._type_field_defaults.get(type_name, {})
+
+        arg_map: Dict[str, str] = {}
+        take_vars: Dict[str, Optional[str]] = {}
+        for arg in arguments[skip_first:]:
+            if arg.name:
+                val = self._emit_operation_value(arg.valtype)
+                arg_map[arg.name] = val
+                take_vars[arg.name] = self._get_take_var(arg.valtype)
+
+        parts: List[str] = []
+        for pname in param_names:
+            if pname in arg_map:
+                parts.append(arg_map[pname])
+            elif pname in field_defaults:
+                parts.append(field_defaults[pname])
+            else:
+                ct = param_ctypes.get(pname, "int64_t")
+                if ct.endswith("*"):
+                    parts.append("NULL")
+                else:
+                    parts.append("0")
+
+        return ", ".join(parts), take_vars
 
     def _build_meta_create_args(
         self, type_name: str, arguments: list, skip_first: int = 0
@@ -4405,20 +4501,10 @@ class CEmitter:
 
         if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
             rec_type = call.callable.type
-            args_str, take_vars = self._build_meta_create_args(
-                rec_type.name, call.arguments
+            args_str, take_vars = self._build_create_args(
+                rec_type.name, rec_type, call.arguments
             )
-            # For born-borrowed records the user defines their own create
-            # function whose signature may differ from meta_create's full
-            # field list. Call meta_create directly so the field-ordered args
-            # always match. For ordinary records, keep calling _create
-            # (which is the auto-generated wrapper around _meta_create).
-            create_fn = (
-                f"z_{rec_type.name}_meta_create"
-                if getattr(rec_type, "is_born_borrowed", False)
-                else f"z_{rec_type.name}_create"
-            )
-            result = f"{create_fn}({args_str})"
+            result = f"z_{rec_type.name}_create({args_str})"
             # handle .take nullification
             for fname, tv in take_vars.items():
                 if tv:
@@ -4444,8 +4530,8 @@ class CEmitter:
             cls_type = call.callable.type
             ctype = f"z_{cls_type.name}_t"
             self.needs_stdlib = True
-            args_str, take_vars = self._build_meta_create_args(
-                cls_type.name, call.arguments
+            args_str, take_vars = self._build_create_args(
+                cls_type.name, cls_type, call.arguments
             )
             result = f"z_{cls_type.name}_create({args_str})"
             tmp = self._temp_name("c")

@@ -1,40 +1,48 @@
-# listiter.z -- Iterator over a container using friend access
+# listiter.z -- Iterator over a container using a born-borrowed record
 #
 # Demonstrates:
 # - Container class with public/private access control
-# - Friend access via .private field type on the iterator
-# - Callable iterator class (for-loop integration via optionval)
-# - Iterator accesses container's private fields directly
-#
-# Note on ownership: the .private reference is always a borrow. In a
-# full implementation, the factory method on the parent would lock this:
-#   iter: function {self: this.lock} out bagiter.borrow is { ... }
-# so the parent cannot be mutated/destroyed while the iterator exists.
-# Lock enforcement is not yet fully implemented, so this example uses
-# .take to transfer ownership of the bag into the iterator instead.
+# - Born-borrowed record iterator (zero allocation, no .take)
+# - .lock field holding a borrowed reference to the container's privates
+# - this.borrow constructor for the iterator
+# - Friend access via .private to read the container's private fields
+# - Callable iterator (for-loop integration via optionval)
+# - The container is locked for the lifetime of the iterator
 
 # Container with private internals
 bag: class { a: i64 b: i64 c: i64 count: i64 } as {
-    public: unit { :count }
+    public: unit { :count :iterate }
+
+    # Factory: borrows the container and returns a born-borrowed iterator.
+    # `b: this.lock` locks the container for the iterator's lifetime.
+    iterate: function {b: this.lock} out bagiter.borrow is {
+        return bagiter target: b.private
+    }
 }
 
-# Iterator: holds private access to bag, returns elements via optionval.
-# The items field is declared as bag.private, granting friend access
-# to all of bag's members including private fields a, b, c.
-bagiter: class { pos: i64 max: i64 items: bag.private } as {
+# Born-borrowed record iterator. The .lock field holds a borrowed reference
+# to bag's private members; the iterator may not outlive the lock.
+bagiter: record {
+    pos: i64
+    max: i64
+    target: bag.private.lock
+} as {
+    create: function {target: bag.private.lock} out this.borrow is {
+        return meta.create pos: 0 max: 3 target: target
+    }
+
     call: function {it: this} out (optionval t: i64) is {
         if it.pos < it.max then {
-            # direct private field access through .private friend
             if it.pos == 0 then {
                 it.pos = it.pos + 1
-                return (optionval.some it.items.a)
+                return (optionval.some it.target.a)
             }
             if it.pos == 1 then {
                 it.pos = it.pos + 1
-                return (optionval.some it.items.b)
+                return (optionval.some it.target.b)
             }
             it.pos = it.pos + 1
-            return (optionval.some it.items.c)
+            return (optionval.some it.target.c)
         }
         return (optionval.none i64)
     }
@@ -44,10 +52,9 @@ main: function is {
     b: bag a: 10 b: 20 c: 30 count: 3
     print "bag count: \{b.count}"
 
-    # Iterator takes ownership of bag via .take
-    it: bagiter pos: 0 max: b.count items: b.take
-
-    for x: it loop {
+    # `with` scopes the borrowed iterator; the bag is locked until the
+    # iterator falls out of scope at the end of the for body.
+    with iter: bag.iterate b: b do for x: iter loop {
         print "iter: \{x}"
     }
 

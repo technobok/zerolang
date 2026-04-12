@@ -1,0 +1,41 @@
+# borrowed_record.z -- Born-borrowed record outside the iterator pattern
+#
+# Demonstrates a "view" or "slice" type: a tiny stack-allocated record
+# that holds a borrowed reference to another object's private data. The
+# view is locked against the source for its lifetime; when the view falls
+# out of scope, the source is unlocked. No heap allocation, no destructor.
+
+# A small container with three named coordinates.
+container: class { x: i64 y: i64 z: i64 } as {
+    public: unit { :slice }
+
+    # Factory: returns a born-borrowed view over self. The container is
+    # locked for the lifetime of the returned view.
+    slice: function {c: this.lock} out cview.borrow is {
+        return cview source: c.private
+    }
+}
+
+# Born-borrowed view: just an offset and a borrowed pointer to the
+# container's private members. Cannot be copied, taken, or stored.
+cview: record {
+    offset: i64
+    source: container.private.lock
+} as {
+    create: function {source: container.private.lock} out this.borrow is {
+        return meta.create offset: 0 source: source
+    }
+}
+
+main: function is {
+    c: container x: 7 y: 14 z: 21
+
+    # Take a borrowed view over c. While `v` is alive, `c` is locked.
+    v: container.slice c: c
+    print "x=\{v.source.x}"
+    print "y=\{v.source.y}"
+    print "z=\{v.source.z}"
+
+    # `v` falls out of scope here -- the lock on `c` is released and `c`
+    # is destroyed at the end of main.
+}

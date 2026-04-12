@@ -1564,6 +1564,40 @@ invalid after the call. Calling <code>.take</code> on an expression that is not 
 <li><code>x.borrow</code> - returns a borrowed reference to <code>x</code>. The variable <code>x</code>
 is exclusively locked for the lifetime of the borrowed reference.</li>
 </ul>
+<h5 id="borrowed-valtypes-and-lock-fields">Borrowed Valtypes and Lock Fields</h5>
+<p>A borrowed valtype is subject to the same restrictions as a borrowed reftype:
+it cannot be copied, taken, swapped, stored in a field, or passed to a
+<code>.take</code> parameter. This makes <code>.borrow</code> meaningful for valtypes and
+enables records that hold locked references to external data.</p>
+<p>Records may declare fields with a <code>.lock</code> type modifier:</p>
+<pre><code class="language-zerolang">iter: record {
+  pos: i64
+  target: container.private.lock
+} as {
+  create: function {target: container.private.lock} out this.borrow is {
+    return iter pos: 0 target: target
+  }
+}</code></pre>
+<p>A record with any <code>.lock</code> field is <em><strong>born-borrowed</strong></em>: every constructor
+must return <code>this.borrow</code>, every instance is borrowed from the moment of
+construction, and the locks held by the <code>.lock</code> fields are released when
+the instance falls out of scope. <code>.lock</code> is the only field-type modifier
+permitted (<code>.take</code> and <code>.borrow</code> on field types are rejected) and it is
+permitted only on records, never on classes (a class may outlive the lock
+scope).</p>
+<p>A function may return a born-borrowed record as <code>&lt;type&gt;.borrow</code>. The type
+checker performs escape analysis: every <code>.lock</code> field of the returned
+value must trace back to a <code>.lock</code> parameter of the current function. The
+locks held by those parameters transfer to the caller's variable holding the
+result.</p>
+<p>Born-borrowed records cannot live in class fields, cannot live in records
+that are not themselves born-borrowed, cannot be elements of copy-by-value
+generic containers (<code>list of: born_borrowed_type</code> is rejected), and
+cannot be sources for <code>protocol.create</code> / <code>protocol.take</code> /
+<code>protocol.borrow</code> / <code>facet.create</code> / <code>facet.take</code>. They <em><strong>can</strong></em>
+declare protocol or facet conformance in their <code>as</code> block (compile-time
+only).</p>
+<p>See <code>doc/ownership.pdoc</code> for the full design and worked examples.</p>
 <h4 id="locking"><a href="#locking">5.1.10. Locking</a></h4>
 <p>Locking is an orthogonal attribute tracked alongside ownership. It prevents
 aliasing and data races at compile time. Locking is purely a compile-time
@@ -2094,6 +2128,17 @@ return: function {t: any result: t} out never</code></pre>
 <h4 id="public"><a href="#public">5.3.16. public</a></h4>
 <p>Defaults to all contents of the current item. </p>
 <h4 id="private"><a href="#private">5.3.17. private</a></h4>
+<p>A type's <code>private</code> member exposes friend access to that type's non-public
+members. Writing the field type as <code>&lt;type&gt;.private</code> in a record or function
+parameter declaration produces a borrowed view that can read and mutate the
+target's private fields.</p>
+<p><code>.private</code> is itself a borrowed reference: it cannot be copied, taken or
+stored as an owned value, and it participates in the locking algorithm like
+any other reference. Combined with <code>.lock</code> (<code>&lt;type&gt;.private.lock</code>), it
+becomes a friend reference whose lock is held for the lifetime of the
+containing variable -- this is how born-borrowed record iterators access
+their container's internal state.</p>
+<p>See <code>doc/ownership.pdoc</code> for the full ownership and locking model.</p>
 <h4 id="numeric-types"><a href="#numeric-types">5.3.18. Numeric Types</a></h4>
 <p>Predefined numeric type identifiers:</p>
 <pre><code class="language-zerolang">u8 u16 u32 u64 u128
@@ -2607,22 +2652,23 @@ fields block, indicating that the object's internal state is compiler-provided:<
 resolution path. The emitter maps each native-marked definition by its
 qualified name to the corresponding C implementation.</p>
 <h4 id="iterators"><a href="#iterators">5.11.5. Iterators</a></h4>
-<p>An 'iterator' defines a function that can yield a series of values. This is a
-function with a <code>yield</code> argument specifying the type of each value. It must not
-have an <code>to</code> argument.</p>
-<p>Creates an object definition that can iterate over a set of values. Instances
-can not be created directly, rather they are created by using the generator in
-a <code>for</code> loop. The yielded object is borrowed only for the body of the <code>for</code>
-loop.</p>
-<p>The <code>is</code> block should contain one or more <code>yield</code> statements to return
-intermediate values. Any <code>return</code> statement or the end of the definition will
-end the iteration and the calling do loop. A <code>return</code> statement in an interator
-must not have a return value.</p>
-<p>The generator is implemented by creating a state machine to track variable
-state including the progress through the generator between subsequent calls.
-The created object has a single <code>next</code> method that returns an optional instance
-of the type specified in the generator's <code>yield</code> argument.</p>
-<p>TODO: can have a generator spec?</p>
+<p>An iterator in Zerolang is any callable object: a <code>record</code> or <code>class</code>
+that defines a <code>call</code> method returning <code>(optionval t: T)</code>. The <code>for</code>
+loop drives an iterator by repeatedly invoking <code>call</code> until the result is
+<code>optionval.none</code>.</p>
+<p>Iterators are created explicitly with <code>with</code> before the <code>for</code> loop.
+The <code>with</code> form scopes the iterator's lifetime; the <code>for</code> loop binds a
+label to the next yielded value:</p>
+<pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
+<p>The recommended zero-allocation form is a born-borrowed record iterator: a
+record with a <code>.lock</code> field referencing the container's private members
+and a <code>this.borrow</code> constructor. The container is locked for the
+iterator's lifetime; the iterator falls out of scope at the end of the
+<code>for</code> body and the lock on the container is released. See
+<code>examples/listiter.z</code> for the canonical pattern and
+<code>doc/ownership.pdoc</code> for the lock-lifecycle walkthrough.</p>
+<p>A class-based iterator is also supported when heap allocation is acceptable
+or when the iterator state is too complex for a stack record.</p>
 <h4 id="methods"><a href="#methods">5.11.6. Methods</a></h4>
 <p>Methods are a specialised form of function. They are defined similar to a
 normal, named function call but they must be defined in the namespace of the
@@ -2645,15 +2691,24 @@ existing methods on the type. This may cause a maintenance burden (changes to
 the external type may cause code that previously compiled correctly to now
 fail) so should be used with caution.</p>
 <h4 id="constructor"><a href="#constructor">5.11.7. Constructor</a></h4>
-<p>There is only one true low-level constructor for an object and it is defined
-automatically by the compiler at <code>meta.create</code>. It will provide the memory for
-the object and set any members directly from parameters supplied or from any
-default field values. <code>meta.create</code> is only available directly within the
-object definition but if no user defined constructor is defined with the name
-<code>create</code>, then the <code>meta.create</code> will be exposed as object.create.</p>
-<p>User defined constructors can be defined on an object. These constructors
-return type <code>this</code> and create instances by calling <code>meta.create</code> directly, or
-by calling other user defined constructors which eventually call <code>meta.create</code>.</p>
+<p>There is only one true low-level constructor for an object and it is
+<code>meta.create</code> -- the compiler-internal raw allocator. <code>meta.create</code>
+reserves the memory for the instance and sets each member directly from
+parameters supplied (or from field defaults). It is the <em><strong>only</strong></em> way to
+construct a new object.</p>
+<p><code>meta.create</code> is accessible only from inside the enclosing type's
+method bodies. Outside those methods it is an error. The compiler
+generates a default <code>create</code> wrapper around <code>meta.create</code> and exposes
+it as <code>object.create</code> so external callers have a valid constructor. If
+the user defines their own <code>create</code> method, that user function replaces
+the generated wrapper; the user body <em><strong>must</strong></em> call <code>meta.create</code>
+directly (or another constructor that eventually calls <code>meta.create</code>)
+to produce the instance.</p>
+<p>Calling a user-defined constructor recursively -- either explicitly as
+<code>Type.create args...</code> or implicitly via bare-name <code>Type args...</code> --
+from inside that same constructor is a compile-time error with a hint
+pointing at <code>meta.create</code>. See <a href="#implicit-construction">Implicit Construction</a>
+for the full dispatch rule.</p>
 <p>Constructors <em><strong>must</strong></em> expose (as parameters) any generic fields in the
 object. It must be able to be determined at the call site the actual type of
 the item being created (although this can be explicitly passed to a higher
@@ -2666,9 +2721,64 @@ level by passing a generic variable at the call site into the constructor.</p>
         return meta.create :a :b      # no stuttering... can use default args
     }
 }</code></pre>
+<p>A valtype constructor may also return <code>out this.borrow</code> instead of
+<code>out this</code>. This declares the type as born-borrowed: every constructor
+must agree on <code>this.borrow</code>, and every instance is borrowed from the
+moment of construction. A born-borrowed constructor may accept <code>.lock</code>
+parameters and store them in <code>.lock</code> fields. A record with any <code>.lock</code>
+field is required to use <code>out this.borrow</code>. See
+<a href="#borrowed-valtypes-and-lock-fields">Borrowed Valtypes and Lock Fields</a>
+and <code>doc/ownership.pdoc</code>.</p>
 <p>Note that constructors are not executed for value types that are copied as
 those values are a clone of the original. Contructors for value types are only
 run when the value type is created explicitly.</p>
+<h5 id="implicit-construction">Implicit Construction</h5>
+<p>When a type appears in a runtime expression in callable position, the
+compiler routes the call through the type's <code>create</code> method. This is
+uniform for every type family: records, classes, protocols, facets and
+typedefs all resolve construction via <code>&lt;type&gt;.create</code>.</p>
+<p>The full call resolution rule is:</p>
+<ol>
+<li>If the callee is a function, call it directly.</li>
+<li>Otherwise, if the callee is a runtime instance whose type has a
+  <code>call</code> method, dispatch to that <code>call</code> method.</li>
+<li>Otherwise, if the callee is a type, look up the type's
+  <code>create</code> method and call that.</li>
+<li>Otherwise, error.</li>
+</ol>
+<p>Step 3 means bare-name construction (<code>mytype arg1: v1 arg2: v2</code>) is
+equivalent to <code>mytype.create arg1: v1 arg2: v2</code>. Both forms validate
+against the <em><strong>actual</strong></em> <code>create</code> signature, which is either
+user-defined or the compiler's default wrapper around <code>meta.create</code>.
+When a type has a user-defined <code>create</code> with an alternate parameter
+list, both the bare-name and explicit forms use that signature.</p>
+<p>The implicit construction rule does not apply inside a <code>data</code> clause
+or as a generic parameter (both of which are type references, not
+runtime expressions).</p>
+<h5 id="disabling-default-construction-create-null">Disabling Default Construction (create: null)</h5>
+<p>Writing <code>create: null</code> in a type's <code>as</code> block suppresses the
+compiler-generated default constructor. After this, any attempt to
+construct the type via <code>mytype args...</code> or <code>mytype.create args...</code>
+is a compile-time error. Only user-defined constructors with other
+names (e.g. <code>mytype.build</code>) remain callable.</p>
+<p>Unions and variants automatically behave as though they have
+<code>create: null</code> because construction requires selecting a specific
+subtype (<code>myunion.subtype value</code>). Attempting to construct a union
+or variant via the bare-name form produces a targeted error pointing
+at the subtype construction form.</p>
+<pre><code class="language-zerolang">secret: class { value: i64 } as {
+    create: null
+
+    build: function {seed: i64} out this is {
+        return meta.create value: seed * 7
+    }
+}
+
+main: function is {
+    # s1: secret value: 42          # error: create disabled
+    # s2: secret.create value: 42   # error: create disabled
+    s3: secret.build seed: 6        # OK -- user-defined constructor
+}</code></pre>
 <pre><code class="language-zerolang"># constructor will not be run on copy-by-value creation
 
 myobj: class {
@@ -2867,6 +2977,22 @@ dictelement2: record {
     t: generic any
     k: t
     v: t
+}</code></pre>
+<p>Record fields may be declared with a <code>.lock</code> type modifier to hold a
+locked reference to external data. A record with any <code>.lock</code> field is
+born-borrowed: every constructor must return <code>this.borrow</code> and every
+instance is borrowed from the moment of construction. <code>.lock</code> is the only
+field-type modifier permitted on records (<code>.take</code> and <code>.borrow</code> are
+rejected) and it is not permitted on classes -- see
+<a href="#borrowed-valtypes-and-lock-fields">Borrowed Valtypes and Lock Fields</a>
+and <code>doc/ownership.pdoc</code>.</p>
+<pre><code class="language-zerolang">bagiter: record {
+    pos: i64
+    target: bag.private.lock
+} as {
+    create: function {target: bag.private.lock} out this.borrow is {
+        return bagiter pos: 0 target: target
+    }
 }</code></pre>
 <h3 id="class"><a href="#class">5.13. class</a></h3>
 <p>Arguments for <code>class</code>:</p>

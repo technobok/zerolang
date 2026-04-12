@@ -273,6 +273,16 @@ class TypeChecker:
         # current function return type (for return statement checking)
         self._current_return_type: Optional[ZType] = None
 
+        # stack of enclosing types for the function body currently being
+        # type-checked. Pushed when entering a method body, popped on exit.
+        # Used to resolve `meta.create` and to detect constructor recursion.
+        self._enclosing_type_stack: List[ZType] = []
+
+        # stack of function ZTypes currently being type-checked. Used to
+        # detect constructor recursion (calling Type.create either directly
+        # or via bare-name Type ... while inside that very function).
+        self._function_body_stack: List[ZType] = []
+
         # current function's ownership annotations (for ownership checking)
         self._current_func_ownership: dict[str, ZParamOwnership] = {}
         self._current_func_return_ownership: Optional[ZParamOwnership] = None
@@ -1202,26 +1212,37 @@ class TypeChecker:
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 ctype.children[mname] = mt
 
-            # typecheck method bodies
-            for mname, mfunc in cls.functions.items():
-                if mfunc.body:
-                    self._check_function_body(f"{name}.{mname}", mfunc)
-            for mname, mfunc in cls.as_functions.items():
-                if mfunc.body:
-                    self._check_function_body(f"{name}.{mname}", mfunc)
-
-            # as_items: protocol satisfaction
+            # as_items: protocol satisfaction — must run before method body
+            # check so create_disabled flag is set before body-check.
             self._process_as_items_protocols(name, ctype, cls.as_items, cls.start)
 
-            # generate meta.create constructor type
+            # generate meta.create constructor type — must be available before
+            # method bodies are checked so `meta.create` inside a body can
+            # resolve to this class's raw allocator.
             is_func_names = set(cls.functions.keys())
             field_names = set(cls.items.keys()) | is_func_names
             create_type = self._make_meta_create_type(
                 name, ctype, is_func_names, field_names
             )
             ctype.children[":meta.create"] = create_type
-            if "create" not in ctype.children:
+            # Only install the default 'create' child if the user has not
+            # disabled it via 'create: null'.
+            if "create" not in ctype.children and not ctype.create_disabled:
                 ctype.children["create"] = create_type
+
+            # typecheck method bodies
+            self._enclosing_type_stack.append(ctype)
+            for mname, mfunc in cls.functions.items():
+                if mfunc.body:
+                    self._function_body_stack.append(ctype.children[mname])
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+                    self._function_body_stack.pop()
+            for mname, mfunc in cls.as_functions.items():
+                if mfunc.body:
+                    self._function_body_stack.append(ctype.children[mname])
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+                    self._function_body_stack.pop()
+            self._enclosing_type_stack.pop()
 
         ctype.public_members = _extract_public_members(cls.as_items)
         priv = _check_private_redefinition(cls.as_items)
@@ -1497,17 +1518,29 @@ class TypeChecker:
             utype.children[mname] = mt
 
         # typecheck method bodies (non-generic only)
+        self._enclosing_type_stack.append(utype)
         for mname, mfunc in union_defn.functions.items():
             if mfunc.body:
+                self._function_body_stack.append(utype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
+                self._function_body_stack.pop()
         for mname, mfunc in union_defn.as_functions.items():
             if mfunc.body:
+                self._function_body_stack.append(utype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
+                self._function_body_stack.pop()
+        self._enclosing_type_stack.pop()
 
         utype.public_members = _extract_public_members(union_defn.as_items)
         priv = _check_private_redefinition(union_defn.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
+
+        # Unions cannot be constructed via bare-name: a specific subtype must
+        # be selected (myunion.subtype value). Mark create as disabled so the
+        # unified call dispatch reports a targeted error.
+        utype.create_disabled = True
+
         self._resolving.pop()
         return utype
 
@@ -1625,6 +1658,10 @@ class TypeChecker:
             priv = _check_private_redefinition(variant_defn.as_items)
             if priv:
                 self._error("'private' cannot be redefined", loc=priv.start)
+
+            # Variants: no bare-name construction (subtype must be selected).
+            vtype.create_disabled = True
+
             self._resolving.pop()
             return vtype
 
@@ -1647,12 +1684,18 @@ class TypeChecker:
             vtype.children[mname] = mt
 
         # typecheck method bodies (non-generic only — variants don't support generics yet)
+        self._enclosing_type_stack.append(vtype)
         for mname, mfunc in variant_defn.functions.items():
             if mfunc.body:
+                self._function_body_stack.append(vtype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
+                self._function_body_stack.pop()
         for mname, mfunc in variant_defn.as_functions.items():
             if mfunc.body:
+                self._function_body_stack.append(vtype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
+                self._function_body_stack.pop()
+        self._enclosing_type_stack.pop()
 
         # auto-generate == and != for non-generic variants
         self._synthesize_eq(vtype)
@@ -1661,6 +1704,12 @@ class TypeChecker:
         priv = _check_private_redefinition(variant_defn.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
+
+        # Variants cannot be constructed via bare-name: a specific subtype
+        # must be selected (myvariant.subtype value). Mark create as disabled
+        # so the unified call dispatch reports a targeted error.
+        vtype.create_disabled = True
+
         self._resolving.pop()
         return vtype
 
@@ -1874,27 +1923,38 @@ class TypeChecker:
         # is born-borrowed and ALL constructors must agree.
         self._check_born_borrowed_record(name, rec, rtype)
 
-        # typecheck method bodies (non-generic only)
-        if not rtype.isgeneric:
-            for mname, mfunc in rec.functions.items():
-                if mfunc.body:
-                    self._check_function_body(f"{name}.{mname}", mfunc)
-            for mname, mfunc in rec.as_functions.items():
-                if mfunc.body:
-                    self._check_function_body(f"{name}.{mname}", mfunc)
-
-        # as_items: protocol satisfaction
+        # as_items: protocol satisfaction — must run before method body check
+        # so create_disabled flag is set before body-check.
         self._process_as_items_protocols(name, rtype, rec.as_items, rec.start)
 
-        # generate meta.create constructor type
+        # generate meta.create constructor type — must be available before
+        # method bodies are checked so `meta.create` inside a body can
+        # resolve to this record's raw allocator.
         is_func_names = set(rec.functions.keys())
         field_names = set(rec.items.keys()) | is_func_names
         create_type = self._make_meta_create_type(
             name, rtype, is_func_names, field_names
         )
         rtype.children[":meta.create"] = create_type
-        if "create" not in rtype.children:
+        # Only install the default 'create' child if the user has not
+        # disabled it via 'create: null'.
+        if "create" not in rtype.children and not rtype.create_disabled:
             rtype.children["create"] = create_type
+
+        # typecheck method bodies (non-generic only)
+        if not rtype.isgeneric:
+            self._enclosing_type_stack.append(rtype)
+            for mname, mfunc in rec.functions.items():
+                if mfunc.body:
+                    self._function_body_stack.append(rtype.children[mname])
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+                    self._function_body_stack.pop()
+            for mname, mfunc in rec.as_functions.items():
+                if mfunc.body:
+                    self._function_body_stack.append(rtype.children[mname])
+                    self._check_function_body(f"{name}.{mname}", mfunc)
+                    self._function_body_stack.pop()
+            self._enclosing_type_stack.pop()
 
         # auto-generate == and != for non-generic records
         if not rtype.isgeneric and not rec.is_native:
@@ -2229,6 +2289,15 @@ class TypeChecker:
                 and at.name == "__generic_param"
             ):
                 continue  # generic params handled in pass 1
+            # 'label: null' in 'as' block — disables a compiler-generated
+            # method (or declares the label as intentionally unavailable).
+            # Used for 'create: null' to suppress the default constructor.
+            if at and at.typetype == ZTypeType.NULL:
+                if label == "create":
+                    rtype.create_disabled = True
+                else:
+                    rtype.children[label] = self.t_null
+                continue
             if at and at.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                 # facet: only valtypes can implement facets
                 if at.typetype == ZTypeType.FACET and not _is_valtype(rtype):
@@ -2824,6 +2893,23 @@ class TypeChecker:
         parent_type: Optional[ZType] = None
         if path.parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             pname = cast(zast.AtomId, path.parent).name
+            # meta.create: compiler-internal raw allocator of the lexically
+            # enclosing type. Only resolves inside a type's method body; at
+            # top level, falls through to the normal name-resolution path
+            # which will error.
+            if pname == "meta" and path.child.name == "create":
+                if self._enclosing_type_stack:
+                    enclosing = self._enclosing_type_stack[-1]
+                    raw = enclosing.children.get(":meta.create")
+                    if raw is not None:
+                        path.type = raw
+                        path.parent.type = enclosing
+                        return raw
+                self._error(
+                    "'meta.create' is only valid inside a type's method body",
+                    loc=path.start,
+                )
+                return None
             # numeric dotted path: 0.u32, 42.i8, 0xff.u16
             if _is_numeric_id(pname):
                 child_name = path.child.name
@@ -2884,6 +2970,27 @@ class TypeChecker:
             marker.parent = parent_type  # the base type being wrapped
             path.type = marker
             return marker
+        # Explicit `Type.create` when create is disabled (either via
+        # `create: null` or implicitly for unions/variants). Emit a targeted
+        # error rather than falling through to a generic "no such child".
+        if child_name == "create" and getattr(parent_type, "create_disabled", False):
+            if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
+                kind = "union" if parent_type.typetype == ZTypeType.UNION else "variant"
+                self._error(
+                    f"'{parent_type.name}.create' is not available; "
+                    f"'{parent_type.name}' is a {kind} and requires a specific "
+                    f"subtype. Try '{parent_type.name}.<subtype> value'.",
+                    loc=path.start,
+                    err=ERR.CALLERROR,
+                )
+            else:
+                self._error(
+                    f"'{parent_type.name}.create' is disabled via 'create: null'; "
+                    f"use a user-defined constructor explicitly.",
+                    loc=path.start,
+                    err=ERR.CALLERROR,
+                )
+            return None
         # check for .generic / .valtype / .reftype — creates a generic type parameter marker
         if child_name in ("generic", "valtype", "reftype"):
             if child_name == "generic":
@@ -3193,6 +3300,21 @@ class TypeChecker:
                             f"Type '{concrete_type.name}' does not satisfy constraint "
                             f"'{constraint.name}' for generic parameter '{param_name}'"
                         )
+
+        # Phase E: born-borrowed valtypes cannot be elements of generic
+        # containers because containers copy/take/store their elements.
+        # Generic functions go through _monomorphize_function, not here, so
+        # this only affects record/class/union/protocol generics.
+        for param_name, concrete_type in generic_args.items():
+            if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
+                continue
+            if getattr(concrete_type, "is_born_borrowed", False):
+                self._error(
+                    f"Born-borrowed type '{concrete_type.name}' cannot be used "
+                    f"as generic parameter '{param_name}' of "
+                    f"'{template_type.name}': container would copy or store the "
+                    f"value, but born-borrowed values cannot be copied or stored"
+                )
 
         # build mangled name
         arg_names = [generic_args[k].name for k in template_type.generic_params]
@@ -5189,6 +5311,72 @@ class TypeChecker:
                 call.callable.type = call_method
                 # fall through to function call checking below
 
+        # Unified call dispatch for types in callable position (bare-name
+        # construction). The callable is not a runtime variable; it refers to
+        # a type. If the type's 'create' is disabled — either explicitly via
+        # 'create: null' or implicitly for unions/variants that require
+        # subtype selection — emit a targeted error here. Otherwise fall
+        # through to the family-specific construction branches below.
+        if (
+            not callee_is_var
+            and callee_type.typetype != ZTypeType.FUNCTION
+            and getattr(callee_type, "create_disabled", False)
+        ):
+            if callee_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
+                kind = "union" if callee_type.typetype == ZTypeType.UNION else "variant"
+                self._error(
+                    f"'{callee_type.name}' is a {kind}; a specific subtype must "
+                    f"be selected. Try '{callee_type.name}.<subtype> value'.",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+            else:
+                self._error(
+                    f"'{callee_type.name}.create' is disabled via 'create: null'; "
+                    f"bare-name construction is not available. Use a user-defined "
+                    f"constructor explicitly.",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+            return None
+
+        # Constructor-recursion detection: reject a call that would route to
+        # the type's 'create' function when that function is currently being
+        # type-checked. Covers both bare-name construction (`return Type ...`
+        # inside `Type.create`) and the explicit form (`return Type.create ...`).
+        if (
+            not callee_is_var
+            and callee_type.typetype != ZTypeType.FUNCTION
+            and self._function_body_stack
+        ):
+            create_fn = callee_type.children.get("create")
+            if create_fn is self._function_body_stack[-1]:
+                self._error(
+                    f"cannot call '{callee_type.name}.create' recursively "
+                    f"(directly or via bare-name). Use 'meta.create' for the "
+                    f"raw allocator.",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+                return None
+        # Also catch the explicit form: `Type.create ...` where the callable
+        # resolves to the function we're currently in.
+        if (
+            callee_type.typetype == ZTypeType.FUNCTION
+            and self._function_body_stack
+            and callee_type is self._function_body_stack[-1]
+            and call.callable.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, call.callable).child.name == "create"
+        ):
+            self._error(
+                f"cannot call '{callee_type.name}' recursively "
+                f"(directly or via bare-name). Use 'meta.create' for the "
+                f"raw allocator.",
+                loc=call.start,
+                err=ERR.CALLERROR,
+            )
+            return None
+
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             # generic record construction
@@ -5257,6 +5445,35 @@ class TypeChecker:
             call.type = callee_type
             call.call_kind = zast.CallKind.UNION_CREATE
             return callee_type
+
+        # bare-name protocol construction: `myproto source` is equivalent
+        # to `myproto.create from: source`, routing through the unified
+        # dispatch via children["create"] (which for protocols aliases .take).
+        if (
+            not callee_is_var
+            and callee_type.typetype == ZTypeType.PROTOCOL
+            and "create" in callee_type.children
+        ):
+            call.call_kind = zast.CallKind.PROTOCOL_CREATE
+            return self._check_protocol_create(callee_type, call)
+
+        # bare-name facet construction: same pattern as protocol.
+        if (
+            not callee_is_var
+            and callee_type.typetype == ZTypeType.FACET
+            and "create" in callee_type.children
+        ):
+            call.call_kind = zast.CallKind.FACET_CREATE
+            return self._check_protocol_create(callee_type, call)
+
+        # bare-name typedef construction: same pattern.
+        if (
+            not callee_is_var
+            and callee_type.typedef_base is not None
+            and "create" in callee_type.children
+        ):
+            call.call_kind = zast.CallKind.TYPEDEF_CREATE
+            return self._check_typedef_create(callee_type, call)
 
         # generic unit instantiation: (mathops t: i64) → monomorphized unit
         # (valid at unit level; _check_non_runtime_type catches misuse in code)
@@ -5511,7 +5728,13 @@ class TypeChecker:
         return call.type
 
     def _check_missing_create_args(self, type_def: ZType, call: zast.Call) -> None:
-        """Check for missing required fields in record/class construction."""
+        """Check for missing required arguments in bare-name construction.
+
+        Validates against the type's public `create` child (which is either
+        user-defined or the compiler's default meta-create wrapper). This
+        means a custom `create` with an alternate signature is correctly
+        checked against that signature, not the full field list.
+        """
         # skip native/collection types — construction is compiler-managed
         if (
             type_def.is_native
@@ -5521,8 +5744,8 @@ class TypeChecker:
             or _is_map_type(type_def)
         ):
             return
-        create_type = type_def.children.get(":meta.create")
-        if not create_type:
+        create_type = type_def.children.get("create")
+        if not create_type or create_type.typetype != ZTypeType.FUNCTION:
             return
         # collect non-function params (user-visible data fields only)
         data_params = [
@@ -5539,7 +5762,7 @@ class TypeChecker:
         for pname, ptype in data_params:
             if pname not in provided and pname not in create_type.param_defaults:
                 self._error(
-                    f"missing required field '{pname}' (type: {ptype.name})",
+                    f"missing required argument '{pname}' (type: {ptype.name})",
                     loc=call.start,
                     err=ERR.CALLERROR,
                 )
@@ -5715,6 +5938,19 @@ class TypeChecker:
         if not arg_type:
             return None
 
+        # Phase E: born-borrowed valtypes cannot be sources for owned
+        # protocol/facet creation — the protocol instance would have to
+        # copy or take the source, but born-borrowed values cannot be
+        # copied or taken.
+        if getattr(arg_type, "is_born_borrowed", False):
+            self._error(
+                f"Cannot create {kind} '{proto_type.name}' from born-borrowed "
+                f"type '{arg_type.name}': born-borrowed values cannot be "
+                f"copied or taken",
+                loc=call.start,
+            )
+            return None
+
         # verify conformance: arg_type must conform to this protocol/facet
         labels = self._protocol_labels.get(arg_type.name, [])
         found_label = None
@@ -5751,6 +5987,18 @@ class TypeChecker:
         # type-check the from: argument
         arg_type = self._check_operation(from_arg.valtype)
         if not arg_type:
+            return None
+
+        # Phase E: born-borrowed valtypes cannot be sources for protocol or
+        # facet construction. Even the borrow path heap-allocates a wrapper
+        # struct that would outlive the born-borrowed source's lock chain.
+        if getattr(arg_type, "is_born_borrowed", False):
+            self._error(
+                f"Cannot borrow {kind} '{proto_type.name}' from born-borrowed "
+                f"type '{arg_type.name}': born-borrowed values cannot back a "
+                f"protocol or facet wrapper",
+                loc=call.start,
+            )
             return None
 
         # verify conformance: arg_type must conform to this protocol/facet
@@ -5848,6 +6096,107 @@ class TypeChecker:
 
     def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
         """Check a return statement: verify return value matches function return type."""
+        # Detect return-construction shorthand: `return Type field1: x ...`
+        # parses with Type as args[0] (a bare AtomId path) and the fields as
+        # remaining args. The emitter folds this into meta.create. Under the
+        # unified dispatch rule this must route through children["create"]:
+        # if we're inside the type's own 'create' body, it is recursion and
+        # the user must use `return meta.create field1: x ...` instead.
+        if (
+            len(call.arguments) >= 1
+            and call.arguments[0].name is None
+            and call.arguments[0].valtype.nodetype == NodeType.ATOMID
+            and any(a.name is not None for a in call.arguments[1:])
+            and self._function_body_stack
+        ):
+            first = cast(zast.AtomId, call.arguments[0].valtype)
+            # only do the recursion check when the first arg refers to a
+            # user-defined type (has a resolved children["create"]).
+            type_ref = self._resolve_name(first.name)
+            if (
+                type_ref is not None
+                and type_ref.typetype
+                in (ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.VARIANT)
+                and type_ref.children.get("create") is self._function_body_stack[-1]
+            ):
+                self._error(
+                    f"cannot construct '{first.name}' inside '{first.name}.create' "
+                    f"via the return shorthand — this would call the constructor "
+                    f"recursively. Use 'return meta.create {{fields}}' for the "
+                    f"raw allocator.",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+                return self._resolve_name("never") or self.t_null
+
+        # Detect `return Type.create field1: x ...` — args[0] is a DottedPath
+        # pointing at the type's create function, and if we're inside that
+        # very function this is explicit recursion.
+        if (
+            len(call.arguments) >= 1
+            and call.arguments[0].name is None
+            and call.arguments[0].valtype.nodetype == NodeType.DOTTEDPATH
+            and self._function_body_stack
+        ):
+            dp_first = cast(zast.DottedPath, call.arguments[0].valtype)
+            if (
+                dp_first.child.name == "create"
+                and dp_first.parent.nodetype == NodeType.ATOMID
+            ):
+                type_name = cast(zast.AtomId, dp_first.parent).name
+                type_ref = self._resolve_name(type_name)
+                if (
+                    type_ref is not None
+                    and type_ref.children.get("create") is self._function_body_stack[-1]
+                ):
+                    self._error(
+                        f"cannot call '{type_name}.create' recursively (directly "
+                        f"or via bare-name). Use 'meta.create' for the raw "
+                        f"allocator.",
+                        loc=call.start,
+                        err=ERR.CALLERROR,
+                    )
+                    return self._resolve_name("never") or self.t_null
+
+        # Detect return-construction shorthand with meta.create:
+        # `return meta.create field1: x ...` inside a type's method body
+        # resolves to the enclosing type's :meta.create raw allocator. The
+        # compiler-internal meta.create returns the enclosing type, so the
+        # return-type check must see that type rather than the function type.
+        if (
+            len(call.arguments) >= 1
+            and call.arguments[0].name is None
+            and call.arguments[0].valtype.nodetype == NodeType.DOTTEDPATH
+        ):
+            dp = cast(zast.DottedPath, call.arguments[0].valtype)
+            if (
+                dp.parent.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, dp.parent).name == "meta"
+                and dp.child.name == "create"
+                and self._enclosing_type_stack
+            ):
+                enclosing = self._enclosing_type_stack[-1]
+                # validate the field args by type (no missing-field check yet
+                # — that goes through the meta-create signature in Phase 4)
+                for a in call.arguments[1:]:
+                    self._check_operation(a.valtype)
+                call.arguments[0].valtype.type = enclosing
+                ret_type_meta: Optional[ZType] = enclosing
+                if self._current_return_type and ret_type_meta:
+                    if not self._types_compatible(
+                        ret_type_meta, self._current_return_type
+                    ):
+                        self._error(
+                            f"return type mismatch: function expects "
+                            f"{self._current_return_type.name}, got "
+                            f"{ret_type_meta.name}",
+                            loc=call.start,
+                            err=ERR.TYPEERROR,
+                        )
+                never_meta = self._resolve_name("never")
+                call.type = never_meta if never_meta else self.t_null
+                return call.type
+
         # type-check the return expression (first argument)
         ret_type = None
         if call.arguments:
