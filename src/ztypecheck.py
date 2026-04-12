@@ -2183,15 +2183,15 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.pop()
 
-        # Synthesize constructors: take/create and borrow
+        # Synthesize constructors: create and borrow. Bare-name `typedef obj`
+        # routes through children["create"] via the unified call dispatch.
         if not rtype.isgeneric:
-            take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
-            take_type.return_type = rtype
-            take_type.children["from"] = base_type
-            take_type.param_ownership["from"] = ZParamOwnership.TAKE
-            rtype.children["take"] = take_type
-            rtype.children["create"] = take_type
-            rtype.children[":meta.create"] = take_type
+            create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
+            create_type.return_type = rtype
+            create_type.children["from"] = base_type
+            create_type.param_ownership["from"] = ZParamOwnership.TAKE
+            rtype.children["create"] = create_type
+            rtype.children[":meta.create"] = create_type
 
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
             borrow_type.return_type = rtype
@@ -2444,7 +2444,8 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.pop()
 
-        # owned create: protocol.create from: expr
+        # owned create: protocol.create from: expr (bare-name `proto obj`
+        # routes through children["create"] via the unified call dispatch)
         if not ptype.isgeneric:
             create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
             create_type.return_type = ptype
@@ -2452,13 +2453,6 @@ class TypeChecker:
             create_type.children["from"] = self.t_null
             create_type.param_ownership["from"] = ZParamOwnership.TAKE
             ptype.children["create"] = create_type
-
-            # take: alias for create
-            take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
-            take_type.return_type = ptype
-            take_type.children["from"] = self.t_null
-            take_type.param_ownership["from"] = ZParamOwnership.TAKE
-            ptype.children["take"] = take_type
 
             # borrow: borrowed protocol creation
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
@@ -2504,19 +2498,14 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.pop()
 
-        # create/take: owned facet creation (copies value)
+        # create: owned facet creation (copies value). Bare-name `facet obj`
+        # routes through children["create"] via the unified call dispatch.
         if not ftype.isgeneric:
             create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
             create_type.return_type = ftype
             create_type.children["from"] = self.t_null
             create_type.param_ownership["from"] = ZParamOwnership.TAKE
             ftype.children["create"] = create_type
-
-            take_type = _make_type(f"{name}.take", ZTypeType.FUNCTION)
-            take_type.return_type = ftype
-            take_type.children["from"] = self.t_null
-            take_type.param_ownership["from"] = ZParamOwnership.TAKE
-            ftype.children["take"] = take_type
 
             # borrow: borrowed facet creation (copies value, locks source)
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
@@ -2990,6 +2979,20 @@ class TypeChecker:
                     loc=path.start,
                     err=ERR.CALLERROR,
                 )
+            return None
+        # `Type.take` on protocol/facet/typedef is no longer a constructor;
+        # emit a targeted migration error pointing at `.create` and `.borrow`.
+        if child_name == "take" and (
+            parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET)
+            or parent_type.typedef_base is not None
+        ):
+            self._error(
+                f"'{parent_type.name}.take' is no longer a constructor. "
+                f"Use '{parent_type.name}.create from: ...' (owned) or "
+                f"'{parent_type.name}.borrow from: ...' (borrowed).",
+                loc=path.start,
+                err=ERR.CALLERROR,
+            )
             return None
         # check for .generic / .valtype / .reftype — creates a generic type parameter marker
         if child_name in ("generic", "valtype", "reftype"):
@@ -5921,14 +5924,26 @@ class TypeChecker:
     def _check_protocol_create(
         self, proto_type: ZType, call: zast.Call
     ) -> Optional[ZType]:
-        """Check protocol/facet.create from: expr — owned creation."""
+        """Check protocol/facet.create from: expr — owned creation.
+
+        Accepts either the explicit `proto.create from: expr` form or the
+        bare-name shorthand `proto expr` (single positional argument), which
+        routes through the unified call dispatch and is equivalent.
+        """
         kind = "facet" if proto_type.typetype == ZTypeType.FACET else "protocol"
-        # find the from: argument
+        # find the from: argument. Also accept a single positional argument
+        # (bare-name construction `proto obj` ≡ `proto.create from: obj`).
         from_arg = None
         for arg in call.arguments:
             if arg.name == "from":
                 from_arg = arg
                 break
+        if (
+            from_arg is None
+            and len(call.arguments) == 1
+            and call.arguments[0].name is None
+        ):
+            from_arg = call.arguments[0]
         if not from_arg:
             self._error(f"{kind}.create requires 'from:' argument", loc=call.start)
             return None
@@ -6027,7 +6042,11 @@ class TypeChecker:
     def _check_typedef_create(
         self, typedef_type: ZType, call: zast.Call
     ) -> Optional[ZType]:
-        """Check typedef.create/take from: expr — owned typedef creation."""
+        """Check typedef.create from: expr — owned typedef creation.
+
+        Also accepts a single positional argument for bare-name construction
+        (`mytypedef obj` ≡ `mytypedef.create from: obj`).
+        """
         from_arg = None
         for arg in call.arguments:
             if arg.name == "from":

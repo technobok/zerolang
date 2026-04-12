@@ -3181,54 +3181,6 @@ class TestProtocols:
         assert "create_owned" in csource
         assert "boxed_destroy" in csource
 
-    def test_protocol_take_record(self):
-        """reader.take from: f.take compiles and runs (same as create)."""
-        csource = emit_source(
-            self.PROTO_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
-            "    r: reader.take from: f.take\n"
-            '    print "\\{r.read b: 5}"\n'
-            "}\n"
-        )
-        output = compile_and_run(csource)
-        assert output.strip() == "15"
-
-    def test_protocol_take_class(self):
-        """reader.take from class compiles and runs."""
-        csource = emit_source(
-            "reader: protocol {\n"
-            "    read: function {:this b: i64} out i64\n"
-            "}\n"
-            "myobj: class {\n"
-            "    fd: i64\n"
-            "} as {\n"
-            "    myreader: reader\n"
-            "    read: function {o: this b: i64} out i64 is {\n"
-            "        return o.fd + b\n"
-            "    }\n"
-            "}\n"
-            "main: function is {\n"
-            "    o: myobj fd: 20\n"
-            "    r: reader.take from: o.take\n"
-            '    print "\\{r.read b: 7}"\n'
-            "}\n"
-        )
-        output = compile_and_run(csource)
-        assert output.strip() == "27"
-
-    def test_protocol_take_asan(self):
-        """ASan clean for take."""
-        csource = emit_source(
-            self.PROTO_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
-            "    r: reader.take from: f.take\n"
-            '    print "\\{r.read b: 5}"\n'
-            "}\n"
-        )
-        result = compile_and_run_asan(csource)
-        assert result.returncode == 0
-        assert result.stdout.strip() == "15"
-
     def test_protocol_borrow_record(self):
         """reader.borrow from: f.lock compiles and runs."""
         csource = emit_source(

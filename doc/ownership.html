@@ -432,11 +432,27 @@ never locked.</p>
   shared locks on parent items) are assigned to the returned value. All other
   argument locks are freed.</li>
 </ol>
-<p>Locks are also taken on targets in <code>if</code> and <code>for</code> as required to prevent
-mutation in the body.</p>
+<p><code>for</code> loops over a reftype iteration target take an exclusive lock on the
+target for the duration of the body, preventing mutation of the container or
+iterator from outside the loop. Valtype iteration targets (eg. born-borrowed
+record iterators) are not locked by the for-loop itself -- their locks flow
+through the per-iteration <code>call</code> method dispatch, which takes and releases
+an exclusive lock on the receiver for each call. See the lock lifecycle
+walkthrough below for a worked example.</p>
 <p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
-and the subject is evaluated once. <code>.take</code> is allowed on the match subject
-inside arm bodies for ownership transfer.</p>
+and the subject is evaluated once, so there is no aliasing or re-evaluation
+concern. <code>.take</code> is allowed on the match subject inside arm bodies for
+ownership transfer.</p>
+<p><code>if</code> does not lock anything. Condition expressions are evaluated like any
+other expression: any intermediate locks taken during evaluation are released
+before control enters the branch body. There is no variable-binding form for
+<code>if</code> in Zerolang.</p>
+<p><code>with</code> does not lock its target either. The <code>with name: value do expr</code>
+form is sugar for a scoped name binding; lock handling is delegated to the
+assignment semantics of <code>name: value</code> and to operations inside <code>expr</code> that
+take their own locks via the function-call algorithm. When <code>name</code> falls out
+of scope at the end of <code>with</code>, any locks it holds -- including those
+transferred from <code>.lock</code> fields of born-borrowed values -- are released.</p>
 <h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.3. Lock Release on Scope Exit</a></h3>
 <p>When a variable falls out of scope, all locks it holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
@@ -571,7 +587,7 @@ restriction only applies when the generic type or function would need to copy
 or take ownership of the born-borrowed value.</p>
 <h3 id="protocol-and-facet-restrictions"><a href="#protocol-and-facet-restrictions">8.7. Protocol and Facet Restrictions</a></h3>
 <p>A born-borrowed valtype cannot be used with <code>protocol.create</code>,
-<code>protocol.take</code>, <code>protocol.borrow</code>, <code>facet.create</code>, or any other
+<code>protocol.borrow</code>, <code>facet.create</code>, <code>facet.borrow</code>, or any other
 construction that wraps the source in a protocol or facet instance. Protocol
 and facet wrappers are heap-allocated and copy or take ownership of their
 source, neither of which is permitted for born-borrowed values.</p>
@@ -833,21 +849,32 @@ for a non-iterator born-borrowed record (a slice/view).</p>
 <p>Protocol instances can be created in three ways, each with different ownership
 semantics:</p>
 <ul>
-<li>Borrowed via label (<code>r: obj.protocolname</code>): returns a borrowed
-protocol instance. The protocol struct is heap-allocated and freed on scope
-exit, but the underlying data is <em><strong>not</strong></em> destroyed. The source variable is
-locked exclusively for the lifetime of the protocol instance and becomes
-accessible again when the protocol instance goes out of scope.</li>
-<li>Owned via <code>create</code> / <code>take</code> (<code>r: proto.create from: obj.take</code>
-or <code>r: proto.take from: obj.take</code>): returns an owned protocol instance.
-The source object is consumed (taken). On scope exit, both the protocol
-struct and the underlying data are destroyed.</li>
+<li>Borrowed via label (<code>r: obj.protocolname</code>) -- <em><strong>preferred</strong></em>
+borrow form when the type declares the protocol with a named label in its
+<code>as</code> block. Returns a borrowed protocol instance. The protocol struct is
+heap-allocated and freed on scope exit, but the underlying data is
+<em><strong>not</strong></em> destroyed. The source variable is locked exclusively for the
+lifetime of the protocol instance and becomes accessible again when the
+protocol instance goes out of scope.</li>
+<li>Owned via <code>create</code> (<code>r: proto.create from: obj.take</code>, or the
+bare-name shorthand <code>r: proto obj.take</code>): returns an owned protocol
+instance. The source object is consumed (taken). On scope exit, both the
+protocol struct and the underlying data are destroyed. Bare-name routes
+through <code>proto.create</code> via the unified call dispatch; see the spec's
+"Implicit Construction" section.</li>
 <li>Borrowed via <code>borrow</code> (<code>r: proto.borrow from: obj.lock</code>):
-returns a borrowed protocol instance. Semantically equivalent to the label
-form -- the protocol struct is heap-allocated and freed on scope exit, the
-underlying data is <em><strong>not</strong></em> destroyed, and the source variable is locked
-exclusively.</li>
+explicit borrow form for when the label shorthand is not available
+(e.g. the implementing type does not name the conformance). Semantically
+equivalent to the label form -- the protocol struct is heap-allocated and
+freed on scope exit, the underlying data is <em><strong>not</strong></em> destroyed, and the
+source variable is locked exclusively.</li>
 </ul>
+<p><code>.take</code> used to be registered as an alias for <code>.create</code> on protocol,
+facet and typedef types. It has been removed: the canonical construction
+verb is <code>.create</code>, and <code>.take</code> on these types now produces a
+migration error pointing at <code>.create</code> and <code>.borrow</code>. <code>.take</code> remains
+available as the inline ownership method on runtime instances
+(<code>obj.take</code>) as before.</p>
 <p>Born-borrowed valtypes (records with <code>.lock</code> fields whose constructors
 return <code>this.borrow</code>) cannot be sources for any of these construction
 forms. See <code>Protocol and Facet Restrictions</code> above.</p>

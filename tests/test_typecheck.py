@@ -1350,36 +1350,6 @@ class TestBornBorrowedGenericsAndProtocols:
             "born-borrowed" in e.msg.lower() and "reader" in e.msg for e in errors
         )
 
-    def test_protocol_take_from_born_borrowed_error(self):
-        errors = check_errors(
-            "reader: protocol {\n"
-            "  read: function {:this} out i64\n"
-            "}\n"
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  myreader: reader\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "  read: function {it: this} out i64 is {\n"
-            "    return it.target.a\n"
-            "  }\n"
-            "}\n"
-            "main: function is {\n"
-            "  b: bag a: 5\n"
-            "  it: bag.iterate b: b\n"
-            "  r: reader.take from: it\n"
-            "}\n"
-        )
-        assert any("born-borrowed" in e.msg.lower() for e in errors)
-
     def test_protocol_borrow_from_born_borrowed_error(self):
         errors = check_errors(
             "reader: protocol {\n"
@@ -3520,8 +3490,8 @@ class TestProtocols:
         assert t.isgeneric is True
         assert "create" not in t.children
 
-    def test_protocol_has_take(self):
-        """Protocol type has `take` child (FUNCTION)."""
+    def test_protocol_has_no_take(self):
+        """Protocol type has no `.take` child; `.take` is not a constructor."""
         program = check_ok(
             "reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
@@ -3532,12 +3502,13 @@ class TestProtocols:
         tc.check()
         t = tc._resolve_unit_name("test", "reader")
         assert t is not None
-        assert "take" in t.children
-        assert t.children["take"].typetype == ZTypeType.FUNCTION
+        assert "take" not in t.children
+        assert "create" in t.children
+        assert "borrow" in t.children
 
-    def test_protocol_take_typechecks(self):
-        """reader.take from: f.take type-checks, result is PROTOCOL."""
-        check_ok(
+    def test_protocol_take_rejected_with_hint(self):
+        """`reader.take from: ...` errors with a migration hint."""
+        errors = check_errors(
             "reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
@@ -3554,20 +3525,12 @@ class TestProtocols:
             "    r: reader.take from: f.take\n"
             "}\n"
         )
-
-    def test_protocol_take_nonconforming_error(self):
-        """from: with non-conforming type errors for take."""
-        errors = check_errors(
-            "reader: protocol {\n"
-            "    read: function {:this b: i64} out i64\n"
-            "}\n"
-            "other: record { x: i64 }\n"
-            "main: function is {\n"
-            "    o: other x: 1\n"
-            "    r: reader.take from: o.take\n"
-            "}\n"
+        assert any(
+            "no longer a constructor" in e.msg
+            and ".create" in e.msg
+            and ".borrow" in e.msg
+            for e in errors
         )
-        assert any("does not conform" in e.msg for e in errors)
 
     def test_protocol_has_borrow(self):
         """Protocol type has `borrow` child (FUNCTION)."""
@@ -4778,7 +4741,7 @@ class TestTypedefs:
         assert any("record type" in e.msg.lower() for e in errors)
 
     def test_typedef_has_constructors(self):
-        """take/create/borrow are synthesized for typedefs."""
+        """create/borrow are synthesized for typedefs. `.take` is not."""
         program = check_ok(
             "meters: record { val: i64.typedef } as {}\n"
             "main: function is { m: meters.create from: 42 }"
@@ -4787,9 +4750,9 @@ class TestTypedefs:
         tc.check()
         mt = tc._resolved.get("test.meters")
         assert mt is not None
-        assert "take" in mt.children
         assert "create" in mt.children
         assert "borrow" in mt.children
+        assert "take" not in mt.children
 
     def test_typedef_of_typedef(self):
         """Chained typedefs, compatibility walks stack."""
@@ -4826,7 +4789,8 @@ class TestFacets:
         assert t.children["show"].typetype == ZTypeType.FUNCTION
 
     def test_facet_has_constructors(self):
-        """Non-generic facets get create/take/borrow constructors."""
+        """Non-generic facets get create/borrow constructors. `.take` is not
+        registered — it was an alias for create and has been removed."""
         program = check_ok(
             "showable: facet {\n"
             "    show: function {:this} out i64\n"
@@ -4837,8 +4801,8 @@ class TestFacets:
         tc.check()
         t = tc._resolve_unit_name("test", "showable")
         assert "create" in t.children
-        assert "take" in t.children
         assert "borrow" in t.children
+        assert "take" not in t.children
 
     def test_facet_conformance_ok(self):
         """Record with correct methods passes facet conformance check."""

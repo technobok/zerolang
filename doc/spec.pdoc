@@ -1711,10 +1711,9 @@ result.
 Born-borrowed records cannot live in class fields, cannot live in records
 that are not themselves born-borrowed, cannot be elements of copy-by-value
 generic containers (#~"list of: born_borrowed_type" is rejected), and
-cannot be sources for #~"protocol.create" / #~"protocol.take" /
-#~"protocol.borrow" / #~"facet.create" / #~"facet.take". They #_*"can"
-declare protocol or facet conformance in their #~"as" block (compile-time
-only).
+cannot be sources for #~"protocol.create" / #~"protocol.borrow" /
+#~"facet.create" / #~"facet.borrow". They #_*"can" declare protocol or
+facet conformance in their #~"as" block (compile-time only).
 
 See #~"doc/ownership.pdoc" for the full design and worked examples.
 
@@ -1767,9 +1766,19 @@ values:
     shared locks on parent items) are assigned to the returned value. All other
     argument locks are freed.]
 
-Locks are also taken on targets in #~"match", #~"if" and #~"for" to prevent
-mutation in the body. #~"match" can also #~".take" its target, in which case
-the target is owned with the narrowed type in the match bodies.
+#~"for" loops over a reftype iteration target take an exclusive lock on the
+target for the body's duration, preventing mutation during iteration. Valtype
+iteration targets (born-borrowed iterators) are not locked by #~"for" itself
+-- their locks flow through per-iteration method dispatch.
+
+#~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
+and the subject is evaluated once, so there is no aliasing concern. #~"match"
+may #~".take" its subject, in which case the subject is owned with the
+narrowed type in the arm bodies.
+
+#~"if" and #~"with" do not lock their condition or target -- expression
+evaluation and assignment semantics handle lock lifetimes without additional
+scope-level locking.
 
 When an instance falls out of scope, all of its locks are freed. If the
 variable is borrowed, the borrow is dropped. If the variable is owned, it is
@@ -3610,21 +3619,26 @@ destructor pointer (NULL for borrowed instances, set for owned instances).
 There are three ways to create a protocol instance:
 
 #ol:
-  [#*: #+ Borrowed via label: access the named protocol member in the #~"as"
-  clause of an object (#~"r: f.myreader"). This creates a borrowed protocol
-  instance: the protocol struct is heap-allocated and freed when it goes out of
-  scope, but the underlying data is not affected. The source variable is locked
-  for the lifetime of the protocol instance.]
-  [#*: #+ Owned via #~"create" or #~"take": call #~"protocol.create from: obj.take"
-  or #~"protocol.take from: obj.take" (#~"take" is an alias for #~"create").
-  This creates an owned protocol instance: the source object is consumed and
-  the protocol instance owns the data. When the protocol instance goes out of
-  scope, both the protocol struct and the underlying data are destroyed.]
-  [#*: #+ Borrowed via #~"borrow": call #~"protocol.borrow from: obj.lock".
-  This creates a borrowed protocol instance (same as the label form). The
-  source variable is locked for the lifetime of the protocol instance. The
-  protocol struct is heap-allocated and freed on scope exit, but the underlying
-  data is not destroyed.]
+  [#*: #+ Borrowed via label #_*"(preferred)": access the named protocol
+  member in the #~"as" clause of an object (#~"r: f.myreader"). This
+  creates a borrowed protocol instance: the protocol struct is
+  heap-allocated and freed when it goes out of scope, but the underlying
+  data is not affected. The source variable is locked for the lifetime of
+  the protocol instance.]
+  [#*: #+ Owned via #~"create": call #~"protocol.create from: obj.take"
+  or use the bare-name shorthand #~"protocol obj.take" which routes
+  through #~".create" via the unified call dispatch. This creates an owned
+  protocol instance: the source object is consumed and the protocol
+  instance owns the data. When the protocol instance goes out of scope,
+  both the protocol struct and the underlying data are destroyed.
+  #~".take" is #_*"not" a protocol constructor; it remains the inline
+  ownership method on runtime instances (#~"obj.take") only.]
+  [#*: #+ Borrowed via #~"borrow": call #~"protocol.borrow from: obj.lock"
+  when the label shorthand is not available. This creates a borrowed
+  protocol instance (same semantics as the label form). The source
+  variable is locked for the lifetime of the protocol instance. The
+  protocol struct is heap-allocated and freed on scope exit, but the
+  underlying data is not destroyed.]
 
 For borrowed instances (label and #~"borrow" forms): if the protocol instance
 is created in a lower scope (eg. passing as a standard loaned argument), then

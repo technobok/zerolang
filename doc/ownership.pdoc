@@ -324,12 +324,30 @@ When a function is called, locks are taken on arguments and the receiver:
   shared locks on parent items) are assigned to the returned value. All other
   argument locks are freed.]
 
-Locks are also taken on targets in #~"if" and #~"for" as required to prevent
-mutation in the body.
+#~"for" loops over a reftype iteration target take an exclusive lock on the
+target for the duration of the body, preventing mutation of the container or
+iterator from outside the loop. Valtype iteration targets (eg. born-borrowed
+record iterators) are not locked by the for-loop itself -- their locks flow
+through the per-iteration #~"call" method dispatch, which takes and releases
+an exclusive lock on the receiver for each call. See the lock lifecycle
+walkthrough below for a worked example.
 
 #~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
-and the subject is evaluated once. #~".take" is allowed on the match subject
-inside arm bodies for ownership transfer.
+and the subject is evaluated once, so there is no aliasing or re-evaluation
+concern. #~".take" is allowed on the match subject inside arm bodies for
+ownership transfer.
+
+#~"if" does not lock anything. Condition expressions are evaluated like any
+other expression: any intermediate locks taken during evaluation are released
+before control enters the branch body. There is no variable-binding form for
+#~"if" in Zerolang.
+
+#~"with" does not lock its target either. The #~"with name: value do expr"
+form is sugar for a scoped name binding; lock handling is delegated to the
+assignment semantics of #~"name: value" and to operations inside #~"expr" that
+take their own locks via the function-call algorithm. When #~"name" falls out
+of scope at the end of #~"with", any locks it holds -- including those
+transferred from #~".lock" fields of born-borrowed values -- are released.
 
 #---: Lock Release on Scope Exit
 
@@ -507,7 +525,7 @@ or take ownership of the born-borrowed value.
 #---: Protocol and Facet Restrictions
 
 A born-borrowed valtype cannot be used with #~"protocol.create",
-#~"protocol.take", #~"protocol.borrow", #~"facet.create", or any other
+#~"protocol.borrow", #~"facet.create", #~"facet.borrow", or any other
 construction that wraps the source in a protocol or facet instance. Protocol
 and facet wrappers are heap-allocated and copy or take ownership of their
 source, neither of which is permitted for born-borrowed values.
@@ -828,20 +846,32 @@ Protocol instances can be created in three ways, each with different ownership
 semantics:
 
 #ul:
-  [#*: #+ Borrowed via label (#~"r: obj.protocolname"): returns a borrowed
-  protocol instance. The protocol struct is heap-allocated and freed on scope
-  exit, but the underlying data is #_*"not" destroyed. The source variable is
-  locked exclusively for the lifetime of the protocol instance and becomes
-  accessible again when the protocol instance goes out of scope.]
-  [#*: #+ Owned via #~"create" / #~"take" (#~"r: proto.create from: obj.take"
-  or #~"r: proto.take from: obj.take"): returns an owned protocol instance.
-  The source object is consumed (taken). On scope exit, both the protocol
-  struct and the underlying data are destroyed.]
+  [#*: #+ Borrowed via label (#~"r: obj.protocolname") -- #_*"preferred"
+  borrow form when the type declares the protocol with a named label in its
+  #~"as" block. Returns a borrowed protocol instance. The protocol struct is
+  heap-allocated and freed on scope exit, but the underlying data is
+  #_*"not" destroyed. The source variable is locked exclusively for the
+  lifetime of the protocol instance and becomes accessible again when the
+  protocol instance goes out of scope.]
+  [#*: #+ Owned via #~"create" (#~"r: proto.create from: obj.take", or the
+  bare-name shorthand #~"r: proto obj.take"): returns an owned protocol
+  instance. The source object is consumed (taken). On scope exit, both the
+  protocol struct and the underlying data are destroyed. Bare-name routes
+  through #~"proto.create" via the unified call dispatch; see the spec's
+  "Implicit Construction" section.]
   [#*: #+ Borrowed via #~"borrow" (#~"r: proto.borrow from: obj.lock"):
-  returns a borrowed protocol instance. Semantically equivalent to the label
-  form -- the protocol struct is heap-allocated and freed on scope exit, the
-  underlying data is #_*"not" destroyed, and the source variable is locked
-  exclusively.]
+  explicit borrow form for when the label shorthand is not available
+  (e.g. the implementing type does not name the conformance). Semantically
+  equivalent to the label form -- the protocol struct is heap-allocated and
+  freed on scope exit, the underlying data is #_*"not" destroyed, and the
+  source variable is locked exclusively.]
+
+#~".take" used to be registered as an alias for #~".create" on protocol,
+facet and typedef types. It has been removed: the canonical construction
+verb is #~".create", and #~".take" on these types now produces a
+migration error pointing at #~".create" and #~".borrow". #~".take" remains
+available as the inline ownership method on runtime instances
+(#~"obj.take") as before.
 
 Born-borrowed valtypes (records with #~".lock" fields whose constructors
 return #~"this.borrow") cannot be sources for any of these construction

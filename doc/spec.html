@@ -1593,10 +1593,9 @@ result.</p>
 <p>Born-borrowed records cannot live in class fields, cannot live in records
 that are not themselves born-borrowed, cannot be elements of copy-by-value
 generic containers (<code>list of: born_borrowed_type</code> is rejected), and
-cannot be sources for <code>protocol.create</code> / <code>protocol.take</code> /
-<code>protocol.borrow</code> / <code>facet.create</code> / <code>facet.take</code>. They <em><strong>can</strong></em>
-declare protocol or facet conformance in their <code>as</code> block (compile-time
-only).</p>
+cannot be sources for <code>protocol.create</code> / <code>protocol.borrow</code> /
+<code>facet.create</code> / <code>facet.borrow</code>. They <em><strong>can</strong></em> declare protocol or
+facet conformance in their <code>as</code> block (compile-time only).</p>
 <p>See <code>doc/ownership.pdoc</code> for the full design and worked examples.</p>
 <h4 id="locking"><a href="#locking">5.1.10. Locking</a></h4>
 <p>Locking is an orthogonal attribute tracked alongside ownership. It prevents
@@ -1639,9 +1638,17 @@ values:</p>
     shared locks on parent items) are assigned to the returned value. All other
     argument locks are freed.</li>
 </ol>
-<p>Locks are also taken on targets in <code>match</code>, <code>if</code> and <code>for</code> to prevent
-mutation in the body. <code>match</code> can also <code>.take</code> its target, in which case
-the target is owned with the narrowed type in the match bodies.</p>
+<p><code>for</code> loops over a reftype iteration target take an exclusive lock on the
+target for the body's duration, preventing mutation during iteration. Valtype
+iteration targets (born-borrowed iterators) are not locked by <code>for</code> itself
+-- their locks flow through per-iteration method dispatch.</p>
+<p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
+and the subject is evaluated once, so there is no aliasing concern. <code>match</code>
+may <code>.take</code> its subject, in which case the subject is owned with the
+narrowed type in the arm bodies.</p>
+<p><code>if</code> and <code>with</code> do not lock their condition or target -- expression
+evaluation and assignment semantics handle lock lifetimes without additional
+scope-level locking.</p>
 <p>When an instance falls out of scope, all of its locks are freed. If the
 variable is borrowed, the borrow is dropped. If the variable is owned, it is
 destroyed.</p>
@@ -3122,21 +3129,26 @@ data, a pointer to a vtable with function pointers for each spec, and a
 destructor pointer (NULL for borrowed instances, set for owned instances).</p>
 <p>There are three ways to create a protocol instance:</p>
 <ol>
-<li>Borrowed via label: access the named protocol member in the <code>as</code>
-clause of an object (<code>r: f.myreader</code>). This creates a borrowed protocol
-instance: the protocol struct is heap-allocated and freed when it goes out of
-scope, but the underlying data is not affected. The source variable is locked
-for the lifetime of the protocol instance.</li>
-<li>Owned via <code>create</code> or <code>take</code>: call <code>protocol.create from: obj.take</code>
-or <code>protocol.take from: obj.take</code> (<code>take</code> is an alias for <code>create</code>).
-This creates an owned protocol instance: the source object is consumed and
-the protocol instance owns the data. When the protocol instance goes out of
-scope, both the protocol struct and the underlying data are destroyed.</li>
-<li>Borrowed via <code>borrow</code>: call <code>protocol.borrow from: obj.lock</code>.
-This creates a borrowed protocol instance (same as the label form). The
-source variable is locked for the lifetime of the protocol instance. The
-protocol struct is heap-allocated and freed on scope exit, but the underlying
-data is not destroyed.</li>
+<li>Borrowed via label <em><strong>(preferred)</strong></em>: access the named protocol
+member in the <code>as</code> clause of an object (<code>r: f.myreader</code>). This
+creates a borrowed protocol instance: the protocol struct is
+heap-allocated and freed when it goes out of scope, but the underlying
+data is not affected. The source variable is locked for the lifetime of
+the protocol instance.</li>
+<li>Owned via <code>create</code>: call <code>protocol.create from: obj.take</code>
+or use the bare-name shorthand <code>protocol obj.take</code> which routes
+through <code>.create</code> via the unified call dispatch. This creates an owned
+protocol instance: the source object is consumed and the protocol
+instance owns the data. When the protocol instance goes out of scope,
+both the protocol struct and the underlying data are destroyed.
+<code>.take</code> is <em><strong>not</strong></em> a protocol constructor; it remains the inline
+ownership method on runtime instances (<code>obj.take</code>) only.</li>
+<li>Borrowed via <code>borrow</code>: call <code>protocol.borrow from: obj.lock</code>
+when the label shorthand is not available. This creates a borrowed
+protocol instance (same semantics as the label form). The source
+variable is locked for the lifetime of the protocol instance. The
+protocol struct is heap-allocated and freed on scope exit, but the
+underlying data is not destroyed.</li>
 </ol>
 <p>For borrowed instances (label and <code>borrow</code> forms): if the protocol instance
 is created in a lower scope (eg. passing as a standard loaned argument), then
