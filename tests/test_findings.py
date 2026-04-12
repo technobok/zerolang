@@ -995,6 +995,10 @@ class TestSqlDump:
             with open(src, "w") as f:
                 f.write('main: function is { print "hello" }\n')
             sql_path = os.path.join(tmpdir, "out.sql")
+            # give zc an explicit -o inside the tempdir so it does not
+            # create a stray clitest.c in the repo root (zc defaults its C
+            # output path to `<unit>.c` in the current working directory).
+            c_path = os.path.join(tmpdir, "out.c")
             src_dir = os.path.join(os.path.dirname(__file__), "..", "src")
             result = subprocess.run(
                 [
@@ -1003,6 +1007,8 @@ class TestSqlDump:
                     "--src",
                     tmpdir,
                     "clitest",
+                    "-o",
+                    c_path,
                     "--dump-sql",
                     sql_path,
                 ],
