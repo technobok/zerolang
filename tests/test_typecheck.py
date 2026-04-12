@@ -1063,6 +1063,35 @@ class TestBorrowedValtypeRestrictions:
             "}"
         )
 
+    def test_born_borrowed_passes_to_borrow_param(self):
+        """A born-borrowed instance can be passed to any .borrow parameter,
+        same as a regular borrowed valtype — born-borrowed is a TYPE-level
+        property; after construction the instance is an ordinary borrowed
+        variable."""
+        check_ok(
+            "bag: class { a: i64 } as {\n"
+            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
+            "    return bagiter target: b.private\n"
+            "  }\n"
+            "}\n"
+            "bagiter: record {\n"
+            "  target: bag.private.lock\n"
+            "} as {\n"
+            "  create: function {target: bag.private.lock} "
+            "out this.borrow is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "}\n"
+            "use_iter: function {it: bagiter.borrow} out i64 is {\n"
+            "  return it.target.a\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 42\n"
+            "  it: bag.iterate b: b\n"
+            "  x: use_iter it\n"
+            "}"
+        )
+
 
 class TestLockFieldsAndBornBorrowed:
     """Phase B: .lock fields, this.borrow constructors, born-borrowed valtypes."""

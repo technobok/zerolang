@@ -3311,6 +3311,10 @@ class TypeChecker:
         for param_name, concrete_type in generic_args.items():
             if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
                 continue
+            # Defensive early error: the instance-level BORROWED check in
+            # _check_call would also reject this at use time (containers
+            # copy/take their elements), but a TYPE-level message about
+            # born-borrowed in a generic container is more helpful.
             if getattr(concrete_type, "is_born_borrowed", False):
                 self._error(
                     f"Born-borrowed type '{concrete_type.name}' cannot be used "
@@ -5953,10 +5957,10 @@ class TypeChecker:
         if not arg_type:
             return None
 
-        # Phase E: born-borrowed valtypes cannot be sources for owned
-        # protocol/facet creation — the protocol instance would have to
-        # copy or take the source, but born-borrowed values cannot be
-        # copied or taken.
+        # Defensive early error: the from: parameter is TAKE, so a borrowed
+        # instance would fail at the standard ownership check in _check_call.
+        # The TYPE-level message about born-borrowed protocol sources is more
+        # helpful than a generic "cannot pass borrowed to take" diagnostic.
         if getattr(arg_type, "is_born_borrowed", False):
             self._error(
                 f"Cannot create {kind} '{proto_type.name}' from born-borrowed "
