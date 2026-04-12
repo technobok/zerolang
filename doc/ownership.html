@@ -123,6 +123,8 @@ Table of Contents</div>
 </li>
 <li><a href="#lock">.lock</a>
 </li>
+<li><a href="#release">.release</a>
+</li>
 </ul>
 </li>
 <li><a href="#locking">Locking</a>
@@ -395,6 +397,38 @@ value.</p>
 nothing to assign the locks to).</p>
 <p><code>.lock</code> is not an inline method on instances. It is only used on function
 parameter declarations.</p>
+<h3 id="release"><a href="#release">6.4. .release</a></h3>
+<p>An inline method only (not a parameter or return attribute). <code>x.release</code> ends
+the lifetime of variable <code>x</code> immediately, as if it fell out of scope at that
+point. The name <code>x</code> is invalidated and any subsequent use is a compile error.</p>
+<p>For owned reftypes (classes, unions, strings): the destructor runs and the
+pointer is set to NULL (scope-exit cleanup becomes a safe no-op).</p>
+<p>For owned valtypes (records, enums, integers): just invalidates the name.
+No destructor call is needed.</p>
+<p>For borrowed variables (any type): ends the borrow and releases any locks the
+variable holds on other variables. The source variable becomes unlocked and
+available again. No destructor is called (the owner is responsible for cleanup).</p>
+<ul>
+<li><code>.release</code> is always a statement, never a value expression.</li>
+<li><code>y: x.release</code> is a compile error.</li>
+<li>Use <code>.take</code> when you need to transfer the value to a new name.</li>
+<li>Use <code>.release</code> when you want to end a lifetime without producing a value.</li>
+</ul>
+<p>Error conditions:</p>
+<ul>
+<li>Cannot release a variable that has active locks held by another variable.</li>
+<li>Cannot release a top-level definition (static lifetime).</li>
+<li>Cannot use <code>.release</code> on a non-variable path like <code>x.field.release</code>.</li>
+</ul>
+<p>Example -- early cleanup without nesting:</p>
+<pre><code class="language-zerolang">h: box label: "hotel" value: 8
+print "h alive: \{h.label}"
+h.release
+print "h released -- no 'with' nesting needed"</code></pre>
+<p>Comparison with <code>.take</code>: both coexist. Standalone <code>x.take</code> continues to work
+for destroying an owned value. <code>.release</code> additionally works on borrowed
+variables (ending the borrow), whereas <code>.take</code> on a borrowed variable is always
+an error.</p>
 <h2 id="locking"><a href="#locking">7. Locking</a></h2>
 <p>Locking is an orthogonal compile-time mechanism that prevents aliasing and data
 races. It has zero runtime overhead.</p>
