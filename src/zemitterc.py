@@ -3735,22 +3735,20 @@ class CEmitter:
 
         if callable_name == "print":
             self.needs_stdio = True
-            self.needs_string = True
-            self.needs_stdlib = True
+            self.needs_stringview = True
             if call.arguments:
                 arg_op = call.arguments[0].valtype
                 arg_type = self._get_operation_type(arg_op)
-                if arg_type and _is_str_type(arg_type):
-                    arg = self._emit_operation_value(arg_op)
-                    return f'{indent}printf("%.*s\\n", (int){arg}.len, {arg}.data);\n'
-                if arg_type and _is_stringview_type(arg_type):
-                    self.needs_stringview = True
-                    arg = self._emit_operation_value(arg_op)
-                    return f"{indent}z_stringview_print({arg});\n"
                 arg = self._emit_operation_value(arg_op)
-                return f"{indent}z_string_print({arg});\n"
-            t = self._static_string("")
-            return f"{indent}z_string_print({t});\n"
+                # convert to stringview at call site for z_stringview_print
+                if arg_type and _is_str_type(arg_type):
+                    arg = f"(z_stringview_t){{ {arg}.data, {arg}.len }}"
+                elif arg_type and arg_type.subtype == ZSubType.STRING:
+                    self.needs_string = True
+                    arg = f"(z_stringview_t){{ {arg}->data, {arg}->size }}"
+                # stringview: pass directly
+                return f"{indent}z_stringview_print({arg});\n"
+            return f'{indent}printf("\\n");\n'
 
         # check call_kind first, then fallback to callable type's control_kind
         _ck = call.call_kind
