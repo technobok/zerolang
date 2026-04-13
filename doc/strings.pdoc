@@ -810,62 +810,66 @@ This section describes the changes needed to implement the v2 string
 design. Items marked with #~"+" are complete.
 
 
-#---: Phase 1: C Rename (#~"ZStr" -> #~"z_string_t")
+#---: Phase 1: C Rename (#~"ZStr" -> #~"z_string_t") \[COMPLETE\]
 
 Mechanical rename, no functional changes.
 
 #ul:
-  #*: Rename #~"ZStr" typedef to #~"z_string_t" in #~"zemitterc_runtime.py".
-  #*: Rename all #~"zstr_*" functions to #~"z_string_*".
-  #*: Update #~"_ctype()" in #~"zemitterc.py": #~"\"ZStr*\"" -> #~"\"z_string_t*\"".
-  #*: Update all emitter references and test assertions.
+  #*: #+ Rename #~"ZStr" typedef to #~"z_string_t" in #~"zemitterc_runtime.py".
+  #*: #+ Rename all #~"zstr_*" functions to #~"z_string_*".
+  #*: #+ Update #~"_ctype()" in #~"zemitterc.py": #~"\"ZStr*\"" -> #~"\"z_string_t*\"".
+  #*: #+ Update all emitter references and test assertions.
 
 
-#---: Phase 2: Compact #~"str" Length Field
-
-#ul:
-  #*: Update #~"_emit_mono_str()": select #~"uint8_t"/#~"uint16_t"/#~"uint32_t" based on capacity.
-  #*: Remove NUL from #~"str" data buffer: #~"data[N]" instead of #~"data[N+1]".
-  #*: Update #~"z_string_copy_to_buf" for variable-size length field.
-
-
-#---: Phase 3: v2 String Struct
+#---: Phase 2: Compact #~"str" Length Field \[COMPLETE\]
 
 #ul:
-  #*: Add #~"uint64_t capacity" to #~"z_string_t" struct.
-  #*: Update #~"z_string_new": set #~"capacity = size", maintain internal NUL.
-  #*: Remove #~"ZSTR_STATIC_FLAG", #~"ZSTR_IS_STATIC", #~"ZSTR_STATIC" macros.
-  #*: Update #~"z_string_free": unconditionally free.
-  #*: String literals temporarily use #~"z_string_new" (become #~"stringview" in Phase 4).
+  #*: #+ Update #~"_emit_mono_str()": select #~"uint8_t"/#~"uint16_t"/#~"uint32_t" based on capacity.
+  #*: #+ Remove NUL from #~"str" data buffer: #~"data[N]" instead of #~"data[N+1]".
+  #*: #+ Inline conversion in per-capacity wrapper (replaces #~"z_string_copy_to_buf" call).
 
 
-#---: Phase 4: #~"stringview" Type
+#---: Phase 3: v2 String Struct \[COMPLETE\]
 
 #ul:
-  #*: Add #~"ZSubType.STRINGVIEW" to #~"ztypes.py".
-  #*: Add #~"stringview" as native born-borrowed type in #~"system.z".
-  #*: Add #~"z_stringview_t" struct to runtime.
-  #*: String literals resolve to #~"stringview" type (not #~"string").
-  #*: Static #~"stringview" (from literals) does not acquire locks.
-  #*: Add #~".string" method on #~"stringview" (copies to heap).
-  #*: Add #~".str to: N" method on #~"stringview" (copies to buffer).
-  #*: Add #~".stringview" method on #~"string" (creates locked view).
-  #*: Add #~".stringview from: to:" method on #~"string" (substring view).
-  #*: Update #~"print" to accept #~"stringview".
-  #*: Update string interpolation to handle #~"stringview" parts.
+  #*: #+ Add #~"uint64_t capacity" to #~"z_string_t" struct.
+  #*: #+ Update #~"z_string_new": set #~"capacity = size", maintain internal NUL.
+  #*: #+ Move static flag to bit 63 of #~"capacity" (was in #~"size"). Keep #~"Z_STRING_STATIC" macro with v2 layout.
+  #*: #+ Update #~"z_string_free": check static flag in capacity before freeing.
+  #*: #+ Update #~"z_string_cat", map copy sites: set capacity, maintain internal NUL.
 
 
-#---: Phase 5: Mutable String Operations
+#---: Phase 4: #~"stringview" Type \[PARTIAL\]
 
 #ul:
-  #*: Add #~"append", #~"reserve", #~"shrink", #~"capacity", #~"length" methods to #~"string".
-  #*: Implement #~"z_string_append(z_string_t** s, const char* data, uint64_t len)".
-  #*: Implement #~"z_string_reserve(z_string_t** s, uint64_t additional)".
-  #*: Implement #~"z_string_shrink(z_string_t** s)".
-  #*: Rewrite interpolation to use append chain (zero intermediate allocations).
+  #*: #+ Add #~"ZSubType.STRINGVIEW" to #~"ztypes.py".
+  #*: #+ Add #~"stringview" record type in #~"system.z" with #~".length" and #~".string" native methods.
+  #*: #+ Add #~"z_stringview_t" struct to runtime (#~"const char* data" + #~"uint64_t length").
+  #*: #+ Add #~"z_stringview_print", #~"z_stringview_eq", #~"z_string_from_view" runtime functions.
+  #*: #+ Add #~"string.toview" method (creates #~"z_stringview_t" from string).
+  #*: #+ Add #~"string.length" method (returns byte count).
+  #*: #+ Add #~"stringview.string" conversion (heap copy via #~"z_string_from_view").
+  #*: #+ Add #~"stringview.length" (byte count).
+  #*: #+ Make #~"stringview" compatible with #~"string" for function parameters.
+  #*: #+ Handle #~"stringview" in print and string interpolation.
+  #*: String literals resolve to #~"stringview" type (not #~"string") -- deferred.
+  #*: #~".toview from: to:" substring views -- deferred.
+  #*: Borrow/lock tracking for dynamic #~"stringview" -- deferred.
 
 
-#---: Phase 6: #~".cstring" Method
+#---: Phase 5: Mutable String Operations \[COMPLETE\]
+
+#ul:
+  #*: #+ Add #~"append", #~"reserve", #~"shrink", #~"capacity" methods to #~"string".
+  #*: #+ Implement #~"z_string_append(z_string_t** s, const char* data, uint64_t len)".
+  #*: #+ Implement #~"z_string_reserve(z_string_t** s, uint64_t additional)" with static-to-heap promotion.
+  #*: #+ Implement #~"z_string_shrink(z_string_t** s)".
+  #*: Rewrite interpolation to use append chain (zero intermediate allocations) -- deferred.
+
+
+#---: Phase 6: #~".cstring" Method \[DEFERRED\]
+
+Requires pointer type for return value; depends on FFI design.
 
 #ul:
   #*: #~"string.cstring" -- returns #~"data" directly (internal NUL maintained).
