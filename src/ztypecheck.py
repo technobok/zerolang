@@ -5487,6 +5487,18 @@ class TypeChecker:
             )
             return None
 
+        # .toview from: to: on string — substring view (not record construction)
+        if (
+            _is_stringview_type(callee_type)
+            and call.callable.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, call.callable).child.name == "toview"
+        ):
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
+            call.type = callee_type
+            call.call_kind = zast.CallKind.REGULAR
+            return callee_type
+
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             # generic record construction

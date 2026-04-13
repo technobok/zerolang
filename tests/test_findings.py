@@ -1200,11 +1200,22 @@ class TestNodeIdTemps:
         csource, _ = emit_with_emitter(
             'main: function is { print "hello \\{1 + 2} world" }'
         )
-        # temp variables should follow _t{nodeid}_{counter} pattern
+        # temp variables follow _{prefix}{nodeid}_{counter} pattern
+        # (e.g., _s1234_1 for string result, _b1234_1 for buffer)
         import re
 
-        temps = re.findall(r"_t\d+_\d+", csource)
+        temps = re.findall(r"_[a-z]\d+_\d+", csource)
         assert len(temps) > 0, "No NodeID-scoped temps found in output"
-        # all temps in main should share the same nodeid prefix
-        nodeids = {t.split("_")[1] for t in temps}
+        # all temps in main should share the same nodeid
+        nodeids = {
+            t.split("_")[1][0:-1] if t.split("_")[1][-1].isdigit() else t.split("_")[1]
+            for t in temps
+        }
+        # extract numeric part after the letter prefix
+        nodeids = set()
+        for t in temps:
+            parts = t.lstrip("_")
+            nid = re.match(r"[a-z](\d+)", parts)
+            if nid:
+                nodeids.add(nid.group(1))
         assert len(nodeids) == 1, f"Expected 1 NodeID prefix, got {nodeids}"

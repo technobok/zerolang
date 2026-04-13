@@ -4398,6 +4398,29 @@ class CEmitter:
                 )
                 if method_name == "toview":
                     self.needs_stringview = True
+                    from_val = None
+                    to_val = None
+                    for arg in call.arguments:
+                        if arg.name == "from":
+                            from_val = self._emit_operation_value(arg.valtype)
+                        elif arg.name == "to":
+                            to_val = self._emit_operation_value(arg.valtype)
+                    if from_val is not None and to_val is not None:
+                        self.needs_stdlib = True
+                        self.needs_stdio = True
+                        indent = self._indent()
+                        self._temp.decls.append(
+                            f"{indent}if ((uint64_t){from_val} > {parent_val}->size"
+                            f" || (uint64_t){to_val} > {parent_val}->size"
+                            f" || (uint64_t){from_val} > (uint64_t){to_val})"
+                            f' {{ fprintf(stderr, "toview: bounds error\\n");'
+                            f" exit(1); }}\n"
+                        )
+                        return (
+                            f"(z_stringview_t){{ {parent_val}->data"
+                            f" + (uint64_t){from_val},"
+                            f" (uint64_t){to_val} - (uint64_t){from_val} }}"
+                        )
                     return (
                         f"(z_stringview_t){{ {parent_val}->data, {parent_val}->size }}"
                     )
@@ -5548,7 +5571,22 @@ class CEmitter:
             literal = self._collect_string_literal(atom.stringparts)
             return self._static_string(literal)
 
-        parts: List[str] = []
+        # append chain: one allocation, no intermediates
+        indent = self._indent()
+        result = self._temp_name("s")
+        # estimate capacity: literal lengths + 16 per expression
+        est_cap = 0
+        for p in atom.stringparts:
+            if getattr(p, "nodetype", None) == NodeType.EXPRESSION:
+                est_cap += 16
+            else:
+                est_cap += len(p.tokstr)  # type: ignore[union-attr]
+        self._temp.decls.append(
+            f"{indent}z_string_t* {result} = z_string_create((uint64_t){est_cap});\n"
+        )
+        self._temp.frees.append(result)
+        self._temp.string_set.add(result)
+
         for p in atom.stringparts:
             if getattr(p, "nodetype", None) == NodeType.EXPRESSION:
                 val = self._emit_expression_value(cast(zast.Expression, p))
@@ -5563,34 +5601,58 @@ class CEmitter:
                     "u32",
                     "u64",
                 ):
-                    parts.append(self._alloc_temp(f"z_string_from_i64((int64_t){val})"))
+                    buf = self._temp_name("b")
+                    self._temp.decls.append(
+                        f"{indent}char {buf}[32]; int {buf}_n = snprintf({buf},"
+                        f' 32, "%ld", (long)(int64_t){val});\n'
+                    )
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result},"
+                        f" {buf}, (uint64_t){buf}_n);\n"
+                    )
                 elif val_type and val_type.name in ("f32", "f64"):
-                    parts.append(self._alloc_temp(f"z_string_from_f64((double){val})"))
+                    buf = self._temp_name("b")
+                    self._temp.decls.append(
+                        f"{indent}char {buf}[64]; int {buf}_n = snprintf({buf},"
+                        f' 64, "%g", (double){val});\n'
+                    )
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result},"
+                        f" {buf}, (uint64_t){buf}_n);\n"
+                    )
                 elif val_type and val_type.subtype == ZSubType.STRING:
-                    # string variable reference — no temp needed
-                    parts.append(val)
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result},"
+                        f" {val}->data, {val}->size);\n"
+                    )
                 elif val_type and _is_stringview_type(val_type):
-                    # stringview — convert to z_string_t* for concatenation
                     self.needs_stringview = True
-                    parts.append(self._alloc_temp(f"z_string_from_view({val})"))
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result},"
+                        f" {val}.data, {val}.length);\n"
+                    )
                 elif val_type and _is_str_type(val_type):
-                    # str valtype — convert to z_string_t* for concatenation
-                    str_type_name = val_type.name
-                    parts.append(self._alloc_temp(f"z_{str_type_name}_string({val})"))
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result}, {val}.data, {val}.len);\n"
+                    )
                 else:
-                    parts.append(self._alloc_temp(f"z_string_from_i64((int64_t){val})"))
+                    buf = self._temp_name("b")
+                    self._temp.decls.append(
+                        f"{indent}char {buf}[32]; int {buf}_n = snprintf({buf},"
+                        f' 32, "%ld", (long)(int64_t){val});\n'
+                    )
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result},"
+                        f" {buf}, (uint64_t){buf}_n);\n"
+                    )
             else:
                 literal = self._escape_c_string(p.tokstr)  # type: ignore[union-attr]
                 if literal:
-                    parts.append(self._static_string(literal))
+                    self._temp.decls.append(
+                        f"{indent}z_string_append(&{result},"
+                        f' "{literal}", sizeof("{literal}")-1);\n'
+                    )
 
-        if not parts:
-            return self._static_string("")
-        if len(parts) == 1:
-            return parts[0]
-        result = parts[0]
-        for p in parts[1:]:
-            result = self._alloc_temp(f"z_string_cat({result}, {p})")
         return result
 
     def _collect_string_literal(self, parts: list) -> str:
