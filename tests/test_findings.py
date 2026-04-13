@@ -175,7 +175,7 @@ class TestFinding3DestructorMetadata:
         assert name_type is not None
         assert name_type.name == "string"
         assert name_type.needs_destructor is True
-        assert name_type.destructor_name == "zstr_free"
+        assert name_type.destructor_name == "z_string_free"
         assert name_type.is_heap_allocated is True
 
     def test_class_destructor(self):
@@ -676,12 +676,12 @@ class TestFinding11ScopeState:
         assert "z_box_destroy" in csource
 
     def test_string_cleanup_emitted(self):
-        """String variables should get zstr_free at scope exit."""
+        """String variables should get z_string_free at scope exit."""
         csource, emitter = emit_with_emitter(
             'greet: function {name: string} out string is { return "hello" }\n'
             'main: function is {\n    s: greet name: "world"\n    print s\n}'
         )
-        assert "zstr_free" in csource
+        assert "z_string_free" in csource
 
     def test_union_cleanup_emitted(self):
         """Union variables should get destroy calls at scope exit."""

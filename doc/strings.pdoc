@@ -20,7 +20,7 @@
 #doc.script src=style/prism-zerolang.js
 #doc.author: pw <p@zerolang.org>
 #doc.datecreated: 2026-03-13
-#doc.version: v0.1
+#doc.version: v0.2
 
 #doc.body class=toc-sidebar
 #nav id=nav: [#include literal=true: style/nav.html]
@@ -33,12 +33,58 @@
   #doc.toc
 
 
-#--: v1 ZStr Memory Layout
+#--: Overview
+
+Zerolang has three string types that separate ownership, mutability,
+and storage concerns:
+
+#ul:
+  #*: #b:"string" -- mutable, owned, heap-allocated. The primary string type for building and modifying text. Always valid UTF-8. Has both a size (current byte count) and a capacity (allocated buffer size). There is no separate string builder -- #~"string" is the builder.
+  #*: #b:"stringview" -- readonly, born-borrowed, value type. A 16-byte pair of #~"(pointer, length)" that provides read-only access into a string's buffer or into static #~".rodata". Always valid UTF-8 (guaranteed by the source it borrows from). Functions that only need to read string data should prefer #~"stringview" parameters. #~"stringview" is also the preferred return type for slicing, iterating, and searching within strings.
+  #*: #b:"str<to: N>" -- fixed-capacity, owned, value type. Stack-allocated with compile-time capacity. Uses the smallest fixed-width integer for the length field. Suitable for bounded strings embedded in records.
+
+All three types are length-delimited. There is no language-level
+guarantee of NUL termination for any string type (aligned with Go and
+Rust). The #~".cstring" method provides C interop when a
+NUL-terminated #~"const char*" is needed.
+
+
+#--: NUL Termination Policy
+
+Zerolang strings are length-delimited at the language level. No string
+type guarantees a NUL terminator as part of its contract.
+
+#b:"Implementation detail:" #~"string" (heap-allocated) maintains an
+internal NUL byte after the content as a free optimization -- malloc
+granularity absorbs the extra byte. This makes the #~".cstring" method
+on #~"string" zero-cost (it returns #~"data" directly). This internal
+NUL is not part of the type's contract and user code must not rely on
+it.
+
+#b:"str<to: N>:" does not maintain a NUL terminator. The data buffer
+is exactly #~"N" bytes. This saves 1 byte per element, which is
+meaningful when #~"str" values are embedded in records or arrays.
+
+#b:"stringview:" has no NUL guarantee. A substring view
+(#~".stringview from: to:") points into the middle of another string's
+buffer and cannot guarantee a NUL follows the viewed region.
+
+#b:"C interop:" all three types provide a #~".cstring" method that
+returns a NUL-terminated #~"const char*":
+
+#ul:
+  #*: #~"string.cstring" -- returns #~"data" directly (zero-cost, internal NUL maintained).
+  #*: #~"str.cstring" -- generates a stack-allocated copy with NUL appended.
+  #*: #~"stringview.cstring" -- generates a stack-allocated copy with NUL appended (or heap for large views).
+
+The returned pointer is valid for the current expression only.
+
+
+#--: v1 ZStr Memory Layout (Historical)
 
 The v1 runtime string type #~"ZStr" is a size-prefixed, NUL-terminated
 byte buffer with a flexible array member. This section documents the v1
-design for historical reference. See "v2 String Design" below for the
-current design direction.
+design for historical reference.
 
 #code language=c: """
 typedef struct {
@@ -50,9 +96,6 @@ typedef struct {
 The #~"data" field starts at offset 8, on a 64-bit boundary. This is optimal
 for #~"memcpy"/#~"memcmp" with SSE/AVX and avoids cache line splits.
 
-Data is always NUL-terminated so it can be used directly as a C string
-via #~"z->data". The NUL is not included in the size.
-
 In v1, the #~"size" field uses bit 63 as a static flag to distinguish
 string literals (in #~".rodata") from heap-allocated strings. The static
 flag is removed in v2 because static literals are exposed as
@@ -60,8 +103,7 @@ flag is removed in v2 because static literals are exposed as
 
 In v1, #~"ZStr" is content-agnostic -- it can store UTF-8, binary data,
 or data with embedded NULs. In v2, all #~"string" and #~"stringview"
-values are guaranteed valid UTF-8. A separate #~"bytes" type will handle
-non-UTF-8 data.
+values are guaranteed valid UTF-8.
 
 
 #--: Comparison with Other Implementations
@@ -76,7 +118,8 @@ pointer, hash cache, and encoding flags.
 
 Two-word value #~"{pointer, length}". No header on the string data
 itself. The garbage collector handles static/heap distinction
-transparently. Immutable slices into larger buffers are cheap.
+transparently. Immutable slices into larger buffers are cheap. No
+NUL terminator.
 
 #---: Swift
 
@@ -88,7 +131,8 @@ whether the string is "small" or a heap pointer.
 
 Separate #~"&str" (borrowed slice: pointer + length) and #~"String"
 (owned: pointer + length + capacity, three words). Lifetime system
-enforces borrow validity at compile time.
+enforces borrow validity at compile time. No NUL terminator;
+#~"CString" type for C interop.
 
 #---: Zerolang v2
 
@@ -99,166 +143,46 @@ with zero heap cost. Heap strings are #~"malloc"/#~"free" with no
 reference counting. Ownership is enforced by the compiler's ownership
 model (take/borrow/swap). Closest to Rust's #~"String" / #~"&str"
 split, but with scope-based lifetime rather than full lifetime
-annotations.
+annotations. No NUL terminator at the language level; #~"string"
+maintains an internal NUL as a free optimization for C interop.
 
 
-#--: String and str Interop
+#--: Mutable String (#~"z_string_t")
 
-Zerolang provides two string types: the heap-allocated #~"string" class and
-the fixed-capacity value type #~"str<to: N>". Conversion between them is
-always explicit via the #~".str" and #~".string" methods.
-
-
-#---: string to str
-
-The #~".str" method on #~"string" converts to a fixed-capacity #~"str":
-
-#code language=zerolang: """
-msg: "hello world"
-s: msg.str to: 8       # truncated to capacity 8
-short: "hi".str to: 32  # fits, no truncation
-"""
-
-The #~"to:" argument is a generic numeric parameter that determines the
-capacity of the resulting #~"str". If the source string is longer than the
-capacity, the data is truncated. The programmer is responsible for checking
-length when truncation matters.
-
-For string literals that fit within the capacity, the compiler emits a
-direct struct initializer with no runtime overhead.
-
-
-#---: str to string
-
-The #~".string" method on #~"str" converts to a heap-allocated #~"string":
-
-#code language=zerolang: """
-s: "hello".str to: 32
-heap: s.string    # heap-allocated copy
-"""
-
-This allocates a new #~"ZStr" on the heap and copies the data.
-
-
-#---: str to str (Different Capacities)
-
-The #~".str" method on #~"str" converts to a different capacity:
-
-#code language=zerolang: """
-s32: "hello".str to: 32
-s64: s32.str to: 64    # widen: data preserved, capacity increases
-s4: s32.str to: 4      # narrow: truncated to 4 bytes
-"""
-
-No heap allocation is involved -- the conversion copies directly between
-the fixed-capacity buffers.
-
-
-#---: Assignment Rules
-
-Same-capacity assignment is a direct C struct copy:
-
-#code language=zerolang: """
-a: "hello".str to: 32
-b: "world".str to: 32
-a = b                  # direct copy, same capacity
-"""
-
-Cross-capacity assignment is a type error. The programmer must explicitly
-convert:
-
-#code language=zerolang: """
-a: "hello".str to: 16
-b: "world".str to: 32
-# a = b              # ERROR: type mismatch
-a = b.str to: 16      # OK: explicit conversion
-"""
-
-
-#---: Implementation
-
-All #~".str" conversions share a single runtime helper:
-
-#code language=c: """
-static inline void zstr_copy_to_buf(
-    char* dst, uint64_t* dst_len, uint64_t dst_cap,
-    const char* src, uint64_t src_len
-) {
-    uint64_t n = src_len < dst_cap ? src_len : dst_cap;
-    *dst_len = n;
-    memcpy(dst, src, n);
-    dst[n] = '\0';
-}
-"""
-
-Per target capacity, one thin wrapper is generated:
-
-#code language=c: """
-static z_str_32_t zstr_to_str_32(const char* data, uint64_t len) {
-    z_str_32_t r = {0};
-    zstr_copy_to_buf(r.data, &r.len, 32, data, len);
-    return r;
-}
-"""
-
-Both #~"string.str to: 32" and #~"str_16.str to: 32" call the same
-#~"zstr_to_str_32" function, differing only in how they extract the source
-data pointer and length.
-
-
-#--: v2 String Design
-
-The v1 string system has a single heap-allocated immutable string type
-(#~"ZStr") and a fixed-capacity value type (#~"str<to: N>"). The v2
-design replaces this with three types that cleanly separate ownership,
-mutability, and storage concerns.
-
-
-#---: The Three String Types
-
-#ul:
-  #*: #b:"string" -- mutable, owned, heap-allocated. The primary string type for building and modifying text. Always valid UTF-8. Has both a size (current byte count) and a capacity (allocated buffer size). There is no separate string builder -- #~"string" is the builder.
-  #*: #b:"stringview" -- readonly, borrowed, value type. A 16-byte pair of #~"(pointer, length)" that provides read-only access into a string's buffer or into static #~".rodata". Always valid UTF-8 (guaranteed by the source it borrows from). Functions that only need to read string data should prefer #~"stringview" parameters.
-  #*: #b:"str<to: N>" -- fixed-capacity, owned, value type. Stack-allocated with compile-time capacity. Uses the smallest fixed-width integer for the length field. Suitable for bounded strings embedded in records.
-
-There is no implicit conversion between #~"string" and #~"stringview".
-Functions must explicitly choose which type they accept. This ensures
-the programmer is always aware of ownership and allocation costs.
-
-
-#---: Mutable String (ZStr v2)
-
-The v2 #~"ZStr" adds a capacity field and removes the static flag. All
-strings are heap-allocated and mutable. Static literals are exposed
-through #~"stringview" instead.
+The v2 #~"z_string_t" adds a capacity field and removes the static
+flag. All #~"string" values are heap-allocated and mutable. Static
+literals are exposed through #~"stringview" instead.
 
 #code language=c: """
 typedef struct {
     uint64_t size;       /* byte count of current content */
-    uint64_t capacity;   /* allocated buffer size (excludes NUL) */
-    char data[];         /* NUL-terminated, flexible array member */
-} ZStr;
+    uint64_t capacity;   /* allocated buffer size */
+    char data[];         /* flexible array member */
+} z_string_t;
 """
 
-The static flag (bit 63 of size) is no longer needed. Since all #~"string"
-values are heap-allocated and owned, the #~"zstr_free" function
-unconditionally calls #~"free":
+The static flag (bit 63 of size) is no longer needed. Since all
+#~"string" values are heap-allocated and owned, the #~"z_string_free"
+function unconditionally calls #~"free":
 
 #code language=c: """
-static void zstr_free(ZStr* s) {
+static void z_string_free(z_string_t* s) {
     if (s) free(s);
 }
 """
 
-#b:"Allocation:" #~"malloc(sizeof(ZStr) + capacity + 1)" -- a single
-contiguous block for header and data. The +1 is for the NUL terminator.
+#b:"Allocation:" #~"malloc(sizeof(z_string_t) + capacity + 1)" -- a
+single contiguous block for header and data. The +1 is for the internal
+NUL terminator (implementation detail for C interop, not part of the
+language contract).
 
 #b:"Growth strategy:" #~"new_cap = cap + (cap >> 1) + 16" -- 1.5x plus a
 small constant. Same strategy used by #~"list". Growth triggers
 #~"realloc" which may extend the block in-place or copy.
 
-#b:"NUL termination:" maintained after every mutation for C interop.
-#~"data[size]" is always #~"'\\0'".
+#b:"Internal NUL:" maintained after every mutation as a free
+optimization. #~"data[size]" is always #~"'\\0'" at the implementation
+level, making #~".cstring" zero-cost. User code must not rely on this.
 
 
 #---: String Construction
@@ -304,35 +228,36 @@ beyond the current size without reallocation. Equivalent to Rust's
 is known.
 
 #b:"shrink:" reallocates the buffer to exactly #~"size + 1" bytes
-(content plus NUL). Releases excess capacity. Equivalent to Rust's
-#~"shrink_to_fit". The #~"realloc" call may be zero-copy if the
+(content plus internal NUL). Releases excess capacity. Equivalent to
+Rust's #~"shrink_to_fit". The #~"realloc" call may be zero-copy if the
 allocator supports in-place shrinking.
 
-Other candidate single-word method names considered: #~"grow" (ambiguous
--- does it grow size or capacity?), #~"fit" (unclear direction),
-#~"trim" (conflicts with whitespace trimming), #~"compact" (reasonable
-alternative to #~"shrink").
+#b:"Implementation note:" #~"append", #~"reserve", and #~"shrink" take
+a pointer-to-pointer (#~"z_string_t**") in the generated C code because
+#~"realloc" may move the buffer to a new address.
 
 
 #---: Concatenation
 
 With mutable strings, interpolation no longer needs intermediate
-allocations. Instead of chaining #~"zstr_cat()" calls, the emitter can:
+allocations. Instead of chaining #~"z_string_cat()" calls, the emitter
+can:
 
 #ol:
   #*: Pre-compute the total size of all parts.
   #*: Call #~"reserve" once on the target string.
-  #*: Append each part in sequence (no intermediate #~"ZStr" temporaries).
+  #*: Append each part in sequence (no intermediate #~"z_string_t" temporaries).
 
 For the expression #~"\"a\\{b}c\\{d}\"" , v1 creates 3 intermediate
 heap allocations. v2 creates 0 -- all appends go directly into the
 result string's buffer.
 
 
-#---: stringview
+#--: stringview (#~"z_stringview_t")
 
-A #~"stringview" is a read-only window into string data. It is a value
-type (16 bytes on the stack) with no heap allocation:
+A #~"stringview" is a read-only window into string data. It is a
+born-borrowed value type (16 bytes on the stack) with no heap
+allocation:
 
 #code language=c: """
 typedef struct {
@@ -340,6 +265,13 @@ typedef struct {
     uint64_t length;     /* byte count of the viewed region */
 } z_stringview_t;
 """
+
+#~"stringview" is the preferred parameter type for functions that only
+read string data. It is efficient to create from either #~"string" or
+a literal, and carries no ownership or allocation cost.
+
+#~"stringview" is also the preferred return type for operations that
+produce substrings, such as slicing, iterating, and searching.
 
 
 #---: Static Literals as stringview
@@ -356,8 +288,8 @@ static const char _zsl1[] = "hello";
 z_stringview_t sv = { _zsl1, 5 };
 """
 
-This replaces the v1 #~"ZSTR_STATIC" macro. No #~"ZStr" struct is
-allocated for literals. The #~"stringview" is constructed as a
+This replaces the v1 #~"ZSTR_STATIC" macro. No #~"z_string_t" struct
+is allocated for literals. The #~"stringview" is constructed as a
 compile-time constant.
 
 To obtain a mutable #~"string" from a literal, use the #~".string"
@@ -372,40 +304,47 @@ mutable: greeting.string    # same: copies viewed data to heap
 
 #---: stringview Ownership and Borrowing
 
-A #~"stringview" created from a #~"string" variable acquires an
-exclusive lock on the source, preventing mutation or deallocation while
-the view exists:
+#~"stringview" is a born-borrowed type: every instance is borrowed from
+the moment of creation. There are two kinds of #~"stringview":
+
+#b:"Static stringview" (from literals): points to #~".rodata", which is
+immortal. No lock is needed. Static views can be freely copied within
+scope constraints.
+
+#b:"Dynamic stringview" (from #~"string.stringview"): acquires an
+exclusive lock on the source #~"string", preventing mutation or
+deallocation while the view exists:
 
 #code language=zerolang: """
 s: "hello world".string
-view: s.view               # view borrows s, s is now locked
-# s.append " !"           # ERROR: s is locked by view
-print view                  # OK: read-only access
+view: s.stringview          # view borrows s, s is now locked
+# s.append " !"            # ERROR: s is locked by view
+print view                   # OK: read-only access
 # view goes out of scope, lock on s is released
-s.append " !"              # OK: s is unlocked
+s.append " !"               # OK: s is unlocked
 """
 
 This uses the existing borrow/lock mechanism in the type checker:
 #~"ZLockState.EXCLUSIVE" on the source variable, tracked via
 #~"LockEntry" and #~"held_locks", released on scope exit.
 
-#b:"Substrings:" a #~"stringview" can point to a sub-range of a string's
-buffer. The lock is on the entire source string, not just the viewed
-region:
+#b:"Substrings:" a #~"stringview" can point to a sub-range of a
+string's buffer. The lock is on the entire source string, not just the
+viewed region:
 
 #code language=zerolang: """
 s: "hello world".string
-sub: s.view from: 6 to: 11   # view of "world", locks s
+sub: s.stringview from: 6 to: 11   # view of "world", locks s
 """
 
-#b:"stringview from stringview:" a view can be narrowed from another view.
-The lock chains: the new view locks the parent view's source. The C
-representation is just a new #~"(pointer, length)" pair -- no additional
-allocation:
+#b:"stringview from stringview:" a view can be narrowed from another
+view. The lock chains: the new view locks the parent view's source. The
+C representation is just a new #~"(pointer, length)" pair -- no
+additional allocation:
 
 #code language=zerolang: """
 greeting: "hello world"     # stringview (static, no lock needed)
-word: greeting.view from: 6 to: 11   # stringview of "world"
+word: greeting.stringview from: 6 to: 11   # stringview of "world"
 """
 
 Static #~"stringview" values (from literals) require no lock because
@@ -413,12 +352,12 @@ Static #~"stringview" values (from literals) require no lock because
 locking.
 
 
-#---: stringview Limitations
+#---: stringview Limitations (v2)
 
-#b:"Not storable in records/classes (v2):" Since #~"stringview" borrows from
+#b:"Not storable in records/classes:" since #~"stringview" borrows from
 a source via a scope-based lock, storing a view in a record or class
-field would require the record to participate in borrow tracking. This is
-complex and deferred. In v2, #~"stringview" can only exist as:
+field would require the record to participate in borrow tracking. This
+is complex and deferred. In v2, #~"stringview" can only exist as:
 
 #ul:
   #*: Local variables (scope-based lifetime)
@@ -426,7 +365,7 @@ complex and deferred. In v2, #~"stringview" can only exist as:
   #*: Function return values (caller must bind to a local with appropriate lock)
 
 Storing #~"stringview" in data structures is a v3 concern that requires
-lifetime annotations or reference counting.
+lifetime annotations.
 
 #b:"No implicit conversion:" there is no implicit conversion between
 #~"string" and #~"stringview". Functions must explicitly declare which
@@ -445,8 +384,209 @@ print_upper "hello"              # OK: literal is stringview
 append_greeting "hello".string   # OK: explicit copy to string
 """
 
+#b:"No stringview from str (v2):" creating a #~"stringview" from a
+#~"str<to: N>" value is not supported in v2. #~"str" is a valtype
+(stack-allocated, copied on assignment). A #~"stringview" pointing into
+an #~"str"'s data buffer would have dangling pointer risk if the #~"str"
+goes out of scope or is copied. Safe implementation requires Rust-style
+lifetime tracking, which is deferred to v3. If a view of #~"str" data
+is needed, convert to #~"string" first:
 
-#---: UTF-8 Encoding
+#code language=zerolang: """
+buf: "hello".str to: 32
+# view: buf.stringview       # ERROR: cannot create stringview from str in v2
+view: buf.string.stringview   # OK: copy to heap, then create view
+"""
+
+
+#--: Conversion Matrix
+
+The following table shows all conversions between string types:
+
+#table:
+  #tr:
+    #th: From \\ To
+    #th: #~"string"
+    #th: #~"str<to: N>"
+    #th: #~"stringview"
+  #tr:
+    #td: #b:"string"
+    #td: --
+    #td: #~".str to: N" (copy)
+    #td: #~".stringview" (borrow, locks source)
+  #tr:
+    #td: #b:"str<to: N>"
+    #td: #~".string" (heap copy)
+    #td: #~".str to: M" (copy)
+    #td: not supported (v2)
+  #tr:
+    #td: #b:"stringview"
+    #td: #~".string" (heap copy)
+    #td: #~".str to: N" (copy)
+    #td: #~".stringview from: to:" (narrow)
+  #tr:
+    #td: #b:"literal"
+    #td: #~".string" (heap copy)
+    #td: #~".str to: N" (direct init)
+    #td: implicit (zero-cost)
+
+All three types also provide #~".cstring" for C interop.
+
+
+#--: String and str Interop
+
+Zerolang provides two owned string types: the heap-allocated #~"string"
+class and the fixed-capacity value type #~"str<to: N>". Conversion
+between them is always explicit via the #~".str" and #~".string"
+methods.
+
+
+#---: string to str
+
+The #~".str" method on #~"string" converts to a fixed-capacity #~"str":
+
+#code language=zerolang: """
+msg: "hello world".string
+s: msg.str to: 8       # truncated to capacity 8
+short: "hi".str to: 32  # fits, no truncation (literal -> str directly)
+"""
+
+The #~"to:" argument is a generic numeric parameter that determines the
+capacity of the resulting #~"str". If the source string is longer than
+the capacity, the data is truncated. The programmer is responsible for
+checking length when truncation matters.
+
+For string literals that fit within the capacity, the compiler emits a
+direct struct initializer with no runtime overhead.
+
+
+#---: str to string
+
+The #~".string" method on #~"str" converts to a heap-allocated
+#~"string":
+
+#code language=zerolang: """
+s: "hello".str to: 32
+heap: s.string    # heap-allocated copy
+"""
+
+This allocates a new #~"z_string_t" on the heap and copies the data.
+
+
+#---: str to str (Different Capacities)
+
+The #~".str" method on #~"str" converts to a different capacity:
+
+#code language=zerolang: """
+s32: "hello".str to: 32
+s64: s32.str to: 64    # widen: data preserved, capacity increases
+s4: s32.str to: 4      # narrow: truncated to 4 bytes
+"""
+
+No heap allocation is involved -- the conversion copies directly between
+the fixed-capacity buffers.
+
+
+#---: Assignment Rules
+
+Same-capacity assignment is a direct C struct copy:
+
+#code language=zerolang: """
+a: "hello".str to: 32
+b: "world".str to: 32
+a = b                  # direct copy, same capacity
+"""
+
+Cross-capacity assignment is a type error. The programmer must explicitly
+convert:
+
+#code language=zerolang: """
+a: "hello".str to: 16
+b: "world".str to: 32
+# a = b              # ERROR: type mismatch
+a = b.str to: 16      # OK: explicit conversion
+"""
+
+
+#---: Implementation
+
+All #~".str" conversions share a single runtime helper:
+
+#code language=c: """
+static inline void z_string_copy_to_buf(
+    char* dst, void* dst_len, uint64_t dst_cap,
+    const char* src, uint64_t src_len
+) {
+    uint64_t n = src_len < dst_cap ? src_len : dst_cap;
+    memcpy(dst, src, n);
+    /* length written via caller-generated assignment (type-specific) */
+}
+"""
+
+Per target capacity, one thin wrapper is generated:
+
+#code language=c: """
+static z_str_32_t zstr_to_str_32(const char* data, uint64_t len) {
+    z_str_32_t r = {0};
+    uint64_t n = len < 32 ? len : 32;
+    r.len = (uint8_t)n;
+    memcpy(r.data, data, n);
+    return r;
+}
+"""
+
+Both #~"string.str to: 32" and #~"str_16.str to: 32" call the same
+#~"zstr_to_str_32" function, differing only in how they extract the
+source data pointer and length.
+
+
+#--: stringview and str Interop
+
+#---: stringview to string
+
+The #~".string" method on #~"stringview" copies the viewed data to a
+new heap-allocated #~"string":
+
+#code language=zerolang: """
+greeting: "hello"           # stringview
+mutable: greeting.string    # heap-allocated copy
+"""
+
+#code language=c: """
+static z_string_t* z_string_from_view(z_stringview_t sv) {
+    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + sv.length + 1);
+    z->size = sv.length;
+    z->capacity = sv.length;
+    memcpy(z->data, sv.data, sv.length);
+    z->data[sv.length] = '\0';  /* internal NUL for .cstring */
+    return z;
+}
+"""
+
+
+#---: stringview to str
+
+The #~".str" method on #~"stringview" copies to a fixed-capacity buffer:
+
+#code language=zerolang: """
+greeting: "hello world"
+s: greeting.str to: 8    # truncated to 8 bytes
+"""
+
+
+#---: string to stringview
+
+The #~".stringview" method on #~"string" creates a borrowed view that
+locks the source:
+
+#code language=zerolang: """
+s: "hello world".string
+view: s.stringview              # locks s
+sub: s.stringview from: 6 to: 11  # substring view, locks s
+"""
+
+
+#--: UTF-8 Encoding
 
 All #~"string" and #~"stringview" values are guaranteed valid UTF-8.
 Validation occurs at construction boundaries, not on every operation.
@@ -483,7 +623,7 @@ overlong encodings, surrogate halves, codepoints beyond U+10FFFF).
 After processing the multi-byte sequence, return to the fast path.
 
 #code language=c: """
-static bool zstr_validate_utf8(const char* data, uint64_t len) {
+static bool z_string_validate_utf8(const char* data, uint64_t len) {
     uint64_t i = 0;
     /* fast path: 8 bytes at a time */
     while (i + 8 <= len) {
@@ -527,11 +667,12 @@ External implementations to examine for production use:
 
 #---: Length Semantics
 
-The #~".length" property on both #~"string" and #~"stringview" returns
-the #b:"byte count", not the codepoint count. This is O(1) and unambiguous:
+The #~".length" property on #~"string", #~"stringview", and #~"str"
+returns the #b:"byte count", not the codepoint count. This is O(1) and
+unambiguous:
 
 #code language=zerolang: """
-s: "cafe\u0301".string    # "café" with combining accent
+s: "cafe\u0301".string    # "caf<e with combining accent>" with combining accent
 s.length                    # 6 (bytes), not 4 or 5
 """
 
@@ -540,7 +681,7 @@ O(n) scan. Grapheme cluster counting (for user-perceived characters)
 would require Unicode segmentation tables and is deferred.
 
 
-#---: str Valtype -- Compact Length Encoding
+#--: str Valtype -- Compact Length Encoding
 
 The #~"str<to: N>" value type uses the smallest fixed-width integer
 that can represent the capacity #~"N":
@@ -555,25 +696,29 @@ and selects the appropriate integer type. For the common case of small
 embedded strings (N < 128), this saves 7 bytes per instance compared
 to the v1 #~"uint64_t" length field.
 
+The data buffer is exactly #~"N" bytes with no NUL terminator. This
+saves 1 byte per instance compared to the v1 layout, which is
+meaningful when #~"str" values are embedded in records and arrays.
+
 Example C structs:
 
 #code language=c: """
-/* str to: 32 — saves 7 bytes vs v1 */
+/* str to: 32 -- compact length, no NUL */
 typedef struct {
     uint8_t len;
-    char data[33];
-} z_str_32_t;           /* 34 bytes (was 41 with uint64_t len) */
+    char data[32];
+} z_str_32_t;           /* 33 bytes */
 
 /* str to: 1024 */
 typedef struct {
     uint16_t len;
-    char data[1025];
+    char data[1024];
 } z_str_1024_t;
 
 /* str to: 100000 (rare) */
 typedef struct {
     uint32_t len;
-    char data[100001];
+    char data[100000];
 } z_str_100000_t;
 """
 
@@ -596,7 +741,7 @@ The fixed-width approach gives the same space savings for the common
 case with none of the complexity.
 
 
-#---: Design Critique
+#--: Design Critique
 
 #---: Mutable string -- Pros
 
@@ -611,7 +756,7 @@ case with none of the complexity.
 #ul:
   #*: Every string carries 8 bytes of capacity overhead (16 bytes header total vs 8 in v1).
   #*: Mutation requires the ownership model to prevent aliased modification. Borrowing a string for read-only access is more restricted (must use #~"stringview").
-  #*: The v1 #~"zstr_cat" pattern (allocate new, return) is simpler to reason about. Mutation adds complexity to the emitter's temporary tracking.
+  #*: The v1 #~"z_string_cat" pattern (allocate new, return) is simpler to reason about. Mutation adds complexity to the emitter's temporary tracking.
   #*: String literals must be explicitly copied to create a mutable #~"string" (#~"\"hello\".string").
 
 #---: stringview -- Pros
@@ -621,6 +766,7 @@ case with none of the complexity.
   #*: Static literals map directly to #~"stringview" with zero heap allocation.
   #*: Substring views are zero-copy (just adjust pointer and length).
   #*: 16-byte valtype fits in two registers -- cheap to pass and return.
+  #*: Preferred parameter type for read-only functions -- efficient, no ownership transfer needed.
 
 #---: stringview -- Cons
 
@@ -629,6 +775,19 @@ case with none of the complexity.
   #*: Exclusive locking on the source string prevents mutation while any view exists. This is safe but can be restrictive in complex code.
   #*: Cannot store #~"stringview" in records or classes in v2 due to scope-based lifetime constraints. This limits expressiveness for data structures containing string references.
   #*: No implicit conversion means extra ceremony when a function takes #~"string" but the caller has a literal or view.
+
+#---: No NUL guarantee -- Pros
+
+#ul:
+  #*: Aligns with Go/Rust mental model (strings are byte slices, not C strings).
+  #*: Saves 1 byte per #~"str" element (meaningful for arrays of records with embedded str fields).
+  #*: Clean: length is the only authority, no sentinel ambiguity.
+
+#---: No NUL guarantee -- Cons
+
+#ul:
+  #*: C interop requires #~".cstring" method (though free for #~"string" due to internal NUL).
+  #*: Debugging in GDB: #~"str" and #~"stringview" data is not a valid C string without NUL. Workaround: use #~"print (int)sv.length, sv.data" in GDB.
 
 #---: UTF-8 validation -- Pros
 
@@ -645,67 +804,83 @@ case with none of the complexity.
   #*: Constrains the string type to text only -- binary protocols or mixed encodings must use a different type.
 
 
-#---: Implementation Roadmap
+#--: Implementation Roadmap
 
 This section describes the changes needed to implement the v2 string
-design. These are reference notes for future implementation work.
+design. Items marked with #~"+" are complete.
 
 
-#---: Runtime Changes (zemitterc_runtime.py)
+#---: Phase 1: C Rename (#~"ZStr" -> #~"z_string_t")
 
-#ul:
-  #*: Replace #~"ZStr" struct: add #~"uint64_t capacity" field, remove static flag from #~"size".
-  #*: Remove #~"ZSTR_STATIC_FLAG", #~"ZSTR_IS_STATIC" macros and #~"ZSTR_STATIC" macro.
-  #*: Add #~"z_stringview_t" struct: #~"const char* data" + #~"uint64_t length".
-  #*: Update #~"zstr_new": allocate with capacity, set both #~"size" and #~"capacity".
-  #*: Add #~"zstr_append(ZStr** s, const char* data, uint64_t len)": grows buffer if needed, takes pointer-to-pointer to allow realloc.
-  #*: Add #~"zstr_reserve(ZStr** s, uint64_t additional)": ensure capacity for additional bytes.
-  #*: Add #~"zstr_shrink(ZStr** s)": realloc to exact size.
-  #*: Update #~"zstr_free": remove static flag check, unconditionally free.
-  #*: Add #~"zstr_validate_utf8(const char*, uint64_t)": validation function.
-  #*: Update #~"zstr_cat": allocate with exact capacity (size == capacity).
-  #*: Add #~"zstr_print_view(z_stringview_t)": print a stringview.
-
-#---: Emitter Changes (zemitterc.py)
+Mechanical rename, no functional changes.
 
 #ul:
-  #*: String literals emit as #~"z_stringview_t" constants instead of #~"ZSTR_STATIC" declarations.
-  #*: Static string deduplication now produces #~"static const char[]" + #~"z_stringview_t" pairs.
-  #*: String interpolation emits append-chain into a result #~"string" instead of #~"zstr_cat" chain.
-  #*: Add #~"stringview" as a new type in #~"_ctype()": maps to #~"z_stringview_t".
-  #*: Update temporary tracking: #~"stringview" is a valtype, no temp tracking needed.
-  #*: Update destructor metadata: #~"stringview" has no destructor (valtype).
-  #*: Update #~"_emit_mono_str()": use compact length type (#~"uint8_t", #~"uint16_t", #~"uint32_t") based on capacity.
-  #*: Add stringview method emission: #~".view", #~".view from: N to: M".
+  #*: Rename #~"ZStr" typedef to #~"z_string_t" in #~"zemitterc_runtime.py".
+  #*: Rename all #~"zstr_*" functions to #~"z_string_*".
+  #*: Update #~"_ctype()" in #~"zemitterc.py": #~"\"ZStr*\"" -> #~"\"z_string_t*\"".
+  #*: Update all emitter references and test assertions.
 
-#---: Type Checker Changes (ztypecheck.py)
+
+#---: Phase 2: Compact #~"str" Length Field
 
 #ul:
-  #*: Add #~"stringview" as a new native type with #~"ZSubType.STRINGVIEW".
-  #*: String literals resolve to #~"stringview" type instead of #~"string".
-  #*: Add borrow/lock tracking for #~"string.view" -- creates #~"stringview" that locks source.
-  #*: Static #~"stringview" (from literals) does not acquire locks (source is immortal).
-  #*: No implicit conversion between #~"string" and #~"stringview".
-  #*: Synthesize #~".string" method on #~"stringview" (copies to heap).
-  #*: Synthesize #~".view" method on #~"string" (creates locked stringview).
-  #*: Synthesize #~".append", #~".reserve", #~".shrink" on #~"string".
-  #*: Update #~".length" to be available on both #~"string" and #~"stringview".
+  #*: Update #~"_emit_mono_str()": select #~"uint8_t"/#~"uint16_t"/#~"uint32_t" based on capacity.
+  #*: Remove NUL from #~"str" data buffer: #~"data[N]" instead of #~"data[N+1]".
+  #*: Update #~"z_string_copy_to_buf" for variable-size length field.
 
-#---: Standard Library Changes
+
+#---: Phase 3: v2 String Struct
 
 #ul:
-  #*: Update #~"system.z": expand #~"string" class with mutation methods, add #~"stringview" type.
-  #*: Update #~"collections.z": #~"str" compact length unchanged at language level (emitter handles).
-  #*: Update #~"io.z": #~"print" accepts #~"stringview" (read-only is sufficient for printing).
+  #*: Add #~"uint64_t capacity" to #~"z_string_t" struct.
+  #*: Update #~"z_string_new": set #~"capacity = size", maintain internal NUL.
+  #*: Remove #~"ZSTR_STATIC_FLAG", #~"ZSTR_IS_STATIC", #~"ZSTR_STATIC" macros.
+  #*: Update #~"z_string_free": unconditionally free.
+  #*: String literals temporarily use #~"z_string_new" (become #~"stringview" in Phase 4).
 
 
-#---: Open Questions
+#---: Phase 4: #~"stringview" Type
+
+#ul:
+  #*: Add #~"ZSubType.STRINGVIEW" to #~"ztypes.py".
+  #*: Add #~"stringview" as native born-borrowed type in #~"system.z".
+  #*: Add #~"z_stringview_t" struct to runtime.
+  #*: String literals resolve to #~"stringview" type (not #~"string").
+  #*: Static #~"stringview" (from literals) does not acquire locks.
+  #*: Add #~".string" method on #~"stringview" (copies to heap).
+  #*: Add #~".str to: N" method on #~"stringview" (copies to buffer).
+  #*: Add #~".stringview" method on #~"string" (creates locked view).
+  #*: Add #~".stringview from: to:" method on #~"string" (substring view).
+  #*: Update #~"print" to accept #~"stringview".
+  #*: Update string interpolation to handle #~"stringview" parts.
+
+
+#---: Phase 5: Mutable String Operations
+
+#ul:
+  #*: Add #~"append", #~"reserve", #~"shrink", #~"capacity", #~"length" methods to #~"string".
+  #*: Implement #~"z_string_append(z_string_t** s, const char* data, uint64_t len)".
+  #*: Implement #~"z_string_reserve(z_string_t** s, uint64_t additional)".
+  #*: Implement #~"z_string_shrink(z_string_t** s)".
+  #*: Rewrite interpolation to use append chain (zero intermediate allocations).
+
+
+#---: Phase 6: #~".cstring" Method
+
+#ul:
+  #*: #~"string.cstring" -- returns #~"data" directly (internal NUL maintained).
+  #*: #~"str.cstring" -- stack-allocated #~"char buf[N+1]" copy with NUL.
+  #*: #~"stringview.cstring" -- stack-allocated copy with NUL.
+
+
+#--: Open Questions
 
 #ul:
   #*: #b:"stringview in records:" what mechanism would allow storing a #~"stringview" in a record field while maintaining safety? Lifetime annotations? Reference counting? Deferred to v3.
-  #*: #b:"stringview from stringview:" should narrowing a static #~"stringview" always skip locking? Yes -- static data is immortal. But narrowing a heap-backed #~"stringview" must preserve the lock chain.
-  #*: #b:"Substring views:" should #~".view from: to:" accept byte offsets or codepoint offsets? Byte offsets are O(1) but can split a multi-byte character. Codepoint offsets are O(n). Byte offsets with a boundary check (error if not at a character boundary) matches Rust's approach.
-  #*: #b:"bytes type:" when is a #~"bytes" type needed for non-UTF-8 data? File I/O and network protocols are the main use cases. This is a separate design effort.
-  #*: #b:"String hashing:" needed for map keys. Should #~"string" and #~"stringview" with the same content produce the same hash? Yes -- hash is computed from content, not representation.
-  #*: #b:"SIMD validation:" should the runtime ship with AVX2/SSE4 validation, or start with the scalar fast-path and upgrade later? Start scalar, upgrade when benchmarks justify it.
-  #*: #b:"Append in interpolation:" when the emitter generates interpolation code, should it pre-compute exact size (scanning all parts) or use #~"reserve" with an estimate? Pre-computing avoids waste; estimating avoids a double scan. Both are valid -- examine generated code size tradeoff.
+  #*: #b:"str.stringview:" deferred to v3 when lifetime annotations can track stack lifetimes.
+  #*: #b:"stringview from stringview:" narrowing a static #~"stringview" always skips locking (static data is immortal). Narrowing a heap-backed #~"stringview" must preserve the lock chain.
+  #*: #b:"Substring offsets:" #~".stringview from: to:" accepts byte offsets (O(1)). Error if not at a character boundary (matches Rust's approach).
+  #*: #b:"bytes type:" separate design for non-UTF-8 data (file I/O, network protocols).
+  #*: #b:"String hashing:" #~"string" and #~"stringview" with the same content produce the same hash (hash from content, not representation).
+  #*: #b:"SIMD validation:" start with scalar fast-path, upgrade when benchmarks justify.
+  #*: #b:"Append in interpolation:" pre-compute exact size (scan all parts) or estimate with reserve. Both valid -- examine generated code size tradeoff.

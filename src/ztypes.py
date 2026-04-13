@@ -47,7 +47,8 @@ class ZSubType(IntEnum):
     """
 
     NONE = 0
-    STRING = 1  # string class — ZStr* with zstr_free destructor
+    STRING = 1  # string class — z_string_t* with z_string_free destructor
+    STRINGVIEW = 2  # stringview record — z_stringview_t, born-borrowed valtype
 
 
 @unique

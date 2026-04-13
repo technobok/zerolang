@@ -2,7 +2,7 @@
 ZeroLang C code emitter
 
 Walks a type-checked AST and emits C source code.
-Includes ownership-based memory management for strings (ZStr*).
+Includes ownership-based memory management for strings (z_string_t*).
 """
 
 from dataclasses import dataclass, field
@@ -33,6 +33,7 @@ from ztypeutil import (
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
+    is_stringview_type as _is_stringview_type,
 )
 
 
@@ -138,7 +139,9 @@ def _ctype(ztype: Optional[ZType]) -> str:
     if name in TYPEMAP:
         return TYPEMAP[name]
     if name == "string":
-        return "ZStr*"
+        return "z_string_t*"
+    if name == "stringview":
+        return "z_stringview_t"
     # use pre-computed cname when available
     if ztype.cname:
         if ztype.typetype in (ZTypeType.CLASS, ZTypeType.UNION, ZTypeType.PROTOCOL):
@@ -259,6 +262,7 @@ class CEmitter:
         self.needs_stdlib = False
         self.needs_stdbool = False
         self.needs_string = False
+        self.needs_stringview = False
         self.forward_decls: List[str] = []
         self.struct_defs: "TrackedList" = TrackedList(self)
         self.func_defs: "TrackedList" = TrackedList(self)
@@ -331,7 +335,7 @@ class CEmitter:
         """Build source_map: for each C output line, the AST node ID that produced it.
 
         Uses the tracked node IDs from struct_defs, func_defs, data_defs.
-        Lines from boilerplate (includes, ZStr runtime, main wrapper) get None.
+        Lines from boilerplate (includes, z_string_t runtime, main wrapper) get None.
         """
         # build a set of (line_start_offset, node_id) from tracked sections
         offset_to_node: List[tuple] = []
@@ -419,7 +423,7 @@ class CEmitter:
         """Allocate a temporary variable for a heap-allocated string expression."""
         name = self._temp_name("t")
         indent = self._indent()
-        self._temp.decls.append(f"{indent}ZStr* {name} = {expr};\n")
+        self._temp.decls.append(f"{indent}z_string_t* {name} = {expr};\n")
         self._temp.frees.append(name)
         self._temp.string_set.add(name)
         return name
@@ -457,7 +461,7 @@ class CEmitter:
         return result
 
     def _static_string(self, escaped: str) -> str:
-        """Return the name of a static ZStr for this literal, deduplicating."""
+        """Return the name of a static z_string_t for this literal, deduplicating."""
         if escaped in self._string_literals:
             return self._string_literals[escaped]
         self._string_literal_counter += 1
@@ -740,7 +744,7 @@ class CEmitter:
                 qname = f"{type_name}.{label}"
                 cname = _mangle_func(qname)
                 if type(v) is str:
-                    # string constant: emit ZSTR_STATIC + pointer alias
+                    # string constant: emit static string + pointer alias
                     self.needs_string = True
                     escaped = self._escape_c_string(v)
                     sname = self._static_string(escaped)
@@ -899,6 +903,7 @@ class CEmitter:
                 needs_stdlib=self.needs_stdlib,
                 needs_stdbool=self.needs_stdbool,
                 needs_string=self.needs_string,
+                needs_stringview=self.needs_stringview,
             )
         )
         parts.append(zrt.emit_static_strings(self._string_literals))
@@ -2230,10 +2235,18 @@ class CEmitter:
             return
         lines: List[str] = []
 
-        # struct definition
+        # compact length type based on capacity
+        if cap <= 255:
+            len_ctype = "uint8_t"
+        elif cap <= 65535:
+            len_ctype = "uint16_t"
+        else:
+            len_ctype = "uint32_t"
+
+        # struct definition (no NUL terminator — data is exactly cap bytes)
         lines.append("typedef struct {\n")
-        lines.append("    uint64_t len;\n")
-        lines.append(f"    char data[{cap + 1}];\n")
+        lines.append(f"    {len_ctype} len;\n")
+        lines.append(f"    char data[{cap}];\n")
         lines.append(f"}} {ctype};\n\n")
 
         # size define
@@ -2247,20 +2260,23 @@ class CEmitter:
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
-        # .string method (str -> ZStr*)
+        # .string method (str -> z_string_t*)
         self.needs_stdlib = True
         string_name = f"z_{name}_string"
-        lines.append(f"static ZStr* {string_name}({ctype} _this);\n")
-        lines.append(f"static ZStr* {string_name}({ctype} _this) {{\n")
-        lines.append("    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + _this.len + 1);\n")
+        lines.append(f"static z_string_t* {string_name}({ctype} _this);\n")
+        lines.append(f"static z_string_t* {string_name}({ctype} _this) {{\n")
+        lines.append(
+            "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + _this.len + 1);\n"
+        )
         lines.append("    z->size = _this.len;\n")
+        lines.append("    z->capacity = _this.len;\n")
         lines.append("    memcpy(z->data, _this.data, _this.len);\n")
         lines.append("    z->data[_this.len] = '\\0';\n")
         lines.append("    return z;\n")
         lines.append("}\n\n")
 
-        # .str conversion: zstr_to_str_N(data, len) — shared by string.str and str.str
-        convert_name = f"zstr_to_{name}"
+        # .str conversion: z_string_to_str_N(data, len) — shared by string.str and str.str
+        convert_name = f"z_string_to_{name}"
         lines.append(
             f"static {ctype} {convert_name}(const char* data, uint64_t len);\n"
         )
@@ -2268,7 +2284,9 @@ class CEmitter:
             f"static {ctype} {convert_name}(const char* data, uint64_t len) {{\n"
         )
         lines.append(f"    {ctype} r = {{0}};\n")
-        lines.append(f"    zstr_copy_to_buf(r.data, &r.len, {cap}, data, len);\n")
+        lines.append(f"    uint64_t n = len < {cap} ? len : {cap};\n")
+        lines.append(f"    r.len = ({len_ctype})n;\n")
+        lines.append("    memcpy(r.data, data, n);\n")
         lines.append("    return r;\n")
         lines.append("}\n\n")
 
@@ -2433,8 +2451,8 @@ class CEmitter:
             return
         key_ctype = _ctype(key_type)
         val_ctype = _ctype(value_type)
-        key_is_string = key_ctype == "ZStr*"
-        val_is_string = val_ctype == "ZStr*"
+        key_is_string = key_ctype == "z_string_t*"
+        val_is_string = val_ctype == "z_string_t*"
         key_is_reftype = key_ctype.endswith("*")
         val_is_reftype = val_ctype.endswith("*")
         bucket_type = f"z_{name}_bucket_t"
@@ -2467,7 +2485,7 @@ class CEmitter:
         if key_is_string:
             # FNV-1a for strings
             lines.append("    uint64_t h = 14695981039346656037ULL;\n")
-            lines.append("    uint64_t len = ZSTR_SIZE(_key);\n")
+            lines.append("    uint64_t len = _key->size;\n")
             lines.append("    for (uint64_t i = 0; i < len; i++) {\n")
             lines.append("        h ^= (uint8_t)_key->data[i];\n")
             lines.append("        h *= 1099511628211ULL;\n")
@@ -2498,8 +2516,8 @@ class CEmitter:
         lines.append(f"static int {eq_fn}({key_ctype} _a, {key_ctype} _b) {{\n")
         if key_is_string:
             lines.append(
-                "    return ZSTR_SIZE(_a) == ZSTR_SIZE(_b) "
-                "&& memcmp(_a->data, _b->data, ZSTR_SIZE(_a)) == 0;\n"
+                "    return _a->size == _b->size "
+                "&& memcmp(_a->data, _b->data, _a->size) == 0;\n"
             )
         elif _is_str_type(key_type):
             lines.append(
@@ -2691,14 +2709,18 @@ class CEmitter:
                 lines.append("    if (idx >= 0) {\n")
                 if val_is_string:
                     lines.append(
-                        "        ZStr* _copy = (ZStr*)malloc(sizeof(ZStr) + ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
+                        "        z_string_t* _copy = (z_string_t*)malloc(sizeof(z_string_t) + _this->buckets[idx].value->size + 1);\n"
                     )
                     lines.append(
-                        "        _copy->size = ZSTR_SIZE(_this->buckets[idx].value);\n"
+                        "        _copy->size = _this->buckets[idx].value->size;\n"
                     )
                     lines.append(
-                        "        memcpy(_copy->data, _this->buckets[idx].value->data, ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
+                        "        _copy->capacity = _this->buckets[idx].value->size;\n"
                     )
+                    lines.append(
+                        "        memcpy(_copy->data, _this->buckets[idx].value->data, _this->buckets[idx].value->size);\n"
+                    )
+                    lines.append("        _copy->data[_copy->size] = '\\0';\n")
                     lines.append("        return _copy;\n")
                 else:
                     lines.append("        return _this->buckets[idx].value;\n")
@@ -2748,14 +2770,18 @@ class CEmitter:
                 if val_is_reftype:
                     if val_is_string:
                         lines.append(
-                            "        ZStr* _copy = (ZStr*)malloc(sizeof(ZStr) + ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
+                            "        z_string_t* _copy = (z_string_t*)malloc(sizeof(z_string_t) + _this->buckets[idx].value->size + 1);\n"
                         )
                         lines.append(
-                            "        _copy->size = ZSTR_SIZE(_this->buckets[idx].value);\n"
+                            "        _copy->size = _this->buckets[idx].value->size;\n"
                         )
                         lines.append(
-                            "        memcpy(_copy->data, _this->buckets[idx].value->data, ZSTR_SIZE(_this->buckets[idx].value) + 1);\n"
+                            "        _copy->capacity = _this->buckets[idx].value->size;\n"
                         )
+                        lines.append(
+                            "        memcpy(_copy->data, _this->buckets[idx].value->data, _this->buckets[idx].value->size);\n"
+                        )
+                        lines.append("        _copy->data[_copy->size] = '\\0';\n")
                         lines.append("        _r->data = _copy;\n")
                     else:
                         lines.append("        _r->data = _this->buckets[idx].value;\n")
@@ -3064,7 +3090,7 @@ class CEmitter:
         if not func.returntype:
             return "void"
         ct = _ctype(func.returntype.type)
-        if ct == "ZStr*":
+        if ct == "z_string_t*":
             self.needs_string = True
             self.needs_stdlib = True
         elif ct.endswith("*"):
@@ -3213,7 +3239,7 @@ class CEmitter:
         # free remaining temps before return
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                result += f"{indent}zstr_free({t});\n"
+                result += f"{indent}z_string_free({t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
                 if tname.startswith(":proto:"):
@@ -3259,7 +3285,7 @@ class CEmitter:
         indent = self._indent()
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                result += f"{indent}zstr_free({t});\n"
+                result += f"{indent}z_string_free({t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
                 if tname.startswith(":proto:"):
@@ -3296,7 +3322,7 @@ class CEmitter:
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
         if assign.type and assign.type.needs_destructor:
-            if ctype == "ZStr*":
+            if ctype == "z_string_t*":
                 self.needs_string = True
             self.needs_stdlib = True
             # the variable now owns the value — remove from temp frees
@@ -3388,7 +3414,7 @@ class CEmitter:
             var_type = dp.type
             result = ""
             if var_type and var_type.subtype == ZSubType.STRING:
-                result += f"{indent}zstr_free({var});\n"
+                result += f"{indent}z_string_free({var});\n"
             elif var_type and var_type.typetype == ZTypeType.CLASS:
                 result += f"{indent}z_{var_type.name}_destroy({var});\n"
             elif var_type and var_type.typetype == ZTypeType.UNION:
@@ -3405,7 +3431,7 @@ class CEmitter:
             result = ""
             # owned reftypes: call destructor + nullify
             if var_type and var_type.subtype == ZSubType.STRING:
-                result += f"{indent}zstr_free({var});\n"
+                result += f"{indent}z_string_free({var});\n"
             elif var_type and var_type.typetype == ZTypeType.CLASS:
                 result += f"{indent}z_{var_type.name}_destroy({var});\n"
             elif var_type and var_type.typetype == ZTypeType.UNION:
@@ -3706,10 +3732,14 @@ class CEmitter:
                 if arg_type and _is_str_type(arg_type):
                     arg = self._emit_operation_value(arg_op)
                     return f'{indent}printf("%.*s\\n", (int){arg}.len, {arg}.data);\n'
+                if arg_type and _is_stringview_type(arg_type):
+                    self.needs_stringview = True
+                    arg = self._emit_operation_value(arg_op)
+                    return f"{indent}z_stringview_print({arg});\n"
                 arg = self._emit_operation_value(arg_op)
-                return f"{indent}zstr_print({arg});\n"
+                return f"{indent}z_string_print({arg});\n"
             t = self._static_string("")
-            return f"{indent}zstr_print({t});\n"
+            return f"{indent}z_string_print({t});\n"
 
         # check call_kind first, then fallback to callable type's control_kind
         _ck = call.call_kind
@@ -3894,7 +3924,7 @@ class CEmitter:
             # free remaining temps (intermediates) before return
             for t in self._temp.frees:
                 if t in self._temp.string_set:
-                    result += f"{indent}zstr_free({t});\n"
+                    result += f"{indent}z_string_free({t});\n"
                 elif t in self._temp.class_set:
                     tname = self._temp.class_set[t]
                     if tname.startswith(":proto:"):
@@ -4024,7 +4054,7 @@ class CEmitter:
                     else "int64_t"
                 )
                 # string-returning calls are already temped by _alloc_temp
-                if ctype != "ZStr*":
+                if ctype != "z_string_t*":
                     val = self._alloc_arg_temp(ctype, val)
             parts.append(val)
             ctype_idx += 1
@@ -4306,6 +4336,39 @@ class CEmitter:
         if call.callable.type and _is_array_type(call.callable.type):
             return f"z_{call.callable.type.name}_create()"
 
+        # stringview method calls: .string, .length
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and _is_stringview_type(dp_parent_type):
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                if method_name == "string":
+                    self.needs_stringview = True
+                    self.needs_stdlib = True
+                    result = f"z_string_from_view({parent_val})"
+                    return self._alloc_temp(result)
+                if method_name == "length":
+                    self.needs_stringview = True
+                    return f"{parent_val}.length"
+
+        # string class method calls: .toview, .length
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                if method_name == "toview":
+                    self.needs_stringview = True
+                    return (
+                        f"(z_stringview_t){{ {parent_val}->data, {parent_val}->size }}"
+                    )
+                if method_name == "length":
+                    return f"{parent_val}->size"
+
         # str construction: (str to: N) — always empty
         if call.callable.type and _is_str_type(call.callable.type):
             str_name = call.callable.type.name
@@ -4367,7 +4430,35 @@ class CEmitter:
                     result = f"z_{str_type_name}_string({parent_val})"
                     return self._alloc_temp(result)
 
-        # .str conversion method on string and str types
+        # stringview method calls: .string
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and _is_stringview_type(dp_parent_type):
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                if method_name == "string":
+                    self.needs_stringview = True
+                    self.needs_stdlib = True
+                    result = f"z_string_from_view({parent_val})"
+                    return self._alloc_temp(result)
+
+        # string class method calls: .toview
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                if method_name == "toview":
+                    self.needs_stringview = True
+                    return (
+                        f"(z_stringview_t){{ {parent_val}->data, {parent_val}->size }}"
+                    )
+
+        # .str conversion method on string, str, and stringview types
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, call.callable)
             dp_parent_type = dp.parent.type
@@ -4378,6 +4469,7 @@ class CEmitter:
                 and (
                     dp_parent_type.subtype == ZSubType.STRING
                     or _is_str_type(dp_parent_type)
+                    or _is_stringview_type(dp_parent_type)
                 )
             ):
                 target_type = call.type
@@ -4407,12 +4499,18 @@ class CEmitter:
                     # emit call to shared converter
                     if dp_parent_type.subtype == ZSubType.STRING:
                         return (
-                            f"zstr_to_{target_name}"
-                            f"({parent_val}->data, ZSTR_SIZE({parent_val}))"
+                            f"z_string_to_{target_name}"
+                            f"({parent_val}->data, {parent_val}->size)"
+                        )
+                    elif _is_stringview_type(dp_parent_type):
+                        self.needs_stringview = True
+                        return (
+                            f"z_string_to_{target_name}"
+                            f"({parent_val}.data, {parent_val}.length)"
                         )
                     else:
                         return (
-                            f"zstr_to_{target_name}"
+                            f"z_string_to_{target_name}"
                             f"({parent_val}.data, {parent_val}.len)"
                         )
 
@@ -4670,7 +4768,7 @@ class CEmitter:
             # string content comparison (native == on string class)
             if binop.lhs.type.subtype == ZSubType.STRING:
                 self.needs_stdbool = True
-                call = f"zstr_eq({lhs}, {rhs})"
+                call = f"z_string_eq({lhs}, {rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
@@ -4835,11 +4933,40 @@ class CEmitter:
         # str: .size constant access
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "size":
             return f"z_{parent_type_dp.name}_size"
-        # str: .string conversion (str -> ZStr*)
+        # str: .string conversion (str -> z_string_t*)
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "string":
             parent = self._emit_path_value(path.parent)
             result = f"z_{parent_type_dp.name}_string({parent})"
             return self._alloc_temp(result)
+        # stringview: .length field access
+        if parent_type_dp and _is_stringview_type(parent_type_dp) and child == "length":
+            self.needs_stringview = True
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}.length"
+        # stringview: .string conversion (stringview -> z_string_t*)
+        if parent_type_dp and _is_stringview_type(parent_type_dp) and child == "string":
+            self.needs_stringview = True
+            self.needs_stdlib = True
+            parent = self._emit_path_value(path.parent)
+            result = f"z_string_from_view({parent})"
+            return self._alloc_temp(result)
+        # string: .length field access
+        if (
+            parent_type_dp
+            and parent_type_dp.subtype == ZSubType.STRING
+            and child == "length"
+        ):
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}->size"
+        # string: .stringview conversion (string -> z_stringview_t)
+        if (
+            parent_type_dp
+            and parent_type_dp.subtype == ZSubType.STRING
+            and child == "toview"
+        ):
+            self.needs_stringview = True
+            parent = self._emit_path_value(path.parent)
+            return f"(z_stringview_t){{ {parent}->data, {parent}->size }}"
         # list: .length field access
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
@@ -5120,7 +5247,7 @@ class CEmitter:
                 subtype_ctype = subtype_ctype_resolved
                 if (
                     subtype_ctype
-                    and subtype_ctype in ("ZStr*",)
+                    and subtype_ctype in ("z_string_t*",)
                     or (
                         subtype_ctype
                         and subtype_ctype.startswith("z_")
@@ -5396,18 +5523,22 @@ class CEmitter:
                     "u32",
                     "u64",
                 ):
-                    parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
+                    parts.append(self._alloc_temp(f"z_string_from_i64((int64_t){val})"))
                 elif val_type and val_type.name in ("f32", "f64"):
-                    parts.append(self._alloc_temp(f"zstr_from_f64((double){val})"))
+                    parts.append(self._alloc_temp(f"z_string_from_f64((double){val})"))
                 elif val_type and val_type.subtype == ZSubType.STRING:
                     # string variable reference — no temp needed
                     parts.append(val)
+                elif val_type and _is_stringview_type(val_type):
+                    # stringview — convert to z_string_t* for concatenation
+                    self.needs_stringview = True
+                    parts.append(self._alloc_temp(f"z_string_from_view({val})"))
                 elif val_type and _is_str_type(val_type):
-                    # str valtype — convert to ZStr* for concatenation
+                    # str valtype — convert to z_string_t* for concatenation
                     str_type_name = val_type.name
                     parts.append(self._alloc_temp(f"z_{str_type_name}_string({val})"))
                 else:
-                    parts.append(self._alloc_temp(f"zstr_from_i64((int64_t){val})"))
+                    parts.append(self._alloc_temp(f"z_string_from_i64((int64_t){val})"))
             else:
                 literal = self._escape_c_string(p.tokstr)  # type: ignore[union-attr]
                 if literal:
@@ -5419,7 +5550,7 @@ class CEmitter:
             return parts[0]
         result = parts[0]
         for p in parts[1:]:
-            result = self._alloc_temp(f"zstr_cat({result}, {p})")
+            result = self._alloc_temp(f"z_string_cat({result}, {p})")
         return result
 
     def _collect_string_literal(self, parts: list) -> str:
@@ -5656,7 +5787,7 @@ class CEmitter:
         # track reftype ownership
         if ifnode.type and ifnode.type.needs_destructor:
             self._temp.frees.append(tmp)
-            if ctype == "ZStr*":
+            if ctype == "z_string_t*":
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 
@@ -5994,7 +6125,7 @@ class CEmitter:
         if val_type:
             ctype = _ctype(val_type)
 
-        is_string = ctype == "ZStr*"
+        is_string = ctype == "z_string_t*"
         is_class = ctype.startswith("z_") and ctype.endswith("_t*")
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
@@ -6019,7 +6150,7 @@ class CEmitter:
         parts.append(doexpr_code)
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                parts.append(f"{inner_indent}zstr_free({t});\n")
+                parts.append(f"{inner_indent}z_string_free({t});\n")
             elif t in self._temp.class_set:
                 parts.append(
                     f"{inner_indent}{self._emit_class_free(t, self._temp.class_set[t])}\n"
@@ -6032,7 +6163,7 @@ class CEmitter:
         if is_union and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
         elif is_string:
-            parts.append(f"{inner_indent}zstr_free({cname});\n")
+            parts.append(f"{inner_indent}z_string_free({cname});\n")
         elif is_class and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
         elif is_class:
@@ -6258,7 +6389,7 @@ class CEmitter:
         # track reftype ownership
         if casenode.type and casenode.type.needs_destructor:
             self._temp.frees.append(tmp)
-            if ctype == "ZStr*":
+            if ctype == "z_string_t*":
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 

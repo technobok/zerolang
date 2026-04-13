@@ -6,7 +6,7 @@ and extract their type parameters.
 """
 
 from typing import Optional
-from ztypes import ZType, TAG_ORIGIN
+from ztypes import ZType, ZSubType, TAG_ORIGIN
 
 
 def is_numeric_id(name: str) -> bool:
@@ -93,3 +93,10 @@ def map_key_type(ztype: ZType) -> Optional[ZType]:
 def map_value_type(ztype: ZType) -> Optional[ZType]:
     """Get the value type of a map type."""
     return ztype.generic_args.get("value")
+
+
+def is_stringview_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is the stringview type."""
+    if not ztype:
+        return False
+    return ztype.subtype == ZSubType.STRINGVIEW

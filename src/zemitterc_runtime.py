@@ -35,73 +35,95 @@ def emit_runtime_includes(
     return "".join(parts)
 
 
-_ZSTR_RUNTIME = (
+_Z_STRING_RUNTIME = (
     "typedef struct {\n"
-    "    uint64_t size;     /* bits 62-0: byte count; bit 63: static flag */\n"
-    "    char data[];       /* NUL-terminated, starts at 8-byte boundary */\n"
-    "} ZStr;\n\n"
-    "#define ZSTR_STATIC_FLAG  0x8000000000000000ull\n"
-    "#define ZSTR_SIZE(z)      ((z)->size & ~ZSTR_STATIC_FLAG)\n"
-    "#define ZSTR_IS_STATIC(z) ((z)->size & ZSTR_STATIC_FLAG)\n\n"
-    "#define ZSTR_STATIC(name, str) \\\n"
-    "    static struct { uint64_t size; char data[sizeof(str)]; } \\\n"
-    "    name##_storage = { (sizeof(str)-1) | ZSTR_STATIC_FLAG, str }; \\\n"
-    "    static ZStr* name = (ZStr*)&name##_storage\n\n"
-    "static ZStr* zstr_new(const char* s) {\n"
+    "    uint64_t size;       /* byte count of current content */\n"
+    "    uint64_t capacity;   /* allocated buffer size; bit 63: static flag */\n"
+    "    char data[];         /* flexible array member */\n"
+    "} z_string_t;\n\n"
+    "#define Z_STRING_IS_STATIC(z) ((z)->capacity & 0x8000000000000000ull)\n\n"
+    "#define Z_STRING_STATIC(name, str) \\\n"
+    "    static struct { uint64_t size; uint64_t capacity; char data[sizeof(str)]; } \\\n"
+    "    name##_storage = { (sizeof(str)-1), (sizeof(str)-1) | 0x8000000000000000ull, str }; \\\n"
+    "    static z_string_t* name = (z_string_t*)&name##_storage\n\n"
+    "static z_string_t* z_string_new(const char* s) {\n"
     "    uint64_t size = (uint64_t)strlen(s);\n"
-    "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + size + 1);\n"
+    "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + size + 1);\n"
     "    z->size = size;\n"
-    "    memcpy(z->data, s, size + 1);\n"
+    "    z->capacity = size;\n"
+    "    memcpy(z->data, s, size);\n"
+    "    z->data[size] = '\\0';\n"
     "    return z;\n"
     "}\n\n"
-    "static ZStr* zstr_cat(ZStr* a, ZStr* b) {\n"
-    "    uint64_t size = ZSTR_SIZE(a) + ZSTR_SIZE(b);\n"
-    "    ZStr* z = (ZStr*)malloc(sizeof(ZStr) + size + 1);\n"
+    "static z_string_t* z_string_cat(z_string_t* a, z_string_t* b) {\n"
+    "    uint64_t size = a->size + b->size;\n"
+    "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + size + 1);\n"
     "    z->size = size;\n"
-    "    memcpy(z->data, a->data, ZSTR_SIZE(a));\n"
-    "    memcpy(z->data + ZSTR_SIZE(a), b->data, ZSTR_SIZE(b) + 1);\n"
+    "    z->capacity = size;\n"
+    "    memcpy(z->data, a->data, a->size);\n"
+    "    memcpy(z->data + a->size, b->data, b->size);\n"
+    "    z->data[size] = '\\0';\n"
     "    return z;\n"
     "}\n\n"
-    "static ZStr* zstr_from_i64(int64_t n) {\n"
+    "static z_string_t* z_string_from_i64(int64_t n) {\n"
     "    char buf[32];\n"
     '    snprintf(buf, sizeof(buf), "%ld", (long)n);\n'
-    "    return zstr_new(buf);\n"
+    "    return z_string_new(buf);\n"
     "}\n\n"
-    "static ZStr* zstr_from_f64(double n) {\n"
+    "static z_string_t* z_string_from_f64(double n) {\n"
     "    char buf[64];\n"
     '    snprintf(buf, sizeof(buf), "%g", n);\n'
-    "    return zstr_new(buf);\n"
+    "    return z_string_new(buf);\n"
     "}\n\n"
-    "static void zstr_print(ZStr* s) {\n"
-    '    printf("%.*s\\n", (int)ZSTR_SIZE(s), s->data);\n'
+    "static void z_string_print(z_string_t* s) {\n"
+    '    printf("%.*s\\n", (int)s->size, s->data);\n'
     "}\n\n"
-    "static void zstr_free(ZStr* s) {\n"
-    "    if (s && !ZSTR_IS_STATIC(s)) free(s);\n"
+    "static void z_string_free(z_string_t* s) {\n"
+    "    if (s && !Z_STRING_IS_STATIC(s)) free(s);\n"
     "}\n\n"
-    "static bool zstr_eq(ZStr* a, ZStr* b) {\n"
+    "static bool z_string_eq(z_string_t* a, z_string_t* b) {\n"
     "    if (a == b) return true;\n"
-    "    uint64_t sa = ZSTR_SIZE(a), sb = ZSTR_SIZE(b);\n"
-    "    return sa == sb && memcmp(a->data, b->data, sa) == 0;\n"
-    "}\n\n"
-    "static inline void zstr_copy_to_buf(\n"
-    "    char* dst, uint64_t* dst_len, uint64_t dst_cap,\n"
-    "    const char* src, uint64_t src_len\n"
-    ") {\n"
-    "    uint64_t n = src_len < dst_cap ? src_len : dst_cap;\n"
-    "    *dst_len = n;\n"
-    "    memcpy(dst, src, n);\n"
-    "    dst[n] = '\\0';\n"
+    "    return a->size == b->size && memcmp(a->data, b->data, a->size) == 0;\n"
     "}\n\n"
 )
 
 
-def emit_runtime_zstr(*, needs_string: bool, needs_stdio: bool) -> str:
-    """Emit ZStr struct, macros, and helper functions.
+_Z_STRINGVIEW_RUNTIME = (
+    "typedef struct {\n"
+    "    const char* data;    /* pointer into string buffer or .rodata */\n"
+    "    uint64_t length;     /* byte count of the viewed region */\n"
+    "} z_stringview_t;\n\n"
+    "static void z_stringview_print(z_stringview_t sv) {\n"
+    '    printf("%.*s\\n", (int)sv.length, sv.data);\n'
+    "}\n\n"
+    "static bool z_stringview_eq(z_stringview_t a, z_stringview_t b) {\n"
+    "    return a.length == b.length && memcmp(a.data, b.data, a.length) == 0;\n"
+    "}\n\n"
+    "static z_string_t* z_string_from_view(z_stringview_t sv) {\n"
+    "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + sv.length + 1);\n"
+    "    z->size = sv.length;\n"
+    "    z->capacity = sv.length;\n"
+    "    memcpy(z->data, sv.data, sv.length);\n"
+    "    z->data[sv.length] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
+)
+
+
+def emit_runtime_z_string(*, needs_string: bool, needs_stdio: bool) -> str:
+    """Emit z_string_t struct, macros, and helper functions.
 
     Future: extract to runtime/zrt_string.c / zrt_string.h.
     """
     if needs_string or needs_stdio:
-        return _ZSTR_RUNTIME
+        return _Z_STRING_RUNTIME
+    return ""
+
+
+def emit_runtime_z_stringview(*, needs_stringview: bool) -> str:
+    """Emit z_stringview_t struct and helper functions."""
+    if needs_stringview:
+        return _Z_STRINGVIEW_RUNTIME
     return ""
 
 
@@ -112,30 +134,38 @@ def emit_runtime(
     needs_stdlib: bool,
     needs_stdbool: bool,
     needs_string: bool,
+    needs_stringview: bool = False,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
-    # ZStr runtime uses malloc/free (stdlib.h), strlen/memcpy (string.h),
-    # and bool (stdbool.h) for zstr_eq
-    has_zstr = needs_string or needs_stdio
-    return emit_runtime_includes(
-        needs_stdio=needs_stdio,
-        needs_stdint=needs_stdint,
-        needs_stdlib=needs_stdlib or has_zstr,
-        needs_stdbool=needs_stdbool or has_zstr,
-        needs_string=needs_string or has_zstr,
-    ) + emit_runtime_zstr(needs_string=needs_string, needs_stdio=needs_stdio)
+    # z_string_t runtime uses malloc/free (stdlib.h), strlen/memcpy (string.h),
+    # and bool (stdbool.h) for z_string_eq
+    has_z_string = needs_string or needs_stdio
+    return (
+        emit_runtime_includes(
+            needs_stdio=needs_stdio,
+            needs_stdint=needs_stdint,
+            needs_stdlib=needs_stdlib or has_z_string or needs_stringview,
+            needs_stdbool=needs_stdbool or has_z_string or needs_stringview,
+            needs_string=needs_string or has_z_string or needs_stringview,
+        )
+        + emit_runtime_z_string(needs_string=needs_string, needs_stdio=needs_stdio)
+        + emit_runtime_z_stringview(needs_stringview=needs_stringview)
+    )
 
 
 def emit_static_strings(string_literals: Dict[str, str]) -> str:
-    """Emit per-program ZSTR_STATIC declarations.
+    """Emit per-program Z_STRING_STATIC declarations.
 
     These are program data (one per unique string literal), not runtime code.
+    Static strings use bit 63 of the capacity field as a flag to prevent
+    freeing. They will become z_stringview_t constants when stringview is
+    implemented (Phase 4).
     """
     if not string_literals:
         return ""
     parts: list[str] = []
     for escaped, sname in string_literals.items():
-        parts.append(f'ZSTR_STATIC({sname}, "{escaped}");\n')
+        parts.append(f'Z_STRING_STATIC({sname}, "{escaped}");\n')
     parts.append("\n")
     return "".join(parts)
 

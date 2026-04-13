@@ -63,7 +63,7 @@ def compile_and_run(csource: str, extra_cflags: list[str] | None = None) -> str:
 class TestEmitterBasic:
     def test_hello_world(self):
         csource = emit_source('main: function is { print "Hello, World!" }')
-        assert "zstr_print" in csource
+        assert "z_string_print" in csource
         assert "z_main" in csource
         output = compile_and_run(csource)
         assert output.strip() == "Hello, World!"
@@ -714,9 +714,9 @@ class TestEmitterStringOwnership:
     """Tests for string ownership semantics in emitted C code."""
 
     def test_string_scope_cleanup(self):
-        """String variables freed at function exit via zstr_free."""
+        """String variables freed at function exit via z_string_free."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
@@ -735,11 +735,11 @@ class TestEmitterStringOwnership:
         assert output.strip() == "Hello 42!"
 
     def test_string_reassignment(self):
-        """Old value freed via zstr_free, new value assigned correctly."""
+        """Old value freed via z_string_free, new value assigned correctly."""
         csource = emit_source(
             'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
         )
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "world"
 
@@ -760,12 +760,12 @@ class TestEmitterStringOwnership:
         assert lines[1] == "first"
 
     def test_string_temporaries(self):
-        """Interpolation intermediates freed via zstr_free."""
+        """Interpolation intermediates freed via z_string_free."""
         csource = emit_source(
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
-        # verify temps are freed (zstr_free(_t...) calls for zstr_cat results)
-        assert "zstr_free(_t" in csource
+        # verify temps are freed (z_string_free(_t...) calls for z_string_cat results)
+        assert "z_string_free(_t" in csource
         output = compile_and_run(csource)
         assert output.strip() == "Hello, Zero!"
 
@@ -786,9 +786,9 @@ class TestEmitterStringOwnership:
         assert lines == ["hello", "world", "!"]
 
     def test_string_in_with_do(self):
-        """Scoped string variable freed at end of with block via zstr_free."""
+        """Scoped string variable freed at end of with block via z_string_free."""
         csource = emit_source('main: function is {\n  with s: "hello" do print s\n}')
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
@@ -809,7 +809,7 @@ class TestBareBlockScope:
         csource = emit_source(
             'main: function is {\n  { s: "hello"\n  print s }\n  print "done"\n}'
         )
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip().split("\n") == ["hello", "done"]
 
@@ -898,7 +898,7 @@ class TestImplicitReturn:
         output = compile_and_run(csource)
         assert output.strip() == "hello"
         # string should be freed at scope exit
-        assert "zstr_free" in csource
+        assert "z_string_free" in csource
 
 
 class TestMatchExpression:
@@ -958,43 +958,43 @@ class TestMatchExpression:
 
 
 class TestEmitterStaticStrings:
-    """Tests for ZSTR_STATIC string literal emission."""
+    """Tests for Z_STRING_STATIC string literal emission."""
 
     def test_literal_uses_static(self):
-        """Plain string literal should emit ZSTR_STATIC, not zstr_new."""
+        """Plain string literal should emit Z_STRING_STATIC, not z_string_new."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        assert "ZSTR_STATIC(_zs" in csource
-        assert 'zstr_new("hello")' not in csource
+        assert "Z_STRING_STATIC(_zs" in csource
+        assert 'z_string_new("hello")' not in csource
 
     def test_static_deduplication(self):
-        """Same literal used twice should produce one ZSTR_STATIC."""
+        """Same literal used twice should produce one Z_STRING_STATIC."""
         csource = emit_source(
             'main: function is {\n  a: "hello"\n  b: "hello"\n  print a\n  print b\n}'
         )
-        assert csource.count('ZSTR_STATIC(_zs1, "hello")') == 1
-        # only one ZSTR_STATIC for "hello"
+        assert csource.count('Z_STRING_STATIC(_zs1, "hello")') == 1
+        # only one Z_STRING_STATIC for "hello"
         assert (
             csource.count("_zs2") == 0
             or '"hello"' not in csource.split("_zs2")[1].split("\n")[0]
         )
 
     def test_interp_fragments_use_static(self):
-        """Literal fragments in interpolation should use ZSTR_STATIC."""
+        """Literal fragments in interpolation should use Z_STRING_STATIC."""
         csource = emit_source(
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
-        assert "ZSTR_STATIC(" in csource
+        assert "Z_STRING_STATIC(" in csource
         # "Hello, " and "!" fragments should be static
-        assert 'zstr_new("Hello, ")' not in csource
-        assert 'zstr_new("!")' not in csource
+        assert 'z_string_new("Hello, ")' not in csource
+        assert 'z_string_new("!")' not in csource
 
     def test_static_string_var_no_temp(self):
         """Static literal assigned to var should not create a temp."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        # Should directly assign: ZStr* s = _zs1;
-        assert "ZStr* s = _zs" in csource
+        # Should directly assign: z_string_t* s = _zs1;
+        assert "z_string_t* s = _zs" in csource
         # No temp allocation
-        assert "ZStr* _t" not in csource or "_t1 = zstr_new" not in csource
+        assert "z_string_t* _t" not in csource or "_t1 = z_string_new" not in csource
 
     def test_static_string_passed_to_function(self):
         """Static string can be passed to and returned from functions."""
@@ -1020,22 +1020,22 @@ class TestEmitterStaticStrings:
         assert result.stdout.strip() == "world"
 
     def test_static_empty_string(self):
-        """Empty string literal should use ZSTR_STATIC."""
+        """Empty string literal should use Z_STRING_STATIC."""
         csource = emit_source('main: function is {\n  s: ""\n  print s\n}')
-        assert "ZSTR_STATIC(" in csource
-        assert 'zstr_new("")' not in csource
+        assert "Z_STRING_STATIC(" in csource
+        assert 'z_string_new("")' not in csource
 
-    def test_zstr_free_in_scope_cleanup(self):
-        """Scope cleanup for string vars should use zstr_free."""
+    def test_z_string_free_in_scope_cleanup(self):
+        """Scope cleanup for string vars should use z_string_free."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         assert "if (s) free(s);" not in csource
 
-    def test_uint64_size_field(self):
-        """ZStr struct should use uint64_t size field."""
+    def test_v2_string_struct(self):
+        """z_string_t struct should have size and capacity fields."""
         csource = emit_source('main: function is { print "hello" }')
         assert "uint64_t size;" in csource
-        assert "int32_t len;" not in csource
+        assert "uint64_t capacity;" in csource
 
 
 class TestEmitterMemorySafety:
@@ -1450,7 +1450,7 @@ class TestEmitterClassDestructors:
             'myclass: class { name: string\n x: 0 }\nmain: function is { c: myclass name: "" }'
         )
         assert "z_myclass_destroy" in csource
-        assert "zstr_free(p->name);" in csource
+        assert "z_string_free(p->name);" in csource
 
     def test_class_destructor_with_class_field(self):
         """Class with class field: destructor recurses."""
@@ -1476,11 +1476,11 @@ class TestEmitterClassDestructors:
             "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
         )
         assert "z_myclass_destroy" in csource
-        # destructor should NOT contain zstr_free or z_*_destroy for fields
+        # destructor should NOT contain z_string_free or z_*_destroy for fields
         # find the destructor body
         idx = csource.index("z_myclass_destroy(z_myclass_t* p)")
         body = csource[idx : csource.index("}\n", idx) + 2]
-        assert "zstr_free" not in body
+        assert "z_string_free" not in body
         assert "z_" not in body.replace("z_myclass_destroy", "").replace(
             "z_myclass_t", ""
         )
@@ -1963,7 +1963,7 @@ class TestStandaloneTake:
     def test_standalone_take_string(self):
         """s.take as statement on string → free + NULL."""
         csource = emit_source('main: function is {\n  s: "hello"\n  s.take\n}')
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         assert "s = NULL;" in csource
 
     def test_standalone_take_class_asan(self):
@@ -1999,7 +1999,7 @@ class TestStandaloneRelease:
     def test_release_string(self):
         """s.release on string → free + NULL."""
         csource = emit_source('main: function is {\n  s: "hello"\n  s.release\n}')
-        assert "zstr_free(s);" in csource
+        assert "z_string_free(s);" in csource
         assert "s = NULL;" in csource
 
     def test_release_valtype_no_destroy(self):
@@ -4249,11 +4249,11 @@ class TestStr:
     """Tests for str type emission and runtime behavior."""
 
     def test_str_struct_emitted(self):
-        """Str struct has len and data fields."""
+        """Str struct has compact len and data fields (no NUL)."""
         csource = emit_source("main: function is { s: (str to: 32) }")
         assert "z_str_32_t" in csource
-        assert "uint64_t len;" in csource
-        assert "char data[33];" in csource
+        assert "uint8_t len;" in csource
+        assert "char data[32];" in csource
 
     def test_str_create_emitted(self):
         """Str create function is emitted."""
@@ -4304,7 +4304,7 @@ class TestStr:
         assert output.strip() == "4"
 
     def test_str_string_conversion(self):
-        """.string converts to heap-allocated ZStr*."""
+        """.string converts to heap-allocated z_string_t*."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello".str to: 32\n'
@@ -4442,8 +4442,8 @@ class TestStr:
         assert lines[0] == "3"
         assert lines[1] == "bob"
 
-    def test_zstr_to_str_deduplication(self):
-        """One zstr_to_str_N function per target capacity regardless of sources."""
+    def test_z_string_to_str_deduplication(self):
+        """One z_string_to_str_N function per target capacity regardless of sources."""
         csource = emit_source(
             "main: function is {\n"
             '    a: "hello".str to: 32\n'
@@ -4452,10 +4452,12 @@ class TestStr:
             "    c: msg.str to: 32\n"
             "}"
         )
-        # only one zstr_to_str_32 function should be emitted
-        assert csource.count("zstr_to_str_32(") >= 2  # call sites
+        # only one z_string_to_str_32 function should be emitted
+        assert csource.count("z_string_to_str_32(") >= 2  # call sites
         # the definition should appear exactly once
-        assert csource.count("static z_str_32_t zstr_to_str_32(") == 2  # fwd decl + def
+        assert (
+            csource.count("static z_str_32_t z_string_to_str_32(") == 2
+        )  # fwd decl + def
 
 
 class TestList:
@@ -5833,7 +5835,7 @@ class TestIdenticalAndStringEquality:
             '  if a == b then print "equal"\n'
             "}"
         )
-        assert "zstr_eq" in csource
+        assert "z_string_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "equal"
 
@@ -5846,7 +5848,7 @@ class TestIdenticalAndStringEquality:
             '  if a != b then print "different"\n'
             "}"
         )
-        assert "zstr_eq" in csource
+        assert "z_string_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "different"
 

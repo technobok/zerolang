@@ -39,6 +39,7 @@ from ztypeutil import (
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
+    is_stringview_type as _is_stringview_type,
 )
 
 
@@ -170,8 +171,12 @@ def _set_destructor_metadata(ztype: ZType) -> None:
     """Set needs_destructor, destructor_name, is_heap_allocated based on type."""
     if ztype.subtype == ZSubType.STRING:
         ztype.needs_destructor = True
-        ztype.destructor_name = "zstr_free"
+        ztype.destructor_name = "z_string_free"
         ztype.is_heap_allocated = True
+    elif ztype.subtype == ZSubType.STRINGVIEW:
+        ztype.needs_destructor = False
+        ztype.destructor_name = None
+        ztype.is_heap_allocated = False
     elif ztype.typetype in (ZTypeType.CLASS, ZTypeType.UNION, ZTypeType.PROTOCOL):
         ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
@@ -1794,6 +1799,8 @@ class TypeChecker:
                 rtype.typetype = ZTypeType.NEVER
             elif name == "null":
                 rtype.typetype = ZTypeType.NULL
+        if name == "stringview":
+            rtype.subtype = ZSubType.STRINGVIEW
         _set_destructor_metadata(rtype)
         self._assign_cname_type(rtype)
 
@@ -3131,10 +3138,24 @@ class TypeChecker:
         # for str types: .string returns the string type directly (not the function)
         if _is_str_type(parent_type) and child_name == "string":
             return self._resolve_name("string")
-        # .str conversion method on string and str types
+        # for stringview types: .string returns the string type directly
+        if _is_stringview_type(parent_type) and child_name == "string":
+            return self._resolve_name("string")
+        # for string class: .toview returns the stringview type directly
+        if parent_type.subtype == ZSubType.STRING and child_name == "toview":
+            return self._resolve_name("stringview")
+        # for string class: .length returns u64 directly
+        if parent_type.subtype == ZSubType.STRING and child_name == "length":
+            return self._resolve_name("u64")
+        # for stringview: .length returns u64 directly
+        if _is_stringview_type(parent_type) and child_name == "length":
+            return self._resolve_name("u64")
+        # .str conversion method on string, str, and stringview types
         # returns a marker function type; actual resolution happens in _check_call
         if child_name == "str" and (
-            (parent_type.subtype == ZSubType.STRING) or _is_str_type(parent_type)
+            (parent_type.subtype == ZSubType.STRING)
+            or _is_str_type(parent_type)
+            or _is_stringview_type(parent_type)
         ):
             marker = _make_type("__str_convert", ZTypeType.FUNCTION)
             marker.is_native = True
@@ -3207,6 +3228,9 @@ class TypeChecker:
             return self._function_types_equivalent(a, b)
         # str types are compatible with string (print, function params)
         if _is_str_type(a) and b.subtype == ZSubType.STRING:
+            return True
+        # stringview is compatible with string (print, read-only params)
+        if _is_stringview_type(a) and b.subtype == ZSubType.STRING:
             return True
         # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
         base = a.typedef_base
