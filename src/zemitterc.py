@@ -4294,14 +4294,6 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
-        # identical: pointer comparison for reftypes
-        callable_name = self._get_callable_name(call.callable)
-        if callable_name == "identical" and len(call.arguments) >= 2:
-            self.needs_stdbool = True
-            lhs = self._emit_operation_value(call.arguments[0].valtype)
-            rhs = self._emit_operation_value(call.arguments[1].valtype)
-            return f"({lhs} == {rhs})"
-
         # callable object dispatch: obj(args) -> z_type_call(obj, args)
         if call.call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
