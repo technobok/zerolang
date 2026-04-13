@@ -4406,6 +4406,17 @@ class CEmitter:
                 if method_name == "capacity":
                     return f"({parent_val}->capacity & ~0x8000000000000000ull)"
 
+        # string construction: string or string capacity: N
+        if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
+            self.needs_string = True
+            self.needs_stdlib = True
+            cap = "0"
+            for arg in call.arguments:
+                if arg.name == "capacity":
+                    cap = self._emit_operation_value(arg.valtype)
+                    break
+            return self._alloc_temp(f"z_string_create((uint64_t){cap})")
+
         # str construction: (str to: N) — always empty
         if call.callable.type and _is_str_type(call.callable.type):
             str_name = call.callable.type.name
@@ -4824,6 +4835,12 @@ class CEmitter:
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
             return f"z_{name}_create({zero_args})"
+        # string class: bare "string" as value -> empty string constructor
+        # only when the name IS "string" (not a variable that has string type)
+        if name == "string" and atom.type and atom.type.subtype == ZSubType.STRING:
+            self.needs_string = True
+            self.needs_stdlib = True
+            return self._alloc_temp("z_string_create((uint64_t)0)")
         if tt == ZTypeType.CLASS and resolved is not None and resolved.name == name:
             self.needs_stdlib = True
             ctype = f"z_{name}_t"

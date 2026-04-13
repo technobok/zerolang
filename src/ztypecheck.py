@@ -3145,8 +3145,9 @@ class TypeChecker:
         # for string class: .toview returns the stringview type directly
         # and acquires an exclusive lock on the source string
         if parent_type.subtype == ZSubType.STRING and child_name == "toview":
-            if path.parent.nodetype == NodeType.ATOMID:
-                self._pending_borrow_lock = cast(zast.AtomId, path.parent).name
+            root_name = self._get_arg_root_name(path.parent)
+            if root_name:
+                self._pending_borrow_lock = root_name
             return self._resolve_name("stringview")
         # for string class: .length and .capacity return u64 directly
         if parent_type.subtype == ZSubType.STRING and child_name in (

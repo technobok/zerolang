@@ -115,6 +115,13 @@ _Z_STRING_RUNTIME = (
     "    *s = (z_string_t*)realloc(*s, sizeof(z_string_t) + (*s)->size + 1);\n"
     "    (*s)->capacity = (*s)->size;\n"
     "}\n\n"
+    "static z_string_t* z_string_create(uint64_t cap) {\n"
+    "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + cap + 1);\n"
+    "    z->size = 0;\n"
+    "    z->capacity = cap;\n"
+    "    z->data[0] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
 )
 
 
