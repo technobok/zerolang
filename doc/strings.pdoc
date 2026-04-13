@@ -834,27 +834,29 @@ Mechanical rename, no functional changes.
 #ul:
   #*: #+ Add #~"uint64_t capacity" to #~"z_string_t" struct.
   #*: #+ Update #~"z_string_new": set #~"capacity = size", maintain internal NUL.
-  #*: #+ Move static flag to bit 63 of #~"capacity" (was in #~"size"). Keep #~"Z_STRING_STATIC" macro with v2 layout.
-  #*: #+ Update #~"z_string_free": check static flag in capacity before freeing.
+  #*: #+ Remove static flag and #~"Z_STRING_STATIC" macro (literals are now #~"stringview").
+  #*: #+ #~"z_string_free" is unconditional: #~"if (s) free(s)".
   #*: #+ Update #~"z_string_cat", map copy sites: set capacity, maintain internal NUL.
 
 
-#---: Phase 4: #~"stringview" Type \[PARTIAL\]
+#---: Phase 4: #~"stringview" Type \[COMPLETE\]
 
 #ul:
   #*: #+ Add #~"ZSubType.STRINGVIEW" to #~"ztypes.py".
-  #*: #+ Add #~"stringview" record type in #~"system.z" with #~".length" and #~".string" native methods.
+  #*: #+ Add #~"stringview" as born-borrowed record type in #~"system.z".
   #*: #+ Add #~"z_stringview_t" struct to runtime (#~"const char* data" + #~"uint64_t length").
   #*: #+ Add #~"z_stringview_print", #~"z_stringview_eq", #~"z_string_from_view" runtime functions.
-  #*: #+ Add #~"string.toview" method (creates #~"z_stringview_t" from string).
-  #*: #+ Add #~"string.length" method (returns byte count).
+  #*: #+ Add #~"string.toview" method (creates locked #~"z_stringview_t" from string).
+  #*: #+ Add #~"string.length" and #~"string.capacity" methods.
   #*: #+ Add #~"stringview.string" conversion (heap copy via #~"z_string_from_view").
   #*: #+ Add #~"stringview.length" (byte count).
   #*: #+ Make #~"stringview" compatible with #~"string" for function parameters.
-  #*: #+ Handle #~"stringview" in print and string interpolation.
-  #*: String literals resolve to #~"stringview" type (not #~"string") -- deferred.
-  #*: #~".toview from: to:" substring views -- deferred.
-  #*: Borrow/lock tracking for dynamic #~"stringview" -- deferred.
+  #*: #+ Handle #~"stringview" in print (call-site conversion) and string interpolation.
+  #*: #+ String literals resolve to #~"stringview" type. Emitted as #~"static const z_stringview_t" constants.
+  #*: #+ #~".toview from: to:" substring views with runtime bounds checking.
+  #*: #+ Born-borrowed: #~"stringview" from #~".toview" cannot be copied; locks source string.
+  #*: #+ #~"print" takes #~"stringview.borrow" with call-site conversion for #~"string" and #~"str" args.
+  #*: #+ Fix #~".toview" lock tracking on dotted paths (#~"record.field.toview" locks root variable).
 
 
 #---: Phase 5: Mutable String Operations \[COMPLETE\]
@@ -862,9 +864,10 @@ Mechanical rename, no functional changes.
 #ul:
   #*: #+ Add #~"append", #~"reserve", #~"shrink", #~"capacity" methods to #~"string".
   #*: #+ Implement #~"z_string_append(z_string_t** s, const char* data, uint64_t len)".
-  #*: #+ Implement #~"z_string_reserve(z_string_t** s, uint64_t additional)" with static-to-heap promotion.
+  #*: #+ Implement #~"z_string_reserve(z_string_t** s, uint64_t additional)".
   #*: #+ Implement #~"z_string_shrink(z_string_t** s)".
-  #*: Rewrite interpolation to use append chain (zero intermediate allocations) -- deferred.
+  #*: #+ Rewrite interpolation to use append chain (zero intermediate allocations).
+  #*: #+ Add #~"string" default constructor (#~"s: string") and capacity constructor (#~"s: string capacity: 256").
 
 
 #---: Phase 6: #~".cstring" Method \[DEFERRED\]
@@ -881,10 +884,9 @@ Requires pointer type for return value; depends on FFI design.
 
 #ul:
   #*: #b:"stringview in records:" what mechanism would allow storing a #~"stringview" in a record field while maintaining safety? Lifetime annotations? Reference counting? Deferred to v3.
-  #*: #b:"str.stringview:" deferred to v3 when lifetime annotations can track stack lifetimes.
-  #*: #b:"stringview from stringview:" narrowing a static #~"stringview" always skips locking (static data is immortal). Narrowing a heap-backed #~"stringview" must preserve the lock chain.
-  #*: #b:"Substring offsets:" #~".stringview from: to:" accepts byte offsets (O(1)). Error if not at a character boundary (matches Rust's approach).
+  #*: #b:"str.stringview:" deferred to v3 when lifetime annotations can track stack lifetimes. At function call boundaries, implicit #~"str" -> #~"stringview" conversion is safe and handled by the emitter.
   #*: #b:"bytes type:" separate design for non-UTF-8 data (file I/O, network protocols).
   #*: #b:"String hashing:" #~"string" and #~"stringview" with the same content produce the same hash (hash from content, not representation).
   #*: #b:"SIMD validation:" start with scalar fast-path, upgrade when benchmarks justify.
-  #*: #b:"Append in interpolation:" pre-compute exact size (scan all parts) or estimate with reserve. Both valid -- examine generated code size tradeoff.
+  #*: #b:".cstring method:" requires pointer type for return value; depends on FFI design.
+  #*: #b:"Small class optimization:" compiler-transparent stack-resident headers for small classes (#~"string", #~"list", #~"map"). Would make #~".toview" conversion zero-cost (no heap dereference). Significant emitter refactor; defer until profiling motivates.
