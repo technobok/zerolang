@@ -3893,6 +3893,10 @@ class CEmitter:
                 is_class = (
                     enclosing_t is not None and enclosing_t.typetype == ZTypeType.CLASS
                 )
+                # constructor takes ownership of string temps passed as args
+                for st in list(self._temp.frees):
+                    if st in self._temp.string_set and st in args_str:
+                        self._temp.frees.remove(st)
                 result_expr = f"z_{fa_name}_meta_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
@@ -3918,6 +3922,10 @@ class CEmitter:
                 args_str, take_vars = self._build_meta_create_args(
                     fa_name, call.arguments, skip_first=1
                 )
+                # constructor takes ownership of string temps passed as args
+                for st in list(self._temp.frees):
+                    if st in self._temp.string_set and st in args_str:
+                        self._temp.frees.remove(st)
                 result_expr = f"z_{fa_name}_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
@@ -4711,6 +4719,10 @@ class CEmitter:
             args_str, take_vars = self._build_create_args(
                 cls_type.name, cls_type, call.arguments
             )
+            # constructor takes ownership of string temps passed as args
+            for st in list(self._temp.frees):
+                if st in self._temp.string_set and st in args_str:
+                    self._temp.frees.remove(st)
             result = f"z_{cls_type.name}_create({args_str})"
             tmp = self._temp_name("c")
             indent = self._indent()
@@ -5013,6 +5025,29 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             result = f"z_string_from_view({parent})"
             return self._alloc_temp(result)
+        # string literal .string: pure literal emits as Z_STRING_STATIC but
+        # .string creates an owned copy via z_string_from_view
+        if (
+            child == "string"
+            and path.parent.nodetype == NodeType.ATOMSTRING
+            and not any(
+                getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                for p in cast(zast.AtomString, path.parent).stringparts
+            )
+        ):
+            self.needs_stringview = True
+            self.needs_string = True
+            self.needs_stdlib = True
+            sname = self._emit_path_value(path.parent)
+            result = f"z_string_from_view((z_stringview_t){{ {sname}->data, {sname}->size }})"
+            return self._alloc_temp(result)
+        # string: .string identity (no-op for already-owned strings)
+        if (
+            parent_type_dp
+            and parent_type_dp.subtype == ZSubType.STRING
+            and child == "string"
+        ):
+            return self._emit_path_value(path.parent)
         # string: .length field access
         if (
             parent_type_dp

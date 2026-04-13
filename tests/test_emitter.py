@@ -767,7 +767,7 @@ class TestEmitterStringOwnership:
         # verify result string is freed (append chain, single allocation)
         assert "z_string_free(_s" in csource
         # verify interpolation uses append chain, not z_string_cat
-        main_body = csource[csource.index("void z_main"):]
+        main_body = csource[csource.index("void z_main") :]
         assert "z_string_cat(" not in main_body
         assert "z_string_append(" in main_body
         output = compile_and_run(csource)

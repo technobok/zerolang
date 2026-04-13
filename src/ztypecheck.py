@@ -3142,6 +3142,9 @@ class TypeChecker:
         # for stringview types: .string returns the string type directly
         if _is_stringview_type(parent_type) and child_name == "string":
             return self._resolve_name("string")
+        # for string class: .string returns the same string type (no-op identity)
+        if parent_type.subtype == ZSubType.STRING and child_name == "string":
+            return self._resolve_name("string")
         # for string class: .toview returns the stringview type directly
         # and acquires an exclusive lock on the source string
         if parent_type.subtype == ZSubType.STRING and child_name == "toview":
