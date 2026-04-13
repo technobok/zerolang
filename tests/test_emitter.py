@@ -4897,8 +4897,10 @@ class TestConstantFolding:
         assert output.strip() == "yes"
         # the C output should not contain a conditional if statement for 1 < 2
         # (string cleanup 'if (s &&' is OK, we check there's no comparison if)
-        assert "if (1" not in csource
-        assert "} else {" not in csource
+        # Check z_main body only (runtime functions may contain else)
+        main_body = csource[csource.index("void z_main") :]
+        assert "if (1" not in main_body
+        assert "} else {" not in main_body
 
     def test_constant_if_false(self):
         """if with constant-false condition should emit only the else branch."""
@@ -4907,8 +4909,9 @@ class TestConstantFolding:
         )
         output = compile_and_run(csource)
         assert output.strip() == "no"
-        assert "if (1" not in csource
-        assert "} else {" not in csource
+        main_body = csource[csource.index("void z_main") :]
+        assert "if (1" not in main_body
+        assert "} else {" not in main_body
 
     def test_constant_if_no_else_false(self):
         """if with constant-false and no else should emit nothing."""
@@ -4998,7 +5001,8 @@ class TestConstantFolding:
         output = compile_and_run(csource)
         assert output.strip() == "yes"
         # the constant condition should not emit a runtime if-else in main
-        assert "} else {" not in csource
+        main_body = csource[csource.index("void z_main") :]
+        assert "} else {" not in main_body
 
     def test_unit_level_f64_constant_expression(self):
         """Unit-level f64 expression should emit as static const."""

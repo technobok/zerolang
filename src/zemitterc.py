@@ -3400,6 +3400,17 @@ class CEmitter:
             return self._emit_with(cast(zast.With, inner))
         if inner.nodetype == zast.NodeType.CASE:
             return self._emit_case(cast(zast.Case, inner))
+        # string.shrink as zero-arg method statement (parsed as dotted path, not call)
+        if inner.nodetype == zast.NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, inner)
+            dp_parent_type = dp.parent.type
+            if (
+                dp_parent_type
+                and dp_parent_type.subtype == ZSubType.STRING
+                and dp.child.name == "shrink"
+            ):
+                parent_val = self._emit_path_value(dp.parent)
+                return f"{indent}z_string_shrink(&{parent_val});\n"
         if (
             inner.nodetype == zast.NodeType.DOTTEDPATH
             and cast(zast.DottedPath, inner).child.name == "take"
@@ -3802,6 +3813,32 @@ class CEmitter:
                     if take_var:
                         code += f"{indent}{take_var} = NULL;\n"
                 return code
+
+        # string class mutating methods: .append, .reserve, .shrink
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                if method_name == "append" and call.arguments:
+                    arg = self._emit_operation_value(call.arguments[0].valtype)
+                    arg_type = self._get_operation_type(call.arguments[0].valtype)
+                    if arg_type and _is_stringview_type(arg_type):
+                        self.needs_stringview = True
+                        return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.length);\n"
+                    if arg_type and _is_str_type(arg_type):
+                        return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.len);\n"
+                    # default: treat as z_string_t*
+                    return f"{indent}z_string_append(&{parent_val}, {arg}->data, {arg}->size);\n"
+                if method_name == "reserve" and call.arguments:
+                    arg = self._emit_operation_value(call.arguments[0].valtype)
+                    return (
+                        f"{indent}z_string_reserve(&{parent_val}, (uint64_t){arg});\n"
+                    )
+                if method_name == "shrink":
+                    return f"{indent}z_string_shrink(&{parent_val});\n"
 
         args = self._emit_call_args(call)
         cname = self._emit_callable_expr(call)
@@ -4368,6 +4405,8 @@ class CEmitter:
                     )
                 if method_name == "length":
                     return f"{parent_val}->size"
+                if method_name == "capacity":
+                    return f"({parent_val}->capacity & ~0x8000000000000000ull)"
 
         # str construction: (str to: N) — always empty
         if call.callable.type and _is_str_type(call.callable.type):
@@ -4443,20 +4482,6 @@ class CEmitter:
                     self.needs_stdlib = True
                     result = f"z_string_from_view({parent_val})"
                     return self._alloc_temp(result)
-
-        # string class method calls: .toview
-        if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
-            if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
-                method_name = cast(zast.DottedPath, call.callable).child.name
-                parent_val = self._emit_path_value(
-                    cast(zast.DottedPath, call.callable).parent
-                )
-                if method_name == "toview":
-                    self.needs_stringview = True
-                    return (
-                        f"(z_stringview_t){{ {parent_val}->data, {parent_val}->size }}"
-                    )
 
         # .str conversion method on string, str, and stringview types
         if call.callable.nodetype == NodeType.DOTTEDPATH:

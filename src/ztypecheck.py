@@ -3144,8 +3144,11 @@ class TypeChecker:
         # for string class: .toview returns the stringview type directly
         if parent_type.subtype == ZSubType.STRING and child_name == "toview":
             return self._resolve_name("stringview")
-        # for string class: .length returns u64 directly
-        if parent_type.subtype == ZSubType.STRING and child_name == "length":
+        # for string class: .length and .capacity return u64 directly
+        if parent_type.subtype == ZSubType.STRING and child_name in (
+            "length",
+            "capacity",
+        ):
             return self._resolve_name("u64")
         # for stringview: .length returns u64 directly
         if _is_stringview_type(parent_type) and child_name == "length":
@@ -3231,6 +3234,12 @@ class TypeChecker:
             return True
         # stringview is compatible with string (print, read-only params)
         if _is_stringview_type(a) and b.subtype == ZSubType.STRING:
+            return True
+        # string is compatible with stringview (read-only params)
+        if a.subtype == ZSubType.STRING and _is_stringview_type(b):
+            return True
+        # str types are compatible with stringview (read-only params)
+        if _is_str_type(a) and _is_stringview_type(b):
             return True
         # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
         base = a.typedef_base
@@ -5619,7 +5628,9 @@ class TypeChecker:
 
         # parameter types (skip special entries like :tag, :meta.create)
         params = [
-            (k, v) for k, v in callee_type.children.items() if not k.startswith(":")
+            (k, v)
+            for k, v in callee_type.children.items()
+            if not k.startswith(":") and k != "this"
         ]
 
         # for callable dispatch, skip the 'this' parameter (first param of call method)
