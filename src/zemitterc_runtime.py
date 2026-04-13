@@ -7,7 +7,7 @@ Future: extract output to runtime/ directory as zrt_string.c,
 zrt_error.c, etc. and compile into libzrt.a.
 """
 
-from typing import Dict, List
+from typing import List
 
 
 def emit_runtime_includes(
@@ -38,14 +38,9 @@ def emit_runtime_includes(
 _Z_STRING_RUNTIME = (
     "typedef struct {\n"
     "    uint64_t size;       /* byte count of current content */\n"
-    "    uint64_t capacity;   /* allocated buffer size; bit 63: static flag */\n"
+    "    uint64_t capacity;   /* allocated buffer size */\n"
     "    char data[];         /* flexible array member */\n"
     "} z_string_t;\n\n"
-    "#define Z_STRING_IS_STATIC(z) ((z)->capacity & 0x8000000000000000ull)\n\n"
-    "#define Z_STRING_STATIC(name, str) \\\n"
-    "    static struct { uint64_t size; uint64_t capacity; char data[sizeof(str)]; } \\\n"
-    "    name##_storage = { (sizeof(str)-1), (sizeof(str)-1) | 0x8000000000000000ull, str }; \\\n"
-    "    static z_string_t* name = (z_string_t*)&name##_storage\n\n"
     "static z_string_t* z_string_new(const char* s) {\n"
     "    uint64_t size = (uint64_t)strlen(s);\n"
     "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + size + 1);\n"
@@ -79,7 +74,7 @@ _Z_STRING_RUNTIME = (
     '    printf("%.*s\\n", (int)s->size, s->data);\n'
     "}\n\n"
     "static void z_string_free(z_string_t* s) {\n"
-    "    if (s && !Z_STRING_IS_STATIC(s)) free(s);\n"
+    "    if (s) free(s);\n"
     "}\n\n"
     "static bool z_string_eq(z_string_t* a, z_string_t* b) {\n"
     "    if (a == b) return true;\n"
@@ -87,21 +82,11 @@ _Z_STRING_RUNTIME = (
     "}\n\n"
     "static void z_string_reserve(z_string_t** s, uint64_t additional) {\n"
     "    uint64_t needed = (*s)->size + additional;\n"
-    "    uint64_t cap = (*s)->capacity & ~0x8000000000000000ull;\n"
-    "    if (needed <= cap) return;\n"
-    "    uint64_t new_cap = cap + (cap >> 1) + 16;\n"
+    "    if (needed <= (*s)->capacity) return;\n"
+    "    uint64_t new_cap = (*s)->capacity + ((*s)->capacity >> 1) + 16;\n"
     "    if (new_cap < needed) new_cap = needed;\n"
-    "    if (Z_STRING_IS_STATIC(*s)) {\n"
-    "        z_string_t* n = (z_string_t*)malloc(sizeof(z_string_t) + new_cap + 1);\n"
-    "        n->size = (*s)->size;\n"
-    "        n->capacity = new_cap;\n"
-    "        memcpy(n->data, (*s)->data, (*s)->size);\n"
-    "        n->data[n->size] = '\\0';\n"
-    "        *s = n;\n"
-    "    } else {\n"
-    "        *s = (z_string_t*)realloc(*s, sizeof(z_string_t) + new_cap + 1);\n"
-    "        (*s)->capacity = new_cap;\n"
-    "    }\n"
+    "    *s = (z_string_t*)realloc(*s, sizeof(z_string_t) + new_cap + 1);\n"
+    "    (*s)->capacity = new_cap;\n"
     "}\n\n"
     "static void z_string_append(z_string_t** s, const char* data, uint64_t len) {\n"
     "    z_string_reserve(s, len);\n"
@@ -110,7 +95,6 @@ _Z_STRING_RUNTIME = (
     "    (*s)->data[(*s)->size] = '\\0';\n"
     "}\n\n"
     "static void z_string_shrink(z_string_t** s) {\n"
-    "    if (Z_STRING_IS_STATIC(*s)) return;\n"
     "    if ((*s)->size == (*s)->capacity) return;\n"
     "    *s = (z_string_t*)realloc(*s, sizeof(z_string_t) + (*s)->size + 1);\n"
     "    (*s)->capacity = (*s)->size;\n"
@@ -190,19 +174,22 @@ def emit_runtime(
     )
 
 
-def emit_static_strings(string_literals: Dict[str, str]) -> str:
-    """Emit per-program Z_STRING_STATIC declarations.
+def emit_static_stringviews(string_literals: dict[str, str]) -> str:
+    """Emit per-program static stringview constants.
 
-    These are program data (one per unique string literal), not runtime code.
-    Static strings use bit 63 of the capacity field as a flag to prevent
-    freeing. They will become z_stringview_t constants when stringview is
-    implemented (Phase 4).
+    Each literal gets a static const char array and a z_stringview_t constant
+    pointing into .rodata with zero runtime cost.
     """
     if not string_literals:
         return ""
     parts: list[str] = []
     for escaped, sname in string_literals.items():
-        parts.append(f'Z_STRING_STATIC({sname}, "{escaped}");\n')
+        dname = f"{sname}_d"
+        byte_len = len(escaped.encode("utf-8").decode("unicode_escape").encode("utf-8"))
+        parts.append(f'static const char {dname}[] = "{escaped}";\n')
+        parts.append(
+            f"static const z_stringview_t {sname} = {{ {dname}, {byte_len} }};\n"
+        )
     parts.append("\n")
     return "".join(parts)
 

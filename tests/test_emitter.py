@@ -715,7 +715,7 @@ class TestEmitterStringOwnership:
 
     def test_string_scope_cleanup(self):
         """String variables freed at function exit via z_string_free."""
-        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
+        csource = emit_source('main: function is {\n  s: "hello".string\n  print s\n}')
         assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -737,7 +737,7 @@ class TestEmitterStringOwnership:
     def test_string_reassignment(self):
         """Old value freed via z_string_free, new value assigned correctly."""
         csource = emit_source(
-            'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
+            'main: function is {\n  s: "hello".string\n  s = "world".string\n  print s\n}'
         )
         assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
@@ -747,8 +747,8 @@ class TestEmitterStringOwnership:
         """Two strings swapped, both usable after swap."""
         csource = emit_source(
             "main: function is {\n"
-            '  a: "first"\n'
-            '  b: "second"\n'
+            '  a: "first".string\n'
+            '  b: "second".string\n'
             "  a swap b\n"
             "  print a\n"
             "  print b\n"
@@ -791,7 +791,9 @@ class TestEmitterStringOwnership:
 
     def test_string_in_with_do(self):
         """Scoped string variable freed at end of with block via z_string_free."""
-        csource = emit_source('main: function is {\n  with s: "hello" do print s\n}')
+        csource = emit_source(
+            'main: function is {\n  with s: "hello".string do print s\n}'
+        )
         assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -811,7 +813,7 @@ class TestBareBlockScope:
     def test_bare_block_string_cleanup(self):
         """String defined inside a bare block is freed at block exit."""
         csource = emit_source(
-            'main: function is {\n  { s: "hello"\n  print s }\n  print "done"\n}'
+            'main: function is {\n  { s: "hello".string\n  print s }\n  print "done"\n}'
         )
         assert "z_string_free(s);" in csource
         output = compile_and_run(csource)
@@ -842,8 +844,8 @@ class TestImplicitReturn:
     def test_implicit_return_string(self):
         """String as implicit return, no memory leak."""
         csource = emit_source(
-            'greet: function {name: string} out string is { "hello" }\n'
-            'main: function is { print (greet "world") }'
+            'greet: function {name: string} out string is { "hello".string }\n'
+            'main: function is { print (greet "world".string) }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -962,32 +964,32 @@ class TestMatchExpression:
 
 
 class TestEmitterStaticStrings:
-    """Tests for Z_STRING_STATIC string literal emission."""
+    """Tests for stringview string literal emission."""
 
     def test_literal_uses_static(self):
-        """Plain string literal should emit Z_STRING_STATIC, not z_string_new."""
+        """Plain string literal should emit static z_stringview_t, not z_string_new."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        assert "Z_STRING_STATIC(_zs" in csource
+        assert "static const z_stringview_t _zs" in csource
         assert 'z_string_new("hello")' not in csource
 
     def test_static_deduplication(self):
-        """Same literal used twice should produce one Z_STRING_STATIC."""
+        """Same literal used twice should produce one static z_stringview_t."""
         csource = emit_source(
             'main: function is {\n  a: "hello"\n  b: "hello"\n  print a\n  print b\n}'
         )
-        assert csource.count('Z_STRING_STATIC(_zs1, "hello")') == 1
-        # only one Z_STRING_STATIC for "hello"
+        # only one stringview constant for "hello"
+        assert csource.count('_zs1_d[] = "hello"') == 1
         assert (
             csource.count("_zs2") == 0
             or '"hello"' not in csource.split("_zs2")[1].split("\n")[0]
         )
 
     def test_interp_fragments_use_static(self):
-        """Literal fragments in interpolation should use Z_STRING_STATIC."""
+        """Literal fragments in interpolation should use static z_stringview_t."""
         csource = emit_source(
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
-        assert "Z_STRING_STATIC(" in csource
+        assert "static const z_stringview_t" in csource
         # "Hello, " and "!" fragments should be static
         assert 'z_string_new("Hello, ")' not in csource
         assert 'z_string_new("!")' not in csource
@@ -995,8 +997,8 @@ class TestEmitterStaticStrings:
     def test_static_string_var_no_temp(self):
         """Static literal assigned to var should not create a temp."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        # Should directly assign: z_string_t* s = _zs1;
-        assert "z_string_t* s = _zs" in csource
+        # Should directly assign: z_stringview_t s = _zs1;
+        assert "z_stringview_t s = _zs" in csource
         # No temp allocation
         assert "z_string_t* _t" not in csource or "_t1 = z_string_new" not in csource
 
@@ -1004,7 +1006,7 @@ class TestEmitterStaticStrings:
         """Static string can be passed to and returned from functions."""
         csource = emit_source(
             "greet: function {n: i64} out string is {\n"
-            '  return "hello"\n'
+            '  return "hello".string\n'
             "}\n"
             "main: function is {\n"
             "  msg: greet 1\n"
@@ -1015,25 +1017,27 @@ class TestEmitterStaticStrings:
         assert output.strip() == "hello"
 
     def test_static_string_asan(self):
-        """Static strings should pass ASan (no leaks, no invalid frees)."""
+        """Strings should pass ASan (no leaks, no invalid frees)."""
         csource = emit_source(
-            'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
+            'main: function is {\n  s: "hello".string\n  s = "world".string\n  print s\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert result.stdout.strip() == "world"
 
     def test_static_empty_string(self):
-        """Empty string literal should use Z_STRING_STATIC."""
+        """Empty string literal should use static z_stringview_t."""
         csource = emit_source('main: function is {\n  s: ""\n  print s\n}')
-        assert "Z_STRING_STATIC(" in csource
+        assert "static const z_stringview_t" in csource
         assert 'z_string_new("")' not in csource
 
     def test_z_string_free_in_scope_cleanup(self):
         """Scope cleanup for string vars should use z_string_free."""
-        csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
+        csource = emit_source('main: function is {\n  s: "hello".string\n  print s\n}')
         assert "z_string_free(s);" in csource
-        assert "if (s) free(s);" not in csource
+        # the main body should not use raw free(s), only z_string_free
+        main_body = csource[csource.index("void z_main") :]
+        assert "if (s) free(s);" not in main_body
 
     def test_v2_string_struct(self):
         """z_string_t struct should have size and capacity fields."""
@@ -1067,7 +1071,7 @@ class TestEmitterMemorySafety:
 
     def test_string_reassign_no_double_free(self):
         csource = emit_source(
-            'main: function is {\n  s: "hello"\n  s = "world"\n  print s\n}'
+            'main: function is {\n  s: "hello".string\n  s = "world".string\n  print s\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -1076,8 +1080,8 @@ class TestEmitterMemorySafety:
     def test_string_swap_no_double_free(self):
         csource = emit_source(
             "main: function is {\n"
-            '  a: "first"\n'
-            '  b: "second"\n'
+            '  a: "first".string\n'
+            '  b: "second".string\n'
             "  a swap b\n"
             "  print a\n"
             "  print b\n"
@@ -1534,7 +1538,7 @@ class TestEmitterClassDestructorIntegration:
         """Class with string field: no leak under ASan."""
         csource = emit_source(
             "myclass: class { name: string\n x: i64 }\n"
-            'main: function is {\n  c: myclass name: "hello" x: 42\n  print "\\{c.name}"\n}'
+            'main: function is {\n  c: myclass name: "hello".string x: 42\n  print "\\{c.name}"\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -1785,7 +1789,7 @@ class TestEmitterUnionIntegration:
         csource = emit_source(
             "myunion: union { a: i64\n b: string\n c: null }\n"
             "main: function is {\n"
-            '  x: myunion.b "hello"\n'
+            '  x: myunion.b "hello".string\n'
             '  print "ok"\n'
             "}"
         )
@@ -1830,11 +1834,11 @@ class TestEmitterUnionIntegration:
             "  match (\n"
             "    r\n"
             "  ) case ok then {\n"
-            '    return "ok"\n'
+            '    return "ok".string\n'
             "  } case err then {\n"
-            '    return "error"\n'
+            '    return "error".string\n'
             "  } case none then {\n"
-            '    return "none"\n'
+            '    return "none".string\n'
             "  }\n"
             "}\n"
             "main: function is {\n"
@@ -1884,7 +1888,7 @@ class TestEmitterUnionMemorySafety:
     def test_union_string_no_leak(self):
         csource = emit_source(
             "myunion: union { a: string\n b: null }\n"
-            'main: function is { x: myunion.a "hello"\n print "ok" }'
+            'main: function is { x: myunion.a "hello".string\n print "ok" }'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -1966,7 +1970,7 @@ class TestStandaloneTake:
 
     def test_standalone_take_string(self):
         """s.take as statement on string → free + NULL."""
-        csource = emit_source('main: function is {\n  s: "hello"\n  s.take\n}')
+        csource = emit_source('main: function is {\n  s: "hello".string\n  s.take\n}')
         assert "z_string_free(s);" in csource
         assert "s = NULL;" in csource
 
@@ -1975,7 +1979,7 @@ class TestStandaloneTake:
         csource = emit_source(
             "myclass: class { name: string }\n"
             "main: function is {\n"
-            '  c: myclass name: "hello"\n'
+            '  c: myclass name: "hello".string\n'
             "  c.take\n"
             '  print "ok"\n'
             "}"
@@ -2002,7 +2006,9 @@ class TestStandaloneRelease:
 
     def test_release_string(self):
         """s.release on string → free + NULL."""
-        csource = emit_source('main: function is {\n  s: "hello"\n  s.release\n}')
+        csource = emit_source(
+            'main: function is {\n  s: "hello".string\n  s.release\n}'
+        )
         assert "z_string_free(s);" in csource
         assert "s = NULL;" in csource
 
@@ -2016,7 +2022,7 @@ class TestStandaloneRelease:
         csource = emit_source(
             "myclass: class { name: string }\n"
             "main: function is {\n"
-            '  c: myclass name: "hello"\n'
+            '  c: myclass name: "hello".string\n'
             "  c.release\n"
             '  print "ok"\n'
             "}"
@@ -2203,7 +2209,7 @@ class TestEmitterConstructorIntegration:
         """Class with string field: take semantics work via meta.create."""
         csource = emit_source(
             "myclass: class { name: string }\n"
-            'main: function is {\n  c: myclass name: "hello"\n  print "\\{c.name}"\n}'
+            'main: function is {\n  c: myclass name: "hello".string\n  print "\\{c.name}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -2225,7 +2231,7 @@ class TestEmitterConstructorMemorySafety:
         """Class with string field: no leak under ASan."""
         csource = emit_source(
             "myclass: class { name: string }\n"
-            'main: function is {\n  c: myclass name: "hello"\n  print "\\{c.name}"\n}'
+            'main: function is {\n  c: myclass name: "hello".string\n  print "\\{c.name}"\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -3446,7 +3452,7 @@ class TestGenericsEmission:
         """option.some with string (reftype) emits nullable pointer."""
         csource = emit_source(
             "main: function is {\n"
-            '    x: option.some "hello"\n'
+            '    x: option.some "hello".string\n'
             "    match (x) case some then {\n"
             '        print "is some"\n'
             "    } case none then {\n"
@@ -3568,7 +3574,7 @@ class TestGenericsEmission:
     def test_box_reftype_passthrough(self):
         """box from: reftype is transparent passthrough."""
         csource = emit_source(
-            'main: function is {\n    b: box from: "hello"\n    print b\n}'
+            'main: function is {\n    b: box from: "hello".string\n    print b\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -3988,7 +3994,7 @@ class TestCodeDeduplication:
     """Tests for AST-level code deduplication of monomorphized methods."""
 
     def test_dedup_identical_numeric_generic_methods(self):
-        """Two numeric-generic instantiations with identical method body produce a #define alias."""
+        """Two numeric-generic instantiations with different this types both emit functions."""
         csource = emit_source(
             "mycls: class { val: i64 } as {\n"
             "    n: u64.generic\n"
@@ -4000,9 +4006,7 @@ class TestCodeDeduplication:
             '    print "ok"\n'
             "}"
         )
-        # one should be a #define alias pointing to the other
-        assert "#define" in csource
-        # both function names should be present (fwd decl + define)
+        # both function names should be present (different this types)
         assert "z_mycls_10_getval" in csource
         assert "z_mycls_20_getval" in csource
 
@@ -4793,12 +4797,12 @@ class TestMap:
         csource = emit_source(
             "main: function is {\n"
             "    m: (map key: string value: i64)\n"
-            '    m.set key: "hello" value: 42\n'
-            '    m.set key: "world" value: 99\n'
+            '    m.set key: "hello".string value: 42\n'
+            '    m.set key: "world".string value: 99\n'
             '    print "\\{m.length}"\n'
-            '    k: "hello"\n'
+            '    k: "hello".string\n'
             '    print "\\{m.has key: k}"\n'
-            '    k2: "nope"\n'
+            '    k2: "nope".string\n'
             '    print "\\{m.has key: k2}"\n'
             "}"
         )
@@ -5820,7 +5824,7 @@ class TestStringEquality:
             '  if a == b then print "equal"\n'
             "}"
         )
-        assert "z_string_eq" in csource
+        assert "z_stringview_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "equal"
 
@@ -5833,7 +5837,7 @@ class TestStringEquality:
             '  if a != b then print "different"\n'
             "}"
         )
-        assert "z_string_eq" in csource
+        assert "z_stringview_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "different"
 

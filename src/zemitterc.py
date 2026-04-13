@@ -744,8 +744,8 @@ class CEmitter:
                 qname = f"{type_name}.{label}"
                 cname = _mangle_func(qname)
                 if type(v) is str:
-                    # string constant: emit static string + pointer alias
-                    self.needs_string = True
+                    # string constant: emit static stringview + alias
+                    self.needs_stringview = True
                     escaped = self._escape_c_string(v)
                     sname = self._static_string(escaped)
                     self.data_defs.append(f"#define {cname} {sname}\n")
@@ -906,7 +906,7 @@ class CEmitter:
                 needs_stringview=self.needs_stringview,
             )
         )
-        parts.append(zrt.emit_static_strings(self._string_literals))
+        parts.append(zrt.emit_static_stringviews(self._string_literals))
 
         for st in self.spec_typedefs:
             parts.append(st)
@@ -3823,6 +3823,7 @@ class CEmitter:
 
         # implicit take: nullify args passed to .take parameters
         ftype = call.callable.type
+        emitted_vals = getattr(self, "_last_emitted_arg_vals", [])
         if ftype and ftype.param_ownership:
             params = list(ftype.children.items())
             for i, arg in enumerate(call.arguments):
@@ -3835,6 +3836,13 @@ class CEmitter:
                             root = self._get_implicit_take_var(arg.valtype)
                             if root:
                                 code += f"{indent}{root} = NULL;\n"
+                            elif (
+                                i < len(emitted_vals)
+                                and emitted_vals[i] in self._temp.string_set
+                            ):
+                                # temp created by .string conversion — nullify
+                                # so scope cleanup doesn't double-free
+                                code += f"{indent}{emitted_vals[i]} = NULL;\n"
 
         return code
 
@@ -4054,10 +4062,13 @@ class CEmitter:
             if gp:
                 generic_param_names = set(gp.keys())
 
+        # track emitted C values per argument index for implicit-take
+        self._last_emitted_arg_vals: List[str] = []
         ctype_idx = 0
         for i, arg in enumerate(call.arguments):
             # skip generic type args (they are compile-time only)
             if arg.name and arg.name in generic_param_names:
+                self._last_emitted_arg_vals.append("")
                 continue
             val = self._emit_operation_value(arg.valtype)
             if self._has_call(arg.valtype):
@@ -4070,6 +4081,7 @@ class CEmitter:
                 if ctype != "z_string_t*":
                     val = self._alloc_arg_temp(ctype, val)
             parts.append(val)
+            self._last_emitted_arg_vals.append(val)
             ctype_idx += 1
 
         # fill defaults for missing trailing params
@@ -4389,7 +4401,7 @@ class CEmitter:
                 if method_name == "length":
                     return f"{parent_val}->size"
                 if method_name == "capacity":
-                    return f"({parent_val}->capacity & ~0x8000000000000000ull)"
+                    return f"{parent_val}->capacity"
 
         # string construction: string or string capacity: N
         if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
@@ -4604,6 +4616,10 @@ class CEmitter:
                         key_val = self._emit_operation_value(call.arguments[0].valtype)
                     if val_val is None:
                         val_val = self._emit_operation_value(call.arguments[1].valtype)
+                    # map.set takes ownership of key — remove from temp frees
+                    if key_val in self._temp.string_set:
+                        if key_val in self._temp.frees:
+                            self._temp.frees.remove(key_val)
                     return f"z_{map_type_name}_set({parent_val}, {key_val}, {val_val})"
                 if method_name == "get" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
@@ -4795,6 +4811,14 @@ class CEmitter:
                 if op == "!=":
                     return f"(!{call})"
                 return call
+            # stringview content comparison
+            if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
+                self.needs_stdbool = True
+                self.needs_stringview = True
+                call = f"z_stringview_eq({lhs}, {rhs})"
+                if op == "!=":
+                    return f"(!{call})"
+                return call
         cop = C_OPS.get(op, op)
         return f"({lhs} {cop} {rhs})"
 
@@ -4979,8 +5003,8 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             result = f"z_string_from_view({parent})"
             return self._alloc_temp(result)
-        # string literal .string: pure literal emits as Z_STRING_STATIC but
-        # .string creates an owned copy via z_string_from_view
+        # string literal .string: literal is a z_stringview_t constant;
+        # .string creates an owned heap copy via z_string_from_view
         if (
             child == "string"
             and path.parent.nodetype == NodeType.ATOMSTRING
@@ -5547,18 +5571,19 @@ class CEmitter:
         return tmp
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
-        self.needs_string = True
-        self.needs_stdlib = True
-        self.needs_stdio = True
-
         has_interp = any(
             getattr(p, "nodetype", None) == NodeType.EXPRESSION
             for p in atom.stringparts
         )
 
         if not has_interp:
+            self.needs_stringview = True
             literal = self._collect_string_literal(atom.stringparts)
             return self._static_string(literal)
+
+        self.needs_string = True
+        self.needs_stdlib = True
+        self.needs_stdio = True
 
         # append chain: one allocation, no intermediates
         indent = self._indent()

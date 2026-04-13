@@ -2254,19 +2254,19 @@ class TypeChecker:
                         loc=start,
                     )
                 else:
-                    string_type = self._resolve_name("string")
-                    if string_type:
+                    sv_type = self._resolve_name("stringview")
+                    if sv_type:
                         # collect the raw string content from token parts
                         raw = "".join(
                             cast(Token, p).tokstr
                             for p in apath_str.stringparts
                             if not p.is_node
                         )
-                        ct = _make_type(string_type.name, string_type.typetype)
-                        ct.children = string_type.children
-                        ct.subtype = string_type.subtype
+                        ct = _make_type(sv_type.name, sv_type.typetype)
+                        ct.children = sv_type.children
+                        ct.subtype = sv_type.subtype
                         ct.const_value = raw
-                        ct.is_valtype = False
+                        ct.is_valtype = True
                         ct.needs_destructor = False  # static, not freed
                         apath_str.type = ct
                         apath_str.const_value = raw
@@ -2949,7 +2949,12 @@ class TypeChecker:
         elif path.parent.nodetype == NodeType.EXPRESSION:
             parent_type = getattr(path.parent, "type", None)
         elif path.parent.nodetype == NodeType.ATOMSTRING:
-            parent_type = self._resolve_name("string")
+            atom_str = cast(zast.AtomString, path.parent)
+            has_interp = any(
+                getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                for p in atom_str.stringparts
+            )
+            parent_type = self._resolve_name("string" if has_interp else "stringview")
         if not parent_type:
             return None
         # check for .typedef — creates a marker detected by type resolvers
@@ -4977,7 +4982,11 @@ class TypeChecker:
         if path.nodetype == NodeType.ATOMSTRING:
             path_str = cast(zast.AtomString, path)
             self._check_string_interpolation(path_str)
-            path_str.type = self._resolve_name("string")
+            has_interp = any(
+                getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                for p in path_str.stringparts
+            )
+            path_str.type = self._resolve_name("string" if has_interp else "stringview")
             return path_str.type
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             return self._check_atomid(cast(zast.AtomId, path))
@@ -5213,7 +5222,11 @@ class TypeChecker:
         elif path.parent.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path.parent)
             self._check_string_interpolation(atom_str)
-            atom_str.type = self._resolve_name("string")
+            has_interp = any(
+                getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                for p in atom_str.stringparts
+            )
+            atom_str.type = self._resolve_name("string" if has_interp else "stringview")
         elif path.parent.nodetype == NodeType.EXPRESSION:
             self._check_expression(cast(zast.Expression, path.parent))
         t = self._resolve_dotted_path(path)

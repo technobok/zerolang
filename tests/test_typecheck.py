@@ -2107,7 +2107,7 @@ class TestStringMigration:
     def test_string_take_invalidates(self):
         """After .take on a string variable, the source is invalidated."""
         errors = check_errors(
-            'main: function is {\n  s: "hello"\n  d: s.take\n  e: s\n}'
+            'main: function is {\n  s: "hello".string\n  d: s.take\n  e: s\n}'
         )
         assert any(
             "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
@@ -2124,14 +2124,16 @@ class TestStringMigration:
 
     def test_string_swap_ok(self):
         """Swapping two string variables should work."""
-        check_ok('main: function is {\n  a: "hello"\n  b: "world"\n  a swap b\n}')
+        check_ok(
+            'main: function is {\n  a: "hello".string\n  b: "world".string\n  a swap b\n}'
+        )
 
     def test_string_aliasing_error(self):
         """Passing the same string twice to a call is an aliasing error."""
         errors = check_errors(
             "f: function {a: string b: string} is {}\n"
             "main: function is {\n"
-            '  s: "hello"\n'
+            '  s: "hello".string\n'
             "  f a: s b: s\n"
             "}"
         )
@@ -3976,7 +3978,7 @@ class TestGenerics:
         """Generic function with valtype constraint rejects reftype arg."""
         errors = check_errors(
             "id: function as { t: any.valtype } in { val: t } out t is { return val }\n"
-            'main: function is { x: id "hello" }'
+            'main: function is { x: id "hello".string }'
         )
         assert any("not a value type" in e.msg.lower() for e in errors)
 
@@ -4270,7 +4272,7 @@ class TestGenerics:
 
     def test_optionval_requires_valtype(self):
         """optionval with reftype should error (requires any.valtype)."""
-        errors = check_errors('main: function is { x: optionval.some "hello" }')
+        errors = check_errors('main: function is { x: optionval.some "hello".string }')
         assert any("not a value type" in e.msg for e in errors)
 
     def test_optionval_some_infers_i64(self):
@@ -4296,7 +4298,7 @@ class TestGenerics:
 
     def test_option_nullable_ptr_flag(self):
         """Monomorphized option(reftype) has is_nullable_ptr set."""
-        program = check_ok('main: function is { x: option.some "hello" }')
+        program = check_ok('main: function is { x: option.some "hello".string }')
         mono, _ = program.mono_types[0]
         assert mono.is_nullable_ptr is True
 
@@ -4310,7 +4312,7 @@ class TestGenerics:
 
     def test_box_reftype_passthrough(self):
         """box from: reftype is a passthrough (type is the reftype)."""
-        program = check_ok('main: function is { b: box from: "hello" }')
+        program = check_ok('main: function is { b: box from: "hello".string }')
         # for reftype passthrough, the type is string, not box
         # no box mono type should be created
         for mono, _ in program.mono_types:
@@ -4369,10 +4371,10 @@ class TestGenerics:
         assert any("Conflicting types" in e.msg for e in errors)
 
     def test_generic_record_multi_param_infer(self):
-        """pair x: 42 y: "hi" infers a=i64, b=string."""
+        """pair x: 42 y: "hi".string infers a=i64, b=string."""
         program = check_ok(
             "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
-            'main: function is { p: mypair x: 42 y: "hi" }'
+            'main: function is { p: mypair x: 42 y: "hi".string }'
         )
         assert len(program.mono_types) >= 1
         mono, _ = program.mono_types[0]
