@@ -294,6 +294,9 @@ class TypeChecker:
 
         # pending borrow lock: set by .borrow, consumed by _check_assignment
         self._pending_borrow_lock: Optional[str] = None
+        # pending view lock: set by .toview, consumed by _check_assignment
+        # like borrow lock but the holder stays OWNED (stringview is a copyable valtype)
+        self._pending_view_lock: Optional[str] = None
         # pending private access: set by .private, consumed by _check_assignment
         self._pending_private_access: bool = False
 
@@ -3142,7 +3145,10 @@ class TypeChecker:
         if _is_stringview_type(parent_type) and child_name == "string":
             return self._resolve_name("string")
         # for string class: .toview returns the stringview type directly
+        # and acquires an exclusive lock on the source string
         if parent_type.subtype == ZSubType.STRING and child_name == "toview":
+            if path.parent.nodetype == NodeType.ATOMID:
+                self._pending_view_lock = cast(zast.AtomId, path.parent).name
             return self._resolve_name("stringview")
         # for string class: .length and .capacity return u64 directly
         if parent_type.subtype == ZSubType.STRING and child_name in (
@@ -4614,6 +4620,9 @@ class TypeChecker:
             # check if this assignment is from a .borrow call
             borrow_target = self._pending_borrow_lock
             self._pending_borrow_lock = None
+            # check if this assignment is from a .toview call
+            view_target = self._pending_view_lock
+            self._pending_view_lock = None
             # check if this assignment is from a .private expression
             private_access = self._pending_private_access
             self._pending_private_access = False
@@ -4647,6 +4656,19 @@ class TypeChecker:
                 self.symtab.define_var(assign.name, var)
                 err = self.symtab.try_lock(
                     borrow_target, ZLockState.EXCLUSIVE, assign.name
+                )
+                if err:
+                    self._error(err, loc=assign.start)
+            elif view_target:
+                # stringview: the variable is OWNED (copyable valtype) but holds
+                # an exclusive lock on the source string to prevent mutation
+                var = ZVariable(
+                    ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED
+                )
+                var.is_private_access = private_access
+                self.symtab.define_var(assign.name, var)
+                err = self.symtab.try_lock(
+                    view_target, ZLockState.EXCLUSIVE, assign.name
                 )
                 if err:
                     self._error(err, loc=assign.start)
