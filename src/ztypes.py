@@ -276,6 +276,15 @@ class ZType:
     # field-by-field) is decided by the emitter based on estimated type size.
     is_simple_eq: bool = field(default=False, init=False)
 
+    # internal metadata: compiler-generated raw allocator for this type
+    meta_create: Optional["ZType"] = field(default=None, init=False)
+
+    # internal metadata: tag discriminator enum for union/variant types
+    tag_type: Optional["ZType"] = field(default=None, init=False)
+
+    # internal metadata: element type for data types
+    element_type: Optional["ZType"] = field(default=None, init=False)
+
     # C identifier for this type (set by type checker, used by emitter)
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.
@@ -487,8 +496,7 @@ def _union_subtype_names(full_type: "ZType") -> "dict[str, ZType]":
     return {
         k: v
         for k, v in full_type.children.items()
-        if not k.startswith(":")
-        and v.typetype
+        if v.typetype
         not in (ZTypeType.FUNCTION, ZTypeType.DATA, ZTypeType.TAG, ZTypeType.ENUM)
         and getattr(v, "generic_origin", None) is not TAG_ORIGIN
     }

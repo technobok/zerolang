@@ -18,23 +18,17 @@ from ztypes import ZType, ZTypeType
 def hash_function(func: zast.Function) -> str:
     """Hash a typechecked Function node, returning a hex digest.
 
-    Hashes parameter types (excluding :this param type name),
-    return type, and body structure. Function name is excluded.
+    Hashes parameter types, return type, and body structure.
+    Function name is excluded.
     """
     h = hashlib.sha256()
 
     # hash parameter types (order matters)
     for pname, ppath in func.parameters.items():
-        if pname.startswith(":"):
-            # for :this, hash only structural info, not the type name
-            h.update(b"THIS_PARAM")
-            if ppath.type:
-                h.update(_hash_type_structure(ppath.type).encode())
-        else:
-            h.update(pname.encode())
-            h.update(b":")
-            if ppath.type:
-                h.update(_hash_type(ppath.type).encode())
+        h.update(pname.encode())
+        h.update(b":")
+        if ppath.type:
+            h.update(_hash_type(ppath.type).encode())
 
     # hash return type
     h.update(b"|RET|")
@@ -57,7 +51,7 @@ def _hash_type(ztype: ZType) -> str:
 
 
 def _hash_type_structure(ztype: ZType) -> str:
-    """Hash a ZType structurally (for :this param — excludes the type name).
+    """Hash a ZType structurally (excludes the type name).
 
     Hashes typetype plus the structure of children (their types),
     so two structurally identical types hash the same even with different names.
@@ -65,8 +59,6 @@ def _hash_type_structure(ztype: ZType) -> str:
     h = hashlib.sha256()
     h.update(ztype.typetype.name.encode())
     for cname, ctype in ztype.children.items():
-        if cname.startswith(":"):
-            continue
         if ctype.typetype == ZTypeType.FUNCTION:
             continue
         h.update(cname.encode())

@@ -134,7 +134,7 @@ def _suggest_similar(name: str, candidates, max_distance: int = 2) -> Optional[s
     best_dist = max_distance + 1
     tied = False
     for c in candidates:
-        if c.startswith(":") or c == name:
+        if c == name:
             continue
         d = _levenshtein(name, c)
         if d < best_dist:
@@ -1229,7 +1229,7 @@ class TypeChecker:
             create_type = self._make_meta_create_type(
                 name, ctype, is_func_names, field_names
             )
-            ctype.children[":meta.create"] = create_type
+            ctype.meta_create = create_type
             # Only install the default 'create' child if the user has not
             # disabled it via 'create: null'.
             if "create" not in ctype.children and not ctype.create_disabled:
@@ -1268,7 +1268,7 @@ class TypeChecker:
         """Resolve tag discriminator for a union or variant type.
 
         Scans as_items for a .tag type reference, validates it against
-        subtype_names, and populates ztype.children[":tag"] and
+        subtype_names, and populates ztype.tag_type and
         ztype.children["tag"].
 
         type_kind is "Union" or "Variant" (for error messages).
@@ -1310,11 +1310,7 @@ class TypeChecker:
 
         if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
             # validate: data labels must match subtypes 1:1
-            data_labels = [
-                k
-                for k in custom_tag_data.children
-                if not k.startswith(":") and k != "tag"
-            ]
+            data_labels = [k for k in custom_tag_data.children if k != "tag"]
             if sorted(data_labels) != sorted(subtype_names):
                 missing_in_data = set(subtype_names) - set(data_labels)
                 missing_in_type = set(data_labels) - set(subtype_names)
@@ -1352,7 +1348,7 @@ class TypeChecker:
                 child = custom_tag_data.children.get(sname)
                 val = child.name if child else str(subtype_names.index(sname))
                 tag_type.children[sname] = _make_type(val, ZTypeType.RECORD)
-            ztype.children[":tag"] = tag_type
+            ztype.tag_type = tag_type
             ztype.children["tag"] = custom_tag_data
 
         elif custom_tag_data and custom_tag_data.typetype == ZTypeType.RECORD:
@@ -1367,7 +1363,7 @@ class TypeChecker:
             tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
                 tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            ztype.children[":tag"] = tag_type
+            ztype.tag_type = tag_type
             gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
@@ -1391,7 +1387,7 @@ class TypeChecker:
             tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
                 tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            ztype.children[":tag"] = tag_type
+            ztype.tag_type = tag_type
             gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
@@ -1774,7 +1770,7 @@ class TypeChecker:
 
         # Store element type for later use
         if element_type:
-            dtype.children[":element_type"] = element_type
+            dtype.element_type = element_type
 
         # Generate .tag subtype — monomorphized tag(element_type) with parent=data
         et_name = element_type.name if element_type else "i64"
@@ -1943,7 +1939,7 @@ class TypeChecker:
         create_type = self._make_meta_create_type(
             name, rtype, is_func_names, field_names
         )
-        rtype.children[":meta.create"] = create_type
+        rtype.meta_create = create_type
         # Only install the default 'create' child if the user has not
         # disabled it via 'create: null'.
         if "create" not in rtype.children and not rtype.create_disabled:
@@ -2068,8 +2064,6 @@ class TypeChecker:
         # check all fields/subtypes support == and track memcmp eligibility
         simple_eq = True
         for fname, ftype in ztype.children.items():
-            if fname.startswith(":"):
-                continue  # internal (e.g., :tag, :meta.create)
             if ftype.typetype == ZTypeType.FUNCTION:
                 continue  # function pointers compared by address in C
             if ftype.typetype == ZTypeType.TAG:
@@ -2199,7 +2193,7 @@ class TypeChecker:
             create_type.children["from"] = base_type
             create_type.param_ownership["from"] = ZParamOwnership.TAKE
             rtype.children["create"] = create_type
-            rtype.children[":meta.create"] = create_type
+            rtype.meta_create = create_type
 
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
             borrow_type.return_type = rtype
@@ -2316,7 +2310,7 @@ class TypeChecker:
                     )
                 # conformance check: implementor must have all spec methods
                 for spec_name, spec_func in at.children.items():
-                    if spec_name.startswith(":") or spec_name in (
+                    if spec_name in (
                         "create",
                         "take",
                         "borrow",
@@ -2542,8 +2536,6 @@ class TypeChecker:
         ftype = _make_type(f"{name}.create", ZTypeType.FUNCTION)
         ftype.return_type = parent_type
         for fname, ft in parent_type.children.items():
-            if fname.startswith(":"):
-                continue
             # skip non-field children (as constants, protocol satisfaction, etc.)
             if field_names is not None and fname not in field_names:
                 continue
@@ -2897,7 +2889,7 @@ class TypeChecker:
             if pname == "meta" and path.child.name == "create":
                 if self._enclosing_type_stack:
                     enclosing = self._enclosing_type_stack[-1]
-                    raw = enclosing.children.get(":meta.create")
+                    raw = enclosing.meta_create
                     if raw is not None:
                         path.type = raw
                         path.parent.type = enclosing
@@ -3063,7 +3055,7 @@ class TypeChecker:
                 # with excluded subtypes (not a type construction)
                 if (
                     path.parent.nodetype == NodeType.ATOMID
-                    and child_name not in ("tag", ":tag")
+                    and child_name != "tag"
                     and child.typetype != ZTypeType.FUNCTION
                 ):
                     pname = cast(zast.AtomId, path.parent).name
@@ -3092,23 +3084,16 @@ class TypeChecker:
                             return None
                 # non-subtype children (tag, :tag, methods) should not be
                 # treated as union/variant subtype construction
-                if (
-                    child_name not in ("tag", ":tag")
-                    and child.typetype != ZTypeType.FUNCTION
-                ):
+                if child_name != "tag" and child.typetype != ZTypeType.FUNCTION:
                     path.parent_tagged_type = parent_type
                 return child
             return None
         # for data: .array method returns a new array of matching type/length
         if parent_type.typetype == ZTypeType.DATA and child_name == "array":
-            elem_type = parent_type.children.get(":element_type")
+            elem_type = parent_type.element_type
             if elem_type:
                 # count data elements (non-special keys)
-                data_len = sum(
-                    1
-                    for k in parent_type.children
-                    if not k.startswith(":") and k != "tag"
-                )
+                data_len = sum(1 for k in parent_type.children if k != "tag")
                 # monomorphize array with matching type and length
                 array_template = self._resolve_name("array")
                 if array_template and array_template.isgeneric:
@@ -3265,8 +3250,8 @@ class TypeChecker:
             return False
         if a_ret and b_ret and a_ret.name != b_ret.name:
             return False
-        a_params = [(k, v) for k, v in a.children.items() if not k.startswith(":")]
-        b_params = [(k, v) for k, v in b.children.items() if not k.startswith(":")]
+        a_params = list(a.children.items())
+        b_params = list(b.children.items())
         if len(a_params) != len(b_params):
             return False
         for (ak, av), (bk, bv) in zip(a_params, b_params):
@@ -3331,8 +3316,7 @@ class TypeChecker:
                     subtype_names = {
                         k
                         for k, v in constraint.children.items()
-                        if not k.startswith(":")
-                        and k != "tag"
+                        if k != "tag"
                         and v.typetype != ZTypeType.FUNCTION
                         and v.typetype != ZTypeType.DATA
                         and v.typetype != ZTypeType.TAG
@@ -3486,8 +3470,7 @@ class TypeChecker:
             subtype_names = [
                 k
                 for k in mono.children
-                if not k.startswith(":")
-                and k != "tag"
+                if k != "tag"
                 and mono.children[k].typetype != ZTypeType.FUNCTION
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
@@ -3497,7 +3480,7 @@ class TypeChecker:
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
                 tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            mono.children[":tag"] = tag_type
+            mono.tag_type = tag_type
             # generate data type for .tag access
             gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
@@ -3514,8 +3497,7 @@ class TypeChecker:
             subtype_names = [
                 k
                 for k in mono.children
-                if not k.startswith(":")
-                and k != "tag"
+                if k != "tag"
                 and mono.children[k].typetype != ZTypeType.FUNCTION
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
@@ -3525,7 +3507,7 @@ class TypeChecker:
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
                 tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            mono.children[":tag"] = tag_type
+            mono.tag_type = tag_type
             gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
@@ -3683,7 +3665,7 @@ class TypeChecker:
                 has_type.return_type = t_bool
                 mono.children["has"] = has_type
 
-        # for classes: rebuild meta.create for the monomorphized class
+        # for classes: rebuild meta_create for the monomorphized class
         if (
             template_type.typetype == ZTypeType.CLASS
             and not _is_list_type(mono)
@@ -3697,9 +3679,16 @@ class TypeChecker:
             create_type = self._make_meta_create_type(
                 mangled, mono, is_func_names, field_names
             )
-            mono.children[":meta.create"] = create_type
+            mono.meta_create = create_type
             if "create" not in mono.children:
                 mono.children["create"] = create_type
+
+        # for records: set meta_create to point to the existing create child
+        # so that _build_create_args delegates to the meta-create builder
+        if template_type.typetype == ZTypeType.RECORD:
+            create_child = mono.children.get("create")
+            if create_child and create_child.typetype == ZTypeType.FUNCTION:
+                mono.meta_create = create_child
 
         # for monomorphized units: all UNIT-specific work in one method
         if not is_partial and defn.nodetype == NodeType.UNIT:
@@ -4072,8 +4061,6 @@ class TypeChecker:
         field_to_gparam: dict[str, str] = {}
         field_names: list[str] = []
         for child_name, child_type in template.children.items():
-            if child_name.startswith(":"):
-                continue
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 field_to_gparam[child_name] = child_type.name
             field_names.append(child_name)
@@ -4162,8 +4149,6 @@ class TypeChecker:
         param_to_gparam: dict[str, str] = {}
         param_names: list[str] = []
         for child_name, child_type in template.children.items():
-            if child_name.startswith(":"):
-                continue
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 param_to_gparam[child_name] = child_type.name
             param_names.append(child_name)
@@ -4247,9 +4232,7 @@ class TypeChecker:
             return None
 
         # verify value arg types against monomorphized parameter types
-        mono_params = [
-            (k, v) for k, v in mono_ftype.children.items() if not k.startswith(":")
-        ]
+        mono_params = list(mono_ftype.children.items())
         for param_name, val_type, arg in checked_value_args:
             if not val_type or not param_name:
                 continue
@@ -4331,8 +4314,7 @@ class TypeChecker:
                     subtype_names = {
                         k
                         for k, v in constraint.children.items()
-                        if not k.startswith(":")
-                        and k != "tag"
+                        if k != "tag"
                         and v.typetype != ZTypeType.FUNCTION
                         and v.typetype != ZTypeType.DATA
                         and v.typetype != ZTypeType.TAG
@@ -4358,11 +4340,13 @@ class TypeChecker:
         mono.generic_args = dict(generic_args)
         mono.is_native = template.is_native
 
+        # copy internal metadata fields
+        mono.meta_create = template.meta_create
+        mono.tag_type = template.tag_type
+        mono.element_type = template.element_type
+
         # substitute generic params in parameter types
         for child_name, child_type in template.children.items():
-            if child_name.startswith(":"):
-                mono.children[child_name] = child_type
-                continue
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 concrete = generic_args.get(child_type.name)
                 if concrete:
@@ -4898,8 +4882,6 @@ class TypeChecker:
                 and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
             ):
                 for pname, ptype in t.children.items():
-                    if pname.startswith(":"):
-                        continue
                     if pname not in t.param_defaults:
                         self._error(
                             f"missing required argument '{pname}' (type: {ptype.name})",
@@ -4915,11 +4897,9 @@ class TypeChecker:
                 and inner.nodetype == NodeType.ATOMID
                 and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
             ):
-                create_type = t.children.get(":meta.create")
+                create_type = t.meta_create
                 if create_type:
                     for pname, ptype in create_type.children.items():
-                        if pname.startswith(":"):
-                            continue
                         if ptype.typetype == ZTypeType.FUNCTION:
                             continue
                         if pname not in create_type.param_defaults:
@@ -5637,12 +5617,8 @@ class TypeChecker:
                 call.call_kind = zast.CallKind.TYPEDEF_CREATE
                 return self._check_typedef_create(parent_type, call)
 
-        # parameter types (skip special entries like :tag, :meta.create)
-        params = [
-            (k, v)
-            for k, v in callee_type.children.items()
-            if not k.startswith(":") and k != "this"
-        ]
+        # parameter types (skip 'this' — handled separately for method calls)
+        params = [(k, v) for k, v in callee_type.children.items() if k != "this"]
 
         # for callable dispatch, skip the 'this' parameter (first param of call method)
         # — the receiver is passed implicitly
@@ -5691,9 +5667,9 @@ class TypeChecker:
                             loc=arg.start,
                             err=ERR.CALLERROR,
                         )
-                elif not arg.name.startswith(":"):
+                else:
                     # unknown named argument — suggest similar parameter names
-                    param_names = [p for p, _ in params if not p.startswith(":")]
+                    param_names = [p for p, _ in params]
                     suggestion = _suggest_similar(arg.name, param_names)
                     self._error(
                         f"unknown argument '{arg.name}'",
@@ -5812,8 +5788,6 @@ class TypeChecker:
             ):
                 provided.add("this")
             for pname, ptype in params:
-                if pname.startswith(":"):
-                    continue
                 if pname not in provided and pname not in callee_type.param_defaults:
                     self._error(
                         f"missing required argument '{pname}' (type: {ptype.name})",
@@ -5869,7 +5843,7 @@ class TypeChecker:
         data_params = [
             (pname, ptype)
             for pname, ptype in create_type.children.items()
-            if not pname.startswith(":") and ptype.typetype != ZTypeType.FUNCTION
+            if ptype.typetype != ZTypeType.FUNCTION
         ]
         if not data_params:
             return
@@ -6854,8 +6828,6 @@ class TypeChecker:
         """
         if parent_type.public_members is None:
             return False  # no restriction (all-public default)
-        if child_name.startswith(":"):
-            return False  # internal/meta fields always accessible
         if child_name in ("tag",):
             return False  # tag accessor always accessible
         if self._is_internal_access(parent_type, path):
@@ -7171,12 +7143,11 @@ class TypeChecker:
         # union/variant exhaustiveness check
         if is_sum_type and subject_type:
             kind = "union" if subject_type.typetype == ZTypeType.UNION else "variant"
-            # collect subtype names (exclude :tag, tag data, and methods)
+            # collect subtype names (exclude tag data, and methods)
             subtypes = {
                 k
                 for k, v in subject_type.children.items()
-                if not k.startswith(":")
-                and v.typetype
+                if v.typetype
                 not in (
                     ZTypeType.FUNCTION,
                     ZTypeType.DATA,
@@ -7357,8 +7328,7 @@ class TypeChecker:
             subtypes_for_exhaust = {
                 k
                 for k, v in subject_type.children.items()
-                if not k.startswith(":")
-                and v.typetype
+                if v.typetype
                 not in (
                     ZTypeType.FUNCTION,
                     ZTypeType.DATA,

@@ -57,6 +57,7 @@ class TempState:
     frees: List[str] = field(default_factory=list)
     string_set: set = field(default_factory=set)
     class_set: Dict[str, str] = field(default_factory=dict)
+    proto_set: Dict[str, str] = field(default_factory=dict)
 
 
 TYPEMAP: Dict[str, str] = {
@@ -176,8 +177,7 @@ def _ctype_func_inline(ztype: ZType) -> str:
     ret_ctype = _ctype(ret) if ret else "void"
     params: List[str] = []
     for k, v in ztype.children.items():
-        if not k.startswith(":"):
-            params.append(_ctype(v))
+        params.append(_ctype(v))
     param_str = ", ".join(params) if params else "void"
     return f"{ret_ctype} (*)({param_str})"
 
@@ -814,7 +814,7 @@ class CEmitter:
                 field_names_r: List[str] = []
                 field_ctypes_r: List[str] = []
                 for fn, ft in mono_type.children.items():
-                    if fn.startswith(":") or ft.typetype == ZTypeType.FUNCTION:
+                    if ft.typetype == ZTypeType.FUNCTION:
                         continue
                     field_names_r.append(fn)
                     field_ctypes_r.append(_ctype(ft))
@@ -837,7 +837,7 @@ class CEmitter:
                 field_names: List[str] = []
                 field_ctypes_list: List[str] = []
                 for fn, ft in mono_type.children.items():
-                    if fn.startswith(":") or ft.typetype == ZTypeType.FUNCTION:
+                    if ft.typetype == ZTypeType.FUNCTION:
                         continue
                     field_names.append(fn)
                     field_ctypes_list.append(_ctype(ft))
@@ -950,8 +950,6 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
-            if pname.startswith(":"):
-                continue
             ptype_str = _ctype(ppath.type)
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
@@ -966,8 +964,6 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
-            if pname.startswith(":"):
-                continue
             ptype_str = _ctype(ppath.type)
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
@@ -1000,7 +996,7 @@ class CEmitter:
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             for pname, ppath in sfunc.parameters.items():
-                if pname.startswith(":") or pname == "this":
+                if pname == "this":
                     continue
                 params.append(_ctype(ppath.type))
             param_str = ", ".join(params)
@@ -1049,8 +1045,6 @@ class CEmitter:
                 ret_ctype = self._return_ctype(mfunc)
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
-                    if pname.startswith(":"):
-                        continue
                     ptype_str = _ctype(ppath.type)
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
@@ -1065,7 +1059,7 @@ class CEmitter:
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
-                if pname.startswith(":") or pname == "this":
+                if pname == "this":
                     continue
                 pctype = _ctype(ppath.type)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
@@ -1179,7 +1173,7 @@ class CEmitter:
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             for pname, ppath in sfunc.parameters.items():
-                if pname.startswith(":") or pname == "this":
+                if pname == "this":
                     continue
                 params.append(_ctype(ppath.type))
             param_str = ", ".join(params)
@@ -1228,8 +1222,6 @@ class CEmitter:
                 ret_ctype = self._return_ctype(mfunc)
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
-                    if pname.startswith(":"):
-                        continue
                     ptype_str = _ctype(ppath.type)
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
@@ -1243,7 +1235,7 @@ class CEmitter:
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
-                if pname.startswith(":") or pname == "this":
+                if pname == "this":
                     continue
                 pctype = _ctype(ppath.type)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
@@ -1430,8 +1422,6 @@ class CEmitter:
             # variant: tag enum (4 bytes) + max(subtype sizes)
             max_sub = 0
             for fname, ftype in ztype.children.items():
-                if fname.startswith(":"):
-                    continue
                 if ftype.typetype in (
                     ZTypeType.FUNCTION,
                     ZTypeType.TAG,
@@ -1452,8 +1442,6 @@ class CEmitter:
         # record: sum of field sizes
         total = 0
         for fname, ftype in ztype.children.items():
-            if fname.startswith(":"):
-                continue
             if ftype.typetype == ZTypeType.FUNCTION:
                 total += 8  # function pointer
                 continue
@@ -1518,8 +1506,6 @@ class CEmitter:
         ret_ctype = self._return_ctype(mfunc)
         params: List[str] = []
         for pname, ppath in mfunc.parameters.items():
-            if pname.startswith(":"):
-                continue
             ptype_str = _ctype(ppath.type)
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
@@ -1542,8 +1528,6 @@ class CEmitter:
             ret_ctype = self._return_ctype(mfunc)
             fp_params: List[str] = []
             for pname, ppath in mfunc.parameters.items():
-                if pname.startswith(":"):
-                    continue
                 fp_params.append(_ctype(ppath.type))
             fp_param_str = ", ".join(fp_params) if fp_params else "void"
             fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
@@ -1925,7 +1909,7 @@ class CEmitter:
         # collect subtypes (non-special children)
         subtype_items: list[tuple[str, ZType]] = []
         for sname, stype in mono_type.children.items():
-            if sname.startswith(":") or sname == "tag":
+            if sname == "tag":
                 continue
             if stype.typetype in (
                 ZTypeType.FUNCTION,
@@ -2005,7 +1989,7 @@ class CEmitter:
         # collect subtypes (non-special children)
         subtype_items: list[tuple[str, ZType]] = []
         for sname, stype in mono_type.children.items():
-            if sname.startswith(":") or sname == "tag":
+            if sname == "tag":
                 continue
             if stype.typetype in (
                 ZTypeType.FUNCTION,
@@ -2103,8 +2087,6 @@ class CEmitter:
         lines.append("typedef struct {\n")
         field_items: list = []
         for fname, ftype in mono_type.children.items():
-            if fname.startswith(":"):
-                continue
             if ftype.typetype == ZTypeType.FUNCTION:
                 continue
             ct = _ctype(ftype)
@@ -2835,7 +2817,7 @@ class CEmitter:
         field_items = [
             (fn, ft)
             for fn, ft in mono_type.children.items()
-            if not fn.startswith(":") and ft.typetype != ZTypeType.FUNCTION
+            if ft.typetype != ZTypeType.FUNCTION
         ]
 
         # struct typedef
@@ -2930,7 +2912,7 @@ class CEmitter:
         specs = [
             (sn, st)
             for sn, st in mono_type.children.items()
-            if not sn.startswith(":") and st.typetype == ZTypeType.FUNCTION
+            if st.typetype == ZTypeType.FUNCTION
         ]
 
         # vtable struct
@@ -2940,7 +2922,7 @@ class CEmitter:
             ret_ctype = _ctype(ret_type) if ret_type else "void"
             params = ["void*"]
             for pname, ptype in stype.children.items():
-                if pname.startswith(":") or pname == "this":
+                if pname == "this":
                     continue
                 params.append(_ctype(ptype))
             lines.append(f"    {ret_ctype} (*{sname})({', '.join(params)});\n")
@@ -3106,8 +3088,6 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
-            if pname.startswith(":"):
-                continue
             ptype_str = _ctype(ppath.type)
             params.append(f"{ptype_str} {_mangle_var(pname)}")
         param_str = ", ".join(params) if params else "void"
@@ -3134,9 +3114,6 @@ class CEmitter:
         params: List[str] = []
         pointer_params: List[str] = []
         for pname, ppath in func.parameters.items():
-            # skip hidden :this parameter (unnamed first param of methods)
-            if pname.startswith(":"):
-                continue
             ptype_str = _ctype(ppath.type)
             # born-borrowed record this-receiver: pass by pointer
             if (
@@ -3164,8 +3141,6 @@ class CEmitter:
         # track parameters that are class pointers
         if self._typetype_of(record_name) == ZTypeType.CLASS:
             for pname, ppath in func.parameters.items():
-                if pname.startswith(":"):
-                    continue
                 ptype_str = _ctype(ppath.type)
                 if ptype_str.endswith("*") and ptype_str.startswith("z_"):
                     self._scope.class_params.add(_mangle_var(pname))
@@ -3240,13 +3215,12 @@ class CEmitter:
         for t in self._temp.frees:
             if t in self._temp.string_set:
                 result += f"{indent}z_string_free({t});\n"
+            elif t in self._temp.proto_set:
+                proto_name = self._temp.proto_set[t]
+                result += f"{indent}z_{proto_name}_destroy({t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
-                if tname.startswith(":proto:"):
-                    proto_name = tname[7:]
-                    result += f"{indent}z_{proto_name}_destroy({t});\n"
-                else:
-                    result += f"{indent}{self._emit_class_free(t, tname)}\n"
+                result += f"{indent}{self._emit_class_free(t, tname)}\n"
             else:
                 result += f"{indent}free({t});\n"
         self._temp.frees.clear()
@@ -3286,13 +3260,12 @@ class CEmitter:
         for t in self._temp.frees:
             if t in self._temp.string_set:
                 result += f"{indent}z_string_free({t});\n"
+            elif t in self._temp.proto_set:
+                proto_name = self._temp.proto_set[t]
+                result += f"{indent}z_{proto_name}_destroy({t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
-                if tname.startswith(":proto:"):
-                    proto_name = tname[7:]  # strip ":proto:" prefix
-                    result += f"{indent}z_{proto_name}_destroy({t});\n"
-                else:
-                    result += f"{indent}{self._emit_class_free(t, tname)}\n"
+                result += f"{indent}{self._emit_class_free(t, tname)}\n"
             else:
                 result += f"{indent}free({t});\n"
 
@@ -3536,7 +3509,7 @@ class CEmitter:
             f"{indent}z_{proto_name}_t* {tmp} = {owned_create}({arg_val});\n"
         )
         self._temp.frees.append(tmp)
-        self._temp.class_set[tmp] = f":proto:{proto_name}"
+        self._temp.proto_set[tmp] = proto_name
 
         # handle .take nullification for class (reftype) arguments only
         if arg_type and arg_type.typetype == ZTypeType.CLASS:
@@ -3591,7 +3564,7 @@ class CEmitter:
             f"{indent}{proto_ctype}* {tmp} = {create_name}({arg_expr});\n"
         )
         self._temp.frees.append(tmp)
-        self._temp.class_set[tmp] = f":proto:{proto_name}"
+        self._temp.proto_set[tmp] = proto_name
 
         return tmp
 
@@ -3851,9 +3824,7 @@ class CEmitter:
         # implicit take: nullify args passed to .take parameters
         ftype = call.callable.type
         if ftype and ftype.param_ownership:
-            params = [
-                (k, v) for k, v in ftype.children.items() if not k.startswith(":")
-            ]
+            params = list(ftype.children.items())
             for i, arg in enumerate(call.arguments):
                 if i < len(params):
                     pname, _ = params[i]
@@ -3968,13 +3939,12 @@ class CEmitter:
             for t in self._temp.frees:
                 if t in self._temp.string_set:
                     result += f"{indent}z_string_free({t});\n"
+                elif t in self._temp.proto_set:
+                    proto_name = self._temp.proto_set[t]
+                    result += f"{indent}z_{proto_name}_destroy({t});\n"
                 elif t in self._temp.class_set:
                     tname = self._temp.class_set[t]
-                    if tname.startswith(":proto:"):
-                        proto_name = tname[7:]
-                        result += f"{indent}z_{proto_name}_destroy({t});\n"
-                    else:
-                        result += f"{indent}{self._emit_class_free(t, tname)}\n"
+                    result += f"{indent}{self._emit_class_free(t, tname)}\n"
                 else:
                     result += f"{indent}free({t});\n"
             self._temp.frees.clear()
@@ -4069,7 +4039,7 @@ class CEmitter:
         ftype = call.callable.type
         if ftype.typetype not in (ZTypeType.FUNCTION, ZTypeType.NULL):
             return []
-        return [_ctype(v) for k, v in ftype.children.items() if not k.startswith(":")]
+        return [_ctype(v) for k, v in ftype.children.items()]
 
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
@@ -4105,9 +4075,7 @@ class CEmitter:
         # fill defaults for missing trailing params
         ftype = call.callable.type
         if ftype and ftype.param_defaults:
-            params = [
-                (k, v) for k, v in ftype.children.items() if not k.startswith(":")
-            ]
+            params = list(ftype.children.items())
             for i in range(len(call.arguments), len(params)):
                 pname, _ = params[i]
                 if pname in ftype.param_defaults:
@@ -4139,7 +4107,7 @@ class CEmitter:
         """Build ordered arguments for a type's `create` call.
 
         When the type has a user-defined `create` (distinct from the compiler's
-        `:meta.create` wrapper), use the user's parameter order. Otherwise
+        `meta_create` wrapper), use the user's parameter order. Otherwise
         fall back to the default meta-create arg builder which orders by the
         full field declaration list (including function-pointer fields).
         """
@@ -4147,7 +4115,7 @@ class CEmitter:
         meta_fn = None
         if type_obj is not None:
             create_fn = type_obj.children.get("create")
-            meta_fn = type_obj.children.get(":meta.create")
+            meta_fn = type_obj.meta_create
         # Default case: no user override — delegate to the meta-create builder.
         if (
             create_fn is None
@@ -4162,8 +4130,6 @@ class CEmitter:
         param_names: List[str] = []
         param_ctypes: Dict[str, str] = {}
         for pname, ptype in create_fn.children.items():
-            if pname.startswith(":"):
-                continue
             param_names.append(pname)
             param_ctypes[pname] = _ctype(ptype)
 
@@ -4263,11 +4229,7 @@ class CEmitter:
                 ftype = atom.type
                 if ftype and ftype.param_defaults:
                     # only emit bare call when ALL params have defaults
-                    real_params = [
-                        (k, v)
-                        for k, v in ftype.children.items()
-                        if not k.startswith(":")
-                    ]
+                    real_params = list(ftype.children.items())
                     all_defaulted = all(
                         p in ftype.param_defaults for p, _ in real_params
                     )
@@ -5140,7 +5102,7 @@ class CEmitter:
                         f"{indent}{proto_ctype}* {tmp} = {create_name}({arg});\n"
                     )
                     self._temp.frees.append(tmp)
-                    self._temp.class_set[tmp] = f":proto:{path.type.name}"
+                    self._temp.proto_set[tmp] = path.type.name
                 else:
                     # temp: stack-allocate (no malloc/free needed)
                     stk = f"{tmp}s"  # companion stack var for protocol temp

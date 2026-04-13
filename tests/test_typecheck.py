@@ -2191,7 +2191,7 @@ class TestUnionTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        tag = ut.children.get(":tag")
+        tag = ut.tag_type
         assert tag is not None
         assert tag.typetype == ZTypeType.ENUM
         assert "a" in tag.children
@@ -2461,7 +2461,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        tag = ut.children.get(":tag")
+        tag = ut.tag_type
         assert tag is not None
         # check that the discriminator values match the data
         assert tag.children["A"].name == "10"
@@ -2502,7 +2502,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.priority")
-        tag = ut.children.get(":tag")
+        tag = ut.tag_type
         assert tag.children["CRITICAL"].name == "10"
 
     def test_multiple_tag_items_error(self):
@@ -2523,7 +2523,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        tag = ut.children.get(":tag")
+        tag = ut.tag_type
         assert tag is not None
         assert tag.children["a"].name == "0"
         assert tag.children["b"].name == "1"
@@ -2833,7 +2833,7 @@ class TestVariantTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         vt = tc._resolved.get("test.myvar")
-        tag = vt.children.get(":tag")
+        tag = vt.tag_type
         assert tag is not None
         assert tag.typetype == ZTypeType.ENUM
         assert "a" in tag.children
@@ -3064,7 +3064,7 @@ class TestSpecs:
         tc.check()
         t = tc._resolve_unit_name("test", "myrec")
         assert t is not None
-        create_t = t.children.get(":meta.create")
+        create_t = t.meta_create
         assert create_t is not None
         assert "x" in create_t.children
         assert "helper" not in create_t.children
@@ -3164,7 +3164,7 @@ class TestDefaults:
         assert t is not None
         assert t.param_defaults == {"y": "0"}
         # defaults propagate to constructor
-        create_t = t.children.get(":meta.create")
+        create_t = t.meta_create
         assert create_t is not None
         assert create_t.param_defaults == {"y": "0"}
 
@@ -4187,8 +4187,8 @@ class TestGenerics:
             "main: function is { x: myopt.some 42 }"
         )
         mono, _ = program.mono_types[0]
-        assert ":tag" in mono.children
-        tag_type = mono.children[":tag"]
+        assert mono.tag_type is not None
+        tag_type = mono.tag_type
         assert tag_type.typetype == ZTypeType.ENUM
         assert "some" in tag_type.children
         assert "none" in tag_type.children
@@ -4529,8 +4529,8 @@ class TestGenerics:
         )
         assert len(program.mono_types) >= 1
         mono, _ = program.mono_types[0]
-        assert ":meta.create" in mono.children
-        assert mono.children[":meta.create"].typetype == ZTypeType.FUNCTION
+        assert mono.meta_create is not None
+        assert mono.meta_create.typetype == ZTypeType.FUNCTION
 
     def test_error_generic_class_no_args(self):
         """Bare generic class name in expression is an error."""
