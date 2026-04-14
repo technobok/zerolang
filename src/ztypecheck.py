@@ -6958,6 +6958,8 @@ class TypeChecker:
             if mono:
                 mono.is_box = True
                 mono.is_heap_allocated = True  # box data is on the heap
+                mono.needs_destructor = True
+                mono.destructor_name = f"z_{mono.name}_destroy"
                 # copy children from inner type for transparent access
                 for cname, ctype in inner_type.children.items():
                     if cname not in mono.children:

@@ -3700,12 +3700,13 @@ class TestGenericsEmission:
         assert output.strip() == "ok"
 
     def test_generic_class_destructor(self):
-        """Monomorphized class has destructor call at scope exit."""
+        """Monomorphized class with only valtype fields has no destructor."""
         csource = emit_source(
             "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        assert "z_mycls_i64_destroy(x);" in csource
+        # valtype-only class: no destructor emitted or called
+        assert "z_mycls_i64_destroy" not in csource
 
     # ---- Generic Protocols ----
 

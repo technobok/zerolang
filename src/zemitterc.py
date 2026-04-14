@@ -1130,12 +1130,16 @@ class CEmitter:
 
         # owned create + destroy wrapper
         if is_class:
-            # class: destroy calls the class destructor
+            # class: destroy frees boxed copy (+ field cleanup if needed)
             destroy_name = f"z_{impl_name}_{label}_owned_destroy"
             lines.append(f"static void {destroy_name}(void* p) {{\n")
-            lines.append(f"    z_{impl_name}_destroy(({impl_ctype}*)p);\n")
+            impl_zt = self._resolved_type(impl_name)
+            if impl_zt and impl_zt.needs_field_cleanup:
+                lines.append(f"    z_{impl_name}_destroy(({impl_ctype}*)p);\n")
+            lines.append("    free(p);\n")
             lines.append("}\n\n")
 
+            # stack class: owned create boxes the struct (malloc + copy)
             owned_create = f"z_{impl_name}_{label}_create_owned"
             lines.append(
                 f"static z_{proto_name}_t* {owned_create}({impl_ctype}* val);\n"
@@ -1146,7 +1150,11 @@ class CEmitter:
             lines.append(
                 f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
             )
-            lines.append("    proto->data = val;\n")
+            lines.append(
+                f"    {impl_ctype}* boxed = ({impl_ctype}*)malloc(sizeof({impl_ctype}));\n"
+            )
+            lines.append("    *boxed = *val;\n")
+            lines.append("    proto->data = boxed;\n")
             lines.append(f"    proto->vtable = &{vtable_name};\n")
             lines.append(f"    proto->destroy = {destroy_name};\n")
             lines.append("    return proto;\n")
@@ -1316,10 +1324,21 @@ class CEmitter:
             return
 
         self.needs_stdint = True
+        ztype = self._resolved_type(name)
+        lock_fields = ztype.lock_field_names if ztype else set()
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in rec.items.items():
             ftype = _ctype(fpath.type)
+            # .lock fields of stack-allocated class type: store as pointer
+            if (
+                fname in lock_fields
+                and fpath.type
+                and fpath.type.typetype == ZTypeType.CLASS
+                and not fpath.type.is_heap_allocated
+                and not ftype.endswith("*")
+            ):
+                ftype = f"{ftype}*"
             lines.append(f"    {ftype} {fname};\n")
         # emit function pointer fields from 'is' section
         for mname, mfunc in rec.functions.items():
@@ -1539,11 +1558,25 @@ class CEmitter:
 
         Returns (params, field_names, field_ctypes).
         """
+        # check lock field names for the type (born-borrowed records store
+        # .lock fields as pointers)
+        ztype = self._resolved_type(name)
+        lock_fields = ztype.lock_field_names if ztype else set()
+
         params: List[str] = []
         field_names: List[str] = []
         field_ctypes: List[str] = []
         for fname, fpath in items.items():
             fct = _ctype(fpath.type)
+            # .lock fields of stack-allocated class type: store as pointer
+            if (
+                fname in lock_fields
+                and fpath.type
+                and fpath.type.typetype == ZTypeType.CLASS
+                and not fpath.type.is_heap_allocated
+                and not fct.endswith("*")
+            ):
+                fct = f"{fct}*"
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
@@ -3110,9 +3143,33 @@ class CEmitter:
         self.needs_stdint = True
         cname = _mangle_func(name)
         ret_ctype = self._return_ctype(func)
+        record_type = self._resolved_type(record_name) if record_name else None
+        is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
+        born_borrowed_record = bool(
+            record_type
+            and record_type.typetype == ZTypeType.RECORD
+            and getattr(record_type, "is_born_borrowed", False)
+        )
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(ppath.type)
+            # this-receiver: pass by pointer
+            if (
+                (is_class_method or born_borrowed_record)
+                and ppath.type is record_type
+                and not ptype_str.endswith("*")
+            ):
+                ptype_str = f"{ptype_str}*"
+            # stack-allocated class borrow/lock params
+            elif (
+                ppath.type
+                and ppath.type.typetype == ZTypeType.CLASS
+                and not ppath.type.is_heap_allocated
+                and not ptype_str.endswith("*")
+                and func.param_ownership.get(pname)
+                in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
+            ):
+                ptype_str = f"{ptype_str}*"
             params.append(f"{ptype_str} {_mangle_var(pname)}")
         param_str = ", ".join(params) if params else "void"
         self.forward_decls.append(f"{ret_ctype} {cname}({param_str});\n")
@@ -3144,6 +3201,17 @@ class CEmitter:
                 (is_class_method or born_borrowed_record)
                 and ppath.type is record_type
                 and not ptype_str.endswith("*")
+            ):
+                ptype_str = f"{ptype_str}*"
+                pointer_params.append(_mangle_var(pname))
+            # stack-allocated class borrow/lock params: pass by pointer
+            elif (
+                ppath.type
+                and ppath.type.typetype == ZTypeType.CLASS
+                and not ppath.type.is_heap_allocated
+                and not ptype_str.endswith("*")
+                and func.param_ownership.get(pname)
+                in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
                 pointer_params.append(_mangle_var(pname))
@@ -4149,7 +4217,13 @@ class CEmitter:
                 is_this_param = param_name == "this" or (
                     param_type is arg_type and ftype.name and "." in ftype.name
                 )
-                if is_this_param:
+                # borrow/lock class params also need &
+                is_borrow_lock = (
+                    arg_type.typetype == ZTypeType.CLASS
+                    and ftype.param_ownership.get(param_name)
+                    in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
+                )
+                if is_this_param or is_borrow_lock:
                     val = f"&{val}"
             parts.append(val)
             self._last_emitted_arg_vals.append(val)
@@ -5197,6 +5271,16 @@ class CEmitter:
                 return f"{parent}.{child}"
             # regular methods (from 'as' section) → method call
             parent = self._emit_path_value(path.parent)
+            # stack-allocated class: wrap with & for this pointer
+            parent_type_m = path.parent.type
+            if (
+                parent_type_m
+                and not parent_type_m.is_heap_allocated
+                and parent_type_m.typetype == ZTypeType.CLASS
+                and not parent.startswith("&")
+                and not self._is_class_pointer_path(path.parent)
+            ):
+                parent = f"&{parent}"
             return f"{_mangle_func(func_name)}({parent})"
 
         # protocol instance creation: obj.label where label maps to a protocol
@@ -5209,7 +5293,8 @@ class CEmitter:
                 self.needs_stdlib = True
                 parent_val = self._emit_path_value(path.parent)
                 create_name = f"z_{parent_type.name}_{child}_create"
-                if parent_type.is_valtype:
+                # pass address for stack-allocated types
+                if parent_type.is_valtype or not parent_type.is_heap_allocated:
                     arg = f"&{parent_val}"
                 else:
                     arg = parent_val
@@ -5279,6 +5364,18 @@ class CEmitter:
         # heap-allocated types (string, box) are always pointers
         if parent_type and parent_type.is_heap_allocated:
             return True
+        # .lock field of stack-allocated class type: stored as pointer
+        if (
+            path.nodetype == NodeType.DOTTEDPATH
+            and parent_type
+            and parent_type.typetype == ZTypeType.CLASS
+            and not parent_type.is_heap_allocated
+        ):
+            dp = cast(zast.DottedPath, path)
+            grandparent_type = dp.parent.type
+            if grandparent_type and grandparent_type.lock_field_names:
+                if dp.child.name in grandparent_type.lock_field_names:
+                    return True
         # local heap-allocated variable tracked for cleanup
         if path.nodetype == NodeType.ATOMID:
             cname = _mangle_var(cast(zast.AtomId, path).name)
