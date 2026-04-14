@@ -187,6 +187,20 @@ def _set_destructor_metadata(ztype: ZType) -> None:
         ztype.is_heap_allocated = False
 
 
+def _set_field_cleanup_metadata(ztype: ZType) -> None:
+    """Set needs_field_cleanup based on whether any non-function children need cleanup.
+
+    Must be called after children are fully resolved. Scans fields (non-function
+    children) and sets needs_field_cleanup=True if any field has needs_destructor=True.
+    """
+    for child_name, child_type in ztype.children.items():
+        if child_type.typetype == ZTypeType.FUNCTION:
+            continue
+        if child_type.needs_destructor:
+            ztype.needs_field_cleanup = True
+            return
+
+
 # Sentinel for definitions currently being resolved
 _RESOLVING = object()
 
@@ -1253,6 +1267,7 @@ class TypeChecker:
         priv = _check_private_redefinition(cls.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
+        _set_field_cleanup_metadata(ctype)
         self._resolving.pop()
         return ctype
 
@@ -1502,6 +1517,7 @@ class TypeChecker:
             priv = _check_private_redefinition(union_defn.as_items)
             if priv:
                 self._error("'private' cannot be redefined", loc=priv.start)
+            _set_field_cleanup_metadata(utype)
             self._resolving.pop()
             return utype
 
@@ -1542,6 +1558,7 @@ class TypeChecker:
         # unified call dispatch reports a targeted error.
         utype.create_disabled = True
 
+        _set_field_cleanup_metadata(utype)
         self._resolving.pop()
         return utype
 
@@ -1663,6 +1680,7 @@ class TypeChecker:
             # Variants: no bare-name construction (subtype must be selected).
             vtype.create_disabled = True
 
+            _set_field_cleanup_metadata(vtype)
             self._resolving.pop()
             return vtype
 
@@ -1711,6 +1729,7 @@ class TypeChecker:
         # so the unified call dispatch reports a targeted error.
         vtype.create_disabled = True
 
+        _set_field_cleanup_metadata(vtype)
         self._resolving.pop()
         return vtype
 
@@ -1968,6 +1987,7 @@ class TypeChecker:
         priv = _check_private_redefinition(rec.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
+        _set_field_cleanup_metadata(rtype)
         self._resolving.pop()
         return rtype
 
@@ -2463,6 +2483,7 @@ class TypeChecker:
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             ptype.children["borrow"] = borrow_type
 
+        _set_field_cleanup_metadata(ptype)
         self._resolving.pop()
         return ptype
 
@@ -2516,6 +2537,7 @@ class TypeChecker:
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             ftype.children["borrow"] = borrow_type
 
+        _set_field_cleanup_metadata(ftype)
         self._resolving.pop()
         return ftype
 
@@ -3754,6 +3776,7 @@ class TypeChecker:
             self._synthesize_eq(mono)
 
         # cache and register
+        _set_field_cleanup_metadata(mono)
         self._mono_cache[cache_key] = mono
         if not is_partial:
             self._mono_types.append((mono, cloned_defn))

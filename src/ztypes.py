@@ -225,6 +225,10 @@ class ZType:
     destructor_name: Optional[str] = field(default=None, init=False)
     is_heap_allocated: bool = field(default=False, init=False)
 
+    # True when the type has owned fields requiring cleanup (string, list, box,
+    # map, or other types with destructors). Set after children are resolved.
+    needs_field_cleanup: bool = field(default=False, init=False)
+
     # nullable pointer option: monomorphized option(reftype) emitted as bare pointer
     is_nullable_ptr: bool = field(default=False, init=False)
 

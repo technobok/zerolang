@@ -1,0 +1,1429 @@
+#doc.lang: en
+
+#//: Zerolang Type Representation
+
+#doc.title: Zerolang Type Representation
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-04-14
+#doc.version: v0.2
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zerolang Type Representation
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+
+This document specifies the memory representation and allocation strategy for
+all types in Zerolang. It supersedes the heap-allocation model for user-defined
+reftypes described in earlier versions and serves as the implementation plan for
+the refactoring.
+
+
+#-: Overview
+
+#--: Design Principles
+
+#ol:
+  [#*: #+ Stack by default. Every user-defined type -- record, class, variant,
+  union, protocol instance, facet instance -- lives on the stack. The struct
+  that describes the object is a local variable or a field inside another
+  struct. No #~"malloc" / #~"free" for the struct itself.]
+  [#*: #+ Heap for data buffers only. The only heap allocations are
+  #~"box" (a single object on the heap), #~"list" data buffers, #~"string"
+  data buffers, and union subtype data. The controlling struct for #~"list"
+  and #~"string" (length, capacity, pointer) still lives on the stack.]
+  [#*: #+ Ownership tied to type class. Valtypes (records, variants) are
+  freely copyable. Reftypes (classes, unions, protocol instances) are
+  single-owner and cannot be copied -- only borrowed or taken.]
+  [#*: #+ Flat valtypes. Valtypes may only contain other valtypes as fields.
+  They cannot contain #~"string", #~"list", #~"box", or any other type that
+  requires heap cleanup. This guarantees that valtypes are always trivially
+  copyable and never need a destructor.]
+  [#*: #+ Reftypes may own heap resources. Reftypes (classes, unions, protocol
+  instances) may contain #~"string", #~"list", #~"box", or other reftype
+  fields. However, a reftype is not required to own heap resources -- a class
+  with only valtype fields is valid. Such a class still has identity and
+  single-owner semantics but needs no destructor.]
+  [#*: #+ Locks live on reftypes. The #~".lock" field mechanism is available to
+  reftypes (classes) only. Valtypes (records, variants) cannot hold locks.
+  Born-borrowed is removed as a concept.]
+
+
+#--: Type Classification Summary
+
+#table cols="3 2 2 2 2 2":
+  Type                |Stack/Heap     |Copyable |Destructor          |Can have heap fields |.lock support
+  record              |stack          |yes      |no                  |no                   |no
+  variant             |stack          |yes      |no                  |no                   |no
+  class               |stack          |no       |if heap fields      |yes                  |yes
+  union               |stack (struct) |no       |yes (frees subdata) |yes (in subtypes)    |no
+  protocol instance   |stack (struct) |no       |if wrapping reftype |yes (via wrapped)    |no
+  facet instance      |stack          |yes      |no                  |no                   |no
+  box(T)              |heap (data)    |no       |yes (free data)     |n/a                  |no
+  list(T)             |stack (struct) |no       |yes (free data buf) |n/a                  |no
+  string              |stack (struct) |no       |yes (free data buf) |n/a                  |no
+  listview(T)         |stack          |no       |no                  |no                   |yes
+  stringview          |stack          |no       |no                  |no                   |yes
+
+Note: "enum" is not a separate type. Enums are variants or unions where every
+subtype is #~"null" -- the struct collapses to just a tag discriminator.
+
+
+#--: Method Receiver (#~"this")
+
+For all type instances with methods, #~"this" is always passed as a pointer at
+the C level. This applies to records, classes, unions, and any other type with
+methods. The pointer convention ensures:
+
+#ul:
+  [#*: Methods can mutate fields and have those mutations persist across calls.]
+  [#*: Method bodies work identically for stack-allocated and boxed instances --
+  #~"box(T)" is already a pointer, so calling a method on a boxed value passes
+  the pointer directly without #~"&".]
+
+At call sites, the emitter generates #~"&var" to pass the address of a stack
+variable to a method:
+
+#code language=c: """
+  /* zerolang: counter.increment c */
+  z_counter_increment(&zv_c);
+  """
+
+
+#-: Type Specifications
+
+
+#--: Records (Valtypes)
+
+Records are product value types. They are stack-allocated, freely copyable, and
+never need a destructor.
+
+#---: Memory Layout
+
+A record is a C struct with all fields inline:
+
+#code language=c: """
+  typedef struct {
+      int64_t x;
+      int64_t y;
+  } z_point_t;
+  """
+
+#---: Field Restrictions
+
+Record fields must be valtypes: numeric types, bools, other records, variants,
+function references. Records #_*"cannot" contain #~"string", #~"list",
+#~"box", #~"map", classes, unions, or any type that requires heap cleanup.
+This restriction is enforced by the type checker.
+
+Records cannot have #~".lock" fields. Locks require identity (single-owner
+semantics) which valtypes do not have. See the Born-Borrowed Analysis section
+for discussion.
+
+#---: Construction
+
+#~"meta.create" returns the struct by value:
+
+#code language=c: """
+  static z_point_t z_point_meta_create(int64_t x, int64_t y) {
+      z_point_t _this = {0};
+      _this.x = x;
+      _this.y = y;
+      return _this;
+  }
+  """
+
+#---: Ownership
+
+Records are freely copied on assignment and passed by value to functions. Each
+copy is independent. When a record falls out of scope it is simply forgotten --
+no destructor runs.
+
+
+#--: Variants (Valtypes)
+
+Variants are sum value types (tagged unions). They are stack-allocated with
+inline subtype data, freely copyable, and never need a destructor.
+
+#---: Memory Layout
+
+A variant uses an inline C union sized to the largest subtype:
+
+#code language=c: """
+  typedef enum {
+      Z_SHAPE_TAG_CIRCLE,
+      Z_SHAPE_TAG_RECT,
+  } z_shape_tag_t;
+
+  typedef struct {
+      z_shape_tag_t tag;
+      union {
+          double circle;            /* radius */
+          z_rect_t rect;            /* inline record */
+      } data;
+  } z_shape_t;
+  """
+
+The struct size is #~"sizeof(tag) + sizeof(largest subtype)". For enum-pattern
+variants (all subtypes are #~"null"), the union is omitted entirely and the
+struct is just #~"{ tag }".
+
+#---: Field Restrictions
+
+Variant subtypes must be valtypes. They cannot contain #~"string", #~"list",
+#~"box", classes, unions, or any type requiring heap cleanup. This ensures
+variants are trivially copyable and need no destructor.
+
+#---: Ownership
+
+Variants are freely copied (struct copy captures tag + active data). No
+destructor is needed. When a variant falls out of scope, it is forgotten.
+
+
+#--: Classes (Reftypes) -- Changed
+
+Classes are product reference types. They are now #+ stack-allocated (changed
+from heap-allocated). They have single-owner semantics: they cannot be copied,
+only borrowed or taken.
+
+#---: Memory Layout
+
+A class is a C struct with all fields inline, stored on the stack:
+
+#code language=c: """
+  typedef struct {
+      z_string_t label;    /* string struct (stack), data buffer (heap) */
+      int64_t value;
+  } z_named_t;
+  """
+
+There is no #~"malloc" for the struct itself. The struct lives in the stack
+frame of the declaring scope.
+
+#---: Field Types
+
+Classes may contain any field type: valtypes, other reftypes, #~"string",
+#~"list", #~"box", and #~"map". A class is not required to have heap-backed
+fields -- a class with only valtype fields is valid. Such a class still has
+identity and single-owner semantics (cannot be copied) but needs no destructor.
+
+#---: Construction
+
+#~"meta.create" returns the struct by value (not a pointer):
+
+#code language=c: """
+  static z_named_t z_named_meta_create(z_string_t label, int64_t value) {
+      z_named_t _this = {0};
+      _this.label = label;
+      _this.value = value;
+      return _this;
+  }
+  """
+
+At the call site, the class variable is a stack local:
+
+#code language=c: """
+  z_named_t n = z_named_create(z_string_new("test"), 42);
+  """
+
+#---: Destructor
+
+A class destructor is emitted only if the class has fields that require
+cleanup (string, list, box, map, or other reftypes with destructors). The
+destructor cleans up those fields but does #_*"not" free the struct itself:
+
+#code language=c: """
+  static void z_named_destroy(z_named_t* p) {
+      if (!p) return;
+      z_string_free(&p->label);   /* free string data buffer */
+      /* NO free(p) -- struct is on the stack */
+  }
+  """
+
+If a class has no heap-backed fields (only valtypes), no destructor is emitted
+and the variable is not added to the scope cleanup list.
+
+#---: Ownership Transfer (.take)
+
+Taking a class copies the struct (C struct assignment) and zero-initialises the
+source. Zero-initialisation sets all pointer fields to #~"NULL", preventing
+double-free when the source's scope cleanup runs:
+
+#code language=c: """
+  z_named_t d = zv_c;                         /* struct copy */
+  zv_c = (z_named_t){0};                      /* invalidate source */
+  """
+
+#---: .release
+
+#~".release" calls the destructor (if present) and zero-initialises the struct:
+
+#code language=c: """
+  z_named_destroy(&zv_n);
+  zv_n = (z_named_t){0};
+  """
+
+#---: Scope Cleanup
+
+When an owned class variable falls out of scope, the destructor is called (if
+the type has one). The cleanup code passes #~"&var" to the destructor:
+
+#code language=c: """
+  z_named_destroy(&zv_n);
+  """
+
+#---: Function Returns
+
+Functions returning a class return the struct by value. C compilers apply NRVO
+(Named Return Value Optimisation) in practice, avoiding unnecessary copies.
+
+#---: Parameter Passing
+
+Borrow parameters receive a pointer (the caller passes #~"&var"). Take
+parameters receive the struct by value (the caller copies the struct and
+zero-initialises its source).
+
+#---: Swap
+
+Swapping two class variables swaps the entire struct:
+
+#code language=c: """
+  {
+      z_named_t _tmp = zv_a;
+      zv_a = zv_b;
+      zv_b = _tmp;
+  }
+  """
+
+#---: .lock Fields on Classes (New)
+
+Classes may have #~".lock" fields. A class with #~".lock" fields:
+
+#ul:
+  [#*: Holds compile-time locks on the targets of its #~".lock" fields for the
+  lifetime of the class instance.]
+  [#*: Cannot be stored as a field of another type (prevents the lock from
+  outliving its target).]
+  [#*: Can be moved via #~".take" -- ownership and locks transfer to the new
+  name.]
+  [#*: Can be passed to #~".borrow" and #~".lock" parameters.]
+  [#*: When the instance falls out of scope, locks are released (and the
+  destructor runs if present).]
+
+Classes with #~".lock" fields are normal owned instances. The single-owner
+semantics of classes (no copying) already provide the safety guarantees that
+born-borrowed previously enforced for records. A class cannot be duplicated, so
+there is no risk of multiple copies holding the same lock.
+
+#~".lock" fields are immutable after construction.
+
+
+#--: Unions (Reftypes) -- Changed
+
+Unions are sum reference types. They are now #+ stack-allocated (the struct
+itself). The subtype data remains heap-allocated via a #~"void*" pointer.
+
+#---: Memory Layout
+
+A union is always two pointer-widths (16 bytes): a tag and a #~"void*":
+
+#code language=c: """
+  typedef enum {
+      Z_RESULT_TAG_OK,
+      Z_RESULT_TAG_ERR,
+  } z_result_tag_t;
+
+  typedef struct {
+      z_result_tag_t tag;
+      void* data;           /* heap-allocated subtype data */
+  } z_result_t;
+  """
+
+The struct is 16 bytes on the stack regardless of subtype sizes. Subtype data
+is heap-allocated and owned by the union.
+
+#---: Subtype Data
+
+Union subtypes may be reftypes or valtypes. The subtype data is always
+heap-allocated:
+
+#ul:
+  [#*: For valtype subtypes: #~"malloc(sizeof(subtype))" + copy value.]
+  [#*: For reftype subtypes (classes, strings, etc.): #~"malloc(sizeof(subtype))"
+  + move (take) the struct into the heap allocation, invalidating the source.]
+  [#*: For #~"null" subtypes: #~"data" is #~"NULL".]
+
+Because union subtypes can be reftypes, a union may indirectly contain
+#~"string", #~"list", #~"box", and other heap-backed fields within its
+subtypes.
+
+#---: Destructor
+
+The destructor switches on the tag, cleans up the active subtype, frees the
+subtype data, but does #_*"not" free the union struct:
+
+#code language=c: """
+  static void z_result_destroy(z_result_t* u) {
+      if (!u) return;
+      switch (u->tag) {
+          case Z_RESULT_TAG_OK:
+              break;
+          case Z_RESULT_TAG_ERR:
+              z_string_free((z_string_t*)u->data);
+              free(u->data);
+              break;
+      }
+  }
+  """
+
+A union always needs a destructor if any subtype has non-null data (to free the
+heap allocation for the subtype data).
+
+#---: Construction
+
+Subtype construction allocates and stores the data:
+
+#code language=c: """
+  z_result_t r = {0};
+  r.tag = Z_RESULT_TAG_OK;
+  r.data = malloc(sizeof(int64_t));
+  *(int64_t*)r.data = 42;
+  """
+
+For null subtypes:
+
+#code language=c: """
+  z_result_t r = {0};
+  r.tag = Z_RESULT_TAG_ERR;
+  r.data = NULL;
+  """
+
+#---: Match / Case
+
+Match arms cast #~"data" to the subtype:
+
+#code language=c: """
+  switch (zv_r.tag) {
+      case Z_RESULT_TAG_OK:
+          printf("%lld\n", *(int64_t*)zv_r.data);
+          break;
+      case Z_RESULT_TAG_ERR:
+          z_string_free((z_string_t*)zv_r.data);
+          break;
+  }
+  """
+
+
+#--: Protocol Instances -- Changed
+
+Protocol instances are existential type wrappers. They are now
+#+ stack-allocated (the wrapper struct). The wrapped data may be a borrowed
+pointer or an owned heap copy.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      void (*method1)(void*, ...);
+      void (*method2)(void*, ...);
+      ...
+  } z_printable_vtable_t;
+
+  typedef struct {
+      void* data;                       /* pointer to implementation */
+      z_printable_vtable_t* vtable;     /* pointer to static vtable */
+      void (*destroy)(void*);           /* destructor (NULL if borrowed) */
+  } z_printable_t;
+  """
+
+The protocol struct (3 pointers = 24 bytes) is on the stack.
+
+#---: Borrowed vs Owned
+
+#ul:
+  [#*: #+ Borrowed (#~"protocol.borrow"): #~"data" points to the source
+  variable (via #~"&var"). #~"destroy" is #~"NULL". The protocol instance does
+  not own the data.]
+  [#*: #+ Owned (#~"protocol.create"): #~"data" points to a heap-allocated
+  copy of the implementation. #~"destroy" is set to a cleanup function that
+  frees the copy. For reftype implementations, the cleanup function calls the
+  implementation's destructor before freeing.]
+
+#---: Destructor
+
+The protocol destructor calls #~"destroy" if set, then does #_*"not" free the
+protocol struct (it is on the stack):
+
+#code language=c: """
+  static void z_printable_destroy(z_printable_t* p) {
+      if (!p) return;
+      if (p->destroy) p->destroy(p->data);
+      /* NO free(p) -- struct is on the stack */
+  }
+  """
+
+Since the wrapped data may be a reftype that contains #~"string", #~"list",
+#~"box", etc., protocol instances may indirectly own heap resources.
+
+
+#--: Facet Instances
+
+Facet instances are value-type existential wrappers. They are stack-allocated
+with inline data and are freely copyable.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef union {
+      z_impl1_t _impl1;
+      z_impl2_t _impl2;
+  } z_iterable_data_u;
+
+  typedef struct {
+      z_iterable_vtable_t* vtable;      /* pointer to static vtable */
+      z_iterable_data_u data;            /* inline data union */
+  } z_iterable_t;
+  """
+
+The data is stored inline (not via pointer). The facet struct size is
+#~"sizeof(vtable pointer) + sizeof(largest conforming type)".
+
+#---: Restrictions
+
+Because facets are valtypes, their implementations must be valtypes (records,
+variants). They cannot wrap reftypes (classes, unions) and therefore cannot
+indirectly contain #~"string", #~"list", #~"box", or other heap-backed fields.
+No destructor is needed.
+
+
+#--: box(T)
+
+#~"box" is a generic type that heap-allocates a single instance of any type.
+The C representation is a pointer to the inner type.
+
+#---: Memory Layout
+
+For #~"box(point)" where point is #~"{ i64 x, i64 y }":
+
+#code language=c: """
+  /* C type: z_point_t*  (pointer to heap-allocated point struct) */
+  z_point_t* b = (z_point_t*)malloc(sizeof(z_point_t));
+  *b = z_point_create(1, 2);
+  """
+
+#---: Transparency
+
+Boxed items support all field and method access directly. The compiler handles
+the indirection. There is no automatic unboxing: passing a boxed item to a
+function requires the function to accept exactly that boxed type.
+
+Since #~"this" is always a pointer in methods, all method bodies work on both
+boxed (heap pointer) and unboxed (stack, via #~"&var") instances without
+modification.
+
+#---: Destructor
+
+The box destructor frees the heap allocation. If the inner type has a
+destructor (eg. a class with heap fields), that destructor is called first:
+
+#code language=c: """
+  static void z_box_named_destroy(z_named_t* v) {
+      if (!v) return;
+      z_named_destroy(v);    /* clean up inner type's heap fields */
+      free(v);               /* free the box allocation */
+  }
+  """
+
+For simple valtypes (no destructor), the box destructor is just #~"free(v)".
+
+#---: Born-Boxed Construction
+
+When a type is defined as a boxed type at the unit level, construction should
+allocate directly on the heap and construct in-place. This avoids the overhead
+of constructing on the stack then copying to the heap.
+
+The box's #~"meta.create" does the heap allocation and field initialisation
+in one step:
+
+#code language=c: """
+  static z_point_t* z_box_point_meta_create(int64_t x, int64_t y) {
+      z_point_t* _this = (z_point_t*)malloc(sizeof(z_point_t));
+      *_this = (z_point_t){0};
+      _this->x = x;
+      _this->y = y;
+      return _this;
+  }
+  """
+
+This is the heap-allocating version of #~"meta.create" -- the same pattern
+currently used for classes, now repurposed for box types only.
+
+#---: Boxing a Pre-Existing Item
+
+When boxing a variable that already exists:
+
+#code language=zerolang: """
+  p: point x: 1 y: 2
+  b: box from: p
+  """
+
+The compiler generates: allocate on heap, copy the value. If the source is a
+reftype, #~".take" semantics apply -- the source is zero-initialised to prevent
+double-free.
+
+#---: Swap
+
+Swapping two boxed items of the same type is a pointer swap:
+
+#code language=c: """
+  {
+      z_point_t* _tmp = zv_a;
+      zv_a = zv_b;
+      zv_b = _tmp;
+  }
+  """
+
+Swapping a boxed item with an unboxed item of the same underlying type is
+#_*"not" supported. This would require a move-in/move-out dance that is
+error-prone. The programmer should unbox/rebox explicitly if needed.
+
+
+#--: list(T)
+
+#~"list" is a generic growable array. The struct lives on the stack; only the
+data buffer is heap-allocated.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      uint64_t length;
+      int64_t* data;        /* heap-allocated data buffer */
+      uint64_t capacity;
+  } z_list_i64_t;
+  """
+
+Field order: #~"length" first, #~"data" second, #~"capacity" last. This order
+is chosen so that the first two fields (#~"length", #~"data") match the
+#~"listview" layout, enabling zero-cost casting from #~"list*" to
+#~"listview*". Capacity is last because it is not present in views.
+
+The struct (24 bytes) is on the stack. The #~"data" pointer references a
+heap-allocated buffer sized to #~"capacity * sizeof(element)".
+
+#---: Construction
+
+#~"create" returns the struct by value (not a pointer):
+
+#code language=c: """
+  static z_list_i64_t z_list_i64_create(uint64_t _capacity) {
+      z_list_i64_t _this = {0};
+      _this.capacity = _capacity;
+      if (_capacity > 0) {
+          _this.data = (int64_t*)calloc(_capacity, sizeof(int64_t));
+      }
+      return _this;
+  }
+  """
+
+#---: Destructor
+
+The destructor frees the data buffer (and element destructors for reftype
+elements). It does #_*"not" free the struct:
+
+#code language=c: """
+  static void z_list_i64_destroy(z_list_i64_t* p) {
+      if (!p) return;
+      free(p->data);
+      /* NO free(p) -- struct is on the stack */
+  }
+  """
+
+For reftype elements:
+
+#code language=c: """
+  static void z_list_string_destroy(z_list_string_t* p) {
+      if (!p) return;
+      for (uint64_t i = 0; i < p->length; i++) {
+          z_string_free(&p->data[i]);
+      }
+      free(p->data);
+  }
+  """
+
+#---: Growth Formula
+
+Unchanged: #~"new_cap = cap + (cap >> 1) + 4" (approximately 1.5x + 4).
+
+#---: Methods
+
+All methods (append, insert, extend, get, set, pop, grow) take #~"this" as a
+pointer. Call sites pass #~"&var".
+
+#---: In-Place Element Creation
+
+For creating elements directly in the data buffer (avoiding a stack temporary
++ copy), two approaches are possible:
+
+#ol:
+  [#*: #+ Append-then-init: append a zero-initialised element, then return a
+  pointer to the last slot for the caller to initialise.]
+  [#*: #+ Placement-style: provide a variant of append that takes construction
+  arguments and constructs the element in-place.]
+
+Recommendation: defer in-place creation to a future optimisation. The current
+pattern (construct element on stack, append copies it into data buffer) is
+correct and the copy cost is negligible for element-sized data.
+
+
+#--: listview(T) (New)
+
+#~"listview" is a generic read-only view into a list. It is a class (single
+ownership) with a #~".lock" field that holds a lock on the parent list.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      uint64_t length;
+      int64_t* data;        /* pointer into parent list's data buffer */
+  } z_listview_i64_t;
+  """
+
+Field order matches the first two fields of #~"list": #~"length" first,
+#~"data" second. This enables zero-cost casting from a #~"z_list_i64_t*" to a
+#~"z_listview_i64_t*" -- the memory is reinterpreted without copying.
+
+#---: Ownership
+
+Listview is a class (reftype): single ownership, cannot be copied. It holds a
+#~".lock" on the source list, preventing mutation of the list while the view
+exists. When the listview falls out of scope, the lock is released.
+
+Listview does #_*"not" need a destructor (no heap allocations of its own). The
+data it points to is owned by the parent list.
+
+#---: Locking
+
+The listview holds a compile-time lock on the source list:
+
+#code language=zerolang: """
+  nums: (list of: i64)
+  nums.append from: 10
+  nums.append from: 20
+  nums.append from: 30
+  v: nums.toview             # v locks nums
+  print v.get i: 0.u64       # OK: read through view
+  # nums.append from: 40     # ERROR: nums is locked by v
+  # when v falls out of scope, nums is unlocked
+  """
+
+#---: Methods
+
+#ul:
+  #*: #~"get(i: u64) out of" -- bounds-checked element access
+  #*: #~"length() out u64" -- number of elements in the view
+  #*: #~"list() out list" -- materialise a new owned list from the view (copies data)
+
+#---: Zerolang Definition
+
+#code language=zerolang: """
+  listview: class {
+      get: function {:this i: u64} out of is native
+      length: function {:this} out u64 is native
+      list: function {:this} out (list of: of) is native
+  } as {
+      of: any.generic
+  }
+  """
+
+
+#--: string -- Changed
+
+#~"string" is a growable UTF-8 byte buffer. The struct lives on the stack; only
+the data buffer is heap-allocated. This is changed from the current
+flexible-array-member design where the entire string (struct + data) was a
+single heap allocation.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      uint64_t size;          /* byte count of current content */
+      char* data;             /* heap-allocated data buffer */
+      uint64_t capacity;      /* allocated buffer size */
+  } z_string_t;
+  """
+
+Field order: #~"size" first, #~"data" second, #~"capacity" last. This matches
+the field order of #~"list" (#~"length", #~"data", #~"capacity") for
+consistency. The first two fields (#~"size", #~"data") match #~"stringview"
+layout, enabling zero-cost casting. Putting #~"size" first also enables a
+future small-string optimisation (SSO) where the high bit of #~"size" marks
+inline storage and the remaining bytes of the struct store the string data
+directly.
+
+The struct (24 bytes) is on the stack. The #~"data" pointer references a
+heap-allocated buffer. Strings are null-terminated (for C interop) but #~"size"
+tracks the actual content length.
+
+#---: Construction
+
+#code language=c: """
+  static z_string_t z_string_new(const char* s) {
+      z_string_t str = {0};
+      if (s) {
+          str.size = strlen(s);
+          str.capacity = str.size + 1;
+          str.data = (char*)malloc(str.capacity);
+          memcpy(str.data, s, str.capacity);  /* includes null terminator */
+      }
+      return str;
+  }
+  """
+
+#---: Destructor
+
+Frees the data buffer only:
+
+#code language=c: """
+  static void z_string_free(z_string_t* s) {
+      if (s && s->data) free(s->data);
+  }
+  """
+
+#---: Growth Formula
+
+Unchanged: #~"new_cap = cap + (cap >> 1) + 16" (approximately 1.5x + 16).
+
+#---: Runtime Functions (Changed Signatures)
+
+All runtime functions are updated for the new layout:
+
+#table cols="4 6":
+  Function                |Signature change
+  #~"z_string_new"        |Returns #~"z_string_t" (was #~"z_string_t*")
+  #~"z_string_cat"        |Returns #~"z_string_t" (was #~"z_string_t*"); args are #~"z_string_t*"
+  #~"z_string_from_i64"   |Returns #~"z_string_t" (was #~"z_string_t*")
+  #~"z_string_from_f64"   |Returns #~"z_string_t" (was #~"z_string_t*")
+  #~"z_string_free"       |Takes #~"z_string_t*"; frees #~"data" only (not struct)
+  #~"z_string_eq"         |Takes two #~"z_string_t*" args
+  #~"z_string_reserve"    |Takes #~"z_string_t*" (unchanged -- already pointer)
+  #~"z_string_append"     |Takes #~"z_string_t*" (unchanged -- already pointer)
+  #~"z_string_shrink"     |Takes #~"z_string_t*" (unchanged -- already pointer)
+  #~"z_string_create"     |Returns #~"z_string_t" (was #~"z_string_t*")
+  #~"z_string_print"      |Takes #~"z_string_t*"
+
+
+#--: stringview -- Changed
+
+#~"stringview" is now a #+ class (changed from born-borrowed record). It is a
+read-only view into a #~"string", with single-owner semantics and a #~".lock"
+on the source string.
+
+#---: Memory Layout
+
+#code language=c: """
+  typedef struct {
+      uint64_t length;        /* byte count of the viewed region */
+      const char* data;       /* pointer into string's data buffer */
+  } z_stringview_t;
+  """
+
+Field order: #~"length" first, #~"data" second. This matches the first two
+fields of #~"string" (#~"size", #~"data"), enabling zero-cost casting from
+#~"z_string_t*" to #~"z_stringview_t*".
+
+#---: Ownership
+
+Stringview is a class (reftype): single ownership, cannot be copied. It holds a
+#~".lock" on the source string (when created from a string variable).
+Stringviews created from string literals point into static #~".rodata" and do
+not lock anything (static data has infinite lifetime).
+
+Stringview has no destructor (no heap allocations).
+
+#---: Methods
+
+#ul:
+  #*: #~"length() out u64" -- byte count
+  #*: #~"string() out string" -- materialise a new owned string from the view
+  #*: #~"==(rhs: stringview) out bool" -- content comparison
+  #*: #~"!=(rhs: stringview) out bool" -- negated comparison
+
+
+#--: option / optionval -- Impact
+
+#~"option" is a union with subtypes #~"{ some: T, none: null }". Under the new
+model, the #~"option" struct (#~"{ tag, void* }") moves to the stack but its
+subtype data is still heap-allocated (standard union behaviour).
+
+The nullable-pointer optimisation (#~"is_nullable_ptr") is preserved: for
+pointer-typed payloads (box, protocol, etc.), #~"option" is represented as a
+bare pointer with #~"NULL" sentinel, avoiding the tag + void* overhead entirely.
+
+
+#-: Born-Borrowed Analysis
+
+#--: Removal from Valtypes
+
+Born-borrowed is removed as a language concept. The #~".lock" field mechanism
+is now available only to reftypes (classes). Valtypes (records, variants)
+cannot hold locks.
+
+#---: Rationale
+
+The original motivation for born-borrowed was to allow stack-allocated records
+to hold locked references to heap-allocated classes. Since records are
+valtypes (freely copyable), the born-borrowed flag was needed to prevent copies
+-- each copy would appear to hold a separate lock on the same target. This made
+born-borrowed records neither truly values (they could not be copied) nor truly
+references (they had no identity or destructor).
+
+With classes now stack-allocated, the motivation disappears. A class with
+#~".lock" fields has single-owner semantics that naturally prevent copies,
+without any special born-borrowed mechanism. The class can be moved
+(#~".take"), which born-borrowed records could not do.
+
+#---: Migration
+
+Types that were born-borrowed records become classes:
+
+#ul:
+  [#*: #~"stringview": becomes a class with #~".lock" on the source string.]
+  [#*: Iterators (eg. #~"bagiter"): become classes with #~".lock" on the
+  container.]
+  [#*: Any record with #~".lock" fields: becomes a class.]
+
+#---: Critique
+
+Removing born-borrowed from valtypes is a simplification but has trade-offs:
+
+#ul:
+  [#*: #+ Pro: Cleaner type system. Valtypes are always values -- freely
+  copyable, no identity, no destructor, no locks. There is no hybrid category.]
+  [#*: #+ Pro: More flexible. Class-based views and iterators support
+  #~".take" (moving to a new name), which born-borrowed records could not do.]
+  [#*: #+ Pro: Consistent locking. Locks live only on types with identity
+  (reftypes). This is conceptually cleaner -- a lock pins a specific instance,
+  which requires identity.]
+  [#*: #+ Con: Performance. Born-borrowed records were passed by value (struct
+  copy) for #~".take" parameters, which is efficient for small structs (eg.
+  stringview = 16 bytes). Classes are passed by pointer for #~".borrow"
+  parameters, adding one level of indirection. However, the struct sizes are
+  identical and the indirection cost is negligible.]
+  [#*: #+ Con: Existing code. All existing born-borrowed records must be
+  migrated to classes. This is a one-time migration cost. The compiler should
+  emit clear errors guiding the migration.]
+  [#*: #+ Con: Semantic shift. A #~"stringview" that was previously a value
+  (cheaply passed around, no ownership tracking) becomes a reference (needs
+  ownership tracking, borrow annotations). This adds some friction for common
+  string-passing patterns. However, since born-borrowed stringviews were
+  already restricted (could not be copied or stored), the practical difference
+  is small.]
+  [#*: #+ Issue: String literals. String literals currently produce
+  stringviews pointing into #~".rodata". If stringview is a class, string
+  literals produce an owned class instance. Since #~".rodata" has static
+  lifetime, there is no safety concern, but the ownership tracking adds
+  overhead to a very common pattern. Consider: should string literals remain a
+  special case that produces a freely-borrowable stringview without locking?
+  This would require the compiler to recognise that #~".rodata"-backed
+  stringviews need no lock.]
+
+
+#-: Implementation Plan
+
+The implementation is split into phases. Each phase is independently testable.
+Dependencies between phases are noted.
+
+
+#--: Phase 1: Foundation -- Destructor Metadata
+
+Goal: separate "struct needs free" from "struct has fields needing cleanup" in
+the type metadata.
+
+#---: Changes
+
+#~"ztypes.py" -- #~"ZType" dataclass (line 223):
+
+#ul:
+  [#*: Add #~"needs_field_cleanup: bool = field(default=False, init=False)".
+  True when the type has owned fields requiring cleanup.]
+
+#~"ztypecheck.py" -- #~"_set_destructor_metadata()" (line 170):
+
+#ul:
+  [#*: After existing metadata, scan children for fields whose types have
+  #~"needs_destructor=True". If found, set #~"needs_field_cleanup=True".]
+
+Testing: #~"make check && make test". All tests pass -- no behaviour change.
+
+
+#--: Phase 2: Stack-Allocate Classes
+
+Goal: move class structs from heap to stack. Core change with largest blast
+radius.
+
+#---: 2a: Type Metadata
+
+#~"ztypecheck.py" -- #~"_set_destructor_metadata()" (line 180):
+
+#ul:
+  [#*: For #~"ZTypeType.CLASS": set #~"is_heap_allocated = False".]
+  [#*: #~"needs_destructor = True" only if #~"needs_field_cleanup" is True.]
+
+#---: 2b: C Type Mapping
+
+#~"zemitterc.py" -- #~"_ctype()" (line 122):
+
+#ul:
+  [#*: Remove #~"ZTypeType.CLASS" from the pointer-returning set.]
+  [#*: Keep #~"UNION" and #~"PROTOCOL" in pointer set for now.]
+
+#---: 2c: Destructor Emission
+
+#~"zemitterc.py" -- #~"_emit_class()" (line 1686):
+
+#ul:
+  [#*: Remove #~"free(p)" at line 1693.]
+  [#*: Emit destructor only when #~"needs_field_cleanup" is True.]
+
+#---: 2d: Field Access Operator
+
+#~"zemitterc.py" -- #~"_is_class_pointer_path()" (line 5169):
+
+#ul:
+  [#*: Remove the early return at lines 5173-5178 for #~"ZTypeType.CLASS".]
+  [#*: Keep #~"class_params" check for method #~"this".]
+
+#---: 2e: Method Receiver
+
+#~"zemitterc.py" -- #~"_emit_function()" (line 3096):
+
+#ul:
+  [#*: When emitting a class method, explicitly add #~"*" to the #~"this"
+  parameter type and add to #~"class_params".]
+
+#---: 2f: Call Sites
+
+#~"zemitterc.py" -- method dispatch and borrow parameters:
+
+#ul:
+  [#*: Generate #~"&var" when passing stack class to borrow param or method.]
+
+#---: 2g: Ownership Transfer
+
+#~"zemitterc.py" -- #~".take" and #~".release":
+
+#ul:
+  [#*: Change from #~"var = NULL" to #~"var = (z_X_t){0}".]
+
+#---: 2h: Function Returns
+
+#ul:
+  [#*: Class returns become by-value (remove pointer return paths).]
+
+#---: 2i: Field Restrictions
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: Add check: record fields cannot be string, list, box, map, class, union,
+  or any type with #~"needs_destructor=True". Emit compile error.]
+
+#---: 2j: Monomorphised Classes
+
+#ul:
+  [#*: Apply same changes to #~"_emit_mono_class()" (line 2807).]
+
+Testing: ~40 test updates expected. Compile #~"classes.z". ASan verification.
+
+
+#--: Phase 3: Stack-Allocate List Structs
+
+Goal: list struct on stack, data buffer on heap.
+
+#---: Changes
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: List types: set #~"is_heap_allocated = False", keep #~"needs_destructor = True".]
+
+#~"zemitterc.py" -- #~"_emit_mono_list()" (line 2288):
+
+#ul:
+  [#*: Reorder struct fields to #~"{ length, data*, capacity }".]
+  [#*: Destructor: remove #~"free(p)". Only free #~"p->data" + element
+  destructors.]
+  [#*: Constructor: return struct by value, not pointer.]
+
+#~"zemitterc.py" -- #~"_emit_heap_container_create()" (line 389):
+
+#ul:
+  [#*: Rename and change: return struct by value, allocate only data buffer.]
+
+Testing: compile #~"lists.z". ASan verification.
+
+
+#--: Phase 4: Rewrite String Runtime
+
+Goal: change string from flexible-array-member to stack struct + heap data
+buffer.
+
+Dependency: Phase 2 (classes on stack).
+
+This is the highest-risk phase due to pervasive string usage.
+
+#---: 4a: Struct Definition
+
+#~"zemitterc_runtime.py" -- #~"_Z_STRING_RUNTIME" (line 38):
+
+#ul:
+  [#*: Change struct to #~"{ uint64_t size; char* data; uint64_t capacity; }".]
+
+#---: 4b: Runtime Functions
+
+Rewrite all string runtime functions:
+
+#ul:
+  [#*: Constructors (#~"z_string_new", #~"z_string_cat", #~"z_string_from_*",
+  #~"z_string_create"): return #~"z_string_t" by value.]
+  [#*: #~"z_string_free": free #~"s->data" only.]
+  [#*: Mutation methods (#~"z_string_reserve", #~"z_string_append",
+  #~"z_string_shrink"): take #~"z_string_t*" (unchanged).]
+
+#---: 4c: Emitter Updates
+
+#~"zemitterc.py":
+
+#ul:
+  [#*: #~"_ctype()": change string from #~"z_string_t*" to #~"z_string_t".]
+  [#*: Update all string temporary handling, interpolation chains, and call
+  sites.]
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: For #~"ZSubType.STRING": set #~"is_heap_allocated = False".]
+
+#---: 4d: Stringview Runtime
+
+#~"zemitterc_runtime.py":
+
+#ul:
+  [#*: #~"z_string_toview": takes #~"z_string_t*", returns #~"z_stringview_t"
+  pointing into #~"s->data".]
+  [#*: #~"z_string_from_view": returns #~"z_string_t" by value.]
+
+Testing: run ALL tests. Sub-phase changes. ASan on all examples.
+
+
+#--: Phase 5: Stack-Allocate Unions
+
+Goal: union struct on stack, subtype data stays heap-allocated via void*.
+
+Dependency: Phase 2 (classes on stack).
+
+#---: Changes
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: For #~"ZTypeType.UNION": set #~"is_heap_allocated = False".]
+
+#~"zemitterc.py" -- #~"_ctype()":
+
+#ul:
+  [#*: Remove #~"ZTypeType.UNION" from pointer-returning set.]
+
+#~"zemitterc.py" -- #~"_emit_union()" (line 1772):
+
+#ul:
+  [#*: Keep #~"{ tag, void* }" struct layout (unchanged).]
+  [#*: Destructor: remove #~"free(u)" at line 1820. Keep subtype cleanup.]
+  [#*: Construction: remove struct malloc. Stack-init the struct, malloc only
+  subtype data.]
+
+#~"zemitterc.py" -- #~"_is_class_pointer_path()":
+
+#ul:
+  [#*: Remove #~"ZTypeType.UNION" from set returning True.]
+
+#~"zemitterc.py" -- union field access, match/case:
+
+#ul:
+  [#*: Change #~"u->" to #~"u." for local union variables.]
+  [#*: #~"u.data" casting patterns stay the same (still void*).]
+
+Testing: union tests. Compile union examples.
+
+
+#--: Phase 6: Stack-Allocate Protocol Instances
+
+Goal: protocol wrapper struct on stack.
+
+Dependency: Phase 2 (classes on stack).
+
+#---: Changes
+
+#~"zemitterc.py" -- #~"_emit_protocol()" (line 987):
+
+#ul:
+  [#*: Protocol struct remains #~"{ void* data, vtable*, destroy }" -- 24
+  bytes on stack.]
+  [#*: Destructor: remove #~"free(p)" from protocol destroy. Keep
+  #~"p->destroy(p->data)" call for owned instances.]
+  [#*: Borrow create: #~"data = &var" (pointer to stack variable).]
+  [#*: Owned create: #~"data = malloc + copy" (heap copy of implementation).
+  The destroy callback frees this copy.]
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: For #~"ZTypeType.PROTOCOL": set #~"is_heap_allocated = False".]
+
+#~"zemitterc.py" -- #~"_ctype()":
+
+#ul:
+  [#*: Remove #~"ZTypeType.PROTOCOL" from pointer-returning set.]
+
+Testing: protocol tests. Compile protocol examples.
+
+
+#--: Phase 7: Extend .lock Fields to Classes
+
+Goal: allow classes to have #~".lock" fields.
+
+Dependency: Phase 2 (classes on stack).
+
+#---: Changes
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: Remove restriction preventing #~".lock" fields on classes.]
+  [#*: For classes with #~".lock" fields: do not set #~"is_born_borrowed".]
+  [#*: Add restriction: a type with #~".lock" fields cannot appear as a field
+  of another type.]
+  [#*: Lock transfer in constructors: same mechanism as born-borrowed records.]
+
+#~"zemitterc.py":
+
+#ul:
+  [#*: #~".lock" fields emit as normal pointer fields.]
+  [#*: No special destructor handling for #~".lock" fields.]
+
+Testing: new test cases for class .lock fields, locking, restriction
+enforcement.
+
+
+#--: Phase 8: Remove Born-Borrowed from Valtypes
+
+Goal: remove the born-borrowed mechanism from records. Migrate existing
+born-borrowed records to classes.
+
+Dependency: Phase 7 (.lock on classes).
+
+#---: Changes
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: Remove #~"_check_born_borrowed_record()" validation.]
+  [#*: Remove #~"is_born_borrowed" checks for records.]
+  [#*: Remove #~"this.borrow" return handling for record constructors.]
+  [#*: Disallow #~".lock" fields on records -- emit error directing user to
+  use a class instead.]
+
+#~"zemitterc.py":
+
+#ul:
+  [#*: Remove born-borrowed record pointer receiver handling (lines
+  3118-3125).]
+  [#*: Remove born-borrowed checks in #~"_is_class_pointer_path()" (lines
+  5188-5196).]
+  [#*: Remove born-borrowed method dispatch wrapping (lines 3655-3666).]
+
+#~"lib/system/system.z":
+
+#ul:
+  [#*: Change #~"stringview" from record to class.]
+
+#~"lib/system/collections.z":
+
+#ul:
+  [#*: Change any born-borrowed records to classes.]
+
+Testing: update all born-borrowed tests. Migrate #~"borrowed_record.z",
+#~"listiter.z", #~"strview.z" examples.
+
+
+#--: Phase 9: Implement listview
+
+Goal: add the #~"listview" generic type.
+
+Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
+
+#---: Changes
+
+#~"lib/system/collections.z":
+
+#ul:
+  [#*: Add #~"listview" type definition.]
+  [#*: Add #~"toview" method to #~"list".]
+
+#~"ztypes.py":
+
+#ul:
+  [#*: Add #~"ZSubType.LISTVIEW".]
+
+#~"ztypeutil.py":
+
+#ul:
+  [#*: Add #~"_is_listview_type()" predicate.]
+
+#~"ztypecheck.py":
+
+#ul:
+  [#*: Resolve #~"listview" monomorphisation.]
+  [#*: Set #~"is_valtype = False" (class), #~"is_heap_allocated = False",
+  #~"needs_destructor = False".]
+
+#~"zemitterc.py":
+
+#ul:
+  [#*: Add #~"_emit_mono_listview()" -- struct, get, length, list methods.]
+  [#*: Add #~"list.toview" method emission.]
+
+Testing: new test cases. New #~"examples/listview.z".
+
+
+#--: Phase 10: Box Refinements
+
+Goal: ensure box works with stack-allocated classes and born-boxed
+optimisation.
+
+Dependency: Phase 2 (classes on stack).
+
+#---: Changes
+
+#~"zemitterc.py" -- #~"_emit_mono_box()" (line 2063):
+
+#ul:
+  [#*: For #~"box(class_with_destructor)": destructor calls inner destructor +
+  #~"free(v)".]
+  [#*: For born-boxed construction: emit heap-allocating #~"meta.create" that
+  constructs in-place.]
+
+Testing: update #~"box.z" example. Add tests for #~"box(class)".
+
+
+#-: Pros, Cons, and Risks
+
+
+#--: Pros
+
+#ul:
+  [#*: #+ Simpler mental model. "Everything is on the stack. Only box and data
+  buffers are on the heap." Easy to teach and reason about.]
+  [#*: #+ Fewer allocations. Most programs see fewer #~"malloc"/#~"free" calls,
+  improving performance and reducing fragmentation.]
+  [#*: #+ Unified field access. Local variables of all types use #~"." for
+  field access. Only #~"this" in methods and boxed items use #~"->".]
+  [#*: #+ Class .lock fields. Enables natural class-based iterators and views
+  without the born-borrowed workaround. More flexible (supports #~".take").]
+  [#*: #+ Clean type system. Valtypes are always values. Reftypes are always
+  references with identity. No hybrid born-borrowed category.]
+  [#*: #+ Predictable memory usage. Stack allocation makes memory usage more
+  predictable and eliminates #~"malloc" failure risk for ordinary objects.]
+
+
+#--: Cons
+
+#ul:
+  [#*: #+ Stack size. Large class structs consume stack space. For deeply
+  recursive functions with large local classes, stack overflow is possible.
+  Mitigation: #~"box(T)" provides explicit opt-in to heap allocation.]
+  [#*: #+ Struct copy cost. Moving a large class (via #~".take" or function
+  return) copies the entire struct. NRVO mitigates returns, but #~".take"
+  always copies. For large structs, #~"box" should be preferred.]
+  [#*: #+ Variant size. Inline tagged variants use the size of the largest
+  subtype. For variants with subtypes of very different sizes, this wastes
+  stack space. Rarely an issue in practice since variant subtypes must be
+  valtypes (typically small).]
+  [#*: #+ String rewrite risk. The string runtime rewrite (Phase 4) touches
+  nearly every test.]
+  [#*: #+ Born-borrowed migration. All existing born-borrowed records must
+  become classes. One-time cost.]
+  [#*: #+ Recursive types. Self-referential types (linked list nodes, tree
+  nodes) must use #~"box(self)" for the recursive field. Error message should
+  be clear.]
+
+
+#--: Risks
+
+#ul:
+  [#*: #+ Test blast radius. ~1200 tests. Phases 2, 4, and 5 will each cause
+  significant test breakage. Mitigation: phase incrementally.]
+  [#*: #+ Protocol interaction. Protocol wrappers that own their data must
+  heap-allocate a copy of the implementation. Verify this path works correctly
+  after Phase 2.]
+  [#*: #+ C ABI for large structs. Some platforms pass large structs via hidden
+  pointer at the ABI level. Handled transparently by the C compiler.]
+  [#*: #+ String literal stringviews. If stringview becomes a class, string
+  literals produce owned class instances. Need to handle .rodata-backed
+  stringviews specially (no lock needed).]
+
+
+#-: Future Directions
+
+#ul:
+  [#*: #+ Small-string optimisation (SSO). The #~"size" field is first in the
+  string struct. The high bit can mark inline storage. When set, the remaining
+  bytes of the struct (data pointer + capacity = 16 bytes) store the string
+  data directly, avoiding a heap allocation for strings up to 15 bytes. The
+  same #~"size-first" layout applies to #~"stringview", #~"list", and
+  #~"listview" for consistency.]
+  [#*: #+ In-place list element creation. Construct elements directly in the
+  data buffer without a stack intermediate.]
+  [#*: #+ Box swap across types. Allow swapping #~"box(T)" with #~"T" for the
+  same underlying type.]
+  [#*: #+ Automatic boxing. Compiler-inferred boxing when a class is passed to
+  a function expecting #~"box(T)".]
+  [#*: #+ Move semantics. Elide struct copies when the compiler can prove the
+  source is unused after the move.]
+  [#*: #+ Arena allocation. Allow #~"box" and #~"list" to allocate from a
+  user-provided arena.]
+
+
+#-: Verification Plan
+
+After each phase, run:
+
+#ol:
+  [#*: #~"make check" -- formatting, linting, type checking.]
+  [#*: #~"make test" -- all pytest tests.]
+  [#*: #~"make build" -- compile all examples to C and then to binaries.]
+  [#*: Run compiled examples under ASan (#~"CFLAGS=-fsanitize=address make build")
+  to detect memory errors, leaks, and undefined behaviour.]
+  [#*: Manual inspection of generated C for one representative example per
+  phase to verify the emitted code matches the specification.]
