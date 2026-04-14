@@ -1224,17 +1224,17 @@ class TestLockFieldsAndBornBorrowed:
             "mixed constructor" in e.msg or "must agree" in e.msg for e in errors
         )
 
-    def test_lock_field_on_class_error(self):
-        errors = check_errors(
+    def test_lock_field_on_class_allowed(self):
+        # Phase 7: classes may have .lock fields (stack-allocated, single-owner)
+        check_ok(
             "bag: class { a: i64 }\n"
-            "bad: class { target: bag.lock } as {\n"
+            "bagview: class { target: bag.lock } as {\n"
             "  create: function {target: bag.lock} out this is {\n"
             "    return meta.create target: target\n"
             "  }\n"
             "}\n"
-            "main: function is { b: bag a: 1; c: bad target: b }"
+            "main: function is { b: bag a: 1\nv: bagview target: b }"
         )
-        assert any("Class" in e.msg and "lock" in e.msg.lower() for e in errors)
 
     def test_take_field_modifier_on_record_error(self):
         # Only .lock is permitted on field types; .take/.borrow are not.

@@ -5845,6 +5845,49 @@ class TestStringEquality:
         assert output.strip() == "different"
 
 
+class TestClassLockFields:
+    """Phase 7: classes with .lock fields.
+
+    Classes (stack-allocated, single-owner) may now hold .lock references
+    to other objects. Unlike born-borrowed records, these classes are
+    owned and can be moved via .take.
+    """
+
+    def test_class_lock_field_stored_as_pointer(self):
+        """Class .lock field is stored as a pointer to the locked target."""
+        csource = emit_source(
+            "bag: class { a: i64 }\n"
+            "bagview: class { target: bag.lock } as {\n"
+            "  create: function {target: bag.lock} out this is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "}\n"
+            "main: function is { b: bag a: 1\nv: bagview target: b }"
+        )
+        # .lock field of stack-class type emits as pointer in struct
+        assert "z_bag_t* target;" in csource
+
+    def test_class_lock_field_runtime(self):
+        """End-to-end: class with .lock accesses the locked target."""
+        csource = emit_source(
+            "bag: class { a: i64 b: i64 }\n"
+            "bagview: class { target: bag.private.lock } as {\n"
+            "  create: function {target: bag.lock} out this is {\n"
+            "    return meta.create target: target\n"
+            "  }\n"
+            "  getval: function {v: this} out i64 is { return v.target.a }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 42 b: 99\n"
+            "  v: bagview target: b\n"
+            "  n: bagview.getval v\n"
+            '  print "\\{n}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "42"
+
+
 class TestBornBorrowedEmitter:
     """Phase D: end-to-end emit/compile/run for born-borrowed records.
 

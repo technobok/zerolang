@@ -1743,10 +1743,21 @@ class CEmitter:
 
         self.needs_stdint = True
         self.needs_stdlib = True
+        ztype = self._resolved_type(name)
+        lock_fields = ztype.lock_field_names if ztype else set()
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in cls.items.items():
             ftype = _ctype(fpath.type)
+            # .lock fields of stack-allocated class type: store as pointer
+            if (
+                fname in lock_fields
+                and fpath.type
+                and fpath.type.typetype == ZTypeType.CLASS
+                and not fpath.type.is_heap_allocated
+                and not ftype.endswith("*")
+            ):
+                ftype = f"{ftype}*"
             lines.append(f"    {ftype} {fname};\n")
         # emit function pointer fields from 'is' section
         for mname, mfunc in cls.functions.items():
@@ -1755,12 +1766,14 @@ class CEmitter:
         lines.append(f"}} z_{name}_t;\n\n")
 
         # emit destructor (only if class has fields needing cleanup)
-        ztype = self._resolved_type(name)
         if ztype and ztype.needs_field_cleanup:
             lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
             lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
             lines.append("    if (!p) return;\n")
             for fname, fpath in cls.items.items():
+                # .lock fields are borrowed references, don't own data
+                if fname in lock_fields:
+                    continue
                 if fpath.type:
                     lines.append(self._emit_field_cleanup(f"p->{fname}", fpath.type))
             lines.append("}\n\n")
@@ -2918,9 +2931,18 @@ class CEmitter:
         ]
 
         # struct typedef
+        lock_fields = mono_type.lock_field_names
         lines.append("typedef struct {\n")
         for fname, ftype in field_items:
             ct = _ctype(ftype)
+            # .lock fields of stack-allocated class type: store as pointer
+            if (
+                fname in lock_fields
+                and ftype.typetype == ZTypeType.CLASS
+                and not ftype.is_heap_allocated
+                and not ct.endswith("*")
+            ):
+                ct = f"{ct}*"
             lines.append(f"    {ct} {fname};\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
@@ -2930,6 +2952,9 @@ class CEmitter:
             lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
             lines.append("    if (!p) return;\n")
             for fname, ftype in field_items:
+                # .lock fields are borrowed references, don't own data
+                if fname in lock_fields:
+                    continue
                 lines.append(self._emit_field_cleanup(f"p->{fname}", ftype))
             lines.append("}\n\n")
 
@@ -4332,22 +4357,48 @@ class CEmitter:
         param_ctypes: Dict[str, str] = {}
         for pname, ptype in create_fn.children.items():
             param_names.append(pname)
-            param_ctypes[pname] = _ctype(ptype)
+            ct = _ctype(ptype)
+            # class borrow/lock params are emitted as pointers in C
+            if (
+                ptype
+                and ptype.typetype == ZTypeType.CLASS
+                and not ptype.is_heap_allocated
+                and not ct.endswith("*")
+                and create_fn.param_ownership.get(pname)
+                in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
+            ):
+                ct = f"{ct}*"
+            param_ctypes[pname] = ct
 
         field_defaults = self._type_field_defaults.get(type_name, {})
 
         arg_map: Dict[str, str] = {}
+        arg_types: Dict[str, Optional[ZType]] = {}
         take_vars: Dict[str, Optional[str]] = {}
         for arg in arguments[skip_first:]:
             if arg.name:
                 val = self._emit_operation_value(arg.valtype)
                 arg_map[arg.name] = val
+                arg_types[arg.name] = self._get_operation_type(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
 
         parts: List[str] = []
         for pname in param_names:
             if pname in arg_map:
-                parts.append(arg_map[pname])
+                val = arg_map[pname]
+                # stack-class passed to pointer param (e.g. .lock): add &
+                ct = param_ctypes.get(pname, "")
+                at = arg_types.get(pname)
+                if (
+                    ct.endswith("*")
+                    and at is not None
+                    and at.typetype == ZTypeType.CLASS
+                    and not at.is_heap_allocated
+                    and not val.startswith("&")
+                    and val not in self._scope.class_params
+                ):
+                    val = f"&{val}"
+                parts.append(val)
             elif pname in field_defaults:
                 parts.append(field_defaults[pname])
             else:
@@ -4373,18 +4424,33 @@ class CEmitter:
 
         # build dict from call arguments
         arg_map: Dict[str, str] = {}
+        arg_types: Dict[str, Optional[ZType]] = {}
         take_vars: Dict[str, Optional[str]] = {}
         for arg in arguments[skip_first:]:
             if arg.name:
                 val = self._emit_operation_value(arg.valtype)
                 arg_map[arg.name] = val
+                arg_types[arg.name] = self._get_operation_type(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
 
         # build ordered args
         parts: List[str] = []
         for i, fname in enumerate(field_names):
             if fname in arg_map:
-                parts.append(arg_map[fname])
+                val = arg_map[fname]
+                # stack-class passed to pointer field (e.g. .lock): add &
+                fct = field_ctypes[i] if i < len(field_ctypes) else ""
+                at = arg_types.get(fname)
+                if (
+                    fct.endswith("*")
+                    and at is not None
+                    and at.typetype == ZTypeType.CLASS
+                    and not at.is_heap_allocated
+                    and not val.startswith("&")
+                    and val not in self._scope.class_params
+                ):
+                    val = f"&{val}"
+                parts.append(val)
             elif fname in field_defaults:
                 parts.append(field_defaults[fname])
             else:

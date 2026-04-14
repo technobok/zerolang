@@ -1179,23 +1179,13 @@ class TypeChecker:
                     and cast(zast.DottedPath, fpath).child.name == "private"
                 ):
                     ctype.private_fields.add(fname)
-                # Phase B: .lock fields are not allowed on classes (the class
-                # may outlive the lock scope). Born-borrowed valtypes are also
-                # rejected as class fields.
+                # Phase 7: .lock fields are now allowed on classes.
+                # Classes are stack-allocated with single-owner semantics,
+                # so they naturally prevent copies that would duplicate locks.
                 f_own = cls.field_ownership.get(fname)
                 if f_own == ZParamOwnership.LOCK:
-                    self._error(
-                        f"Class '{name}' field '{fname}' cannot have a "
-                        f"'.lock' type — only records (valtypes) may store "
-                        f"locked references.",
-                        loc=cls.start,
-                        err=ERR.TYPEERROR,
-                        hint=(
-                            "use a record (valtype) for types that hold "
-                            "locked references, since classes can outlive "
-                            "the lock scope"
-                        ),
-                    )
+                    ctype.lock_field_names.add(fname)
+                    ctype.has_lock_fields = True
                 elif f_own is not None:
                     self._error(
                         f"Only '.lock' is permitted as a field type modifier; "
@@ -1203,6 +1193,8 @@ class TypeChecker:
                         loc=cls.start,
                         err=ERR.TYPEERROR,
                     )
+                # born-borrowed valtypes still cannot be stored in class fields
+                # (they are bound to a narrower lexical scope).
                 if getattr(ft, "is_born_borrowed", False):
                     self._error(
                         f"Class '{name}' field '{fname}' has born-borrowed "
