@@ -1892,8 +1892,19 @@ class CEmitter:
             else:
                 stype = spath.type
                 if stype and stype.needs_destructor and stype.destructor_name:
-                    cast_expr = f"({_ctype(stype)})u->data"
-                    lines.append(f"            {stype.destructor_name}({cast_expr});\n")
+                    if stype.is_heap_allocated:
+                        # heap-allocated: destructor frees the allocation
+                        cast_expr = f"({_ctype(stype)})u->data"
+                        lines.append(
+                            f"            {stype.destructor_name}({cast_expr});\n"
+                        )
+                    else:
+                        # stack-allocated (boxed): call destructor on boxed copy, then free box
+                        ptr_ctype = f"{_ctype(stype)}*"
+                        lines.append(
+                            f"            {stype.destructor_name}(({ptr_ctype})u->data);\n"
+                        )
+                        lines.append("            free(u->data);\n")
                 else:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
@@ -2028,8 +2039,17 @@ class CEmitter:
                 lines.append("            break;\n")
             else:
                 if stype.needs_destructor and stype.destructor_name:
-                    cast_expr = f"({_ctype(stype)})u->data"
-                    lines.append(f"            {stype.destructor_name}({cast_expr});\n")
+                    if stype.is_heap_allocated:
+                        cast_expr = f"({_ctype(stype)})u->data"
+                        lines.append(
+                            f"            {stype.destructor_name}({cast_expr});\n"
+                        )
+                    else:
+                        ptr_ctype = f"{_ctype(stype)}*"
+                        lines.append(
+                            f"            {stype.destructor_name}(({ptr_ctype})u->data);\n"
+                        )
+                        lines.append("            free(u->data);\n")
                 else:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
@@ -2597,6 +2617,8 @@ class CEmitter:
         # helper: free a key if reftype
         def emit_free_key(var: str, indent: str = "    ") -> str:
             if key_type and key_type.needs_destructor and key_type.destructor_name:
+                if not key_type.is_heap_allocated:
+                    return f"{indent}{key_type.destructor_name}(&{var});\n"
                 return f"{indent}{key_type.destructor_name}({var});\n"
             if key_is_reftype:
                 return f"{indent}if ({var}) free({var});\n"
@@ -2609,6 +2631,8 @@ class CEmitter:
                 and value_type.needs_destructor
                 and value_type.destructor_name
             ):
+                if not value_type.is_heap_allocated:
+                    return f"{indent}{value_type.destructor_name}(&{var});\n"
                 return f"{indent}{value_type.destructor_name}({var});\n"
             if val_is_reftype:
                 return f"{indent}if ({var}) free({var});\n"
@@ -5586,6 +5610,9 @@ class CEmitter:
                     )
                     self._temp.decls.append(f"{indent}*{box_tmp} = {val};\n")
                     self._temp.decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
+                    # ownership transferred to boxed copy — don't free original
+                    if val in self._temp.frees:
+                        self._temp.frees.remove(val)
 
         self._temp.frees.append(tmp)
         return tmp

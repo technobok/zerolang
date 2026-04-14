@@ -716,7 +716,7 @@ class TestEmitterStringOwnership:
     def test_string_scope_cleanup(self):
         """String variables freed at function exit via z_string_free."""
         csource = emit_source('main: function is {\n  s: "hello".string\n  print s\n}')
-        assert "z_string_free(s);" in csource
+        assert "z_string_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
@@ -739,7 +739,7 @@ class TestEmitterStringOwnership:
         csource = emit_source(
             'main: function is {\n  s: "hello".string\n  s = "world".string\n  print s\n}'
         )
-        assert "z_string_free(s);" in csource
+        assert "z_string_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "world"
 
@@ -765,7 +765,7 @@ class TestEmitterStringOwnership:
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
         # verify result string is freed (append chain, single allocation)
-        assert "z_string_free(_s" in csource
+        assert "z_string_free(&_s" in csource
         # verify interpolation uses append chain, not z_string_cat
         main_body = csource[csource.index("void z_main") :]
         assert "z_string_cat(" not in main_body
@@ -794,7 +794,7 @@ class TestEmitterStringOwnership:
         csource = emit_source(
             'main: function is {\n  with s: "hello".string do print s\n}'
         )
-        assert "z_string_free(s);" in csource
+        assert "z_string_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
@@ -815,7 +815,7 @@ class TestBareBlockScope:
         csource = emit_source(
             'main: function is {\n  { s: "hello".string\n  print s }\n  print "done"\n}'
         )
-        assert "z_string_free(s);" in csource
+        assert "z_string_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip().split("\n") == ["hello", "done"]
 
@@ -1034,7 +1034,7 @@ class TestEmitterStaticStrings:
     def test_z_string_free_in_scope_cleanup(self):
         """Scope cleanup for string vars should use z_string_free."""
         csource = emit_source('main: function is {\n  s: "hello".string\n  print s\n}')
-        assert "z_string_free(s);" in csource
+        assert "z_string_free(&s);" in csource
         # the main body should not use raw free(s), only z_string_free
         main_body = csource[csource.index("void z_main") :]
         assert "if (s) free(s);" not in main_body
@@ -1459,7 +1459,7 @@ class TestEmitterClassDestructors:
             'myclass: class { name: string\n x: 0 }\nmain: function is { c: myclass name: "" }'
         )
         assert "z_myclass_destroy" in csource
-        assert "z_string_free(p->name);" in csource
+        assert "z_string_free(&p->name);" in csource
 
     def test_class_destructor_with_class_field(self):
         """Class with class field: destructor recurses."""
@@ -1967,10 +1967,10 @@ class TestStandaloneTake:
         assert "x = NULL;" in csource
 
     def test_standalone_take_string(self):
-        """s.take as statement on string → free + NULL."""
+        """s.take as statement on string → free + zero-init."""
         csource = emit_source('main: function is {\n  s: "hello".string\n  s.take\n}')
-        assert "z_string_free(s);" in csource
-        assert "s = NULL;" in csource
+        assert "z_string_free(&s);" in csource
+        assert "s = (z_string_t){0};" in csource
 
     def test_standalone_take_class_asan(self):
         """Standalone .take on class with string field → no leak, no double-free."""
@@ -2003,12 +2003,12 @@ class TestStandaloneRelease:
         assert "c = (z_myclass_t){0};" in csource
 
     def test_release_string(self):
-        """s.release on string → free + NULL."""
+        """s.release on string → free + zero-init."""
         csource = emit_source(
             'main: function is {\n  s: "hello".string\n  s.release\n}'
         )
-        assert "z_string_free(s);" in csource
-        assert "s = NULL;" in csource
+        assert "z_string_free(&s);" in csource
+        assert "s = (z_string_t){0};" in csource
 
     def test_release_valtype_no_destroy(self):
         """x.release on valtype → no destroy call in C output."""
@@ -2100,7 +2100,7 @@ class TestReturnPathTake:
             '  print "ok"\n'
             "}"
         )
-        assert "s = NULL;" in csource
+        assert "s = (z_string_t){0};" in csource
 
 
 # ---- Phase 4h.2: Constructor Infrastructure (meta.create) ----

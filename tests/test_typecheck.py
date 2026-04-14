@@ -4297,10 +4297,10 @@ class TestGenerics:
         assert mono.is_valtype is True
 
     def test_option_nullable_ptr_flag(self):
-        """Monomorphized option(reftype) has is_nullable_ptr set."""
+        """Monomorphized option(stack-struct) does NOT use nullable-ptr."""
         program = check_ok('main: function is { x: option.some "hello".string }')
         mono, _ = program.mono_types[0]
-        assert mono.is_nullable_ptr is True
+        assert mono.is_nullable_ptr is False
 
     def test_box_valtype_creates_reftype(self):
         """box from: valtype creates a box reftype."""

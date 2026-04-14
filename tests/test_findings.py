@@ -176,7 +176,7 @@ class TestFinding3DestructorMetadata:
         assert name_type.name == "string"
         assert name_type.needs_destructor is True
         assert name_type.destructor_name == "z_string_free"
-        assert name_type.is_heap_allocated is True
+        assert name_type.is_heap_allocated is False
 
     def test_class_destructor(self):
         program = parse_and_check(

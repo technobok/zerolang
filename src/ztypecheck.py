@@ -211,11 +211,13 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
     # Skip types that manage their own heap data: box (is_box=True),
     # list, and map — identified by is_heap_allocated which is set
     # explicitly after monomorphization for these collection types.
+    # Also skip string: stack struct with heap data buffer, always needs cleanup.
     if (
         ztype.typetype == ZTypeType.CLASS
         and not ztype.is_heap_allocated
         and not getattr(ztype, "is_box", False)
         and not ztype.needs_field_cleanup
+        and ztype.subtype != ZSubType.STRING
     ):
         ztype.needs_destructor = False
         ztype.destructor_name = None
@@ -3509,8 +3511,12 @@ class TypeChecker:
         _set_destructor_metadata(mono)
 
         # for nullable-ptr option (monomorphized option union): mark as nullable ptr
+        # only when the some type is heap-allocated (pointer-based), e.g. unions, protocols
+        # Stack-allocated types like string cannot use the nullable-ptr optimization
         if template_type.typetype == ZTypeType.UNION and template_type.name == "option":
-            mono.is_nullable_ptr = True
+            some_child = mono.children.get("some")
+            if some_child and some_child.is_heap_allocated:
+                mono.is_nullable_ptr = True
 
         # for unions: rebuild tag enum with the monomorphized name
         if template_type.typetype == ZTypeType.UNION:
