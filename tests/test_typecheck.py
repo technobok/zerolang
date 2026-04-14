@@ -5342,10 +5342,9 @@ class TestList:
     def test_list_creation(self):
         """list of: i64 creates a monomorphized list type."""
         program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if "list" in m.name]
-        assert len(monos) >= 1
-        mono = monos[0]
-        assert mono.name == "list_i64"
+        # look specifically for list_i64 (not listview_i64, which is also mono'd)
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        assert len(monos) == 1
 
     def test_list_creation_with_capacity(self):
         """list of: i64 with capacity argument type-checks."""

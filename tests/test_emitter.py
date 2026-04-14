@@ -5845,6 +5845,48 @@ class TestStringEquality:
         assert output.strip() == "different"
 
 
+class TestListView:
+    """Phase 9: listview — generic read-only view into a list.
+
+    Listview is a class with the same first two fields as list ({length,
+    data*}) enabling zero-cost casting. It is a reftype (single-owner).
+    """
+
+    def test_listview_struct_layout(self):
+        """listview struct has {length, data*} matching list's first two fields."""
+        csource = emit_source("main: function is { l: (list of: i64)\nv: l.toview }")
+        # listview struct matches first two fields of list for zero-cost cast
+        assert (
+            "typedef struct {\n    uint64_t length;\n    int64_t* data;\n} z_listview_i64_t;"
+            in csource
+        )
+
+    def test_listview_toview_is_cast(self):
+        """list.toview is a zero-cost reinterpret_cast in C."""
+        csource = emit_source("main: function is { l: (list of: i64)\nv: l.toview }")
+        # toview is a cast, not a copy
+        assert "return *(z_listview_i64_t*)_this;" in csource
+
+    def test_listview_length_and_get(self):
+        """Listview provides .length and .get methods."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    nums: (list of: i64)\n"
+            "    nums.append from: 10\n"
+            "    nums.append from: 20\n"
+            "    nums.append from: 30\n"
+            "    v: nums.toview\n"
+            "    n: v.length\n"
+            '    print "length: \\{n}"\n'
+            "    e: v.get i: 1.u64\n"
+            '    print "elem[1]: \\{e}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert "length: 3" in output
+        assert "elem[1]: 20" in output
+
+
 class TestClassLockFields:
     """Phase 7: classes with .lock fields.
 

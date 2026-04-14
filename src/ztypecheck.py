@@ -36,6 +36,8 @@ from ztypeutil import (
     str_capacity as _str_capacity,
     is_list_type as _is_list_type,
     list_element_type as _list_element_type,
+    is_listview_type as _is_listview_type,
+    listview_element_type as _listview_element_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -3204,6 +3206,11 @@ class TypeChecker:
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
+        # for list types: .toview returns the listview type directly (zero-arg method)
+        if _is_list_type(parent_type) and child_name == "toview":
+            toview_child = parent_type.children.get("toview")
+            if toview_child and toview_child.return_type:
+                return toview_child.return_type
         # for records/enums, look up child in children
         # resolve public name (may redirect renamed members)
         resolved_name = self._resolve_public_name(parent_type, child_name, path)
@@ -3615,6 +3622,25 @@ class TypeChecker:
             string_method.return_type = self._resolve_name("string") or self.t_null
             mono.children["string"] = string_method
 
+        # for listview types: set reftype, synthesize methods
+        # Listview struct is stack-allocated; no owned data (borrowed from list).
+        if _is_listview_type(mono) and not is_partial:
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            elem_type = _listview_element_type(mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            if elem_type:
+                # synthesize .get method: function {i: u64} out <elem>
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["i"] = t_u64
+                get_type.return_type = elem_type
+                get_type.return_ownership = ZParamOwnership.BORROW
+                mono.children["get"] = get_type
+
         # for list types: set reftype, synthesize methods
         # List struct is stack-allocated; only the data buffer is on the heap.
         if _is_list_type(mono) and not is_partial:
@@ -3665,6 +3691,20 @@ class TypeChecker:
                 pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
                 pop_type.return_type = elem_type
                 mono.children["pop"] = pop_type
+                # synthesize .toview method: function {:this.lock} out (listview of: <elem>)
+                # Get or create the monomorphized listview type
+                listview_template = self._resolve_name("listview")
+                if listview_template:
+                    lv_defn = self._find_generic_defn(listview_template)
+                    if lv_defn:
+                        listview_mono = self._monomorphize(
+                            listview_template, {"of": elem_type}, lv_defn
+                        )
+                        toview_type = _make_type(
+                            f"{mangled}.toview", ZTypeType.FUNCTION
+                        )
+                        toview_type.return_type = listview_mono
+                        mono.children["toview"] = toview_type
 
         # for map types: set reftype, synthesize methods
         # Maps remain heap-allocated for now.

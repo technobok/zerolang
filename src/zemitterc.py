@@ -30,6 +30,8 @@ from ztypeutil import (
     str_capacity as _str_capacity,
     is_list_type as _is_list_type,
     list_element_type as _list_element_type,
+    is_listview_type as _is_listview_type,
+    listview_element_type as _listview_element_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -1941,6 +1943,9 @@ class CEmitter:
         if _is_list_type(mono_type):
             self._emit_mono_list(mono_type)
             return
+        if _is_listview_type(mono_type):
+            self._emit_mono_listview(mono_type)
+            return
         if _is_map_type(mono_type):
             self._emit_mono_map(mono_type)
             return
@@ -2523,6 +2528,53 @@ class CEmitter:
         zrt.emit_empty_check(lines, "list pop: empty list")
         lines.append("    _this->length--;\n")
         lines.append("    return _this->data[_this->length];\n")
+        lines.append("}\n\n")
+
+        # toview — zero-cost cast from list to listview (same first two fields)
+        toview_child = mono_type.children.get("toview")
+        if toview_child and toview_child.return_type:
+            lv_type = toview_child.return_type
+            lv_name = lv_type.name
+            lv_ctype = f"z_{lv_name}_t"
+            lines.append(f"static {lv_ctype} z_{name}_toview({ctype}* _this);\n")
+            lines.append(f"static {lv_ctype} z_{name}_toview({ctype}* _this) {{\n")
+            lines.append(f"    return *({lv_ctype}*)_this;\n")
+            lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_listview(self, mono_type: ZType) -> None:
+        """Emit a monomorphized listview type (view into a list).
+
+        Listview has the same first two fields as list ({length, data*})
+        for zero-cost casting. No destructor — listview doesn't own data.
+        """
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        self.needs_stdio = True
+        name = mono_type.name
+        ctype = f"z_{name}_t"
+        elem_type = _listview_element_type(mono_type)
+        if elem_type is None:
+            return
+        elem_ctype = _ctype(elem_type)
+        lines: List[str] = []
+
+        # struct definition — matches first two fields of z_list_T_t
+        lines.append("typedef struct {\n")
+        lines.append("    uint64_t length;\n")
+        lines.append(f"    {elem_ctype}* data;\n")
+        lines.append(f"}} {ctype};\n\n")
+
+        # get — bounds-checked element access
+        lines.append(
+            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx);\n"
+        )
+        lines.append(
+            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx) {{\n"
+        )
+        self._emit_bounds_check(lines, "_idx", "_this->length", "listview get")
+        lines.append("    return _this->data[_idx];\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -3949,6 +4001,9 @@ class CEmitter:
                         arg_t = self._get_operation_type(arg.valtype)
                         code += self._emit_take_invalidation(take_var, arg_t, indent)
                 return code
+            if dp_parent_type and _is_listview_type(dp_parent_type):
+                val = self._emit_call_value(call)
+                return f"{indent}{val};\n"
             if dp_parent_type and _is_map_type(dp_parent_type):
                 val = self._emit_call_value(call)
                 code = f"{indent}{val};\n"
@@ -4858,6 +4913,26 @@ class CEmitter:
                     return f"z_{list_type_name}_set({parent_val}, {idx_val}, {val_val})"
                 if method_name == "pop":
                     return f"z_{list_type_name}_pop({parent_val})"
+                if method_name == "toview":
+                    return f"z_{list_type_name}_toview({parent_val})"
+
+        # listview method calls: .get
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and _is_listview_type(dp_parent_type):
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                parent_path = cast(zast.DottedPath, call.callable).parent
+                if not self._is_class_pointer_path(
+                    parent_path
+                ) and not parent_val.startswith("&"):
+                    parent_val = f"&{parent_val}"
+                lv_type_name = dp_parent_type.name
+                if method_name == "get" and call.arguments:
+                    idx_val = self._emit_operation_value(call.arguments[0].valtype)
+                    return f"z_{lv_type_name}_get({parent_val}, {idx_val})"
 
         # map method calls: .set, .get, .delete, .has
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -5343,6 +5418,11 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"{parent}{acc}capacity"
+        # listview: .length field access
+        if parent_type_dp and _is_listview_type(parent_type_dp) and child == "length":
+            parent = self._emit_path_value(path.parent)
+            acc = "->" if self._is_class_pointer_path(path.parent) else "."
+            return f"{parent}{acc}length"
         # list: .pop as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
             parent = self._emit_path_value(path.parent)
@@ -5351,6 +5431,14 @@ class CEmitter:
             ):
                 parent = f"&{parent}"
             return f"z_{parent_type_dp.name}_pop({parent})"
+        # list: .toview as dotted path (zero-arg method call)
+        if parent_type_dp and _is_list_type(parent_type_dp) and child == "toview":
+            parent = self._emit_path_value(path.parent)
+            if not self._is_class_pointer_path(path.parent) and not parent.startswith(
+                "&"
+            ):
+                parent = f"&{parent}"
+            return f"z_{parent_type_dp.name}_toview({parent})"
         # map: .length field access
         if parent_type_dp and _is_map_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)

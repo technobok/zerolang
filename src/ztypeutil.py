@@ -74,6 +74,22 @@ def list_element_type(ztype: ZType) -> Optional[ZType]:
     return ztype.generic_args.get("of")
 
 
+def is_listview_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized listview type."""
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "listview"
+    )
+
+
+def listview_element_type(ztype: ZType) -> Optional[ZType]:
+    """Get the element type of a listview type."""
+    return ztype.generic_args.get("of")
+
+
 def is_map_type(ztype: Optional[ZType]) -> bool:
     """Check if a type is a monomorphized map type."""
     if not ztype:
