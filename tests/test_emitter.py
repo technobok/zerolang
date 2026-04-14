@@ -1241,21 +1241,22 @@ class TestEmitterClasses:
             "myclass: class { x: i64 }\n"
             'main: function is { c: myclass x: 5\n print "\\{c.x}" }'
         )
-        assert "c->x" in csource
+        assert "c.x" in csource
 
     def test_class_scope_cleanup(self):
         """Class variables destroyed at function exit."""
         csource = emit_source(
             "myclass: class { x: 0 }\nmain: function is { c: myclass }"
         )
-        assert "z_myclass_destroy(c);" in csource
+        # valtype-only class: no destructor needed
+        assert "z_myclass_destroy" not in csource
 
     def test_class_take_nullifies(self):
         """After .take, source variable should be nullified."""
         csource = emit_source(
             "myclass: class { x: 0 }\nmain: function is { c: myclass\n d: c.take }"
         )
-        assert "= NULL;" in csource
+        assert "= (z_myclass_t){0};" in csource
 
     def test_class_method_uses_pointer(self):
         """Class methods should take pointer parameter."""
@@ -1278,7 +1279,7 @@ class TestEmitterClasses:
             "  a swap b\n"
             "}"
         )
-        assert "z_myclass_t* _tmp" in csource
+        assert "z_myclass_t _tmp" in csource
 
 
 class TestEmitterClassIntegration:
@@ -1467,7 +1468,9 @@ class TestEmitterClassDestructors:
             "outer: class { child: inner }\n"
             "main: function is { o: outer child: inner }"
         )
-        assert "z_inner_destroy(p->child);" in csource
+        # inner is valtype-only so no destructor; outer has no heap fields either
+        assert "z_inner_destroy" not in csource
+        assert "z_outer_destroy" not in csource
 
     def test_class_destructor_with_union_field(self):
         """Class with union field: destructor calls union destroy."""
@@ -1479,27 +1482,19 @@ class TestEmitterClassDestructors:
         assert "z_myunion_destroy(p->payload);" in csource
 
     def test_class_destructor_valtype_only(self):
-        """Class with only valtype fields: just NULL check + free."""
+        """Class with only valtype fields: no destructor emitted."""
         csource = emit_source(
             "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
         )
-        assert "z_myclass_destroy" in csource
-        # destructor should NOT contain z_string_free or z_*_destroy for fields
-        # find the destructor body
-        idx = csource.index("z_myclass_destroy(z_myclass_t* p)")
-        body = csource[idx : csource.index("}\n", idx) + 2]
-        assert "z_string_free" not in body
-        assert "z_" not in body.replace("z_myclass_destroy", "").replace(
-            "z_myclass_t", ""
-        )
+        assert "z_myclass_destroy" not in csource
 
     def test_scope_exit_calls_destructor(self):
         """Scope-exit cleanup calls z_{name}_destroy."""
         csource = emit_source(
             'myclass: class { name: string }\nmain: function is { c: myclass name: "" }'
         )
-        # should call destructor, not bare free
-        assert "z_myclass_destroy(c);" in csource
+        # should call destructor with address-of, not bare free
+        assert "z_myclass_destroy(&c);" in csource
         assert "if (c) free(c);" not in csource
 
     def test_reassignment_calls_destructor(self):
@@ -1511,7 +1506,8 @@ class TestEmitterClassDestructors:
             "  c = myclass x: 2\n"
             "}"
         )
-        assert "z_myclass_destroy(c);" in csource
+        # valtype-only class: no destructor needed
+        assert "z_myclass_destroy" not in csource
 
     def test_with_block_calls_destructor(self):
         """With-block scope exit calls destructor."""
@@ -1519,7 +1515,8 @@ class TestEmitterClassDestructors:
             "myclass: class { x: i64 }\n"
             'main: function is { with c: myclass x: 1 do print "ok" }'
         )
-        assert "z_myclass_destroy(c);" in csource
+        # valtype-only class: no destructor needed
+        assert "z_myclass_destroy" not in csource
 
     def test_union_class_subtype_destructor(self):
         """Union with class subtype calls class destructor in union destructor."""
@@ -1528,7 +1525,8 @@ class TestEmitterClassDestructors:
             "myunion: union { a: myclass\n b: null }\n"
             "main: function is { u: myunion.b }"
         )
-        assert "z_myclass_destroy((z_myclass_t*)u->data);" in csource
+        # valtype-only class: no class destructor, union just frees data
+        assert "free(u->data);" in csource
 
 
 class TestEmitterClassDestructorIntegration:
@@ -1945,7 +1943,7 @@ class TestStandaloneTake:
     """Tests for standalone .take (as expression statement, not in assignment)."""
 
     def test_standalone_take_class(self):
-        """x.take as statement on class → destroy + NULL."""
+        """x.take as statement on class → zero-init."""
         csource = emit_source(
             "myclass: class { x: i64 }\n"
             "main: function is {\n"
@@ -1953,8 +1951,8 @@ class TestStandaloneTake:
             "  c.take\n"
             "}"
         )
-        assert "z_myclass_destroy(c);" in csource
-        assert "c = NULL;" in csource
+        # valtype-only class: no destructor, just zero-init
+        assert "c = (z_myclass_t){0};" in csource
 
     def test_standalone_take_union(self):
         """x.take as statement on union → destroy + NULL."""
@@ -1993,7 +1991,7 @@ class TestStandaloneRelease:
     """Tests for standalone .release (early scope-exit for a variable)."""
 
     def test_release_class(self):
-        """x.release on class → destroy + NULL."""
+        """x.release on class → zero-init."""
         csource = emit_source(
             "myclass: class { x: i64 }\n"
             "main: function is {\n"
@@ -2001,8 +1999,8 @@ class TestStandaloneRelease:
             "  c.release\n"
             "}"
         )
-        assert "z_myclass_destroy(c);" in csource
-        assert "c = NULL;" in csource
+        # valtype-only class: no destructor, just zero-init
+        assert "c = (z_myclass_t){0};" in csource
 
     def test_release_string(self):
         """s.release on string → free + NULL."""
@@ -2045,21 +2043,21 @@ class TestImplicitTake:
             "  consume c\n"
             "}"
         )
-        # after the call, c should be nullified
+        # after the call, c should be zero-initialized
         lines = csource.split("\n")
         found_call = False
         found_null = False
         for line in lines:
-            if "z_consume(c)" in line:
+            if "z_consume(" in line and "c" in line and "&c" not in line:
                 found_call = True
-            elif found_call and "c = NULL;" in line:
+            elif found_call and "c = (z_myclass_t){0};" in line:
                 found_null = True
                 break
-        assert found_call, "Expected call to z_consume"
-        assert found_null, "Expected c = NULL after implicit take call"
+        assert found_call, "Expected call to z_consume(c) (by value)"
+        assert found_null, "Expected c = (z_myclass_t){0} after implicit take call"
 
     def test_implicit_take_no_double_null(self):
-        """Explicit .take with implicit take param → only one NULL."""
+        """Explicit .take with implicit take param → only one zero-init."""
         csource = emit_source(
             "myclass: class { x: i64 }\n"
             'consume: function {p: myclass.take} is { print "consumed" }\n'
@@ -2068,8 +2066,8 @@ class TestImplicitTake:
             "  consume c.take\n"
             "}"
         )
-        # should have exactly one c = NULL (from explicit .take, not doubled)
-        assert csource.count("c = NULL;") == 1
+        # should have exactly one zero-init (from explicit .take, not doubled)
+        assert csource.count("c = (z_myclass_t){0};") == 1
 
     def test_implicit_take_asan(self):
         """Implicit take with class → no double-free."""
@@ -2118,9 +2116,9 @@ class TestEmitterConstructors:
         )
         assert "z_counter_meta_create" in csource
         assert "z_counter_create" in csource
-        assert "z_counter_t* _this" in csource
-        assert "malloc(sizeof(z_counter_t))" in csource
-        assert "_this->value = value;" in csource
+        assert "z_counter_t _this" in csource
+        assert "malloc" not in csource
+        assert "_this.value = value;" in csource
 
     def test_record_meta_create_emitted(self):
         """Record should emit both meta.create and create functions."""
@@ -2181,7 +2179,7 @@ class TestEmitterConstructors:
             "}\n"
             "main: function is { c: myclass }"
         )
-        assert "z_myclass_t* z_myclass_make" in csource
+        assert "z_myclass_t z_myclass_make" in csource
 
 
 class TestEmitterConstructorIntegration:

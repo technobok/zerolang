@@ -189,9 +189,8 @@ class TestFinding3DestructorMetadata:
                 t = ztype
                 break
         assert t is not None, "box type not found in resolved"
-        assert t.needs_destructor is True
-        assert t.destructor_name == "z_box_destroy"
-        assert t.is_heap_allocated is True
+        assert t.needs_destructor is False
+        assert t.is_heap_allocated is False
 
     def test_union_destructor(self):
         program = parse_and_check(
@@ -668,12 +667,12 @@ class TestFinding11ScopeState:
         assert emitter._scope_stack[0].cleanup_vars == []
 
     def test_class_cleanup_emitted(self):
-        """Class variables should get destroy calls at scope exit."""
+        """Class variables with only valtype fields need no destroy at scope exit."""
         csource, emitter = emit_with_emitter(
             "box: class { value: i64 }\n"
             'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
         )
-        assert "z_box_destroy" in csource
+        assert "z_box_destroy" not in csource
 
     def test_string_cleanup_emitted(self):
         """String variables should get z_string_free at scope exit."""
@@ -980,9 +979,8 @@ class TestSqlDump:
             "FROM types WHERE name = 'box'"
         ).fetchone()
         assert row is not None, "box type not in types table"
-        assert row[0] == 1  # needs_destructor
-        assert row[1] == "z_box_destroy"
-        assert row[2] == 1  # is_heap_allocated
+        assert row[0] == 0  # needs_destructor (valtype-only class)
+        assert row[2] == 0  # is_heap_allocated
         conn.close()
 
     def test_cli_dump_sql_flag(self):

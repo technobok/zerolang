@@ -145,7 +145,9 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return "z_stringview_t"
     # use pre-computed cname when available
     if ztype.cname:
-        if ztype.typetype in (ZTypeType.CLASS, ZTypeType.UNION, ZTypeType.PROTOCOL):
+        if ztype.is_heap_allocated:
+            return f"{ztype.cname}*"
+        if ztype.typetype in (ZTypeType.UNION, ZTypeType.PROTOCOL):
             return f"{ztype.cname}*"
         if ztype.typetype == ZTypeType.FUNCTION:
             return f"{ztype.cname}_ft"
@@ -154,7 +156,9 @@ def _ctype(ztype: Optional[ZType]) -> str:
     if ztype.typetype == ZTypeType.RECORD and name not in TYPEMAP:
         return f"z_{name}_t"
     if ztype.typetype == ZTypeType.CLASS:
-        return f"z_{name}_t*"
+        if ztype.is_heap_allocated:
+            return f"z_{name}_t*"
+        return f"z_{name}_t"
     if ztype.typetype == ZTypeType.UNION:
         return f"z_{name}_t*"
     if ztype.typetype == ZTypeType.VARIANT:
@@ -441,8 +445,12 @@ class CEmitter:
         """Emit cleanup code for a single field/variable given its ZType.
 
         Returns a C statement string (with newline) or empty string if no cleanup needed.
+        For stack-allocated types (non-heap), prepends & to pass address to destructor.
         """
         if ftype.needs_destructor and ftype.destructor_name:
+            # Stack-allocated types need & to get a pointer for the destructor
+            if not ftype.is_heap_allocated:
+                return f"{indent}{ftype.destructor_name}(&{access});\n"
             return f"{indent}{ftype.destructor_name}({access});\n"
         return ""
 
@@ -1039,6 +1047,7 @@ class CEmitter:
         # forward declarations for methods called by wrappers
         all_methods = dict(impl_defn.as_functions)
         all_methods.update(impl_defn.functions)
+        impl_type = self._resolved_type(impl_name)
         for sname in proto.specs:
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
@@ -1046,6 +1055,20 @@ class CEmitter:
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
                     ptype_str = _ctype(ppath.type)
+                    # 'this' parameter: add * for class/born-borrowed methods
+                    if (
+                        impl_type
+                        and ppath.type is impl_type
+                        and not ptype_str.endswith("*")
+                        and (
+                            impl_type.typetype == ZTypeType.CLASS
+                            or (
+                                impl_type.typetype == ZTypeType.RECORD
+                                and getattr(impl_type, "is_born_borrowed", False)
+                            )
+                        )
+                    ):
+                        ptype_str = f"{ptype_str}*"
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
                 method_cname = _mangle_func(f"{impl_name}.{sname}")
@@ -1683,15 +1706,16 @@ class CEmitter:
             lines.append(f"    {decl};\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # emit destructor
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
-        lines.append("    if (!p) return;\n")
-        for fname, fpath in cls.items.items():
-            if fpath.type:
-                lines.append(self._emit_field_cleanup(f"p->{fname}", fpath.type))
-        lines.append("    free(p);\n")
-        lines.append("}\n\n")
+        # emit destructor (only if class has fields needing cleanup)
+        ztype = self._resolved_type(name)
+        if ztype and ztype.needs_field_cleanup:
+            lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
+            lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
+            lines.append("    if (!p) return;\n")
+            for fname, fpath in cls.items.items():
+                if fpath.type:
+                    lines.append(self._emit_field_cleanup(f"p->{fname}", fpath.type))
+            lines.append("}\n\n")
 
         # emit meta.create constructor
         self._emit_meta_create(name, cls, lines)
@@ -2827,14 +2851,14 @@ class CEmitter:
             lines.append(f"    {ct} {fname};\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # destructor
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
-        lines.append("    if (!p) return;\n")
-        for fname, ftype in field_items:
-            lines.append(self._emit_field_cleanup(f"p->{fname}", ftype))
-        lines.append("    free(p);\n")
-        lines.append("}\n\n")
+        # destructor (only if class has fields needing cleanup)
+        if mono_type.needs_field_cleanup:
+            lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
+            lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
+            lines.append("    if (!p) return;\n")
+            for fname, ftype in field_items:
+                lines.append(self._emit_field_cleanup(f"p->{fname}", ftype))
+            lines.append("}\n\n")
 
         # meta.create constructor
         self._emit_mono_create(name, mono_type, field_items, lines)
@@ -3101,23 +3125,23 @@ class CEmitter:
 
         ret_ctype = self._return_ctype(func)
 
-        # born-borrowed record methods pass the `this` receiver by pointer so
-        # mutations via `it.field = ...` persist across calls (needed for
-        # stack-allocated iterators).
+        # Class and born-borrowed record methods pass the `this` receiver by
+        # pointer so mutations via `it.field = ...` persist across calls.
         record_type = self._resolved_type(record_name) if record_name else None
         born_borrowed_record = bool(
             record_type
             and record_type.typetype == ZTypeType.RECORD
             and getattr(record_type, "is_born_borrowed", False)
         )
+        is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
 
         params: List[str] = []
         pointer_params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(ppath.type)
-            # born-borrowed record this-receiver: pass by pointer
+            # class/born-borrowed record this-receiver: pass by pointer
             if (
-                born_borrowed_record
+                (is_class_method or born_borrowed_record)
                 and ppath.type is record_type
                 and not ptype_str.endswith("*")
             ):
@@ -3138,16 +3162,14 @@ class CEmitter:
         prev_enclosing = self._current_enclosing_type_name
         if record_name:
             self._current_enclosing_type_name = record_name
-        # track parameters that are class pointers
-        if self._typetype_of(record_name) == ZTypeType.CLASS:
-            for pname, ppath in func.parameters.items():
-                ptype_str = _ctype(ppath.type)
-                if ptype_str.endswith("*") and ptype_str.startswith("z_"):
-                    self._scope.class_params.add(_mangle_var(pname))
-        # born-borrowed record this-receiver is a pointer too — field access
-        # should use `->` like a class pointer.
+        # track all pointer parameters for -> field access dispatch
         for pp in pointer_params:
             self._scope.class_params.add(pp)
+        # also track other parameters that are already pointer types (unions, etc.)
+        for pname, ppath in func.parameters.items():
+            ptype_str = _ctype(ppath.type)
+            if ptype_str.endswith("*") and ptype_str.startswith("z_"):
+                self._scope.class_params.add(_mangle_var(pname))
 
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
@@ -3317,10 +3339,10 @@ class CEmitter:
         ):
             ctype = f"z_{cast(zast.AtomId, inner).name}_t"
         result = f"{indent}{ctype} {cname} = {val};\n"
-        # nullify source on .take for class pointers
+        # invalidate source on .take for reftypes
         take_var = self._get_take_var_from_expr(assign.value)
         if take_var:
-            result += f"{indent}{take_var} = NULL;\n"
+            result += self._emit_take_invalidation(take_var, assign.value.type, indent)
         return result
 
     def _emit_reassignment(self, reassign: zast.Reassignment) -> str:
@@ -3397,13 +3419,12 @@ class CEmitter:
             var = self._emit_path_value(dp.parent)
             var_type = dp.type
             result = ""
-            if var_type and var_type.subtype == ZSubType.STRING:
-                result += f"{indent}z_string_free({var});\n"
-            elif var_type and var_type.typetype == ZTypeType.CLASS:
-                result += f"{indent}z_{var_type.name}_destroy({var});\n"
-            elif var_type and var_type.typetype == ZTypeType.UNION:
-                result += f"{indent}z_{var_type.name}_destroy({var});\n"
-            result += f"{indent}{var} = NULL;\n"
+            if var_type and var_type.needs_destructor and var_type.destructor_name:
+                if var_type.is_heap_allocated:
+                    result += f"{indent}{var_type.destructor_name}({var});\n"
+                else:
+                    result += f"{indent}{var_type.destructor_name}(&{var});\n"
+            result += self._emit_take_invalidation(var, var_type, indent)
             return result
         if (
             inner.nodetype == zast.NodeType.DOTTEDPATH
@@ -3413,19 +3434,18 @@ class CEmitter:
             var = self._emit_path_value(dp.parent)
             var_type = dp.type
             result = ""
-            # owned reftypes: call destructor + nullify
-            if var_type and var_type.subtype == ZSubType.STRING:
-                result += f"{indent}z_string_free({var});\n"
-            elif var_type and var_type.typetype == ZTypeType.CLASS:
-                result += f"{indent}z_{var_type.name}_destroy({var});\n"
-            elif var_type and var_type.typetype == ZTypeType.UNION:
-                result += f"{indent}z_{var_type.name}_destroy({var});\n"
-            # nullify pointer so scope-exit destroy is a no-op
+            # owned reftypes: call destructor
+            if var_type and var_type.needs_destructor and var_type.destructor_name:
+                if var_type.is_heap_allocated:
+                    result += f"{indent}{var_type.destructor_name}({var});\n"
+                else:
+                    result += f"{indent}{var_type.destructor_name}(&{var});\n"
+            # invalidate so scope-exit destroy is a no-op
             if var_type and (
                 var_type.subtype == ZSubType.STRING
                 or var_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
             ):
-                result += f"{indent}{var} = NULL;\n"
+                result += self._emit_take_invalidation(var, var_type, indent)
             # borrowed variables and valtypes: no C code needed
             return result
         if inner.nodetype in (
@@ -3502,6 +3522,15 @@ class CEmitter:
         label = self._proto_conformance.get((impl_name, proto_name), "")
         owned_create = f"z_{impl_name}_{label}_create_owned"
 
+        # stack-allocated class: pass address to protocol create
+        if (
+            arg_type
+            and arg_type.typetype == ZTypeType.CLASS
+            and not arg_type.is_heap_allocated
+            and not arg_val.startswith("&")
+        ):
+            arg_val = f"&{arg_val}"
+
         # allocate temp and track as protocol var
         tmp = self._temp_name("c")
         indent = self._indent()
@@ -3511,11 +3540,12 @@ class CEmitter:
         self._temp.frees.append(tmp)
         self._temp.proto_set[tmp] = proto_name
 
-        # handle .take nullification for class (reftype) arguments only
+        # handle .take invalidation for class (reftype) arguments
         if arg_type and arg_type.typetype == ZTypeType.CLASS:
             take_var = self._get_take_var(from_arg.valtype)
             if take_var:
-                self._temp.decls.append(f"{indent}{take_var} = NULL;\n")
+                ct = _ctype(arg_type)
+                self._temp.decls.append(f"{indent}{take_var} = ({ct}){{0}};\n")
 
         return tmp
 
@@ -3548,8 +3578,11 @@ class CEmitter:
         label = self._proto_conformance.get((impl_name, proto_name), "")
         create_name = f"z_{impl_name}_{label}_create"
 
-        # for value types (records): pass address; for reference types: pass directly
-        if arg_type and arg_type.is_valtype:
+        # pass address for stack-allocated types (records, stack classes)
+        if arg_type and (
+            arg_type.is_valtype
+            or (arg_type.typetype == ZTypeType.CLASS and not arg_type.is_heap_allocated)
+        ):
             arg_expr = f"&{arg_val}"
         else:
             arg_expr = arg_val
@@ -3652,15 +3685,19 @@ class CEmitter:
         type_name = call.callable_type_name
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
-        # born-borrowed record methods expect a pointer receiver so mutations
-        # via `it.field = ...` persist. Wrap the variable with & when the
-        # receiver's type is a born-borrowed record and the receiver is a
-        # plain atom (not already a pointer).
+        # Class and born-borrowed record methods expect a pointer receiver.
+        # Wrap the variable with & when it's a stack-allocated type and the
+        # receiver is a plain atom (not already a pointer).
         rec_t = self._resolved_type(type_name) if type_name is not None else None
         if (
             rec_t is not None
-            and rec_t.typetype == ZTypeType.RECORD
-            and getattr(rec_t, "is_born_borrowed", False)
+            and (
+                rec_t.typetype == ZTypeType.CLASS
+                or (
+                    rec_t.typetype == ZTypeType.RECORD
+                    and getattr(rec_t, "is_born_borrowed", False)
+                )
+            )
             and not receiver.startswith("&")
         ):
             receiver = f"&{receiver}"
@@ -3774,7 +3811,8 @@ class CEmitter:
                 for arg in call.arguments:
                     take_var = self._get_take_var(arg.valtype)
                     if take_var:
-                        code += f"{indent}{take_var} = NULL;\n"
+                        arg_t = self._get_operation_type(arg.valtype)
+                        code += self._emit_take_invalidation(take_var, arg_t, indent)
                 return code
             if dp_parent_type and _is_map_type(dp_parent_type):
                 val = self._emit_call_value(call)
@@ -3782,7 +3820,8 @@ class CEmitter:
                 for arg in call.arguments:
                     take_var = self._get_take_var(arg.valtype)
                     if take_var:
-                        code += f"{indent}{take_var} = NULL;\n"
+                        arg_t = self._get_operation_type(arg.valtype)
+                        code += self._emit_take_invalidation(take_var, arg_t, indent)
                 return code
 
         # string class mutating methods: .append, .reserve, .shrink
@@ -3815,13 +3854,14 @@ class CEmitter:
         cname = self._emit_callable_expr(call)
         code = f"{indent}{cname}({args});\n"
 
-        # if call takes a .take argument, nullify it after the call
+        # if call takes a .take argument, invalidate it after the call
         for arg in call.arguments:
             take_var = self._get_take_var(arg.valtype)
             if take_var:
-                code += f"{indent}{take_var} = NULL;\n"
+                arg_t = self._get_operation_type(arg.valtype)
+                code += self._emit_take_invalidation(take_var, arg_t, indent)
 
-        # implicit take: nullify args passed to .take parameters
+        # implicit take: invalidate args passed to .take parameters
         ftype = call.callable.type
         emitted_vals = getattr(self, "_last_emitted_arg_vals", [])
         if ftype and ftype.param_ownership:
@@ -3830,12 +3870,15 @@ class CEmitter:
                 if i < len(params):
                     pname, _ = params[i]
                     if ftype.param_ownership.get(pname) == ZParamOwnership.TAKE:
-                        # skip if already nullified by explicit .take
+                        # skip if already invalidated by explicit .take
                         take_var = self._get_take_var(arg.valtype)
                         if not take_var:
                             root = self._get_implicit_take_var(arg.valtype)
                             if root:
-                                code += f"{indent}{root} = NULL;\n"
+                                arg_t = self._get_operation_type(arg.valtype)
+                                code += self._emit_take_invalidation(
+                                    root, arg_t, indent
+                                )
                             elif (
                                 i < len(emitted_vals)
                                 and emitted_vals[i] in self._temp.string_set
@@ -3869,9 +3912,6 @@ class CEmitter:
                     fa_name, call.arguments, skip_first=1
                 )
                 enclosing_t = self._resolved_type(fa_name)
-                is_class = (
-                    enclosing_t is not None and enclosing_t.typetype == ZTypeType.CLASS
-                )
                 # constructor takes ownership of string temps passed as args
                 for st in list(self._temp.frees):
                     if st in self._temp.string_set and st in args_str:
@@ -3879,15 +3919,13 @@ class CEmitter:
                 result_expr = f"z_{fa_name}_meta_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
-                if is_class:
-                    self._temp.decls.append(
-                        f"{indent}{ctype}* {tmp} = {result_expr};\n"
-                    )
-                else:
-                    self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
+                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
                     if tv:
-                        self._temp.decls.append(f"{indent}{tv} = NULL;\n")
+                        ft = enclosing_t.children.get(fname) if enclosing_t else None
+                        self._temp.decls.append(
+                            self._emit_take_invalidation(tv, ft, indent)
+                        )
                 val = tmp
             elif (
                 first_arg.nodetype == NodeType.ATOMID
@@ -3895,7 +3933,7 @@ class CEmitter:
                 and first_arg.type.typetype == ZTypeType.CLASS
                 and len(call.arguments) > 1
             ):
-                # emit as create call (heap)
+                # emit as create call
                 self.needs_stdlib = True
                 fa_name = cast(zast.AtomId, first_arg).name
                 args_str, take_vars = self._build_meta_create_args(
@@ -3908,10 +3946,14 @@ class CEmitter:
                 result_expr = f"z_{fa_name}_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
-                self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result_expr};\n")
+                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
                     if tv:
-                        self._temp.decls.append(f"{indent}{tv} = NULL;\n")
+                        cls_t = self._resolved_type(fa_name)
+                        ft = cls_t.children.get(fname) if cls_t else None
+                        self._temp.decls.append(
+                            self._emit_take_invalidation(tv, ft, indent)
+                        )
                 val = tmp
             elif (
                 first_arg.nodetype == NodeType.ATOMID
@@ -4080,6 +4122,35 @@ class CEmitter:
                 # string-returning calls are already temped by _alloc_temp
                 if ctype != "z_string_t*":
                     val = self._alloc_arg_temp(ctype, val)
+            # stack-allocated class/born-borrowed record passed as 'this': add &
+            # The C function expects a pointer for 'this' parameters, but the
+            # argument is a stack-allocated struct. Detect 'this' by checking
+            # if the function is a method and the parameter type matches the
+            # enclosing class/record type.
+            arg_type = self._get_operation_type(arg.valtype)
+            if (
+                arg_type
+                and not arg_type.is_heap_allocated
+                and (
+                    arg_type.typetype == ZTypeType.CLASS
+                    or (
+                        arg_type.typetype == ZTypeType.RECORD
+                        and getattr(arg_type, "is_born_borrowed", False)
+                    )
+                )
+                and not val.startswith("&")
+                and ftype
+                and ctype_idx < len(list(ftype.children.items()))
+            ):
+                param_name = list(ftype.children.keys())[ctype_idx]
+                param_type = ftype.children[param_name]
+                # 'this' receiver: param type matches enclosing class/record
+                # and the function is a method (dotted name origin)
+                is_this_param = param_name == "this" or (
+                    param_type is arg_type and ftype.name and "." in ftype.name
+                )
+                if is_this_param:
+                    val = f"&{val}"
             parts.append(val)
             self._last_emitted_arg_vals.append(val)
             ctype_idx += 1
@@ -4278,9 +4349,10 @@ class CEmitter:
                     ctype = f"z_{call.type.name}_t"
                     tmp = self._temp_name("c")
                     indent = self._indent()
-                    self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-                    self._temp.frees.append(tmp)
-                    self._temp.class_set[tmp] = call.type.name
+                    self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
+                    if call.type.needs_destructor:
+                        self._temp.frees.append(tmp)
+                        self._temp.class_set[tmp] = call.type.name
                     return tmp
                 if call.type.typetype == ZTypeType.UNION:
                     ctype = f"z_{call.type.name}_t"
@@ -4696,13 +4768,18 @@ class CEmitter:
             result = f"z_{cls_type.name}_create({args_str})"
             tmp = self._temp_name("c")
             indent = self._indent()
-            self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-            # handle .take nullification
+            self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
+            # handle .take invalidation
             for fname, tv in take_vars.items():
                 if tv:
-                    self._temp.decls.append(f"{indent}{tv} = NULL;\n")
-            self._temp.frees.append(tmp)
-            self._temp.class_set[tmp] = cls_type.name
+                    # get field type for proper invalidation
+                    ft = cls_type.children.get(fname)
+                    self._temp.decls.append(
+                        self._emit_take_invalidation(tv, ft, indent)
+                    )
+            if cls_type.needs_destructor:
+                self._temp.frees.append(tmp)
+                self._temp.class_set[tmp] = cls_type.name
             return tmp
 
         args = self._emit_call_args(call)
@@ -4717,6 +4794,23 @@ class CEmitter:
                     receiver = self._emit_path_value(
                         cast(zast.DottedPath, call.callable).parent
                     )
+                    # stack-allocated class/born-borrowed record: wrap with &
+                    parent_path = cast(zast.DottedPath, call.callable).parent
+                    parent_type = parent_path.type
+                    if (
+                        parent_type
+                        and not parent_type.is_heap_allocated
+                        and (
+                            parent_type.typetype == ZTypeType.CLASS
+                            or (
+                                parent_type.typetype == ZTypeType.RECORD
+                                and getattr(parent_type, "is_born_borrowed", False)
+                            )
+                        )
+                        and not receiver.startswith("&")
+                        and not self._is_class_pointer_path(parent_path)
+                    ):
+                        receiver = f"&{receiver}"
                     args = f"{receiver}, {args}" if args else receiver
 
         cname = self._emit_callable_expr(call)
@@ -4730,9 +4824,10 @@ class CEmitter:
                 ctype = f"z_{call.type.name}_t"
                 tmp = self._temp_name("c")
                 indent = self._indent()
-                self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-                self._temp.frees.append(tmp)
-                self._temp.class_set[tmp] = call.type.name
+                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
+                if call.type.needs_destructor:
+                    self._temp.frees.append(tmp)
+                    self._temp.class_set[tmp] = call.type.name
                 return tmp
             if call.type.typetype == ZTypeType.UNION:
                 ctype = f"z_{call.type.name}_t"
@@ -4861,10 +4956,11 @@ class CEmitter:
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(
-                f"{indent}{ctype}* {tmp} = z_{name}_create({zero_args});\n"
+                f"{indent}{ctype} {tmp} = z_{name}_create({zero_args});\n"
             )
-            self._temp.frees.append(tmp)
-            self._temp.class_set[tmp] = name
+            if resolved.needs_destructor:
+                self._temp.frees.append(tmp)
+                self._temp.class_set[tmp] = name
             return tmp
         return _mangle_var(name)
 
@@ -5167,40 +5263,51 @@ class CEmitter:
         return f"{parent}.{child}"
 
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
-        """Check if a path refers to a class/union/protocol pointer (for -> vs . dispatch)."""
-        # type annotation from type checker
+        """Check if a path refers to a pointer type (for -> vs . dispatch).
+
+        Returns True for heap-allocated types (union, protocol, string, box)
+        and for method 'this' parameters (tracked in class_params).
+        Stack-allocated class locals use '.' — only 'this' in methods uses '->'.
+        """
+        # type annotation from type checker — only heap-allocated types are pointers
         parent_type = path.type
         if parent_type and parent_type.typetype in (
-            ZTypeType.CLASS,
             ZTypeType.UNION,
             ZTypeType.PROTOCOL,
         ):
             return True
-        # local class/union/protocol variable tracked for cleanup
+        # heap-allocated types (string, box) are always pointers
+        if parent_type and parent_type.is_heap_allocated:
+            return True
+        # local heap-allocated variable tracked for cleanup
         if path.nodetype == NodeType.ATOMID:
             cname = _mangle_var(cast(zast.AtomId, path).name)
             for vname, vtype in self._scope.cleanup_vars:
                 if vname == cname and vtype.is_heap_allocated:
                     return True
-            # class method parameter (this/type resolves to class pointer)
-            # or born-borrowed record method receiver (pointer too)
-            scope_rec = self._resolved_type(self._scope.record_name)
-            if scope_rec is not None and (
-                scope_rec.typetype == ZTypeType.CLASS
-                or (
-                    scope_rec.typetype == ZTypeType.RECORD
-                    and getattr(scope_rec, "is_born_borrowed", False)
-                )
-            ):
-                if cname in self._scope.class_params:
-                    return True
+            # method 'this' parameter (class or born-borrowed record) is a pointer
+            if cname in self._scope.class_params:
+                return True
         return False
 
     def _emit_class_free(self, var: str, type_name: Optional[str]) -> str:
-        """Emit the right destroy call for a class variable."""
+        """Emit the right destroy call for a class variable (stack-allocated)."""
         if type_name:
-            return f"z_{type_name}_destroy({var});"
-        return f"if ({var}) free({var});"
+            return f"z_{type_name}_destroy(&{var});"
+        return ""
+
+    def _emit_take_invalidation(
+        self, var: str, ztype: Optional[ZType], indent: str
+    ) -> str:
+        """Emit invalidation code for a variable after .take.
+
+        For heap-allocated types (union, protocol, string): set to NULL.
+        For stack-allocated types (class): zero-initialize the struct.
+        """
+        if ztype and not ztype.is_heap_allocated and ztype.typetype == ZTypeType.CLASS:
+            ct = _ctype(ztype)
+            return f"{indent}{var} = ({ct}){{0}};\n"
+        return f"{indent}{var} = NULL;\n"
 
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
@@ -6076,12 +6183,18 @@ class CEmitter:
                 if callable_type:
                     obj_val = self._emit_operation_value(iop)
                     call_fn = _mangle_func(f"{callable_type}.call")
-                    # born-borrowed record iterators take a pointer receiver.
+                    # Class and born-borrowed record iterators take a pointer
+                    # receiver since 'this' is always a pointer.
                     rec_t = self._resolved_type(callable_type)
                     if (
                         rec_t is not None
-                        and rec_t.typetype == ZTypeType.RECORD
-                        and getattr(rec_t, "is_born_borrowed", False)
+                        and (
+                            rec_t.typetype == ZTypeType.CLASS
+                            or (
+                                rec_t.typetype == ZTypeType.RECORD
+                                and getattr(rec_t, "is_born_borrowed", False)
+                            )
+                        )
                         and not obj_val.startswith("&")
                     ):
                         obj_val = f"&{obj_val}"
