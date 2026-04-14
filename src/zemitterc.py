@@ -140,7 +140,7 @@ def _ctype(ztype: Optional[ZType]) -> str:
     if name in TYPEMAP:
         return TYPEMAP[name]
     if name == "string":
-        return "z_string_t*"
+        return "z_string_t"
     if name == "stringview":
         return "z_stringview_t"
     # use pre-computed cname when available
@@ -448,10 +448,10 @@ class CEmitter:
         return f"_{prefix}{nid}_{self._scope.temp_counter}"
 
     def _alloc_temp(self, expr: str) -> str:
-        """Allocate a temporary variable for a heap-allocated string expression."""
+        """Allocate a temporary variable for a stack-allocated string expression."""
         name = self._temp_name("t")
         indent = self._indent()
-        self._temp.decls.append(f"{indent}z_string_t* {name} = {expr};\n")
+        self._temp.decls.append(f"{indent}z_string_t {name} = {expr};\n")
         self._temp.frees.append(name)
         self._temp.string_set.add(name)
         return name
@@ -2323,18 +2323,17 @@ class CEmitter:
         lines.append("    return _this;\n")
         lines.append("}\n\n")
 
-        # .string method (str -> z_string_t*)
+        # .string method (str -> z_string_t)
         self.needs_stdlib = True
         string_name = f"z_{name}_string"
-        lines.append(f"static z_string_t* {string_name}({ctype} _this);\n")
-        lines.append(f"static z_string_t* {string_name}({ctype} _this) {{\n")
-        lines.append(
-            "    z_string_t* z = (z_string_t*)malloc(sizeof(z_string_t) + _this.len + 1);\n"
-        )
-        lines.append("    z->size = _this.len;\n")
-        lines.append("    z->capacity = _this.len;\n")
-        lines.append("    memcpy(z->data, _this.data, _this.len);\n")
-        lines.append("    z->data[_this.len] = '\\0';\n")
+        lines.append(f"static z_string_t {string_name}({ctype} _this);\n")
+        lines.append(f"static z_string_t {string_name}({ctype} _this) {{\n")
+        lines.append("    z_string_t z = {0};\n")
+        lines.append("    z.size = _this.len;\n")
+        lines.append("    z.capacity = _this.len + 1;\n")
+        lines.append("    z.data = (char*)malloc(z.capacity);\n")
+        lines.append("    memcpy(z.data, _this.data, _this.len);\n")
+        lines.append("    z.data[_this.len] = '\\0';\n")
         lines.append("    return z;\n")
         lines.append("}\n\n")
 
@@ -2518,8 +2517,8 @@ class CEmitter:
             return
         key_ctype = _ctype(key_type)
         val_ctype = _ctype(value_type)
-        key_is_string = key_ctype == "z_string_t*"
-        val_is_string = val_ctype == "z_string_t*"
+        key_is_string = key_ctype == "z_string_t"
+        val_is_string = val_ctype == "z_string_t"
         key_is_reftype = key_ctype.endswith("*")
         val_is_reftype = val_ctype.endswith("*")
         bucket_type = f"z_{name}_bucket_t"
@@ -2552,9 +2551,9 @@ class CEmitter:
         if key_is_string:
             # FNV-1a for strings
             lines.append("    uint64_t h = 14695981039346656037ULL;\n")
-            lines.append("    uint64_t len = _key->size;\n")
+            lines.append("    uint64_t len = _key.size;\n")
             lines.append("    for (uint64_t i = 0; i < len; i++) {\n")
-            lines.append("        h ^= (uint8_t)_key->data[i];\n")
+            lines.append("        h ^= (uint8_t)_key.data[i];\n")
             lines.append("        h *= 1099511628211ULL;\n")
             lines.append("    }\n")
             lines.append("    return h;\n")
@@ -2583,8 +2582,8 @@ class CEmitter:
         lines.append(f"static int {eq_fn}({key_ctype} _a, {key_ctype} _b) {{\n")
         if key_is_string:
             lines.append(
-                "    return _a->size == _b->size "
-                "&& memcmp(_a->data, _b->data, _a->size) == 0;\n"
+                "    return _a.size == _b.size "
+                "&& memcmp(_a.data, _b.data, _a.size) == 0;\n"
             )
         elif _is_str_type(key_type):
             lines.append(
@@ -2775,19 +2774,18 @@ class CEmitter:
                 lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
                 lines.append("    if (idx >= 0) {\n")
                 if val_is_string:
+                    lines.append("        z_string_t _copy = {0};\n")
                     lines.append(
-                        "        z_string_t* _copy = (z_string_t*)malloc(sizeof(z_string_t) + _this->buckets[idx].value->size + 1);\n"
+                        "        _copy.size = _this->buckets[idx].value.size;\n"
+                    )
+                    lines.append("        _copy.capacity = _copy.size + 1;\n")
+                    lines.append(
+                        "        _copy.data = (char*)malloc(_copy.capacity);\n"
                     )
                     lines.append(
-                        "        _copy->size = _this->buckets[idx].value->size;\n"
+                        "        memcpy(_copy.data, _this->buckets[idx].value.data, _copy.size);\n"
                     )
-                    lines.append(
-                        "        _copy->capacity = _this->buckets[idx].value->size;\n"
-                    )
-                    lines.append(
-                        "        memcpy(_copy->data, _this->buckets[idx].value->data, _this->buckets[idx].value->size);\n"
-                    )
-                    lines.append("        _copy->data[_copy->size] = '\\0';\n")
+                    lines.append("        _copy.data[_copy.size] = '\\0';\n")
                     lines.append("        return _copy;\n")
                 else:
                     lines.append("        return _this->buckets[idx].value;\n")
@@ -2837,16 +2835,17 @@ class CEmitter:
                 if val_is_reftype:
                     if val_is_string:
                         lines.append(
-                            "        z_string_t* _copy = (z_string_t*)malloc(sizeof(z_string_t) + _this->buckets[idx].value->size + 1);\n"
+                            "        z_string_t* _copy = (z_string_t*)malloc(sizeof(z_string_t));\n"
                         )
                         lines.append(
-                            "        _copy->size = _this->buckets[idx].value->size;\n"
+                            "        _copy->size = _this->buckets[idx].value.size;\n"
+                        )
+                        lines.append("        _copy->capacity = _copy->size + 1;\n")
+                        lines.append(
+                            "        _copy->data = (char*)malloc(_copy->capacity);\n"
                         )
                         lines.append(
-                            "        _copy->capacity = _this->buckets[idx].value->size;\n"
-                        )
-                        lines.append(
-                            "        memcpy(_copy->data, _this->buckets[idx].value->data, _this->buckets[idx].value->size);\n"
+                            "        memcpy(_copy->data, _this->buckets[idx].value.data, _copy->size);\n"
                         )
                         lines.append("        _copy->data[_copy->size] = '\\0';\n")
                         lines.append("        _r->data = _copy;\n")
@@ -3157,7 +3156,7 @@ class CEmitter:
         if not func.returntype:
             return "void"
         ct = _ctype(func.returntype.type)
-        if ct == "z_string_t*":
+        if ct == "z_string_t":
             self.needs_string = True
             self.needs_stdlib = True
         elif ct.endswith("*"):
@@ -3332,7 +3331,7 @@ class CEmitter:
         # free remaining temps before return
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                result += f"{indent}z_string_free({t});\n"
+                result += f"{indent}z_string_free(&{t});\n"
             elif t in self._temp.proto_set:
                 proto_name = self._temp.proto_set[t]
                 result += f"{indent}z_{proto_name}_destroy({t});\n"
@@ -3377,7 +3376,7 @@ class CEmitter:
         indent = self._indent()
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                result += f"{indent}z_string_free({t});\n"
+                result += f"{indent}z_string_free(&{t});\n"
             elif t in self._temp.proto_set:
                 proto_name = self._temp.proto_set[t]
                 result += f"{indent}z_{proto_name}_destroy({t});\n"
@@ -3413,7 +3412,7 @@ class CEmitter:
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
         if assign.type and assign.type.needs_destructor:
-            if ctype == "z_string_t*":
+            if ctype == "z_string_t":
                 self.needs_string = True
             self.needs_stdlib = True
             # the variable now owns the value — remove from temp frees
@@ -3851,7 +3850,7 @@ class CEmitter:
                     arg = f"(z_stringview_t){{ {arg}.data, {arg}.len }}"
                 elif arg_type and arg_type.subtype == ZSubType.STRING:
                     self.needs_string = True
-                    arg = f"(z_stringview_t){{ {arg}->data, {arg}->size }}"
+                    arg = f"(z_stringview_t){{ {arg}.data, {arg}.size }}"
                 # stringview: pass directly
                 return f"{indent}z_stringview_print({arg});\n"
             return f'{indent}printf("\\n");\n'
@@ -3936,8 +3935,8 @@ class CEmitter:
                         return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.length);\n"
                     if arg_type and _is_str_type(arg_type):
                         return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.len);\n"
-                    # default: treat as z_string_t*
-                    return f"{indent}z_string_append(&{parent_val}, {arg}->data, {arg}->size);\n"
+                    # default: treat as z_string_t (stack-allocated)
+                    return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.size);\n"
                 if method_name == "reserve" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
                     return (
@@ -3979,9 +3978,11 @@ class CEmitter:
                                 i < len(emitted_vals)
                                 and emitted_vals[i] in self._temp.string_set
                             ):
-                                # temp created by .string conversion — nullify
+                                # temp created by .string conversion — zero-init
                                 # so scope cleanup doesn't double-free
-                                code += f"{indent}{emitted_vals[i]} = NULL;\n"
+                                code += (
+                                    f"{indent}{emitted_vals[i]} = (z_string_t){{0}};\n"
+                                )
 
         return code
 
@@ -4084,7 +4085,7 @@ class CEmitter:
             # free remaining temps (intermediates) before return
             for t in self._temp.frees:
                 if t in self._temp.string_set:
-                    result += f"{indent}z_string_free({t});\n"
+                    result += f"{indent}z_string_free(&{t});\n"
                 elif t in self._temp.proto_set:
                     proto_name = self._temp.proto_set[t]
                     result += f"{indent}z_{proto_name}_destroy({t});\n"
@@ -4216,7 +4217,7 @@ class CEmitter:
                     else "int64_t"
                 )
                 # string-returning calls are already temped by _alloc_temp
-                if ctype != "z_string_t*":
+                if ctype != "z_string_t":
                     val = self._alloc_arg_temp(ctype, val)
             # stack-allocated class/born-borrowed record passed as 'this': add &
             # The C function expects a pointer for 'this' parameters, but the
@@ -5012,7 +5013,7 @@ class CEmitter:
             # string content comparison (native == on string class)
             if binop.lhs.type.subtype == ZSubType.STRING:
                 self.needs_stdbool = True
-                call = f"z_string_eq({lhs}, {rhs})"
+                call = f"z_string_eq(&{lhs}, &{rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
@@ -5223,7 +5224,7 @@ class CEmitter:
             self.needs_string = True
             self.needs_stdlib = True
             sname = self._emit_path_value(path.parent)
-            result = f"z_string_from_view((z_stringview_t){{ {sname}->data, {sname}->size }})"
+            result = f"z_string_from_view({sname})"
             return self._alloc_temp(result)
         # string: .string identity (no-op for already-owned strings)
         if (
@@ -5239,7 +5240,8 @@ class CEmitter:
             and child == "length"
         ):
             parent = self._emit_path_value(path.parent)
-            return f"{parent}->size"
+            acc = "->" if self._is_class_pointer_path(path.parent) else "."
+            return f"{parent}{acc}size"
         # string: .stringview conversion (string -> z_stringview_t)
         if (
             parent_type_dp
@@ -5248,7 +5250,8 @@ class CEmitter:
         ):
             self.needs_stringview = True
             parent = self._emit_path_value(path.parent)
-            return f"(z_stringview_t){{ {parent}->data, {parent}->size }}"
+            acc = "->" if self._is_class_pointer_path(path.parent) else "."
+            return f"(z_stringview_t){{ {parent}{acc}data, {parent}{acc}size }}"
         # list: .length field access
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
@@ -5440,10 +5443,10 @@ class CEmitter:
     ) -> str:
         """Emit invalidation code for a variable after .take.
 
-        For heap-allocated types (union, protocol, string): set to NULL.
-        For stack-allocated types (class): zero-initialize the struct.
+        For heap-allocated types (union, protocol): set to NULL.
+        For stack-allocated types (class, string): zero-initialize the struct.
         """
-        if ztype and not ztype.is_heap_allocated and ztype.typetype == ZTypeType.CLASS:
+        if ztype and not ztype.is_heap_allocated:
             ct = _ctype(ztype)
             return f"{indent}{var} = ({ct}){{0}};\n"
         return f"{indent}{var} = NULL;\n"
@@ -5567,14 +5570,8 @@ class CEmitter:
             else:
                 val = self._emit_operation_value(value_arg.valtype)
                 subtype_ctype = subtype_ctype_resolved
-                if (
-                    subtype_ctype
-                    and subtype_ctype in ("z_string_t*",)
-                    or (
-                        subtype_ctype
-                        and subtype_ctype.startswith("z_")
-                        and subtype_ctype.endswith("_t*")
-                    )
+                if subtype_ctype and (
+                    subtype_ctype.startswith("z_") and subtype_ctype.endswith("_t*")
                 ):
                     # reftype: store pointer directly
                     if val in self._temp.frees:
@@ -5842,7 +5839,7 @@ class CEmitter:
             else:
                 est_cap += len(p.tokstr)  # type: ignore[union-attr]
         self._temp.decls.append(
-            f"{indent}z_string_t* {result} = z_string_create((uint64_t){est_cap});\n"
+            f"{indent}z_string_t {result} = z_string_create((uint64_t){est_cap});\n"
         )
         self._temp.frees.append(result)
         self._temp.string_set.add(result)
@@ -5882,8 +5879,7 @@ class CEmitter:
                     )
                 elif val_type and val_type.subtype == ZSubType.STRING:
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result},"
-                        f" {val}->data, {val}->size);\n"
+                        f"{indent}z_string_append(&{result}, {val}.data, {val}.size);\n"
                     )
                 elif val_type and _is_stringview_type(val_type):
                     self.needs_stringview = True
@@ -6149,7 +6145,7 @@ class CEmitter:
         # track reftype ownership
         if ifnode.type and ifnode.type.needs_destructor:
             self._temp.frees.append(tmp)
-            if ctype == "z_string_t*":
+            if ctype == "z_string_t":
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 
@@ -6493,7 +6489,7 @@ class CEmitter:
         if val_type:
             ctype = _ctype(val_type)
 
-        is_string = ctype == "z_string_t*"
+        is_string = ctype == "z_string_t"
         is_class = ctype.startswith("z_") and ctype.endswith("_t*")
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
@@ -6518,7 +6514,7 @@ class CEmitter:
         parts.append(doexpr_code)
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                parts.append(f"{inner_indent}z_string_free({t});\n")
+                parts.append(f"{inner_indent}z_string_free(&{t});\n")
             elif t in self._temp.class_set:
                 parts.append(
                     f"{inner_indent}{self._emit_class_free(t, self._temp.class_set[t])}\n"
@@ -6531,7 +6527,7 @@ class CEmitter:
         if is_union and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
         elif is_string:
-            parts.append(f"{inner_indent}z_string_free({cname});\n")
+            parts.append(f"{inner_indent}z_string_free(&{cname});\n")
         elif is_class and val_type:
             parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
         elif is_class:
@@ -6757,7 +6753,7 @@ class CEmitter:
         # track reftype ownership
         if casenode.type and casenode.type.needs_destructor:
             self._temp.frees.append(tmp)
-            if ctype == "z_string_t*":
+            if ctype == "z_string_t":
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 

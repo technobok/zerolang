@@ -172,7 +172,7 @@ def _set_destructor_metadata(ztype: ZType) -> None:
     if ztype.subtype == ZSubType.STRING:
         ztype.needs_destructor = True
         ztype.destructor_name = "z_string_free"
-        ztype.is_heap_allocated = True
+        ztype.is_heap_allocated = False  # stack struct, heap data buffer
     elif ztype.subtype == ZSubType.STRINGVIEW:
         ztype.needs_destructor = False
         ztype.destructor_name = None
