@@ -205,7 +205,7 @@ class TestFinding3DestructorMetadata:
         assert t is not None, "result type not found in resolved"
         assert t.needs_destructor is True
         assert t.destructor_name == "z_result_destroy"
-        assert t.is_heap_allocated is True
+        assert t.is_heap_allocated is False
 
     def test_record_no_destructor(self):
         program = parse_and_check(

@@ -147,7 +147,7 @@ def _ctype(ztype: Optional[ZType]) -> str:
     if ztype.cname:
         if ztype.is_heap_allocated:
             return f"{ztype.cname}*"
-        if ztype.typetype in (ZTypeType.UNION, ZTypeType.PROTOCOL):
+        if ztype.typetype == ZTypeType.PROTOCOL:
             return f"{ztype.cname}*"
         if ztype.typetype == ZTypeType.FUNCTION:
             return f"{ztype.cname}_ft"
@@ -160,7 +160,7 @@ def _ctype(ztype: Optional[ZType]) -> str:
             return f"z_{name}_t*"
         return f"z_{name}_t"
     if ztype.typetype == ZTypeType.UNION:
-        return f"z_{name}_t*"
+        return f"z_{name}_t"
     if ztype.typetype == ZTypeType.VARIANT:
         return f"z_{name}_t"
     if ztype.typetype == ZTypeType.FUNCTION:
@@ -1879,6 +1879,7 @@ class CEmitter:
         # emit destructor
         lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
         lines.append("    if (!u) return;\n")
+        lines.append("    if (!u->data) return;\n")
         lines.append("    switch (u->tag) {\n")
         for sname, spath in union_defn.items.items():
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
@@ -1909,7 +1910,6 @@ class CEmitter:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
         lines.append("    }\n")
-        lines.append("    free(u);\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -2030,6 +2030,7 @@ class CEmitter:
         # emit destructor
         lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
         lines.append("    if (!u) return;\n")
+        lines.append("    if (!u->data) return;\n")
         lines.append("    switch (u->tag) {\n")
         for sname, stype in subtype_items:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
@@ -2054,7 +2055,6 @@ class CEmitter:
                     lines.append("            free(u->data);\n")
                 lines.append("            break;\n")
         lines.append("    }\n")
-        lines.append("    free(u);\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -2851,11 +2851,9 @@ class CEmitter:
                 )
                 lines.append(f"    uint64_t h = {hash_fn}(_key);\n")
                 lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
-                lines.append(
-                    f"    {opt_struct}* _r = ({opt_struct}*)malloc(sizeof({opt_struct}));\n"
-                )
+                lines.append(f"    {opt_struct} _r = {{0}};\n")
                 lines.append("    if (idx >= 0) {\n")
-                lines.append(f"        _r->tag = {some_tag};\n")
+                lines.append(f"        _r.tag = {some_tag};\n")
                 if val_is_reftype:
                     if val_is_string:
                         lines.append(
@@ -2872,18 +2870,18 @@ class CEmitter:
                             "        memcpy(_copy->data, _this->buckets[idx].value.data, _copy->size);\n"
                         )
                         lines.append("        _copy->data[_copy->size] = '\\0';\n")
-                        lines.append("        _r->data = _copy;\n")
+                        lines.append("        _r.data = _copy;\n")
                     else:
-                        lines.append("        _r->data = _this->buckets[idx].value;\n")
+                        lines.append("        _r.data = _this->buckets[idx].value;\n")
                 else:
                     lines.append(
                         f"        {val_ctype}* _d = ({val_ctype}*)malloc(sizeof({val_ctype}));\n"
                     )
                     lines.append("        *_d = _this->buckets[idx].value;\n")
-                    lines.append("        _r->data = _d;\n")
+                    lines.append("        _r.data = _d;\n")
                 lines.append("    } else {\n")
-                lines.append(f"        _r->tag = {none_tag};\n")
-                lines.append("        _r->data = NULL;\n")
+                lines.append(f"        _r.tag = {none_tag};\n")
+                lines.append("        _r.data = NULL;\n")
                 lines.append("    }\n")
                 lines.append("    return _r;\n")
                 lines.append("}\n\n")
@@ -5425,10 +5423,7 @@ class CEmitter:
         """
         # type annotation from type checker — only heap-allocated types are pointers
         parent_type = path.type
-        if parent_type and parent_type.typetype in (
-            ZTypeType.UNION,
-            ZTypeType.PROTOCOL,
-        ):
+        if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
             return True
         # heap-allocated types (string, box) are always pointers
         if parent_type and parent_type.is_heap_allocated:
@@ -5542,10 +5537,8 @@ class CEmitter:
         ctype = f"z_{union_name}_t"
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
 
-        self._temp.decls.append(
-            f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
-        )
-        self._temp.decls.append(f"{indent}{tmp}->tag = {tag};\n")
+        self._temp.decls.append(f"{indent}{ctype} {tmp} = {{0}};\n")
+        self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
 
         # determine subtype info — check monomorphized type first
         is_null = False
@@ -5585,12 +5578,12 @@ class CEmitter:
                     break
 
         if is_null or value_arg is None:
-            self._temp.decls.append(f"{indent}{tmp}->data = NULL;\n")
+            self._temp.decls.append(f"{indent}{tmp}.data = NULL;\n")
         else:
             # for monomorphized null subtype with explicit type arg, skip the arg
             # (it's a type name, not a value)
             if call_type and call_type.generic_origin and is_null:
-                self._temp.decls.append(f"{indent}{tmp}->data = NULL;\n")
+                self._temp.decls.append(f"{indent}{tmp}.data = NULL;\n")
             else:
                 val = self._emit_operation_value(value_arg.valtype)
                 subtype_ctype = subtype_ctype_resolved
@@ -5600,7 +5593,7 @@ class CEmitter:
                     # reftype: store pointer directly
                     if val in self._temp.frees:
                         self._temp.frees.remove(val)
-                    self._temp.decls.append(f"{indent}{tmp}->data = {val};\n")
+                    self._temp.decls.append(f"{indent}{tmp}.data = {val};\n")
                 else:
                     # valtype: box it (malloc + copy)
                     box_ctype = subtype_ctype or "int64_t"
@@ -5609,12 +5602,13 @@ class CEmitter:
                         f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
                     )
                     self._temp.decls.append(f"{indent}*{box_tmp} = {val};\n")
-                    self._temp.decls.append(f"{indent}{tmp}->data = {box_tmp};\n")
+                    self._temp.decls.append(f"{indent}{tmp}.data = {box_tmp};\n")
                     # ownership transferred to boxed copy — don't free original
                     if val in self._temp.frees:
                         self._temp.frees.remove(val)
 
         self._temp.frees.append(tmp)
+        self._temp.class_set[tmp] = union_name
         return tmp
 
     def _emit_nullable_ptr_construction(self, call: zast.Call) -> str:
@@ -5720,12 +5714,11 @@ class CEmitter:
         tmp = self._temp_name("c")
         ctype = f"z_{union_name}_t"
         tag = f"Z_{union_name.upper()}_TAG_{subtype_name.upper()}"
-        self._temp.decls.append(
-            f"{indent}{ctype}* {tmp} = ({ctype}*)malloc(sizeof({ctype}));\n"
-        )
-        self._temp.decls.append(f"{indent}{tmp}->tag = {tag};\n")
-        self._temp.decls.append(f"{indent}{tmp}->data = NULL;\n")
+        self._temp.decls.append(f"{indent}{ctype} {tmp} = {{0}};\n")
+        self._temp.decls.append(f"{indent}{tmp}.tag = {tag};\n")
+        self._temp.decls.append(f"{indent}{tmp}.data = NULL;\n")
         self._temp.frees.append(tmp)
+        self._temp.class_set[tmp] = union_name
         return tmp
 
     def _is_variant_construction(self, call: zast.Call) -> bool:
@@ -6382,12 +6375,12 @@ class CEmitter:
                     none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(
-                        f"{inner}if ({tmp}->tag == {none_tag}) {{ free({tmp}); break; }}\n"
+                        f"{inner}if ({tmp}.tag == {none_tag}) {{ z_{opt_name}_destroy(&{tmp}); break; }}\n"
                     )
                     parts.append(
-                        f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}->data;\n"
+                        f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}.data;\n"
                     )
-                    parts.append(f"{inner}free({tmp});\n")
+                    parts.append(f"{inner}z_{opt_name}_destroy(&{tmp});\n")
             if fornode.loop:
                 parts.append(self._emit_for_body(fornode))
             if has_post:
@@ -6633,7 +6626,7 @@ class CEmitter:
 
         subject = self._emit_operation_value(casenode.subject)
 
-        parts.append(f"{indent}switch ({subject}->tag) {{\n")
+        parts.append(f"{indent}switch ({subject}.tag) {{\n")
         for clause in casenode.clauses:
             sname = clause.match.name
             tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
@@ -6657,10 +6650,8 @@ class CEmitter:
         # post-match cleanup: destroy subject if taken in any arm but not all
         if casenode.subject_taken:
             parts.append(
-                f"{indent}if ({subject} != NULL) {{\n"
-                f"{indent}    z_{union_name}_destroy({subject});\n"
-                f"{indent}}}\n"
-                f"{indent}{subject} = NULL;\n"
+                f"{indent}z_{union_name}_destroy(&{subject});\n"
+                f"{indent}{subject} = (z_{union_name}_t){{0}};\n"
             )
 
         return "".join(parts)
@@ -6853,7 +6844,7 @@ class CEmitter:
         union_name = union_type.name
         subject = self._emit_operation_value(casenode.subject)
 
-        parts.append(f"{indent}switch ({subject}->tag) {{\n")
+        parts.append(f"{indent}switch ({subject}.tag) {{\n")
         for clause in casenode.clauses:
             sname = clause.match.name
             tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"

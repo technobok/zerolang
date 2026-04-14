@@ -1479,7 +1479,7 @@ class TestEmitterClassDestructors:
             "myclass: class { payload: myunion }\n"
             "main: function is { c: myclass payload: myunion.b }"
         )
-        assert "z_myunion_destroy(p->payload);" in csource
+        assert "z_myunion_destroy(&p->payload);" in csource
 
     def test_class_destructor_valtype_only(self):
         """Class with only valtype fields: no destructor emitted."""
@@ -1613,11 +1613,13 @@ class TestEmitterUnions:
         assert "void* data;" in csource
 
     def test_union_construction_emits_malloc(self):
-        """Union construction should emit malloc + tag + data."""
+        """Union construction should emit stack struct init + tag + data."""
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 42 }"
         )
-        assert "malloc(sizeof(z_myunion_t))" in csource
+        assert "malloc(sizeof(z_myunion_t))" not in csource
+        assert "z_myunion_t" in csource
+        assert "= {0}" in csource
         assert "Z_MYUNION_TAG_A" in csource
 
     def test_union_null_construction(self):
@@ -1626,7 +1628,7 @@ class TestEmitterUnions:
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
         )
         assert "Z_MYUNION_TAG_B" in csource
-        assert "->data = NULL" in csource
+        assert ".data = NULL" in csource
 
     def test_union_match_emits_switch(self):
         """Match on union emits switch on tag."""
@@ -1643,7 +1645,7 @@ class TestEmitterUnions:
             "  }\n"
             "}"
         )
-        assert "switch (x->tag)" in csource
+        assert "switch (x.tag)" in csource
         assert "case Z_MYUNION_TAG_A:" in csource
         assert "case Z_MYUNION_TAG_B:" in csource
 
@@ -1652,15 +1654,15 @@ class TestEmitterUnions:
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
-        assert "z_myunion_destroy(x);" in csource
+        assert "z_myunion_destroy(&x);" in csource
 
     def test_union_take_nullifies(self):
-        """After .take, source variable should be nullified."""
+        """After .take, source variable should be zero-initialized."""
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\n"
             "main: function is { x: myunion.a 1\n y: x.take }"
         )
-        assert "= NULL;" in csource
+        assert "= (z_myunion_t){0};" in csource
 
     def test_union_destructor_emitted(self):
         """Union destructor should be generated."""
@@ -1669,7 +1671,7 @@ class TestEmitterUnions:
         )
         assert "z_myunion_destroy" in csource
         assert "switch (u->tag)" in csource
-        assert "free(u);" in csource
+        assert "free(u);" not in csource
 
 
 class TestEmitterUnionCustomTag:
@@ -1963,8 +1965,8 @@ class TestStandaloneTake:
             "  x.take\n"
             "}"
         )
-        assert "z_myunion_destroy(x);" in csource
-        assert "x = NULL;" in csource
+        assert "z_myunion_destroy(&x);" in csource
+        assert "x = (z_myunion_t){0};" in csource
 
     def test_standalone_take_string(self):
         """s.take as statement on string → free + zero-init."""
@@ -3355,7 +3357,7 @@ class TestGenericsEmission:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
-        assert "z_myopt_i64_destroy(x);" in csource
+        assert "z_myopt_i64_destroy(&x);" in csource
 
     def test_two_different_instantiations(self):
         """Two different instantiations produce two distinct types."""

@@ -183,7 +183,11 @@ def _set_destructor_metadata(ztype: ZType) -> None:
         ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
         ztype.is_heap_allocated = False
-    elif ztype.typetype in (ZTypeType.UNION, ZTypeType.PROTOCOL):
+    elif ztype.typetype == ZTypeType.UNION:
+        ztype.needs_destructor = True
+        ztype.destructor_name = f"z_{ztype.name}_destroy"
+        ztype.is_heap_allocated = False  # stack struct, heap subtype data
+    elif ztype.typetype == ZTypeType.PROTOCOL:
         ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
         ztype.is_heap_allocated = True
