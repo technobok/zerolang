@@ -397,7 +397,7 @@ class CEmitter:
         ctype: str,
         data_ctype: str,
     ) -> None:
-        """Emit a heap-allocated container create function (list/map pattern)."""
+        """Emit a heap-allocated container create function (map pattern)."""
         create_name = f"z_{name}_create"
         lines.append(f"static {ctype}* {create_name}(uint64_t _capacity);\n")
         lines.append(f"static {ctype}* {create_name}(uint64_t _capacity) {{\n")
@@ -407,6 +407,30 @@ class CEmitter:
         lines.append("    if (_capacity > 0) {\n")
         lines.append(
             f"        _this->data = ({data_ctype}*)calloc(_capacity, sizeof({data_ctype}));\n"
+        )
+        lines.append("    }\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+
+    def _emit_stack_container_create(
+        self,
+        lines: List[str],
+        name: str,
+        ctype: str,
+        data_ctype: str,
+    ) -> None:
+        """Emit a stack-allocated container create function (list pattern).
+
+        Returns struct by value. Only the data buffer is heap-allocated.
+        """
+        create_name = f"z_{name}_create"
+        lines.append(f"static {ctype} {create_name}(uint64_t _capacity);\n")
+        lines.append(f"static {ctype} {create_name}(uint64_t _capacity) {{\n")
+        lines.append(f"    {ctype} _this = {{0}};\n")
+        lines.append("    _this.capacity = _capacity;\n")
+        lines.append("    if (_capacity > 0) {\n")
+        lines.append(
+            f"        _this.data = ({data_ctype}*)calloc(_capacity, sizeof({data_ctype}));\n"
         )
         lines.append("    }\n")
         lines.append("    return _this;\n")
@@ -2357,32 +2381,34 @@ class CEmitter:
         elem_is_reftype = elem_ctype.endswith("*")
         lines: List[str] = []
 
-        # struct definition
+        # struct definition — field order: length, data*, capacity
+        # (length + data match listview layout for zero-cost casting)
         lines.append("typedef struct {\n")
-        lines.append("    uint64_t capacity;\n")
         lines.append("    uint64_t length;\n")
         lines.append(f"    {elem_ctype}* data;\n")
+        lines.append("    uint64_t capacity;\n")
         lines.append(f"}} {ctype};\n\n")
 
-        # destroy
+        # destroy — free data buffer only (struct is on the stack)
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
         if elem_is_reftype:
             if elem_type and elem_type.needs_destructor and elem_type.destructor_name:
+                elem_destr = elem_type.destructor_name
+                elem_addr = "" if elem_type.is_heap_allocated else "&"
                 lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
-                lines.append(f"        {elem_type.destructor_name}(p->data[i]);\n")
+                lines.append(f"        {elem_destr}({elem_addr}p->data[i]);\n")
                 lines.append("    }\n")
             else:
                 lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
                 lines.append("        if (p->data[i]) free(p->data[i]);\n")
                 lines.append("    }\n")
         lines.append("    free(p->data);\n")
-        lines.append("    free(p);\n")
         lines.append("}\n\n")
 
-        # create constructor
-        self._emit_heap_container_create(lines, name, ctype, elem_ctype)
+        # create constructor — returns struct by value (stack-allocated)
+        self._emit_stack_container_create(lines, name, ctype, elem_ctype)
 
         # growth helper (inline in append/insert/extend via macro-like pattern)
         grow_fn = f"z_{name}_grow"
@@ -2439,7 +2465,9 @@ class CEmitter:
         )
         lines.append("    _this->length += _from->length;\n")
         lines.append("    free(_from->data);\n")
-        lines.append("    free(_from);\n")
+        lines.append("    _from->data = NULL;\n")
+        lines.append("    _from->length = 0;\n")
+        lines.append("    _from->capacity = 0;\n")
         lines.append("}\n\n")
 
         # get
@@ -4699,6 +4727,12 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
+                # stack-allocated list: pass address to methods
+                parent_path = cast(zast.DottedPath, call.callable).parent
+                if not self._is_class_pointer_path(
+                    parent_path
+                ) and not parent_val.startswith("&"):
+                    parent_val = f"&{parent_val}"
                 list_type_name = dp_parent_type.name
                 if method_name == "append" and call.arguments:
                     from_arg = call.arguments[0]
@@ -4721,7 +4755,9 @@ class CEmitter:
                     )
                 if method_name == "extend" and call.arguments:
                     from_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{list_type_name}_extend({parent_val}, {from_val})"
+                    # extend takes a pointer to the source list
+                    from_tmp = self._alloc_arg_temp(f"z_{list_type_name}_t", from_val)
+                    return f"z_{list_type_name}_extend({parent_val}, &{from_tmp})"
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{list_type_name}_get({parent_val}, {idx_val})"
@@ -5216,14 +5252,20 @@ class CEmitter:
         # list: .length field access
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
-            return f"{parent}->length"
+            acc = "->" if self._is_class_pointer_path(path.parent) else "."
+            return f"{parent}{acc}length"
         # list: .capacity field access
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "capacity":
             parent = self._emit_path_value(path.parent)
-            return f"{parent}->capacity"
+            acc = "->" if self._is_class_pointer_path(path.parent) else "."
+            return f"{parent}{acc}capacity"
         # list: .pop as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
             parent = self._emit_path_value(path.parent)
+            if not self._is_class_pointer_path(path.parent) and not parent.startswith(
+                "&"
+            ):
+                parent = f"&{parent}"
             return f"z_{parent_type_dp.name}_pop({parent})"
         # map: .length field access
         if parent_type_dp and _is_map_type(parent_type_dp) and child == "length":
@@ -6373,7 +6415,7 @@ class CEmitter:
         if last.nodetype == NodeType.EXPRESSION:
             val = self._emit_expression_value(cast(zast.Expression, last))
             indent = self._indent()
-            parts.append(f"{indent}z_{list_name}_append({list_var}, {val});\n")
+            parts.append(f"{indent}z_{list_name}_append(&{list_var}, {val});\n")
         else:
             parts.append(self._emit_statement_line(stmts[-1]))
         return "".join(parts)

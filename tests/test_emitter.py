@@ -4593,7 +4593,7 @@ class TestList:
     def test_list_scope_cleanup(self):
         """List is destroyed on scope exit (ASan-safe)."""
         csource = emit_source("main: function is { l: (list of: i64) }")
-        assert "z_list_i64_destroy(l)" in csource
+        assert "z_list_i64_destroy(&l)" in csource
         # should compile and run without issues
         compile_and_run(csource)
 

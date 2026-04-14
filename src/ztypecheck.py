@@ -208,8 +208,15 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
             ztype.needs_field_cleanup = True
             return
     # Stack-allocated class with no heap fields needs no destructor.
-    # Box, list, and map types have is_heap_allocated=True so are excluded.
-    if ztype.typetype == ZTypeType.CLASS and not ztype.is_heap_allocated:
+    # Skip types that manage their own heap data: box (is_box=True),
+    # list, and map — identified by is_heap_allocated which is set
+    # explicitly after monomorphization for these collection types.
+    if (
+        ztype.typetype == ZTypeType.CLASS
+        and not ztype.is_heap_allocated
+        and not getattr(ztype, "is_box", False)
+        and not ztype.needs_field_cleanup
+    ):
         ztype.needs_destructor = False
         ztype.destructor_name = None
 
@@ -3607,11 +3614,11 @@ class TypeChecker:
             mono.children["string"] = string_method
 
         # for list types: set reftype, synthesize methods
-        # Lists remain heap-allocated (struct + data on heap) for now.
+        # List struct is stack-allocated; only the data buffer is on the heap.
         if _is_list_type(mono) and not is_partial:
             mono.is_valtype = False
             _set_destructor_metadata(mono)
-            mono.is_heap_allocated = True  # list struct is still heap-allocated
+            mono.needs_field_cleanup = True  # data buffer needs cleanup
             elem_type = _list_element_type(mono)
             t_u64 = self._resolve_name("u64") or self.t_null
             # synthesize .length field (runtime, u64)
@@ -3663,6 +3670,7 @@ class TypeChecker:
             mono.is_valtype = False
             _set_destructor_metadata(mono)
             mono.is_heap_allocated = True  # map struct is still heap-allocated
+            mono.needs_field_cleanup = True  # data buckets need cleanup
             key_type = _map_key_type(mono)
             value_type = _map_value_type(mono)
             t_u64 = self._resolve_name("u64") or self.t_null
