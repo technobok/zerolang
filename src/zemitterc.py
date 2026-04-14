@@ -147,8 +147,6 @@ def _ctype(ztype: Optional[ZType]) -> str:
     if ztype.cname:
         if ztype.is_heap_allocated:
             return f"{ztype.cname}*"
-        if ztype.typetype == ZTypeType.PROTOCOL:
-            return f"{ztype.cname}*"
         if ztype.typetype == ZTypeType.FUNCTION:
             return f"{ztype.cname}_ft"
         return ztype.cname
@@ -167,7 +165,7 @@ def _ctype(ztype: Optional[ZType]) -> str:
         cname = name.replace(".", "_")
         return f"z_{cname}_ft"
     if ztype.typetype == ZTypeType.PROTOCOL:
-        return f"z_{name}_t*"
+        return f"z_{name}_t"
     if ztype.typetype == ZTypeType.FACET:
         return f"z_{name}_t"
     return "void"
@@ -1047,7 +1045,7 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
         lines.append("    if (!proto) return;\n")
         lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
-        lines.append("    free(proto);\n")
+        lines.append("    proto->destroy = NULL;\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -1140,15 +1138,14 @@ class CEmitter:
         lines.append("};\n\n")
 
         # create function (borrowed — pointer to original, no copy)
+        # Returns protocol struct by value; caller stores on stack.
         create_name = f"z_{impl_name}_{label}_create"
-        lines.append(f"static z_{proto_name}_t* {create_name}({impl_ctype}* val);\n")
-        lines.append(f"static z_{proto_name}_t* {create_name}({impl_ctype}* val) {{\n")
-        lines.append(
-            f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
-        )
-        lines.append("    proto->data = val;\n")
-        lines.append(f"    proto->vtable = &{vtable_name};\n")
-        lines.append("    proto->destroy = NULL;\n")
+        lines.append(f"static z_{proto_name}_t {create_name}({impl_ctype}* val);\n")
+        lines.append(f"static z_{proto_name}_t {create_name}({impl_ctype}* val) {{\n")
+        lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
+        lines.append("    proto.data = val;\n")
+        lines.append(f"    proto.vtable = &{vtable_name};\n")
+        lines.append("    proto.destroy = NULL;\n")
         lines.append("    return proto;\n")
         lines.append("}\n\n")
 
@@ -1166,21 +1163,19 @@ class CEmitter:
             # stack class: owned create boxes the struct (malloc + copy)
             owned_create = f"z_{impl_name}_{label}_create_owned"
             lines.append(
-                f"static z_{proto_name}_t* {owned_create}({impl_ctype}* val);\n"
+                f"static z_{proto_name}_t {owned_create}({impl_ctype}* val);\n"
             )
             lines.append(
-                f"static z_{proto_name}_t* {owned_create}({impl_ctype}* val) {{\n"
+                f"static z_{proto_name}_t {owned_create}({impl_ctype}* val) {{\n"
             )
-            lines.append(
-                f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
-            )
+            lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
             lines.append(
                 f"    {impl_ctype}* boxed = ({impl_ctype}*)malloc(sizeof({impl_ctype}));\n"
             )
             lines.append("    *boxed = *val;\n")
-            lines.append("    proto->data = boxed;\n")
-            lines.append(f"    proto->vtable = &{vtable_name};\n")
-            lines.append(f"    proto->destroy = {destroy_name};\n")
+            lines.append("    proto.data = boxed;\n")
+            lines.append(f"    proto.vtable = &{vtable_name};\n")
+            lines.append(f"    proto.destroy = {destroy_name};\n")
             lines.append("    return proto;\n")
             lines.append("}\n\n")
         else:
@@ -1196,22 +1191,18 @@ class CEmitter:
             lines.append("}\n\n")
 
             owned_create = f"z_{impl_name}_{label}_create_owned"
+            lines.append(f"static z_{proto_name}_t {owned_create}({impl_ctype} val);\n")
             lines.append(
-                f"static z_{proto_name}_t* {owned_create}({impl_ctype} val);\n"
+                f"static z_{proto_name}_t {owned_create}({impl_ctype} val) {{\n"
             )
-            lines.append(
-                f"static z_{proto_name}_t* {owned_create}({impl_ctype} val) {{\n"
-            )
-            lines.append(
-                f"    z_{proto_name}_t* proto = (z_{proto_name}_t*)malloc(sizeof(z_{proto_name}_t));\n"
-            )
+            lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
             lines.append(
                 f"    {impl_ctype}* boxed = ({impl_ctype}*)malloc(sizeof({impl_ctype}));\n"
             )
             lines.append("    *boxed = val;\n")
-            lines.append("    proto->data = boxed;\n")
-            lines.append(f"    proto->vtable = &{vtable_name};\n")
-            lines.append(f"    proto->destroy = {destroy_name};\n")
+            lines.append("    proto.data = boxed;\n")
+            lines.append(f"    proto.vtable = &{vtable_name};\n")
+            lines.append(f"    proto.destroy = {destroy_name};\n")
             lines.append("    return proto;\n")
             lines.append("}\n\n")
 
@@ -3046,7 +3037,7 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
         lines.append("    if (!proto) return;\n")
         lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
-        lines.append("    free(proto);\n")
+        lines.append("    proto->destroy = NULL;\n")
         lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -3356,7 +3347,7 @@ class CEmitter:
                 result += f"{indent}z_string_free(&{t});\n"
             elif t in self._temp.proto_set:
                 proto_name = self._temp.proto_set[t]
-                result += f"{indent}z_{proto_name}_destroy({t});\n"
+                result += f"{indent}z_{proto_name}_destroy(&{t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
                 result += f"{indent}{self._emit_class_free(t, tname)}\n"
@@ -3401,7 +3392,7 @@ class CEmitter:
                 result += f"{indent}z_string_free(&{t});\n"
             elif t in self._temp.proto_set:
                 proto_name = self._temp.proto_set[t]
-                result += f"{indent}z_{proto_name}_destroy({t});\n"
+                result += f"{indent}z_{proto_name}_destroy(&{t});\n"
             elif t in self._temp.class_set:
                 tname = self._temp.class_set[t]
                 result += f"{indent}{self._emit_class_free(t, tname)}\n"
@@ -3652,7 +3643,7 @@ class CEmitter:
         tmp = self._temp_name("c")
         indent = self._indent()
         self._temp.decls.append(
-            f"{indent}z_{proto_name}_t* {tmp} = {owned_create}({arg_val});\n"
+            f"{indent}z_{proto_name}_t {tmp} = {owned_create}({arg_val});\n"
         )
         self._temp.frees.append(tmp)
         self._temp.proto_set[tmp] = proto_name
@@ -3711,7 +3702,7 @@ class CEmitter:
         indent = self._indent()
         proto_ctype = f"z_{proto_name}_t"
         self._temp.decls.append(
-            f"{indent}{proto_ctype}* {tmp} = {create_name}({arg_expr});\n"
+            f"{indent}{proto_ctype} {tmp} = {create_name}({arg_expr});\n"
         )
         self._temp.frees.append(tmp)
         self._temp.proto_set[tmp] = proto_name
@@ -3792,10 +3783,12 @@ class CEmitter:
             return None
         parent_val = self._emit_path_value(dp.parent)
         method = dp.child.name
-        args = [f"{parent_val}->data"]
+        # stack-allocated protocol: use . for locals, -> for pointers
+        acc = "->" if self._is_class_pointer_path(dp.parent) else "."
+        args = [f"{parent_val}{acc}data"]
         for arg in call.arguments:
             args.append(self._emit_operation_value(arg.valtype))
-        return f"{parent_val}->vtable->{method}({', '.join(args)})"
+        return f"{parent_val}{acc}vtable->{method}({', '.join(args)})"
 
     def _emit_callable_dispatch(self, call: zast.Call) -> str:
         """Emit a callable object dispatch: obj(args) -> z_type_call(obj, args)."""
@@ -4110,7 +4103,7 @@ class CEmitter:
                     result += f"{indent}z_string_free(&{t});\n"
                 elif t in self._temp.proto_set:
                     proto_name = self._temp.proto_set[t]
-                    result += f"{indent}z_{proto_name}_destroy({t});\n"
+                    result += f"{indent}z_{proto_name}_destroy(&{t});\n"
                 elif t in self._temp.class_set:
                     tname = self._temp.class_set[t]
                     result += f"{indent}{self._emit_class_free(t, tname)}\n"
@@ -5368,24 +5361,12 @@ class CEmitter:
                 tmp = self._temp_name("p")
                 indent = self._indent()
                 proto_ctype = f"z_{path.type.name}_t"
-                if self._in_named_assignment:
-                    # named var: heap-allocate via create function
-                    self._temp.decls.append(
-                        f"{indent}{proto_ctype}* {tmp} = {create_name}({arg});\n"
-                    )
-                    self._temp.frees.append(tmp)
-                    self._temp.proto_set[tmp] = path.type.name
-                else:
-                    # temp: stack-allocate (no malloc/free needed)
-                    stk = f"{tmp}s"  # companion stack var for protocol temp
-                    vtable_name = f"z_{parent_type.name}_{child}_vtable"
-                    self._temp.decls.append(
-                        f"{indent}{proto_ctype} {stk};\n"
-                        f"{indent}{stk}.data = {arg};\n"
-                        f"{indent}{stk}.vtable = &{vtable_name};\n"
-                        f"{indent}{stk}.destroy = NULL;\n"
-                        f"{indent}{proto_ctype}* {tmp} = &{stk};\n"
-                    )
+                # stack-allocate: protocol struct is now stack-based
+                self._temp.decls.append(
+                    f"{indent}{proto_ctype} {tmp} = {create_name}({arg});\n"
+                )
+                self._temp.frees.append(tmp)
+                self._temp.proto_set[tmp] = path.type.name
                 return tmp
 
         # runtime numeric cast: x.u32 where x is a numeric variable
@@ -5423,8 +5404,6 @@ class CEmitter:
         """
         # type annotation from type checker — only heap-allocated types are pointers
         parent_type = path.type
-        if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
-            return True
         # heap-allocated types (string, box) are always pointers
         if parent_type and parent_type.is_heap_allocated:
             return True

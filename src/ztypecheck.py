@@ -190,7 +190,7 @@ def _set_destructor_metadata(ztype: ZType) -> None:
     elif ztype.typetype == ZTypeType.PROTOCOL:
         ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
-        ztype.is_heap_allocated = True
+        ztype.is_heap_allocated = False  # stack struct, heap wrapped data
     else:
         ztype.needs_destructor = False
         ztype.destructor_name = None

@@ -3108,10 +3108,12 @@ class TestProtocols:
             '    print "\\{use_reader f.myreader}"\n'
             "}\n"
         )
-        # temp path should have stack alloc pattern (companion stack var ends with 's')
-        assert "s.data" in csource and "s.vtable" in csource
-        # the temp should not appear in any free() call
-        assert "z_reader_destroy(_p" not in csource
+        # temp path should be stack-allocated (z_reader_t directly, not pointer)
+        assert "z_reader_t _p" in csource
+        # protocol struct itself is not malloc'd
+        assert "malloc(sizeof(z_reader_t))" not in csource
+        # the stack temp is destroyed by address
+        assert "z_reader_destroy(&_p" in csource
 
     def test_protocol_temp_runtime(self):
         """Stack-allocated temp protocol instance works at runtime."""
