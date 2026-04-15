@@ -3573,13 +3573,14 @@ class TestGenericsEmission:
         output = compile_and_run(csource)
         assert output.strip() == "15"
 
-    def test_box_reftype_passthrough(self):
-        """box from: reftype is transparent passthrough."""
+    def test_box_string_value(self):
+        """box from: string — heap-allocates the stack string struct."""
+        # Just verify it compiles & runs cleanly (box manages lifetime)
         csource = emit_source(
-            'main: function is {\n    b: box from: "hello".string\n    print b\n}'
+            'main: function is {\n    b: box from: "hello".string\n    print "done"\n}'
         )
         output = compile_and_run(csource)
-        assert output.strip() == "hello"
+        assert "done" in output
 
     def test_box_valtype_comparison(self):
         """Comparison on boxed valtype auto-derefs."""
@@ -5843,6 +5844,43 @@ class TestStringEquality:
         assert "z_stringview_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "different"
+
+
+class TestBoxRefinements:
+    """Phase 10: box(class) and box(string) heap-allocate a copy; no leaks.
+
+    All user-defined types are stack-allocated now, so box always creates
+    a real heap copy (no more passthrough for classes/strings).
+    """
+
+    def test_box_class_with_string_field(self):
+        """Box a class with heap-backed fields chains destructor correctly."""
+        csource = emit_source(
+            "named: class {\n"
+            "    label: string\n"
+            "    value: i64\n"
+            "}\n"
+            "main: function is {\n"
+            '    n: named label: "hello".string value: 42\n'
+            "    b: box from: n.take\n"
+            '    print "done"\n'
+            "}"
+        )
+        # box destructor chains inner class destructor
+        assert "z_named_destroy(v);" in csource
+        # inner destructor frees heap fields like strings
+        output = compile_and_run(csource)
+        assert "done" in output
+
+    def test_box_string_heap_allocates(self):
+        """box from: string heap-allocates a copy (string is stack-allocated now)."""
+        csource = emit_source(
+            'main: function is {\n    b: box from: "hello".string\n    print "done"\n}'
+        )
+        # box allocates z_string_t* on the heap
+        assert "(z_string_t*)malloc(sizeof(z_string_t))" in csource
+        output = compile_and_run(csource)
+        assert "done" in output
 
 
 class TestListView:

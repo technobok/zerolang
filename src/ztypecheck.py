@@ -6999,29 +6999,33 @@ class TypeChecker:
         if not inner_type:
             return None
 
-        if _is_valtype(inner_type):
-            # valtype: create monomorphized box type as reftype
-            defn = self._find_generic_defn(box_template)
-            if not defn:
-                return None
-            mono = self._monomorphize(box_template, {"t": inner_type}, defn)
-            if mono:
-                mono.is_box = True
-                mono.is_heap_allocated = True  # box data is on the heap
-                mono.needs_destructor = True
-                mono.destructor_name = f"z_{mono.name}_destroy"
-                # copy children from inner type for transparent access
-                for cname, ctype in inner_type.children.items():
-                    if cname not in mono.children:
-                        mono.children[cname] = ctype
-                call.type = mono
-                call.call_kind = zast.CallKind.BOX_CREATE
-            return mono
-        else:
-            # reftype: passthrough — result IS the inner type
+        # With stack-allocated classes and unions, all user-defined types
+        # are stack-allocated values. Box always heap-allocates a copy.
+        # Only types that are already pointers (heap-allocated: list, map,
+        # heap-allocated classes in legacy code) use passthrough.
+        if inner_type.is_heap_allocated:
+            # Already a pointer: passthrough (just take ownership)
             call.type = inner_type
             call.call_kind = zast.CallKind.BOX_PASSTHROUGH
             return inner_type
+
+        # stack-allocated value: create monomorphized box type
+        defn = self._find_generic_defn(box_template)
+        if not defn:
+            return None
+        mono = self._monomorphize(box_template, {"t": inner_type}, defn)
+        if mono:
+            mono.is_box = True
+            mono.is_heap_allocated = True  # box data is on the heap
+            mono.needs_destructor = True
+            mono.destructor_name = f"z_{mono.name}_destroy"
+            # copy children from inner type for transparent access
+            for cname, ctype in inner_type.children.items():
+                if cname not in mono.children:
+                    mono.children[cname] = ctype
+            call.type = mono
+            call.call_kind = zast.CallKind.BOX_CREATE
+        return mono
 
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""

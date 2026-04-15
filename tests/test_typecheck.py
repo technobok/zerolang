@@ -4310,13 +4310,12 @@ class TestGenerics:
         assert mono.is_box is True
         assert mono.is_valtype is False
 
-    def test_box_reftype_passthrough(self):
-        """box from: reftype is a passthrough (type is the reftype)."""
+    def test_box_string_creates_box_mono(self):
+        """box from: string creates a box monomorphized type (strings are stack now)."""
         program = check_ok('main: function is { b: box from: "hello".string }')
-        # for reftype passthrough, the type is string, not box
-        # no box mono type should be created
-        for mono, _ in program.mono_types:
-            assert not mono.is_box
+        # string is stack-allocated now; box creates a real box mono
+        box_monos = [m for m, _ in program.mono_types if m.is_box]
+        assert len(box_monos) >= 1
 
     def test_box_valtype_has_inner_children(self):
         """box(valtype) has children copied from inner type for transparent access."""

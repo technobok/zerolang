@@ -2171,7 +2171,11 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_box(self, mono_type: ZType) -> None:
-        """Emit a monomorphized box(valtype) type — just a destructor."""
+        """Emit a monomorphized box(T) destructor.
+
+        If the inner type has its own destructor (class with heap fields,
+        string, etc.), chain it before freeing the box allocation.
+        """
         self.needs_stdlib = True
         name = mono_type.name
         inner_type = mono_type.generic_args.get("t")
@@ -2180,9 +2184,17 @@ class CEmitter:
         inner_ctype = _ctype(inner_type)
         ptr_ctype = f"{inner_ctype}*"
         lines: List[str] = []
-        # destructor: free the heap-allocated value
         lines.append(f"static void z_{name}_destroy({ptr_ctype} v) {{\n")
-        lines.append("    if (v) free(v);\n")
+        lines.append("    if (!v) return;\n")
+        # chain inner destructor for types that own heap resources
+        if inner_type.needs_destructor and inner_type.destructor_name:
+            if inner_type.is_heap_allocated:
+                # inner is a pointer type (map, etc.); pass as-is
+                lines.append(f"    {inner_type.destructor_name}(v);\n")
+            else:
+                # inner is a stack type (class, string, etc.); pass pointer to it
+                lines.append(f"    {inner_type.destructor_name}(v);\n")
+        lines.append("    free(v);\n")
         lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
@@ -5808,6 +5820,17 @@ class CEmitter:
             f"{indent}{ptr_ctype} {tmp} = ({ptr_ctype})malloc(sizeof({inner_ctype}));\n"
         )
         self._temp.decls.append(f"{indent}*{tmp} = {val};\n")
+        # ownership transferred to boxed copy — remove source from frees
+        # to avoid double-free of shared heap resources (e.g. string data)
+        if val in self._temp.frees:
+            self._temp.frees.remove(val)
+        # handle explicit .take — invalidate source variable
+        take_var = self._get_take_var(value_arg.valtype)
+        if take_var:
+            val_type = self._get_operation_type(value_arg.valtype)
+            self._temp.decls.append(
+                self._emit_take_invalidation(take_var, val_type, indent)
+            )
         self._temp.frees.append(tmp)
         return tmp
 
