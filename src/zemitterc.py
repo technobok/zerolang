@@ -2704,7 +2704,14 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
-        if key_is_reftype or val_is_reftype:
+        # iterate buckets if either key or value needs per-entry cleanup —
+        # includes stack-struct-with-heap-data types (e.g. string) which the
+        # `*`-suffix heuristic of key_is_reftype / val_is_reftype misses.
+        key_needs_free = key_is_reftype or bool(key_type and key_type.needs_destructor)
+        val_needs_free = val_is_reftype or bool(
+            value_type and value_type.needs_destructor
+        )
+        if key_needs_free or val_needs_free:
             lines.append("    for (uint64_t i = 0; i < p->capacity; i++) {\n")
             lines.append(
                 f"        if (p->buckets[i].state == Z_{name.upper()}_USED) {{\n"
@@ -3352,6 +3359,18 @@ class CEmitter:
             if ptype_str.endswith("*") and ptype_str.startswith("z_"):
                 self._scope.class_params.add(_mangle_var(pname))
 
+        # register .take params with a destructor for scope-exit cleanup.
+        # Ownership was transferred in from the caller, so the callee owns the
+        # heap data and must free it at function exit (or early return).
+        for pname, ppath in func.parameters.items():
+            if (
+                ppath.type
+                and ppath.type.needs_destructor
+                and ppath.type.destructor_name
+                and func.param_ownership.get(pname) == ZParamOwnership.TAKE
+            ):
+                self._scope.cleanup_vars.append((_mangle_var(pname), ppath.type))
+
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
         self.indent_level = 1
@@ -3504,7 +3523,11 @@ class CEmitter:
             # the variable now owns the value — remove from temp frees
             if val in self._temp.frees:
                 self._temp.frees.remove(val)
-            self._scope.cleanup_vars.append((cname, assign.type))
+            # If the RHS is a call to a function declared `out T.borrow`, the
+            # caller does NOT own the return value. Skip cleanup registration
+            # so scope exit doesn't double-free the borrowed heap buffer.
+            if not self._is_borrow_return_call(assign.value):
+                self._scope.cleanup_vars.append((cname, assign.type))
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = (
@@ -4093,10 +4116,6 @@ class CEmitter:
                     fa_name, call.arguments, skip_first=1
                 )
                 enclosing_t = self._resolved_type(fa_name)
-                # constructor takes ownership of string temps passed as args
-                for st in list(self._temp.frees):
-                    if st in self._temp.string_set and st in args_str:
-                        self._temp.frees.remove(st)
                 result_expr = f"z_{fa_name}_meta_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
@@ -4121,10 +4140,6 @@ class CEmitter:
                 args_str, take_vars = self._build_create_args(
                     fa_name, first_arg.type, call.arguments, skip_first=1
                 )
-                # constructor takes ownership of string temps passed as args
-                for st in list(self._temp.frees):
-                    if st in self._temp.string_set and st in args_str:
-                        self._temp.frees.remove(st)
                 result_expr = f"z_{fa_name}_create({args_str})"
                 ctype = f"z_{fa_name}_t"
                 tmp = self._temp_name("c")
@@ -4413,12 +4428,14 @@ class CEmitter:
         arg_map: Dict[str, str] = {}
         arg_types: Dict[str, Optional[ZType]] = {}
         take_vars: Dict[str, Optional[str]] = {}
+        indent = self._indent()
         for arg in arguments[skip_first:]:
             if arg.name:
                 val = self._emit_operation_value(arg.valtype)
                 arg_map[arg.name] = val
                 arg_types[arg.name] = self._get_operation_type(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
+                self._transfer_implicit_take(val, arg.valtype, indent)
 
         parts: List[str] = []
         for pname in param_names:
@@ -4464,12 +4481,14 @@ class CEmitter:
         arg_map: Dict[str, str] = {}
         arg_types: Dict[str, Optional[ZType]] = {}
         take_vars: Dict[str, Optional[str]] = {}
+        indent = self._indent()
         for arg in arguments[skip_first:]:
             if arg.name:
                 val = self._emit_operation_value(arg.valtype)
                 arg_map[arg.name] = val
                 arg_types[arg.name] = self._get_operation_type(arg.valtype)
                 take_vars[arg.name] = self._get_take_var(arg.valtype)
+                self._transfer_implicit_take(val, arg.valtype, indent)
 
         # build ordered args
         parts: List[str] = []
@@ -4927,21 +4946,24 @@ class CEmitter:
                 )
                 map_type_name = dp_parent_type.name
                 if method_name == "set" and len(call.arguments) >= 2:
-                    key_val = None
-                    val_val = None
+                    key_arg = None
+                    val_arg = None
                     for arg in call.arguments:
                         if arg.name == "key":
-                            key_val = self._emit_operation_value(arg.valtype)
+                            key_arg = arg
                         elif arg.name == "value":
-                            val_val = self._emit_operation_value(arg.valtype)
-                    if key_val is None:
-                        key_val = self._emit_operation_value(call.arguments[0].valtype)
-                    if val_val is None:
-                        val_val = self._emit_operation_value(call.arguments[1].valtype)
-                    # map.set takes ownership of key — remove from temp frees
-                    if key_val in self._temp.string_set:
-                        if key_val in self._temp.frees:
-                            self._temp.frees.remove(key_val)
+                            val_arg = arg
+                    if key_arg is None:
+                        key_arg = call.arguments[0]
+                    if val_arg is None:
+                        val_arg = call.arguments[1]
+                    key_val = self._emit_operation_value(key_arg.valtype)
+                    val_val = self._emit_operation_value(val_arg.valtype)
+                    # map.set takes ownership of both key and value — apply
+                    # implicit-take semantics for heap-backed stack structs.
+                    indent = self._indent()
+                    self._transfer_implicit_take(key_val, key_arg.valtype, indent)
+                    self._transfer_implicit_take(val_val, val_arg.valtype, indent)
                     return f"z_{map_type_name}_set({parent_val}, {key_val}, {val_val})"
                 if method_name == "get" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
@@ -5011,10 +5033,6 @@ class CEmitter:
             args_str, take_vars = self._build_create_args(
                 cls_type.name, cls_type, call.arguments
             )
-            # constructor takes ownership of string temps passed as args
-            for st in list(self._temp.frees):
-                if st in self._temp.string_set and st in args_str:
-                    self._temp.frees.remove(st)
             result = f"z_{cls_type.name}_create({args_str})"
             tmp = self._temp_name("c")
             indent = self._indent()
@@ -5059,27 +5077,53 @@ class CEmitter:
 
         cname = self._emit_callable_expr(call)
         result = f"{cname}({args})"
+        indent = self._indent()
 
         # if call returns a reftype, wrap in temp for cleanup
         if call.type:
             if call.type.subtype == ZSubType.STRING:
-                return self._alloc_temp(result)
+                # A callee declared `out string.borrow` returns a borrowed
+                # view — caller does NOT own it and must not free it.
+                ftype = call.callable.type
+                if ftype and ftype.return_ownership == ZParamOwnership.BORROW:
+                    tmp = self._temp_name("t")
+                    self._temp.decls.append(f"{indent}z_string_t {tmp} = {result};\n")
+                else:
+                    tmp = self._alloc_temp(result)
+                self._apply_call_implicit_takes(call, indent)
+                return tmp
             if call.type.typetype == ZTypeType.CLASS:
                 ctype = f"z_{call.type.name}_t"
                 tmp = self._temp_name("c")
-                indent = self._indent()
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
                 if call.type.needs_destructor:
                     self._temp.frees.append(tmp)
                     self._temp.class_set[tmp] = call.type.name
+                self._apply_call_implicit_takes(call, indent)
                 return tmp
             if call.type.typetype == ZTypeType.UNION:
                 ctype = f"z_{call.type.name}_t"
                 tmp = self._temp_name("c")
-                indent = self._indent()
                 self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
                 self._temp.frees.append(tmp)
+                self._apply_call_implicit_takes(call, indent)
                 return tmp
+
+        # non-reftype return (int/float/void): wrap in a stmt-expr temp so that
+        # implicit-take invalidations for string args are ordered AFTER the
+        # call. Only do this when a string arg is present, to avoid disturbing
+        # the cleanup of other heap-backed stack-struct args (protocols, etc.).
+        if self._call_has_string_arg(call):
+            ret_type = call.type
+            if ret_type is None or _ctype(ret_type) == "void":
+                self._temp.decls.append(f"{indent}{result};\n")
+                self._apply_call_implicit_takes(call, indent)
+                return "0"
+            tmp = self._temp_name("r")
+            ct = _ctype(ret_type)
+            self._temp.decls.append(f"{indent}{ct} {tmp} = {result};\n")
+            self._apply_call_implicit_takes(call, indent)
+            return tmp
 
         return result
 
@@ -5579,6 +5623,98 @@ class CEmitter:
             ct = _ctype(ztype)
             return f"{indent}{var} = ({ct}){{0}};\n"
         return f"{indent}{var} = NULL;\n"
+
+    def _needs_implicit_take(self, ztype: Optional[ZType]) -> bool:
+        """True if ztype is a stack struct that owns heap data (e.g. string).
+
+        Passing such a value by value copies the outer struct but aliases the
+        inner heap pointer, so ownership MUST be transferred at the call site
+        to avoid double-free / leak / use-after-free.
+        """
+        if ztype is None:
+            return False
+        return bool(ztype.needs_destructor) and not ztype.is_heap_allocated
+
+    def _apply_call_implicit_takes(self, call: zast.Call, indent: str) -> None:
+        """Apply implicit TAKE to ownership-transferring args of a function call.
+
+        Runs AFTER the call's result has been emitted (so invalidation decls are
+        appended to ``_temp.decls`` after the call's result-temp decl). Scope:
+
+          * ``string`` args: always transferred at the C level (strings are
+            passed by value and the callee is expected to own the heap buffer).
+          * Other heap-backed stack structs (protocols, unions, classes): only
+            transferred when the param is annotated ``.take`` — default for
+            these is BORROW and the caller retains ownership.
+        """
+        emitted_vals = getattr(self, "_last_emitted_arg_vals", [])
+        ftype = call.callable.type
+        for i, arg in enumerate(call.arguments):
+            if i >= len(emitted_vals) or not emitted_vals[i]:
+                continue
+            arg_type = self._get_operation_type(arg.valtype)
+            if arg_type is None:
+                continue
+            explicit_own = (
+                ftype.param_ownership.get(arg.name) if ftype and arg.name else None
+            )
+            if explicit_own in (ZParamOwnership.BORROW, ZParamOwnership.LOCK):
+                continue
+            is_string = arg_type.subtype == ZSubType.STRING
+            is_explicit_take = explicit_own == ZParamOwnership.TAKE
+            if is_string or (is_explicit_take and self._needs_implicit_take(arg_type)):
+                self._transfer_implicit_take(emitted_vals[i], arg.valtype, indent)
+
+    def _is_borrow_return_call(self, expr: zast.Expression) -> bool:
+        """True if ``expr`` is a call whose callee returns a borrowed value.
+
+        A `out T.borrow` function declares that the return is aliased from an
+        input — the caller must not free it.
+        """
+        inner = expr.expression
+        if inner.nodetype != NodeType.CALL:
+            return False
+        call = cast(zast.Call, inner)
+        ftype = call.callable.type
+        return bool(ftype and ftype.return_ownership == ZParamOwnership.BORROW)
+
+    def _call_has_string_arg(self, call: zast.Call) -> bool:
+        """True if any arg to ``call`` is a string (needs post-call ordering)."""
+        for arg in call.arguments:
+            at = self._get_operation_type(arg.valtype)
+            if at and at.subtype == ZSubType.STRING:
+                return True
+        return False
+
+    def _transfer_implicit_take(
+        self,
+        emitted_val: str,
+        arg_op: zast.Operation,
+        indent: str,
+    ) -> None:
+        """Apply TAKE semantics for an arg whose type owns heap data.
+
+        Mirrors the `_emit_box_create` pattern: drop the arg from the scope's
+        free list (the destination now owns the heap buffer) and, for the
+        implicit case (no explicit `.take`), zero-init the source variable
+        so any residual reference or scope-exit free is a safe no-op.
+
+        The explicit `.take` case is detected via `_get_take_var` and left to
+        the caller's existing `take_vars` invalidation loop — but we still
+        drop from frees here, since ownership is transferred either way.
+        """
+        arg_type = self._get_operation_type(arg_op)
+        if not self._needs_implicit_take(arg_type):
+            return
+        if emitted_val in self._temp.frees:
+            self._temp.frees.remove(emitted_val)
+        if self._get_take_var(arg_op):
+            return  # explicit .take invalidation handled by caller
+        root = self._get_implicit_take_var(arg_op)
+        if root:
+            self._temp.decls.append(
+                self._emit_take_invalidation(root, arg_type, indent)
+            )
 
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
