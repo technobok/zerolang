@@ -1561,38 +1561,32 @@ invalid after the call. Calling <code>.take</code> on an expression that is not 
 <li><code>x.borrow</code> - returns a borrowed reference to <code>x</code>. The variable <code>x</code>
 is exclusively locked for the lifetime of the borrowed reference.</li>
 </ul>
-<h5 id="borrowed-valtypes-and-lock-fields">Borrowed Valtypes and Lock Fields</h5>
-<p>A borrowed valtype is subject to the same restrictions as a borrowed reftype:
-it cannot be copied, taken, swapped, stored in a field, or passed to a
-<code>.take</code> parameter. This makes <code>.borrow</code> meaningful for valtypes and
-enables records that hold locked references to external data.</p>
-<p>Records may declare fields with a <code>.lock</code> type modifier:</p>
-<pre><code class="language-zerolang">iter: record {
+<h5 id="lock-fields-on-classes">Lock Fields on Classes</h5>
+<p>A class may declare a field with a <code>.lock</code> type modifier. The field stores
+a locked reference to external data; the reference is locked for the
+instance's entire lifetime. Classes are single-owner and cannot be copied,
+so the lock cannot be duplicated.</p>
+<pre><code class="language-zerolang">iter: class {
   pos: i64
   target: container.private.lock
 } as {
-  create: function {target: container.private.lock} out this.borrow is {
-    return iter pos: 0 target: target
+  create: function {target: container.private.lock} out this is {
+    return meta.create pos: 0 target: target
   }
 }</code></pre>
-<p>A record with any <code>.lock</code> field is <em><strong>born-borrowed</strong></em>: every constructor
-must return <code>this.borrow</code>, every instance is borrowed from the moment of
-construction, and the locks held by the <code>.lock</code> fields are released when
-the instance falls out of scope. <code>.lock</code> is the only field-type modifier
-permitted (<code>.take</code> and <code>.borrow</code> on field types are rejected) and it is
-permitted only on records, never on classes (a class may outlive the lock
-scope).</p>
-<p>A function may return a born-borrowed record as <code>&lt;type&gt;.borrow</code>. The type
-checker performs escape analysis: every <code>.lock</code> field of the returned
-value must trace back to a <code>.lock</code> parameter of the current function. The
-locks held by those parameters transfer to the caller's variable holding the
-result.</p>
-<p>Born-borrowed records cannot live in class fields, cannot live in records
-that are not themselves born-borrowed, cannot be elements of copy-by-value
-generic containers (<code>list of: born_borrowed_type</code> is rejected), and
-cannot be sources for <code>protocol.create</code> / <code>protocol.borrow</code> /
-<code>facet.create</code> / <code>facet.borrow</code>. They <em><strong>can</strong></em> declare protocol or
-facet conformance in their <code>as</code> block (compile-time only).</p>
+<p><code>.lock</code> is the only field-type modifier permitted (<code>.take</code> and
+<code>.borrow</code> on field types are rejected). <code>.lock</code> fields are only
+permitted on <em><strong>classes</strong></em>. A record with a <code>.lock</code> field is a compile
+error because records are copied freely, which would duplicate the lock.
+A class that has any <code>.lock</code> field cannot itself be nested as a field
+of another user-defined type (its lifetime must be scoped by the same
+block that owns the lock target).</p>
+<p>A function that returns a class holding <code>.lock</code> fields must initialise
+those fields from <code>.lock</code> parameters of the current function. The
+compiler performs escape analysis: every <code>.lock</code> field of the returned
+instance must trace back to a <code>.lock</code> parameter. The locks transfer
+from those parameters to the caller's variable holding the result, keeping
+the source locked for the returned instance's lifetime.</p>
 <p>See <code>doc/ownership.pdoc</code> for the full design and worked examples.</p>
 <h4 id="locking"><a href="#locking">5.1.10. Locking</a></h4>
 <p>Locking is an orthogonal attribute tracked alongside ownership. It prevents
@@ -1636,9 +1630,9 @@ values:</p>
     argument locks are freed.</li>
 </ol>
 <p><code>for</code> loops over a reftype iteration target take an exclusive lock on the
-target for the body's duration, preventing mutation during iteration. Valtype
-iteration targets (born-borrowed iterators) are not locked by <code>for</code> itself
--- their locks flow through per-iteration method dispatch.</p>
+target for the body's duration, preventing mutation during iteration. Per-
+iteration locks on the iterator (and on any <code>.lock</code> fields it carries)
+flow through the per-iteration method dispatch.</p>
 <p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing concern. <code>match</code>
 may <code>.take</code> its subject, in which case the subject is owned with the
@@ -2140,8 +2134,8 @@ target's private fields.</p>
 stored as an owned value, and it participates in the locking algorithm like
 any other reference. Combined with <code>.lock</code> (<code>&lt;type&gt;.private.lock</code>), it
 becomes a friend reference whose lock is held for the lifetime of the
-containing variable -- this is how born-borrowed record iterators access
-their container's internal state.</p>
+containing variable -- this is how class iterators access their container's
+internal state.</p>
 <p>See <code>doc/ownership.pdoc</code> for the full ownership and locking model.</p>
 <h4 id="numeric-types"><a href="#numeric-types">5.3.18. Numeric Types</a></h4>
 <p>Predefined numeric type identifiers:</p>
@@ -2336,11 +2330,11 @@ pa: primes.array   # creates array of: i64 to: 5 with data copied in</code></pre
 process. Since arrays are valtypes, they are copied on assignment and when
 passed to functions. The entire array value is passed on the stack.</p>
 <h3 id="str"><a href="#str">5.7. str</a></h3>
-<p><code>str</code> is a fixed-capacity, stack-allocated string valtype. It complements the
-heap-allocated <code>string</code> (ZStr*) with a lightweight alternative that can be
-used in records and variants, passed by value, and requires no ownership
-tracking or cleanup. <code>str</code> and <code>string</code> are separate types with no implicit
-coercion.</p>
+<p><code>str</code> is a fixed-capacity, stack-allocated string valtype. It complements
+<code>string</code> (whose struct lives on the stack but whose data buffer is on the
+heap) with a lightweight alternative that can be used in records and
+variants, passed by value, and requires no ownership tracking or cleanup.
+<code>str</code> and <code>string</code> are separate types with no implicit coercion.</p>
 <p>The constructor is <code>str to: &lt;capacity&gt;</code> where <code>capacity</code> is the maximum
 number of bytes. An optional <code>from:</code> argument accepts a <code>string</code> value to
 initialize content; if the source exceeds capacity, it is silently truncated.</p>
@@ -2354,8 +2348,8 @@ greeting: (str to: 32) from: "hello"
 n: greeting.length     # u64, current content length (5)
 c: greeting.capacity   # u64, compile-time constant (32)
 
-# convert to heap-allocated string
-heap: greeting.string   # returns ZStr*
+# convert to a string (heap-allocated data buffer)
+heap: greeting.string   # returns string
 
 # print directly
 print greeting
@@ -2370,14 +2364,15 @@ to functions. The entire value (length + data buffer) is passed on the stack.
 Different capacities produce different types: <code>str to: 16</code> and <code>str to: 32</code>
 are incompatible.</p>
 <h3 id="list"><a href="#list">5.8. list</a></h3>
-<p><code>list</code> is a growable, heap-allocated collection reftype. It is generic over
-the element type and provides dynamic-length storage with amortized O(1) append.
-Lists follow reftype ownership semantics: they are heap-allocated, tracked for
-scope cleanup, and support <code>.take</code> for ownership transfer.</p>
+<p><code>list</code> is a growable collection reftype. It is generic over the element
+type and provides dynamic-length storage with amortized O(1) append. Lists
+follow reftype ownership semantics: they are tracked for scope cleanup and
+support <code>.take</code> for ownership transfer. The list struct itself lives on
+the stack; only its element data buffer is heap-allocated.</p>
 <p>The constructor is <code>(list of: &lt;type&gt;)</code> for an empty list, or
 <code>(list of: &lt;type&gt;) capacity: &lt;u64&gt;</code> to pre-allocate storage. The C
-representation is a pointer to a struct with <code>capacity</code> (u64),
-<code>length</code> (u64), and a typed <code>data</code> pointer.</p>
+representation is a struct with <code>length</code> (u64), a typed <code>data</code>
+pointer to the heap buffer, and <code>capacity</code> (u64).</p>
 <pre><code class="language-zerolang"># create an empty list
 nums: (list of: i64)
 
@@ -2677,15 +2672,13 @@ loop drives an iterator by repeatedly invoking <code>call</code> until the resul
 The <code>with</code> form scopes the iterator's lifetime; the <code>for</code> loop binds a
 label to the next yielded value:</p>
 <pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
-<p>The recommended zero-allocation form is a born-borrowed record iterator: a
-record with a <code>.lock</code> field referencing the container's private members
-and a <code>this.borrow</code> constructor. The container is locked for the
-iterator's lifetime; the iterator falls out of scope at the end of the
-<code>for</code> body and the lock on the container is released. See
+<p>The recommended iterator form is a class with a <code>.lock</code> field referencing
+the container's private members. The container is locked for the iterator's
+lifetime; the iterator falls out of scope at the end of the <code>for</code> body
+and the lock on the container is released. Classes are single-owner (cannot
+be copied), which is what makes the <code>.lock</code> field safe. See
 <code>examples/listiter.z</code> for the canonical pattern and
 <code>doc/ownership.pdoc</code> for the lock-lifecycle walkthrough.</p>
-<p>A class-based iterator is also supported when heap allocation is acceptable
-or when the iterator state is too complex for a stack record.</p>
 <h4 id="methods"><a href="#methods">5.11.6. Methods</a></h4>
 <p>Methods are a specialised form of function. They are defined similar to a
 normal, named function call but they must be defined in the namespace of the
@@ -2738,13 +2731,11 @@ level by passing a generic variable at the call site into the constructor.</p>
         return meta.create :a :b      # no stuttering... can use default args
     }
 }</code></pre>
-<p>A valtype constructor may also return <code>out this.borrow</code> instead of
-<code>out this</code>. This declares the type as born-borrowed: every constructor
-must agree on <code>this.borrow</code>, and every instance is borrowed from the
-moment of construction. A born-borrowed constructor may accept <code>.lock</code>
-parameters and store them in <code>.lock</code> fields. A record with any <code>.lock</code>
-field is required to use <code>out this.borrow</code>. See
-<a href="#borrowed-valtypes-and-lock-fields">Borrowed Valtypes and Lock Fields</a>
+<p>Class constructors whose type carries <code>.lock</code> fields simply return
+<code>out this</code> like any other class constructor; the type system verifies
+that the <code>.lock</code> fields are initialised from <code>.lock</code> parameters of
+the constructor (escape analysis). See
+<a href="#lock-fields-on-classes">Lock Fields on Classes</a>
 and <code>doc/ownership.pdoc</code>.</p>
 <p>Note that constructors are not executed for value types that are copied as
 those values are a clone of the original. Contructors for value types are only
@@ -2995,20 +2986,18 @@ dictelement2: record {
     k: t
     v: t
 }</code></pre>
-<p>Record fields may be declared with a <code>.lock</code> type modifier to hold a
-locked reference to external data. A record with any <code>.lock</code> field is
-born-borrowed: every constructor must return <code>this.borrow</code> and every
-instance is borrowed from the moment of construction. <code>.lock</code> is the only
-field-type modifier permitted on records (<code>.take</code> and <code>.borrow</code> are
-rejected) and it is not permitted on classes -- see
-<a href="#borrowed-valtypes-and-lock-fields">Borrowed Valtypes and Lock Fields</a>
+<p>Record fields are pure value data. A record cannot contain <code>string</code>,
+<code>list</code>, <code>box</code>, <code>map</code> or any other heap-backed type, and it cannot
+carry a <code>.lock</code> field. Types that need to hold a locked reference to
+external data are <em><strong>classes</strong></em> -- see
+<a href="#lock-fields-on-classes">Lock Fields on Classes</a>
 and <code>doc/ownership.pdoc</code>.</p>
-<pre><code class="language-zerolang">bagiter: record {
+<pre><code class="language-zerolang">bagiter: class {
     pos: i64
     target: bag.private.lock
 } as {
-    create: function {target: bag.private.lock} out this.borrow is {
-        return bagiter pos: 0 target: target
+    create: function {target: bag.private.lock} out this is {
+        return meta.create pos: 0 target: target
     }
 }</code></pre>
 <h3 id="class"><a href="#class">5.13. class</a></h3>
@@ -3141,23 +3130,23 @@ destructor pointer (NULL for borrowed instances, set for owned instances).</p>
 <ol>
 <li>Borrowed via label <em><strong>(preferred)</strong></em>: access the named protocol
 member in the <code>as</code> clause of an object (<code>r: f.myreader</code>). This
-creates a borrowed protocol instance: the protocol struct is
-heap-allocated and freed when it goes out of scope, but the underlying
-data is not affected. The source variable is locked for the lifetime of
-the protocol instance.</li>
+creates a borrowed protocol instance: the protocol instance lives on the
+caller's stack and is forgotten when it goes out of scope, but the
+underlying data is not affected. The source variable is locked for the
+lifetime of the protocol instance.</li>
 <li>Owned via <code>create</code>: call <code>protocol.create from: obj.take</code>
 or use the bare-name shorthand <code>protocol obj.take</code> which routes
 through <code>.create</code> via the unified call dispatch. This creates an owned
 protocol instance: the source object is consumed and the protocol
 instance owns the data. When the protocol instance goes out of scope,
-both the protocol struct and the underlying data are destroyed.
+both the protocol instance and the underlying data are destroyed.
 <code>.take</code> is <em><strong>not</strong></em> a protocol constructor; it remains the inline
 ownership method on runtime instances (<code>obj.take</code>) only.</li>
 <li>Borrowed via <code>borrow</code>: call <code>protocol.borrow from: obj.lock</code>
 when the label shorthand is not available. This creates a borrowed
 protocol instance (same semantics as the label form). The source
 variable is locked for the lifetime of the protocol instance. The
-protocol struct is heap-allocated and freed on scope exit, but the
+protocol instance lives on the stack until it falls out of scope; the
 underlying data is not destroyed.</li>
 </ol>
 <p>For borrowed instances (label and <code>borrow</code> forms): if the protocol instance
@@ -3254,10 +3243,11 @@ both are value types).</p>
 <p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
 <p>Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
-is a reference type &#x2014; always heap-allocated with a uniform two-word layout:
-a tag and a <code>void*</code> data pointer. All member types may be reference types or
-value types. Valtype payloads are boxed (heap-allocated copy). Reftype payloads
-are stored as pointers directly.</p>
+is a reference type with a uniform two-word layout: a tag and a <code>void*</code>
+data pointer. The union struct itself lives on the stack; the subtype data
+pointed to by <code>void*</code> is heap-allocated. All member types may be reference
+types or value types. Valtype payloads are stored in the heap-allocated
+subtype slot; reftype payloads are stored by pointer.</p>
 <p>Methods can be defined on the union body. These methods operate on the union
 type itself. To access subtype-specific data, the union must first be narrowed
 via <code>match</code>.</p>

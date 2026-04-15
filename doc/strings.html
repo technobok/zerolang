@@ -214,7 +214,7 @@ Table of Contents</div>
 and storage concerns:</p>
 <ul>
 <li><strong>string</strong> -- mutable, owned, heap-allocated. The primary string type for building and modifying text. Always valid UTF-8. Has both a size (current byte count) and a capacity (allocated buffer size). There is no separate string builder -- <code>string</code> is the builder.</li>
-<li><strong>stringview</strong> -- readonly, born-borrowed, value type. A 16-byte pair of <code>(pointer, length)</code> that provides read-only access into a string's buffer or into static <code>.rodata</code>. Always valid UTF-8 (guaranteed by the source it borrows from). Functions that only need to read string data should prefer <code>stringview</code> parameters. <code>stringview</code> is also the preferred return type for slicing, iterating, and searching within strings.</li>
+<li><strong>stringview</strong> -- readonly, single-owner class with a <code>.lock</code> on its source string. A 16-byte pair of <code>(pointer, length)</code> that provides read-only access into a string's buffer or into static <code>.rodata</code>. Always valid UTF-8 (guaranteed by the source it borrows from). The view keeps its source locked for its own lifetime. Functions that only need to read string data should prefer <code>stringview</code> parameters. <code>stringview</code> is also the preferred return type for slicing, iterating, and searching within strings.</li>
 <li><strong>str&lt;to: N&gt;</strong> -- fixed-capacity, owned, value type. Stack-allocated with compile-time capacity. Uses the smallest fixed-width integer for the length field. Suitable for bounded strings embedded in records.</li>
 </ul>
 <p>All three types are length-delimited. There is no language-level
@@ -366,7 +366,7 @@ heap allocations. v2 creates 0 -- all appends go directly into the
 result string's buffer.</p>
 <h2 id="stringview"><a href="#stringview">6. stringview (<code>z_stringview_t</code>)</a></h2>
 <p>A <code>stringview</code> is a read-only window into string data. It is a
-born-borrowed value type (16 bytes on the stack) with no heap
+single-owner class laid out inline on the stack (16 bytes) with no heap
 allocation:</p>
 <pre><code class="language-c">typedef struct {
     const char* data;    /* pointer into string buffer or .rodata */
@@ -395,8 +395,10 @@ method which copies the data to the heap:</p>
 mutable: "hello".string     # string (heap-allocated copy)
 mutable: greeting.string    # same: copies viewed data to heap</code></pre>
 <h3 id="stringview-ownership-and-borrowing"><a href="#stringview-ownership-and-borrowing">6.2. stringview Ownership and Borrowing</a></h3>
-<p><code>stringview</code> is a born-borrowed type: every instance is borrowed from
-the moment of creation. There are two kinds of <code>stringview</code>:</p>
+<p><code>stringview</code> is a single-owner class: it cannot be copied, only moved
+via <code>.take</code>. Dynamic views keep their source <code>string</code> locked for the
+view's lifetime, exactly like any class with a <code>.lock</code> field. There
+are two kinds of <code>stringview</code>:</p>
 <p><strong>Static stringview</strong> (from literals): points to <code>.rodata</code>, which is
 immortal. No lock is needed. Static views can be freely copied within
 scope constraints.</p>
@@ -711,7 +713,7 @@ case with none of the complexity.</p>
 <ul>
 <li>Two string-like types complicates the API. Every function must decide which to accept.</li>
 <li>Exclusive locking on the source string prevents mutation while any view exists. This is safe but can be restrictive in complex code.</li>
-<li>Cannot store <code>stringview</code> in records or classes in v2 due to scope-based lifetime constraints. This limits expressiveness for data structures containing string references.</li>
+<li><code>stringview</code> is a class with a <code>.lock</code> field, so it can appear as a field of another class (following the class <code>.lock</code> rules) but not inside a record (records cannot hold heap-backed fields) and not as a field of a type that might outlive the source <code>string</code>.</li>
 <li>No implicit conversion means extra ceremony when a function takes <code>string</code> but the caller has a literal or view.</li>
 </ul>
 <h3 id="no-nul-guarantee-pros"><a href="#no-nul-guarantee-pros">12.5. No NUL guarantee -- Pros</a></h3>
@@ -765,7 +767,7 @@ design. Items marked with <code>+</code> are complete.</p>
 <h3 id="phase-4-type-complete"><a href="#phase-4-type-complete">13.4. Phase 4: <code>stringview</code> Type [COMPLETE]</a></h3>
 <ul>
 <li>Add <code>ZSubType.STRINGVIEW</code> to <code>ztypes.py</code>.</li>
-<li>Add <code>stringview</code> as born-borrowed record type in <code>system.z</code>.</li>
+<li>Add <code>stringview</code> as a class (<code>.lock</code> field on the source string) in <code>system.z</code> (finalised in the type-representation refactor).</li>
 <li>Add <code>z_stringview_t</code> struct to runtime (<code>const char* data</code> + <code>uint64_t length</code>).</li>
 <li>Add <code>z_stringview_print</code>, <code>z_stringview_eq</code>, <code>z_string_from_view</code> runtime functions.</li>
 <li>Add <code>string.toview</code> method (creates locked <code>z_stringview_t</code> from string).</li>
@@ -776,7 +778,7 @@ design. Items marked with <code>+</code> are complete.</p>
 <li>Handle <code>stringview</code> in print (call-site conversion) and string interpolation.</li>
 <li>String literals resolve to <code>stringview</code> type. Emitted as <code>static const z_stringview_t</code> constants.</li>
 <li><code>.toview from: to:</code> substring views with runtime bounds checking.</li>
-<li>Born-borrowed: <code>stringview</code> from <code>.toview</code> cannot be copied; locks source string.</li>
+<li>Single-owner class: <code>stringview</code> from <code>.toview</code> cannot be copied; locks source string for the view's lifetime.</li>
 <li><code>print</code> takes <code>stringview.borrow</code> with call-site conversion for <code>string</code> and <code>str</code> args.</li>
 <li>Fix <code>.toview</code> lock tracking on dotted paths (<code>record.field.toview</code> locks root variable).</li>
 </ul>
@@ -798,7 +800,7 @@ design. Items marked with <code>+</code> are complete.</p>
 </ul>
 <h2 id="open-questions"><a href="#open-questions">14. Open Questions</a></h2>
 <ul>
-<li><strong>stringview in records:</strong> what mechanism would allow storing a <code>stringview</code> in a record field while maintaining safety? Lifetime annotations? Reference counting? Deferred to v3.</li>
+<li><strong>stringview in records:</strong> resolved. Records cannot hold <code>stringview</code> fields (records cannot contain any heap-backed type). A <code>stringview</code> can appear as a field of a class, following the class <code>.lock</code> rules described in <code>doc/ownership.pdoc</code>.</li>
 <li><strong>str.stringview:</strong> deferred to v3 when lifetime annotations can track stack lifetimes. At function call boundaries, implicit <code>str</code> -&gt; <code>stringview</code> conversion is safe and handled by the emitter.</li>
 <li><strong>bytes type:</strong> separate design for non-UTF-8 data (file I/O, network protocols).</li>
 <li><strong>String hashing:</strong> <code>string</code> and <code>stringview</code> with the same content produce the same hash (hash from content, not representation).</li>

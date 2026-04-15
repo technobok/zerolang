@@ -261,15 +261,17 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#implementation-plan">Implementation Plan</a>
+<li><a href="#implementation-history">Implementation History</a>
 <ul>
-<li><a href="#phase-1-foundation-destructor-metadata">Phase 1: Foundation -- Destructor Metadata</a>
+<li><a href="#historical-phase-notes-scaffolding">Historical Phase Notes -- Scaffolding</a>
+</li>
+<li><a href="#phase-1-foundation-destructor-metadata-complete">Phase 1: Foundation -- Destructor Metadata [COMPLETE]</a>
 <ul>
 <li><a href="#changes">Changes</a>
 </li>
 </ul>
 </li>
-<li><a href="#phase-2-stack-allocate-classes">Phase 2: Stack-Allocate Classes</a>
+<li><a href="#phase-2-stack-allocate-classes-complete">Phase 2: Stack-Allocate Classes [COMPLETE]</a>
 <ul>
 <li><a href="#2a-type-metadata">2a: Type Metadata</a>
 </li>
@@ -293,13 +295,13 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#phase-3-stack-allocate-list-structs">Phase 3: Stack-Allocate List Structs</a>
+<li><a href="#phase-3-stack-allocate-list-structs-complete">Phase 3: Stack-Allocate List Structs [COMPLETE]</a>
 <ul>
 <li><a href="#changes-2">Changes</a>
 </li>
 </ul>
 </li>
-<li><a href="#phase-4-rewrite-string-runtime">Phase 4: Rewrite String Runtime</a>
+<li><a href="#phase-4-rewrite-string-runtime-complete">Phase 4: Rewrite String Runtime [COMPLETE]</a>
 <ul>
 <li><a href="#4a-struct-definition">4a: Struct Definition</a>
 </li>
@@ -311,39 +313,31 @@ Table of Contents</div>
 </li>
 </ul>
 </li>
-<li><a href="#phase-5-stack-allocate-unions">Phase 5: Stack-Allocate Unions</a>
+<li><a href="#phase-5-stack-allocate-unions-complete">Phase 5: Stack-Allocate Unions [COMPLETE]</a>
 <ul>
 <li><a href="#changes-3">Changes</a>
 </li>
 </ul>
 </li>
-<li><a href="#phase-6-stack-allocate-protocol-instances">Phase 6: Stack-Allocate Protocol Instances</a>
+<li><a href="#phase-6-stack-allocate-protocol-instances-complete">Phase 6: Stack-Allocate Protocol Instances [COMPLETE]</a>
 <ul>
 <li><a href="#changes-4">Changes</a>
 </li>
 </ul>
 </li>
-<li><a href="#phase-7-extend-lock-fields-to-classes">Phase 7: Extend .lock Fields to Classes</a>
+<li><a href="#phase-7-extend-lock-fields-to-classes-complete">Phase 7: Extend .lock Fields to Classes [COMPLETE]</a>
+</li>
+<li><a href="#phase-8-remove-born-borrowed-from-valtypes-complete">Phase 8: Remove Born-Borrowed from Valtypes [COMPLETE]</a>
+</li>
+<li><a href="#phase-9-implement-listview-complete">Phase 9: Implement listview [COMPLETE]</a>
 <ul>
 <li><a href="#changes-5">Changes</a>
 </li>
 </ul>
 </li>
-<li><a href="#phase-8-remove-born-borrowed-from-valtypes">Phase 8: Remove Born-Borrowed from Valtypes</a>
+<li><a href="#phase-10-box-refinements-complete">Phase 10: Box Refinements [COMPLETE]</a>
 <ul>
 <li><a href="#changes-6">Changes</a>
-</li>
-</ul>
-</li>
-<li><a href="#phase-9-implement-listview">Phase 9: Implement listview</a>
-<ul>
-<li><a href="#changes-7">Changes</a>
-</li>
-</ul>
-</li>
-<li><a href="#phase-10-box-refinements">Phase 10: Box Refinements</a>
-<ul>
-<li><a href="#changes-8">Changes</a>
 </li>
 </ul>
 </li>
@@ -1010,13 +1004,55 @@ special case that produces a freely-borrowable stringview without locking?
 This would require the compiler to recognise that <code>.rodata</code>-backed
 stringviews need no lock.</li>
 </ul>
-<h1 id="implementation-plan"><a href="#implementation-plan">Implementation Plan</a></h1>
-<p>The implementation is split into phases. Each phase is independently testable.
-Dependencies between phases are noted.</p>
-<h2 id="phase-1-foundation-destructor-metadata"><a href="#phase-1-foundation-destructor-metadata">17. Phase 1: Foundation -- Destructor Metadata</a></h2>
+<h1 id="implementation-history"><a href="#implementation-history">Implementation History</a></h1>
+<p>The refactor was landed in ten phases, all of which are now  complete. Each
+phase was independently testable and landed behind passing <code>make check &amp;&amp;
+make test &amp;&amp; make build</code>. This section records the phase list for historical
+reference; the type specifications earlier in this document describe the
+current state.</p>
+<ul>
+<li>Phase 1 -- Destructor metadata. Split "struct needs free" from
+"struct has fields needing cleanup" in <code>ZType</code>.</li>
+<li>Phase 2 -- Stack-allocate classes. Removed class heap allocation;
+class field access uses <code>.</code> (only method <code>this</code> and boxed items use
+<code>-&gt;</code>); destructors emit only when a class has owned fields that need
+cleanup.</li>
+<li>Phase 3 -- Stack-allocate list structs. <code>list</code> struct on the
+stack; the data buffer remains on the heap.</li>
+<li>Phase 4 -- Rewrite string runtime. <code>z_string_t</code> becomes
+<code>{ size, data*, capacity }</code> on the stack with a heap data buffer.</li>
+<li>Phase 5 -- Stack-allocate unions. Union struct stays
+<code>{ tag, void* }</code> but lives on the stack; subtype data is heap-allocated.</li>
+<li>Phase 6 -- Stack-allocate protocol instances. Protocol wrapper is
+now a 24-byte stack struct; owned wrappers heap-allocate only a copy of
+the implementation.</li>
+<li>Phase 7 -- Extend <code>.lock</code> fields to classes.</li>
+<li>Phase 8 -- Remove born-borrowed from valtypes. Records may no
+longer hold <code>.lock</code> fields or heap-backed types; types that needed
+them became classes (<code>stringview</code>, iterators, views).</li>
+<li>Phase 9 -- Implement <code>listview</code> as a read-only class view into
+a <code>list</code>.</li>
+<li>Phase 10 -- Box refinements. <code>box(T)</code> adapted to work with
+stack-allocated classes and born-boxed construction.</li>
+</ul>
+<p>The compile-time restrictions that the refactor introduced are:</p>
+<ul>
+<li>Record fields cannot be <code>string</code>, <code>list</code>, <code>box</code>, <code>map</code> or any
+  other heap-backed type. They also cannot be another user class or union.
+  Records are pure valtypes.</li>
+<li><code>.lock</code> fields are permitted on classes only. A record with a
+<code>.lock</code> field is rejected.</li>
+<li>A class (or any user-defined type) that has a <code>.lock</code> field cannot
+  appear as a field of another type.</li>
+</ul>
+<h2 id="historical-phase-notes-scaffolding"><a href="#historical-phase-notes-scaffolding">17. Historical Phase Notes -- Scaffolding</a></h2>
+<p>The rest of this section is an internal record of the phase-by-phase
+work items. It is retained for archaeology; none of the plans below are
+outstanding.</p>
+<h2 id="phase-1-foundation-destructor-metadata-complete"><a href="#phase-1-foundation-destructor-metadata-complete">18. Phase 1: Foundation -- Destructor Metadata [COMPLETE]</a></h2>
 <p>Goal: separate "struct needs free" from "struct has fields needing cleanup" in
 the type metadata.</p>
-<h3 id="changes"><a href="#changes">17.1. Changes</a></h3>
+<h3 id="changes"><a href="#changes">18.1. Changes</a></h3>
 <p><code>ztypes.py</code> -- <code>ZType</code> dataclass (line 223):</p>
 <ul>
 <li>Add <code>needs_field_cleanup: bool = field(default=False, init=False)</code>.
@@ -1028,67 +1064,67 @@ the type metadata.</p>
   <code>needs_destructor=True</code>. If found, set <code>needs_field_cleanup=True</code>.</li>
 </ul>
 <p>Testing: <code>make check &amp;&amp; make test</code>. All tests pass -- no behaviour change.</p>
-<h2 id="phase-2-stack-allocate-classes"><a href="#phase-2-stack-allocate-classes">18. Phase 2: Stack-Allocate Classes</a></h2>
+<h2 id="phase-2-stack-allocate-classes-complete"><a href="#phase-2-stack-allocate-classes-complete">19. Phase 2: Stack-Allocate Classes [COMPLETE]</a></h2>
 <p>Goal: move class structs from heap to stack. Core change with largest blast
 radius.</p>
-<h3 id="2a-type-metadata"><a href="#2a-type-metadata">18.1. 2a: Type Metadata</a></h3>
+<h3 id="2a-type-metadata"><a href="#2a-type-metadata">19.1. 2a: Type Metadata</a></h3>
 <p><code>ztypecheck.py</code> -- <code>_set_destructor_metadata()</code> (line 180):</p>
 <ul>
 <li>For <code>ZTypeType.CLASS</code>: set <code>is_heap_allocated = False</code>.</li>
 <li><code>needs_destructor = True</code> only if <code>needs_field_cleanup</code> is True.</li>
 </ul>
-<h3 id="2b-c-type-mapping"><a href="#2b-c-type-mapping">18.2. 2b: C Type Mapping</a></h3>
+<h3 id="2b-c-type-mapping"><a href="#2b-c-type-mapping">19.2. 2b: C Type Mapping</a></h3>
 <p><code>zemitterc.py</code> -- <code>_ctype()</code> (line 122):</p>
 <ul>
 <li>Remove <code>ZTypeType.CLASS</code> from the pointer-returning set.</li>
 <li>Keep <code>UNION</code> and <code>PROTOCOL</code> in pointer set for now.</li>
 </ul>
-<h3 id="2c-destructor-emission"><a href="#2c-destructor-emission">18.3. 2c: Destructor Emission</a></h3>
+<h3 id="2c-destructor-emission"><a href="#2c-destructor-emission">19.3. 2c: Destructor Emission</a></h3>
 <p><code>zemitterc.py</code> -- <code>_emit_class()</code> (line 1686):</p>
 <ul>
 <li>Remove <code>free(p)</code> at line 1693.</li>
 <li>Emit destructor only when <code>needs_field_cleanup</code> is True.</li>
 </ul>
-<h3 id="2d-field-access-operator"><a href="#2d-field-access-operator">18.4. 2d: Field Access Operator</a></h3>
+<h3 id="2d-field-access-operator"><a href="#2d-field-access-operator">19.4. 2d: Field Access Operator</a></h3>
 <p><code>zemitterc.py</code> -- <code>_is_class_pointer_path()</code> (line 5169):</p>
 <ul>
 <li>Remove the early return at lines 5173-5178 for <code>ZTypeType.CLASS</code>.</li>
 <li>Keep <code>class_params</code> check for method <code>this</code>.</li>
 </ul>
-<h3 id="2e-method-receiver"><a href="#2e-method-receiver">18.5. 2e: Method Receiver</a></h3>
+<h3 id="2e-method-receiver"><a href="#2e-method-receiver">19.5. 2e: Method Receiver</a></h3>
 <p><code>zemitterc.py</code> -- <code>_emit_function()</code> (line 3096):</p>
 <ul>
 <li>When emitting a class method, explicitly add <code>*</code> to the <code>this</code>
   parameter type and add to <code>class_params</code>.</li>
 </ul>
-<h3 id="2f-call-sites"><a href="#2f-call-sites">18.6. 2f: Call Sites</a></h3>
+<h3 id="2f-call-sites"><a href="#2f-call-sites">19.6. 2f: Call Sites</a></h3>
 <p><code>zemitterc.py</code> -- method dispatch and borrow parameters:</p>
 <ul>
 <li>Generate <code>&amp;var</code> when passing stack class to borrow param or method.</li>
 </ul>
-<h3 id="2g-ownership-transfer"><a href="#2g-ownership-transfer">18.7. 2g: Ownership Transfer</a></h3>
+<h3 id="2g-ownership-transfer"><a href="#2g-ownership-transfer">19.7. 2g: Ownership Transfer</a></h3>
 <p><code>zemitterc.py</code> -- <code>.take</code> and <code>.release</code>:</p>
 <ul>
 <li>Change from <code>var = NULL</code> to <code>var = (z_X_t){0}</code>.</li>
 </ul>
-<h3 id="2h-function-returns"><a href="#2h-function-returns">18.8. 2h: Function Returns</a></h3>
+<h3 id="2h-function-returns"><a href="#2h-function-returns">19.8. 2h: Function Returns</a></h3>
 <ul>
 <li>Class returns become by-value (remove pointer return paths).</li>
 </ul>
-<h3 id="2i-field-restrictions"><a href="#2i-field-restrictions">18.9. 2i: Field Restrictions</a></h3>
+<h3 id="2i-field-restrictions"><a href="#2i-field-restrictions">19.9. 2i: Field Restrictions</a></h3>
 <p><code>ztypecheck.py</code>:</p>
 <ul>
 <li>Add check: record fields cannot be string, list, box, map, class, union,
   or any type with <code>needs_destructor=True</code>. Emit compile error.</li>
 </ul>
-<h3 id="2j-monomorphised-classes"><a href="#2j-monomorphised-classes">18.10. 2j: Monomorphised Classes</a></h3>
+<h3 id="2j-monomorphised-classes"><a href="#2j-monomorphised-classes">19.10. 2j: Monomorphised Classes</a></h3>
 <ul>
 <li>Apply same changes to <code>_emit_mono_class()</code> (line 2807).</li>
 </ul>
 <p>Testing: ~40 test updates expected. Compile <code>classes.z</code>. ASan verification.</p>
-<h2 id="phase-3-stack-allocate-list-structs"><a href="#phase-3-stack-allocate-list-structs">19. Phase 3: Stack-Allocate List Structs</a></h2>
+<h2 id="phase-3-stack-allocate-list-structs-complete"><a href="#phase-3-stack-allocate-list-structs-complete">20. Phase 3: Stack-Allocate List Structs [COMPLETE]</a></h2>
 <p>Goal: list struct on stack, data buffer on heap.</p>
-<h3 id="changes-2"><a href="#changes-2">19.1. Changes</a></h3>
+<h3 id="changes-2"><a href="#changes-2">20.1. Changes</a></h3>
 <p><code>ztypecheck.py</code>:</p>
 <ul>
 <li>List types: set <code>is_heap_allocated = False</code>, keep <code>needs_destructor = True</code>.</li>
@@ -1105,17 +1141,17 @@ radius.</p>
 <li>Rename and change: return struct by value, allocate only data buffer.</li>
 </ul>
 <p>Testing: compile <code>lists.z</code>. ASan verification.</p>
-<h2 id="phase-4-rewrite-string-runtime"><a href="#phase-4-rewrite-string-runtime">20. Phase 4: Rewrite String Runtime</a></h2>
+<h2 id="phase-4-rewrite-string-runtime-complete"><a href="#phase-4-rewrite-string-runtime-complete">21. Phase 4: Rewrite String Runtime [COMPLETE]</a></h2>
 <p>Goal: change string from flexible-array-member to stack struct + heap data
 buffer.</p>
 <p>Dependency: Phase 2 (classes on stack).</p>
 <p>This is the highest-risk phase due to pervasive string usage.</p>
-<h3 id="4a-struct-definition"><a href="#4a-struct-definition">20.1. 4a: Struct Definition</a></h3>
+<h3 id="4a-struct-definition"><a href="#4a-struct-definition">21.1. 4a: Struct Definition</a></h3>
 <p><code>zemitterc_runtime.py</code> -- <code>_Z_STRING_RUNTIME</code> (line 38):</p>
 <ul>
 <li>Change struct to <code>{ uint64_t size; char* data; uint64_t capacity; }</code>.</li>
 </ul>
-<h3 id="4b-runtime-functions"><a href="#4b-runtime-functions">20.2. 4b: Runtime Functions</a></h3>
+<h3 id="4b-runtime-functions"><a href="#4b-runtime-functions">21.2. 4b: Runtime Functions</a></h3>
 <p>Rewrite all string runtime functions:</p>
 <ul>
 <li>Constructors (<code>z_string_new</code>, <code>z_string_cat</code>, <code>z_string_from_*</code>,
@@ -1124,7 +1160,7 @@ buffer.</p>
 <li>Mutation methods (<code>z_string_reserve</code>, <code>z_string_append</code>,
   <code>z_string_shrink</code>): take <code>z_string_t*</code> (unchanged).</li>
 </ul>
-<h3 id="4c-emitter-updates"><a href="#4c-emitter-updates">20.3. 4c: Emitter Updates</a></h3>
+<h3 id="4c-emitter-updates"><a href="#4c-emitter-updates">21.3. 4c: Emitter Updates</a></h3>
 <p><code>zemitterc.py</code>:</p>
 <ul>
 <li><code>_ctype()</code>: change string from <code>z_string_t*</code> to <code>z_string_t</code>.</li>
@@ -1135,7 +1171,7 @@ buffer.</p>
 <ul>
 <li>For <code>ZSubType.STRING</code>: set <code>is_heap_allocated = False</code>.</li>
 </ul>
-<h3 id="4d-stringview-runtime"><a href="#4d-stringview-runtime">20.4. 4d: Stringview Runtime</a></h3>
+<h3 id="4d-stringview-runtime"><a href="#4d-stringview-runtime">21.4. 4d: Stringview Runtime</a></h3>
 <p><code>zemitterc_runtime.py</code>:</p>
 <ul>
 <li><code>z_string_toview</code>: takes <code>z_string_t*</code>, returns <code>z_stringview_t</code>
@@ -1143,10 +1179,10 @@ pointing into <code>s-&gt;data</code>.</li>
 <li><code>z_string_from_view</code>: returns <code>z_string_t</code> by value.</li>
 </ul>
 <p>Testing: run ALL tests. Sub-phase changes. ASan on all examples.</p>
-<h2 id="phase-5-stack-allocate-unions"><a href="#phase-5-stack-allocate-unions">21. Phase 5: Stack-Allocate Unions</a></h2>
+<h2 id="phase-5-stack-allocate-unions-complete"><a href="#phase-5-stack-allocate-unions-complete">22. Phase 5: Stack-Allocate Unions [COMPLETE]</a></h2>
 <p>Goal: union struct on stack, subtype data stays heap-allocated via void*.</p>
 <p>Dependency: Phase 2 (classes on stack).</p>
-<h3 id="changes-3"><a href="#changes-3">21.1. Changes</a></h3>
+<h3 id="changes-3"><a href="#changes-3">22.1. Changes</a></h3>
 <p><code>ztypecheck.py</code>:</p>
 <ul>
 <li>For <code>ZTypeType.UNION</code>: set <code>is_heap_allocated = False</code>.</li>
@@ -1172,10 +1208,10 @@ pointing into <code>s-&gt;data</code>.</li>
 <li><code>u.data</code> casting patterns stay the same (still void*).</li>
 </ul>
 <p>Testing: union tests. Compile union examples.</p>
-<h2 id="phase-6-stack-allocate-protocol-instances"><a href="#phase-6-stack-allocate-protocol-instances">22. Phase 6: Stack-Allocate Protocol Instances</a></h2>
+<h2 id="phase-6-stack-allocate-protocol-instances-complete"><a href="#phase-6-stack-allocate-protocol-instances-complete">23. Phase 6: Stack-Allocate Protocol Instances [COMPLETE]</a></h2>
 <p>Goal: protocol wrapper struct on stack.</p>
 <p>Dependency: Phase 2 (classes on stack).</p>
-<h3 id="changes-4"><a href="#changes-4">22.1. Changes</a></h3>
+<h3 id="changes-4"><a href="#changes-4">23.1. Changes</a></h3>
 <p><code>zemitterc.py</code> -- <code>_emit_protocol()</code> (line 987):</p>
 <ul>
 <li>Protocol struct remains <code>{ void* data, vtable*, destroy }</code> -- 24
@@ -1195,60 +1231,40 @@ pointing into <code>s-&gt;data</code>.</li>
 <li>Remove <code>ZTypeType.PROTOCOL</code> from pointer-returning set.</li>
 </ul>
 <p>Testing: protocol tests. Compile protocol examples.</p>
-<h2 id="phase-7-extend-lock-fields-to-classes"><a href="#phase-7-extend-lock-fields-to-classes">23. Phase 7: Extend .lock Fields to Classes</a></h2>
+<h2 id="phase-7-extend-lock-fields-to-classes-complete"><a href="#phase-7-extend-lock-fields-to-classes-complete">24. Phase 7: Extend .lock Fields to Classes [COMPLETE]</a></h2>
 <p>Goal: allow classes to have <code>.lock</code> fields.</p>
 <p>Dependency: Phase 2 (classes on stack).</p>
-<h3 id="changes-5"><a href="#changes-5">23.1. Changes</a></h3>
-<p><code>ztypecheck.py</code>:</p>
+<p>Summary of completed work:</p>
 <ul>
-<li>Remove restriction preventing <code>.lock</code> fields on classes.</li>
-<li>For classes with <code>.lock</code> fields: do not set <code>is_born_borrowed</code>.</li>
-<li>Add restriction: a type with <code>.lock</code> fields cannot appear as a field
-  of another type.</li>
-<li>Lock transfer in constructors: same mechanism as born-borrowed records.</li>
+<li>Removed the restriction that prevented <code>.lock</code> fields on classes.</li>
+<li>Added the restriction: a type with a <code>.lock</code> field cannot appear
+  as a field of another type.</li>
+<li>Classes with <code>.lock</code> fields use the same lock-transfer mechanism
+  in constructors that born-borrowed records previously used.</li>
+<li><code>.lock</code> fields emit as normal pointer fields with no special
+destructor handling.</li>
 </ul>
-<p><code>zemitterc.py</code>:</p>
-<ul>
-<li><code>.lock</code> fields emit as normal pointer fields.</li>
-<li>No special destructor handling for <code>.lock</code> fields.</li>
-</ul>
-<p>Testing: new test cases for class .lock fields, locking, restriction
-enforcement.</p>
-<h2 id="phase-8-remove-born-borrowed-from-valtypes"><a href="#phase-8-remove-born-borrowed-from-valtypes">24. Phase 8: Remove Born-Borrowed from Valtypes</a></h2>
-<p>Goal: remove the born-borrowed mechanism from records. Migrate existing
-born-borrowed records to classes.</p>
+<h2 id="phase-8-remove-born-borrowed-from-valtypes-complete"><a href="#phase-8-remove-born-borrowed-from-valtypes-complete">25. Phase 8: Remove Born-Borrowed from Valtypes [COMPLETE]</a></h2>
+<p>Goal: remove the born-borrowed mechanism from records entirely. Migrate
+the remaining born-borrowed records to classes.</p>
 <p>Dependency: Phase 7 (.lock on classes).</p>
-<h3 id="changes-6"><a href="#changes-6">24.1. Changes</a></h3>
-<p><code>ztypecheck.py</code>:</p>
+<p>Summary of completed work:</p>
 <ul>
-<li>Remove <code>_check_born_borrowed_record()</code> validation.</li>
-<li>Remove <code>is_born_borrowed</code> checks for records.</li>
-<li>Remove <code>this.borrow</code> return handling for record constructors.</li>
-<li>Disallow <code>.lock</code> fields on records -- emit error directing user to
-  use a class instead.</li>
+<li>Removed <code>_check_born_borrowed_record()</code> validation and all
+  <code>is_born_borrowed</code> checks from the type checker.</li>
+<li>Removed <code>this.borrow</code> return handling for record constructors.</li>
+<li><code>.lock</code> fields on records now emit a compile error pointing the
+user at classes.</li>
+<li>Removed all born-borrowed record pointer-receiver handling and
+  method-dispatch wrapping from the emitter.</li>
+<li><code>stringview</code> in <code>lib/system/system.z</code> became a class.</li>
+<li>Migrated <code>borrowed_record.z</code>, <code>listiter.z</code>, and <code>strview.z</code>
+  examples to the class-based form.</li>
 </ul>
-<p><code>zemitterc.py</code>:</p>
-<ul>
-<li>Remove born-borrowed record pointer receiver handling (lines
-  3118-3125).</li>
-<li>Remove born-borrowed checks in <code>_is_class_pointer_path()</code> (lines
-  5188-5196).</li>
-<li>Remove born-borrowed method dispatch wrapping (lines 3655-3666).</li>
-</ul>
-<p><code>lib/system/system.z</code>:</p>
-<ul>
-<li>Change <code>stringview</code> from record to class.</li>
-</ul>
-<p><code>lib/system/collections.z</code>:</p>
-<ul>
-<li>Change any born-borrowed records to classes.</li>
-</ul>
-<p>Testing: update all born-borrowed tests. Migrate <code>borrowed_record.z</code>,
-<code>listiter.z</code>, <code>strview.z</code> examples.</p>
-<h2 id="phase-9-implement-listview"><a href="#phase-9-implement-listview">25. Phase 9: Implement listview</a></h2>
+<h2 id="phase-9-implement-listview-complete"><a href="#phase-9-implement-listview-complete">26. Phase 9: Implement listview [COMPLETE]</a></h2>
 <p>Goal: add the <code>listview</code> generic type.</p>
 <p>Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).</p>
-<h3 id="changes-7"><a href="#changes-7">25.1. Changes</a></h3>
+<h3 id="changes-5"><a href="#changes-5">26.1. Changes</a></h3>
 <p><code>lib/system/collections.z</code>:</p>
 <ul>
 <li>Add <code>listview</code> type definition.</li>
@@ -1274,11 +1290,11 @@ born-borrowed records to classes.</p>
 <li>Add <code>list.toview</code> method emission.</li>
 </ul>
 <p>Testing: new test cases. New <code>examples/listview.z</code>.</p>
-<h2 id="phase-10-box-refinements"><a href="#phase-10-box-refinements">26. Phase 10: Box Refinements</a></h2>
+<h2 id="phase-10-box-refinements-complete"><a href="#phase-10-box-refinements-complete">27. Phase 10: Box Refinements [COMPLETE]</a></h2>
 <p>Goal: ensure box works with stack-allocated classes and born-boxed
 optimisation.</p>
 <p>Dependency: Phase 2 (classes on stack).</p>
-<h3 id="changes-8"><a href="#changes-8">26.1. Changes</a></h3>
+<h3 id="changes-6"><a href="#changes-6">27.1. Changes</a></h3>
 <p><code>zemitterc.py</code> -- <code>_emit_mono_box()</code> (line 2063):</p>
 <ul>
 <li>For <code>box(class_with_destructor)</code>: destructor calls inner destructor +
@@ -1288,7 +1304,7 @@ optimisation.</p>
 </ul>
 <p>Testing: update <code>box.z</code> example. Add tests for <code>box(class)</code>.</p>
 <h1 id="pros-cons-and-risks"><a href="#pros-cons-and-risks">Pros, Cons, and Risks</a></h1>
-<h2 id="pros"><a href="#pros">27. Pros</a></h2>
+<h2 id="pros"><a href="#pros">28. Pros</a></h2>
 <ul>
 <li>Simpler mental model. "Everything is on the stack. Only box and data
 buffers are on the heap." Easy to teach and reason about.</li>
@@ -1296,14 +1312,15 @@ buffers are on the heap." Easy to teach and reason about.</li>
 improving performance and reducing fragmentation.</li>
 <li>Unified field access. Local variables of all types use <code>.</code> for
 field access. Only <code>this</code> in methods and boxed items use <code>-&gt;</code>.</li>
-<li>Class .lock fields. Enables natural class-based iterators and views
-without the born-borrowed workaround. More flexible (supports <code>.take</code>).</li>
+<li>Class .lock fields. Enables natural class-based iterators and
+views. More flexible than the old born-borrowed record approach: a class
+instance supports <code>.take</code> (moving to a new name).</li>
 <li>Clean type system. Valtypes are always values. Reftypes are always
-references with identity. No hybrid born-borrowed category.</li>
+references with identity. No hybrid category.</li>
 <li>Predictable memory usage. Stack allocation makes memory usage more
 predictable and eliminates <code>malloc</code> failure risk for ordinary objects.</li>
 </ul>
-<h2 id="cons"><a href="#cons">28. Cons</a></h2>
+<h2 id="cons"><a href="#cons">29. Cons</a></h2>
 <ul>
 <li>Stack size. Large class structs consume stack space. For deeply
 recursive functions with large local classes, stack overflow is possible.
@@ -1317,13 +1334,13 @@ stack space. Rarely an issue in practice since variant subtypes must be
 valtypes (typically small).</li>
 <li>String rewrite risk. The string runtime rewrite (Phase 4) touches
 nearly every test.</li>
-<li>Born-borrowed migration. All existing born-borrowed records must
-become classes. One-time cost.</li>
+<li>Born-borrowed migration cost. All born-borrowed records had to be
+rewritten as classes. One-time cost, now absorbed.</li>
 <li>Recursive types. Self-referential types (linked list nodes, tree
 nodes) must use <code>box(self)</code> for the recursive field. Error message should
 be clear.</li>
 </ul>
-<h2 id="risks"><a href="#risks">29. Risks</a></h2>
+<h2 id="risks"><a href="#risks">30. Risks</a></h2>
 <ul>
 <li>Test blast radius. ~1200 tests. Phases 2, 4, and 5 will each cause
 significant test breakage. Mitigation: phase incrementally.</li>
