@@ -1079,18 +1079,12 @@ class CEmitter:
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
                     ptype_str = _ctype(ppath.type)
-                    # 'this' parameter: add * for class/born-borrowed methods
+                    # 'this' parameter: add * for class methods
                     if (
                         impl_type
                         and ppath.type is impl_type
                         and not ptype_str.endswith("*")
-                        and (
-                            impl_type.typetype == ZTypeType.CLASS
-                            or (
-                                impl_type.typetype == ZTypeType.RECORD
-                                and getattr(impl_type, "is_born_borrowed", False)
-                            )
-                        )
+                        and impl_type.typetype == ZTypeType.CLASS
                     ):
                         ptype_str = f"{ptype_str}*"
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
@@ -1575,8 +1569,8 @@ class CEmitter:
 
         Returns (params, field_names, field_ctypes).
         """
-        # check lock field names for the type (born-borrowed records store
-        # .lock fields as pointers)
+        # check lock field names for the type (classes with .lock fields
+        # store stack-allocated class fields as pointers)
         ztype = self._resolved_type(name)
         lock_fields = ztype.lock_field_names if ztype else set()
 
@@ -3274,17 +3268,12 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         record_type = self._resolved_type(record_name) if record_name else None
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
-        born_borrowed_record = bool(
-            record_type
-            and record_type.typetype == ZTypeType.RECORD
-            and getattr(record_type, "is_born_borrowed", False)
-        )
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(ppath.type)
             # this-receiver: pass by pointer
             if (
-                (is_class_method or born_borrowed_record)
+                is_class_method
                 and ppath.type is record_type
                 and not ptype_str.endswith("*")
             ):
@@ -3311,23 +3300,18 @@ class CEmitter:
 
         ret_ctype = self._return_ctype(func)
 
-        # Class and born-borrowed record methods pass the `this` receiver by
-        # pointer so mutations via `it.field = ...` persist across calls.
+        # Class methods pass the `this` receiver by pointer so mutations via
+        # `it.field = ...` persist across calls.
         record_type = self._resolved_type(record_name) if record_name else None
-        born_borrowed_record = bool(
-            record_type
-            and record_type.typetype == ZTypeType.RECORD
-            and getattr(record_type, "is_born_borrowed", False)
-        )
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
 
         params: List[str] = []
         pointer_params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(ppath.type)
-            # class/born-borrowed record this-receiver: pass by pointer
+            # class this-receiver: pass by pointer
             if (
-                (is_class_method or born_borrowed_record)
+                is_class_method
                 and ppath.type is record_type
                 and not ptype_str.endswith("*")
             ):
@@ -3884,19 +3868,12 @@ class CEmitter:
         type_name = call.callable_type_name
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
-        # Class and born-borrowed record methods expect a pointer receiver.
-        # Wrap the variable with & when it's a stack-allocated type and the
-        # receiver is a plain atom (not already a pointer).
+        # Class methods expect a pointer receiver. Wrap the variable with &
+        # when the receiver is a plain atom (not already a pointer).
         rec_t = self._resolved_type(type_name) if type_name is not None else None
         if (
             rec_t is not None
-            and (
-                rec_t.typetype == ZTypeType.CLASS
-                or (
-                    rec_t.typetype == ZTypeType.RECORD
-                    and getattr(rec_t, "is_born_borrowed", False)
-                )
-            )
+            and rec_t.typetype == ZTypeType.CLASS
             and not receiver.startswith("&")
         ):
             receiver = f"&{receiver}"
@@ -4327,38 +4304,31 @@ class CEmitter:
                 # string-returning calls are already temped by _alloc_temp
                 if ctype != "z_string_t":
                     val = self._alloc_arg_temp(ctype, val)
-            # stack-allocated class/born-borrowed record passed as 'this': add &
+            # stack-allocated class passed as 'this': add &.
             # The C function expects a pointer for 'this' parameters, but the
             # argument is a stack-allocated struct. Detect 'this' by checking
             # if the function is a method and the parameter type matches the
-            # enclosing class/record type.
+            # enclosing class type.
             arg_type = self._get_operation_type(arg.valtype)
             if (
                 arg_type
                 and not arg_type.is_heap_allocated
-                and (
-                    arg_type.typetype == ZTypeType.CLASS
-                    or (
-                        arg_type.typetype == ZTypeType.RECORD
-                        and getattr(arg_type, "is_born_borrowed", False)
-                    )
-                )
+                and arg_type.typetype == ZTypeType.CLASS
                 and not val.startswith("&")
                 and ftype
                 and ctype_idx < len(list(ftype.children.items()))
             ):
                 param_name = list(ftype.children.keys())[ctype_idx]
                 param_type = ftype.children[param_name]
-                # 'this' receiver: param type matches enclosing class/record
+                # 'this' receiver: param type matches enclosing class
                 # and the function is a method (dotted name origin)
                 is_this_param = param_name == "this" or (
                     param_type is arg_type and ftype.name and "." in ftype.name
                 )
                 # borrow/lock class params also need &
-                is_borrow_lock = (
-                    arg_type.typetype == ZTypeType.CLASS
-                    and ftype.param_ownership.get(param_name)
-                    in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
+                is_borrow_lock = ftype.param_ownership.get(param_name) in (
+                    ZParamOwnership.BORROW,
+                    ZParamOwnership.LOCK,
                 )
                 if is_this_param or is_borrow_lock:
                     val = f"&{val}"
@@ -5074,19 +5044,13 @@ class CEmitter:
                     receiver = self._emit_path_value(
                         cast(zast.DottedPath, call.callable).parent
                     )
-                    # stack-allocated class/born-borrowed record: wrap with &
+                    # stack-allocated class: wrap with &
                     parent_path = cast(zast.DottedPath, call.callable).parent
                     parent_type = parent_path.type
                     if (
                         parent_type
                         and not parent_type.is_heap_allocated
-                        and (
-                            parent_type.typetype == ZTypeType.CLASS
-                            or (
-                                parent_type.typetype == ZTypeType.RECORD
-                                and getattr(parent_type, "is_born_borrowed", False)
-                            )
-                        )
+                        and parent_type.typetype == ZTypeType.CLASS
                         and not receiver.startswith("&")
                         and not self._is_class_pointer_path(parent_path)
                     ):
@@ -5592,7 +5556,7 @@ class CEmitter:
             for vname, vtype in self._scope.cleanup_vars:
                 if vname == cname and vtype.is_heap_allocated:
                     return True
-            # method 'this' parameter (class or born-borrowed record) is a pointer
+            # method 'this' parameter (class) is a pointer
             if cname in self._scope.class_params:
                 return True
         return False
@@ -6495,18 +6459,12 @@ class CEmitter:
                 if callable_type:
                     obj_val = self._emit_operation_value(iop)
                     call_fn = _mangle_func(f"{callable_type}.call")
-                    # Class and born-borrowed record iterators take a pointer
-                    # receiver since 'this' is always a pointer.
+                    # Class iterators take a pointer receiver since 'this' is
+                    # always a pointer.
                     rec_t = self._resolved_type(callable_type)
                     if (
                         rec_t is not None
-                        and (
-                            rec_t.typetype == ZTypeType.CLASS
-                            or (
-                                rec_t.typetype == ZTypeType.RECORD
-                                and getattr(rec_t, "is_born_borrowed", False)
-                            )
-                        )
+                        and rec_t.typetype == ZTypeType.CLASS
                         and not obj_val.startswith("&")
                     ):
                         obj_val = f"&{obj_val}"

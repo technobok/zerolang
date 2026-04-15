@@ -1135,72 +1135,14 @@ class TestBorrowedValtypeRestrictions:
             "}"
         )
 
-    def test_born_borrowed_passes_to_borrow_param(self):
-        """A born-borrowed instance can be passed to any .borrow parameter,
-        same as a regular borrowed valtype — born-borrowed is a TYPE-level
-        property; after construction the instance is an ordinary borrowed
-        variable."""
-        check_ok(
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "}\n"
-            "use_iter: function {it: bagiter.borrow} out i64 is {\n"
-            "  return it.target.a\n"
-            "}\n"
-            "main: function is {\n"
-            "  b: bag a: 42\n"
-            "  it: bag.iterate b: b\n"
-            "  x: use_iter it\n"
-            "}"
-        )
 
+class TestLockFieldsAndBornBorrowedRemoved:
+    """Born-borrowed records have been removed; the equivalent functionality
+    is provided by classes with .lock fields. These tests verify that the
+    obsolete forms now produce errors directing users to classes."""
 
-class TestLockFieldsAndBornBorrowed:
-    """Phase B: .lock fields, this.borrow constructors, born-borrowed valtypes."""
-
-    def _born_borrowed_iterator(self) -> str:
-        """Source for the canonical born-borrowed iterator pattern."""
-        return (
-            "bag: class { a: i64 b: i64 c: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  pos: i64\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create pos: 0 target: target\n"
-            "  }\n"
-            "}\n"
-        )
-
-    def test_lock_field_with_this_borrow_constructor_ok(self):
-        program = check_ok(
-            self._born_borrowed_iterator()
-            + "main: function is { b: bag a: 1 b: 2 c: 3; it: b.iterate }"
-        )
-        tc = TypeChecker(program)
-        tc.check()
-        rtype = tc._resolved.get("test.bagiter")
-        assert rtype is not None
-        assert rtype.has_lock_fields is True
-        assert "target" in rtype.lock_field_names
-        assert rtype.is_born_borrowed is True
-
-    def test_lock_field_without_this_borrow_constructor_error(self):
+    def test_lock_field_on_record_error(self):
+        # A .lock field on a record is no longer accepted.
         errors = check_errors(
             "bag: class { a: i64 }\n"
             "badrec: record { target: bag.private.lock } as {\n"
@@ -1210,18 +1152,20 @@ class TestLockFieldsAndBornBorrowed:
             "}\n"
             "main: function is { b: bag a: 1; r: badrec target: b.private }"
         )
-        assert any("lock" in e.msg.lower() and "this.borrow" in e.msg for e in errors)
+        assert any("'.lock'" in e.msg and "class" in e.msg.lower() for e in errors)
 
-    def test_constructor_agreement_required(self):
+    def test_this_borrow_constructor_on_record_error(self):
+        # A constructor returning this.borrow on a record is no longer
+        # accepted. Use a class with .lock fields instead.
         errors = check_errors(
             "v: record { x: i64 } as {\n"
-            "  c1: function out this is { return meta.create x: 0 }\n"
-            "  c2: function out this.borrow is { return meta.create x: 0 }\n"
+            "  create: function out this.borrow is { return meta.create x: 0 }\n"
             "}\n"
-            "main: function is { r: v.c1 }"
+            "main: function is { r: v.create }"
         )
         assert any(
-            "mixed constructor" in e.msg or "must agree" in e.msg for e in errors
+            "born-borrowed" in e.msg.lower() and "no longer supported" in e.msg.lower()
+            for e in errors
         )
 
     def test_lock_field_on_class_allowed(self):
@@ -1242,275 +1186,6 @@ class TestLockFieldsAndBornBorrowed:
             "v: record { f: i64.take }\nmain: function is { x: v f: 0 }"
         )
         assert any("only '.lock'" in e.msg.lower() for e in errors)
-
-    def test_born_borrowed_record_in_class_field_error(self):
-        errors = check_errors(
-            self._born_borrowed_iterator() + "holder: class { it: bagiter }\n"
-            "main: function is { b: bag a: 1 b: 2 c: 3; h: holder it: b.iterate }"
-        )
-        assert any(
-            "born-borrowed" in e.msg.lower() and "class" in e.msg.lower()
-            for e in errors
-        )
-
-    def test_lock_field_reassignment_error(self):
-        # The reassignment must be reachable from somewhere with private
-        # access, so put it inside a method on bag itself.
-        errors = check_errors(
-            "bag: class { a: i64 } as {\n"
-            "  reset: function {b: this.lock other: this.lock} "
-            "out bagiter.borrow is {\n"
-            "    it: bagiter pos: 0 target: b.private\n"
-            "    it.target = other.private\n"
-            "    return it\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  pos: i64\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create pos: 0 target: target\n"
-            "  }\n"
-            "}\n"
-            "main: function is { b: bag a: 1 }"
-        )
-        assert any(
-            "lock" in e.msg.lower() and "immutable" in e.msg.lower() for e in errors
-        )
-
-    def test_born_borrowed_instance_is_borrowed(self):
-        # Born-borrowed instances should be BORROWED, so copying them should
-        # fail (covered by the Phase A check in _check_assignment). Use the
-        # explicit named-argument call form (`bag.iterate b: b`) since a
-        # bare `b.iterate` parses as a function reference, not a method call.
-        errors = check_errors(
-            self._born_borrowed_iterator() + "main: function is {\n"
-            "  b: bag a: 1 b: 2 c: 3\n"
-            "  it: bag.iterate b: b\n"
-            "  it2: it\n"
-            "}"
-        )
-        assert any("borrowed valtype" in e.msg.lower() for e in errors)
-
-
-class TestValtypeBorrowEscape:
-    """Phase C: escape analysis for valtype borrow returns."""
-
-    def _types(self) -> str:
-        return (
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "}\n"
-        )
-
-    def test_borrow_return_traces_lock_param_ok(self):
-        check_ok(self._types() + "main: function is { b: bag a: 1 }")
-
-    def test_borrow_return_traces_local_var_error(self):
-        # Returning a born-borrowed constructed from a local variable (not
-        # a .lock parameter) is rejected.
-        errors = check_errors(
-            "bag: class { a: i64 } as {\n"
-            "  bad: function {b: this.lock} out bagiter.borrow is {\n"
-            "    other: bag a: 5\n"
-            "    return bagiter target: other.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "}\n"
-            "main: function is { b: bag a: 1 }"
-        )
-        assert any(
-            "Borrowed return" in e.msg and "lock" in e.msg.lower() for e in errors
-        )
-
-    def test_borrow_return_parenthesised_construction_ok(self):
-        check_ok(
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return (bagiter target: b.private)\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "}\n"
-            "main: function is { b: bag a: 1 }"
-        )
-
-    def test_borrow_return_with_no_lock_param_error(self):
-        # Function declares borrow return but has no .lock parameter at all.
-        errors = check_errors(
-            "bag: class { a: i64 }\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "}\n"
-            "noparam: function out bagiter.borrow is {\n"
-            "  b: bag a: 1\n"
-            "  return bagiter target: b.private\n"
-            "}\n"
-            "main: function is {}"
-        )
-        assert any(
-            "no 'lock' parameter" in e.msg or "lock parameter" in e.msg.lower()
-            for e in errors
-        )
-
-
-class TestBornBorrowedGenericsAndProtocols:
-    """Phase E: born-borrowed valtypes are rejected as generic container
-    elements and as sources for protocol/facet creation."""
-
-    BAG = (
-        "bag: class { a: i64 } as {\n"
-        "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-        "    return bagiter target: b.private\n"
-        "  }\n"
-        "}\n"
-        "bagiter: record {\n"
-        "  target: bag.private.lock\n"
-        "} as {\n"
-        "  create: function {target: bag.private.lock} "
-        "out this.borrow is {\n"
-        "    return bagiter target: target\n"
-        "  }\n"
-        "}\n"
-    )
-
-    def test_list_of_born_borrowed_error(self):
-        errors = check_errors(self.BAG + "main: function is { xs: (list of: bagiter) }")
-        assert any(
-            "born-borrowed" in e.msg.lower() and "bagiter" in e.msg for e in errors
-        )
-
-    def test_list_of_normal_record_ok(self):
-        check_ok(
-            "point: record { x: i64 y: i64 }\n"
-            "main: function is {\n"
-            "  xs: (list of: point)\n"
-            "  xs.append from: (point x: 1 y: 2)\n"
-            "}"
-        )
-
-    def test_protocol_create_from_born_borrowed_error(self):
-        errors = check_errors(
-            "reader: protocol {\n"
-            "  read: function {:this} out i64\n"
-            "}\n"
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  myreader: reader\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "  read: function {it: this} out i64 is {\n"
-            "    return it.target.a\n"
-            "  }\n"
-            "}\n"
-            "main: function is {\n"
-            "  b: bag a: 5\n"
-            "  it: bag.iterate b: b\n"
-            "  r: reader.create from: it\n"
-            "}\n"
-        )
-        assert any(
-            "born-borrowed" in e.msg.lower() and "reader" in e.msg for e in errors
-        )
-
-    def test_protocol_borrow_from_born_borrowed_error(self):
-        errors = check_errors(
-            "reader: protocol {\n"
-            "  read: function {:this} out i64\n"
-            "}\n"
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  myreader: reader\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "  read: function {it: this} out i64 is {\n"
-            "    return it.target.a\n"
-            "  }\n"
-            "}\n"
-            "main: function is {\n"
-            "  b: bag a: 5\n"
-            "  it: bag.iterate b: b\n"
-            "  r: reader.borrow from: it\n"
-            "}\n"
-        )
-        assert any("born-borrowed" in e.msg.lower() for e in errors)
-
-    def test_born_borrowed_protocol_conformance_declaration_ok(self):
-        """Declaring protocol conformance in `as` is permitted -- the
-        conformance itself is compile-time only. Only construction
-        (.create / .take / .borrow) is rejected."""
-        check_ok(
-            "reader: protocol {\n"
-            "  read: function {:this} out i64\n"
-            "}\n"
-            "bag: class { a: i64 } as {\n"
-            "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-            "    return bagiter target: b.private\n"
-            "  }\n"
-            "}\n"
-            "bagiter: record {\n"
-            "  target: bag.private.lock\n"
-            "} as {\n"
-            "  myreader: reader\n"
-            "  create: function {target: bag.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create target: target\n"
-            "  }\n"
-            "  read: function {it: this} out i64 is {\n"
-            "    return it.target.a\n"
-            "  }\n"
-            "}\n"
-            "main: function is {\n"
-            "  b: bag a: 5\n"
-            "  it: bag.iterate b: b\n"
-            "}\n"
-        )
 
 
 class TestImplicitConstruction:

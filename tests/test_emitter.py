@@ -5928,9 +5928,8 @@ class TestListView:
 class TestClassLockFields:
     """Phase 7: classes with .lock fields.
 
-    Classes (stack-allocated, single-owner) may now hold .lock references
-    to other objects. Unlike born-borrowed records, these classes are
-    owned and can be moved via .take.
+    Classes (stack-allocated, single-owner) may hold .lock references
+    to other objects. These classes are owned and can be moved via .take.
     """
 
     def test_class_lock_field_stored_as_pointer(self):
@@ -5966,109 +5965,3 @@ class TestClassLockFields:
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
-
-
-class TestBornBorrowedEmitter:
-    """Phase D: end-to-end emit/compile/run for born-borrowed records.
-
-    These tests exercise records with .lock fields and `this.borrow`
-    constructors. The C emitter must:
-      1. Emit born-borrowed records as plain structs with no destructor.
-      2. Pass the receiver as a pointer to method calls so mutations to
-         fields like `pos` persist across iterator invocations.
-      3. Not enqueue born-borrowed values for scope cleanup.
-    """
-
-    BAG_ITERATOR = (
-        "bag: class { a: i64 b: i64 c: i64 } as {\n"
-        "  iterate: function {b: this.lock} out bagiter.borrow is {\n"
-        "    return bagiter target: b.private\n"
-        "  }\n"
-        "}\n"
-        "bagiter: record {\n"
-        "  pos: i64\n"
-        "  max: i64\n"
-        "  target: bag.private.lock\n"
-        "} as {\n"
-        "  create: function {target: bag.private.lock} "
-        "out this.borrow is {\n"
-        "    return meta.create pos: 0 max: 3 target: target\n"
-        "  }\n"
-        "  call: function {it: this} out (optionval t: i64) is {\n"
-        "    if it.pos < it.max then {\n"
-        "      if it.pos == 0 then {\n"
-        "        it.pos = it.pos + 1\n"
-        "        return (optionval.some it.target.a)\n"
-        "      }\n"
-        "      if it.pos == 1 then {\n"
-        "        it.pos = it.pos + 1\n"
-        "        return (optionval.some it.target.b)\n"
-        "      }\n"
-        "      it.pos = it.pos + 1\n"
-        "      return (optionval.some it.target.c)\n"
-        "    }\n"
-        "    return (optionval.none i64)\n"
-        "  }\n"
-        "}\n"
-    )
-
-    def test_born_borrowed_iterator_runs(self):
-        """For-loop over a born-borrowed record iterator emits and runs."""
-        csource = emit_source(
-            self.BAG_ITERATOR + "main: function is {\n"
-            "  b: bag a: 10 b: 20 c: 30\n"
-            "  with iter: bag.iterate b: b do for x: iter loop {\n"
-            '    print "\\{x}"\n'
-            "  }\n"
-            "}"
-        )
-        # Born-borrowed records have no destructor.
-        assert "z_bagiter_destroy" not in csource
-        output = compile_and_run(csource)
-        assert output.strip() == "10\n20\n30"
-
-    def test_born_borrowed_iterator_asan_clean(self):
-        """Same iterator under ASan/UBSan: no leaks or undefined behavior."""
-        csource = emit_source(
-            self.BAG_ITERATOR + "main: function is {\n"
-            "  b: bag a: 1 b: 2 c: 3\n"
-            "  with iter: bag.iterate b: b do for x: iter loop {\n"
-            '    print "\\{x}"\n'
-            "  }\n"
-            "}"
-        )
-        output = compile_and_run(
-            csource,
-            extra_cflags=["-fsanitize=address", "-fsanitize=undefined"],
-        )
-        assert output.strip() == "1\n2\n3"
-
-    def test_born_borrowed_slice_runs(self):
-        """Non-iterator born-borrowed record: slice/view over a class."""
-        csource = emit_source(
-            "container: class { x: i64 y: i64 z: i64 } as {\n"
-            "  slice: function {c: this.lock} out cview.borrow is {\n"
-            "    return cview source: c.private\n"
-            "  }\n"
-            "}\n"
-            "cview: record {\n"
-            "  offset: i64\n"
-            "  source: container.private.lock\n"
-            "} as {\n"
-            "  create: function {source: container.private.lock} "
-            "out this.borrow is {\n"
-            "    return meta.create offset: 0 source: source\n"
-            "  }\n"
-            "}\n"
-            "main: function is {\n"
-            "  c: container x: 7 y: 14 z: 21\n"
-            "  v: container.slice c: c\n"
-            '  print "\\{v.source.x}"\n'
-            '  print "\\{v.source.y}"\n'
-            '  print "\\{v.source.z}"\n'
-            "}"
-        )
-        # Born-borrowed records have no destructor.
-        assert "z_cview_destroy" not in csource
-        output = compile_and_run(csource)
-        assert output.strip() == "7\n14\n21"

@@ -48,7 +48,7 @@ class ZSubType(IntEnum):
 
     NONE = 0
     STRING = 1  # string class — z_string_t* with z_string_free destructor
-    STRINGVIEW = 2  # stringview record — z_stringview_t, born-borrowed valtype
+    STRINGVIEW = 2  # stringview class — z_stringview_t (borrowed view of bytes)
 
 
 @unique
@@ -253,16 +253,11 @@ class ZType:
 
     # set of field names declared with the .lock type modifier — the field
     # stores a locked reference to external data. Lock fields are immutable
-    # after construction and force the enclosing record to be born-borrowed.
+    # after construction and only permitted on classes.
     lock_field_names: "set[str]" = field(default_factory=set, init=False)
 
-    # True iff this record has at least one .lock field. Implies the type is
-    # born-borrowed and propagates the borrowed restriction.
+    # True iff this type has at least one .lock field (classes only).
     has_lock_fields: bool = field(default=False, init=False)
-
-    # True iff every constructor of this record returns this.borrow (the type
-    # is born-borrowed). Instances are BORROWED from the moment of creation.
-    is_born_borrowed: bool = field(default=False, init=False)
 
     # True iff the type's 'create' method is disabled — either by the user
     # writing 'create: null' in the 'as' block, or by the compiler for types
