@@ -4140,8 +4140,9 @@ class CEmitter:
                 # emit as create call
                 self.needs_stdlib = True
                 fa_name = cast(zast.AtomId, first_arg).name
-                args_str, take_vars = self._build_meta_create_args(
-                    fa_name, call.arguments, skip_first=1
+                # use _build_create_args to respect user-defined create param order
+                args_str, take_vars = self._build_create_args(
+                    fa_name, first_arg.type, call.arguments, skip_first=1
                 )
                 # constructor takes ownership of string temps passed as args
                 for st in list(self._temp.frees):

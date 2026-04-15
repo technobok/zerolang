@@ -1,10 +1,9 @@
-# listiter.z -- Iterator over a container using a born-borrowed record
+# listiter.z -- Iterator over a container using a class with .lock field
 #
 # Demonstrates:
 # - Container class with public/private access control
-# - Born-borrowed record iterator (zero allocation, no .take)
+# - Class-based iterator with .lock field (Phase 7: classes may hold locks)
 # - .lock field holding a borrowed reference to the container's privates
-# - this.borrow constructor for the iterator
 # - Friend access via .private to read the container's private fields
 # - Callable iterator (for-loop integration via optionval)
 # - The container is locked for the lifetime of the iterator
@@ -13,21 +12,22 @@
 bag: class { a: i64 b: i64 c: i64 count: i64 } as {
     public: unit { :count :iterate }
 
-    # Factory: borrows the container and returns a born-borrowed iterator.
+    # Factory: borrows the container and returns an iterator.
     # `b: this.lock` locks the container for the iterator's lifetime.
-    iterate: function {b: this.lock} out bagiter.borrow is {
+    iterate: function {b: this.lock} out bagiter is {
         return bagiter target: b.private
     }
 }
 
-# Born-borrowed record iterator. The .lock field holds a borrowed reference
-# to bag's private members; the iterator may not outlive the lock.
-bagiter: record {
+# Class iterator with a .lock field. Classes are single-owner
+# (can be moved via .take but not copied), providing the safety
+# guarantees that born-borrowed records used to enforce.
+bagiter: class {
     pos: i64
     max: i64
     target: bag.private.lock
 } as {
-    create: function {target: bag.private.lock} out this.borrow is {
+    create: function {target: bag.private.lock} out this is {
         return meta.create pos: 0 max: 3 target: target
     }
 
@@ -52,7 +52,7 @@ main: function is {
     b: bag a: 10 b: 20 c: 30 count: 3
     print "bag count: \{b.count}"
 
-    # `with` scopes the borrowed iterator; the bag is locked until the
+    # `with` scopes the iterator; the bag is locked until the
     # iterator falls out of scope at the end of the for body.
     with iter: bag.iterate b: b do for x: iter loop {
         print "iter: \{x}"
