@@ -1674,46 +1674,38 @@ runtime instances:
   [#*: #~"x.borrow" - returns a borrowed reference to #~"x". The variable #~"x"
     is exclusively locked for the lifetime of the borrowed reference.]
 
-#-----: Borrowed Valtypes and Lock Fields
+#-----: #~".lock" Fields on Classes
 
-A borrowed valtype is subject to the same restrictions as a borrowed reftype:
-it cannot be copied, taken, swapped, stored in a field, or passed to a
-#~".take" parameter. This makes #~".borrow" meaningful for valtypes and
-enables records that hold locked references to external data.
-
-Records may declare fields with a #~".lock" type modifier:
+A class may declare a field with a #~".lock" type modifier. The field stores
+a locked reference to external data; the reference is locked for the
+instance's entire lifetime. Classes are single-owner and cannot be copied,
+so the lock cannot be duplicated.
 
 #code language=zerolang: """
-  iter: record {
+  iter: class {
     pos: i64
     target: container.private.lock
   } as {
-    create: function {target: container.private.lock} out this.borrow is {
-      return iter pos: 0 target: target
+    create: function {target: container.private.lock} out this is {
+      return meta.create pos: 0 target: target
     }
   }
   """
 
-A record with any #~".lock" field is #_*"born-borrowed": every constructor
-must return #~"this.borrow", every instance is borrowed from the moment of
-construction, and the locks held by the #~".lock" fields are released when
-the instance falls out of scope. #~".lock" is the only field-type modifier
-permitted (#~".take" and #~".borrow" on field types are rejected) and it is
-permitted only on records, never on classes (a class may outlive the lock
-scope).
+#~".lock" is the only field-type modifier permitted (#~".take" and
+#~".borrow" on field types are rejected). #~".lock" fields are only
+permitted on #_*"classes". A record with a #~".lock" field is a compile
+error because records are copied freely, which would duplicate the lock.
+A class that has any #~".lock" field cannot itself be nested as a field
+of another user-defined type (its lifetime must be scoped by the same
+block that owns the lock target).
 
-A function may return a born-borrowed record as #~"<type>.borrow". The type
-checker performs escape analysis: every #~".lock" field of the returned
-value must trace back to a #~".lock" parameter of the current function. The
-locks held by those parameters transfer to the caller's variable holding the
-result.
-
-Born-borrowed records cannot live in class fields, cannot live in records
-that are not themselves born-borrowed, cannot be elements of copy-by-value
-generic containers (#~"list of: born_borrowed_type" is rejected), and
-cannot be sources for #~"protocol.create" / #~"protocol.borrow" /
-#~"facet.create" / #~"facet.borrow". They #_*"can" declare protocol or
-facet conformance in their #~"as" block (compile-time only).
+A function that returns a class holding #~".lock" fields must initialise
+those fields from #~".lock" parameters of the current function. The
+compiler performs escape analysis: every #~".lock" field of the returned
+instance must trace back to a #~".lock" parameter. The locks transfer
+from those parameters to the caller's variable holding the result, keeping
+the source locked for the returned instance's lifetime.
 
 See #~"doc/ownership.pdoc" for the full design and worked examples.
 
@@ -1767,9 +1759,9 @@ values:
     argument locks are freed.]
 
 #~"for" loops over a reftype iteration target take an exclusive lock on the
-target for the body's duration, preventing mutation during iteration. Valtype
-iteration targets (born-borrowed iterators) are not locked by #~"for" itself
--- their locks flow through per-iteration method dispatch.
+target for the body's duration, preventing mutation during iteration. Per-
+iteration locks on the iterator (and on any #~".lock" fields it carries)
+flow through the per-iteration method dispatch.
 
 #~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing concern. #~"match"
@@ -2381,8 +2373,8 @@ target's private fields.
 stored as an owned value, and it participates in the locking algorithm like
 any other reference. Combined with #~".lock" (#~"<type>.private.lock"), it
 becomes a friend reference whose lock is held for the lifetime of the
-containing variable -- this is how born-borrowed record iterators access
-their container's internal state.
+containing variable -- this is how class iterators access their container's
+internal state.
 
 See #~"doc/ownership.pdoc" for the full ownership and locking model.
 
@@ -2656,11 +2648,11 @@ passed to functions. The entire array value is passed on the stack.
 
 #---: str
 
-#~"str" is a fixed-capacity, stack-allocated string valtype. It complements the
-heap-allocated #~"string" (ZStr*) with a lightweight alternative that can be
-used in records and variants, passed by value, and requires no ownership
-tracking or cleanup. #~"str" and #~"string" are separate types with no implicit
-coercion.
+#~"str" is a fixed-capacity, stack-allocated string valtype. It complements
+#~"string" (whose struct lives on the stack but whose data buffer is on the
+heap) with a lightweight alternative that can be used in records and
+variants, passed by value, and requires no ownership tracking or cleanup.
+#~"str" and #~"string" are separate types with no implicit coercion.
 
 The constructor is #~"str to: <capacity>" where #~"capacity" is the maximum
 number of bytes. An optional #~"from:" argument accepts a #~"string" value to
@@ -2677,8 +2669,8 @@ initialize content; if the source exceeds capacity, it is silently truncated.
   n: greeting.length     # u64, current content length (5)
   c: greeting.capacity   # u64, compile-time constant (32)
 
-  # convert to heap-allocated string
-  heap: greeting.string   # returns ZStr*
+  # convert to a string (heap-allocated data buffer)
+  heap: greeting.string   # returns string
 
   # print directly
   print greeting
@@ -2697,15 +2689,16 @@ are incompatible.
 
 #---: list
 
-#~"list" is a growable, heap-allocated collection reftype. It is generic over
-the element type and provides dynamic-length storage with amortized O(1) append.
-Lists follow reftype ownership semantics: they are heap-allocated, tracked for
-scope cleanup, and support #~".take" for ownership transfer.
+#~"list" is a growable collection reftype. It is generic over the element
+type and provides dynamic-length storage with amortized O(1) append. Lists
+follow reftype ownership semantics: they are tracked for scope cleanup and
+support #~".take" for ownership transfer. The list struct itself lives on
+the stack; only its element data buffer is heap-allocated.
 
 The constructor is #~"(list of: <type>)" for an empty list, or
 #~"(list of: <type>) capacity: <u64>" to pre-allocate storage. The C
-representation is a pointer to a struct with #~"capacity" (u64),
-#~"length" (u64), and a typed #~"data" pointer.
+representation is a struct with #~"length" (u64), a typed #~"data"
+pointer to the heap buffer, and #~"capacity" (u64).
 
 #code language=zerolang: """
   # create an empty list
@@ -3072,16 +3065,13 @@ label to the next yielded value:
 #code language=zerolang:
   with iter: container.iterate c: c do for x: iter loop { ... }
 
-The recommended zero-allocation form is a born-borrowed record iterator: a
-record with a #~".lock" field referencing the container's private members
-and a #~"this.borrow" constructor. The container is locked for the
-iterator's lifetime; the iterator falls out of scope at the end of the
-#~"for" body and the lock on the container is released. See
+The recommended iterator form is a class with a #~".lock" field referencing
+the container's private members. The container is locked for the iterator's
+lifetime; the iterator falls out of scope at the end of the #~"for" body
+and the lock on the container is released. Classes are single-owner (cannot
+be copied), which is what makes the #~".lock" field safe. See
 #~"examples/listiter.z" for the canonical pattern and
 #~"doc/ownership.pdoc" for the lock-lifecycle walkthrough.
-
-A class-based iterator is also supported when heap allocation is acceptable
-or when the iterator state is too complex for a stack record.
 
 #----: Methods
 
@@ -3150,13 +3140,11 @@ level by passing a generic variable at the call site into the constructor.
   }
   """
 
-A valtype constructor may also return #~"out this.borrow" instead of
-#~"out this". This declares the type as born-borrowed: every constructor
-must agree on #~"this.borrow", and every instance is borrowed from the
-moment of construction. A born-borrowed constructor may accept #~".lock"
-parameters and store them in #~".lock" fields. A record with any #~".lock"
-field is required to use #~"out this.borrow". See
-#> to=borrowed-valtypes-and-lock-fields: Borrowed Valtypes and Lock Fields
+Class constructors whose type carries #~".lock" fields simply return
+#~"out this" like any other class constructor; the type system verifies
+that the #~".lock" fields are initialised from #~".lock" parameters of
+the constructor (escape analysis). See
+#> to=.lock-fields-on-classes: .lock Fields on Classes
 and #~"doc/ownership.pdoc".
 
 Note that constructors are not executed for value types that are copied as
@@ -3459,22 +3447,20 @@ Generic types can also be used in records:
   }
   """
 
-Record fields may be declared with a #~".lock" type modifier to hold a
-locked reference to external data. A record with any #~".lock" field is
-born-borrowed: every constructor must return #~"this.borrow" and every
-instance is borrowed from the moment of construction. #~".lock" is the only
-field-type modifier permitted on records (#~".take" and #~".borrow" are
-rejected) and it is not permitted on classes -- see
-#> to=borrowed-valtypes-and-lock-fields: Borrowed Valtypes and Lock Fields
+Record fields are pure value data. A record cannot contain #~"string",
+#~"list", #~"box", #~"map" or any other heap-backed type, and it cannot
+carry a #~".lock" field. Types that need to hold a locked reference to
+external data are #_*"classes" -- see
+#> to=.lock-fields-on-classes: .lock Fields on Classes
 and #~"doc/ownership.pdoc".
 
 #code language=zerolang: """
-  bagiter: record {
+  bagiter: class {
       pos: i64
       target: bag.private.lock
   } as {
-      create: function {target: bag.private.lock} out this.borrow is {
-          return bagiter pos: 0 target: target
+      create: function {target: bag.private.lock} out this is {
+          return meta.create pos: 0 target: target
       }
   }
   """
@@ -3640,23 +3626,23 @@ There are three ways to create a protocol instance:
 #ol:
   [#*: #+ Borrowed via label #_*"(preferred)": access the named protocol
   member in the #~"as" clause of an object (#~"r: f.myreader"). This
-  creates a borrowed protocol instance: the protocol struct is
-  heap-allocated and freed when it goes out of scope, but the underlying
-  data is not affected. The source variable is locked for the lifetime of
-  the protocol instance.]
+  creates a borrowed protocol instance: the protocol instance lives on the
+  caller's stack and is forgotten when it goes out of scope, but the
+  underlying data is not affected. The source variable is locked for the
+  lifetime of the protocol instance.]
   [#*: #+ Owned via #~"create": call #~"protocol.create from: obj.take"
   or use the bare-name shorthand #~"protocol obj.take" which routes
   through #~".create" via the unified call dispatch. This creates an owned
   protocol instance: the source object is consumed and the protocol
   instance owns the data. When the protocol instance goes out of scope,
-  both the protocol struct and the underlying data are destroyed.
+  both the protocol instance and the underlying data are destroyed.
   #~".take" is #_*"not" a protocol constructor; it remains the inline
   ownership method on runtime instances (#~"obj.take") only.]
   [#*: #+ Borrowed via #~"borrow": call #~"protocol.borrow from: obj.lock"
   when the label shorthand is not available. This creates a borrowed
   protocol instance (same semantics as the label form). The source
   variable is locked for the lifetime of the protocol instance. The
-  protocol struct is heap-allocated and freed on scope exit, but the
+  protocol instance lives on the stack until it falls out of scope; the
   underlying data is not destroyed.]
 
 For borrowed instances (label and #~"borrow" forms): if the protocol instance
@@ -3785,10 +3771,11 @@ For controlling the discriminator, see also the #>"tag" type.
 
 Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
-is a reference type — always heap-allocated with a uniform two-word layout:
-a tag and a #~"void*" data pointer. All member types may be reference types or
-value types. Valtype payloads are boxed (heap-allocated copy). Reftype payloads
-are stored as pointers directly.
+is a reference type with a uniform two-word layout: a tag and a #~"void*"
+data pointer. The union struct itself lives on the stack; the subtype data
+pointed to by #~"void*" is heap-allocated. All member types may be reference
+types or value types. Valtype payloads are stored in the heap-allocated
+subtype slot; reftype payloads are stored by pointer.
 
 Methods can be defined on the union body. These methods operate on the union
 type itself. To access subtype-specific data, the union must first be narrowed

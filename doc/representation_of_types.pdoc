@@ -949,13 +949,58 @@ Removing born-borrowed from valtypes is a simplification but has trade-offs:
   stringviews need no lock.]
 
 
-#-: Implementation Plan
+#-: Implementation History
 
-The implementation is split into phases. Each phase is independently testable.
-Dependencies between phases are noted.
+The refactor was landed in ten phases, all of which are now #+ complete. Each
+phase was independently testable and landed behind passing #~"make check &&
+make test && make build". This section records the phase list for historical
+reference; the type specifications earlier in this document describe the
+current state.
+
+#ul:
+  [#*: #+ Phase 1 -- Destructor metadata. Split "struct needs free" from
+  "struct has fields needing cleanup" in #~"ZType".]
+  [#*: #+ Phase 2 -- Stack-allocate classes. Removed class heap allocation;
+  class field access uses #~"." (only method #~"this" and boxed items use
+  #~"->"); destructors emit only when a class has owned fields that need
+  cleanup.]
+  [#*: #+ Phase 3 -- Stack-allocate list structs. #~"list" struct on the
+  stack; the data buffer remains on the heap.]
+  [#*: #+ Phase 4 -- Rewrite string runtime. #~"z_string_t" becomes
+  #~"{ size, data*, capacity }" on the stack with a heap data buffer.]
+  [#*: #+ Phase 5 -- Stack-allocate unions. Union struct stays
+  #~"{ tag, void* }" but lives on the stack; subtype data is heap-allocated.]
+  [#*: #+ Phase 6 -- Stack-allocate protocol instances. Protocol wrapper is
+  now a 24-byte stack struct; owned wrappers heap-allocate only a copy of
+  the implementation.]
+  [#*: #+ Phase 7 -- Extend #~".lock" fields to classes.]
+  [#*: #+ Phase 8 -- Remove born-borrowed from valtypes. Records may no
+  longer hold #~".lock" fields or heap-backed types; types that needed
+  them became classes (#~"stringview", iterators, views).]
+  [#*: #+ Phase 9 -- Implement #~"listview" as a read-only class view into
+  a #~"list".]
+  [#*: #+ Phase 10 -- Box refinements. #~"box(T)" adapted to work with
+  stack-allocated classes and born-boxed construction.]
+
+The compile-time restrictions that the refactor introduced are:
+
+#ul:
+  [#*: Record fields cannot be #~"string", #~"list", #~"box", #~"map" or any
+  other heap-backed type. They also cannot be another user class or union.
+  Records are pure valtypes.]
+  [#*: #~".lock" fields are permitted on classes only. A record with a
+  #~".lock" field is rejected.]
+  [#*: A class (or any user-defined type) that has a #~".lock" field cannot
+  appear as a field of another type.]
+
+#--: Historical Phase Notes -- Scaffolding
+
+The rest of this section is an internal record of the phase-by-phase
+work items. It is retained for archaeology; none of the plans below are
+outstanding.
 
 
-#--: Phase 1: Foundation -- Destructor Metadata
+#--: Phase 1: Foundation -- Destructor Metadata [COMPLETE]
 
 Goal: separate "struct needs free" from "struct has fields needing cleanup" in
 the type metadata.
@@ -977,7 +1022,7 @@ the type metadata.
 Testing: #~"make check && make test". All tests pass -- no behaviour change.
 
 
-#--: Phase 2: Stack-Allocate Classes
+#--: Phase 2: Stack-Allocate Classes [COMPLETE]
 
 Goal: move class structs from heap to stack. Core change with largest blast
 radius.
@@ -1057,7 +1102,7 @@ radius.
 Testing: ~40 test updates expected. Compile #~"classes.z". ASan verification.
 
 
-#--: Phase 3: Stack-Allocate List Structs
+#--: Phase 3: Stack-Allocate List Structs [COMPLETE]
 
 Goal: list struct on stack, data buffer on heap.
 
@@ -1084,7 +1129,7 @@ Goal: list struct on stack, data buffer on heap.
 Testing: compile #~"lists.z". ASan verification.
 
 
-#--: Phase 4: Rewrite String Runtime
+#--: Phase 4: Rewrite String Runtime [COMPLETE]
 
 Goal: change string from flexible-array-member to stack struct + heap data
 buffer.
@@ -1137,7 +1182,7 @@ Rewrite all string runtime functions:
 Testing: run ALL tests. Sub-phase changes. ASan on all examples.
 
 
-#--: Phase 5: Stack-Allocate Unions
+#--: Phase 5: Stack-Allocate Unions [COMPLETE]
 
 Goal: union struct on stack, subtype data stays heap-allocated via void*.
 
@@ -1177,7 +1222,7 @@ Dependency: Phase 2 (classes on stack).
 Testing: union tests. Compile union examples.
 
 
-#--: Phase 6: Stack-Allocate Protocol Instances
+#--: Phase 6: Stack-Allocate Protocol Instances [COMPLETE]
 
 Goal: protocol wrapper struct on stack.
 
@@ -1209,75 +1254,47 @@ Dependency: Phase 2 (classes on stack).
 Testing: protocol tests. Compile protocol examples.
 
 
-#--: Phase 7: Extend .lock Fields to Classes
+#--: Phase 7: Extend .lock Fields to Classes [COMPLETE]
 
 Goal: allow classes to have #~".lock" fields.
 
 Dependency: Phase 2 (classes on stack).
 
-#---: Changes
-
-#~"ztypecheck.py":
+Summary of completed work:
 
 #ul:
-  [#*: Remove restriction preventing #~".lock" fields on classes.]
-  [#*: For classes with #~".lock" fields: do not set #~"is_born_borrowed".]
-  [#*: Add restriction: a type with #~".lock" fields cannot appear as a field
-  of another type.]
-  [#*: Lock transfer in constructors: same mechanism as born-borrowed records.]
-
-#~"zemitterc.py":
-
-#ul:
-  [#*: #~".lock" fields emit as normal pointer fields.]
-  [#*: No special destructor handling for #~".lock" fields.]
-
-Testing: new test cases for class .lock fields, locking, restriction
-enforcement.
+  [#*: Removed the restriction that prevented #~".lock" fields on classes.]
+  [#*: Added the restriction: a type with a #~".lock" field cannot appear
+  as a field of another type.]
+  [#*: Classes with #~".lock" fields use the same lock-transfer mechanism
+  in constructors that born-borrowed records previously used.]
+  [#*: #~".lock" fields emit as normal pointer fields with no special
+  destructor handling.]
 
 
-#--: Phase 8: Remove Born-Borrowed from Valtypes
+#--: Phase 8: Remove Born-Borrowed from Valtypes [COMPLETE]
 
-Goal: remove the born-borrowed mechanism from records. Migrate existing
-born-borrowed records to classes.
+Goal: remove the born-borrowed mechanism from records entirely. Migrate
+the remaining born-borrowed records to classes.
 
 Dependency: Phase 7 (.lock on classes).
 
-#---: Changes
-
-#~"ztypecheck.py":
+Summary of completed work:
 
 #ul:
-  [#*: Remove #~"_check_born_borrowed_record()" validation.]
-  [#*: Remove #~"is_born_borrowed" checks for records.]
-  [#*: Remove #~"this.borrow" return handling for record constructors.]
-  [#*: Disallow #~".lock" fields on records -- emit error directing user to
-  use a class instead.]
-
-#~"zemitterc.py":
-
-#ul:
-  [#*: Remove born-borrowed record pointer receiver handling (lines
-  3118-3125).]
-  [#*: Remove born-borrowed checks in #~"_is_class_pointer_path()" (lines
-  5188-5196).]
-  [#*: Remove born-borrowed method dispatch wrapping (lines 3655-3666).]
-
-#~"lib/system/system.z":
-
-#ul:
-  [#*: Change #~"stringview" from record to class.]
-
-#~"lib/system/collections.z":
-
-#ul:
-  [#*: Change any born-borrowed records to classes.]
-
-Testing: update all born-borrowed tests. Migrate #~"borrowed_record.z",
-#~"listiter.z", #~"strview.z" examples.
+  [#*: Removed #~"_check_born_borrowed_record()" validation and all
+  #~"is_born_borrowed" checks from the type checker.]
+  [#*: Removed #~"this.borrow" return handling for record constructors.]
+  [#*: #~".lock" fields on records now emit a compile error pointing the
+  user at classes.]
+  [#*: Removed all born-borrowed record pointer-receiver handling and
+  method-dispatch wrapping from the emitter.]
+  [#*: #~"stringview" in #~"lib/system/system.z" became a class.]
+  [#*: Migrated #~"borrowed_record.z", #~"listiter.z", and #~"strview.z"
+  examples to the class-based form.]
 
 
-#--: Phase 9: Implement listview
+#--: Phase 9: Implement listview [COMPLETE]
 
 Goal: add the #~"listview" generic type.
 
@@ -1317,7 +1334,7 @@ Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
 Testing: new test cases. New #~"examples/listview.z".
 
 
-#--: Phase 10: Box Refinements
+#--: Phase 10: Box Refinements [COMPLETE]
 
 Goal: ensure box works with stack-allocated classes and born-boxed
 optimisation.
@@ -1349,10 +1366,11 @@ Testing: update #~"box.z" example. Add tests for #~"box(class)".
   improving performance and reducing fragmentation.]
   [#*: #+ Unified field access. Local variables of all types use #~"." for
   field access. Only #~"this" in methods and boxed items use #~"->".]
-  [#*: #+ Class .lock fields. Enables natural class-based iterators and views
-  without the born-borrowed workaround. More flexible (supports #~".take").]
+  [#*: #+ Class .lock fields. Enables natural class-based iterators and
+  views. More flexible than the old born-borrowed record approach: a class
+  instance supports #~".take" (moving to a new name).]
   [#*: #+ Clean type system. Valtypes are always values. Reftypes are always
-  references with identity. No hybrid born-borrowed category.]
+  references with identity. No hybrid category.]
   [#*: #+ Predictable memory usage. Stack allocation makes memory usage more
   predictable and eliminates #~"malloc" failure risk for ordinary objects.]
 
@@ -1372,8 +1390,8 @@ Testing: update #~"box.z" example. Add tests for #~"box(class)".
   valtypes (typically small).]
   [#*: #+ String rewrite risk. The string runtime rewrite (Phase 4) touches
   nearly every test.]
-  [#*: #+ Born-borrowed migration. All existing born-borrowed records must
-  become classes. One-time cost.]
+  [#*: #+ Born-borrowed migration cost. All born-borrowed records had to be
+  rewritten as classes. One-time cost, now absorbed.]
   [#*: #+ Recursive types. Self-referential types (linked list nodes, tree
   nodes) must use #~"box(self)" for the recursive field. Error message should
   be clear.]
