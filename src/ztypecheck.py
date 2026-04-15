@@ -1116,6 +1116,8 @@ class TypeChecker:
             ctype.is_native = True
             if name == "string":
                 ctype.subtype = ZSubType.STRING
+            elif name == "stringview":
+                ctype.subtype = ZSubType.STRINGVIEW
         _set_destructor_metadata(ctype)
         self._assign_cname_type(ctype)
 
