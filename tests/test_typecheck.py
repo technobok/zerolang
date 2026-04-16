@@ -15,7 +15,6 @@ from ztypes import (
     ZLockState,
     ZVariable,
     ZNaming,
-    LockEntry,
     TAG_ORIGIN,
 )
 import zast
@@ -689,10 +688,9 @@ class TestOwnershipEnums:
 
         t = ZType(name="i64", typetype=ZTypeType.RECORD, parent=None)
         v = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
-        assert v.locks == []
-        assert v.held_locks == []
+        assert v.ownership == ZOwnership.OWNED
 
-    def test_zvariable_with_lock(self):
+    def test_zvariable_borrowed(self):
         from ztypes import ZType
 
         t = ZType(name="point", typetype=ZTypeType.RECORD, parent=None)
@@ -700,14 +698,8 @@ class TestOwnershipEnums:
             ztype=t,
             ownership=ZOwnership.BORROWED,
             named=ZNaming.NAMED,
-            locks=[LockEntry(lock_type=ZLockState.EXCLUSIVE, holder="y")],
-            held_locks=["x"],
         )
         assert v.ownership == ZOwnership.BORROWED
-        assert len(v.locks) == 1
-        assert v.locks[0].lock_type == ZLockState.EXCLUSIVE
-        assert v.locks[0].holder == "y"
-        assert v.held_locks == ["x"]
 
 
 class TestOwnershipParsing:
@@ -1408,16 +1400,20 @@ class TestExampleProgramsOwnership:
 # ---- Phase 4d: Lock Checking Tests ----
 
 
-class TestLockEntry:
-    """Test the LockEntry dataclass."""
+class TestLockInfo:
+    """Test the LockInfo dataclass."""
 
-    def test_lock_entry_exclusive(self):
-        e = LockEntry(lock_type=ZLockState.EXCLUSIVE, holder="y")
+    def test_lock_info_exclusive(self):
+        from ztypes import LockInfo
+
+        e = LockInfo(lock_type=ZLockState.EXCLUSIVE, holder="y")
         assert e.lock_type == ZLockState.EXCLUSIVE
         assert e.holder == "y"
 
-    def test_lock_entry_shared(self):
-        e = LockEntry(lock_type=ZLockState.SHARED, holder="parent")
+    def test_lock_info_shared(self):
+        from ztypes import LockInfo
+
+        e = LockInfo(lock_type=ZLockState.SHARED, holder="parent")
         assert e.lock_type == ZLockState.SHARED
         assert e.holder == "parent"
 
@@ -1442,9 +1438,9 @@ class TestSymbolTableLocking:
         st = self._make_symtab_with_vars("x", "y")
         err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
         assert err is None
-        var = st.lookup_var("x")
-        assert len(var.locks) == 1
-        assert var.locks[0].lock_type == ZLockState.EXCLUSIVE
+        lock = st.find_lock("x")
+        assert lock is not None
+        assert lock.lock_type == ZLockState.EXCLUSIVE
 
     def test_try_lock_exclusive_on_exclusive_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
@@ -1460,8 +1456,10 @@ class TestSymbolTableLocking:
         assert err is None
         err = st.try_lock("x", ZLockState.SHARED, "z")
         assert err is None
-        var = st.lookup_var("x")
-        assert len(var.locks) == 2
+        # shared + shared is OK (deduplicated to single entry)
+        lock = st.find_lock("x")
+        assert lock is not None
+        assert lock.lock_type == ZLockState.SHARED
 
     def test_try_lock_shared_on_exclusive_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
@@ -1478,35 +1476,20 @@ class TestSymbolTableLocking:
         err = st.try_lock("x", ZLockState.EXCLUSIVE, "z")
         assert err is not None
 
-    def test_release_lock(self):
+    def test_lock_released_by_scope_pop(self):
+        """Locks are released when the scope containing them is popped."""
         st = self._make_symtab_with_vars("x", "y")
         st.try_lock("x", ZLockState.EXCLUSIVE, "y")
-        var = st.lookup_var("x")
-        assert len(var.locks) == 1
-        st.release_lock("x", "y")
-        assert len(var.locks) == 0
+        assert st.find_lock("x") is not None
+        st.pop()
+        assert st.find_lock("x") is None
 
     def test_release_held_locks(self):
         st = self._make_symtab_with_vars("x", "y")
         st.try_lock("x", ZLockState.EXCLUSIVE, "y")
-        target = st.lookup_var("x")
-        holder = st.lookup_var("y")
-        assert len(target.locks) == 1
-        assert holder.held_locks == ["x"]
+        assert st.find_lock("x") is not None
         st.release_held_locks("y")
-        assert len(target.locks) == 0
-        assert holder.held_locks == []
-
-    def test_release_only_specific_holder(self):
-        """Releasing locks for one holder should not affect another holder's locks."""
-        st = self._make_symtab_with_vars("x", "y", "z")
-        st.try_lock("x", ZLockState.SHARED, "y")
-        st.try_lock("x", ZLockState.SHARED, "z")
-        var = st.lookup_var("x")
-        assert len(var.locks) == 2
-        st.release_lock("x", "y")
-        assert len(var.locks) == 1
-        assert var.locks[0].holder == "z"
+        assert st.find_lock("x") is None
 
 
 class TestLockCheckingBorrow:

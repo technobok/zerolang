@@ -307,6 +307,55 @@ def _alloc_variable_id() -> int:
     return vid
 
 
+@unique
+class ScopeKind(IntEnum):
+    """Kind of scope in the symbol table."""
+
+    BLOCK = 0  # language construct (function, do, for, if, with, match, arm)
+    CALL = 1  # call-scoped lock boundary
+    OVERLAY = 2  # per-statement state change
+
+
+# module-level counter for scope IDs
+_next_scope_id: int = 0
+
+
+def _alloc_scope_id() -> int:
+    """Allocate the next auto-incrementing scope ID."""
+    global _next_scope_id
+    sid = _next_scope_id
+    _next_scope_id += 1
+    return sid
+
+
+@dataclass
+class LockInfo:
+    """Lock state on a variable — stored on Entry, not on ZVariable."""
+
+    lock_type: ZLockState  # EXCLUSIVE or SHARED
+    holder: str  # borrow variable name or call identifier
+
+
+@dataclass
+class Entry:
+    """A single entry in a scope's environment.
+
+    Represents either a definition (introduces a name) or a shadow/overlay
+    (modifies state of a name from an outer scope).
+    """
+
+    name: str
+    ztype: ZType
+    is_definition: bool
+    # for runtime variables (None for type/function definitions and lock-only overlays)
+    var: "Optional[ZVariable]" = None
+    # lock state (one lock per variable per scope)
+    lock: Optional[LockInfo] = None
+    # taken state
+    is_taken: bool = False
+    taken_at: Optional[Tuple[int, int, int]] = None
+
+
 @dataclass
 class ExprResult:
     """Result of checking an expression: the resolved type plus any
@@ -318,32 +367,16 @@ class ExprResult:
 
 
 @dataclass
-class LockEntry:
-    """
-    A single lock held on a variable.
-
-    lock_type: EXCLUSIVE or SHARED
-    holder: name of the variable that holds this lock
-    """
-
-    lock_type: ZLockState
-    holder: str
-
-
-@dataclass
 class ZVariable:
     """
-    ZVariable - type + ownership + lock info for a variable/expression
+    ZVariable - type + ownership info for a variable/expression.
+    Lock state is tracked via Entry.lock in the scope chain, not here.
     """
 
     variableid: int = field(default_factory=_alloc_variable_id, init=False)
     ztype: ZType
     ownership: ZOwnership
     named: ZNaming
-    # locks held ON this variable by other variables
-    locks: List[LockEntry] = field(default_factory=list)
-    # names of variables this variable holds locks on (for cleanup on scope exit)
-    held_locks: List[str] = field(default_factory=list)
     # private access: variable declared with .private type, bypasses public_members
     is_private_access: bool = False
 

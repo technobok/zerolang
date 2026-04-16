@@ -1,224 +1,348 @@
 """
 ZeroLang scoped symbol table for the type checker
+
+List-based environment: each scope holds a List[Entry] rather than dicts.
+Scopes are small (measured max ~6 entries), so linear scan beats hash lookup.
 """
 
-from typing import Optional, Dict, List, Tuple
-from ztypes import ZType, ZVariable, ZLockState, LockEntry
+from typing import Optional, List, Tuple
+from ztypes import (
+    ZType,
+    ZVariable,
+    ZLockState,
+    LockInfo,
+    ScopeKind,
+    Entry,
+    _alloc_scope_id,
+)
 
 
 class Scope:
     """
     A single scope level in the symbol table.
-    Maps names to their resolved ZType (and optionally ZVariable for ownership).
+    Entries are stored in a list (not a dict) for simplicity and cache locality.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self, name: str, kind: ScopeKind) -> None:
+        self.scope_id: int = _alloc_scope_id()
+        self.kind = kind
         self.name = name
-        self.symbols: Dict[str, ZType] = {}
-        self.variables: Dict[str, ZVariable] = {}
-        # taken (invalidated) variables in this scope: name -> (line, col, file_id)
-        self.taken: Dict[str, Tuple[int, int, int]] = {}
+        self.entries: List[Entry] = []
+        self.unreachable: bool = False
 
-    def define(self, name: str, ztype: ZType) -> None:
-        self.symbols[name] = ztype
+    def find(self, name: str) -> Optional[Entry]:
+        """Find the most recent entry for a name in this scope."""
+        i = len(self.entries) - 1
+        while i >= 0:
+            if self.entries[i].name == name:
+                return self.entries[i]
+            i -= 1
+        return None
 
-    def define_var(self, name: str, var: ZVariable) -> None:
-        self.symbols[name] = var.ztype
-        self.variables[name] = var
-
-    def lookup(self, name: str) -> Optional[ZType]:
-        return self.symbols.get(name)
-
-    def lookup_var(self, name: str) -> Optional[ZVariable]:
-        return self.variables.get(name)
+    def append(self, entry: Entry) -> None:
+        self.entries.append(entry)
 
 
 class SymbolTable:
     """
     Scoped symbol table — a stack of Scope frames.
-    Lookup searches from innermost to outermost.
+    Lookup searches from innermost scope to outermost.
+
+    Three scope kinds:
+    - BLOCK: language constructs (function, do, for, if, with, match, arm)
+    - CALL: call-scoped lock boundary
+    - OVERLAY: per-statement state change (immutable shadow records)
     """
 
     def __init__(self) -> None:
         self._scopes: List[Scope] = []
 
+    # ---- scope management ----
+
     def push(self, name: str) -> Scope:
-        scope = Scope(name)
+        """Push a block scope. Returns the scope (marker is self.depth - 1)."""
+        scope = Scope(name, ScopeKind.BLOCK)
         self._scopes.append(scope)
         return scope
 
+    def push_block(self, name: str) -> int:
+        """Push a block scope. Returns the marker for pop_to."""
+        marker = len(self._scopes)
+        scope = Scope(name, ScopeKind.BLOCK)
+        self._scopes.append(scope)
+        return marker
+
+    def push_overlay(self) -> Scope:
+        """Push an overlay scope for per-statement state changes."""
+        scope = Scope("", ScopeKind.OVERLAY)
+        self._scopes.append(scope)
+        return scope
+
+    def push_call(self) -> int:
+        """Push a call scope for call-scoped locking. Returns marker for pop_to."""
+        marker = len(self._scopes)
+        scope = Scope("", ScopeKind.CALL)
+        self._scopes.append(scope)
+        return marker
+
     def pop(self) -> Scope:
-        # release any borrow-scoped locks held by variables in this scope
-        # before the scope disappears; otherwise locks placed on outer
-        # variables by inner borrows would persist past their holder's
-        # lifetime (see doc/ownership.pdoc, "Lock Release on Scope Exit").
+        """Pop the topmost scope. Lock entries vanish naturally with the scope.
+        Taken entries are merged into the parent so errors persist."""
         top = self._scopes[-1]
-        for holder_name in list(top.variables.keys()):
-            self.release_held_locks(holder_name)
         self._scopes.pop()
-        # merge taken entries into parent scope so "already taken" errors
-        # persist after the inner scope exits
-        if self._scopes and top.taken:
-            parent = self._scopes[-1]
-            for name, loc in top.taken.items():
-                if name not in parent.taken:
-                    parent.taken[name] = loc
+        # merge taken entries into parent scope
+        if self._scopes:
+            for entry in top.entries:
+                if entry.is_taken and entry.taken_at is not None:
+                    if not self._is_taken(entry.name):
+                        taken_entry = Entry(
+                            name=entry.name,
+                            ztype=entry.ztype,
+                            is_definition=False,
+                            is_taken=True,
+                            taken_at=entry.taken_at,
+                        )
+                        self._scopes[-1].append(taken_entry)
         return top
 
+    def pop_to(self, marker: int) -> None:
+        """Pop all scopes from the given marker (inclusive)."""
+        while len(self._scopes) > marker:
+            self.pop()
+
+    # ---- name resolution ----
+
     def define(self, name: str, ztype: ZType) -> None:
-        self._scopes[-1].define(name, ztype)
+        """Define a non-variable name (type, function, control flow)."""
+        entry = Entry(name=name, ztype=ztype, is_definition=True)
+        self._scopes[-1].append(entry)
 
     def define_var(self, name: str, var: ZVariable) -> None:
-        self._scopes[-1].define_var(name, var)
+        """Define a runtime variable with ownership tracking."""
+        entry = Entry(name=name, ztype=var.ztype, is_definition=True, var=var)
+        self._scopes[-1].append(entry)
 
     def lookup(self, name: str) -> Optional[ZType]:
-        for scope in reversed(self._scopes):
-            t = scope.lookup(name)
-            if t is not None:
-                return t
+        """Search scopes inner→outer for a name. Returns its type or None."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None:
+                if entry.is_taken:
+                    return None  # taken variables are not resolvable
+                return entry.ztype
+            i -= 1
         return None
 
     def lookup_var(self, name: str) -> Optional[ZVariable]:
-        for scope in reversed(self._scopes):
-            v = scope.lookup_var(name)
-            if v is not None:
-                return v
+        """Search scopes inner→outer for a variable. Returns ZVariable or None.
+
+        Skips lock overlays and taken markers (entries without var) to find
+        the actual variable definition.
+        """
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if entry.name == name:
+                    if entry.is_taken:
+                        return None
+                    if entry.var is not None:
+                        return entry.var
+                    # skip lock overlays and other non-var entries in this scope
+                j -= 1
+            i -= 1
         return None
 
-    def invalidate(self, name: str, loc: Optional[Tuple[int, int, int]] = None) -> bool:
-        """Mark a variable as consumed (taken). Returns True if found and invalidated.
+    def lookup_entry(self, name: str) -> Optional[Entry]:
+        """Search scopes inner→outer for a name. Returns the Entry or None."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None:
+                return entry
+            i -= 1
+        return None
 
-        loc: optional (line, col, file_id) of the take expression for error reporting.
+    # ---- invalidation (take) ----
+
+    def invalidate(self, name: str, loc: Optional[Tuple[int, int, int]] = None) -> bool:
+        """Mark a variable as consumed (taken). Pushes an overlay with is_taken.
+
+        Returns True if the name was found in any scope.
         """
-        for scope in reversed(self._scopes):
-            if name in scope.symbols:
-                del scope.symbols[name]
-                if name in scope.variables:
-                    del scope.variables[name]
-                if loc is not None:
-                    scope.taken[name] = loc
-                return True
-        return False
+        # find the entry to get its type for the taken overlay
+        entry = self.lookup_entry(name)
+        if entry is None:
+            return False
+        # push a taken overlay in the current scope
+        taken_entry = Entry(
+            name=name,
+            ztype=entry.ztype,
+            is_definition=False,
+            is_taken=True,
+            taken_at=loc,
+        )
+        self._scopes[-1].append(taken_entry)
+        return True
 
     def get_taken_location(self, name: str) -> Optional[Tuple[int, int, int]]:
         """Return the (line, col, file_id) where a variable was taken, or None."""
-        for scope in reversed(self._scopes):
-            loc = scope.taken.get(name)
-            if loc is not None:
-                return loc
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None and entry.is_taken:
+                return entry.taken_at
+            i -= 1
         return None
 
     def clear_taken(self, name: str) -> None:
         """Remove the taken record for a name (used by match/case to restore
-        a variable between arms)."""
-        for scope in reversed(self._scopes):
-            if name in scope.taken:
-                del scope.taken[name]
-                return
+        a variable between arms). Searches from innermost scope."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                if scope.entries[j].name == name and scope.entries[j].is_taken:
+                    scope.entries.pop(j)
+                    return
+                j -= 1
+            i -= 1
 
     def set_taken_location(self, name: str, loc: Tuple[int, int, int]) -> None:
         """Override the taken location for a name (used by match/case for
         better error reporting)."""
-        for scope in reversed(self._scopes):
-            if name in scope.taken:
-                scope.taken[name] = loc
-                return
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                if scope.entries[j].name == name and scope.entries[j].is_taken:
+                    scope.entries[j].taken_at = loc
+                    return
+                j -= 1
+            i -= 1
 
-    def _assert_lock_consistency(self, target_name: str, holder: str) -> None:
-        """Debug assertion: verify bidirectional lock consistency."""
-        var = self.lookup_var(target_name)
-        holder_var = self.lookup_var(holder)
-        if var and holder_var:
-            has_lock = any(e.holder == holder for e in var.locks)
-            has_held = target_name in holder_var.held_locks
-            assert has_lock == has_held, (
-                f"Lock inconsistency: {target_name}.locks has {holder}={has_lock}, "
-                f"{holder}.held_locks has {target_name}={has_held}"
-            )
+    def _is_taken(self, name: str) -> bool:
+        """Check if a name has a taken entry in any scope."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None:
+                return entry.is_taken
+            i -= 1
+        return False
+
+    # ---- lock operations (scope-based: locks are Entry.lock in scope chain) ----
 
     def try_lock(
         self, target_name: str, lock_type: ZLockState, holder: str
     ) -> Optional[str]:
-        """Try to take a lock on target_name. Returns error message or None on success."""
-        var = self.lookup_var(target_name)
-        if not var:
+        """Try to take a lock on target_name. Returns error message or None on success.
+
+        Searches the scope chain for existing locks. On success, appends a lock
+        Entry to the current scope.
+        """
+        # check the target exists as a variable
+        target_var = self.lookup_var(target_name)
+        if target_var is None:
             return None  # unknown variable, skip lock checking
 
-        for entry in var.locks:
+        # check for conflicts in scope chain
+        existing = self.find_lock(target_name)
+        if existing is not None:
             if lock_type == ZLockState.EXCLUSIVE:
-                # exclusive conflicts with any existing lock
                 return (
                     f"Cannot take exclusive lock on '{target_name}': "
-                    f"already has {entry.lock_type.name.lower()} lock held by '{entry.holder}'"
+                    f"already has {existing.lock_type.name.lower()} lock held by '{existing.holder}'"
                 )
             if (
                 lock_type == ZLockState.SHARED
-                and entry.lock_type == ZLockState.EXCLUSIVE
+                and existing.lock_type == ZLockState.EXCLUSIVE
             ):
                 return (
                     f"Cannot take shared lock on '{target_name}': "
-                    f"already has exclusive lock held by '{entry.holder}'"
+                    f"already has exclusive lock held by '{existing.holder}'"
                 )
-            # shared + shared is OK
+            # shared + shared: already locked at this level, no need to add another
+            if (
+                lock_type == ZLockState.SHARED
+                and existing.lock_type == ZLockState.SHARED
+            ):
+                return None
 
-        entry = LockEntry(lock_type=lock_type, holder=holder)
-        var.locks.append(entry)
-
-        # track on holder side for cleanup
-        holder_var = self.lookup_var(holder)
-        if holder_var:
-            holder_var.held_locks.append(target_name)
-
-        if __debug__:
-            self._assert_lock_consistency(target_name, holder)
+        # add lock entry to current scope
+        lock_entry = Entry(
+            name=target_name,
+            ztype=target_var.ztype,
+            is_definition=False,
+            lock=LockInfo(lock_type=lock_type, holder=holder),
+        )
+        self._scopes[-1].append(lock_entry)
         return None
 
-    def release_lock(self, target_name: str, holder: str) -> None:
-        """Release a specific lock held by holder on target_name."""
-        var = self.lookup_var(target_name)
-        if not var:
-            return
-        i = 0
-        while i < len(var.locks):
-            if var.locks[i].holder == holder:
-                var.locks.pop(i)
-            else:
-                i += 1
+    def find_lock(self, name: str) -> Optional[LockInfo]:
+        """Search scope chain for any lock on name. Returns LockInfo or None."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if entry.name == name and entry.lock is not None:
+                    return entry.lock
+                j -= 1
+            i -= 1
+        return None
 
     def find_exclusive_lock(self, name: str) -> Optional[Tuple[str, str]]:
-        """Return (name, holder) if `name` has an outstanding EXCLUSIVE lock,
-        else None. Used by mutation sites to reject operations on paths rooted
-        at a variable with an active borrow-scoped lock.
+        """Return (name, holder) if name has an outstanding EXCLUSIVE lock.
 
-        Only EXCLUSIVE locks block mutation. SHARED locks are call-scoped
-        (released when the call returns) and do not represent a persisting
-        borrow."""
-        var = self.lookup_var(name)
-        if not var:
-            return None
-        for entry in var.locks:
-            if entry.lock_type == ZLockState.EXCLUSIVE:
-                return (name, entry.holder)
+        Compatibility wrapper around find_lock for existing callers.
+        """
+        lock = self.find_lock(name)
+        if lock is not None and lock.lock_type == ZLockState.EXCLUSIVE:
+            return (name, lock.holder)
         return None
 
     def release_held_locks(self, holder_name: str) -> None:
-        """Release all locks held by a variable (called on scope exit)."""
-        var = self.lookup_var(holder_name)
-        if not var:
-            return
-        for target_name in var.held_locks:
-            self.release_lock(target_name, holder_name)
-        var.held_locks.clear()
+        """Release all locks whose holder matches holder_name.
+
+        Used before .take/.release to clean up locks before invalidation.
+        Searches all scopes and removes matching lock entries.
+        """
+        # collect all lock entries held by this holder
+        to_remove: List[Tuple[int, int]] = []  # (scope_idx, entry_idx)
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if entry.lock is not None and entry.lock.holder == holder_name:
+                    to_remove.append((i, j))
+                j -= 1
+            i -= 1
+        # remove in reverse order (highest indices first) to keep indices valid
+        for si, ei in to_remove:
+            self._scopes[si].entries.pop(ei)
+
+    # ---- utility ----
 
     def all_names(self) -> List[str]:
         """Return all defined names across all scopes (for did-you-mean suggestions)."""
         names: List[str] = []
         seen: set = set()
-        for scope in reversed(self._scopes):
-            for name in scope.symbols:
-                if name not in seen:
-                    names.append(name)
-                    seen.add(name)
+        i = len(self._scopes) - 1
+        while i >= 0:
+            for entry in self._scopes[i].entries:
+                if entry.name not in seen and not entry.is_taken:
+                    names.append(entry.name)
+                    seen.add(entry.name)
+            i -= 1
         return names
 
     @property
