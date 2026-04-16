@@ -330,6 +330,138 @@ class SymbolTable:
         for si, ei in to_remove:
             self._scopes[si].entries.pop(ei)
 
+    # ---- narrowing (replaces TypeState) ----
+
+    def narrow(self, name: str, to_type: "ZType", subtype_name: str = "") -> None:
+        """Narrow a variable to a specific subtype. Pushes overlay entry.
+
+        The entry keeps the ORIGINAL declared type in ztype (so name resolution
+        continues to return the union/variant type). The narrowed_subtype field
+        records which subtype the variable is known to be.
+        """
+        # find the original declared type for this variable
+        existing = self.lookup_entry(name)
+        original_type = existing.ztype if existing else to_type
+        entry = Entry(
+            name=name,
+            ztype=original_type,
+            is_definition=False,
+            narrowed_subtype=subtype_name if subtype_name else None,
+        )
+        self._scopes[-1].append(entry)
+
+    def exclude(self, name: str, subtype_name: str, full_type: "ZType") -> None:
+        """Exclude a subtype from a variable's known type.
+
+        If only one subtype remains, auto-collapses to narrowed_subtype.
+        Adds an overlay entry to the current scope.
+        """
+        from ztypes import ZTypeType, TAG_ORIGIN
+
+        # collect all subtypes of the full union/variant
+        all_subtypes = {
+            k: v
+            for k, v in full_type.children.items()
+            if v.typetype
+            not in (ZTypeType.FUNCTION, ZTypeType.DATA, ZTypeType.TAG, ZTypeType.ENUM)
+            and getattr(v, "generic_origin", None) is not TAG_ORIGIN
+        }
+
+        # get current exclusions for this variable
+        prev_excluded = self.get_excluded(name)
+        new_excluded = prev_excluded | {subtype_name}
+
+        remaining = {k: v for k, v in all_subtypes.items() if k not in new_excluded}
+
+        if not remaining:
+            # all subtypes excluded — unreachable
+            self._scopes[-1].unreachable = True
+            return
+
+        narrowed_sub: Optional[str] = None
+        if len(remaining) == 1:
+            sname, _ = next(iter(remaining.items()))
+            narrowed_sub = sname
+
+        entry = Entry(
+            name=name,
+            ztype=full_type,  # keep original type for name resolution
+            is_definition=False,
+            narrowed_subtype=narrowed_sub,
+            excluded_subtypes=frozenset(new_excluded),
+        )
+        self._scopes[-1].append(entry)
+
+    def reset_narrowing(self, name: str) -> None:
+        """Clear narrowing for a variable. Pushes overlay with original type."""
+        # find the definition entry (the one with the declared type)
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if entry.name == name and entry.is_definition:
+                    # push overlay that resets narrowing to original type
+                    reset_entry = Entry(
+                        name=name,
+                        ztype=entry.ztype,
+                        is_definition=False,
+                    )
+                    self._scopes[-1].append(reset_entry)
+                    return
+                j -= 1
+            i -= 1
+
+    def lookup_narrowed(self, name: str) -> "Optional[ZType]":
+        """Return the narrowed type for a name, or None if not narrowed."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None:
+                if entry.narrowed_subtype is not None:
+                    return entry.ztype
+                return None  # found an entry but not narrowed
+            i -= 1
+        return None
+
+    def is_excluded(self, name: str, subtype_name: str) -> bool:
+        """Check if a subtype has been excluded for a variable."""
+        excluded = self.get_excluded(name)
+        return subtype_name in excluded
+
+    def get_excluded(self, name: str) -> "frozenset[str]":
+        """Get the set of excluded subtypes for a variable."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None and entry.excluded_subtypes is not None:
+                return entry.excluded_subtypes
+            if entry is not None:
+                return frozenset()  # found entry but no exclusions
+            i -= 1
+        return frozenset()
+
+    def get_subtype_name(self, name: str) -> "Optional[str]":
+        """Return the subtype name a variable is narrowed to, or None."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            entry = self._scopes[i].find(name)
+            if entry is not None:
+                return entry.narrowed_subtype
+            i -= 1
+        return None
+
+    def mark_unreachable(self) -> None:
+        """Mark the current scope as unreachable (all paths diverged)."""
+        self._scopes[-1].unreachable = True
+
+    def is_unreachable(self) -> bool:
+        """Check if the current scope is unreachable."""
+        if not self._scopes:
+            return False
+        return self._scopes[-1].unreachable
+
     # ---- utility ----
 
     def all_names(self) -> List[str]:
