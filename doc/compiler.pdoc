@@ -167,10 +167,87 @@ BORROWED (a temporary reference; the variable does not own the instance).
 
 Function parameters carry ownership annotations: #~"take" (caller transfers
 ownership to callee), #~"borrow" (callee gets a borrowed reference), or
-#~"lock" (callee locks the argument for the duration of the call).
+#~"lock" (callee locks the argument for the duration of the call). See
+#~"doc/ownership.pdoc" for the full specification.
 
-Lock checking infrastructure exists (#~"ZLockState" with UNLOCKED, EXCLUSIVE,
-and SHARED states) but enforcement is not yet active.
+
+#---: Scope Environment
+
+All variable state -- type, ownership, lock state, type narrowing, and
+taken (consumed) status -- is tracked in a unified scope-based environment.
+Each scope holds a #~"List[Entry]" rather than a dictionary. Scopes are
+small (measured maximum of approximately 6 entries in practice) so linear
+scan outperforms hash lookup. This also simplifies the eventual self-hosted
+implementation.
+
+An #~"Entry" carries: the variable name, its resolved type, whether it is a
+definition or a shadow overlay, optional ownership info (#~"VarInfo"),
+optional lock state (#~"LockInfo"), optional type narrowing
+(#~"narrowed_subtype" and #~"excluded_subtypes"), and optional taken state.
+
+Three scope kinds are used:
+
+#ul:
+  [#*: #+ BLOCK -- language constructs (function, do, for, if, with, match,
+  match arm). Can contain variable definitions.]
+  [#*: #+ CALL -- pushed before processing call arguments, popped after the
+  call returns. Lock entries placed here are released automatically when the
+  scope is popped.]
+  [#*: #+ OVERLAY -- per-statement state changes. Contains shadow entries
+  that record a new state (lock, narrowing, taken) for a variable defined in
+  an outer scope.]
+
+State changes follow an immutability principle: new shadow entries are
+created in overlay scopes rather than modifying existing entries. The scope
+chain is the history. Scope exit (via #~"pop_to") naturally releases all
+state from that scope -- locks vanish, narrowing resets, taken markers are
+merged into the parent.
+
+Each scope carries a monotonically increasing #~"scope_id" for tracing and
+SQL output.
+
+
+#---: Lock Checking
+
+Lock enforcement is fully active. Two lock scopes exist:
+
+#ul:
+  [#*: #+ Call-scoped locks -- taken on function arguments during a call.
+  A call scope is pushed before argument processing. After the call returns,
+  the scope is popped and all call-scoped locks are released. For #~".lock"
+  parameters, the lock transfers to the return value (installed as a
+  borrow-scoped lock in the parent scope).]
+  [#*: #+ Borrow-scoped locks -- taken when #~".borrow" or #~".lock"
+  creates a borrowed binding. An exclusive lock entry is placed in the
+  scope where the borrow variable is defined. The lock persists for the
+  lifetime of that scope. When the scope exits, the lock vanishes and
+  the locked variable becomes available again.]
+
+Lock state is queried by searching the scope chain from innermost to
+outermost. An exclusive lock on a variable blocks all access (reads and
+writes) for the duration of the lock. Shared locks (used during calls for
+dotted-path arguments) do not block other shared locks but do block
+exclusive locks.
+
+
+#---: Type Narrowing
+
+Type narrowing for union and variant types is tracked through scope-based
+overlay entries. When a match arm narrows a variable to a specific subtype,
+a narrowing entry is placed in the arm's scope. When the arm scope is
+popped, the narrowing resets automatically.
+
+Post-match exclusion works by recording which subtypes were handled by
+diverging arms (arms that return or break). After the match scope is popped,
+exclusion entries are placed in the parent scope. Subsequent access to an
+excluded subtype produces a compile error.
+
+Assignment-based narrowing (e.g., #~"x: result.ok 42") also places a
+narrowing entry in the current scope. Reassignment resets the narrowing.
+
+If all branches of an #~"if" or #~"match" diverge, the parent scope is
+marked unreachable and subsequent statements are reported as dead code.
+
 
 #--: Code Generator
 

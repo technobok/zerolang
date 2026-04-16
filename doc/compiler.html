@@ -97,6 +97,12 @@ Table of Contents</div>
 </li>
 <li><a href="#ownership-and-lifetime">Ownership and Lifetime</a>
 </li>
+<li><a href="#scope-environment">Scope Environment</a>
+</li>
+<li><a href="#lock-checking">Lock Checking</a>
+</li>
+<li><a href="#type-narrowing">Type Narrowing</a>
+</li>
 </ul>
 </li>
 <li><a href="#code-generator">Code Generator</a>
@@ -218,9 +224,69 @@ OWNED (the variable owns the instance and is responsible for its lifetime) or
 BORROWED (a temporary reference; the variable does not own the instance).</p>
 <p>Function parameters carry ownership annotations: <code>take</code> (caller transfers
 ownership to callee), <code>borrow</code> (callee gets a borrowed reference), or
-<code>lock</code> (callee locks the argument for the duration of the call).</p>
-<p>Lock checking infrastructure exists (<code>ZLockState</code> with UNLOCKED, EXCLUSIVE,
-and SHARED states) but enforcement is not yet active.</p>
+<code>lock</code> (callee locks the argument for the duration of the call). See
+<code>doc/ownership.pdoc</code> for the full specification.</p>
+<h3 id="scope-environment"><a href="#scope-environment">6.4. Scope Environment</a></h3>
+<p>All variable state -- type, ownership, lock state, type narrowing, and
+taken (consumed) status -- is tracked in a unified scope-based environment.
+Each scope holds a <code>List[Entry]</code> rather than a dictionary. Scopes are
+small (measured maximum of approximately 6 entries in practice) so linear
+scan outperforms hash lookup. This also simplifies the eventual self-hosted
+implementation.</p>
+<p>An <code>Entry</code> carries: the variable name, its resolved type, whether it is a
+definition or a shadow overlay, optional ownership info (<code>VarInfo</code>),
+optional lock state (<code>LockInfo</code>), optional type narrowing
+(<code>narrowed_subtype</code> and <code>excluded_subtypes</code>), and optional taken state.</p>
+<p>Three scope kinds are used:</p>
+<ul>
+<li>BLOCK -- language constructs (function, do, for, if, with, match,
+match arm). Can contain variable definitions.</li>
+<li>CALL -- pushed before processing call arguments, popped after the
+call returns. Lock entries placed here are released automatically when the
+scope is popped.</li>
+<li>OVERLAY -- per-statement state changes. Contains shadow entries
+that record a new state (lock, narrowing, taken) for a variable defined in
+an outer scope.</li>
+</ul>
+<p>State changes follow an immutability principle: new shadow entries are
+created in overlay scopes rather than modifying existing entries. The scope
+chain is the history. Scope exit (via <code>pop_to</code>) naturally releases all
+state from that scope -- locks vanish, narrowing resets, taken markers are
+merged into the parent.</p>
+<p>Each scope carries a monotonically increasing <code>scope_id</code> for tracing and
+SQL output.</p>
+<h3 id="lock-checking"><a href="#lock-checking">6.5. Lock Checking</a></h3>
+<p>Lock enforcement is fully active. Two lock scopes exist:</p>
+<ul>
+<li>Call-scoped locks -- taken on function arguments during a call.
+A call scope is pushed before argument processing. After the call returns,
+the scope is popped and all call-scoped locks are released. For <code>.lock</code>
+parameters, the lock transfers to the return value (installed as a
+borrow-scoped lock in the parent scope).</li>
+<li>Borrow-scoped locks -- taken when <code>.borrow</code> or <code>.lock</code>
+creates a borrowed binding. An exclusive lock entry is placed in the
+scope where the borrow variable is defined. The lock persists for the
+lifetime of that scope. When the scope exits, the lock vanishes and
+the locked variable becomes available again.</li>
+</ul>
+<p>Lock state is queried by searching the scope chain from innermost to
+outermost. An exclusive lock on a variable blocks all access (reads and
+writes) for the duration of the lock. Shared locks (used during calls for
+dotted-path arguments) do not block other shared locks but do block
+exclusive locks.</p>
+<h3 id="type-narrowing"><a href="#type-narrowing">6.6. Type Narrowing</a></h3>
+<p>Type narrowing for union and variant types is tracked through scope-based
+overlay entries. When a match arm narrows a variable to a specific subtype,
+a narrowing entry is placed in the arm's scope. When the arm scope is
+popped, the narrowing resets automatically.</p>
+<p>Post-match exclusion works by recording which subtypes were handled by
+diverging arms (arms that return or break). After the match scope is popped,
+exclusion entries are placed in the parent scope. Subsequent access to an
+excluded subtype produces a compile error.</p>
+<p>Assignment-based narrowing (e.g., <code>x: result.ok 42</code>) also places a
+narrowing entry in the current scope. Reassignment resets the narrowing.</p>
+<p>If all branches of an <code>if</code> or <code>match</code> diverge, the parent scope is
+marked unreachable and subsequent statements are reported as dead code.</p>
 <h2 id="code-generator"><a href="#code-generator">7. Code Generator</a></h2>
 <p>The code generator (C emitter) walks the fully typed AST and emits C source
 code. The output is compiled by a C compiler (gcc/clang) to produce a native
