@@ -308,6 +308,16 @@ def _alloc_variable_id() -> int:
 
 
 @dataclass
+class ExprResult:
+    """Result of checking an expression: the resolved type plus any
+    borrow/private intent that the enclosing assignment should consume."""
+
+    ztype: Optional[ZType] = None
+    borrow_target: Optional[str] = None
+    private_access: bool = False
+
+
+@dataclass
 class LockEntry:
     """
     A single lock held on a variable.

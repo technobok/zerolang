@@ -22,6 +22,7 @@ from ztypes import (
     ZVariable,
     ZLockState,
     ControlKind,
+    ExprResult,
     NUMERIC_RANGES,
     TAG_ORIGIN,
     TypeState,
@@ -334,9 +335,12 @@ class TypeChecker:
         self._current_func_ownership: dict[str, ZParamOwnership] = {}
         self._current_func_return_ownership: Optional[ZParamOwnership] = None
 
-        # pending borrow lock: set by .borrow, consumed by _check_assignment
+        # pending borrow lock: set by deep methods (.borrow, .lock, .toview,
+        # protocol paths), captured and cleared by _check_expression into
+        # ExprResult.borrow_target so it cannot leak between statements.
         self._pending_borrow_lock: Optional[str] = None
-        # pending private access: set by .private, consumed by _check_assignment
+        # pending private access: set by .private, captured and cleared by
+        # _check_expression into ExprResult.private_access.
         self._pending_private_access: bool = False
 
         # inline unit context stack: tracks nesting during resolution
@@ -769,7 +773,7 @@ class TypeChecker:
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)
             self._resolving.append((key, shell))
-            t = self._check_expression(cast(zast.Expression, defn))
+            t = self._check_expression(cast(zast.Expression, defn)).ztype
             self._resolving.pop()
             return t
         if defn.nodetype == NodeType.ATOMID:
@@ -4616,10 +4620,6 @@ class TypeChecker:
         # propagate type to statement line wrapper
         if inner.type is not None:
             sline.type = inner.type
-        # clear stale borrow-lock flag after every statement so that a
-        # standalone expression (e.g. print s.toview) doesn't leak the flag
-        # into the next statement's assignment check
-        self._pending_borrow_lock = None
 
     def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
         """Check if a type is non-runtime (null/never/unit). Returns True if error emitted."""
@@ -4647,9 +4647,8 @@ class TypeChecker:
         return False
 
     def _check_assignment(self, assign: zast.Assignment) -> None:
-        self._pending_borrow_lock = None
-        self._pending_private_access = False
-        t = self._check_expression(assign.value)
+        result = self._check_expression(assign.value)
+        t = result.ztype
         self._check_exhaustive_if(assign.value)
         if t and self._check_non_runtime_type(t, "a value", assign.start):
             return
@@ -4667,12 +4666,8 @@ class TypeChecker:
             )
             return
         if t:
-            # check if this assignment is from a .borrow call
-            borrow_target = self._pending_borrow_lock
-            self._pending_borrow_lock = None
-            # check if this assignment is from a .private expression
-            private_access = self._pending_private_access
-            self._pending_private_access = False
+            borrow_target = result.borrow_target
+            private_access = result.private_access
 
             # Phase A: cannot copy a borrowed valtype to a new owned name.
             # The .borrow inline method (which sets borrow_target) is allowed
@@ -4751,7 +4746,7 @@ class TypeChecker:
 
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
         existing = self._check_path(reassign.topath)
-        new_t = self._check_expression(reassign.value)
+        new_t = self._check_expression(reassign.value).ztype
         self._check_exhaustive_if(reassign.value)
         if existing and new_t and not self._types_compatible(existing, new_t):
             self._error(
@@ -4811,14 +4806,7 @@ class TypeChecker:
         # `x = v` (root is x) and `rec.f = v` (root is rec). See ownership.pdoc.
         root = self._get_arg_root_name(reassign.topath)
         if root:
-            conflict = self.symtab.find_exclusive_lock(root)
-            if conflict:
-                _, holder = conflict
-                self._error(
-                    f"Cannot reassign: '{root}' has exclusive lock held by '{holder}'",
-                    loc=reassign.start,
-                    err=ERR.OWNERERROR,
-                )
+            self._check_not_locked(root, "Cannot reassign", reassign.start)
 
         # reassignment narrowing: reset and optionally re-narrow
         if reassign.topath.nodetype == NodeType.ATOMID:
@@ -4853,6 +4841,21 @@ class TypeChecker:
         self._check_swap_ownership(swap.lhs, "left", swap.start)
         self._check_swap_ownership(swap.rhs, "right", swap.start)
 
+    def _check_not_locked(self, name: str, context: str, loc: Token) -> None:
+        """Emit an error if `name` has an outstanding exclusive lock.
+
+        context is a phrase like "Cannot reassign" or "Cannot swap left operand"
+        that is placed at the start of the error message.
+        """
+        conflict = self.symtab.find_exclusive_lock(name)
+        if conflict:
+            _, holder = conflict
+            self._error(
+                f"{context}: '{name}' has exclusive lock held by '{holder}'",
+                loc=loc,
+                err=ERR.OWNERERROR,
+            )
+
     def _check_swap_ownership(self, path: zast.Path, side: str, loc: Token) -> None:
         """Check that swap argument is owned (or parent is owned for dotted paths)."""
         if path.nodetype == NodeType.ATOMID:
@@ -4881,16 +4884,9 @@ class TypeChecker:
         # a variable with an outstanding exclusive lock. See ownership.pdoc.
         root_name = self._get_arg_root_name(path)
         if root_name:
-            conflict = self.symtab.find_exclusive_lock(root_name)
-            if conflict:
-                _, holder = conflict
-                self._error(
-                    f"Cannot swap {side} operand: '{root_name}' has exclusive lock held by '{holder}'",
-                    loc=loc,
-                    err=ERR.OWNERERROR,
-                )
+            self._check_not_locked(root_name, f"Cannot swap {side} operand", loc)
 
-    def _check_expression(self, expr: zast.Expression) -> Optional[ZType]:
+    def _check_expression(self, expr: zast.Expression) -> ExprResult:
         inner = expr.expression
         t: Optional[ZType] = None
         if inner.nodetype == NodeType.CALL:
@@ -5016,7 +5012,14 @@ class TypeChecker:
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
                 expr.call_kind = cast(zast.Call, inner).call_kind
-        return t
+        # capture and clear pending flags into the result so they cannot
+        # leak between statements (replaces the safety clear that was
+        # previously needed after every statement)
+        borrow_target = self._pending_borrow_lock
+        private_access = self._pending_private_access
+        self._pending_borrow_lock = None
+        self._pending_private_access = False
+        return ExprResult(t, borrow_target, private_access)
 
     def _check_operation(self, op: zast.Operation) -> Optional[ZType]:
         if op.nodetype == NodeType.CALL:
@@ -5057,10 +5060,10 @@ class TypeChecker:
     def _check_path(self, path: zast.Path) -> Optional[ZType]:
         if path.nodetype == NodeType.EXPRESSION:
             path_expr = cast(zast.Expression, path)
-            result = self._check_expression(path_expr)
-            if result and not path_expr.type:
-                path_expr.type = result
-            return result
+            t = self._check_expression(path_expr).ztype
+            if t and not path_expr.type:
+                path_expr.type = t
+            return t
         if path.nodetype == NodeType.ATOMSTRING:
             path_str = cast(zast.AtomString, path)
             self._check_string_interpolation(path_str)
@@ -5305,17 +5308,10 @@ class TypeChecker:
                 path.parent.type = parent_type
                 # Borrow-scoped lock enforcement: locked variables are
                 # completely unavailable (reads AND writes).
-                var = self.symtab.lookup_var(parent_atom.name)
-                if var:
-                    conflict = self.symtab.find_exclusive_lock(parent_atom.name)
-                    if conflict:
-                        _, holder = conflict
-                        self._error(
-                            f"Cannot access '{parent_atom.name}': "
-                            f"exclusive lock held by '{holder}'",
-                            loc=path.start,
-                            err=ERR.OWNERERROR,
-                        )
+                if self.symtab.lookup_var(parent_atom.name):
+                    self._check_not_locked(
+                        parent_atom.name, "Cannot access", path.start
+                    )
             else:
                 taken_loc = self.symtab.get_taken_location(parent_atom.name)
                 if taken_loc:
@@ -5392,16 +5388,8 @@ class TypeChecker:
         if t:
             # Borrow-scoped lock enforcement: locked variables are completely
             # unavailable (reads AND writes) for the duration of the lock.
-            var = self.symtab.lookup_var(name)
-            if var:
-                conflict = self.symtab.find_exclusive_lock(name)
-                if conflict:
-                    _, holder = conflict
-                    self._error(
-                        f"Cannot access '{name}': exclusive lock held by '{holder}'",
-                        loc=atom.start,
-                        err=ERR.OWNERERROR,
-                    )
+            if self.symtab.lookup_var(name):
+                self._check_not_locked(name, "Cannot access", atom.start)
             atom.type = t
             # constant folding: propagate const_value for true/false literals
             if name == "true":
@@ -6009,7 +5997,7 @@ class TypeChecker:
         """Take locks for a function call argument. Returns list of (target, holder) pairs."""
         locks_taken: List[Tuple[str, str]] = []
         # use a synthetic holder name based on the call for tracking
-        holder = f"__call_{id(call)}"
+        holder = f"__call_{call.nodeid}"
 
         if op.nodetype == NodeType.ATOMID:
             name = cast(zast.AtomId, op).name
@@ -6094,7 +6082,7 @@ class TypeChecker:
         # don't lock data items
         if root_var.ztype.typetype == ZTypeType.DATA:
             return
-        holder = f"__recv_{id(call)}"
+        holder = f"__recv_{call.nodeid}"
         # exclusive lock on root (the receiver)
         err = self.symtab.try_lock(root, ZLockState.EXCLUSIVE, holder)
         if err:
@@ -6993,10 +6981,10 @@ class TypeChecker:
 
     def _check_with(self, withnode: zast.With) -> Optional[ZType]:
         self.symtab.push("with")
-        val_t = self._check_expression(withnode.value)
+        val_t = self._check_expression(withnode.value).ztype
         if val_t:
             self.symtab.define(withnode.name, val_t)
-        result = self._check_expression(withnode.doexpr)
+        result = self._check_expression(withnode.doexpr).ztype
         self.symtab.pop()
         return result
 
@@ -7202,8 +7190,7 @@ class TypeChecker:
                     # restore the variable so the next arm can reference it
                     self.symtab.define_var(subject_name, subject_var)
                     # clear the taken record so the next arm starts fresh
-                    if subject_name in self.symtab._taken:
-                        del self.symtab._taken[subject_name]
+                    self.symtab.clear_taken(subject_name)
 
             # post-match narrowing: if arm diverges, exclude that subtype
             if target_name and subject_type:
@@ -7238,8 +7225,7 @@ class TypeChecker:
                     if subject_taken_in_arm is None:
                         subject_taken_in_arm = "else"
                     self.symtab.define_var(subject_name, subject_var)
-                    if subject_name in self.symtab._taken:
-                        del self.symtab._taken[subject_name]
+                    self.symtab.clear_taken(subject_name)
 
             # if else clause diverges, all remaining subtypes are excluded
             # (but the else covers everything not explicitly matched, so this
@@ -7270,11 +7256,10 @@ class TypeChecker:
             )
             self.symtab.invalidate(subject_name, loc=loc_tuple)
             # override the taken message for better error reporting
-            if subject_name in self.symtab._taken and take_loc:
-                self.symtab._taken[subject_name] = (
-                    take_loc.lineno,
-                    take_loc.colno,
-                    take_loc.fsno,
+            if take_loc:
+                self.symtab.set_taken_location(
+                    subject_name,
+                    (take_loc.lineno, take_loc.colno, take_loc.fsno),
                 )
 
         # determine if match is exhaustive (else clause or all subtypes covered)

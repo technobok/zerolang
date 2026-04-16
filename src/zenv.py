@@ -16,6 +16,8 @@ class Scope:
         self.name = name
         self.symbols: Dict[str, ZType] = {}
         self.variables: Dict[str, ZVariable] = {}
+        # taken (invalidated) variables in this scope: name -> (line, col, file_id)
+        self.taken: Dict[str, Tuple[int, int, int]] = {}
 
     def define(self, name: str, ztype: ZType) -> None:
         self.symbols[name] = ztype
@@ -39,8 +41,6 @@ class SymbolTable:
 
     def __init__(self) -> None:
         self._scopes: List[Scope] = []
-        # track taken (invalidated) variables: name -> (line, col, file_id)
-        self._taken: Dict[str, Tuple[int, int, int]] = {}
 
     def push(self, name: str) -> Scope:
         scope = Scope(name)
@@ -55,7 +55,15 @@ class SymbolTable:
         top = self._scopes[-1]
         for holder_name in list(top.variables.keys()):
             self.release_held_locks(holder_name)
-        return self._scopes.pop()
+        self._scopes.pop()
+        # merge taken entries into parent scope so "already taken" errors
+        # persist after the inner scope exits
+        if self._scopes and top.taken:
+            parent = self._scopes[-1]
+            for name, loc in top.taken.items():
+                if name not in parent.taken:
+                    parent.taken[name] = loc
+        return top
 
     def define(self, name: str, ztype: ZType) -> None:
         self._scopes[-1].define(name, ztype)
@@ -88,13 +96,45 @@ class SymbolTable:
                 if name in scope.variables:
                     del scope.variables[name]
                 if loc is not None:
-                    self._taken[name] = loc
+                    scope.taken[name] = loc
                 return True
         return False
 
     def get_taken_location(self, name: str) -> Optional[Tuple[int, int, int]]:
         """Return the (line, col, file_id) where a variable was taken, or None."""
-        return self._taken.get(name)
+        for scope in reversed(self._scopes):
+            loc = scope.taken.get(name)
+            if loc is not None:
+                return loc
+        return None
+
+    def clear_taken(self, name: str) -> None:
+        """Remove the taken record for a name (used by match/case to restore
+        a variable between arms)."""
+        for scope in reversed(self._scopes):
+            if name in scope.taken:
+                del scope.taken[name]
+                return
+
+    def set_taken_location(self, name: str, loc: Tuple[int, int, int]) -> None:
+        """Override the taken location for a name (used by match/case for
+        better error reporting)."""
+        for scope in reversed(self._scopes):
+            if name in scope.taken:
+                scope.taken[name] = loc
+                return
+
+    def _assert_lock_consistency(self, target_name: str, holder: str) -> None:
+        """Debug assertion: verify bidirectional lock consistency."""
+        var = self.lookup_var(target_name)
+        holder_var = self.lookup_var(holder)
+        if var and holder_var:
+            has_lock = any(e.holder == holder for e in var.locks)
+            has_held = target_name in holder_var.held_locks
+            assert has_lock == has_held, (
+                f"Lock inconsistency: {target_name}.locks has {holder}={has_lock}, "
+                f"{holder}.held_locks has {target_name}={has_held}"
+            )
 
     def try_lock(
         self, target_name: str, lock_type: ZLockState, holder: str
@@ -129,6 +169,8 @@ class SymbolTable:
         if holder_var:
             holder_var.held_locks.append(target_name)
 
+        if __debug__:
+            self._assert_lock_consistency(target_name, holder)
         return None
 
     def release_lock(self, target_name: str, holder: str) -> None:
@@ -136,7 +178,12 @@ class SymbolTable:
         var = self.lookup_var(target_name)
         if not var:
             return
-        var.locks = [e for e in var.locks if e.holder != holder]
+        i = 0
+        while i < len(var.locks):
+            if var.locks[i].holder == holder:
+                var.locks.pop(i)
+            else:
+                i += 1
 
     def find_exclusive_lock(self, name: str) -> Optional[Tuple[str, str]]:
         """Return (name, holder) if `name` has an outstanding EXCLUSIVE lock,
