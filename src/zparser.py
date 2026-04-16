@@ -2063,36 +2063,6 @@ class Parser:
         )
         return NodeX(fornode, extern=extern)
 
-    def _acceptdo(self, lex: Lexer) -> Union[NodeX[zast.Do], zast.Error, None]:
-        """
-        acceptdo - accept a do clause (sequence)
-
-            "do" [ "block" ] statement
-
-        Return an Do or Error or None for no unit (missing "do" keyword)
-        """
-        start = lex.peek()
-        if not lex.accept(TT.DO):
-            return None
-
-        extern: Dict[str, zast.AtomId] = {}
-
-        # optional 'block' identifier (not a keyword)
-        if lex.peek().toktype == TT.REFID and lex.peek().tokstr == "block":
-            lex.acceptany()
-
-        statementx = self._acceptstatement(lex)
-        if statementx is not None and statementx.is_error:
-            return cast(zast.Error, statementx)  # propagate error
-        if not statementx:
-            msg = "Expected statement for 'do'"
-            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDSTATEMENT, msg=msg)
-        statementx = cast(NodeX[zast.Statement], statementx)
-        promoteexterns(addto=extern, addfrom=statementx.extern)
-
-        donode = zast.Do(statement=statementx.node, start=start)
-        return NodeX(donode, extern=extern)
-
     def _acceptwith(self, lex: Lexer) -> Union[NodeX[zast.With], zast.Error, None]:
         """
         acceptwith - accept a with expression (scoped definition)

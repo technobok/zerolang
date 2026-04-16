@@ -4887,7 +4887,7 @@ class TypeChecker:
             t = self._check_for(cast(zast.For, inner))
         elif inner.nodetype == NodeType.DO:
             inner_do = cast(zast.Do, inner)
-            self.symtab.push("do")
+            self.symtab.push("block")
             # introduce break (but not continue) for early exit
             t_never = self._resolve_name("never")
             if t_never:
