@@ -1964,11 +1964,9 @@ class TypeChecker:
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
 
-        # Phase B: detect this.borrow constructors and validate agreement.
-        # Records cannot use born-borrowed semantics: reject .lock fields and
-        # 'this.borrow' constructor returns. Use a class with .lock fields
-        # instead.
-        self._reject_born_borrowed_record(name, rec, rtype)
+        # Records cannot have .lock fields or this.borrow constructors —
+        # use a class instead (classes have identity and single-owner semantics).
+        self._reject_record_lock_features(name, rec, rtype)
 
         # as_items: protocol satisfaction — must run before method body check
         # so create_disabled flag is set before body-check.
@@ -2024,15 +2022,14 @@ class TypeChecker:
             return cast(zast.AtomId, rt).name == "this"
         return False
 
-    def _reject_born_borrowed_record(
+    def _reject_record_lock_features(
         self, name: str, rec: zast.Record, rtype: ZType
     ) -> None:
-        """Reject born-borrowed features on records.
+        """Reject .lock fields and this.borrow constructors on records.
 
-        Born-borrowed records have been replaced by class types with .lock
-        fields. Records may not use:
-        - .lock field annotations
-        - 'this.borrow' return type on constructors
+        Records are valtypes (copyable, no identity). .lock fields and
+        this.borrow constructors require single-owner semantics — use a
+        class instead.
         """
         if rtype.has_lock_fields:
             self._error(
@@ -2062,7 +2059,8 @@ class TypeChecker:
             self._error(
                 f"Record '{name}' constructor(s) "
                 f"({', '.join(offending)}) return 'this.borrow'; "
-                f"born-borrowed records are no longer supported.",
+                f"records cannot return 'this.borrow' — use a class with "
+                f".lock fields instead.",
                 loc=rec.start,
                 err=ERR.TYPEERROR,
                 hint=(

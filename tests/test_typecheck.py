@@ -1227,10 +1227,7 @@ class TestLockFieldsAndBornBorrowedRemoved:
             "}\n"
             "main: function is { r: v.create }"
         )
-        assert any(
-            "born-borrowed" in e.msg.lower() and "no longer supported" in e.msg.lower()
-            for e in errors
-        )
+        assert any("this.borrow" in e.msg and "class" in e.msg.lower() for e in errors)
 
     def test_lock_field_on_class_allowed(self):
         # Phase 7: classes may have .lock fields (stack-allocated, single-owner)
