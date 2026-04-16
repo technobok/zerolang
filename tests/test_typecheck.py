@@ -1739,6 +1739,93 @@ class TestLockEnforcement:
             "exclusive lock" in e.msg.lower() and "'me'" in e.msg for e in errors
         )
 
+    # --- Phase 3 tests ---
+
+    def test_callable_dispatch_rejects_locked_callable(self):
+        """Explicit method call c.call on a locked variable errors —
+        callable dispatch must check the receiver lock."""
+        errors = check_errors(
+            "counter: class { i: i64 max: i64 } as {\n"
+            "  call: function {:this} out (optionval t: i64) is {\n"
+            "    if this.i < this.max then {\n"
+            "      result: optionval.some this.i\n"
+            "      this.i = this.i + 1\n"
+            "      return result\n"
+            "    }\n"
+            "    return (optionval.none i64)\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: counter i: 0 max: 5\n"
+            "  v: c.borrow\n"
+            "  x: c.call\n"
+            "}"
+        )
+        assert any("lock" in e.msg.lower() for e in errors)
+
+    def test_stale_borrow_lock_cleared_after_expression(self):
+        """_pending_borrow_lock is cleared between statements, so a standalone
+        expression that sets it doesn't affect the next assignment."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  print s.toview\n"
+            '  t: "world".string\n'
+            "}"
+        )
+
+    def test_toview_on_temporary_rejected(self):
+        """Creating a view from a temporary expression is rejected — no named
+        root to lock, so the view would dangle."""
+        errors = check_errors('main: function is { v: "hello".string.toview }')
+        assert any("temporary" in e.msg.lower() for e in errors)
+
+    def test_borrow_on_temporary_rejected(self):
+        """Borrowing a temporary expression is rejected."""
+        errors = check_errors("main: function is { v: (1 + 2).borrow }")
+        assert any("temporary" in e.msg.lower() for e in errors)
+
+    def test_read_locked_var_rejected(self):
+        """Reading a locked variable (not just writing) is an error.
+        Locked means completely unavailable."""
+        errors = check_errors(
+            'main: function is {\n  s: "hello".string\n  v: s.toview\n  t: s\n}'
+        )
+        assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_read_locked_field_rejected(self):
+        """Reading a field of a locked record is an error."""
+        errors = check_errors(
+            "namepair: record { name: string other: i64 }\n"
+            "main: function is {\n"
+            '  p: namepair name: "a".string other: 0\n'
+            "  v: p.name.toview\n"
+            "  x: p.other\n"
+            "}"
+        )
+        assert any("cannot access" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_read_locked_var_in_interpolation_rejected(self):
+        """String interpolation of a locked variable is a read access — error."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.toview\n"
+            '  print "\\{s}"\n'
+            "}"
+        )
+        assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_holder_read_ok(self):
+        """The lock holder itself is not locked — reads through it are fine."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.toview\n"
+            '  print "\\{v.length}"\n'
+            "}"
+        )
+
 
 class TestLockCheckingExamplePrograms:
     """Verify all v1 example programs still pass with lock checking."""

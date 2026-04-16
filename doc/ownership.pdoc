@@ -424,23 +424,30 @@ of how deep into the locked variable's structure it reaches -- is
 checked against the root's lock (see #~"Mutation-Site Enforcement"
 below).
 
-#---: Mutation-Site Enforcement
+#---: Lock Enforcement
 
 While a variable has an outstanding exclusive Borrow-scoped Lock,
-the compiler rejects any mutation whose path is rooted at that
-variable:
+the variable is #_+"completely unavailable". The compiler rejects
+#_*"any" access whose path is rooted at the locked variable -- both
+reads and writes:
 
 #ul:
-  [#*: reassignment of the locked variable (#~"x = v")]
-  [#*: field reassignment through it (#~"x.f = v", #~"x.a.b = v")]
+  [#*: reading the variable or any field through it
+  (#~"x", #~"x.field", #~"x.a.b")]
+  [#*: reassignment (#~"x = v") or field reassignment (#~"x.f = v")]
   [#*: swap with either side rooted at the locked variable]
   [#*: method calls on the locked variable]
   [#*: further #~".borrow", #~".toview", #~".take", or #~".release"
   on it]
+  [#*: passing the locked variable as an argument]
 
-Read access to unrelated fields is not blocked. This root-based
-enforcement is what makes root-only Borrow-scoped Lock placement
-sound -- one lock on the root protects the entire reachable subtree.
+The only code that can access the locked data is the lock holder
+(the borrow or view variable) through its own interface.
+
+This strict approach prevents aliasing through field reads (which
+would create references that bypass the lock) and makes the
+programmer's intent clear: a locked variable is off-limits until
+the borrow ends.
 
 #~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation
@@ -465,12 +472,24 @@ When a variable falls out of scope, all locks it holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).
 
-#---: Temporary Variables for Locked Expressions
+#---: Temporary Expressions in Lock Context
 
-Ideally, locked parameters are named variables in the caller. But the compiler
-can assign temporary names to expressions if used in a lock context. The
-compiler is responsible for keeping those temporaries alive until the locks are
-released and then destroying them.
+The compiler rejects #~".borrow", #~".toview", and #~".lock" on
+temporary expressions (i.e. expressions whose result has no named
+variable). The programmer must assign the value to a variable first:
+
+#code language=zerolang: """
+  # ERROR: cannot create view from temporary expression
+  # v: "hello".string.toview
+
+  # OK: assign first, then view
+  s: "hello".string
+  v: s.toview
+  """
+
+A future version of the compiler may support automatic temporary
+variable creation to keep lock-context expressions alive, but for
+now explicit naming is required.
 
 
 #--: Classes with #~".lock" Fields

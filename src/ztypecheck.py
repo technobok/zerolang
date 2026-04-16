@@ -3149,6 +3149,13 @@ class TypeChecker:
             root_name = self._get_arg_root_name(path.parent)
             if root_name:
                 self._pending_borrow_lock = root_name
+            else:
+                self._error(
+                    "Cannot create view from temporary expression; "
+                    "assign the value to a variable first",
+                    loc=path.start,
+                    err=ERR.OWNERERROR,
+                )
             return self._resolve_name("stringview")
         # for string class: .length and .capacity return u64 directly
         if parent_type.subtype == ZSubType.STRING and child_name in (
@@ -3173,7 +3180,18 @@ class TypeChecker:
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
         # for list types: .toview returns the listview type directly (zero-arg method)
+        # and acquires an exclusive lock on the source list
         if _is_list_type(parent_type) and child_name == "toview":
+            root_name = self._get_arg_root_name(path.parent)
+            if root_name:
+                self._pending_borrow_lock = root_name
+            else:
+                self._error(
+                    "Cannot create view from temporary expression; "
+                    "assign the value to a variable first",
+                    loc=path.start,
+                    err=ERR.OWNERERROR,
+                )
             toview_child = parent_type.children.get("toview")
             if toview_child and toview_child.return_type:
                 return toview_child.return_type
@@ -4598,6 +4616,10 @@ class TypeChecker:
         # propagate type to statement line wrapper
         if inner.type is not None:
             sline.type = inner.type
+        # clear stale borrow-lock flag after every statement so that a
+        # standalone expression (e.g. print s.toview) doesn't leak the flag
+        # into the next statement's assignment check
+        self._pending_borrow_lock = None
 
     def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
         """Check if a type is non-runtime (null/never/unit). Returns True if error emitted."""
@@ -5180,6 +5202,13 @@ class TypeChecker:
                     root_name = self._get_arg_root_name(path.parent)
                     if root_name:
                         self._pending_borrow_lock = root_name
+                    else:
+                        self._error(
+                            "Cannot borrow temporary expression; "
+                            "assign the value to a variable first",
+                            loc=path.start,
+                            err=ERR.OWNERERROR,
+                        )
                     path.type = parent_type
                     return parent_type
 
@@ -5190,6 +5219,13 @@ class TypeChecker:
                 root_name = self._get_arg_root_name(path.parent)
                 if root_name:
                     self._pending_borrow_lock = root_name
+                else:
+                    self._error(
+                        "Cannot lock temporary expression; "
+                        "assign the value to a variable first",
+                        loc=path.start,
+                        err=ERR.OWNERERROR,
+                    )
                 path.type = parent_type
             return parent_type
 
@@ -5267,6 +5303,19 @@ class TypeChecker:
             parent_type = self._resolve_name(parent_atom.name)
             if parent_type:
                 path.parent.type = parent_type
+                # Borrow-scoped lock enforcement: locked variables are
+                # completely unavailable (reads AND writes).
+                var = self.symtab.lookup_var(parent_atom.name)
+                if var:
+                    conflict = self.symtab.find_exclusive_lock(parent_atom.name)
+                    if conflict:
+                        _, holder = conflict
+                        self._error(
+                            f"Cannot access '{parent_atom.name}': "
+                            f"exclusive lock held by '{holder}'",
+                            loc=path.start,
+                            err=ERR.OWNERERROR,
+                        )
             else:
                 taken_loc = self.symtab.get_taken_location(parent_atom.name)
                 if taken_loc:
@@ -5304,6 +5353,13 @@ class TypeChecker:
                 root_name = self._get_arg_root_name(path.parent)
                 if root_name:
                     self._pending_borrow_lock = root_name
+                else:
+                    self._error(
+                        "Cannot borrow temporary expression; "
+                        "assign the value to a variable first",
+                        loc=path.start,
+                        err=ERR.OWNERERROR,
+                    )
             # if this is a union subtype reference (null subtype used as value),
             # the type should be the parent union type
             if path.parent_tagged_type:
@@ -5334,6 +5390,18 @@ class TypeChecker:
 
         t = self._resolve_name(name)
         if t:
+            # Borrow-scoped lock enforcement: locked variables are completely
+            # unavailable (reads AND writes) for the duration of the lock.
+            var = self.symtab.lookup_var(name)
+            if var:
+                conflict = self.symtab.find_exclusive_lock(name)
+                if conflict:
+                    _, holder = conflict
+                    self._error(
+                        f"Cannot access '{name}': exclusive lock held by '{holder}'",
+                        loc=atom.start,
+                        err=ERR.OWNERERROR,
+                    )
             atom.type = t
             # constant folding: propagate const_value for true/false literals
             if name == "true":
@@ -5880,9 +5948,12 @@ class TypeChecker:
         }
         for target_name, holder, pname in call_locks:
             if pname in lock_param_names:
-                # these locks will be transferred to whoever receives the return value;
-                # keep them in place — the holder is the arg variable which remains locked
-                pass
+                # Transfer the lock to whoever receives the return value.
+                # Release the synthetic __call_* lock and set
+                # _pending_borrow_lock so that the receiving variable
+                # installs a proper borrow-scoped lock in _check_assignment.
+                self.symtab.release_lock(target_name, holder)
+                self._pending_borrow_lock = target_name
             else:
                 # release this call's lock
                 self.symtab.release_lock(target_name, holder)
