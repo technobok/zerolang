@@ -4784,6 +4784,20 @@ class TypeChecker:
                     ),
                 )
 
+        # Borrow-scoped lock enforcement: reject reassignment whose path is
+        # rooted at a variable with an outstanding exclusive lock. Works for
+        # `x = v` (root is x) and `rec.f = v` (root is rec). See ownership.pdoc.
+        root = self._get_arg_root_name(reassign.topath)
+        if root:
+            conflict = self.symtab.find_exclusive_lock(root)
+            if conflict:
+                _, holder = conflict
+                self._error(
+                    f"Cannot reassign: '{root}' has exclusive lock held by '{holder}'",
+                    loc=reassign.start,
+                    err=ERR.OWNERERROR,
+                )
+
         # reassignment narrowing: reset and optionally re-narrow
         if reassign.topath.nodetype == NodeType.ATOMID:
             var_name = cast(zast.AtomId, reassign.topath).name
@@ -4840,6 +4854,19 @@ class TypeChecker:
                         f"Cannot swap {side} operand: parent '{root_name}' is borrowed",
                         loc=loc,
                     )
+
+        # Borrow-scoped lock enforcement: reject swap whose path is rooted at
+        # a variable with an outstanding exclusive lock. See ownership.pdoc.
+        root_name = self._get_arg_root_name(path)
+        if root_name:
+            conflict = self.symtab.find_exclusive_lock(root_name)
+            if conflict:
+                _, holder = conflict
+                self._error(
+                    f"Cannot swap {side} operand: '{root_name}' has exclusive lock held by '{holder}'",
+                    loc=loc,
+                    err=ERR.OWNERERROR,
+                )
 
     def _check_expression(self, expr: zast.Expression) -> Optional[ZType]:
         inner = expr.expression
@@ -5931,29 +5958,21 @@ class TypeChecker:
                 locks_taken.append((name, holder))
 
         elif op.nodetype == NodeType.DOTTEDPATH:
-            # for dotted paths: exclusive lock on leaf, shared on parent chain
+            # for dotted paths: shared locks on each variable in the chain.
+            # The leaf of a dotted path is a field name (not a symtab entry),
+            # so an exclusive lock on the leaf would be a silent no-op and is
+            # intentionally not attempted — aliasing protection comes from
+            # the shared locks on the shared ancestors (see ownership.pdoc,
+            # "Call-scoped Locking Algorithm").
             chain = self._get_dotted_chain(cast(zast.DottedPath, op))
-            if chain:
-                # exclusive lock on the leaf (last element)
-                leaf = chain[-1]
-                leaf_var = self.symtab.lookup_var(leaf)
-                if leaf_var and leaf_var.ztype.typetype != ZTypeType.DATA:
-                    err = self.symtab.try_lock(leaf, ZLockState.EXCLUSIVE, holder)
+            for parent_name in chain:
+                parent_var = self.symtab.lookup_var(parent_name)
+                if parent_var and parent_var.ztype.typetype != ZTypeType.DATA:
+                    err = self.symtab.try_lock(parent_name, ZLockState.SHARED, holder)
                     if err:
                         self._error(err, loc=loc)
                     else:
-                        locks_taken.append((leaf, holder))
-                # shared lock on each parent in the chain
-                for parent_name in chain[:-1]:
-                    parent_var = self.symtab.lookup_var(parent_name)
-                    if parent_var and parent_var.ztype.typetype != ZTypeType.DATA:
-                        err = self.symtab.try_lock(
-                            parent_name, ZLockState.SHARED, holder
-                        )
-                        if err:
-                            self._error(err, loc=loc)
-                        else:
-                            locks_taken.append((parent_name, holder))
+                        locks_taken.append((parent_name, holder))
 
         elif op.nodetype == NodeType.EXPRESSION:
             inner = cast(zast.Expression, op).expression
@@ -6009,6 +6028,8 @@ class TypeChecker:
         err = self.symtab.try_lock(root, ZLockState.EXCLUSIVE, holder)
         if err:
             self._error(err, loc=call.start)
+            # lock was not taken, skip the mismatched release
+            return
         # receiver locks are released after the call
         self.symtab.release_lock(root, holder)
 

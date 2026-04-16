@@ -131,6 +131,22 @@ class SymbolTable:
             return
         var.locks = [e for e in var.locks if e.holder != holder]
 
+    def find_exclusive_lock(self, name: str) -> Optional[Tuple[str, str]]:
+        """Return (name, holder) if `name` has an outstanding EXCLUSIVE lock,
+        else None. Used by mutation sites to reject operations on paths rooted
+        at a variable with an active borrow-scoped lock.
+
+        Only EXCLUSIVE locks block mutation. SHARED locks are call-scoped
+        (released when the call returns) and do not represent a persisting
+        borrow."""
+        var = self.lookup_var(name)
+        if not var:
+            return None
+        for entry in var.locks:
+            if entry.lock_type == ZLockState.EXCLUSIVE:
+                return (name, entry.holder)
+        return None
+
     def release_held_locks(self, holder_name: str) -> None:
         """Release all locks held by a variable (called on scope exit)."""
         var = self.lookup_var(holder_name)

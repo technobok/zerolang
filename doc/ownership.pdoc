@@ -266,6 +266,8 @@ on the caller's stack with borrowed restrictions.
 As an inline method (#~"x.borrow"): returns a borrowed reference to #~"x".
 The variable #~"x" is exclusively locked for the lifetime of the borrowed
 reference. #~".borrow" can be called on either owned or borrowed variables.
+The lock is placed on the #_+"root variable" of the path, not on any
+intermediate field (see #~"Borrow-scoped Locking" below).
 
 #---: .lock
 
@@ -329,8 +331,26 @@ an error.
 
 #--: Locking
 
-Locking is an orthogonal compile-time mechanism that prevents aliasing and data
-races. It has zero runtime overhead.
+Locking is an orthogonal compile-time mechanism that prevents aliasing and
+enforces mutation-safety for outstanding borrows. It has zero runtime
+overhead.
+
+Zerolang uses one lock primitive for two purposes, which this document
+refers to as:
+
+#ul:
+  [#*: #_+"Call-scoped Locking" -- locks held only during a function or
+  method call, used to prevent aliasing between arguments and receiver.
+  Acquired by the call-dispatch machinery; released automatically when
+  the call returns.]
+  [#*: #_+"Borrow-scoped Locking" -- locks held for the full scope of a
+  borrowing variable (#~".borrow", #~".toview", #~".lock" fields,
+  returned values of functions with #~".lock" parameters). Acquired when
+  the borrow is bound; released when the borrowing variable falls out of
+  scope or is explicitly #~".release"d.]
+
+Both use the same EXCLUSIVE/SHARED states and the same storage; they
+differ only in lifetime and acquisition policy.
 
 #---: Lock States
 
@@ -343,39 +363,84 @@ Each variable can have locks placed on it by other variables:
   exclusive locks are not.]
 
 A reftype can only appear once as an argument or as a receiver in a single
-function call (enforced by the locking algorithm below). This prevents
-aliasing and is the property #~"doc/spec.pdoc" calls 'no aliasing for
-reftypes'. Top-level #~"data" items are exempt -- they are immutable and
-never locked.
+function call (enforced by the Call-scoped Locking algorithm below). This
+prevents aliasing and is the property #~"doc/spec.pdoc" calls 'no aliasing
+for reftypes'. Top-level #~"data" items are exempt -- they are immutable
+and never locked.
 
-#---: Locking Algorithm During Calls
+#---: Call-scoped Locking Algorithm
 
-When a function is called, locks are taken on arguments and the receiver:
+When a function is called, locks are taken on arguments and the receiver
+and released when the call returns:
 
 #ol:
   [#*: Each argument is processed left to right.]
-  [#*: If the argument is a top-level #~"data" item, no lock is taken (immutable,
-  freely shared).]
-  [#*: Otherwise, an exclusive lock is taken on the argument.]
-  [#*: If the argument is a dotted chain, a shared lock is taken on each parent
-  and grandparent in that chain.]
-  [#*: Additional shared locks on already-shared-locked parents are permitted.]
-  [#*: If there is already an exclusive or shared lock on the argument being
-  passed, it is an error (prevents aliasing).]
-  [#*: If the argument is a sub-call, locking is applied recursively. After the
-  sub-call, its argument locks are cleared or assigned to the sub-call result.]
-  [#*: After all arguments are processed, the receiver is locked (exclusive lock
-  on each component of the receiver chain).]
+  [#*: If the argument is a top-level #~"data" item, no lock is taken
+  (immutable, freely shared).]
+  [#*: If the argument is a bare variable, an exclusive lock is taken on it.]
+  [#*: If the argument is a dotted chain, a shared lock is taken on every
+  variable name in the chain (root and intermediate parents). No
+  additional lock is taken on the leaf because field names do not have
+  independent lock identity -- aliasing is prevented by the shared locks
+  on the shared ancestors.]
+  [#*: Additional shared locks on already-shared-locked parents are
+  permitted.]
+  [#*: If there is already an exclusive or shared lock on the argument
+  being passed, it is an error (prevents aliasing).]
+  [#*: If the argument is a sub-call, locking is applied recursively.
+  After the sub-call, its argument locks are cleared or assigned to the
+  sub-call result.]
+  [#*: After all arguments are processed, an exclusive lock is taken on
+  the root of the receiver chain for the duration of the call.]
   [#*: The call is made.]
-  [#*: After the call, for any #~".lock" parameters, their exclusive locks (plus
-  shared locks on parent items) are assigned to the returned value. All other
-  argument locks are freed.]
+  [#*: After the call, for any #~".lock" parameters, their locks transfer
+  to the returned value and become Borrow-scoped Locks held by that
+  returned value. All other argument locks are released.]
 
-#~"for" loops over a reftype iteration target take an exclusive lock on the
-target for the duration of the body, preventing mutation of the container or
-iterator from outside the loop. Per-iteration #~"call" method dispatch takes
-and releases an exclusive lock on the receiver for each call. See the lock
-lifecycle walkthrough below for a worked example.
+#~"for" loops over a reftype iteration target take an exclusive lock on
+the target for the duration of the body, preventing mutation of the
+container or iterator from outside the loop. Per-iteration method
+dispatch takes and releases an exclusive lock on the receiver for each
+call. See the lock lifecycle walkthrough below for a worked example.
+
+#---: Borrow-scoped Locking
+
+A Borrow-scoped Lock is acquired whenever a variable is bound to a
+borrow or view construct: #~".borrow", #~"string.toview" (and
+analogous #~".toview" on list/listview), the transfer from #~".lock"
+parameters to a return value, and #~".lock" fields on classes. The
+lock is:
+
+#ul:
+  [#*: exclusive]
+  [#*: placed on the #_+"root variable" of the path the borrow was
+  taken from. For #~"v: rec.field.toview" the lock is on #~"rec", not
+  on #~"field".]
+  [#*: held for the full scope of the borrowing variable; released
+  automatically on scope exit or via #~".release".]
+
+Root-only placement is sufficient: any mutation attempt -- regardless
+of how deep into the locked variable's structure it reaches -- is
+checked against the root's lock (see #~"Mutation-Site Enforcement"
+below).
+
+#---: Mutation-Site Enforcement
+
+While a variable has an outstanding exclusive Borrow-scoped Lock,
+the compiler rejects any mutation whose path is rooted at that
+variable:
+
+#ul:
+  [#*: reassignment of the locked variable (#~"x = v")]
+  [#*: field reassignment through it (#~"x.f = v", #~"x.a.b = v")]
+  [#*: swap with either side rooted at the locked variable]
+  [#*: method calls on the locked variable]
+  [#*: further #~".borrow", #~".toview", #~".take", or #~".release"
+  on it]
+
+Read access to unrelated fields is not blocked. This root-based
+enforcement is what makes root-only Borrow-scoped Lock placement
+sound -- one lock on the root protects the entire reachable subtree.
 
 #~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation

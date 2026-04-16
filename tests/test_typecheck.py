@@ -1546,6 +1546,124 @@ class TestLockCheckingScopeExit:
         check_ok("main: function is {\n  x: 42\n  y: x.take\n}")
 
 
+class TestLockEnforcement:
+    """Mutation-site enforcement of outstanding exclusive Borrow-scoped Locks.
+
+    While a variable holds an exclusive Borrow-scoped Lock (e.g. from
+    `.borrow` or `string.toview`), the compiler must reject reassignment,
+    field reassignment, swap, and method calls whose path is rooted at the
+    locked variable. See doc/ownership.pdoc, Mutation-Site Enforcement.
+    """
+
+    def test_reassign_locked_var_rejected(self):
+        """Reassigning a var holding an outstanding view lock must error."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.toview\n"
+            '  s = "world".string\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_reassign_locked_valtype_var_rejected(self):
+        """Same rule applies to borrowed valtype via .borrow."""
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n  x = 7\n}")
+        # existing BORROWED-check may fire too; we want the new lock check also
+        assert any("exclusive lock" in e.msg.lower() for e in errors)
+
+    def test_field_reassign_rejects_locked_root(self):
+        """Reassigning a field of a record whose string field is viewed errors —
+        the view installs a Borrow-scoped Lock on the root record."""
+        errors = check_errors(
+            "namepair: record { name: string other: string }\n"
+            "main: function is {\n"
+            '  p: namepair name: "a".string other: "b".string\n'
+            "  v: p.name.toview\n"
+            '  p.other = "c".string\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_sibling_field_reassign_rejected_when_root_locked(self):
+        """Root-locking is coarse — reassigning a sibling field is blocked."""
+        errors = check_errors(
+            "namepair: record { name: string other: i64 }\n"
+            "main: function is {\n"
+            '  p: namepair name: "a".string other: 0\n'
+            "  v: p.name.toview\n"
+            "  p.other = 3\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_swap_rejects_locked_var(self):
+        """Swap with a locked var on either side errors."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  x: "hello".string\n'
+            '  a: "world".string\n'
+            "  v: x.toview\n"
+            "  x swap a\n"
+            "}"
+        )
+        assert any(
+            "exclusive lock" in e.msg.lower() and "swap" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_swap_rejects_locked_root(self):
+        """Swap where a side's root has an outstanding lock errors."""
+        errors = check_errors(
+            "namepair: record { name: string other: string }\n"
+            "main: function is {\n"
+            '  p: namepair name: "a".string other: "b".string\n'
+            '  a: "c".string\n'
+            "  v: p.name.toview\n"
+            "  p.other swap a\n"
+            "}"
+        )
+        assert any(
+            "exclusive lock" in e.msg.lower() and "swap" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_method_call_on_locked_receiver_rejected(self):
+        """Calling a method on a locked receiver errors (existing _lock_receiver
+        behavior; guards against B3 regression)."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.toview\n"
+            '  s.append " world"\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() for e in errors)
+
+    def test_mutation_ok_after_release(self):
+        """After explicit .release of the view, the source becomes mutable."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  v: s.toview\n"
+            "  v.release\n"
+            '  s = "world".string\n'
+            "}"
+        )
+
+    def test_call_shared_lock_allows_sibling_field_args(self):
+        """Call-scoped SHARED locks on the parent permit passing sibling fields
+        as separate arguments (regression guard for B4)."""
+        check_ok(
+            "point: record { x: i64 y: i64 }\n"
+            "f: function {a: i64 b: i64} is {}\n"
+            "main: function is {\n"
+            "  p: point x: 1 y: 2\n"
+            "  f a: p.x b: p.y\n"
+            "}"
+        )
+
+
 class TestLockCheckingExamplePrograms:
     """Verify all v1 example programs still pass with lock checking."""
 
