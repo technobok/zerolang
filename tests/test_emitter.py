@@ -5981,3 +5981,62 @@ class TestClassLockFields:
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
+
+
+class TestTakeInArmMemorySafety:
+    """Memory safety tests for .take inside if/match arms using ASan."""
+
+    def test_take_in_one_if_arm_no_leak(self):
+        """Take in then-arm, else-arm runs at runtime -- no leak."""
+        csource = emit_source(
+            "box: class { label: string }\n"
+            "main: function is {\n"
+            '  a: box label: "hello".string\n'
+            '  print "\\{a.label}"\n'
+            "  x: 0\n"
+            "  if x > 0 then { b: a.take }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_take_in_one_if_arm_no_double_free(self):
+        """Take in then-arm, then-arm runs at runtime -- no double-free."""
+        csource = emit_source(
+            "box: class { label: string }\n"
+            "main: function is {\n"
+            '  a: box label: "hello".string\n'
+            '  print "\\{a.label}"\n'
+            "  x: 1\n"
+            "  if x > 0 then { b: a.take }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_take_in_if_else_no_leak(self):
+        """Take in then-arm, no take in else-arm, else runs -- no leak."""
+        csource = emit_source(
+            "box: class { label: string }\n"
+            "consume: function {b: box.take} is {}\n"
+            "main: function is {\n"
+            '  a: box label: "hello".string\n'
+            '  print "\\{a.label}"\n'
+            "  x: 0\n"
+            '  if x > 0 then { consume a } else { print "else" }\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+    def test_arm_local_var_cleanup(self):
+        """Variable declared inside arm is cleaned up inside arm scope."""
+        csource = emit_source(
+            "box: class { label: string }\n"
+            "main: function is {\n"
+            "  x: 1\n"
+            '  if x > 0 then { b: box label: "inner".string\n print "\\{b.label}" }\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"

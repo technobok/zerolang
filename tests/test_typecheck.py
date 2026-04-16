@@ -7234,3 +7234,55 @@ class TestStringEquality:
             "}"
         )
         assert any("No operator '=='" in e.msg for e in errors)
+
+
+class TestTakeInArm:
+    """Test that .take inside if/match arms invalidates the variable after."""
+
+    def test_take_in_one_if_arm_invalidates(self):
+        """Take in then-arm, variable invalid after if."""
+        errors = check_errors(
+            "box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: box value: 1\n"
+            "  if 1 > 0 then { b: a.take }\n"
+            '  print "\\{a.value}"\n'
+            "}"
+        )
+        assert any("ownership transfer" in e.msg.lower() for e in errors)
+
+    def test_take_in_if_else_both_arms_invalidates(self):
+        """Take in both arms, variable invalid after if."""
+        errors = check_errors(
+            "box: class { value: i64 }\n"
+            "consume: function {b: box.take} is {}\n"
+            "main: function is {\n"
+            "  a: box value: 1\n"
+            "  if 1 > 0 then { consume a } else { consume a }\n"
+            '  print "\\{a.value}"\n'
+            "}"
+        )
+        assert any("ownership transfer" in e.msg.lower() for e in errors)
+
+    def test_no_take_in_any_arm_still_valid(self):
+        """No take in any arm, variable still valid after if."""
+        check_ok(
+            "box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: box value: 1\n"
+            '  if 1 > 0 then { print "hello" } else { print "world" }\n'
+            '  print "\\{a.value}"\n'
+            "}"
+        )
+
+    def test_take_in_one_if_arm_no_else_invalidates(self):
+        """Take in then-arm with no else, variable invalid after if."""
+        errors = check_errors(
+            "box: class { value: i64 }\n"
+            "main: function is {\n"
+            "  a: box value: 1\n"
+            "  if 1 > 0 then { b: a.take }\n"
+            '  print "\\{a.value}"\n'
+            "}"
+        )
+        assert any("ownership transfer" in e.msg.lower() for e in errors)

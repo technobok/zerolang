@@ -5624,6 +5624,47 @@ class CEmitter:
             return f"{indent}{var} = ({ct}){{0}};\n"
         return f"{indent}{var} = NULL;\n"
 
+    def _emit_arm_local_cleanup(self, saved_len: int) -> str:
+        """Emit cleanup for variables declared inside an arm, then truncate.
+
+        Variables added to cleanup_vars during arm emission (indices saved_len..)
+        are local to the arm's C scope. We emit their destructors inside the arm
+        block and remove them from cleanup_vars so they are not double-freed at
+        function scope exit.
+        """
+        indent = self._indent()
+        result = ""
+        arm_vars = self._scope.cleanup_vars[saved_len:]
+        for var_name, var_type in reversed(arm_vars):
+            result += self._emit_field_cleanup(var_name, var_type, indent)
+        del self._scope.cleanup_vars[saved_len:]
+        return result
+
+    def _emit_taken_vars_cleanup(
+        self,
+        taken_vars: "List[tuple]",
+        indent: str,
+    ) -> str:
+        """Emit destroy+zero for variables taken in some arm of a case/if block.
+
+        For each (name, type) in taken_vars, emit the appropriate
+        destructor call and zero-initialization so the variable is safe
+        for scope-exit cleanup (no double-free, no leak).
+        """
+        parts: List[str] = []
+        for vname, vtype in taken_vars:
+            if vtype and vtype.needs_destructor and vtype.destructor_name:
+                var = _mangle_var(vname)
+                if vtype.is_heap_allocated:
+                    parts.append(
+                        f"{indent}if ({var}) {{ {vtype.destructor_name}({var}); }}\n"
+                    )
+                    parts.append(f"{indent}{var} = NULL;\n")
+                else:
+                    parts.append(f"{indent}{vtype.destructor_name}(&{var});\n")
+                    parts.append(f"{indent}{var} = ({_ctype(vtype)}){{0}};\n")
+        return "".join(parts)
+
     def _needs_implicit_take(self, ztype: Optional[ZType]) -> bool:
         """True if ztype is a stack struct that owns heap data (e.g. string).
 
@@ -6243,7 +6284,9 @@ class CEmitter:
                     # emit just the branch body in a new scope
                     parts.append(f"{indent}{{\n")
                     self.indent_level += 1
+                    saved_len = len(self._scope.cleanup_vars)
                     parts.append(self._emit_statement(clause.statement))
+                    parts.append(self._emit_arm_local_cleanup(saved_len))
                     self.indent_level -= 1
                     parts.append(f"{indent}}}\n")
                     emitted_true_branch = True
@@ -6262,13 +6305,17 @@ class CEmitter:
                 cond_str = " && ".join(conds) if conds else "1"
                 parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
                 self.indent_level += 1
+                saved_len = len(self._scope.cleanup_vars)
                 parts.append(self._emit_statement(clause.statement))
+                parts.append(self._emit_arm_local_cleanup(saved_len))
                 self.indent_level -= 1
 
             if ifnode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
+                saved_len = len(self._scope.cleanup_vars)
                 parts.append(self._emit_statement(ifnode.elseclause))
+                parts.append(self._emit_arm_local_cleanup(saved_len))
                 self.indent_level -= 1
 
             parts.append(f"{indent}}}\n")
@@ -6276,9 +6323,14 @@ class CEmitter:
             # all clauses were constant-false, emit else branch in a scope
             parts.append(f"{indent}{{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(ifnode.elseclause))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
             parts.append(f"{indent}}}\n")
+
+        # post-if cleanup: destroy+zero variables taken in some arm
+        parts.append(self._emit_taken_vars_cleanup(ifnode.taken_vars, indent))
 
         return "".join(parts)
 
@@ -6854,16 +6906,24 @@ class CEmitter:
             keyword = "if" if i == 0 else "} else if"
             parts.append(f"{indent}{keyword} ({subject} == {match_val}) {{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
 
         if casenode.elseclause:
             parts.append(f"{indent}}} else {{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(casenode.elseclause))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
 
         parts.append(f"{indent}}}\n")
+
+        # post-match cleanup: destroy+zero variables taken in some arm
+        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+
         return "".join(parts)
 
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
@@ -6883,7 +6943,9 @@ class CEmitter:
             tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
@@ -6891,7 +6953,9 @@ class CEmitter:
         if casenode.elseclause:
             parts.append(f"{indent}    default: {{\n")
             self.indent_level += 2
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(casenode.elseclause))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
@@ -6904,6 +6968,9 @@ class CEmitter:
                 f"{indent}z_{union_name}_destroy(&{subject});\n"
                 f"{indent}{subject} = (z_{union_name}_t){{0}};\n"
             )
+
+        # post-match cleanup: destroy+zero variables taken in some arm
+        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
 
         return "".join(parts)
 
@@ -6925,33 +6992,45 @@ class CEmitter:
         if some_clause and none_clause:
             parts.append(f"{indent}if ({subject} != NULL) {{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(some_clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
             parts.append(f"{indent}}} else {{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(none_clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
             parts.append(f"{indent}}}\n")
         elif some_clause:
             parts.append(f"{indent}if ({subject} != NULL) {{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(some_clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
             if casenode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
+                saved_len = len(self._scope.cleanup_vars)
                 parts.append(self._emit_statement(casenode.elseclause))
+                parts.append(self._emit_arm_local_cleanup(saved_len))
                 self.indent_level -= 1
             parts.append(f"{indent}}}\n")
         elif none_clause:
             parts.append(f"{indent}if ({subject} == NULL) {{\n")
             self.indent_level += 1
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(none_clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             self.indent_level -= 1
             if casenode.elseclause:
                 parts.append(f"{indent}}} else {{\n")
                 self.indent_level += 1
+                saved_len = len(self._scope.cleanup_vars)
                 parts.append(self._emit_statement(casenode.elseclause))
+                parts.append(self._emit_arm_local_cleanup(saved_len))
                 self.indent_level -= 1
             parts.append(f"{indent}}}\n")
 
@@ -6964,6 +7043,9 @@ class CEmitter:
                 f"{indent}}}\n"
                 f"{indent}{subject} = NULL;\n"
             )
+
+        # post-match cleanup: destroy+zero variables taken in some arm
+        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
 
         return "".join(parts)
 
@@ -6980,7 +7062,9 @@ class CEmitter:
             tag = f"Z_{variant_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(clause.statement))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
@@ -6988,12 +7072,18 @@ class CEmitter:
         if casenode.elseclause:
             parts.append(f"{indent}    default: {{\n")
             self.indent_level += 2
+            saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(casenode.elseclause))
+            parts.append(self._emit_arm_local_cleanup(saved_len))
             parts.append(f"{self._indent()}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
 
         parts.append(f"{indent}}}\n")
+
+        # post-match cleanup: destroy+zero variables taken in some arm
+        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+
         return "".join(parts)
 
     def _emit_case_expression_value(self, casenode: zast.Case) -> str:

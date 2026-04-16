@@ -6572,6 +6572,19 @@ class TypeChecker:
         if_marker = self.symtab.push_block("if")
         all_branches_diverge = True
         const_true_taken = False
+
+        # snapshot live owned variables before arms for take-in-arm tracking
+        live_before = self.symtab.get_live_owned_vars()
+        # save variable info so we can restore between arms
+        saved_vars: dict = {}
+        for vname in live_before:
+            saved_vars[vname] = (
+                self.symtab.lookup_var(vname),
+                self.symtab.lookup(vname),
+            )
+        # track which variables were taken in at least one arm
+        taken_in_any_arm: set = set()
+
         for clause in ifnode.clauses:
             branch_marker = self.symtab.push_block("if_branch")
             for _, cond_op in clause.conditions.items():
@@ -6593,6 +6606,16 @@ class TypeChecker:
                 const_true_taken = True
             if not self.symtab.is_unreachable():
                 all_branches_diverge = False
+
+            # detect variables taken in this arm and restore for next arm
+            for vname in live_before:
+                if self.symtab.lookup(vname) is None:
+                    taken_in_any_arm.add(vname)
+                    sv, st = saved_vars[vname]
+                    if sv is not None:
+                        self.symtab.define_var(vname, sv)
+                        self.symtab.clear_taken(vname)
+
             self.symtab.pop_to(branch_marker)
         if ifnode.elseclause:
             branch_marker = self.symtab.push_block("if_else")
@@ -6603,6 +6626,12 @@ class TypeChecker:
                 self._suppress_compile_error -= 1
             if not self.symtab.is_unreachable():
                 all_branches_diverge = False
+
+            # detect variables taken in else arm
+            for vname in live_before:
+                if self.symtab.lookup(vname) is None:
+                    taken_in_any_arm.add(vname)
+
             self.symtab.pop_to(branch_marker)
         else:
             all_branches_diverge = False  # missing else = not all paths diverge
@@ -6659,6 +6688,25 @@ class TypeChecker:
                                 break
 
         self.symtab.pop_to(if_marker)
+
+        # post-if ownership: invalidate variables taken in any arm
+        if taken_in_any_arm:
+            for vname in taken_in_any_arm:
+                _, vtype = saved_vars[vname]
+                ifnode.taken_vars.append((vname, vtype))
+                take_loc = getattr(ifnode, "start", None)
+                loc_tuple = (
+                    (take_loc.lineno, take_loc.colno, take_loc.fsno)
+                    if take_loc
+                    else None
+                )
+                self.symtab.invalidate(vname, loc=loc_tuple)
+                if take_loc:
+                    self.symtab.set_taken_location(
+                        vname,
+                        (take_loc.lineno, take_loc.colno, take_loc.fsno),
+                    )
+
         # mark parent unreachable after popping the if scope
         if all_branches_diverge:
             self.symtab.mark_unreachable()
@@ -7067,6 +7115,16 @@ class TypeChecker:
                 subject_const = cv
         const_match_taken = False
 
+        # snapshot live owned variables before arms for generalized take-in-arm tracking
+        live_before_match = self.symtab.get_live_owned_vars()
+        saved_match_vars: dict = {}
+        for vname in live_before_match:
+            saved_match_vars[vname] = (
+                self.symtab.lookup_var(vname),
+                self.symtab.lookup(vname),
+            )
+        taken_in_any_match_arm: set = set()
+
         # type narrowing via scope-based overlays
         match_marker = self.symtab.push_block("match_body")
         # reset any existing narrowing for the match target
@@ -7126,6 +7184,17 @@ class TypeChecker:
                     # clear the taken record so the next arm starts fresh
                     self.symtab.clear_taken(subject_name)
 
+            # generalized take-in-arm tracking for all live owned variables
+            for vname in live_before_match:
+                if vname == subject_name:
+                    continue  # subject handled above
+                if self.symtab.lookup(vname) is None:
+                    taken_in_any_match_arm.add(vname)
+                    sv, st = saved_match_vars[vname]
+                    if sv is not None:
+                        self.symtab.define_var(vname, sv)
+                        self.symtab.clear_taken(vname)
+
             # track diverging arms for post-match exclusion
             if target_name and subject_type:
                 arm_type = self._last_statement_type(clause.statement)
@@ -7153,6 +7222,13 @@ class TypeChecker:
                         subject_taken_in_arm = "else"
                     self.symtab.define_var(subject_name, subject_var)
                     self.symtab.clear_taken(subject_name)
+
+            # generalized take-in-arm tracking for else clause
+            for vname in live_before_match:
+                if vname == subject_name:
+                    continue
+                if self.symtab.lookup(vname) is None:
+                    taken_in_any_match_arm.add(vname)
 
             # if else clause diverges, all remaining subtypes are excluded
             else_type = self._last_statement_type(casenode.elseclause)
@@ -7186,6 +7262,24 @@ class TypeChecker:
                     subject_name,
                     (take_loc.lineno, take_loc.colno, take_loc.fsno),
                 )
+
+        # post-match ownership: invalidate non-subject variables taken in any arm
+        if taken_in_any_match_arm:
+            for vname in taken_in_any_match_arm:
+                _, vtype = saved_match_vars[vname]
+                casenode.taken_vars.append((vname, vtype))
+                take_loc = getattr(casenode, "start", None)
+                loc_tuple = (
+                    (take_loc.lineno, take_loc.colno, take_loc.fsno)
+                    if take_loc
+                    else None
+                )
+                self.symtab.invalidate(vname, loc=loc_tuple)
+                if take_loc:
+                    self.symtab.set_taken_location(
+                        vname,
+                        (take_loc.lineno, take_loc.colno, take_loc.fsno),
+                    )
 
         # determine if match is exhaustive (else clause or all subtypes covered)
         is_exhaustive = bool(casenode.elseclause)

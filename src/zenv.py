@@ -477,6 +477,28 @@ class SymbolTable:
             i -= 1
         return names
 
+    def get_live_owned_vars(self) -> set:
+        """Return a set of variable names that are live (defined, not taken)
+        and have types that need destructors (i.e. owned resources).
+
+        Used to snapshot live variables before if/match arms so we can detect
+        which variables are taken in some arms.
+        """
+        names: set = set()
+        taken: set = set()
+        i = len(self._scopes) - 1
+        while i >= 0:
+            for entry in self._scopes[i].entries:
+                if entry.name in names or entry.name in taken:
+                    continue
+                if entry.is_taken:
+                    taken.add(entry.name)
+                    continue
+                if entry.var is not None and entry.ztype.needs_destructor:
+                    names.add(entry.name)
+            i -= 1
+        return names
+
     @property
     def depth(self) -> int:
         return len(self._scopes)

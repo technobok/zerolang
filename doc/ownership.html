@@ -386,6 +386,27 @@ default): the function returns a new owned value to the caller.</p>
 The name <code>x</code> is invalidated after the call. If the result is not assigned or
 passed, the instance is destroyed. <code>.take</code> can only be called on an owned
 variable. Calling <code>.take</code> on a borrowed variable is always an error.</p>
+<h4 id="take-in-conditional-arms"><a href="#take-in-conditional-arms">6.1.1. .take in Conditional Arms</a></h4>
+<p>If <code>.take</code> is called on a variable with a destructor inside any arm of an
+<code>if</code> or <code>match</code>, the compiler ensures the variable is consumed in <em><strong>all</strong></em>
+arms:</p>
+<ul>
+<li>In arms where the programmer calls <code>.take</code>: ownership transfers
+  normally (the slot is already zeroed).</li>
+<li>In arms where the programmer does <em><strong>not</strong></em> call <code>.take</code>: the compiler
+  auto-destroys the variable after the block.</li>
+<li>After the <code>if</code>/<code>match</code>, the variable is invalidated -- using it is a
+  compile error.</li>
+</ul>
+<p>If <em><strong>no</strong></em> arm takes the variable, it remains valid after the <code>if</code>/<code>match</code>
+and no auto-destroy is inserted.</p>
+<pre><code class="language-zerolang">conn: connection.open "db"
+if ready then {
+    process from: conn.take     # programmer takes ownership
+} else {
+    log "not ready"             # compiler auto-destroys conn
+}
+# conn is invalid here</code></pre>
 <h3 id="borrow"><a href="#borrow">6.2. .borrow</a></h3>
 <p>As a parameter attribute (<code>type.borrow</code> or just <code>type</code> since borrow is
 the default for all parameters): the function borrows the argument. The
@@ -560,11 +581,13 @@ the borrow ends.</p>
 <p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation
 concern. <code>.take</code> is allowed on the match subject inside arm bodies for
-ownership transfer.</p>
+ownership transfer. See <a href="#take-in-conditional-arms">.take in Conditional Arms</a>
+for the auto-destroy rule when <code>.take</code> appears in some but not all arms.</p>
 <p><code>if</code> does not lock anything. Condition expressions are evaluated like any
 other expression: any intermediate locks taken during evaluation are released
 before control enters the branch body. There is no variable-binding form for
-<code>if</code> in Zerolang.</p>
+<code>if</code> in Zerolang. However, <code>.take</code> in an <code>if</code> arm triggers the same
+auto-destroy rule as <code>match</code>.</p>
 <p><code>with</code> does not lock its target either. The <code>with name: value do expr</code>
 form is sugar for a scoped name binding; lock handling is delegated to the
 assignment semantics of <code>name: value</code> and to operations inside <code>expr</code> that

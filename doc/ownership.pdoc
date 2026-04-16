@@ -258,6 +258,33 @@ The name #~"x" is invalidated after the call. If the result is not assigned or
 passed, the instance is destroyed. #~".take" can only be called on an owned
 variable. Calling #~".take" on a borrowed variable is always an error.
 
+#----: .take in Conditional Arms
+
+If #~".take" is called on a variable with a destructor inside any arm of an
+#~"if" or #~"match", the compiler ensures the variable is consumed in #_*"all"
+arms:
+
+#ul:
+  [#*: In arms where the programmer calls #~".take": ownership transfers
+  normally (the slot is already zeroed).]
+  [#*: In arms where the programmer does #_*"not" call #~".take": the compiler
+  auto-destroys the variable after the block.]
+  [#*: After the #~"if"/#~"match", the variable is invalidated -- using it is a
+  compile error.]
+
+If #_*"no" arm takes the variable, it remains valid after the #~"if"/#~"match"
+and no auto-destroy is inserted.
+
+#code language=zerolang: """
+  conn: connection.open "db"
+  if ready then {
+      process from: conn.take     # programmer takes ownership
+  } else {
+      log "not ready"             # compiler auto-destroys conn
+  }
+  # conn is invalid here
+  """
+
 #---: .borrow
 
 As a parameter attribute (#~"type.borrow" or just #~"type" since borrow is
@@ -468,12 +495,14 @@ the borrow ends.
 #~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation
 concern. #~".take" is allowed on the match subject inside arm bodies for
-ownership transfer.
+ownership transfer. See [#> to=take-in-conditional-arms: .take in Conditional Arms]
+for the auto-destroy rule when #~".take" appears in some but not all arms.
 
 #~"if" does not lock anything. Condition expressions are evaluated like any
 other expression: any intermediate locks taken during evaluation are released
 before control enters the branch body. There is no variable-binding form for
-#~"if" in Zerolang.
+#~"if" in Zerolang. However, #~".take" in an #~"if" arm triggers the same
+auto-destroy rule as #~"match".
 
 #~"with" does not lock its target either. The #~"with name: value do expr"
 form is sugar for a scoped name binding; lock handling is delegated to the

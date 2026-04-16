@@ -591,6 +591,10 @@ class If(Node):
     nodetype: NodeType = field(default=NodeType.IF, init=False)
     clauses: typing.List["IfClause"]
     elseclause: Optional["Statement"]
+    # set by type checker: variables taken in some arm (name, type) for post-block cleanup
+    taken_vars: typing.List[typing.Tuple[str, "Optional[ZType]"]] = field(
+        default_factory=list, init=False
+    )
 
 
 @dataclass
@@ -629,6 +633,10 @@ class Case(Node):
     elseclause: Optional["Statement"]
     # set by type checker: subject was .take'd in at least one arm
     subject_taken: bool = field(default=False, init=False)
+    # set by type checker: variables taken in some arm (name, type) for post-block cleanup
+    taken_vars: typing.List[typing.Tuple[str, "Optional[ZType]"]] = field(
+        default_factory=list, init=False
+    )
 
 
 @dataclass
