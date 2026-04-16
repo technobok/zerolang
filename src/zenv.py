@@ -48,6 +48,13 @@ class SymbolTable:
         return scope
 
     def pop(self) -> Scope:
+        # release any borrow-scoped locks held by variables in this scope
+        # before the scope disappears; otherwise locks placed on outer
+        # variables by inner borrows would persist past their holder's
+        # lifetime (see doc/ownership.pdoc, "Lock Release on Scope Exit").
+        top = self._scopes[-1]
+        for holder_name in list(top.variables.keys()):
+            self.release_held_locks(holder_name)
         return self._scopes.pop()
 
     def define(self, name: str, ztype: ZType) -> None:

@@ -1663,6 +1663,82 @@ class TestLockEnforcement:
             "}"
         )
 
+    # --- Phase 2: acquisition-path coverage ---
+
+    def test_borrow_on_dotted_path_locks_root(self):
+        """.borrow on a field path should lock the root, preventing sibling
+        mutation. (Fix A: routes through _get_arg_root_name.)"""
+        errors = check_errors(
+            "point: record { a: i64 b: i64 }\n"
+            "main: function is {\n"
+            "  p: point a: 1 b: 2\n"
+            "  y: p.a.borrow\n"
+            "  p.b = 3\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_lock_inline_on_dotted_path_locks_root(self):
+        """.lock on a field path should lock the root (alias for .borrow)."""
+        errors = check_errors(
+            "point: record { a: i64 b: i64 }\n"
+            "main: function is {\n"
+            "  p: point a: 1 b: 2\n"
+            "  y: p.a.lock\n"
+            "  p.b = 3\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_borrow_on_field_released_on_scope_exit(self):
+        """Borrow-scoped locks on dotted paths are released when the holder
+        goes out of scope. (Needs Fix A + Fix B.)"""
+        check_ok(
+            "point: record { a: i64 b: i64 }\n"
+            "main: function is {\n"
+            "  p: point a: 1 b: 2\n"
+            "  { y: p.a.borrow }\n"
+            "  p.b = 3\n"
+            "}"
+        )
+
+    # --- Phase 2: scope-exit lock release (Fix B) ---
+
+    def test_mutation_ok_after_view_scope_exit(self):
+        """After a view in an inner bare block exits, the outer source is
+        mutable. (Fix B: SymbolTable.pop calls release_held_locks.)"""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  {\n"
+            "    v: s.toview\n"
+            "    print v\n"
+            "  }\n"
+            '  s = "world".string\n'
+            "}"
+        )
+
+    # --- Phase 2: method-body cases (Gap C was a false alarm) ---
+
+    def test_custom_receiver_name_locks_correctly(self):
+        """A user-chosen receiver name ('me: this') triggers the root lock
+        on the method parameter name."""
+        errors = check_errors(
+            "thing: class { s: string } as {\n"
+            "  peek: function {me: this} is {\n"
+            "    v: me.s.toview\n"
+            '    me.s = "new".string\n'
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            '  t: thing s: "x".string\n'
+            "  t.peek\n"
+            "}"
+        )
+        assert any(
+            "exclusive lock" in e.msg.lower() and "'me'" in e.msg for e in errors
+        )
+
 
 class TestLockCheckingExamplePrograms:
     """Verify all v1 example programs still pass with lock checking."""

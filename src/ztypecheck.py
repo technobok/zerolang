@@ -5174,12 +5174,12 @@ class TypeChecker:
                 elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
                 else:
-                    # .borrow takes an exclusive lock on the receiver
-                    if path.parent.nodetype == NodeType.ATOMID:
-                        receiver_name = cast(zast.AtomId, path.parent).name
-                        # the borrow result will be assigned to a name by _check_assignment;
-                        # for now, use a placeholder holder that will be updated
-                        self._pending_borrow_lock = receiver_name
+                    # .borrow takes an exclusive lock on the root of the path.
+                    # The borrow result will be assigned to a name by
+                    # _check_assignment; the lock holder is updated there.
+                    root_name = self._get_arg_root_name(path.parent)
+                    if root_name:
+                        self._pending_borrow_lock = root_name
                     path.type = parent_type
                     return parent_type
 
@@ -5187,8 +5187,9 @@ class TypeChecker:
         if child_name == "lock":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                if path.parent.nodetype == NodeType.ATOMID:
-                    self._pending_borrow_lock = cast(zast.AtomId, path.parent).name
+                root_name = self._get_arg_root_name(path.parent)
+                if root_name:
+                    self._pending_borrow_lock = root_name
                 path.type = parent_type
             return parent_type
 
@@ -5298,12 +5299,11 @@ class TypeChecker:
                 garg = parent_type.generic_args.get(child_name)
                 if garg and garg.numeric_value is not None:
                     path.const_value = garg.numeric_value
-            # protocol/facet borrow: lock the source variable
-            if (
-                t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET)
-                and path.parent.nodetype == NodeType.ATOMID
-            ):
-                self._pending_borrow_lock = cast(zast.AtomId, path.parent).name
+            # protocol/facet borrow: lock the root of the source path
+            if t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+                root_name = self._get_arg_root_name(path.parent)
+                if root_name:
+                    self._pending_borrow_lock = root_name
             # if this is a union subtype reference (null subtype used as value),
             # the type should be the parent union type
             if path.parent_tagged_type:
