@@ -1071,21 +1071,20 @@ class TypeChecker:
                 hint="add .lock to a parameter to borrow from it",
             )
 
-        # .borrow/.lock on known valtype parameters is an error (valtypes are
-        # copied, not referenced). Allow on generic params since they may
-        # monomorphize to reftypes.
+        # .lock on known valtype parameters is an error (locking requires
+        # identity, which valtypes don't have). .borrow is fine on valtypes
+        # (it's the default — just means copy without invalidation).
         for pname, pown in own.items():
-            if pown in (ZParamOwnership.BORROW, ZParamOwnership.LOCK):
+            if pown == ZParamOwnership.LOCK:
                 ptype = ftype.children.get(pname)
                 if (
                     ptype
                     and _is_valtype(ptype)
                     and ptype.typetype != ZTypeType.GENERIC_PARAM
                 ):
-                    label = "borrow" if pown == ZParamOwnership.BORROW else "lock"
                     self._error(
-                        f"Cannot use '.{label}' on valtype parameter '{pname}' "
-                        f"(type '{ptype.name}') — valtypes are copied, not referenced",
+                        f"Cannot use '.lock' on valtype parameter '{pname}' "
+                        f"(type '{ptype.name}') — locking requires identity (use a class)",
                         loc=func.start,
                         err=ERR.OWNERERROR,
                     )
@@ -4565,11 +4564,9 @@ class TypeChecker:
                     # explicit .borrow / .lock — body sees a borrowed binding
                     ownership = ZOwnership.BORROWED
                 else:
-                    # default: take for valtypes (copy), borrow for reftypes
-                    if _is_valtype(pt):
-                        ownership = ZOwnership.OWNED
-                    else:
-                        ownership = ZOwnership.BORROWED
+                    # default: borrow for all types (valtypes are copied,
+                    # reftypes are referenced — neither invalidates the source)
+                    ownership = ZOwnership.BORROWED
                 var = ZVariable(ztype=pt, ownership=ownership, named=ZNaming.NAMED)
                 self.symtab.define_var(pname, var)
 
@@ -4683,26 +4680,6 @@ class TypeChecker:
         if t:
             borrow_target = result.borrow_target
             private_access = result.private_access
-
-            # Phase A: cannot copy a borrowed valtype to a new owned name.
-            # The .borrow inline method (which sets borrow_target) is allowed
-            # because it produces a new borrowed binding.
-            if not borrow_target and _is_valtype(t):
-                src_name = self._get_simple_var_source(assign.value)
-                if src_name is not None:
-                    src_var = self.symtab.lookup_var(src_name)
-                    if src_var and src_var.ownership == ZOwnership.BORROWED:
-                        self._error(
-                            f"Cannot copy borrowed valtype '{src_name}' to new "
-                            f"name '{assign.name}'",
-                            loc=assign.start,
-                            err=ERR.OWNERERROR,
-                            hint=(
-                                f"use '{src_name}.borrow' to create another "
-                                f"borrowed reference"
-                            ),
-                        )
-                        return
 
             if borrow_target:
                 # the new variable is borrowed and holds an exclusive lock on the target
@@ -5214,22 +5191,9 @@ class TypeChecker:
                 elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
                 else:
-                    # reject .borrow on known valtypes (valtypes are copied,
-                    # not referenced — borrowing is meaningless). Allow on
-                    # generic params since they may monomorphize to reftypes.
-                    if (
-                        _is_valtype(parent_type)
-                        and parent_type.typetype != ZTypeType.GENERIC_PARAM
-                    ):
-                        self._error(
-                            f"Cannot borrow valtype '{parent_type.name}' — "
-                            f"valtypes are copied, use assignment instead",
-                            loc=path.start,
-                            err=ERR.OWNERERROR,
-                        )
-                        path.type = parent_type
-                        return parent_type
-                    # .borrow takes an exclusive lock on the root of the path.
+                    # .borrow takes an exclusive lock on the root of the path
+                    # (for reftypes). For valtypes, the lock is skipped in
+                    # _check_assignment — the result is just a copy.
                     root_name = self._get_arg_root_name(path.parent)
                     if root_name:
                         self._pending_borrow_lock = root_name
@@ -5247,18 +5211,6 @@ class TypeChecker:
         if child_name == "lock":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                if (
-                    _is_valtype(parent_type)
-                    and parent_type.typetype != ZTypeType.GENERIC_PARAM
-                ):
-                    self._error(
-                        f"Cannot lock valtype '{parent_type.name}' — "
-                        f"valtypes are copied, not referenced",
-                        loc=path.start,
-                        err=ERR.OWNERERROR,
-                    )
-                    path.type = parent_type
-                    return parent_type
                 root_name = self._get_arg_root_name(path.parent)
                 if root_name:
                     self._pending_borrow_lock = root_name
@@ -5886,37 +5838,10 @@ class TypeChecker:
                 # valtypes, borrow for reftypes).
                 effective_own = param_own
                 if effective_own is None:
-                    effective_own = (
-                        ZParamOwnership.TAKE
-                        if _is_valtype(arg_type)
-                        else ZParamOwnership.BORROW
-                    )
+                    effective_own = ZParamOwnership.BORROW
                 if effective_own == ZParamOwnership.TAKE:
-                    # detect borrowed valtype passed by name (whole-variable
-                    # copy/take). Field reads through a borrowed parent are
-                    # fine — they produce a fresh value.
-                    simple_src = self._get_simple_var_source(arg.valtype)
-                    if simple_src is not None and _is_valtype(arg_type):
-                        src_var = self.symtab.lookup_var(simple_src)
-                        if src_var and src_var.ownership == ZOwnership.BORROWED:
-                            self._error(
-                                f"Cannot pass borrowed valtype '{simple_src}' "
-                                f"to 'take' parameter '{pname}'",
-                                loc=arg.start,
-                                err=ERR.OWNERERROR,
-                                hint=(
-                                    "borrowed valtypes cannot be copied; "
-                                    f"use '{simple_src}.borrow' or change "
-                                    f"the parameter to '{pname}.borrow'"
-                                ),
-                            )
-                            # don't fall through to invalidation
-                            arg_root = None
-                        else:
-                            arg_root = simple_src
-                    else:
-                        arg_root = self._get_arg_root_name(arg.valtype)
-                    if arg_root and param_own == ZParamOwnership.TAKE:
+                    arg_root = self._get_arg_root_name(arg.valtype)
+                    if arg_root:
                         var = self.symtab.lookup_var(arg_root)
                         if var and var.ownership == ZOwnership.BORROWED:
                             self._error(
@@ -5926,9 +5851,7 @@ class TypeChecker:
                                 err=ERR.OWNERERROR,
                             )
                         else:
-                            # explicit .take on a reftype invalidates the
-                            # caller's name. Default-take on valtypes is just
-                            # a copy and must not invalidate.
+                            # .take parameter: invalidate the caller's name
                             self.symtab.release_held_locks(arg_root)
                             take_loc = (
                                 (arg.start.lineno, arg.start.colno, arg.start.fsno)

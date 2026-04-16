@@ -1613,10 +1613,11 @@ Ownership states:
   [#*: Owned - the instance is owned at this location. All instances have exactly
     one owner. Reftype constructors return owned instances. For valtypes,
     every copy is a new owned instance.]
-  [#*: Borrowed - only for reftypes and generic type parameters. The instance at
-    this location has been borrowed from an owned reftype. A reftype function
-    parameter borrows by default (#~"borrow" is the default for reftype #~"in"
-    parameters). Valtypes cannot be borrowed.]
+  [#*: Borrowed - the instance at this location has been borrowed. All function
+    parameters borrow by default (#~"borrow" is the default for all #~"in"
+    parameters). For reftypes, borrowing passes a reference. For valtypes,
+    borrowing passes a copy (the copy is treated as borrowed by the compiler
+    for uniform ownership tracking).]
 
 #~"this" within object methods is always borrowed (you cannot own yourself).
 
@@ -1654,11 +1655,13 @@ type paths:
     to be specified.]
   [#*: #~"type.borrow" - for #~"in" parameters, ownership is not taken. The
     function can call methods on the parameter but cannot store or destroy it.
-    #~".borrow" is the default for reftype #~"in" parameters and does not need
-    to be specified. #~".borrow" on a known valtype is a compile error (valtypes
-    are pass-by-value). Generic type parameters are exempt. For #~"out" return
-    types, #~".borrow" means a borrowed instance is returned. The parameter
-    housing that instance must be marked #~".lock".]
+    #~".borrow" is the default for all #~"in" parameters (both valtypes and
+    reftypes) and does not need to be specified. For valtypes, borrowing means
+    a copy is passed (source not invalidated). For reftypes, borrowing means
+    a reference is passed. Generic type parameters are exempt from type-family
+    restrictions. For #~"out" return types, #~".borrow" means a borrowed
+    instance is returned. The parameter housing that instance must be marked
+    #~".lock".]
   [#*: #~"type.lock" - for #~"in" parameters, this parameter will be locked by
     the return value for its lifetime. Multiple parameters may be marked
     #~".lock"; all locks transfer to the return value. It is illegal to specify
@@ -1675,10 +1678,10 @@ runtime instances:
   [#*: #~"x.take" - takes ownership from the variable #~"x". The name #~"x" is
     invalid after the call. Calling #~".take" on an expression that is not used
     (not assigned or passed) destroys the instance.]
-  [#*: #~"x.borrow" - returns a borrowed reference to #~"x". The variable #~"x"
-    is exclusively locked for the lifetime of the borrowed reference. Only valid
-    on reftypes (classes, unions) and generic type parameters; #~".borrow" on a
-    known valtype is a compile error.]
+  [#*: #~"x.borrow" - valid on all types. For reftypes, returns a borrowed
+    reference to #~"x" and exclusively locks #~"x" for the lifetime of the
+    borrowed reference. For valtypes, returns a copy of #~"x" without locking
+    (valtypes have no identity to lock).]
 
 #-----: Lock Fields on Classes
 
@@ -2079,10 +2082,11 @@ argument.
 
 #----: take
 
-#~"take" is a predefined type attribute on all reftype types. When used as a
-dotted path on a type in function parameter or return type declarations, it
-specifies ownership transfer semantics. See [#> to=ownership: ownership] for
-full details.
+#~"take" is a predefined type attribute on all types. When used as a dotted
+path on a type in function parameter or return type declarations, it specifies
+ownership transfer semantics. See [#> to=ownership: ownership] for full
+details. #~".take" must be explicitly written on parameters -- it is not the
+default for any type family.
 
 As a type attribute on function parameters (#~"type.take"): ownership is taken
 from the caller. As a return type attribute: the default -- function returns a
@@ -2093,19 +2097,19 @@ variable, rendering the name invalid. See [#> to=take-method: take (method)].
 
 #----: borrow
 
-#~"borrow" is a predefined type attribute on reftype types and generic type
-parameters. When used as a dotted path on a type in function parameter
-declarations, it specifies that ownership is not taken. #~".borrow" is the
-default for reftype #~"in" parameters. #~".borrow" on a known valtype
-(record, variant, integer, enum) is a compile error -- valtypes are
-pass-by-value so borrowing is meaningless.
+#~"borrow" is a predefined type attribute on all types. When used as a dotted
+path on a type in function parameter declarations, it specifies that ownership
+is not taken. #~".borrow" is the default for all #~"in" parameters. For
+valtypes, borrowing means a copy is passed (source not invalidated). For
+reftypes, borrowing means a reference is passed.
 
 As a return type attribute (#~"out type.borrow"): the function returns a
 borrowed reference. At least one #~"in" parameter must be marked #~".lock".
 
-As a compiler method on instances (#~"x.borrow"): returns a borrowed reference,
-exclusively locking the receiver. Only valid on reftypes and generic type
-parameters. See [#> to=borrow-method: borrow (method)].
+As a compiler method on instances (#~"x.borrow"): valid on all types. For
+reftypes, returns a borrowed reference and exclusively locks the receiver.
+For valtypes, returns a copy without locking. See
+[#> to=borrow-method: borrow (method)].
 
 #----: lock
 
@@ -3005,9 +3009,8 @@ function argument label), can be:
   #~"myprotocol.generic") to specify a generic type constraint
 - a type followed by #~".take" (eg. #~"reftype.take") to take ownership of the
   parameter
-- a type followed by #~".borrow" (eg. #~"reftype.borrow") to explicitly borrow
-  (this is the default for reftype parameters and does not need to be specified;
-  compile error on known valtypes; permitted on generic type parameters)
+- a type followed by #~".borrow" (eg. #~"type.borrow") to explicitly borrow
+  (this is the default for all parameters and does not need to be specified)
 - a type followed by #~".lock" (eg. #~"reftype.lock") to lock the parameter for
   the lifetime of the return value (compile error on known valtypes; permitted
   on generic type parameters)

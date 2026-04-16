@@ -1509,10 +1509,11 @@ out of scope.</p>
 <li>Owned - the instance is owned at this location. All instances have exactly
     one owner. Reftype constructors return owned instances. For valtypes,
     every copy is a new owned instance.</li>
-<li>Borrowed - only for reftypes and generic type parameters. The instance at
-    this location has been borrowed from an owned reftype. A reftype function
-    parameter borrows by default (<code>borrow</code> is the default for reftype <code>in</code>
-    parameters). Valtypes cannot be borrowed.</li>
+<li>Borrowed - the instance at this location has been borrowed. All function
+    parameters borrow by default (<code>borrow</code> is the default for all <code>in</code>
+    parameters). For reftypes, borrowing passes a reference. For valtypes,
+    borrowing passes a copy (the copy is treated as borrowed by the compiler
+    for uniform ownership tracking).</li>
 </ul>
 <p><code>this</code> within object methods is always borrowed (you cannot own yourself).</p>
 <p>Instance fields are always borrowed even if the parent is owned. Valtype fields
@@ -1543,11 +1544,13 @@ default (function returns a new owned instance to caller) and does not need
 to be specified.</li>
 <li><code>type.borrow</code> - for <code>in</code> parameters, ownership is not taken. The
 function can call methods on the parameter but cannot store or destroy it.
-<code>.borrow</code> is the default for reftype <code>in</code> parameters and does not need
-to be specified. <code>.borrow</code> on a known valtype is a compile error (valtypes
-are pass-by-value). Generic type parameters are exempt. For <code>out</code> return
-types, <code>.borrow</code> means a borrowed instance is returned. The parameter
-housing that instance must be marked <code>.lock</code>.</li>
+<code>.borrow</code> is the default for all <code>in</code> parameters (both valtypes and
+reftypes) and does not need to be specified. For valtypes, borrowing means
+a copy is passed (source not invalidated). For reftypes, borrowing means
+a reference is passed. Generic type parameters are exempt from type-family
+restrictions. For <code>out</code> return types, <code>.borrow</code> means a borrowed
+instance is returned. The parameter housing that instance must be marked
+<code>.lock</code>.</li>
 <li><code>type.lock</code> - for <code>in</code> parameters, this parameter will be locked by
 the return value for its lifetime. Multiple parameters may be marked
 <code>.lock</code>; all locks transfer to the return value. It is illegal to specify
@@ -1562,10 +1565,10 @@ runtime instances:</p>
 <li><code>x.take</code> - takes ownership from the variable <code>x</code>. The name <code>x</code> is
 invalid after the call. Calling <code>.take</code> on an expression that is not used
 (not assigned or passed) destroys the instance.</li>
-<li><code>x.borrow</code> - returns a borrowed reference to <code>x</code>. The variable <code>x</code>
-is exclusively locked for the lifetime of the borrowed reference. Only valid
-on reftypes (classes, unions) and generic type parameters; <code>.borrow</code> on a
-known valtype is a compile error.</li>
+<li><code>x.borrow</code> - valid on all types. For reftypes, returns a borrowed
+reference to <code>x</code> and exclusively locks <code>x</code> for the lifetime of the
+borrowed reference. For valtypes, returns a copy of <code>x</code> without locking
+(valtypes have no identity to lock).</li>
 </ul>
 <h5 id="lock-fields-on-classes">Lock Fields on Classes</h5>
 <p>A class may declare a field with a <code>.lock</code> type modifier. The field stores
@@ -1876,27 +1879,28 @@ optional and if unspecified, will require the created generic field to be
 initialised at the call site either explicitly or implicitly via an associated
 argument.</p>
 <h4 id="take"><a href="#take">5.3.7. take</a></h4>
-<p><code>take</code> is a predefined type attribute on all reftype types. When used as a
-dotted path on a type in function parameter or return type declarations, it
-specifies ownership transfer semantics. See <a href="#ownership">ownership</a> for
-full details.</p>
+<p><code>take</code> is a predefined type attribute on all types. When used as a dotted
+path on a type in function parameter or return type declarations, it specifies
+ownership transfer semantics. See <a href="#ownership">ownership</a> for full
+details. <code>.take</code> must be explicitly written on parameters -- it is not the
+default for any type family.</p>
 <p>As a type attribute on function parameters (<code>type.take</code>): ownership is taken
 from the caller. As a return type attribute: the default -- function returns a
 new owned instance.</p>
 <p>As a compiler method on instances (<code>x.take</code>): takes ownership from the
 variable, rendering the name invalid. See <a href="#take-method">take (method)</a>.</p>
 <h4 id="borrow"><a href="#borrow">5.3.8. borrow</a></h4>
-<p><code>borrow</code> is a predefined type attribute on reftype types and generic type
-parameters. When used as a dotted path on a type in function parameter
-declarations, it specifies that ownership is not taken. <code>.borrow</code> is the
-default for reftype <code>in</code> parameters. <code>.borrow</code> on a known valtype
-(record, variant, integer, enum) is a compile error -- valtypes are
-pass-by-value so borrowing is meaningless.</p>
+<p><code>borrow</code> is a predefined type attribute on all types. When used as a dotted
+path on a type in function parameter declarations, it specifies that ownership
+is not taken. <code>.borrow</code> is the default for all <code>in</code> parameters. For
+valtypes, borrowing means a copy is passed (source not invalidated). For
+reftypes, borrowing means a reference is passed.</p>
 <p>As a return type attribute (<code>out type.borrow</code>): the function returns a
 borrowed reference. At least one <code>in</code> parameter must be marked <code>.lock</code>.</p>
-<p>As a compiler method on instances (<code>x.borrow</code>): returns a borrowed reference,
-exclusively locking the receiver. Only valid on reftypes and generic type
-parameters. See <a href="#borrow-method">borrow (method)</a>.</p>
+<p>As a compiler method on instances (<code>x.borrow</code>): valid on all types. For
+reftypes, returns a borrowed reference and exclusively locks the receiver.
+For valtypes, returns a copy without locking. See
+<a href="#borrow-method">borrow (method)</a>.</p>
 <h4 id="lock"><a href="#lock">5.3.9. lock</a></h4>
 <p><code>lock</code> is a predefined type attribute on reftype types and generic type
 parameters, for use in function parameter declarations only (<code>type.lock</code>).
@@ -2637,9 +2641,8 @@ function argument label), can be:</p>
   <code>myprotocol.generic</code>) to specify a generic type constraint
 - a type followed by <code>.take</code> (eg. <code>reftype.take</code>) to take ownership of the
   parameter
-- a type followed by <code>.borrow</code> (eg. <code>reftype.borrow</code>) to explicitly borrow
-  (this is the default for reftype parameters and does not need to be specified;
-  compile error on known valtypes; permitted on generic type parameters)
+- a type followed by <code>.borrow</code> (eg. <code>type.borrow</code>) to explicitly borrow
+  (this is the default for all parameters and does not need to be specified)
 - a type followed by <code>.lock</code> (eg. <code>reftype.lock</code>) to lock the parameter for
   the lifetime of the return value (compile error on known valtypes; permitted
   on generic type parameters)

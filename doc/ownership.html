@@ -206,14 +206,15 @@ covers owned and borrowed variables, locking, <code>.lock</code> fields on class
 escape analysis, iterators, protocol instances and the lifetime guarantees the
 compiler enforces.</p>
 <h2 id="for-most-code"><a href="#for-most-code">1. For Most Code</a></h2>
-<p>For most code, ownership works automatically. Valtypes (records, numbers) are
-copied freely -- each copy is an independent value. Reftypes (classes, unions)
-are borrowed by default in function parameters and owned when returned. The
-compiler handles this without annotation. A programmer writing normal functions,
-records and classes rarely needs to think about ownership at all.</p>
+<p>For most code, ownership works automatically. All function parameters borrow
+by default -- for valtypes (records, numbers) a borrow is a copy (the original
+is still valid); for reftypes (classes, unions) a borrow is a reference (the
+caller still owns it). Return values are owned. The compiler handles this
+without annotation. A programmer writing normal functions, records and classes
+rarely needs to think about ownership at all.</p>
 <p>The defaults:</p>
 <ul>
-<li>Pass a record to a function? It is copied (taken). The original is still valid.</li>
+<li>Pass a record to a function? It is borrowed (copied). The original is still valid.</li>
 <li>Pass a class to a function? It is borrowed. The function can use it, and the caller still owns it.</li>
 <li>Return a new object? It is owned by the caller.</li>
 <li>Variable falls out of scope? Classes are destroyed. Records are forgotten.</li>
@@ -247,8 +248,9 @@ borrowed variable can never be used in a context that expects a take (error:
 insufficient permission).</p>
 <p><code>this</code> within object methods is always borrowed.</p>
 <h3 id="valtypes-and-reftypes"><a href="#valtypes-and-reftypes">2.1. Valtypes and Reftypes</a></h3>
-<p>There are two major families of types with different ownership defaults
-(although the underlying ownership model is consistent between them).</p>
+<p>There are two major families of types with different runtime behaviour
+(although the ownership model is uniform: all parameters default to
+<code>.borrow</code>).</p>
 <p> Value types (valtypes) are freely copyable. The primitives are the numeric
 types; the user defined compound value types are <code>record</code> (product value
 type) and <code>variant</code> (sum value type). Each copy is an independently owned
@@ -270,8 +272,8 @@ the backing buffers of <code>string</code>, <code>list</code> and similar contai
 heap. A class lives inline on the stack, but copying is disallowed: the single
 stack slot for a class is its identity.</p>
 <h3 id="defaults"><a href="#defaults">2.2. Defaults</a></h3>
-<p>Each type family has a natural default ownership for function parameters and
-return values:</p>
+<p>All function parameters default to <code>.borrow</code>. Return values default to
+<code>.take</code>. There is no distinction between valtype and reftype defaults.</p>
 <table>
 <colgroup>
 <col style="width: 33%">
@@ -282,17 +284,17 @@ return values:</p>
 <tr><th style="text-align: left">Context</th><th style="text-align: left">Valtype default</th><th style="text-align: left">Reftype default</th></tr>
 </thead>
 <tbody>
-<tr><td>In parameters</td><td>take (copy)</td><td>borrow (reference)</td></tr>
+<tr><td>In parameters</td><td>borrow (copy)</td><td>borrow (reference)</td></tr>
 <tr><td>Out return values</td><td>take</td><td>take</td></tr>
 </tbody>
 </table>
+<p>For valtypes, <code>.borrow</code> performs a copy -- the source is NOT invalidated.
+For reftypes, <code>.borrow</code> passes a reference -- the source is NOT invalidated.
+<code>.take</code> must be explicitly written on parameter definitions when ownership
+transfer is intended.</p>
 <p>The defaults can be overridden by explicitly specifying <code>.take</code>,
-<code>.borrow</code> or <code>.lock</code>, subject to the restriction that <code>.borrow</code> and
-<code>.lock</code> are only valid on reftypes and generic type parameters (not on
-known valtypes).</p>
-<p>These defaults reflect the natural semantics of each type family: valtypes are
-small and copying is cheap and safe; reftypes are single-owner and copying
-would duplicate ownership.</p>
+<code>.borrow</code> or <code>.lock</code>, subject to the restriction that <code>.lock</code> is
+only valid on reftypes and generic type parameters (not on known valtypes).</p>
 <h3 id="passing-conventions"><a href="#passing-conventions">2.3. Passing Conventions</a></h3>
 <ul>
 <li>Valtypes are always passed by value (the full value is copied). The
@@ -314,11 +316,13 @@ would duplicate ownership.</p>
 <li>Destroy explicitly via <code>.take</code> as an unused expression</li>
 </ul>
 <h3 id="implicit-take"><a href="#implicit-take">3.2. Implicit take</a></h3>
-<p>When a variable is passed to a <code>.take</code> parameter, the compiler automatically
-applies <code>.take</code> at the call site even if the programmer does not write it
-explicitly. The programmer can write <code>.take</code> explicitly to make the transfer
-visible in the source. After the call, the variable name is invalidated (for
-reftypes) or a copy was made (for valtypes).</p>
+<p>When a variable is passed to an explicitly declared <code>.take</code> parameter, the
+compiler automatically applies <code>.take</code> at the call site even if the
+programmer does not write it explicitly. The programmer can write <code>.take</code>
+explicitly to make the transfer visible in the source. After the call, the
+variable name is invalidated (for reftypes) or a copy was made (for valtypes).
+Note that <code>.take</code> must be explicitly written on the parameter definition --
+parameters default to <code>.borrow</code>.</p>
 <h3 id="scope-exit"><a href="#scope-exit">3.3. Scope exit</a></h3>
 <p>When an owned variable falls out of scope without being consumed:</p>
 <ul>
@@ -326,7 +330,11 @@ reftypes) or a copy was made (for valtypes).</p>
 <li>Valtype: the stack value is simply forgotten (no action needed)</li>
 </ul>
 <h2 id="borrowed-variables"><a href="#borrowed-variables">4. Borrowed Variables</a></h2>
-<p>A borrowed variable has temporary, restricted access to a value it does not own.</p>
+<p>A borrowed variable has temporary, restricted access to a value it does not
+own. Both valtypes and reftypes can be borrowed. For reftypes, borrowing
+passes a reference without transferring ownership. For valtypes, borrowing
+passes a copy -- the copy is an independent owned value at the C level, but
+the compiler treats it as borrowed to maintain a uniform ownership model.</p>
 <h3 id="what-a-borrowed-variable-can-do"><a href="#what-a-borrowed-variable-can-do">4.1. What a borrowed variable can do</a></h3>
 <ul>
 <li>Call methods on the value (including mutating methods via <code>this</code>)</li>
@@ -338,7 +346,6 @@ reftypes) or a copy was made (for valtypes).</p>
 <ul>
 <li>Cannot be passed to a <code>.take</code> parameter (error: insufficient permission)</li>
 <li>Cannot call <code>.take</code> on it (error: cannot take a borrowed variable)</li>
-<li>Cannot be copied</li>
 <li>Cannot be stored in a field of another object</li>
 <li>Cannot be swapped</li>
 <li>Cannot be reassigned -- the name must remain bound to the same borrowed value for its full scope (shadowing in inner scopes is permitted)</li>
@@ -380,23 +387,23 @@ The name <code>x</code> is invalidated after the call. If the result is not assi
 passed, the instance is destroyed. <code>.take</code> can only be called on an owned
 variable. Calling <code>.take</code> on a borrowed variable is always an error.</p>
 <h3 id="borrow"><a href="#borrow">6.2. .borrow</a></h3>
-<p>As a parameter attribute (<code>type.borrow</code> or just <code>type</code> for reftypes since
-borrow is the default): the function borrows the argument. The function body
-can call methods and access fields but cannot store, take, or destroy the value.
-Ownership remains with the caller.</p>
+<p>As a parameter attribute (<code>type.borrow</code> or just <code>type</code> since borrow is
+the default for all parameters): the function borrows the argument. The
+function body can call methods and access fields but cannot store, take, or
+destroy the value. Ownership remains with the caller. For valtypes, borrowing
+means a copy is made -- the source is not invalidated. For reftypes, borrowing
+means a reference is passed.</p>
 <p>As a return attribute (<code>out type.borrow</code>): the function returns a borrowed
 value. At least one input parameter must be marked <code>.lock</code> so the returned
 value has a locked parent to live in. The returned reference points into the
 locked parameter's data.</p>
-<p>As an inline method (<code>x.borrow</code>): returns a borrowed reference to <code>x</code>.
-The variable <code>x</code> is exclusively locked for the lifetime of the borrowed
-reference. <code>.borrow</code> can be called on either owned or borrowed variables.
-The lock is placed on the root variable of the path, not on any
+<p>As an inline method (<code>x.borrow</code>): valid on all types. For reftypes,
+returns a borrowed reference to <code>x</code> and exclusively locks <code>x</code> for
+the lifetime of the borrowed reference. For valtypes, returns a copy of
+<code>x</code> without locking (valtypes have no identity to lock). <code>.borrow</code>
+can be called on either owned or borrowed variables. When locking applies,
+the lock is placed on the root variable of the path, not on any
 intermediate field (see <code>Borrow-scoped Locking</code> below).</p>
-<p><code>.borrow</code> on a known valtype is a compile error. Valtypes are pass-by-value
-so borrowing is meaningless -- each copy is already an independent value.
-If the type is a generic parameter, <code>.borrow</code> is permitted because the
-parameter may monomorphize to a reftype.</p>
 <h3 id="lock"><a href="#lock">6.3. .lock</a></h3>
 <p>As a parameter attribute (<code>type.lock</code>): indicates that this parameter will be
 locked by the return value for the lifetime of that return value. Within the
@@ -749,12 +756,12 @@ that cover most code.</p>
 <h3 id="owned-valtypes-the-common-case"><a href="#owned-valtypes-the-common-case">10.1. Owned Valtypes (the common case)</a></h3>
 <pre><code class="language-zerolang">point: record { x: i64 y: i64 }
 
-# Valtype default: take (copy). Both p and q are independent owned values.
+# Valtype default: borrow (copy). Both p and q are independent owned values.
 p: point x: 1 y: 2
 q: p                 # copy -- p is still valid
 q.x = 99             # does not affect p
 
-# Passing to a function: copied by default
+# Passing to a function: borrowed (copied) by default
 print_point: function {pt: point} is {
   print "\{pt.x}, \{pt.y}"
 }
@@ -981,7 +988,7 @@ available as the inline ownership method on runtime instances
 </thead>
 <tbody>
 <tr><td><code>f borrowed_var.take</code></td><td>Cannot take a borrowed variable</td><td>Pass as <code>.borrow</code> or restructure ownership</td></tr>
-<tr><td><code>x.borrow</code> on a valtype</td><td>Cannot borrow a valtype</td><td>Valtypes are pass-by-value; use a class if identity-based locking is needed</td></tr>
+<tr><td><code>x.lock</code> on a valtype</td><td>Cannot lock a valtype</td><td>Valtypes are pass-by-value; use a class if identity-based locking is needed</td></tr>
 <tr><td><code>return localvar</code> (as <code>.borrow</code>)</td><td>Cannot return local as borrowed without .lock param</td><td>Add <code>.lock</code> to the relevant parameter</td></tr>
 <tr><td><code>.lock</code> param with no return value</td><td>Lock param with no return value</td><td>Remove <code>.lock</code> or add a return value</td></tr>
 <tr><td><code>out type.borrow</code> with no <code>.lock</code> param</td><td>Borrow return requires a lock parameter</td><td>Add <code>.lock</code> to input parameter</td></tr>

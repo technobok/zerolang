@@ -38,16 +38,17 @@ compiler enforces.
 
 #--: For Most Code
 
-For most code, ownership works automatically. Valtypes (records, numbers) are
-copied freely -- each copy is an independent value. Reftypes (classes, unions)
-are borrowed by default in function parameters and owned when returned. The
-compiler handles this without annotation. A programmer writing normal functions,
-records and classes rarely needs to think about ownership at all.
+For most code, ownership works automatically. All function parameters borrow
+by default -- for valtypes (records, numbers) a borrow is a copy (the original
+is still valid); for reftypes (classes, unions) a borrow is a reference (the
+caller still owns it). Return values are owned. The compiler handles this
+without annotation. A programmer writing normal functions, records and classes
+rarely needs to think about ownership at all.
 
 The defaults:
 
 #ul:
-  #*: Pass a record to a function? It is copied (taken). The original is still valid.
+  #*: Pass a record to a function? It is borrowed (copied). The original is still valid.
   #*: Pass a class to a function? It is borrowed. The function can use it, and the caller still owns it.
   #*: Return a new object? It is owned by the caller.
   #*: Variable falls out of scope? Classes are destroyed. Records are forgotten.
@@ -90,8 +91,9 @@ insufficient permission).
 
 #---: Valtypes and Reftypes
 
-There are two major families of types with different ownership defaults
-(although the underlying ownership model is consistent between them).
+There are two major families of types with different runtime behaviour
+(although the ownership model is uniform: all parameters default to
+#~".borrow").
 
 #+ Value types (valtypes) are freely copyable. The primitives are the numeric
 types; the user defined compound value types are #~"record" (product value
@@ -120,22 +122,22 @@ stack slot for a class is its identity.
 
 #---: Defaults
 
-Each type family has a natural default ownership for function parameters and
-return values:
+All function parameters default to #~".borrow". Return values default to
+#~".take". There is no distinction between valtype and reftype defaults.
 
 #table cols="3 3 3":
   Context            |Valtype default |Reftype default
-  In parameters      |take (copy)     |borrow (reference)
+  In parameters      |borrow (copy)   |borrow (reference)
   Out return values  |take            |take
 
-The defaults can be overridden by explicitly specifying #~".take",
-#~".borrow" or #~".lock", subject to the restriction that #~".borrow" and
-#~".lock" are only valid on reftypes and generic type parameters (not on
-known valtypes).
+For valtypes, #~".borrow" performs a copy -- the source is NOT invalidated.
+For reftypes, #~".borrow" passes a reference -- the source is NOT invalidated.
+#~".take" must be explicitly written on parameter definitions when ownership
+transfer is intended.
 
-These defaults reflect the natural semantics of each type family: valtypes are
-small and copying is cheap and safe; reftypes are single-owner and copying
-would duplicate ownership.
+The defaults can be overridden by explicitly specifying #~".take",
+#~".borrow" or #~".lock", subject to the restriction that #~".lock" is
+only valid on reftypes and generic type parameters (not on known valtypes).
 
 
 #---: Passing Conventions
@@ -165,11 +167,13 @@ An owned (taken) variable has full permission over its value.
 
 #---: Implicit take
 
-When a variable is passed to a #~".take" parameter, the compiler automatically
-applies #~".take" at the call site even if the programmer does not write it
-explicitly. The programmer can write #~".take" explicitly to make the transfer
-visible in the source. After the call, the variable name is invalidated (for
-reftypes) or a copy was made (for valtypes).
+When a variable is passed to an explicitly declared #~".take" parameter, the
+compiler automatically applies #~".take" at the call site even if the
+programmer does not write it explicitly. The programmer can write #~".take"
+explicitly to make the transfer visible in the source. After the call, the
+variable name is invalidated (for reftypes) or a copy was made (for valtypes).
+Note that #~".take" must be explicitly written on the parameter definition --
+parameters default to #~".borrow".
 
 #---: Scope exit
 
@@ -182,7 +186,11 @@ When an owned variable falls out of scope without being consumed:
 
 #--: Borrowed Variables
 
-A borrowed variable has temporary, restricted access to a value it does not own.
+A borrowed variable has temporary, restricted access to a value it does not
+own. Both valtypes and reftypes can be borrowed. For reftypes, borrowing
+passes a reference without transferring ownership. For valtypes, borrowing
+passes a copy -- the copy is an independent owned value at the C level, but
+the compiler treats it as borrowed to maintain a uniform ownership model.
 
 #---: What a borrowed variable can do
 
@@ -197,7 +205,6 @@ A borrowed variable has temporary, restricted access to a value it does not own.
 #ul:
   #*: Cannot be passed to a #~".take" parameter (error: insufficient permission)
   #*: Cannot call #~".take" on it (error: cannot take a borrowed variable)
-  #*: Cannot be copied
   #*: Cannot be stored in a field of another object
   #*: Cannot be swapped
   #*: Cannot be reassigned -- the name must remain bound to the same borrowed value for its full scope (shadowing in inner scopes is permitted)
@@ -253,26 +260,25 @@ variable. Calling #~".take" on a borrowed variable is always an error.
 
 #---: .borrow
 
-As a parameter attribute (#~"type.borrow" or just #~"type" for reftypes since
-borrow is the default): the function borrows the argument. The function body
-can call methods and access fields but cannot store, take, or destroy the value.
-Ownership remains with the caller.
+As a parameter attribute (#~"type.borrow" or just #~"type" since borrow is
+the default for all parameters): the function borrows the argument. The
+function body can call methods and access fields but cannot store, take, or
+destroy the value. Ownership remains with the caller. For valtypes, borrowing
+means a copy is made -- the source is not invalidated. For reftypes, borrowing
+means a reference is passed.
 
 As a return attribute (#~"out type.borrow"): the function returns a borrowed
 value. At least one input parameter must be marked #~".lock" so the returned
 value has a locked parent to live in. The returned reference points into the
 locked parameter's data.
 
-As an inline method (#~"x.borrow"): returns a borrowed reference to #~"x".
-The variable #~"x" is exclusively locked for the lifetime of the borrowed
-reference. #~".borrow" can be called on either owned or borrowed variables.
-The lock is placed on the #_+"root variable" of the path, not on any
+As an inline method (#~"x.borrow"): valid on all types. For reftypes,
+returns a borrowed reference to #~"x" and exclusively locks #~"x" for
+the lifetime of the borrowed reference. For valtypes, returns a copy of
+#~"x" without locking (valtypes have no identity to lock). #~".borrow"
+can be called on either owned or borrowed variables. When locking applies,
+the lock is placed on the #_+"root variable" of the path, not on any
 intermediate field (see #~"Borrow-scoped Locking" below).
-
-#~".borrow" on a known valtype is a compile error. Valtypes are pass-by-value
-so borrowing is meaningless -- each copy is already an independent value.
-If the type is a generic parameter, #~".borrow" is permitted because the
-parameter may monomorphize to a reftype.
 
 #---: .lock
 
@@ -719,12 +725,12 @@ that cover most code.
 #code language=zerolang: """
   point: record { x: i64 y: i64 }
 
-  # Valtype default: take (copy). Both p and q are independent owned values.
+  # Valtype default: borrow (copy). Both p and q are independent owned values.
   p: point x: 1 y: 2
   q: p                 # copy -- p is still valid
   q.x = 99             # does not affect p
 
-  # Passing to a function: copied by default
+  # Passing to a function: borrowed (copied) by default
   print_point: function {pt: point} is {
     print "\{pt.x}, \{pt.y}"
   }
@@ -979,7 +985,7 @@ available as the inline ownership method on runtime instances
 #table cols="4 4 4":
   What you wrote                                            |Error                                                |Fix
   #~"f borrowed_var.take"                                   |Cannot take a borrowed variable                      |Pass as #~".borrow" or restructure ownership
-  #~"x.borrow" on a valtype                                  |Cannot borrow a valtype                              |Valtypes are pass-by-value; use a class if identity-based locking is needed
+  #~"x.lock" on a valtype                                   |Cannot lock a valtype                                |Valtypes are pass-by-value; use a class if identity-based locking is needed
   #~"return localvar" (as #~".borrow")                      |Cannot return local as borrowed without .lock param   |Add #~".lock" to the relevant parameter
   #~".lock" param with no return value                      |Lock param with no return value                      |Remove #~".lock" or add a return value
   #~"out type.borrow" with no #~".lock" param               |Borrow return requires a lock parameter               |Add #~".lock" to input parameter

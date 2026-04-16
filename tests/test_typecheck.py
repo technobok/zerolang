@@ -1047,33 +1047,44 @@ class TestSwapOwnership:
         check_ok("main: function is {\n  a: 10\n  b: 20\n  a swap b\n}")
 
 
-class TestBorrowValtypeRejection:
-    """Borrowing or locking a valtype is now a compile error.
-
-    Valtypes are copied, not referenced — .borrow and .lock are meaningless.
+class TestBorrowValtypeAllowed:
+    """.borrow on valtypes is allowed (produces a copy, no lock).
+    .lock on valtype PARAMETERS is an error (locking requires identity).
     """
 
-    def test_borrow_valtype_inline_error(self):
-        """x.borrow on a valtype produces a compile error."""
-        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n}")
-        assert any("cannot borrow valtype" in e.msg.lower() for e in errors)
+    def test_borrow_valtype_inline_ok(self):
+        """x.borrow on a valtype produces a borrowed copy (no lock)."""
+        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n}")
 
-    def test_lock_valtype_inline_error(self):
-        """x.lock on a valtype produces a compile error."""
-        errors = check_errors("main: function is {\n  x: 42\n  y: x.lock\n}")
-        assert any("cannot lock valtype" in e.msg.lower() for e in errors)
+    def test_lock_valtype_inline_ok(self):
+        """x.lock on a valtype produces a borrowed copy (no lock)."""
+        check_ok("main: function is {\n  x: 42\n  y: x.lock\n}")
 
-    def test_borrow_valtype_param_error(self):
-        """.borrow on a valtype parameter produces a compile error."""
-        errors = check_errors("f: function {a: i64.borrow} is {}\nmain: function is {}")
-        assert any("'.borrow'" in e.msg and "valtype" in e.msg for e in errors)
+    def test_borrow_valtype_param_ok(self):
+        """.borrow on a valtype parameter is allowed (redundant but valid)."""
+        check_ok("f: function {a: i64.borrow} is {}\nmain: function is {}")
 
     def test_lock_valtype_param_error(self):
-        """.lock on a valtype parameter produces a compile error."""
+        """.lock on a valtype parameter is an error (locking requires identity)."""
         errors = check_errors(
             "f: function {a: i64.lock} out i64 is { return a }\nmain: function is {}"
         )
         assert any("'.lock'" in e.msg and "valtype" in e.msg for e in errors)
+
+    def test_valtype_default_is_borrow(self):
+        """Valtype params default to borrow — source not invalidated."""
+        check_ok(
+            "f: function {x: i64} is {}\n"
+            'main: function is {\n  a: 42\n  f x: a\n  print "\\{a}"\n}'
+        )
+
+    def test_valtype_explicit_take_invalidates(self):
+        """Explicit .take on valtype param invalidates source at call site."""
+        errors = check_errors(
+            "f: function {x: i64.take} is {}\n"
+            'main: function is {\n  a: 42\n  f x: a\n  print "\\{a}"\n}'
+        )
+        assert any("ownership transfer" in e.msg.lower() for e in errors)
 
     def test_borrow_generic_param_allowed(self):
         """Generic parameters may monomorphize to reftype — .borrow is allowed."""
