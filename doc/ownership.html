@@ -131,11 +131,15 @@ Table of Contents</div>
 <ul>
 <li><a href="#lock-states">Lock States</a>
 </li>
-<li><a href="#locking-algorithm-during-calls">Locking Algorithm During Calls</a>
+<li><a href="#call-scoped-locking-algorithm">Call-scoped Locking Algorithm</a>
+</li>
+<li><a href="#borrow-scoped-locking">Borrow-scoped Locking</a>
+</li>
+<li><a href="#lock-enforcement">Lock Enforcement</a>
 </li>
 <li><a href="#lock-release-on-scope-exit">Lock Release on Scope Exit</a>
 </li>
-<li><a href="#temporary-variables-for-locked-expressions">Temporary Variables for Locked Expressions</a>
+<li><a href="#temporary-expressions-in-lock-context">Temporary Expressions in Lock Context</a>
 </li>
 </ul>
 </li>
@@ -234,9 +238,8 @@ returned, or explicitly destroyed.</li>
 own. It cannot copy, take, store, swap, or destroy the value. It can call
 methods on it, read and write fields, and pass it to other <code>.borrow</code>
 parameters. When the borrowed variable falls out of scope the borrow ends:
-the reference (for reftypes) or the stack value (for borrowed valtypes) is
-simply forgotten without destruction, and any locks held by this variable are
-released.</li>
+the reference is simply forgotten without destruction, and any locks held by
+this variable are released.</li>
 </ul>
 <p>Ownership forms a permission hierarchy:  take &gt; borrow. An owned variable can
 always be used in a context that expects a borrow (automatic downgrade). A
@@ -283,8 +286,10 @@ return values:</p>
 <tr><td>Out return values</td><td>take</td><td>take</td></tr>
 </tbody>
 </table>
-<p>The defaults can always be overridden by explicitly specifying <code>.take</code>,
-<code>.borrow</code> or <code>.lock</code>.</p>
+<p>The defaults can be overridden by explicitly specifying <code>.take</code>,
+<code>.borrow</code> or <code>.lock</code>, subject to the restriction that <code>.borrow</code> and
+<code>.lock</code> are only valid on reftypes and generic type parameters (not on
+known valtypes).</p>
 <p>These defaults reflect the natural semantics of each type family: valtypes are
 small and copying is cheap and safe; reftypes are single-owner and copying
 would duplicate ownership.</p>
@@ -333,7 +338,7 @@ reftypes) or a copy was made (for valtypes).</p>
 <ul>
 <li>Cannot be passed to a <code>.take</code> parameter (error: insufficient permission)</li>
 <li>Cannot call <code>.take</code> on it (error: cannot take a borrowed variable)</li>
-<li>Cannot be copied (for valtypes -- a copy would create an independent owned value which violates the borrow semantics)</li>
+<li>Cannot be copied</li>
 <li>Cannot be stored in a field of another object</li>
 <li>Cannot be swapped</li>
 <li>Cannot be reassigned -- the name must remain bound to the same borrowed value for its full scope (shadowing in inner scopes is permitted)</li>
@@ -341,8 +346,8 @@ reftypes) or a copy was made (for valtypes).</p>
 <h3 id="scope-exit-2"><a href="#scope-exit-2">4.3. Scope exit</a></h3>
 <p>When a borrowed variable falls out of scope:</p>
 <ul>
-<li>The borrow ends. The reference (reftype) or stack value (valtype) is
-  forgotten. The underlying object is <em><strong>not</strong></em> destroyed.</li>
+<li>The borrow ends. The reference is forgotten. The underlying object is
+  <em><strong>not</strong></em> destroyed.</li>
 <li>Any locks held by this variable are released. The locked targets become
   available for use again.</li>
 </ul>
@@ -381,12 +386,17 @@ can call methods and access fields but cannot store, take, or destroy the value.
 Ownership remains with the caller.</p>
 <p>As a return attribute (<code>out type.borrow</code>): the function returns a borrowed
 value. At least one input parameter must be marked <code>.lock</code> so the returned
-value has a locked parent to live in. For reftypes, the returned reference
-points into the locked parameter's data. For valtypes, the returned value is
-on the caller's stack with borrowed restrictions.</p>
+value has a locked parent to live in. The returned reference points into the
+locked parameter's data.</p>
 <p>As an inline method (<code>x.borrow</code>): returns a borrowed reference to <code>x</code>.
 The variable <code>x</code> is exclusively locked for the lifetime of the borrowed
-reference. <code>.borrow</code> can be called on either owned or borrowed variables.</p>
+reference. <code>.borrow</code> can be called on either owned or borrowed variables.
+The lock is placed on the root variable of the path, not on any
+intermediate field (see <code>Borrow-scoped Locking</code> below).</p>
+<p><code>.borrow</code> on a known valtype is a compile error. Valtypes are pass-by-value
+so borrowing is meaningless -- each copy is already an independent value.
+If the type is a generic parameter, <code>.borrow</code> is permitted because the
+parameter may monomorphize to a reftype.</p>
 <h3 id="lock"><a href="#lock">6.3. .lock</a></h3>
 <p>As a parameter attribute (<code>type.lock</code>): indicates that this parameter will be
 locked by the return value for the lifetime of that return value. Within the
@@ -400,6 +410,10 @@ value.</p>
 nothing to assign the locks to).</p>
 <p><code>.lock</code> is not an inline method on instances. It is only used on function
 parameter declarations.</p>
+<p><code>.lock</code> on a known valtype parameter is a compile error. Valtypes are
+pass-by-value so identity-based locking is meaningless. If locking is
+needed, use a class. Generic type parameters are exempt because they may
+monomorphize to a reftype.</p>
 <h3 id="release"><a href="#release">6.4. .release</a></h3>
 <p>An inline method only (not a parameter or return attribute). <code>x.release</code> ends
 the lifetime of variable <code>x</code> immediately, as if it fell out of scope at that
@@ -434,8 +448,24 @@ for destroying an owned value. <code>.release</code> additionally works on borro
 variables (ending the borrow), whereas <code>.take</code> on a borrowed variable is always
 an error.</p>
 <h2 id="locking"><a href="#locking">7. Locking</a></h2>
-<p>Locking is an orthogonal compile-time mechanism that prevents aliasing and data
-races. It has zero runtime overhead.</p>
+<p>Locking is an orthogonal compile-time mechanism that prevents aliasing and
+enforces mutation-safety for outstanding borrows. It has zero runtime
+overhead.</p>
+<p>Zerolang uses one lock primitive for two purposes, which this document
+refers to as:</p>
+<ul>
+<li>Call-scoped Locking -- locks held only during a function or
+method call, used to prevent aliasing between arguments and receiver.
+Acquired by the call-dispatch machinery; released automatically when
+the call returns.</li>
+<li>Borrow-scoped Locking -- locks held for the full scope of a
+borrowing variable (<code>.borrow</code>, <code>.toview</code>, <code>.lock</code> fields,
+returned values of functions with <code>.lock</code> parameters). Acquired when
+the borrow is bound; released when the borrowing variable falls out of
+scope or is explicitly <code>.release</code>d.</li>
+</ul>
+<p>Both use the same EXCLUSIVE/SHARED states and the same storage; they
+differ only in lifetime and acquisition policy.</p>
 <h3 id="lock-states"><a href="#lock-states">7.1. Lock States</a></h3>
 <p>Each variable can have locks placed on it by other variables:</p>
 <ul>
@@ -445,36 +475,81 @@ races. It has zero runtime overhead.</p>
   exclusive locks are not.</li>
 </ul>
 <p>A reftype can only appear once as an argument or as a receiver in a single
-function call (enforced by the locking algorithm below). This prevents
-aliasing and is the property <code>doc/spec.pdoc</code> calls 'no aliasing for
-reftypes'. Top-level <code>data</code> items are exempt -- they are immutable and
-never locked.</p>
-<h3 id="locking-algorithm-during-calls"><a href="#locking-algorithm-during-calls">7.2. Locking Algorithm During Calls</a></h3>
-<p>When a function is called, locks are taken on arguments and the receiver:</p>
+function call (enforced by the Call-scoped Locking algorithm below). This
+prevents aliasing and is the property <code>doc/spec.pdoc</code> calls 'no aliasing
+for reftypes'. Top-level <code>data</code> items are exempt -- they are immutable
+and never locked.</p>
+<h3 id="call-scoped-locking-algorithm"><a href="#call-scoped-locking-algorithm">7.2. Call-scoped Locking Algorithm</a></h3>
+<p>When a function is called, locks are taken on arguments and the receiver
+and released when the call returns:</p>
 <ol>
 <li>Each argument is processed left to right.</li>
-<li>If the argument is a top-level <code>data</code> item, no lock is taken (immutable,
-  freely shared).</li>
-<li>Otherwise, an exclusive lock is taken on the argument.</li>
-<li>If the argument is a dotted chain, a shared lock is taken on each parent
-  and grandparent in that chain.</li>
-<li>Additional shared locks on already-shared-locked parents are permitted.</li>
-<li>If there is already an exclusive or shared lock on the argument being
-  passed, it is an error (prevents aliasing).</li>
-<li>If the argument is a sub-call, locking is applied recursively. After the
-  sub-call, its argument locks are cleared or assigned to the sub-call result.</li>
-<li>After all arguments are processed, the receiver is locked (exclusive lock
-  on each component of the receiver chain).</li>
+<li>If the argument is a top-level <code>data</code> item, no lock is taken
+  (immutable, freely shared).</li>
+<li>If the argument is a bare variable, an exclusive lock is taken on it.</li>
+<li>If the argument is a dotted chain, a shared lock is taken on every
+  variable name in the chain (root and intermediate parents). No
+  additional lock is taken on the leaf because field names do not have
+  independent lock identity -- aliasing is prevented by the shared locks
+  on the shared ancestors.</li>
+<li>Additional shared locks on already-shared-locked parents are
+  permitted.</li>
+<li>If there is already an exclusive or shared lock on the argument
+  being passed, it is an error (prevents aliasing).</li>
+<li>If the argument is a sub-call, locking is applied recursively.
+  After the sub-call, its argument locks are cleared or assigned to the
+  sub-call result.</li>
+<li>After all arguments are processed, an exclusive lock is taken on
+  the root of the receiver chain for the duration of the call.</li>
 <li>The call is made.</li>
-<li>After the call, for any <code>.lock</code> parameters, their exclusive locks (plus
-  shared locks on parent items) are assigned to the returned value. All other
-  argument locks are freed.</li>
+<li>After the call, for any <code>.lock</code> parameters, their locks transfer
+  to the returned value and become Borrow-scoped Locks held by that
+  returned value. All other argument locks are released.</li>
 </ol>
-<p><code>for</code> loops over a reftype iteration target take an exclusive lock on the
-target for the duration of the body, preventing mutation of the container or
-iterator from outside the loop. Per-iteration <code>call</code> method dispatch takes
-and releases an exclusive lock on the receiver for each call. See the lock
-lifecycle walkthrough below for a worked example.</p>
+<p><code>for</code> loops over a reftype iteration target take an exclusive lock on
+the target for the duration of the body, preventing mutation of the
+container or iterator from outside the loop. Per-iteration method
+dispatch takes and releases an exclusive lock on the receiver for each
+call. See the lock lifecycle walkthrough below for a worked example.</p>
+<h3 id="borrow-scoped-locking"><a href="#borrow-scoped-locking">7.3. Borrow-scoped Locking</a></h3>
+<p>A Borrow-scoped Lock is acquired whenever a variable is bound to a
+borrow or view construct: <code>.borrow</code>, <code>string.toview</code> (and
+analogous <code>.toview</code> on list/listview), the transfer from <code>.lock</code>
+parameters to a return value, and <code>.lock</code> fields on classes. The
+lock is:</p>
+<ul>
+<li>exclusive</li>
+<li>placed on the root variable of the path the borrow was
+  taken from. For <code>v: rec.field.toview</code> the lock is on <code>rec</code>, not
+  on <code>field</code>.</li>
+<li>held for the full scope of the borrowing variable; released
+  automatically on scope exit or via <code>.release</code>.</li>
+</ul>
+<p>Root-only placement is sufficient: any mutation attempt -- regardless
+of how deep into the locked variable's structure it reaches -- is
+checked against the root's lock (see <code>Mutation-Site Enforcement</code>
+below).</p>
+<h3 id="lock-enforcement"><a href="#lock-enforcement">7.4. Lock Enforcement</a></h3>
+<p>While a variable has an outstanding exclusive Borrow-scoped Lock,
+the variable is completely unavailable. The compiler rejects
+<em><strong>any</strong></em> access whose path is rooted at the locked variable -- both
+reads and writes:</p>
+<ul>
+<li>reading the variable or any field through it
+  (<code>x</code>, <code>x.field</code>, <code>x.a.b</code>)</li>
+<li>reassignment (<code>x = v</code>) or field reassignment (<code>x.f = v</code>)</li>
+<li>swap with either side rooted at the locked variable</li>
+<li>method calls on the locked variable</li>
+<li>further <code>.borrow</code>, <code>.toview</code>, <code>.take</code>, or <code>.release</code>
+  on it</li>
+<li>passing the locked variable as an argument</li>
+</ul>
+<p>The only code that can access the locked data is the lock holder
+(the borrow or view variable) through its own interface.</p>
+<p>This strict approach prevents aliasing through field reads (which
+would create references that bypass the lock) and makes the
+programmer's intent clear: a locked variable is off-limits until
+the borrow ends.</p>
 <p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation
 concern. <code>.take</code> is allowed on the match subject inside arm bodies for
@@ -489,15 +564,23 @@ assignment semantics of <code>name: value</code> and to operations inside <code>
 take their own locks via the function-call algorithm. When <code>name</code> falls out
 of scope at the end of <code>with</code>, any locks it holds -- including those
 transferred from <code>.lock</code> fields of the bound value -- are released.</p>
-<h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.3. Lock Release on Scope Exit</a></h3>
+<h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.5. Lock Release on Scope Exit</a></h3>
 <p>When a variable falls out of scope, all locks it holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).</p>
-<h3 id="temporary-variables-for-locked-expressions"><a href="#temporary-variables-for-locked-expressions">7.4. Temporary Variables for Locked Expressions</a></h3>
-<p>Ideally, locked parameters are named variables in the caller. But the compiler
-can assign temporary names to expressions if used in a lock context. The
-compiler is responsible for keeping those temporaries alive until the locks are
-released and then destroying them.</p>
+<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">7.6. Temporary Expressions in Lock Context</a></h3>
+<p>The compiler rejects <code>.borrow</code>, <code>.toview</code>, and <code>.lock</code> on
+temporary expressions (i.e. expressions whose result has no named
+variable). The programmer must assign the value to a variable first:</p>
+<pre><code class="language-zerolang"># ERROR: cannot create view from temporary expression
+# v: "hello".string.toview
+
+# OK: assign first, then view
+s: "hello".string
+v: s.toview</code></pre>
+<p>A future version of the compiler may support automatic temporary
+variable creation to keep lock-context expressions alive, but for
+now explicit naming is required.</p>
 <h2 id="classes-with-fields"><a href="#classes-with-fields">8. Classes with <code>.lock</code> Fields</a></h2>
 <p>Some classes need to hold a locked reference to another object -- most commonly
 iterators and views. A class field can be declared with a <code>.lock</code> type
@@ -573,9 +656,9 @@ parameters of the same type:</p>
 <ul>
 <li>Reftype <code>.lock</code> parameter -- the pointer is passed by value (the
   reftype's normal C calling convention).</li>
-<li>Valtype <code>.lock</code> parameter -- the value is passed by value (the
-  valtype's normal C calling convention; identical to <code>.take</code> and the
-  default for valtypes).</li>
+<li>Generic <code>.lock</code> parameter -- passed using the convention of whatever
+  concrete type the generic parameter monomorphizes to (reftype: pointer;
+  valtype: value). <code>.lock</code> on a known valtype is a compile error.</li>
 </ul>
 <h3 id="unions-protocol-instances-variants"><a href="#unions-protocol-instances-variants">8.4. Unions, Protocol Instances, Variants</a></h3>
 <p>Unions are represented as a <code>{tag, void*}</code> struct on the stack. The tag
@@ -898,7 +981,7 @@ available as the inline ownership method on runtime instances
 </thead>
 <tbody>
 <tr><td><code>f borrowed_var.take</code></td><td>Cannot take a borrowed variable</td><td>Pass as <code>.borrow</code> or restructure ownership</td></tr>
-<tr><td><code>x: borrowed_var</code> (copy)</td><td>Cannot copy a borrowed valtype</td><td>Use <code>.borrow</code> to create a borrowed reference</td></tr>
+<tr><td><code>x.borrow</code> on a valtype</td><td>Cannot borrow a valtype</td><td>Valtypes are pass-by-value; use a class if identity-based locking is needed</td></tr>
 <tr><td><code>return localvar</code> (as <code>.borrow</code>)</td><td>Cannot return local as borrowed without .lock param</td><td>Add <code>.lock</code> to the relevant parameter</td></tr>
 <tr><td><code>.lock</code> param with no return value</td><td>Lock param with no return value</td><td>Remove <code>.lock</code> or add a return value</td></tr>
 <tr><td><code>out type.borrow</code> with no <code>.lock</code> param</td><td>Borrow return requires a lock parameter</td><td>Add <code>.lock</code> to input parameter</td></tr>

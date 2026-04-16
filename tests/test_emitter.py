@@ -3020,6 +3020,22 @@ class TestProtocols:
         "}\n"
     )
 
+    # Class-based version for .borrow/.lock tests (records are valtypes,
+    # cannot be locked).
+    PROTO_CLASS_SOURCE = (
+        "reader: protocol {\n"
+        "    read: function {:this b: i64} out i64\n"
+        "}\n"
+        "myfile: class {\n"
+        "    fd: i64\n"
+        "} as {\n"
+        "    myreader: reader\n"
+        "    read: function {f: this b: i64} out i64 is {\n"
+        "        return f.fd + b\n"
+        "    }\n"
+        "}\n"
+    )
+
     def test_protocol_vtable_struct(self):
         """C output contains vtable and instance struct."""
         csource = emit_source(
@@ -3235,9 +3251,9 @@ class TestProtocols:
         assert "boxed_destroy" in csource
 
     def test_protocol_borrow_record(self):
-        """reader.borrow from: f.lock compiles and runs."""
+        """reader.borrow from: f.lock compiles and runs (class, since records are valtypes)."""
         csource = emit_source(
-            self.PROTO_SOURCE + "main: function is {\n"
+            self.PROTO_CLASS_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
             "    r: reader.borrow from: f.lock\n"
             '    print "\\{r.read b: 5}"\n'
@@ -3272,7 +3288,7 @@ class TestProtocols:
     def test_protocol_borrow_asan(self):
         """ASan clean for borrow, no use-after-free."""
         csource = emit_source(
-            self.PROTO_SOURCE + "main: function is {\n"
+            self.PROTO_CLASS_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
             "    r: reader.borrow from: f.lock\n"
             '    print "\\{r.read b: 5}"\n'
@@ -3285,7 +3301,7 @@ class TestProtocols:
     def test_protocol_borrow_source_accessible_after_scope(self):
         """Underlying object accessible after borrowed protocol used in function."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_CLASS_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"

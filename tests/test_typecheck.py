@@ -707,7 +707,10 @@ class TestOwnershipParsing:
 
     def test_param_borrow(self):
         """Parameter with .borrow annotation should parse and type-check."""
-        program = check_ok("f: function {a: i64.borrow} is {}\nmain: function is {}")
+        program = check_ok(
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.borrow} is {}\nmain: function is {}"
+        )
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
         assert "a" in func.param_ownership
@@ -723,7 +726,9 @@ class TestOwnershipParsing:
     def test_param_lock(self):
         """Parameter with .lock annotation (requires return value)."""
         program = check_ok(
-            "f: function {a: i64.lock} out i64 is { return a }\nmain: function is {}"
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.lock} out myclass is { return a }\n"
+            "main: function is {}"
         )
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
@@ -739,7 +744,9 @@ class TestOwnershipParsing:
     def test_mixed_params(self):
         """Mix of annotated and unannotated parameters."""
         program = check_ok(
-            "f: function {a: i64.take b: i64 c: i64.borrow} is {}\nmain: function is {}"
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.take b: myclass c: myclass.borrow} is {}\n"
+            "main: function is {}"
         )
         func = program.units["test"].body["f"]
         assert isinstance(func, zast.Function)
@@ -750,7 +757,8 @@ class TestOwnershipParsing:
     def test_return_type_borrow(self):
         """Return type with .borrow annotation."""
         program = check_ok(
-            "f: function {a: i64.lock} out i64.borrow is { return a }\n"
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
             "main: function is {}"
         )
         func = program.units["test"].body["f"]
@@ -772,7 +780,8 @@ class TestOwnershipInZType:
     def test_param_ownership_on_ztype(self):
         """Ownership annotations should be on the ZType after type checking."""
         program = check_ok(
-            "f: function {a: i64.take b: i64.borrow} out i64 is { return a }\n"
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.take b: myclass.borrow} out myclass is { return a }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -785,7 +794,8 @@ class TestOwnershipInZType:
     def test_return_ownership_on_ztype(self):
         """Return ownership should propagate to ZType."""
         program = check_ok(
-            "f: function {a: i64.lock} out i64.borrow is { return a }\n"
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -877,7 +887,8 @@ class TestOwnershipSignatureValidation:
     def test_borrow_return_with_lock_param_ok(self):
         """Returning borrow with a lock parameter is OK."""
         check_ok(
-            "f: function {t: i64.lock} out i64.borrow is { return t }\n"
+            "myclass: class { value: 0 }\n"
+            "f: function {t: myclass.lock} out myclass.borrow is { return t }\n"
             "main: function is {}"
         )
 
@@ -891,7 +902,9 @@ class TestOwnershipSignatureValidation:
     def test_lock_param_with_return_ok(self):
         """Lock parameter with a return value is OK."""
         check_ok(
-            "f: function {t: i64.lock} out i64 is { return t }\nmain: function is {}"
+            "myclass: class { value: 0 }\n"
+            "f: function {t: myclass.lock} out myclass is { return t }\n"
+            "main: function is {}"
         )
 
     def test_borrow_return_no_params_error(self):
@@ -921,7 +934,8 @@ class TestOwnershipReturnChecking:
     def test_return_lock_param_as_borrow_ok(self):
         """Returning a lock parameter as borrowed is OK."""
         check_ok(
-            "f: function {t: i64.lock} out i64.borrow is { return t }\n"
+            "myclass: class { value: 0 }\n"
+            "f: function {t: myclass.lock} out myclass.borrow is { return t }\n"
             "main: function is {}"
         )
 
@@ -934,8 +948,11 @@ class TestTakeBorrowCompilerMethods:
         check_ok("main: function is {\n  x: 42\n  y: x.take\n}")
 
     def test_borrow_resolves(self):
-        """x.borrow should resolve to x's type."""
-        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n}")
+        """x.borrow should resolve to x's type (reftype)."""
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n}"
+        )
 
     def test_take_invalidates_name(self):
         """After x.take, x should be invalid (ownership transferred)."""
@@ -959,14 +976,18 @@ class TestReleaseCompilerMethod:
             "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
         )
 
-    def test_release_borrowed_valtype(self):
-        """Releasing a borrowed valtype ends the borrow."""
-        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n  y.release\n}")
+    def test_release_borrowed_reftype(self):
+        """Releasing a borrowed reftype ends the borrow."""
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  y.release\n}"
+        )
 
     def test_source_unlocked_after_borrow_release(self):
         """After releasing a borrow, the source is unlocked and usable."""
         check_ok(
-            "main: function is {\n  x: 42\n  y: x.borrow\n  y.release\n  z: x.take\n}"
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  y.release\n  z: x.take\n}"
         )
 
     def test_release_parameter_ok(self):
@@ -976,7 +997,8 @@ class TestReleaseCompilerMethod:
     def test_cannot_release_locked_variable(self):
         """Cannot release a variable that has a lock held by someone else."""
         errors = check_errors(
-            "main: function is {\n  x: 42\n  y: x.borrow\n  x.release\n}"
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  x.release\n}"
         )
         assert any(
             "release" in e.msg.lower() and "lock" in e.msg.lower() for e in errors
@@ -1025,95 +1047,51 @@ class TestSwapOwnership:
         check_ok("main: function is {\n  a: 10\n  b: 20\n  a swap b\n}")
 
 
-class TestBorrowedValtypeRestrictions:
-    """Phase A: borrow restrictions for valtypes.
+class TestBorrowValtypeRejection:
+    """Borrowing or locking a valtype is now a compile error.
 
-    Once a valtype is BORROWED (via .borrow inline method or a .borrow/.lock
-    function parameter), it cannot be copied to a new name, taken, swapped,
-    reassigned, or passed where a copy/take is expected.
+    Valtypes are copied, not referenced — .borrow and .lock are meaningless.
     """
 
-    def test_borrowed_valtype_cannot_be_copied(self):
-        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n  z: y\n}")
-        assert any("borrowed valtype" in e.msg.lower() for e in errors)
+    def test_borrow_valtype_inline_error(self):
+        """x.borrow on a valtype produces a compile error."""
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n}")
+        assert any("cannot borrow valtype" in e.msg.lower() for e in errors)
 
-    def test_borrowed_valtype_can_be_borrowed_again(self):
-        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n  z: y.borrow\n}")
+    def test_lock_valtype_inline_error(self):
+        """x.lock on a valtype produces a compile error."""
+        errors = check_errors("main: function is {\n  x: 42\n  y: x.lock\n}")
+        assert any("cannot lock valtype" in e.msg.lower() for e in errors)
 
-    def test_borrowed_valtype_cannot_be_taken(self):
+    def test_borrow_valtype_param_error(self):
+        """.borrow on a valtype parameter produces a compile error."""
+        errors = check_errors("f: function {a: i64.borrow} is {}\nmain: function is {}")
+        assert any("'.borrow'" in e.msg and "valtype" in e.msg for e in errors)
+
+    def test_lock_valtype_param_error(self):
+        """.lock on a valtype parameter produces a compile error."""
         errors = check_errors(
-            "main: function is {\n  x: 42\n  y: x.borrow\n  y.take\n}"
+            "f: function {a: i64.lock} out i64 is { return a }\nmain: function is {}"
         )
-        assert any(
-            "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
-        )
+        assert any("'.lock'" in e.msg and "valtype" in e.msg for e in errors)
 
-    def test_borrowed_valtype_cannot_be_swapped(self):
-        errors = check_errors(
-            "main: function is {\n  x: 42\n  y: 10\n  z: x.borrow\n  z swap y\n}"
-        )
-        assert any(
-            "swap" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
-        )
-
-    def test_borrowed_valtype_cannot_be_reassigned(self):
-        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n  y = 7\n}")
-        assert any(
-            "reassign" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
-        )
-
-    def test_borrowed_valtype_cannot_be_passed_to_default_take(self):
-        # default for valtype params is take (copy); the source must not be borrowed.
-        errors = check_errors(
-            "f: function {a: i64} is {}\n"
-            "main: function is {\n"
-            "  x: 42\n"
-            "  y: x.borrow\n"
-            "  f y\n"
-            "}"
-        )
-        assert any(
-            "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
-        )
-
-    def test_borrowed_valtype_can_be_passed_to_borrow_param(self):
+    def test_borrow_generic_param_allowed(self):
+        """Generic parameters may monomorphize to reftype — .borrow is allowed."""
         check_ok(
-            "f: function {a: i64.borrow} is {}\n"
-            "main: function is {\n"
-            "  x: 42\n"
-            "  y: x.borrow\n"
-            "  f y\n"
-            "}"
-        )
-
-    def test_owned_valtype_passed_to_borrow_is_downgrade(self):
-        check_ok(
-            "f: function {a: i64.borrow} is {}\nmain: function is {\n  x: 42\n  f x\n}"
-        )
-
-    def test_borrow_param_body_is_borrowed(self):
-        # Inside the body, an .borrow parameter is BORROWED — copying it
-        # to a new name is forbidden.
-        errors = check_errors(
-            "f: function {a: i64.borrow} is {\n  b: a\n}\nmain: function is {}"
-        )
-        assert any("borrowed valtype" in e.msg.lower() for e in errors)
-
-    def test_lock_param_body_is_borrowed(self):
-        # .lock parameters are also borrowed in the body. Returning the
-        # original is fine; copying is not.
-        check_ok(
-            "f: function {a: i64.lock} out i64.borrow is { return a }\n"
-            "main: function is {}"
-        )
-        errors = check_errors(
-            "f: function {a: i64.lock} out i64 is {\n"
-            "  b: a\n"
-            "  return b\n"
+            "identity: function {a: t.borrow} out t as { t: any.generic } is {\n"
+            "  return a\n"
             "}\n"
             "main: function is {}"
         )
-        assert any("borrowed valtype" in e.msg.lower() for e in errors)
+
+    def test_lock_generic_param_allowed(self):
+        """Generic parameters may monomorphize to reftype — .lock is allowed."""
+        check_ok(
+            "identity: function {a: t.lock} out t.borrow as { t: any.generic } is {\n"
+            "  return a\n"
+            "}\n"
+            "main: function is {}"
+        )
 
     def test_field_read_from_borrowed_class_ok(self):
         # Reading a valtype field through a borrowed class produces a fresh
@@ -1125,6 +1103,89 @@ class TestBorrowedValtypeRestrictions:
             "  c: box v: 5\n"
             "  r: f c\n"
             "}"
+        )
+
+
+class TestBorrowedReftypeRestrictions:
+    """Borrow restrictions for reftypes (classes).
+
+    Once a reftype is BORROWED (via .borrow inline method or a .borrow/.lock
+    function parameter), it cannot be copied to a new name, taken, swapped,
+    reassigned, or passed where a copy/take is expected.
+    """
+
+    def test_borrowed_reftype_can_be_borrowed_again(self):
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  z: y.borrow\n}"
+        )
+
+    def test_borrowed_reftype_cannot_be_taken(self):
+        errors = check_errors(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  y.take\n}"
+        )
+        assert any(
+            "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_reftype_cannot_be_swapped(self):
+        errors = check_errors(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n"
+            "  x: myclass\n  y: myclass\n  z: x.borrow\n  z swap y\n"
+            "}"
+        )
+        assert any(
+            "swap" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_reftype_cannot_be_reassigned(self):
+        errors = check_errors(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  y = myclass\n}"
+        )
+        assert any(
+            "reassign" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
+        )
+
+    def test_borrowed_reftype_cannot_be_passed_to_take_param(self):
+        errors = check_errors(
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.take} is {}\n"
+            "main: function is {\n"
+            "  x: myclass\n"
+            "  y: x.borrow\n"
+            "  f y\n"
+            "}"
+        )
+        assert any("borrowed" in e.msg.lower() for e in errors)
+
+    def test_borrowed_reftype_can_be_passed_to_borrow_param(self):
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.borrow} is {}\n"
+            "main: function is {\n"
+            "  x: myclass\n"
+            "  y: x.borrow\n"
+            "  f y\n"
+            "}"
+        )
+
+    def test_owned_reftype_passed_to_borrow_is_downgrade(self):
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.borrow} is {}\n"
+            "main: function is {\n  x: myclass\n  f x\n}"
+        )
+
+    def test_lock_param_body_is_borrowed(self):
+        # .lock parameters are also borrowed in the body. Returning the
+        # original is fine; copying is not.
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
+            "main: function is {}"
         )
 
 
@@ -1496,17 +1557,24 @@ class TestLockCheckingBorrow:
     """Test lock checking for .borrow compiler method."""
 
     def test_borrow_ok(self):
-        """y: x.borrow should work without errors."""
-        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n}")
+        """y: x.borrow should work without errors (reftype)."""
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n}"
+        )
 
     def test_chained_borrow_ok(self):
         """y: x.borrow, z: y.borrow should work (z locks y which locks x)."""
-        check_ok("main: function is {\n  x: 42\n  y: x.borrow\n  z: y.borrow\n}")
+        check_ok(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  z: y.borrow\n}"
+        )
 
     def test_double_borrow_same_var_error(self):
         """Cannot borrow x twice — second borrow conflicts with existing exclusive lock."""
         errors = check_errors(
-            "main: function is {\n  x: 42\n  y: x.borrow\n  z: x.borrow\n}"
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  z: x.borrow\n}"
         )
         assert any(
             "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
@@ -1549,10 +1617,12 @@ class TestLockEnforcement:
         )
         assert any("exclusive lock" in e.msg.lower() and "'s'" in e.msg for e in errors)
 
-    def test_reassign_locked_valtype_var_rejected(self):
-        """Same rule applies to borrowed valtype via .borrow."""
-        errors = check_errors("main: function is {\n  x: 42\n  y: x.borrow\n  x = 7\n}")
-        # existing BORROWED-check may fire too; we want the new lock check also
+    def test_reassign_locked_reftype_var_rejected(self):
+        """Same rule applies to borrowed reftype via .borrow."""
+        errors = check_errors(
+            "myclass: class { value: 0 }\n"
+            "main: function is {\n  x: myclass\n  y: x.borrow\n  x = myclass\n}"
+        )
         assert any("exclusive lock" in e.msg.lower() for e in errors)
 
     def test_field_reassign_rejects_locked_root(self):
@@ -1652,11 +1722,12 @@ class TestLockEnforcement:
         """.borrow on a field path should lock the root, preventing sibling
         mutation. (Fix A: routes through _get_arg_root_name.)"""
         errors = check_errors(
-            "point: record { a: i64 b: i64 }\n"
+            "inner: class { value: 0 }\n"
+            "point: record { a: inner b: inner }\n"
             "main: function is {\n"
-            "  p: point a: 1 b: 2\n"
+            "  p: point a: inner b: inner\n"
             "  y: p.a.borrow\n"
-            "  p.b = 3\n"
+            "  p.b = inner\n"
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
@@ -1664,11 +1735,12 @@ class TestLockEnforcement:
     def test_lock_inline_on_dotted_path_locks_root(self):
         """.lock on a field path should lock the root (alias for .borrow)."""
         errors = check_errors(
-            "point: record { a: i64 b: i64 }\n"
+            "inner: class { value: 0 }\n"
+            "point: record { a: inner b: inner }\n"
             "main: function is {\n"
-            "  p: point a: 1 b: 2\n"
+            "  p: point a: inner b: inner\n"
             "  y: p.a.lock\n"
-            "  p.b = 3\n"
+            "  p.b = inner\n"
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
@@ -1677,9 +1749,10 @@ class TestLockEnforcement:
         """Borrow-scoped locks on dotted paths are released when the holder
         goes out of scope. (Needs Fix A + Fix B.)"""
         check_ok(
-            "point: record { a: i64 b: i64 }\n"
+            "inner: class { value: 0 }\n"
+            "point: record { a: inner b: i64 }\n"
             "main: function is {\n"
-            "  p: point a: 1 b: 2\n"
+            "  p: point a: inner b: 0\n"
             "  { y: p.a.borrow }\n"
             "  p.b = 3\n"
             "}"
@@ -1764,8 +1837,8 @@ class TestLockEnforcement:
         assert any("temporary" in e.msg.lower() for e in errors)
 
     def test_borrow_on_temporary_rejected(self):
-        """Borrowing a temporary expression is rejected."""
-        errors = check_errors("main: function is { v: (1 + 2).borrow }")
+        """Borrowing a temporary reftype expression is rejected."""
+        errors = check_errors('main: function is { v: ("hello".string).borrow }')
         assert any("temporary" in e.msg.lower() for e in errors)
 
     def test_read_locked_var_rejected(self):
@@ -3595,7 +3668,7 @@ class TestProtocols:
             "reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "myfile: class {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: reader\n"

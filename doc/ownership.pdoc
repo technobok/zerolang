@@ -77,9 +77,8 @@ compile time. There are exactly two ownership states:
   own. It cannot copy, take, store, swap, or destroy the value. It can call
   methods on it, read and write fields, and pass it to other #~".borrow"
   parameters. When the borrowed variable falls out of scope the borrow ends:
-  the reference (for reftypes) or the stack value (for borrowed valtypes) is
-  simply forgotten without destruction, and any locks held by this variable are
-  released.]
+  the reference is simply forgotten without destruction, and any locks held by
+  this variable are released.]
 
 Ownership forms a permission hierarchy: #+ take > borrow. An owned variable can
 always be used in a context that expects a borrow (automatic downgrade). A
@@ -129,8 +128,10 @@ return values:
   In parameters      |take (copy)     |borrow (reference)
   Out return values  |take            |take
 
-The defaults can always be overridden by explicitly specifying #~".take",
-#~".borrow" or #~".lock".
+The defaults can be overridden by explicitly specifying #~".take",
+#~".borrow" or #~".lock", subject to the restriction that #~".borrow" and
+#~".lock" are only valid on reftypes and generic type parameters (not on
+known valtypes).
 
 These defaults reflect the natural semantics of each type family: valtypes are
 small and copying is cheap and safe; reftypes are single-owner and copying
@@ -196,7 +197,7 @@ A borrowed variable has temporary, restricted access to a value it does not own.
 #ul:
   #*: Cannot be passed to a #~".take" parameter (error: insufficient permission)
   #*: Cannot call #~".take" on it (error: cannot take a borrowed variable)
-  #*: Cannot be copied (for valtypes -- a copy would create an independent owned value which violates the borrow semantics)
+  #*: Cannot be copied
   #*: Cannot be stored in a field of another object
   #*: Cannot be swapped
   #*: Cannot be reassigned -- the name must remain bound to the same borrowed value for its full scope (shadowing in inner scopes is permitted)
@@ -206,8 +207,8 @@ A borrowed variable has temporary, restricted access to a value it does not own.
 When a borrowed variable falls out of scope:
 
 #ul:
-  [#*: The borrow ends. The reference (reftype) or stack value (valtype) is
-  forgotten. The underlying object is #_*"not" destroyed.]
+  [#*: The borrow ends. The reference is forgotten. The underlying object is
+  #_*"not" destroyed.]
   [#*: Any locks held by this variable are released. The locked targets become
   available for use again.]
 
@@ -259,15 +260,19 @@ Ownership remains with the caller.
 
 As a return attribute (#~"out type.borrow"): the function returns a borrowed
 value. At least one input parameter must be marked #~".lock" so the returned
-value has a locked parent to live in. For reftypes, the returned reference
-points into the locked parameter's data. For valtypes, the returned value is
-on the caller's stack with borrowed restrictions.
+value has a locked parent to live in. The returned reference points into the
+locked parameter's data.
 
 As an inline method (#~"x.borrow"): returns a borrowed reference to #~"x".
 The variable #~"x" is exclusively locked for the lifetime of the borrowed
 reference. #~".borrow" can be called on either owned or borrowed variables.
 The lock is placed on the #_+"root variable" of the path, not on any
 intermediate field (see #~"Borrow-scoped Locking" below).
+
+#~".borrow" on a known valtype is a compile error. Valtypes are pass-by-value
+so borrowing is meaningless -- each copy is already an independent value.
+If the type is a generic parameter, #~".borrow" is permitted because the
+parameter may monomorphize to a reftype.
 
 #---: .lock
 
@@ -286,6 +291,11 @@ nothing to assign the locks to).
 
 #~".lock" is not an inline method on instances. It is only used on function
 parameter declarations.
+
+#~".lock" on a known valtype parameter is a compile error. Valtypes are
+pass-by-value so identity-based locking is meaningless. If locking is
+needed, use a class. Generic type parameters are exempt because they may
+monomorphize to a reftype.
 
 #---: .release
 
@@ -583,9 +593,9 @@ parameters of the same type:
 #ul:
   [#*: Reftype #~".lock" parameter -- the pointer is passed by value (the
   reftype's normal C calling convention).]
-  [#*: Valtype #~".lock" parameter -- the value is passed by value (the
-  valtype's normal C calling convention; identical to #~".take" and the
-  default for valtypes).]
+  [#*: Generic #~".lock" parameter -- passed using the convention of whatever
+  concrete type the generic parameter monomorphizes to (reftype: pointer;
+  valtype: value). #~".lock" on a known valtype is a compile error.]
 
 #---: Unions, Protocol Instances, Variants
 
@@ -969,7 +979,7 @@ available as the inline ownership method on runtime instances
 #table cols="4 4 4":
   What you wrote                                            |Error                                                |Fix
   #~"f borrowed_var.take"                                   |Cannot take a borrowed variable                      |Pass as #~".borrow" or restructure ownership
-  #~"x: borrowed_var" (copy)                                |Cannot copy a borrowed valtype                       |Use #~".borrow" to create a borrowed reference
+  #~"x.borrow" on a valtype                                  |Cannot borrow a valtype                              |Valtypes are pass-by-value; use a class if identity-based locking is needed
   #~"return localvar" (as #~".borrow")                      |Cannot return local as borrowed without .lock param   |Add #~".lock" to the relevant parameter
   #~".lock" param with no return value                      |Lock param with no return value                      |Remove #~".lock" or add a return value
   #~"out type.borrow" with no #~".lock" param               |Borrow return requires a lock parameter               |Add #~".lock" to input parameter

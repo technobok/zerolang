@@ -1071,6 +1071,25 @@ class TypeChecker:
                 hint="add .lock to a parameter to borrow from it",
             )
 
+        # .borrow/.lock on known valtype parameters is an error (valtypes are
+        # copied, not referenced). Allow on generic params since they may
+        # monomorphize to reftypes.
+        for pname, pown in own.items():
+            if pown in (ZParamOwnership.BORROW, ZParamOwnership.LOCK):
+                ptype = ftype.children.get(pname)
+                if (
+                    ptype
+                    and _is_valtype(ptype)
+                    and ptype.typetype != ZTypeType.GENERIC_PARAM
+                ):
+                    label = "borrow" if pown == ZParamOwnership.BORROW else "lock"
+                    self._error(
+                        f"Cannot use '.{label}' on valtype parameter '{pname}' "
+                        f"(type '{ptype.name}') — valtypes are copied, not referenced",
+                        loc=func.start,
+                        err=ERR.OWNERERROR,
+                    )
+
     def _check_is_as_name_collision(
         self,
         name: str,
@@ -4692,11 +4711,15 @@ class TypeChecker:
                 )
                 var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
-                err = self.symtab.try_lock(
-                    borrow_target, ZLockState.EXCLUSIVE, assign.name
-                )
-                if err:
-                    self._error(err, loc=assign.start)
+                # skip locking for valtypes — they are copies, not references.
+                # this handles generic monomorphization where .borrow was allowed
+                # at definition but the concrete type is a valtype.
+                if not _is_valtype(t):
+                    err = self.symtab.try_lock(
+                        borrow_target, ZLockState.EXCLUSIVE, assign.name
+                    )
+                    if err:
+                        self._error(err, loc=assign.start)
             else:
                 # new local variables are owned by default.
                 var = ZVariable(
@@ -5191,9 +5214,22 @@ class TypeChecker:
                 elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
                 else:
+                    # reject .borrow on known valtypes (valtypes are copied,
+                    # not referenced — borrowing is meaningless). Allow on
+                    # generic params since they may monomorphize to reftypes.
+                    if (
+                        _is_valtype(parent_type)
+                        and parent_type.typetype != ZTypeType.GENERIC_PARAM
+                    ):
+                        self._error(
+                            f"Cannot borrow valtype '{parent_type.name}' — "
+                            f"valtypes are copied, use assignment instead",
+                            loc=path.start,
+                            err=ERR.OWNERERROR,
+                        )
+                        path.type = parent_type
+                        return parent_type
                     # .borrow takes an exclusive lock on the root of the path.
-                    # The borrow result will be assigned to a name by
-                    # _check_assignment; the lock holder is updated there.
                     root_name = self._get_arg_root_name(path.parent)
                     if root_name:
                         self._pending_borrow_lock = root_name
@@ -5211,6 +5247,18 @@ class TypeChecker:
         if child_name == "lock":
             parent_type = self._check_path(path.parent)
             if parent_type:
+                if (
+                    _is_valtype(parent_type)
+                    and parent_type.typetype != ZTypeType.GENERIC_PARAM
+                ):
+                    self._error(
+                        f"Cannot lock valtype '{parent_type.name}' — "
+                        f"valtypes are copied, not referenced",
+                        loc=path.start,
+                        err=ERR.OWNERERROR,
+                    )
+                    path.type = parent_type
+                    return parent_type
                 root_name = self._get_arg_root_name(path.parent)
                 if root_name:
                     self._pending_borrow_lock = root_name

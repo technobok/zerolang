@@ -1613,9 +1613,10 @@ Ownership states:
   [#*: Owned - the instance is owned at this location. All instances have exactly
     one owner. Reftype constructors return owned instances. For valtypes,
     every copy is a new owned instance.]
-  [#*: Borrowed - only for reftypes. The instance at this location has been
-    borrowed from an owned reftype. A function parameter borrows by default
-    (#~"borrow" is the default for #~"in" parameters).]
+  [#*: Borrowed - only for reftypes and generic type parameters. The instance at
+    this location has been borrowed from an owned reftype. A reftype function
+    parameter borrows by default (#~"borrow" is the default for reftype #~"in"
+    parameters). Valtypes cannot be borrowed.]
 
 #~"this" within object methods is always borrowed (you cannot own yourself).
 
@@ -1653,14 +1654,17 @@ type paths:
     to be specified.]
   [#*: #~"type.borrow" - for #~"in" parameters, ownership is not taken. The
     function can call methods on the parameter but cannot store or destroy it.
-    #~".borrow" is the default for #~"in" parameters and does not need to be
-    specified. For #~"out" return types, #~".borrow" means a borrowed instance is
-    returned. The parameter housing that instance must be marked #~".lock".]
+    #~".borrow" is the default for reftype #~"in" parameters and does not need
+    to be specified. #~".borrow" on a known valtype is a compile error (valtypes
+    are pass-by-value). Generic type parameters are exempt. For #~"out" return
+    types, #~".borrow" means a borrowed instance is returned. The parameter
+    housing that instance must be marked #~".lock".]
   [#*: #~"type.lock" - for #~"in" parameters, this parameter will be locked by
     the return value for its lifetime. Multiple parameters may be marked
     #~".lock"; all locks transfer to the return value. It is illegal to specify
     #~".lock" on a return value. It is illegal to #~".lock" a parameter when
-    there is no return value.]
+    there is no return value. #~".lock" on a known valtype parameter is a
+    compile error. Generic type parameters are exempt.]
 
 #-----: Ownership Methods on Instances
 
@@ -1672,7 +1676,9 @@ runtime instances:
     invalid after the call. Calling #~".take" on an expression that is not used
     (not assigned or passed) destroys the instance.]
   [#*: #~"x.borrow" - returns a borrowed reference to #~"x". The variable #~"x"
-    is exclusively locked for the lifetime of the borrowed reference.]
+    is exclusively locked for the lifetime of the borrowed reference. Only valid
+    on reftypes (classes, unions) and generic type parameters; #~".borrow" on a
+    known valtype is a compile error.]
 
 #-----: Lock Fields on Classes
 
@@ -2087,24 +2093,30 @@ variable, rendering the name invalid. See [#> to=take-method: take (method)].
 
 #----: borrow
 
-#~"borrow" is a predefined type attribute on all reftype types. When used as a
-dotted path on a type in function parameter declarations, it specifies that
-ownership is not taken. #~".borrow" is the default for #~"in" parameters.
+#~"borrow" is a predefined type attribute on reftype types and generic type
+parameters. When used as a dotted path on a type in function parameter
+declarations, it specifies that ownership is not taken. #~".borrow" is the
+default for reftype #~"in" parameters. #~".borrow" on a known valtype
+(record, variant, integer, enum) is a compile error -- valtypes are
+pass-by-value so borrowing is meaningless.
 
 As a return type attribute (#~"out type.borrow"): the function returns a
 borrowed reference. At least one #~"in" parameter must be marked #~".lock".
 
 As a compiler method on instances (#~"x.borrow"): returns a borrowed reference,
-exclusively locking the receiver. See [#> to=borrow-method: borrow (method)].
+exclusively locking the receiver. Only valid on reftypes and generic type
+parameters. See [#> to=borrow-method: borrow (method)].
 
 #----: lock
 
-#~"lock" is a predefined type attribute on reftype types for use in function
-parameter declarations only (#~"type.lock"). It indicates that this parameter
-will be locked by the return value for the lifetime of that return value.
-Multiple parameters may be marked #~".lock"; all locks transfer to the return
-value. It is illegal to specify #~".lock" on a return value or when there is no
-return value.
+#~"lock" is a predefined type attribute on reftype types and generic type
+parameters, for use in function parameter declarations only (#~"type.lock").
+It indicates that this parameter will be locked by the return value for the
+lifetime of that return value. Multiple parameters may be marked #~".lock";
+all locks transfer to the return value. It is illegal to specify #~".lock" on
+a return value or when there is no return value. #~".lock" on a known valtype
+parameter is a compile error -- valtypes are pass-by-value so identity-based
+locking is meaningless.
 
 #----: typedef
 
@@ -2488,9 +2500,11 @@ See also the [#> to=ownership: ownership].
 
 #----: borrow (method)
 
-#~"borrow" is a compiler-generated method predefined on all variable names that
-refer to a reftype. It returns a borrowed reference to the receiver. The
-receiver is exclusively locked for the lifetime of the borrowed reference.
+#~"borrow" is a compiler-generated method predefined on variable names that
+refer to a reftype (class, union) or a generic type parameter. It returns a
+borrowed reference to the receiver. The receiver is exclusively locked for the
+lifetime of the borrowed reference. #~".borrow" on a known valtype (record,
+variant, integer, enum) is a compile error.
 
 The #~"borrow" method is zero overhead -- it is a manipulation of the compile
 time type system only. Use of the #~".borrow" method is optional when passing
@@ -2992,9 +3006,11 @@ function argument label), can be:
 - a type followed by #~".take" (eg. #~"reftype.take") to take ownership of the
   parameter
 - a type followed by #~".borrow" (eg. #~"reftype.borrow") to explicitly borrow
-  (this is the default for parameters and does not need to be specified)
+  (this is the default for reftype parameters and does not need to be specified;
+  compile error on known valtypes; permitted on generic type parameters)
 - a type followed by #~".lock" (eg. #~"reftype.lock") to lock the parameter for
-  the lifetime of the return value
+  the lifetime of the return value (compile error on known valtypes; permitted
+  on generic type parameters)
 - a restrained type: a named type followed by a dot then a child named protocol
   or named method of that type. The call must pass an instance of the named
   type and the function declares that it will only use methods in the named
