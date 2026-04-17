@@ -1752,11 +1752,11 @@ class Parser:
                     msg = "'then' must appear after at least one condition"
                     return zast.Error(start=t, err=ERR.BADTHEN, msg=msg)
                 lex.acceptany()
-                statementx = self._acceptstatement(lex)
+                statementx = self._accept_primary_expression(lex)
                 if statementx is not None and statementx.is_error:
                     return cast(zast.Error, statementx)  # propagate error
                 if not statementx:
-                    msg = "Expected statement for 'then'"
+                    msg = "Expected primary-expression for 'then'"
                     return zast.Error(
                         start=lex.acceptany(),
                         err=ERR.EXPECTEDSTATEMENT,
@@ -1788,11 +1788,11 @@ class Parser:
                 msg = "'else' must appear after at least one if/then clause"
                 return zast.Error(start=t, err=ERR.BADELSE, msg=msg)
             lex.acceptany()
-            statementx = self._acceptstatement(lex)
+            statementx = self._accept_primary_expression(lex)
             if statementx is not None and statementx.is_error:
                 return cast(zast.Error, statementx)  # propagate error
             if not statementx:
-                msg = "Expected statement for 'else'"
+                msg = "Expected primary-expression for 'else'"
                 return zast.Error(
                     start=lex.acceptany(),
                     err=ERR.EXPECTEDSTATEMENT,
@@ -1889,11 +1889,11 @@ class Parser:
                 return zast.Error(start=lex.acceptany(), err=ERR.BADCASE, msg=msg)
 
             lex.acceptany()  # 'then'
-            statementx = self._acceptstatement(lex)
+            statementx = self._accept_primary_expression(lex)
             if statementx is not None and statementx.is_error:
                 return cast(zast.Error, statementx)  # propagate error
             if not statementx:
-                msg = "Expected statement for 'then'"
+                msg = "Expected primary-expression for 'then'"
                 return zast.Error(
                     start=lex.acceptany(),
                     err=ERR.EXPECTEDSTATEMENT,
@@ -1908,11 +1908,11 @@ class Parser:
             clauses.append(caseclause)
 
         if lex.accept(TT.ELSE):
-            statementx = self._acceptstatement(lex)
+            statementx = self._accept_primary_expression(lex)
             if statementx is not None and statementx.is_error:
                 return cast(zast.Error, statementx)  # propagate error
             if not statementx:
-                msg = "Expected statement after 'else' for 'case'"
+                msg = "Expected primary-expression after 'else' for 'case'"
                 return zast.Error(
                     start=lex.acceptany(),
                     err=ERR.EXPECTEDSTATEMENT,
@@ -2015,11 +2015,11 @@ class Parser:
                     return zast.Error(start=lex.acceptany(), err=ERR.BADFOR, msg=msg)
 
                 lex.acceptany()
-                statementx = self._acceptstatement(lex)
+                statementx = self._accept_primary_expression(lex)
                 if statementx is not None and statementx.is_error:
                     return cast(zast.Error, statementx)  # propagate error
                 if not statementx:
-                    msg = "Expected statement for 'loop'"
+                    msg = "Expected primary-expression for 'loop'"
                     return zast.Error(
                         start=lex.acceptany(),
                         err=ERR.EXPECTEDSTATEMENT,
@@ -2118,6 +2118,44 @@ class Parser:
             name=name, value=valuex.node, doexpr=doexprx.node, start=start
         )
         return NodeX(withnode, extern=extern)
+
+    def _accept_primary_expression(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Statement], zast.Error, None]:
+        """
+        Accept a primary-expression per grammar:
+
+            primary_expression: block | operation
+
+        Used in slots the grammar restricts to a block-or-operation
+        (if/match `then`/`else`, `for` loop body). This helper:
+        - accepts `{ ... }` blocks via `_acceptstatement`;
+        - for non-brace forms, delegates to `_acceptexpression`, which
+          includes nested control-flow (`if`, `for`, `match`, `with`) so
+          idioms like `else if ...` and `else for ...` parse without
+          requiring explicit braces.
+
+        It does NOT accept bare label-bindings, assignments, reassignments,
+        or swaps — those are only valid inside a block. `_acceptexpression`
+        by construction does not emit those at its top level.
+
+        Returns a Statement so the AST shape of IfClause/CaseClause/For.loop
+        stays stable. Block forms are passed through as Statement-with-many-
+        lines; expression forms are wrapped as a single StatementLine.
+        """
+        start = lex.peek()
+        if start.toktype == TT.BRACEOPEN:
+            return self._acceptstatement(lex)
+
+        exprx = self._acceptexpression(lex)
+        if exprx is None:
+            return None
+        if exprx.is_error:
+            return cast(zast.Error, exprx)
+        exprx = cast(NodeX[zast.Expression], exprx)
+        line = zast.StatementLine(statementline=exprx.node, start=exprx.node.start)
+        stmt = zast.Statement(statements=[line], start=start)
+        return NodeX(stmt, extern=exprx.extern)
 
     def _acceptbareblock(self, lex: Lexer) -> Union[NodeX[zast.Do], zast.Error, None]:
         """
