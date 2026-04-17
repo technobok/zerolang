@@ -1250,59 +1250,60 @@ class Parser:
         self, lex: Lexer
     ) -> Union[NodeX[zast.Protocol], zast.Error, None]:
         """
-        accept a protocol
+        Accept a protocol per grammar's item_definition:
 
-            protocol
-                "protocol" [ "is" ] "{" { protocolitem | newline } "}"
+            "protocol" [ "is" ] ( "{" ... "}" | "native" ) [ "as" "{" ... "}" ]
 
-        Returns a Protocol or Error or None (if no 'protocol' keyword)
+        Route through `_accept_item_bodies` so `is` / `as` can be reordered
+        and `native` is accepted, matching the other item kinds.
         """
         start = lex.peek()
         if not lex.accept(TT.PROTOCOL):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._get_object_body(lex, ObjectBodyKind.PROTOCOL)
-        if b.is_error:
-            return cast(zast.Error, b)  # propagate error
-        b = cast(ObjectBody, b)
+        is_body, as_body, extern, err, native = self._accept_item_bodies(
+            lex, ObjectBodyKind.PROTOCOL
+        )
+        if err:
+            return err
 
         protocol = zast.Protocol(
-            parameters=b.items,  # 'item's are the generic parameters for protocols
-            specs=b.functions,
-            includes=b.islist,
+            parameters=is_body.items if is_body else {},
+            specs=is_body.functions if is_body else {},
+            includes=is_body.islist if is_body else [],
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
             start=start,
+            is_native=native,
         )
-        return NodeX(node=protocol, extern=b.extern)
+        return NodeX(node=protocol, extern=extern)
 
     def _accept_facet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
         """
-        accept a facet (value-type interface, same syntax as protocol)
-
-            facet
-                "facet" [ "is" ] "{" { facetitem | newline } "}"
-
-        Returns a Facet or Error or None (if no 'facet' keyword)
+        Accept a facet (value-type interface). Same grammar shape as
+        protocol; routed through `_accept_item_bodies` for `is`/`as`
+        reordering and `native` support.
         """
         start = lex.peek()
         if not lex.accept(TT.FACET):
             return None
 
-        lex.accept(TT.IS)  # optional 'is'
-
-        b = self._get_object_body(lex, ObjectBodyKind.FACET)
-        if b.is_error:
-            return cast(zast.Error, b)  # propagate error
-        b = cast(ObjectBody, b)
+        is_body, as_body, extern, err, native = self._accept_item_bodies(
+            lex, ObjectBodyKind.FACET
+        )
+        if err:
+            return err
 
         facet = zast.Facet(
-            parameters=b.items,  # 'item's are the generic parameters for facets
-            specs=b.functions,
-            includes=b.islist,
+            parameters=is_body.items if is_body else {},
+            specs=is_body.functions if is_body else {},
+            includes=is_body.islist if is_body else [],
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
             start=start,
+            is_native=native,
         )
-        return NodeX(node=facet, extern=b.extern)
+        return NodeX(node=facet, extern=extern)
 
     def _accept_item_bodies(
         self,

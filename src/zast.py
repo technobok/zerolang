@@ -509,6 +509,9 @@ class Protocol(Node):
     # specs (to be implimented by target) and self contained functions
     specs: Dict[str, "Function"]
     includes: typing.List["Path"]  # interfaces satisfied by this record, a Typeref
+    as_items: Dict[str, "Path"] = field(default_factory=dict)
+    as_functions: Dict[str, "Function"] = field(default_factory=dict)
+    is_native: bool = False
 
 
 @dataclass
@@ -521,6 +524,9 @@ class Facet(Node):
     parameters: Dict[str, "Path"]  # generic only, a TyperefOrNum
     specs: Dict[str, "Function"]  # specs (to be implemented by conforming valtypes)
     includes: typing.List["Path"]  # interfaces satisfied by this facet
+    as_items: Dict[str, "Path"] = field(default_factory=dict)
+    as_functions: Dict[str, "Function"] = field(default_factory=dict)
+    is_native: bool = False
 
 
 ExpressionSubTypes = typing.Union[
