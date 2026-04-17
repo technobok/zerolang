@@ -4,6 +4,7 @@ ZeroLang parser
 """
 
 # pylint: disable=too-many-lines
+from enum import IntEnum, auto
 from typing import List, Dict, Optional, Union, TypeVar, Generic, Set, cast
 from dataclasses import dataclass, field
 from zvfs import ZVfs, DEntryID, DEntryType, ZVfsOpenFile
@@ -18,6 +19,42 @@ _OWNERSHIP_SUFFIXES = {
     "take": ZParamOwnership.TAKE,
     "borrow": ZParamOwnership.BORROW,
     "lock": ZParamOwnership.LOCK,
+}
+
+
+class ObjectBodyKind(IntEnum):
+    """
+    What kind of item is having its body parsed. Replaces the legacy
+    (allowtag, unlabelledpath, unlabelledid) triple-bool; the bools are
+    derived in `_getobjectbody` from kind + whether this is the `as`
+    clause (static members) or the `is` clause (instance members).
+
+    - FUNCTION_AS: generic params for a function's `as` clause (named only)
+    - PROTOCOL / FACET: interface / value-type interface bodies (named only)
+    - RECORD / CLASS: struct-like items — unlabelled paths are field types
+      named by their path leaf
+    - VARIANT / UNION: struct-like with an optional `tag:` declaration
+    - ENUM: bare ids as values (unlabelled id permitted)
+    """
+
+    FUNCTION_AS = auto()
+    PROTOCOL = auto()
+    FACET = auto()
+    RECORD = auto()
+    CLASS = auto()
+    VARIANT = auto()
+    UNION = auto()
+    ENUM = auto()
+
+
+_OBJECT_BODY_ALLOWS_UNLABELLED_PATH = {
+    ObjectBodyKind.RECORD,
+    ObjectBodyKind.CLASS,
+    ObjectBodyKind.VARIANT,
+    ObjectBodyKind.UNION,
+}
+_OBJECT_BODY_ALLOWS_UNLABELLED_ID = {
+    ObjectBodyKind.ENUM,
 }
 
 # A Node type.
@@ -1026,12 +1063,7 @@ class Parser:
                     msg = "Duplicate 'as'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
-                b = self._getobjectbody(
-                    lex,
-                    allowtag=False,
-                    unlabelledpath=False,
-                    unlabelledid=False,
-                )
+                b = self._getobjectbody(lex, ObjectBodyKind.FUNCTION_AS)
                 if b.is_error:
                     return cast(zast.Error, b)
                 b = cast(ObjectBody, b)
@@ -1156,7 +1188,7 @@ class Parser:
             return None
 
         is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, allowtag=False, unlabelledpath=True, unlabelledid=False
+            lex, ObjectBodyKind.RECORD
         )
         if err:
             return err
@@ -1187,7 +1219,7 @@ class Parser:
             return None
 
         is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, allowtag=False, unlabelledpath=True, unlabelledid=False
+            lex, ObjectBodyKind.CLASS
         )
         if err:
             return err
@@ -1220,7 +1252,7 @@ class Parser:
             return None
 
         is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, allowtag=True, unlabelledpath=True, unlabelledid=False
+            lex, ObjectBodyKind.VARIANT
         )
         if err:
             return err
@@ -1251,7 +1283,7 @@ class Parser:
             return None
 
         is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, allowtag=True, unlabelledpath=True, unlabelledid=False
+            lex, ObjectBodyKind.UNION
         )
         if err:
             return err
@@ -1285,9 +1317,7 @@ class Parser:
 
         lex.accept(TT.IS)  # optional 'is'
 
-        b = self._getobjectbody(
-            lex, allowtag=False, unlabelledpath=False, unlabelledid=False
-        )
+        b = self._getobjectbody(lex, ObjectBodyKind.PROTOCOL)
         if b.is_error:
             return cast(zast.Error, b)  # propagate error
         b = cast(ObjectBody, b)
@@ -1315,9 +1345,7 @@ class Parser:
 
         lex.accept(TT.IS)  # optional 'is'
 
-        b = self._getobjectbody(
-            lex, allowtag=False, unlabelledpath=False, unlabelledid=False
-        )
+        b = self._getobjectbody(lex, ObjectBodyKind.FACET)
         if b.is_error:
             return cast(zast.Error, b)  # propagate error
         b = cast(ObjectBody, b)
@@ -1333,19 +1361,17 @@ class Parser:
     def _acceptitembodies(
         self,
         lex: Lexer,
-        allowtag: bool,
-        unlabelledpath: bool,
-        unlabelledid: bool,
+        kind: ObjectBodyKind,
     ) -> tuple:
         """
-        Parse 'is' and 'as' bodies for item definitions.
-        'is' and 'as' can appear in any order if named.
-        Unnamed first arg defaults to 'is'.
-        'is native' marks the type as having compiler-provided state.
+        Parse `is` and `as` bodies for item definitions.
+        `is` and `as` can appear in any order if named.
+        Unnamed first arg defaults to `is`.
+        `is native` marks the type as having compiler-provided state.
 
         Returns (is_body, as_body, extern, error, is_native)
         where is_body is ObjectBody or None, as_body is Optional[ObjectBody],
-        extern is Dict, error is Optional[Error], is_native is bool
+        extern is Dict, error is Optional[Error], is_native is bool.
         """
         is_body: Optional[ObjectBody] = None
         as_body: Optional[ObjectBody] = None
@@ -1368,12 +1394,7 @@ class Parser:
                 if lex.accept(TT.NATIVE):
                     is_native = True
                 else:
-                    b = self._getobjectbody(
-                        lex,
-                        allowtag=allowtag,
-                        unlabelledpath=unlabelledpath,
-                        unlabelledid=unlabelledid,
-                    )
+                    b = self._getobjectbody(lex, kind)
                     if b.is_error:
                         return None, None, None, cast(zast.Error, b), False
                     b = cast(ObjectBody, b)
@@ -1394,12 +1415,7 @@ class Parser:
                         False,
                     )
                 lex.acceptany()
-                b = self._getobjectbody(
-                    lex,
-                    allowtag=False,
-                    unlabelledpath=unlabelledpath,
-                    unlabelledid=False,
-                )
+                b = self._getobjectbody(lex, kind, as_clause=True)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1407,12 +1423,7 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=b.extern)
             elif t.toktype == TT.BRACEOPEN and is_body is None and not is_native:
                 # unnamed first arg defaults to 'is'
-                b = self._getobjectbody(
-                    lex,
-                    allowtag=allowtag,
-                    unlabelledpath=unlabelledpath,
-                    unlabelledid=unlabelledid,
-                )
+                b = self._getobjectbody(lex, kind)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1443,28 +1454,35 @@ class Parser:
     def _getobjectbody(
         self,
         lex: Lexer,
-        # nodetype: zast.NodeType, TODO: add this and remove allowtag, unlabelled...
-        allowtag: bool,
-        unlabelledpath: bool,
-        unlabelledid: bool,
+        kind: ObjectBodyKind,
+        as_clause: bool = False,
     ) -> Union[ObjectBody, zast.Error]:
         """
-        getobjectbody - parse an object body (after 'is') for a record, class,
-        variant, union, enum or protocol
+        Parse an object body (after `is` or `as`) for any item kind.
 
-        allowtag = allows a 'tag' param. For union, variant, enum
+        `kind` is the item being parsed (RECORD / CLASS / VARIANT / UNION /
+        PROTOCOL / FACET / ENUM / FUNCTION_AS). `as_clause` is True when
+        we are parsing the `as` section (static members); the `as` section
+        never permits a `tag` declaration or unlabelled-id entries, and
+        mirrors the kind's unlabelled-path rule.
 
-        unlabelledpath = allow an unlabelled path that is named for the id
-        after the last dot (if present). (For record, class, union, variant)
+        The legacy three-bool API (unlabelledpath, unlabelledid + a
+        dead `allowtag`) is derived here from (kind, as_clause) to keep
+        call sites declarative and prevent the invalid combinations the
+        old API allowed by convention only. `tag` is currently handled
+        as a regular named field and is enforced at the typechecker, not
+        the parser — so no parser-level tag gate is needed.
 
-        unlabelledid = allow an unlabelled id. name is id, value is None.
-        (For enum)
-
-        Only one of allowunlabelled... can be set. Or neither (For protocol)
-
-        Return an Error or the body components in an ObjectBody
+        Return an Error or the body components in an ObjectBody.
         """
         # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
+        if as_clause:
+            unlabelledid = False
+            unlabelledpath = kind in _OBJECT_BODY_ALLOWS_UNLABELLED_PATH
+        else:
+            unlabelledpath = kind in _OBJECT_BODY_ALLOWS_UNLABELLED_PATH
+            unlabelledid = kind in _OBJECT_BODY_ALLOWS_UNLABELLED_ID
+
         if not lex.accept(TT.BRACEOPEN):
             msg = "Expected open brace '{' for 'is' argument"
             return zast.Error(start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg)
