@@ -7267,7 +7267,21 @@ class TypeChecker:
             ZTypeType.UNION,
             ZTypeType.VARIANT,
         )
-        target_name = self._get_arg_root_name(casenode.subject) if is_sum_type else None
+        # Per A3: narrow only when the subject is a simple addressable name
+        # (a bare AtomId after stripping any Expression wrappers). Dotted
+        # paths and complex expressions share a root whose type must not be
+        # re-narrowed by the match; arm bodies for those subjects get no
+        # narrowed binding and can only perform side effects predicated on
+        # the matched variant.
+        target_name: Optional[str] = None
+        if is_sum_type:
+            subj: zast.Node = casenode.subject
+            while subj.nodetype == NodeType.EXPRESSION:
+                subj = cast(zast.Expression, subj).expression
+            if subj.nodetype == NodeType.ATOMID:
+                name = cast(zast.AtomId, subj).name
+                if not _is_numeric_id(name):
+                    target_name = name
 
         # save subject variable info for take-in-arms tracking (reftypes only)
         subject_name = self._get_arg_root_name(casenode.subject)
