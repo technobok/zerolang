@@ -763,8 +763,6 @@ class Data(Node):
     """
 
     nodetype: NodeType = field(default=NodeType.DATA, init=False)
-    # generic, can be a generic reference or constant numeric expression
-    subtype: Optional["Path"]  # inferred if None, a Typeref
     data: typing.List["NamedOperation"]  # data, change to dict?
 
 

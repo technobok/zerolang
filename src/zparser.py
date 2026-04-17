@@ -2193,7 +2193,17 @@ class Parser:
         """
         acceptdata - accept a data clause
 
-            "data" [ "is" ] "{" { ( [ label ] term ) | label_value } "}"
+            "data" [ "is" ] "{"
+                { ( [ label ] term ) | label_value }
+            "}"
+
+        Elements are single `term`s (paths) rather than full `operation`s
+        so that adjacent unlabelled values like `10 20 30` stay as three
+        separate elements. To use a constant operation for an element,
+        wrap it in parentheses: `bytes: (1024 + 4)`.
+
+        The typechecker rejects non-numeric element values (strings,
+        records, reference values).
 
         Return a Data or Error or None for no data (missing "data" keyword)
         """
@@ -2202,7 +2212,6 @@ class Parser:
         if not lex.accept(TT.DATA):
             return None
 
-        subtype: Optional[zast.Path] = None
         data: List[zast.NamedOperation] = []
         extern: Dict[str, zast.AtomId] = {}
 
@@ -2230,24 +2239,31 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=lvx.extern)
                 continue
 
-            label: Optional[Token] = None
+            label_tok: Optional[Token] = None
             if lex.peek().toktype == TT.LABEL:
-                label = lex.acceptany()
-                if label.tokstr in datanames:
-                    msg = f"Duplicate data member name: {label.tokstr}"
+                label_tok = lex.acceptany()
+                if label_tok.tokstr in datanames:
+                    msg = f"Duplicate data member name: {label_tok.tokstr}"
                     return zast.Error(
                         start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
                     )
-                datanames.add(label.tokstr)
+                datanames.add(label_tok.tokstr)
 
+            # Data elements are single terms (paths), as grammar requires.
+            # Use parentheses to embed an operation: `bytes: (1024 + 4)`.
+            # Unconstrained operations would make adjacent elements
+            # ambiguous — e.g. `10 MIDDLE: 20 30` could fuse `20 30` as
+            # a call with unnamed argument, eating the next element.
             pathx = self._acceptpath(lex)
             if pathx is not None and pathx.is_error:
-                return cast(zast.Error, pathx)  # propagate error
+                return cast(zast.Error, pathx)
             pathx = cast(Optional[NodeX[zast.Path]], pathx)
             if pathx:
-                if label:
+                if label_tok:
                     namedop = zast.NamedOperation(
-                        name=label.tokstr, valtype=pathx.node, start=label
+                        name=label_tok.tokstr,
+                        valtype=pathx.node,
+                        start=label_tok,
                     )
                 else:
                     namedop = zast.NamedOperation(
@@ -2256,14 +2272,17 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=pathx.extern)
                 data.append(namedop)
             else:
-                # no path, finished block
+                if label_tok:
+                    msg = f"Expected term after data label: {label_tok.tokstr}"
+                    return zast.Error(start=lex.peek(), err=ERR.BADDATA, msg=msg)
+                # no element, finished block
                 break
 
         if not lex.accept(TT.BRACECLOSE):
             msg = "Expected closing brace '}' for data body"
             return zast.Error(start=lex.acceptany(), err=ERR.BADDATA, msg=msg)
 
-        datanode = zast.Data(subtype=subtype, data=data, start=start)
+        datanode = zast.Data(data=data, start=start)
         return NodeX(datanode, extern=extern)
 
     def _acceptoperation(
