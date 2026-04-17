@@ -704,11 +704,10 @@ class Parser:
         elif tt == TT.BRACEOPEN:
             node = self._acceptbareblock(lex)
         else:
-            oplist = self._getoplist(lex)
-            if getattr(oplist, "is_error", False):
-                return cast(zast.Error, oplist)  # propagate error
-            oplist_ok = cast(List[NodeX[zast.Path]], oplist)
-            node = self._acceptoperationorcall(oplist_ok, lex)
+            oplist, err = self._getoplist(lex)
+            if err is not None:
+                return err
+            node = self._acceptoperationorcall(oplist, lex)
 
         if node is not None and node.is_error:
             return cast(zast.Error, node)
@@ -760,26 +759,30 @@ class Parser:
         )  # don't propagate error, may be call
         return opx
 
-    def _getoplist(self, lex: Lexer) -> Union[List[NodeX[zast.Path]], zast.Error]:
+    def _getoplist(
+        self, lex: Lexer
+    ) -> tuple[List[NodeX[zast.Path]], Optional[zast.Error]]:
         """
+        Get a greedy list of operation elements (operand/operator paths).
+        Used to decide between operation and call and to drive `_getop`.
 
-        getoplist - get a list of possible operation elements (operands and
-        operators). Take as many elements of these types as possible. This is
-        used to determine if parser is at an expression or a call and is used
-        in getop. Each element is a Path
-
-        Returns the List (possibly empty) or an Error
+        Returns a tuple `(paths, err)`:
+        - `paths`: the accumulated list (possibly empty). Callers can use
+          `paths` whenever `err is None`.
+        - `err`: an Error if a path failed to parse; `paths` is empty in
+          that case. The tuple shape avoids the `Union[List, Error]`
+          inspection dance at call sites.
         """
         ret: List[NodeX[zast.Path]] = []
         while True:
             path = self._acceptpath(lex)
             if path is not None and path.is_error:
-                return cast(zast.Error, path)  # propagate error
+                return [], cast(zast.Error, path)
             if not path:
                 break
             ret.append(cast(NodeX[zast.Path], path))
 
-        return ret
+        return ret, None
 
     @staticmethod
     def _getop(
@@ -2279,10 +2282,9 @@ class Parser:
         consumes a trailing LABEL / LABELPRE. Callers wanting to accept
         named-arg calls should use `_acceptoperationorcall` instead.
         """
-        oplist_raw = self._getoplist(lex)
-        if getattr(oplist_raw, "is_error", False):
-            return cast(zast.Error, oplist_raw)
-        oplist = cast(List[NodeX[zast.Path]], oplist_raw)
+        oplist, err = self._getoplist(lex)
+        if err is not None:
+            return err
         if not oplist:
             return None
 
@@ -2431,10 +2433,9 @@ class Parser:
             return NodeX(node=statementline, extern=exprx.extern)
 
         # now for the hard ones....
-        oplist_or_err = self._getoplist(lex)
-        if getattr(oplist_or_err, "is_error", False):
-            return cast(zast.Error, oplist_or_err)  # propagate error
-        oplist = cast(List[NodeX[zast.Path]], oplist_or_err)
+        oplist, err = self._getoplist(lex)
+        if err is not None:
+            return err
 
         if lex.accept(TT.EQUALS):  # Reassignment
             # get LHS from oplist
