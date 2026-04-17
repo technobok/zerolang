@@ -4718,6 +4718,20 @@ class TypeChecker:
                 self.symtab.define_var(assign.name, var)
             assign.type = t
 
+            # Phase B: alias optimization for inline `x: y.take` and
+            # `x: y.borrow`. We only alias when ownership is explicitly
+            # transferred or borrowed (take or borrow_target). Plain `x: y`
+            # is NOT aliased — for valtypes it's a copy and aliasing would
+            # silently change semantics; for reftypes the implicit take at
+            # this level already does a pointer copy.
+            is_explicit_take_or_borrow = getattr(
+                inner_expr, "nodetype", None
+            ) == NodeType.DOTTEDPATH and cast(
+                zast.DottedPath, inner_expr
+            ).child.name in ("take", "borrow")
+            if borrow_target or is_explicit_take_or_borrow:
+                assign.alias_of = self._alias_target(assign.value)
+
             # assignment-based narrowing: if RHS is a union/variant subtype
             # construction, narrow the variable to that subtype
             subtype_name = self._get_construction_subtype_name(assign.value)
@@ -6097,6 +6111,91 @@ class TypeChecker:
                 return self._get_arg_root_name(cast(zast.Operation, inner))
         return None
 
+    def _alias_target(self, expr: zast.Expression) -> Optional[str]:
+        """Return the zerolang-level path string to alias for this RHS, or None.
+
+        Aliasing is safe only when the source slot is stable for the binding's
+        lifetime (borrow-locked or take-invalidated) AND accessing the source
+        does not dereference a reftype pointer at any intermediate step
+        (which would silently turn a single register load into N memory loads).
+
+        Eligibility:
+        - Bare name (any type) -> "name"
+        - Dotted path with valtype parents only -> "r.f.g"
+        - Above with inline .take / .borrow suffix -> unwrap, recurse
+        - Anything else -> None
+        """
+        inner = expr.expression if expr.nodetype == NodeType.EXPRESSION else expr
+        return self._alias_target_inner(cast(zast.Operation, inner))
+
+    def _alias_target_inner(self, op: zast.Operation) -> Optional[str]:
+        nt = getattr(op, "nodetype", None)
+        if nt == NodeType.ATOMID:
+            atom = cast(zast.AtomId, op)
+            if _is_numeric_id(atom.name):
+                return None
+            # Must be a runtime variable (type is set by _check_expression).
+            # We do not lookup_var here because .take on the path may have
+            # already invalidated the source — we still want to alias to
+            # that source's storage (the source slot persists until its
+            # enclosing scope ends; the alias just names it).
+            if atom.type is None:
+                return None
+            # Reject names that resolve to types, functions, data, or
+            # constants (we want local/param variables only).
+            if atom.type.typetype in (
+                ZTypeType.FUNCTION,
+                ZTypeType.DATA,
+            ):
+                return None
+            # A bare class/record *type* name (not an instance) — reject.
+            if atom.type.name == atom.name and atom.type.typetype in (
+                ZTypeType.CLASS,
+                ZTypeType.RECORD,
+                ZTypeType.UNION,
+                ZTypeType.VARIANT,
+                ZTypeType.PROTOCOL,
+                ZTypeType.FACET,
+            ):
+                return None
+            return atom.name
+        if nt == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, op)
+            child_name = dp.child.name
+            if child_name in ("take", "borrow"):
+                # unwrap: alias applies to the underlying path
+                return self._alias_target_inner(cast(zast.Operation, dp.parent))
+            if child_name in ("release", "lock", "stringview", "listview"):
+                # compiler methods: not a plain path reference
+                return None
+            # field access — the parent must be a valtype (struct-field
+            # addressing is free). Reftype pointer hops are rejected so the
+            # programmer's "pin in a register" intent is preserved.
+            parent_type = dp.parent.type
+            if parent_type is None or not _is_valtype(parent_type):
+                return None
+            # The child must be a real data field of the parent type, not a
+            # method/protocol/facet label or a compiler-special resolution.
+            # Protocol/facet/typedef subtype construction (e.g., f.myreader)
+            # would not have child_name in parent_type.children.
+            child = parent_type.children.get(child_name)
+            if child is None:
+                return None
+            # Methods and protocol/facet labels are not data fields.
+            if child.typetype in (
+                ZTypeType.FUNCTION,
+                ZTypeType.PROTOCOL,
+                ZTypeType.FACET,
+            ):
+                return None
+            if dp.parent_tagged_type is not None:
+                return None
+            parent_path = self._alias_target_inner(cast(zast.Operation, dp.parent))
+            if parent_path is None:
+                return None
+            return f"{parent_path}.{child_name}"
+        return None
+
     def _check_protocol_create(
         self, proto_type: ZType, call: zast.Call
     ) -> Optional[ZType]:
@@ -7062,6 +7161,13 @@ class TypeChecker:
 
         withnode.ownership = ownership
         withnode.type = t
+
+        # Phase B: alias optimization — if the RHS is a plain path reference
+        # (bare name, dotted valtype path, or inline take/borrow of either),
+        # emit the binding as a C-level alias instead of a real local.
+        # Either the borrow lock or the take-invalidation guarantees the
+        # source slot is stable for the binding's lifetime.
+        withnode.alias_of = self._alias_target(withnode.value)
 
         do_type = self._check_expression(withnode.doexpr).ztype
         self.symtab.pop()

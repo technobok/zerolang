@@ -141,6 +141,8 @@ Table of Contents</div>
 </li>
 <li><a href="#temporary-expressions-in-lock-context">Temporary Expressions in Lock Context</a>
 </li>
+<li><a href="#binding-aliases">Binding Aliases</a>
+</li>
 </ul>
 </li>
 <li><a href="#classes-with-fields">Classes with  Fields</a>
@@ -615,6 +617,36 @@ v: s.stringview</code></pre>
 <p>A future version of the compiler may support automatic temporary
 variable creation to keep lock-context expressions alive, but for
 now explicit naming is required.</p>
+<h3 id="binding-aliases"><a href="#binding-aliases">7.7. Binding Aliases</a></h3>
+<p>Certain bindings do not produce a new storage location at all &#x2014; the
+compiler emits the new name as an alias for the source expression. The
+existing Borrow-scoped Lock guarantees the source slot stays valid and
+unmutated for the alias's lifetime, so there is no observable
+difference between "fresh copy" and "alias" semantics, and the alias
+saves the copy.</p>
+<p>Aliasing applies to:</p>
+<ul>
+<li><code>with name: path do body</code> whose RHS is a bare name
+(<code>with a: c do ...</code>), a dotted-valtype path
+(<code>with v: r.f do ...</code>), or inline <code>.take</code> / <code>.borrow</code> on either
+(<code>with a: c.take do ...</code>).</li>
+<li>Inline <code>.take</code> or <code>.borrow</code> in a plain assignment
+  (<code>d: c.take</code>, <code>y: r.f.borrow</code>).</li>
+</ul>
+<p>Aliasing does NOT apply to:</p>
+<ul>
+<li>Call or constructor right-hand sides -- the returned value must
+  materialize into a real local.</li>
+<li>Dotted paths that dereference a reftype pointer at any step
+  (e.g. <code>b.label</code> where <code>b</code> is a class) -- keeping the local pins
+  the pointer in a register so the programmer's load-once intent is
+  preserved.</li>
+<li>Plain <code>x: y</code> assignments without <code>.take</code> or <code>.borrow</code> --
+  these retain their existing copy-or-transfer semantics.</li>
+</ul>
+<p>The generated C contains <code>/* alias: name =&gt; source */</code> comments at
+the substitution site for readability; references to the alias name in
+the body emit as the source expression directly.</p>
 <h2 id="classes-with-fields"><a href="#classes-with-fields">8. Classes with <code>.lock</code> Fields</a></h2>
 <p>Some classes need to hold a locked reference to another object -- most commonly
 iterators and views. A class field can be declared with a <code>.lock</code> type

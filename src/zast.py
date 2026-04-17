@@ -701,6 +701,9 @@ class With(Node):
     # bare-name / dotted-path / .borrow RHS (borrow-by-default); OWNED for
     # call/constructor/.take RHS. Controls destructor emission.
     ownership: Optional[ZOwnership] = field(default=None, init=False)
+    # set by the type checker: if non-None, emit `name` as an alias for this
+    # C-level expression (bare identifier or `r.f.g`) instead of a real local.
+    alias_of: Optional[str] = field(default=None, init=False)
 
 
 @unique
@@ -814,6 +817,12 @@ class Assignment(Node):
     nodetype: NodeType = field(default=NodeType.ASSIGNMENT, init=False)
     name: str  # also in start     # xxTypeDefinition?
     value: "Expression"  # source expression
+    # set by the type checker: if non-None, emit `name` as an alias for this
+    # C-level expression (bare identifier or `r.f.g`) instead of a real local.
+    # Only set when the source path is stable for the binding's lifetime
+    # (borrow-locked or take-invalidated) and no reftype pointer is
+    # dereferenced along the way.
+    alias_of: Optional[str] = field(default=None, init=False)
 
 
 @dataclass

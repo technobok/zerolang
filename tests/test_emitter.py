@@ -1251,12 +1251,16 @@ class TestEmitterClasses:
         # valtype-only class: no destructor needed
         assert "z_myclass_destroy" not in csource
 
-    def test_class_take_nullifies(self):
-        """After .take, source variable should be nullified."""
+    def test_class_take_aliases_source(self):
+        """Inline `d: c.take` on a class is emitted as a binding alias:
+        no new local, no nullification, one destructor at scope end."""
         csource = emit_source(
             "myclass: class { x: 0 }\nmain: function is { c: myclass\n d: c.take }"
         )
-        assert "= (z_myclass_t){0};" in csource
+        # alias marker present
+        assert "/* alias: d => c */" in csource
+        # no separate d local declared
+        assert "z_myclass_t d =" not in csource
 
     def test_class_method_uses_pointer(self):
         """Class methods should take pointer parameter."""
@@ -1656,13 +1660,16 @@ class TestEmitterUnions:
         )
         assert "z_myunion_destroy(&x);" in csource
 
-    def test_union_take_nullifies(self):
-        """After .take, source variable should be zero-initialized."""
+    def test_union_take_aliases_source(self):
+        """Inline `y: x.take` on a union is emitted as a binding alias:
+        no new local, one destructor at scope end on the source."""
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\n"
             "main: function is { x: myunion.a 1\n y: x.take }"
         )
-        assert "= (z_myunion_t){0};" in csource
+        assert "/* alias: y => x */" in csource
+        assert "z_myunion_t y =" not in csource
+        assert "z_myunion_destroy(&x);" in csource
 
     def test_union_destructor_emitted(self):
         """Union destructor should be generated."""
@@ -6108,3 +6115,115 @@ class TestTakeInArmMemorySafety:
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+
+class TestAliasBinding:
+    """Phase B: binding alias optimization.
+
+    When the RHS of `with name: expr do body` is a plain path reference,
+    and when `x: y.take` / `x: y.borrow` is inline, the emitter skips the
+    C local declaration and substitutes the source expression at reference
+    sites. Calls and reftype-pointer hops are NOT aliased.
+    """
+
+    def test_with_bare_name_alias(self):
+        """with a: c do ... emits a as an alias for c."""
+        csource = emit_source(
+            'main: function is {\n  c: "hi".string\n  with a: c do print a\n}'
+        )
+        assert "/* alias: a => c */" in csource
+        assert "z_string_t a =" not in csource
+
+    def test_with_take_alias_no_double_free(self):
+        """with a: c.take do ... aliases and runs cleanly (single free)."""
+        csource = emit_source(
+            'main: function is {\n  c: "hi".string\n  with a: c.take do print a\n}'
+        )
+        assert "/* alias: a => c */" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "hi"
+
+    def test_with_borrow_alias(self):
+        """with a: c.borrow do ... aliases a to c."""
+        csource = emit_source(
+            'main: function is {\n  c: "hi".string\n  with a: c.borrow do print a\n}'
+        )
+        assert "/* alias: a => c */" in csource
+
+    def test_with_call_rhs_not_aliased(self):
+        """with a: ctor arg do ... still emits a real local."""
+        csource = emit_source(
+            "bag: class { x: i64 } as {\n"
+            "  public: unit { :x }\n"
+            "  create: function { x: i64 } out this is {\n"
+            "    return meta.create x: x\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            '  with b: bag x: 1 do print "\\{b.x}"\n'
+            "}"
+        )
+        assert "/* alias: b" not in csource
+
+    def test_with_dotted_valtype_path_alias(self):
+        """with v: e.name do ... aliases v to e.name (all-valtype path)."""
+        csource = emit_source(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '  e: entry name: ("alice".str to: 16) age: 30\n'
+            "  with v: e.name do print v\n"
+            "}"
+        )
+        assert "/* alias: v => e.name */" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "alice"
+
+    def test_with_reftype_pointer_path_not_aliased(self):
+        """with v: inner.label do ... — inner is a class (reftype pointer),
+        no alias; v gets a real local to pin the pointer in a register."""
+        csource = emit_source(
+            "box: class { label: string }\n"
+            "main: function is {\n"
+            '  b: box label: "hello".string\n'
+            '  with v: b.label do print "\\{v}"\n'
+            "}"
+        )
+        # b is a class (reftype pointer) so b.label is NOT aliased
+        assert "/* alias: v" not in csource
+
+    def test_inline_take_alias(self):
+        """Inline `d: c.take` on a class is aliased (no separate local)."""
+        csource = emit_source(
+            "myclass: class { x: 0 }\nmain: function is { c: myclass\n d: c.take }"
+        )
+        assert "/* alias: d => c */" in csource
+        assert "z_myclass_t d =" not in csource
+
+    def test_inline_plain_assign_not_aliased(self):
+        """Plain `d: c` (no inline .take/.borrow) is NOT aliased —
+        it keeps existing semantics (copy for valtypes, implicit take for reftypes)."""
+        csource = emit_source(
+            'main: function is {\n  c: "hi".string\n  d: c\n  print d\n}'
+        )
+        assert "/* alias: d" not in csource
+
+    def test_with_alias_end_to_end(self):
+        """Full program with multiple aliased with-bindings compiles and runs."""
+        csource = emit_source(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '  e: entry name: ("alice".str to: 16) age: 30\n'
+            "  with who: e.name do {\n"
+            "    print who\n"
+            '    print "\\{who.length}"\n'
+            "  }\n"
+            "  with age: e.age do {\n"
+            '    print "\\{age}"\n'
+            "  }\n"
+            "}"
+        )
+        assert "/* alias: who => e.name */" in csource
+        assert "/* alias: age => e.age */" in csource
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip().split("\n") == ["alice", "5", "30"]

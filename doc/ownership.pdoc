@@ -541,6 +541,42 @@ variable creation to keep lock-context expressions alive, but for
 now explicit naming is required.
 
 
+#---: Binding Aliases
+
+Certain bindings do not produce a new storage location at all — the
+compiler emits the new name as an alias for the source expression. The
+existing Borrow-scoped Lock guarantees the source slot stays valid and
+unmutated for the alias's lifetime, so there is no observable
+difference between "fresh copy" and "alias" semantics, and the alias
+saves the copy.
+
+Aliasing applies to:
+
+#ul:
+  [#*: #~"with name: path do body" whose RHS is a bare name
+  (#~"with a: c do ..."), a dotted-valtype path
+  (#~"with v: r.f do ..."), or inline #~".take" / #~".borrow" on either
+  (#~"with a: c.take do ...").]
+  [#*: Inline #~".take" or #~".borrow" in a plain assignment
+  (#~"d: c.take", #~"y: r.f.borrow").]
+
+Aliasing does NOT apply to:
+
+#ul:
+  [#*: Call or constructor right-hand sides -- the returned value must
+  materialize into a real local.]
+  [#*: Dotted paths that dereference a reftype pointer at any step
+  (e.g. #~"b.label" where #~"b" is a class) -- keeping the local pins
+  the pointer in a register so the programmer's load-once intent is
+  preserved.]
+  [#*: Plain #~"x: y" assignments without #~".take" or #~".borrow" --
+  these retain their existing copy-or-transfer semantics.]
+
+The generated C contains #~"/* alias: name => source */" comments at
+the substitution site for readability; references to the alias name in
+the body emit as the source expression directly.
+
+
 #--: Classes with #~".lock" Fields
 
 Some classes need to hold a locked reference to another object -- most commonly

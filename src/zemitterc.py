@@ -304,6 +304,11 @@ class CEmitter:
         self._scope_stack: List[ScopeState] = [ScopeState()]
         self._temp_stack: List[TempState] = [TempState()]
         self._in_named_assignment: bool = False  # set during _emit_assignment
+        # binding alias substitutions: zerolang name -> C expression (e.g., "r.f").
+        # Set by alias-optimized `with` and inline `.take`/`.borrow` bindings so
+        # references to the bound name in the body emit as the source expression
+        # directly. Reset per function.
+        self._alias_map: Dict[str, str] = {}
         # static string literal deduplication
         self._string_literals: Dict[str, str] = {}  # escaped C string → static var name
         self._string_literal_counter: int = 0
@@ -3347,6 +3352,9 @@ class CEmitter:
         self._scope_stack.append(
             ScopeState(record_name=record_name, func_nodeid=func_nid)
         )
+        # binding aliases are scoped to the current function body
+        prev_alias_map = self._alias_map
+        self._alias_map = {}
         # track enclosing type for meta.create resolution in the body
         prev_enclosing = self._current_enclosing_type_name
         if record_name:
@@ -3398,6 +3406,7 @@ class CEmitter:
         # pop function scope
         self._scope_stack.pop()
         self._current_enclosing_type_name = prev_enclosing
+        self._alias_map = prev_alias_map
 
     def _is_implicit_return(self, func: zast.Function) -> bool:
         """Check if the function's last statement is an implicit return candidate."""
@@ -3497,6 +3506,15 @@ class CEmitter:
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
+        # Phase B alias optimization: inline `x: y.take` or `x: y.borrow`
+        # (or similar on a valtype dotted path) becomes a C-level alias —
+        # no local declaration, no destructor, substitute at reference
+        # sites. The alias lives until the enclosing function ends.
+        if assign.alias_of is not None:
+            alias_expr = self._alias_c_expr(assign.alias_of)
+            cname = _mangle_var(assign.name)
+            self._alias_map[assign.name] = alias_expr
+            return f"{indent}/* alias: {cname} => {alias_expr} */\n"
         ctype = "int64_t"
         if assign.type:
             # typedef method calls: type is FUNCTION but variable holds the
@@ -5256,6 +5274,10 @@ class CEmitter:
         name = atom.name
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
+        # binding alias: substitute the source expression at the reference site
+        # (set by alias-optimized `with` and inline .take/.borrow bindings).
+        if name in self._alias_map:
+            return self._alias_map[name]
         # check if this refers to a function, constant, data, or record
         resolved = self._resolved_type(name)
         tt = resolved.typetype if resolved else None
@@ -5651,6 +5673,18 @@ class CEmitter:
         if type_name:
             return f"z_{type_name}_destroy(&{var});"
         return ""
+
+    def _alias_c_expr(self, path: str) -> str:
+        """Render a zerolang-level alias path (e.g. `r.f.g`) as a C
+        expression. Only the root component is mangled; field names after
+        a dot are passed through unchanged (they must be valtype-field
+        accesses — the type checker rejects reftype pointer hops).
+        """
+        parts = path.split(".")
+        out = _mangle_var(parts[0])
+        for p in parts[1:]:
+            out = f"{out}.{p}"
+        return out
 
     def _emit_take_invalidation(
         self, var: str, ztype: Optional[ZType], indent: str
@@ -6847,7 +6881,6 @@ class CEmitter:
         indent = self._indent()
         parts: List[str] = []
 
-        val = self._emit_expression_value(withnode.value)
         val_type = self._get_expression_type(withnode.value)
         ctype = "int64_t"
         if val_type:
@@ -6861,6 +6894,40 @@ class CEmitter:
         # BORROW bindings do not own the value — no destructor at scope exit
         # and no adoption of reftype temps.
         is_owned = withnode.ownership != ZOwnership.BORROWED
+
+        # Phase B alias optimization: when the RHS is a plain path reference,
+        # skip the C local declaration and substitute at reference sites.
+        if withnode.alias_of is not None:
+            alias_expr = self._alias_c_expr(withnode.alias_of)
+            prev = self._alias_map.get(withnode.name)
+            self._alias_map[withnode.name] = alias_expr
+            parts.append(f"{indent}{{\n")
+            self.indent_level += 1
+            inner_indent = self._indent()
+            parts.append(f"{inner_indent}/* alias: {cname} => {alias_expr} */\n")
+            self._temp_stack.append(TempState())
+            doexpr_code = self._emit_expression_stmt(withnode.doexpr)
+            parts.append("".join(self._temp.decls))
+            parts.append(doexpr_code)
+            for t in self._temp.frees:
+                if t in self._temp.string_set:
+                    parts.append(f"{inner_indent}z_string_free(&{t});\n")
+                elif t in self._temp.class_set:
+                    parts.append(
+                        f"{inner_indent}{self._emit_class_free(t, self._temp.class_set[t])}\n"
+                    )
+                else:
+                    parts.append(f"{inner_indent}free({t});\n")
+            self._temp_stack.pop()
+            self.indent_level -= 1
+            parts.append(f"{indent}}}\n")
+            if prev is None:
+                del self._alias_map[withnode.name]
+            else:
+                self._alias_map[withnode.name] = prev
+            return "".join(parts)
+
+        val = self._emit_expression_value(withnode.value)
 
         # if value is a reftype temp and the with var owns it, adopt it
         if is_owned and (is_string or is_class) and val in self._temp.frees:
