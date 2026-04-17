@@ -4470,6 +4470,74 @@ class TestStr:
         assert lines[0] == "3"
         assert lines[1] == "bob"
 
+    def test_str_stringview_zero_arg_shape(self):
+        """str.stringview emits (z_stringview_t){ s.data, s.len } at path access."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: "hello".str to: 32\n'
+            "    v: s.stringview\n"
+            "    print v\n"
+            "}"
+        )
+        assert "(z_stringview_t){ s.data, s.len }" in csource
+
+    def test_str_stringview_zero_arg_runs(self):
+        """End-to-end: str.stringview prints the str's content."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: "hello".str to: 32\n'
+            "    v: s.stringview\n"
+            "    print v\n"
+            '    print "\\{v.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "hello"
+        assert lines[1] == "5"
+
+    def test_str_stringview_substring_bounds_check(self):
+        """Substring form emits a runtime bounds check against s.len."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: "hello world".str to: 32\n'
+            "    v: s.stringview from: 0 to: 5\n"
+            "    print v\n"
+            "}"
+        )
+        assert "> s.len" in csource
+        assert "stringview: bounds error" in csource
+
+    def test_str_stringview_substring_runs(self):
+        """End-to-end: substring view prints the sliced bytes."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: "hello world".str to: 32\n'
+            "    v: s.stringview from: 6 to: 11\n"
+            "    print v\n"
+            '    print "\\{v.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "world"
+        assert lines[1] == "5"
+
+    def test_str_stringview_record_field(self):
+        """View of e.name uses e.name.data / e.name.len."""
+        csource = emit_source(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '    e: entry name: ("alice".str to: 16) age: 30\n'
+            "    v: e.name.stringview\n"
+            "    print v\n"
+            "}"
+        )
+        assert "e.name.data" in csource
+        assert "e.name.len" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "alice"
+
     def test_z_string_to_str_deduplication(self):
         """One z_string_to_str_N function per target capacity regardless of sources."""
         csource = emit_source(
@@ -5908,17 +5976,17 @@ class TestListView:
 
     def test_listview_struct_layout(self):
         """listview struct has {length, data*} matching list's first two fields."""
-        csource = emit_source("main: function is { l: (list of: i64)\nv: l.toview }")
+        csource = emit_source("main: function is { l: (list of: i64)\nv: l.listview }")
         # listview struct matches first two fields of list for zero-cost cast
         assert (
             "typedef struct {\n    uint64_t length;\n    int64_t* data;\n} z_listview_i64_t;"
             in csource
         )
 
-    def test_listview_toview_is_cast(self):
-        """list.toview is a zero-cost reinterpret_cast in C."""
-        csource = emit_source("main: function is { l: (list of: i64)\nv: l.toview }")
-        # toview is a cast, not a copy
+    def test_listview_listview_is_cast(self):
+        """list.listview is a zero-cost reinterpret_cast in C."""
+        csource = emit_source("main: function is { l: (list of: i64)\nv: l.listview }")
+        # listview is a cast, not a copy
         assert "return *(z_listview_i64_t*)_this;" in csource
 
     def test_listview_length_and_get(self):
@@ -5929,7 +5997,7 @@ class TestListView:
             "    nums.append from: 10\n"
             "    nums.append from: 20\n"
             "    nums.append from: 30\n"
-            "    v: nums.toview\n"
+            "    v: nums.listview\n"
             "    n: v.length\n"
             '    print "length: \\{n}"\n'
             "    e: v.get i: 1.u64\n"

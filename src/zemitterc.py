@@ -2536,14 +2536,14 @@ class CEmitter:
         lines.append("    return _this->data[_this->length];\n")
         lines.append("}\n\n")
 
-        # toview — zero-cost cast from list to listview (same first two fields)
-        toview_child = mono_type.children.get("toview")
-        if toview_child and toview_child.return_type:
-            lv_type = toview_child.return_type
+        # listview — zero-cost cast from list to listview (same first two fields)
+        listview_child = mono_type.children.get("listview")
+        if listview_child and listview_child.return_type:
+            lv_type = listview_child.return_type
             lv_name = lv_type.name
             lv_ctype = f"z_{lv_name}_t"
-            lines.append(f"static {lv_ctype} z_{name}_toview({ctype}* _this);\n")
-            lines.append(f"static {lv_ctype} z_{name}_toview({ctype}* _this) {{\n")
+            lines.append(f"static {lv_ctype} z_{name}_listview({ctype}* _this);\n")
+            lines.append(f"static {lv_ctype} z_{name}_listview({ctype}* _this) {{\n")
             lines.append(f"    return *({lv_ctype}*)_this;\n")
             lines.append("}\n\n")
 
@@ -4675,7 +4675,7 @@ class CEmitter:
                     self.needs_stringview = True
                     return f"{parent_val}.length"
 
-        # string class method calls: .toview, .length
+        # string class method calls: .stringview, .length, .capacity
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
             if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
@@ -4683,7 +4683,7 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                if method_name == "toview":
+                if method_name == "stringview":
                     self.needs_stringview = True
                     from_val = None
                     to_val = None
@@ -4700,7 +4700,7 @@ class CEmitter:
                             f"{indent}if ((uint64_t){from_val} > {parent_val}->size"
                             f" || (uint64_t){to_val} > {parent_val}->size"
                             f" || (uint64_t){from_val} > (uint64_t){to_val})"
-                            f' {{ fprintf(stderr, "toview: bounds error\\n");'
+                            f' {{ fprintf(stderr, "stringview: bounds error\\n");'
                             f" exit(1); }}\n"
                         )
                         return (
@@ -4715,6 +4715,41 @@ class CEmitter:
                     return f"{parent_val}->size"
                 if method_name == "capacity":
                     return f"{parent_val}->capacity"
+
+        # str valtype method calls: .stringview (zero-arg or from: to: substring)
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if dp_parent_type and _is_str_type(dp_parent_type):
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                if method_name == "stringview":
+                    self.needs_stringview = True
+                    parent_val = self._emit_path_value(
+                        cast(zast.DottedPath, call.callable).parent
+                    )
+                    from_val = None
+                    to_val = None
+                    for arg in call.arguments:
+                        if arg.name == "from":
+                            from_val = self._emit_operation_value(arg.valtype)
+                        elif arg.name == "to":
+                            to_val = self._emit_operation_value(arg.valtype)
+                    if from_val is not None and to_val is not None:
+                        self.needs_stdlib = True
+                        self.needs_stdio = True
+                        indent = self._indent()
+                        self._temp.decls.append(
+                            f"{indent}if ((uint64_t){from_val} > {parent_val}.len"
+                            f" || (uint64_t){to_val} > {parent_val}.len"
+                            f" || (uint64_t){from_val} > (uint64_t){to_val})"
+                            f' {{ fprintf(stderr, "stringview: bounds error\\n");'
+                            f" exit(1); }}\n"
+                        )
+                        return (
+                            f"(z_stringview_t){{ {parent_val}.data"
+                            f" + (uint64_t){from_val},"
+                            f" (uint64_t){to_val} - (uint64_t){from_val} }}"
+                        )
+                    return f"(z_stringview_t){{ {parent_val}.data, {parent_val}.len }}"
 
         # string construction: string or string capacity: N
         if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
@@ -4915,8 +4950,8 @@ class CEmitter:
                     return f"z_{list_type_name}_set({parent_val}, {idx_val}, {val_val})"
                 if method_name == "pop":
                     return f"z_{list_type_name}_pop({parent_val})"
-                if method_name == "toview":
-                    return f"z_{list_type_name}_toview({parent_val})"
+                if method_name == "listview":
+                    return f"z_{list_type_name}_listview({parent_val})"
 
         # listview method calls: .get
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -5423,12 +5458,17 @@ class CEmitter:
         if (
             parent_type_dp
             and parent_type_dp.subtype == ZSubType.STRING
-            and child == "toview"
+            and child == "stringview"
         ):
             self.needs_stringview = True
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"(z_stringview_t){{ {parent}{acc}data, {parent}{acc}size }}"
+        # str: .stringview conversion (str -> z_stringview_t) at path-access position
+        if parent_type_dp and _is_str_type(parent_type_dp) and child == "stringview":
+            self.needs_stringview = True
+            parent = self._emit_path_value(path.parent)
+            return f"(z_stringview_t){{ {parent}.data, {parent}.len }}"
         # list: .length field access
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
@@ -5452,14 +5492,14 @@ class CEmitter:
             ):
                 parent = f"&{parent}"
             return f"z_{parent_type_dp.name}_pop({parent})"
-        # list: .toview as dotted path (zero-arg method call)
-        if parent_type_dp and _is_list_type(parent_type_dp) and child == "toview":
+        # list: .listview as dotted path (zero-arg method call)
+        if parent_type_dp and _is_list_type(parent_type_dp) and child == "listview":
             parent = self._emit_path_value(path.parent)
             if not self._is_class_pointer_path(path.parent) and not parent.startswith(
                 "&"
             ):
                 parent = f"&{parent}"
-            return f"z_{parent_type_dp.name}_toview({parent})"
+            return f"z_{parent_type_dp.name}_listview({parent})"
         # map: .length field access
         if parent_type_dp and _is_map_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)

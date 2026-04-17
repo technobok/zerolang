@@ -334,7 +334,7 @@ class TypeChecker:
         self._current_func_ownership: dict[str, ZParamOwnership] = {}
         self._current_func_return_ownership: Optional[ZParamOwnership] = None
 
-        # pending borrow lock: set by deep methods (.borrow, .lock, .toview,
+        # pending borrow lock: set by deep methods (.borrow, .lock, .stringview,
         # protocol paths), captured and cleared by _check_expression into
         # ExprResult.borrow_target so it cannot leak between statements.
         self._pending_borrow_lock: Optional[str] = None
@@ -3162,9 +3162,23 @@ class TypeChecker:
         # for string class: .string returns the same string type (no-op identity)
         if parent_type.subtype == ZSubType.STRING and child_name == "string":
             return self._resolve_name("string")
-        # for string class: .toview returns the stringview type directly
+        # for string class: .stringview returns the stringview type directly
         # and acquires an exclusive lock on the source string
-        if parent_type.subtype == ZSubType.STRING and child_name == "toview":
+        if parent_type.subtype == ZSubType.STRING and child_name == "stringview":
+            root_name = self._get_arg_root_name(path.parent)
+            if root_name:
+                self._pending_borrow_lock = root_name
+            else:
+                self._error(
+                    "Cannot create view from temporary expression; "
+                    "assign the value to a variable first",
+                    loc=path.start,
+                    err=ERR.OWNERERROR,
+                )
+            return self._resolve_name("stringview")
+        # for str valtype: .stringview returns the stringview type directly
+        # and acquires an exclusive lock on the root of the source path
+        if _is_str_type(parent_type) and child_name == "stringview":
             root_name = self._get_arg_root_name(path.parent)
             if root_name:
                 self._pending_borrow_lock = root_name
@@ -3198,9 +3212,9 @@ class TypeChecker:
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
-        # for list types: .toview returns the listview type directly (zero-arg method)
+        # for list types: .listview returns the listview type directly (zero-arg method)
         # and acquires an exclusive lock on the source list
-        if _is_list_type(parent_type) and child_name == "toview":
+        if _is_list_type(parent_type) and child_name == "listview":
             root_name = self._get_arg_root_name(path.parent)
             if root_name:
                 self._pending_borrow_lock = root_name
@@ -3211,9 +3225,9 @@ class TypeChecker:
                     loc=path.start,
                     err=ERR.OWNERERROR,
                 )
-            toview_child = parent_type.children.get("toview")
-            if toview_child and toview_child.return_type:
-                return toview_child.return_type
+            listview_child = parent_type.children.get("listview")
+            if listview_child and listview_child.return_type:
+                return listview_child.return_type
         # for records/enums, look up child in children
         # resolve public name (may redirect renamed members)
         resolved_name = self._resolve_public_name(parent_type, child_name, path)
@@ -3675,7 +3689,7 @@ class TypeChecker:
                 pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
                 pop_type.return_type = elem_type
                 mono.children["pop"] = pop_type
-                # synthesize .toview method: function {:this.lock} out (listview of: <elem>)
+                # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
                 # Get or create the monomorphized listview type
                 listview_template = self._resolve_name("listview")
                 if listview_template:
@@ -3684,11 +3698,11 @@ class TypeChecker:
                         listview_mono = self._monomorphize(
                             listview_template, {"of": elem_type}, lv_defn
                         )
-                        toview_type = _make_type(
-                            f"{mangled}.toview", ZTypeType.FUNCTION
+                        listview_type = _make_type(
+                            f"{mangled}.listview", ZTypeType.FUNCTION
                         )
-                        toview_type.return_type = listview_mono
-                        mono.children["toview"] = toview_type
+                        listview_type.return_type = listview_mono
+                        mono.children["listview"] = listview_type
 
         # for map types: set reftype, synthesize methods
         # Maps remain heap-allocated for now.
@@ -5580,11 +5594,12 @@ class TypeChecker:
             )
             return None
 
-        # .toview from: to: on string — substring view (not record construction)
+        # .stringview from: to: — substring view on string, str, or stringview
+        # (not record construction)
         if (
             _is_stringview_type(callee_type)
             and call.callable.nodetype == NodeType.DOTTEDPATH
-            and cast(zast.DottedPath, call.callable).child.name == "toview"
+            and cast(zast.DottedPath, call.callable).child.name == "stringview"
         ):
             for arg in call.arguments:
                 self._check_operation(arg.valtype)

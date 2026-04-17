@@ -461,16 +461,23 @@ append_greeting: function { s: string } is { s.append "hello" }
 print_upper "hello"              # OK: literal is stringview
 # append_greeting "hello"       # ERROR: literal is stringview, not string
 append_greeting "hello".string   # OK: explicit copy to string</code></pre>
-<p><strong>No stringview from str (v2):</strong> creating a <code>stringview</code> from a
-<code>str&lt;to: N&gt;</code> value is not supported in v2. <code>str</code> is a valtype
-(stack-allocated, copied on assignment). A <code>stringview</code> pointing into
-an <code>str</code>'s data buffer would have dangling pointer risk if the <code>str</code>
-goes out of scope or is copied. Safe implementation requires Rust-style
-lifetime tracking, which is deferred to v3. If a view of <code>str</code> data
-is needed, convert to <code>string</code> first:</p>
+<p><strong>stringview from str:</strong> a <code>stringview</code> can be created from a
+<code>str&lt;to: N&gt;</code> via <code>.stringview</code>. The class-identity root lock that
+protects <code>string.stringview</code> applies identically here: while the view
+is alive, the root of the source path and every subordinate along that
+path is fully locked. Take, swap, move, reassignment, and every method
+or field access on the root or any subordinate is rejected. Only the
+view itself may access the leaf data (<code>sv.length</code>,
+<code>sv.stringview from: to:</code>, <code>print sv</code>); direct access to the
+source by name (including reads on parents of the leaf) is rejected
+for the view's lifetime.</p>
 <pre><code class="language-zerolang">buf: "hello".str to: 32
-# view: buf.stringview       # ERROR: cannot create stringview from str in v2
-view: buf.string.stringview   # OK: copy to heap, then create view</code></pre>
+view: buf.stringview                 # view of the full str
+sub:  buf.stringview from: 0 to: 3   # substring, runtime bounds check</code></pre>
+<p>Because <code>str</code> is a valtype (no identity) it cannot carry a
+<code>.lock</code> parameter annotation; a <code>stringview</code> over a <code>str</code>
+therefore has no way to escape the function that created its source.
+Returning such a view is rejected by escape analysis.</p>
 <h2 id="conversion-matrix"><a href="#conversion-matrix">7. Conversion Matrix</a></h2>
 <p>The following table shows all conversions between string types:</p>
 <table>
@@ -484,9 +491,9 @@ view: buf.string.stringview   # OK: copy to heap, then create view</code></pre>
 <tr><th style="text-align: left">From \ To</th><th style="text-align: left"><code>string</code></th><th style="text-align: left"><code>str&lt;to: N&gt;</code></th><th style="text-align: left"><code>stringview</code></th></tr>
 </thead>
 <tbody>
-<tr><td><strong>string</strong></td><td>--</td><td><code>.str to: N</code> copy</td><td><code>.toview</code> borrow, locks source</td></tr>
-<tr><td><strong>str&lt;to: N&gt;</strong></td><td><code>.string</code> copy</td><td><code>.str to: M</code> copy</td><td>not supported (v2)</td></tr>
-<tr><td><strong>stringview</strong></td><td><code>.string</code> copy</td><td><code>.str to: N</code> copy</td><td><code>.toview from: to:</code> narrow</td></tr>
+<tr><td><strong>string</strong></td><td>--</td><td><code>.str to: N</code> copy</td><td><code>.stringview</code> borrow, locks source</td></tr>
+<tr><td><strong>str&lt;to: N&gt;</strong></td><td><code>.string</code> copy</td><td><code>.str to: M</code> copy</td><td><code>.stringview</code> borrow, locks source</td></tr>
+<tr><td><strong>stringview</strong></td><td><code>.string</code> copy</td><td><code>.str to: N</code> copy</td><td><code>.stringview from: to:</code> narrow</td></tr>
 <tr><td><strong>literal</strong></td><td><code>.string</code> copy</td><td><code>.str to: N</code> init</td><td>implicit (zero-cost)</td></tr>
 </tbody>
 </table>
@@ -778,17 +785,18 @@ design. Items marked with <code>+</code> are complete.</p>
 <li>Add <code>stringview</code> as a class (<code>.lock</code> field on the source string) in <code>system.z</code> (finalised in the type-representation refactor).</li>
 <li>Add <code>z_stringview_t</code> struct to runtime (<code>const char* data</code> + <code>uint64_t length</code>).</li>
 <li>Add <code>z_stringview_print</code>, <code>z_stringview_eq</code>, <code>z_string_from_view</code> runtime functions.</li>
-<li>Add <code>string.toview</code> method (creates locked <code>z_stringview_t</code> from string).</li>
+<li>Add <code>string.stringview</code> method (creates locked <code>z_stringview_t</code> from string).</li>
 <li>Add <code>string.length</code> and <code>string.capacity</code> methods.</li>
 <li>Add <code>stringview.string</code> conversion (heap copy via <code>z_string_from_view</code>).</li>
 <li>Add <code>stringview.length</code> (byte count).</li>
 <li>Make <code>stringview</code> compatible with <code>string</code> for function parameters.</li>
 <li>Handle <code>stringview</code> in print (call-site conversion) and string interpolation.</li>
 <li>String literals resolve to <code>stringview</code> type. Emitted as <code>static const z_stringview_t</code> constants.</li>
-<li><code>.toview from: to:</code> substring views with runtime bounds checking.</li>
-<li>Single-owner class: <code>stringview</code> from <code>.toview</code> cannot be copied; locks source string for the view's lifetime.</li>
+<li><code>.stringview from: to:</code> substring views with runtime bounds checking.</li>
+<li>Single-owner class: <code>stringview</code> from <code>.stringview</code> cannot be copied; locks source string for the view's lifetime.</li>
 <li><code>print</code> takes <code>stringview.borrow</code> with call-site conversion for <code>string</code> and <code>str</code> args.</li>
-<li>Fix <code>.toview</code> lock tracking on dotted paths (<code>record.field.toview</code> locks root variable).</li>
+<li>Fix <code>.stringview</code> lock tracking on dotted paths (<code>record.field.stringview</code> locks root variable).</li>
+<li>Add <code>str.stringview</code> method &#x2014; views over the <code>str</code> valtype; root-locked and non-escaping (<code>str</code> has no <code>.lock</code> annotation).</li>
 </ul>
 <h3 id="phase-5-mutable-string-operations-complete"><a href="#phase-5-mutable-string-operations-complete">13.5. Phase 5: Mutable String Operations [COMPLETE]</a></h3>
 <ul>
@@ -809,12 +817,12 @@ design. Items marked with <code>+</code> are complete.</p>
 <h2 id="open-questions"><a href="#open-questions">14. Open Questions</a></h2>
 <ul>
 <li><strong>stringview in records:</strong> resolved. Records cannot hold <code>stringview</code> fields (records cannot contain any heap-backed type). A <code>stringview</code> can appear as a field of a class, following the class <code>.lock</code> rules described in <code>doc/ownership.pdoc</code>.</li>
-<li><strong>str.stringview:</strong> deferred to v3 when lifetime annotations can track stack lifetimes. At function call boundaries, implicit <code>str</code> -&gt; <code>stringview</code> conversion is safe and handled by the emitter.</li>
+<li><strong>str.stringview:</strong> shipped &#x2014; <code>str.stringview</code> creates a root-locked view over the valtype. The view cannot escape the function because <code>str</code> is a valtype (no identity to lock across call boundaries). At function call boundaries, implicit <code>str</code> -&gt; <code>stringview</code> conversion is safe and handled by the emitter.</li>
 <li><strong>bytes type:</strong> separate design for non-UTF-8 data (file I/O, network protocols).</li>
 <li><strong>String hashing:</strong> <code>string</code> and <code>stringview</code> with the same content produce the same hash (hash from content, not representation).</li>
 <li><strong>SIMD validation:</strong> start with scalar fast-path, upgrade when benchmarks justify.</li>
 <li><strong>.cstring method:</strong> requires pointer type for return value; depends on FFI design.</li>
-<li><strong>Small class optimization:</strong> compiler-transparent stack-resident headers for small classes (<code>string</code>, <code>list</code>, <code>map</code>). Would make <code>.toview</code> conversion zero-cost (no heap dereference). Significant emitter refactor; defer until profiling motivates.</li>
+<li><strong>Small class optimization:</strong> compiler-transparent stack-resident headers for small classes (<code>string</code>, <code>list</code>, <code>map</code>). Would make <code>.stringview</code> / <code>.listview</code> conversion zero-cost (no heap dereference). Significant emitter refactor; defer until profiling motivates.</li>
 </ul>
 </main>
 </body>

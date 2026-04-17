@@ -1609,7 +1609,7 @@ class TestLockEnforcement:
     """Mutation-site enforcement of outstanding exclusive Borrow-scoped Locks.
 
     While a variable holds an exclusive Borrow-scoped Lock (e.g. from
-    `.borrow` or `string.toview`), the compiler must reject reassignment,
+    `.borrow` or `string.stringview`), the compiler must reject reassignment,
     field reassignment, swap, and method calls whose path is rooted at the
     locked variable. See doc/ownership.pdoc, Mutation-Site Enforcement.
     """
@@ -1619,7 +1619,7 @@ class TestLockEnforcement:
         errors = check_errors(
             "main: function is {\n"
             '  s: "hello".string\n'
-            "  v: s.toview\n"
+            "  v: s.stringview\n"
             '  s = "world".string\n'
             "}"
         )
@@ -1640,7 +1640,7 @@ class TestLockEnforcement:
             "namepair: record { name: string other: string }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
-            "  v: p.name.toview\n"
+            "  v: p.name.stringview\n"
             '  p.other = "c".string\n'
             "}"
         )
@@ -1652,7 +1652,7 @@ class TestLockEnforcement:
             "namepair: record { name: string other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
-            "  v: p.name.toview\n"
+            "  v: p.name.stringview\n"
             "  p.other = 3\n"
             "}"
         )
@@ -1664,7 +1664,7 @@ class TestLockEnforcement:
             "main: function is {\n"
             '  x: "hello".string\n'
             '  a: "world".string\n'
-            "  v: x.toview\n"
+            "  v: x.stringview\n"
             "  x swap a\n"
             "}"
         )
@@ -1680,7 +1680,7 @@ class TestLockEnforcement:
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
             '  a: "c".string\n'
-            "  v: p.name.toview\n"
+            "  v: p.name.stringview\n"
             "  p.other swap a\n"
             "}"
         )
@@ -1695,7 +1695,7 @@ class TestLockEnforcement:
         errors = check_errors(
             "main: function is {\n"
             '  s: "hello".string\n'
-            "  v: s.toview\n"
+            "  v: s.stringview\n"
             '  s.append " world"\n'
             "}"
         )
@@ -1706,7 +1706,7 @@ class TestLockEnforcement:
         check_ok(
             "main: function is {\n"
             '  s: "hello".string\n'
-            "  v: s.toview\n"
+            "  v: s.stringview\n"
             "  v.release\n"
             '  s = "world".string\n'
             "}"
@@ -1775,7 +1775,7 @@ class TestLockEnforcement:
             "main: function is {\n"
             '  s: "hello".string\n'
             "  {\n"
-            "    v: s.toview\n"
+            "    v: s.stringview\n"
             "    print v\n"
             "  }\n"
             '  s = "world".string\n'
@@ -1790,7 +1790,7 @@ class TestLockEnforcement:
         errors = check_errors(
             "thing: class { s: string } as {\n"
             "  peek: function {me: this} is {\n"
-            "    v: me.s.toview\n"
+            "    v: me.s.stringview\n"
             '    me.s = "new".string\n'
             "  }\n"
             "}\n"
@@ -1833,15 +1833,15 @@ class TestLockEnforcement:
         check_ok(
             "main: function is {\n"
             '  s: "hello".string\n'
-            "  print s.toview\n"
+            "  print s.stringview\n"
             '  t: "world".string\n'
             "}"
         )
 
-    def test_toview_on_temporary_rejected(self):
+    def test_stringview_on_temporary_rejected(self):
         """Creating a view from a temporary expression is rejected — no named
         root to lock, so the view would dangle."""
-        errors = check_errors('main: function is { v: "hello".string.toview }')
+        errors = check_errors('main: function is { v: "hello".string.stringview }')
         assert any("temporary" in e.msg.lower() for e in errors)
 
     def test_borrow_on_temporary_rejected(self):
@@ -1853,7 +1853,7 @@ class TestLockEnforcement:
         """Reading a locked variable (not just writing) is an error.
         Locked means completely unavailable."""
         errors = check_errors(
-            'main: function is {\n  s: "hello".string\n  v: s.toview\n  t: s\n}'
+            'main: function is {\n  s: "hello".string\n  v: s.stringview\n  t: s\n}'
         )
         assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
 
@@ -1863,7 +1863,7 @@ class TestLockEnforcement:
             "namepair: record { name: string other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
-            "  v: p.name.toview\n"
+            "  v: p.name.stringview\n"
             "  x: p.other\n"
             "}"
         )
@@ -1874,7 +1874,7 @@ class TestLockEnforcement:
         errors = check_errors(
             "main: function is {\n"
             '  s: "hello".string\n'
-            "  v: s.toview\n"
+            "  v: s.stringview\n"
             '  print "\\{s}"\n'
             "}"
         )
@@ -1885,7 +1885,7 @@ class TestLockEnforcement:
         check_ok(
             "main: function is {\n"
             '  s: "hello".string\n'
-            "  v: s.toview\n"
+            "  v: s.stringview\n"
             '  print "\\{v.length}"\n'
             "}"
         )
@@ -5353,6 +5353,166 @@ class TestStr:
     def test_str_constructor_no_args(self):
         """str to: N with no arguments creates empty str."""
         check_ok("main: function is { s: str to: 32 }")
+
+
+class TestStrStringview:
+    """stringview created from a str valtype.
+
+    str.stringview takes a borrow-scoped exclusive lock on the root of the
+    source path, identical in kind to string.stringview. The class-identity
+    lock on the view (stringview is a class) is what makes it safe to lend
+    a pointer into a stack buffer: the root and every subordinate along the
+    path are fully inaccessible while the view is alive; only the view may
+    read the leaf data.
+    """
+
+    def test_returns_stringview(self):
+        program = check_ok(
+            'main: function is {\n  s: "hi".str to: 32\n  v: s.stringview\n}'
+        )
+        # the view local should have stringview type
+        assert program is not None
+
+    def test_blocks_take(self):
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hi".str to: 32\n'
+            "  v: s.stringview\n"
+            "  t: s.take\n"
+            "}"
+        )
+        assert any("lock" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_blocks_reassignment(self):
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hi".str to: 32\n'
+            "  v: s.stringview\n"
+            '  s = "x".str to: 32\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_blocks_direct_source_read(self):
+        """While viewed, the str source is off-limits — only the view reads it."""
+        errors = check_errors(
+            'main: function is {\n  s: "hi".str to: 32\n  v: s.stringview\n  print s\n}'
+        )
+        assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_blocks_direct_length_read(self):
+        """Method call on the locked source is rejected."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  s: "hi".str to: 32\n'
+            "  v: s.stringview\n"
+            "  n: s.length\n"
+            "}"
+        )
+        assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
+
+    def test_blocks_parent_of_leaf(self):
+        """View of e.name locks root `e` — reading `e.age` errors."""
+        errors = check_errors(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '  e: entry name: ("a".str to: 16) age: 1\n'
+            "  v: e.name.stringview\n"
+            "  x: e.age\n"
+            "}"
+        )
+        assert any("cannot access" in e.msg.lower() and "'e'" in e.msg for e in errors)
+
+    def test_blocks_leaf_read_outside_view(self):
+        """View of e.name locks root — direct read of e.name is also blocked."""
+        errors = check_errors(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '  e: entry name: ("a".str to: 16) age: 1\n'
+            "  v: e.name.stringview\n"
+            "  m: e.name.length\n"
+            "}"
+        )
+        assert any("cannot access" in e.msg.lower() and "'e'" in e.msg for e in errors)
+
+    def test_blocks_field_reassign(self):
+        errors = check_errors(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '  e: entry name: ("a".str to: 16) age: 1\n'
+            "  v: e.name.stringview\n"
+            "  e.age = 2\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'e'" in e.msg for e in errors)
+
+    def test_reads_via_view_permitted(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hi".str to: 32\n'
+            "  v: s.stringview\n"
+            "  print v\n"
+            '  print "\\{v.length}"\n'
+            "}"
+        )
+
+    def test_substring_bounds_form(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".str to: 32\n'
+            "  v: s.stringview from: 0 to: 3\n"
+            "  print v\n"
+            "}"
+        )
+
+    def test_release_after_scope_exit(self):
+        """Inner block releases the view, source becomes accessible again."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "hi".str to: 32\n'
+            "  { v: s.stringview\n    print v\n  }\n"
+            "  print s\n"
+            "}"
+        )
+
+    def test_rejects_temporary(self):
+        errors = check_errors('main: function is { v: ("hi".str to: 8).stringview }')
+        assert any("temporary" in e.msg.lower() for e in errors)
+
+    def test_rejects_return_of_local_view(self):
+        """Cannot return a view of a local str — escape analysis blocks it.
+
+        There is no way to make a str.stringview escape because str is a
+        valtype (stack-local) and .lock cannot be applied to valtype
+        parameters — so a borrowed stringview return can never be rooted at
+        a surviving source. The function definition itself is rejected for
+        declaring borrow-return with no .lock parameter, and returning the
+        local view also errors.
+        """
+        errors = check_errors(
+            "f: function out stringview.borrow is {\n"
+            '  s: "hi".str to: 32\n'
+            "  return s.stringview\n"
+            "}\n"
+            "main: function is { v: f }"
+        )
+        assert any("cannot return" in e.msg.lower() for e in errors)
+
+    def test_lock_on_str_param_is_rejected(self):
+        """str is a valtype — .lock cannot be applied to valtype parameters.
+
+        This captures the reason str.stringview cannot escape a function:
+        there is no .lock-able source to anchor the borrow to.
+        """
+        errors = check_errors(
+            "f: function {s: (str to: 32).lock} out stringview.borrow is {\n"
+            "  return s.stringview\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            ".lock" in e.msg.lower() and "valtype" in e.msg.lower() for e in errors
+        )
 
 
 class TestList:

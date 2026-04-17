@@ -395,19 +395,27 @@ print_upper "hello"              # OK: literal is stringview
 append_greeting "hello".string   # OK: explicit copy to string
 """
 
-#b:"No stringview from str (v2):" creating a #~"stringview" from a
-#~"str<to: N>" value is not supported in v2. #~"str" is a valtype
-(stack-allocated, copied on assignment). A #~"stringview" pointing into
-an #~"str"'s data buffer would have dangling pointer risk if the #~"str"
-goes out of scope or is copied. Safe implementation requires Rust-style
-lifetime tracking, which is deferred to v3. If a view of #~"str" data
-is needed, convert to #~"string" first:
+#b:"stringview from str:" a #~"stringview" can be created from a
+#~"str<to: N>" via #~".stringview". The class-identity root lock that
+protects #~"string.stringview" applies identically here: while the view
+is alive, the root of the source path and every subordinate along that
+path is fully locked. Take, swap, move, reassignment, and every method
+or field access on the root or any subordinate is rejected. Only the
+view itself may access the leaf data (#~"sv.length",
+#~"sv.stringview from: to:", #~"print sv"); direct access to the
+source by name (including reads on parents of the leaf) is rejected
+for the view's lifetime.
 
 #code language=zerolang: """
 buf: "hello".str to: 32
-# view: buf.stringview       # ERROR: cannot create stringview from str in v2
-view: buf.string.stringview   # OK: copy to heap, then create view
+view: buf.stringview                 # view of the full str
+sub:  buf.stringview from: 0 to: 3   # substring, runtime bounds check
 """
+
+Because #~"str" is a valtype (no identity) it cannot carry a
+#~".lock" parameter annotation; a #~"stringview" over a #~"str"
+therefore has no way to escape the function that created its source.
+Returning such a view is rejected by escape analysis.
 
 
 #--: Conversion Matrix
@@ -416,9 +424,9 @@ The following table shows all conversions between string types:
 
 #table cols="2 2 2 3":
   From \\ To          |#~"string"          |#~"str<to: N>"      |#~"stringview"
-  #b:"string"         |--                  |#~".str to: N" copy |#~".toview" borrow, locks source
-  #b:"str<to: N>"     |#~".string" copy    |#~".str to: M" copy |not supported (v2)
-  #b:"stringview"     |#~".string" copy    |#~".str to: N" copy |#~".toview from: to:" narrow
+  #b:"string"         |--                  |#~".str to: N" copy |#~".stringview" borrow, locks source
+  #b:"str<to: N>"     |#~".string" copy    |#~".str to: M" copy |#~".stringview" borrow, locks source
+  #b:"stringview"     |#~".string" copy    |#~".str to: N" copy |#~".stringview from: to:" narrow
   #b:"literal"        |#~".string" copy    |#~".str to: N" init |implicit (zero-cost)
 
 All three types also provide #~".cstring" for C interop.
@@ -837,17 +845,18 @@ Mechanical rename, no functional changes.
   #*: #+ Add #~"stringview" as a class (#~".lock" field on the source string) in #~"system.z" (finalised in the type-representation refactor).
   #*: #+ Add #~"z_stringview_t" struct to runtime (#~"const char* data" + #~"uint64_t length").
   #*: #+ Add #~"z_stringview_print", #~"z_stringview_eq", #~"z_string_from_view" runtime functions.
-  #*: #+ Add #~"string.toview" method (creates locked #~"z_stringview_t" from string).
+  #*: #+ Add #~"string.stringview" method (creates locked #~"z_stringview_t" from string).
   #*: #+ Add #~"string.length" and #~"string.capacity" methods.
   #*: #+ Add #~"stringview.string" conversion (heap copy via #~"z_string_from_view").
   #*: #+ Add #~"stringview.length" (byte count).
   #*: #+ Make #~"stringview" compatible with #~"string" for function parameters.
   #*: #+ Handle #~"stringview" in print (call-site conversion) and string interpolation.
   #*: #+ String literals resolve to #~"stringview" type. Emitted as #~"static const z_stringview_t" constants.
-  #*: #+ #~".toview from: to:" substring views with runtime bounds checking.
-  #*: #+ Single-owner class: #~"stringview" from #~".toview" cannot be copied; locks source string for the view's lifetime.
+  #*: #+ #~".stringview from: to:" substring views with runtime bounds checking.
+  #*: #+ Single-owner class: #~"stringview" from #~".stringview" cannot be copied; locks source string for the view's lifetime.
   #*: #+ #~"print" takes #~"stringview.borrow" with call-site conversion for #~"string" and #~"str" args.
-  #*: #+ Fix #~".toview" lock tracking on dotted paths (#~"record.field.toview" locks root variable).
+  #*: #+ Fix #~".stringview" lock tracking on dotted paths (#~"record.field.stringview" locks root variable).
+  #*: #+ Add #~"str.stringview" method — views over the #~"str" valtype; root-locked and non-escaping (#~"str" has no #~".lock" annotation).
 
 
 #---: Phase 5: Mutable String Operations \[COMPLETE\]
@@ -875,9 +884,9 @@ Requires pointer type for return value; depends on FFI design.
 
 #ul:
   #*: #b:"stringview in records:" resolved. Records cannot hold #~"stringview" fields (records cannot contain any heap-backed type). A #~"stringview" can appear as a field of a class, following the class #~".lock" rules described in #~"doc/ownership.pdoc".
-  #*: #b:"str.stringview:" deferred to v3 when lifetime annotations can track stack lifetimes. At function call boundaries, implicit #~"str" -> #~"stringview" conversion is safe and handled by the emitter.
+  #*: #b:"str.stringview:" shipped — #~"str.stringview" creates a root-locked view over the valtype. The view cannot escape the function because #~"str" is a valtype (no identity to lock across call boundaries). At function call boundaries, implicit #~"str" -> #~"stringview" conversion is safe and handled by the emitter.
   #*: #b:"bytes type:" separate design for non-UTF-8 data (file I/O, network protocols).
   #*: #b:"String hashing:" #~"string" and #~"stringview" with the same content produce the same hash (hash from content, not representation).
   #*: #b:"SIMD validation:" start with scalar fast-path, upgrade when benchmarks justify.
   #*: #b:".cstring method:" requires pointer type for return value; depends on FFI design.
-  #*: #b:"Small class optimization:" compiler-transparent stack-resident headers for small classes (#~"string", #~"list", #~"map"). Would make #~".toview" conversion zero-cost (no heap dereference). Significant emitter refactor; defer until profiling motivates.
+  #*: #b:"Small class optimization:" compiler-transparent stack-resident headers for small classes (#~"string", #~"list", #~"map"). Would make #~".stringview" / #~".listview" conversion zero-cost (no heap dereference). Significant emitter refactor; defer until profiling motivates.
