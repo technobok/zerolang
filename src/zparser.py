@@ -639,45 +639,29 @@ class Parser:
             return self._acceptprotocol(lex)
         if tt == TT.FACET:
             return self._acceptfacet(lex)
+        # at unit level, if / match / data are wrapped as Expression so
+        # downstream treats them uniformly with operation-valued
+        # definitions. Only operations (not calls) are valid for the
+        # fall-through case.
         if tt == TT.IF:
-            return self._acceptifastypedef(lex)
+            return self._wrap_as_expression(self._acceptif(lex))
         if tt == TT.MATCH:
-            return self._acceptmatchastypedef(lex)
+            return self._wrap_as_expression(self._acceptmatch(lex))
         if tt == TT.DATA:
-            return self._acceptdataastypedef(lex)
-        # at unit level, only operations (not calls) are valid
+            return self._wrap_as_expression(self._acceptdata(lex))
         return self._acceptoperation(lex)
 
-    def _acceptifastypedef(
-        self, lex: Lexer
+    @staticmethod
+    def _wrap_as_expression(
+        nx: Union[NodeX, zast.Error, None],
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
-        """Wrap _acceptif result as an Expression for use at type definition level."""
-        node = self._acceptif(lex)
-        if node is None or node.is_error:
-            return cast(Union[zast.Error, None], node)
-        node = cast(NodeX[zast.If], node)
-        expression = zast.Expression(expression=node.node, start=node.node.start)
-        return NodeX(node=expression, extern=node.extern)
-
-    def _acceptmatchastypedef(
-        self, lex: Lexer
-    ) -> Union[NodeX[zast.Expression], zast.Error, None]:
-        """Wrap _acceptmatch result as an Expression for use at type definition level."""
-        node = self._acceptmatch(lex)
-        if node is None or node.is_error:
-            return cast(Union[zast.Error, None], node)
-        node = cast(NodeX[zast.Case], node)
-        expression = zast.Expression(expression=node.node, start=node.node.start)
-        return NodeX(node=expression, extern=node.extern)
-
-    def _acceptdataastypedef(
-        self, lex: Lexer
-    ) -> Union[NodeX[zast.Expression], zast.Error, None]:
-        """Wrap _acceptdata result as an Expression for use at type definition level."""
-        node = self._acceptdata(lex)
-        if node is None or node.is_error:
-            return cast(Union[zast.Error, None], node)
-        node = cast(NodeX[zast.Data], node)
+        """Pass through Error/None; wrap an expression-shaped NodeX as a
+        `zast.Expression` with the same extern set. Used at unit level for
+        if / match / data — each of which returns an ExpressionSubTypes
+        payload that must be boxed as an Expression for a TypeDefinition."""
+        if nx is None or nx.is_error:
+            return cast(Union[zast.Error, None], nx)
+        node = cast(NodeX[zast.ExpressionSubTypes], nx)
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
 
