@@ -4058,15 +4058,15 @@ class CEmitter:
                     cast(zast.DottedPath, call.callable).parent
                 )
                 if method_name == "append" and call.arguments:
+                    # append's parameter is declared as stringview; the
+                    # typechecker rejects other string types. Callers with
+                    # a string/str project explicitly with `.stringview`.
                     arg = self._emit_operation_value(call.arguments[0].valtype)
-                    arg_type = self._get_operation_type(call.arguments[0].valtype)
-                    if arg_type and _is_stringview_type(arg_type):
-                        self.needs_stringview = True
-                        return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.length);\n"
-                    if arg_type and _is_str_type(arg_type):
-                        return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.len);\n"
-                    # default: treat as z_string_t (stack-allocated)
-                    return f"{indent}z_string_append(&{parent_val}, {arg}.data, {arg}.size);\n"
+                    self.needs_stringview = True
+                    return (
+                        f"{indent}z_string_append(&{parent_val}, "
+                        f"{arg}.data, {arg}.length);\n"
+                    )
                 if method_name == "reserve" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
                     return (
