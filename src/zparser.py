@@ -669,23 +669,19 @@ class Parser:
         self, lex: Lexer
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """
-        acceptexpression
+        Accept an expression per grammar (minus assign/reassign/swap,
+        which currently still live in `_acceptstatementline`):
 
-            expression
-                if
-                | for
-                | case
-                | data
-                | operation
-                | call
+            expression: for-expression | with-expression | if-expression
+                      | match-expression | data-definition | block
+                      | call | binop
 
-            call
-                path [ operation ] { label operation }
+        Dispatches on the leading keyword (IF/FOR/MATCH/DATA/WITH/
+        BRACEOPEN); otherwise falls through to `_acceptoperationorcall`
+        which picks between `operation` and `call` via path-count and
+        lookahead. Wraps the result in a `zast.Expression` for the caller.
 
-            operation
-                path | binop
-
-        Returns the Expression or an error or None
+        Returns the Expression, an Error, or None.
         """
         # pylint: disable=R0911,R0912,R0914
         t = lex.peek()
@@ -2396,15 +2392,22 @@ class Parser:
         self, lex: Lexer
     ) -> Union[NodeX[zast.StatementLine], zast.Error, None]:
         """
-        acceptstatementline - accept a statementline clause
+        Accept a blockline — the top of a line inside a `{ ... }` block:
 
-            ( label [ newline ] expression )
-            | ( path "=" expression )
-            | ( expression )
+            ( label [ newline ] expression )   # new-binding assignment
+            | label-value                       # `:name` shorthand
+            | ( path "=" expression )           # reassignment
+            | ( path "swap" path )              # swap
+            | expression                        # bare expression
 
-        Return a StatementLine or Error or None
+        Reassignment and swap are handled here (not in `_acceptexpression`)
+        — the grammar lists them as expressions but the parser keeps them
+        at statement level until the typechecker gains a null-use rule
+        (see plan A9.2).
+
+        Return a StatementLine, Error, or None.
         """
-        # pylintxxx: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
+        # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
         extern: Dict[str, zast.AtomId] = {}
         start = lex.peek()
 
