@@ -3284,25 +3284,20 @@ class TypeChecker:
         return None
 
     def _types_compatible(self, a: ZType, b: ZType) -> bool:
-        """Check if two types are compatible (identity, name match, or structural equiv for functions)."""
+        """Check if two types are compatible (identity, name match, or structural equiv for functions).
+
+        Zerolang does not perform implicit conversions between distinct
+        types: there are no silent str↔string↔stringview bridges at
+        parameter-passing or assignment boundaries. Callers must use the
+        explicit zero-cost projections (`.stringview`, `.string`) where
+        the receiver expects a specific string type.
+        """
         if a is b:
             return True
         if a.name == b.name:
             return True
         if a.typetype == ZTypeType.FUNCTION and b.typetype == ZTypeType.FUNCTION:
             return self._function_types_equivalent(a, b)
-        # str types are compatible with string (print, function params)
-        if _is_str_type(a) and b.subtype == ZSubType.STRING:
-            return True
-        # stringview is compatible with string (print, read-only params)
-        if _is_stringview_type(a) and b.subtype == ZSubType.STRING:
-            return True
-        # string is compatible with stringview (read-only params)
-        if a.subtype == ZSubType.STRING and _is_stringview_type(b):
-            return True
-        # str types are compatible with stringview (read-only params)
-        if _is_str_type(a) and _is_stringview_type(b):
-            return True
         # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
         base = a.typedef_base
         while base is not None:

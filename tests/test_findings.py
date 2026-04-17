@@ -677,8 +677,12 @@ class TestFinding11ScopeState:
     def test_string_cleanup_emitted(self):
         """String variables should get z_string_free at scope exit."""
         csource, emitter = emit_with_emitter(
-            'greet: function {name: string} out string is { return "hello" }\n'
-            'main: function is {\n    s: greet name: "world"\n    print s\n}'
+            "greet: function {name: string} out string is "
+            '{ return "hello".string }\n'
+            "main: function is {\n"
+            '    s: greet name: "world".string\n'
+            "    print s\n"
+            "}"
         )
         assert "z_string_free" in csource
 

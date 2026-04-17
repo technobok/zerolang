@@ -2105,7 +2105,7 @@ class TestReturnPathTake:
             "  return myclass name: s.take\n"
             "}\n"
             "main: function is {\n"
-            '  c: wrap "hello"\n'
+            '  c: wrap "hello".string\n'
             '  print "ok"\n'
             "}"
         )

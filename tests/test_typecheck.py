@@ -5837,11 +5837,11 @@ class TestMap:
         assert "map_string_u64" in names
 
     def test_map_string_key(self):
-        """map with string keys type-checks."""
+        """map with string keys type-checks (caller projects literal to string)."""
         check_ok(
             "main: function is {\n"
             "    m: (map key: string value: i64)\n"
-            '    m.set key: "hello" value: 42\n'
+            '    m.set key: "hello".string value: 42\n'
             "}"
         )
 
