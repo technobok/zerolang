@@ -4957,6 +4957,12 @@ class TypeChecker:
             t = self._check_case(cast(zast.Case, inner))
         elif inner.nodetype == NodeType.DATA:
             t = None
+        elif inner.nodetype == NodeType.REASSIGNMENT:
+            self._check_reassignment(cast(zast.Reassignment, inner))
+            t = self.t_null
+        elif inner.nodetype == NodeType.SWAP:
+            self._check_swap(cast(zast.Swap, inner))
+            t = self.t_null
         elif inner.nodetype in (
             NodeType.BINOP,
             NodeType.DOTTEDPATH,

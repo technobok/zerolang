@@ -669,23 +669,27 @@ class Parser:
         self, lex: Lexer
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """
-        Accept an expression per grammar (minus assign/reassign/swap,
-        which currently still live in `_accept_blockline`):
+        Accept an expression per grammar:
 
             expression: for-expression | with-expression | if-expression
                       | match-expression | data-definition | block
+                      | ( term "=" expression )
+                      | ( term "swap" term )
                       | call | binop
 
         Dispatches on the leading keyword (IF/FOR/MATCH/DATA/WITH/
-        BRACEOPEN); otherwise falls through to `_accept_operation_or_call`
-        which picks between `operation` and `call` via path-count and
-        lookahead. Wraps the result in a `zast.Expression` for the caller.
+        BRACEOPEN); otherwise consumes a greedy path list and decides
+        between reassignment (`=`), swap (`swap`), or operation/call.
+        Reassignment returns `null`-typed and swap returns `null`-typed
+        per grammar — the typechecker rejects using these as stored
+        values.
 
         Returns the Expression, an Error, or None.
         """
-        # pylint: disable=R0911,R0912,R0914
+        # pylint: disable=R0911,R0912,R0914,too-many-statements,too-many-branches
         t = lex.peek()
         tt = t.toktype
+        start = t
         node: Union[NodeX[zast.ExpressionSubTypes], zast.Error, None]
         if tt == TT.IF:
             node = self._accept_if_expression(lex)
@@ -703,7 +707,13 @@ class Parser:
             oplist, err = self._operation_paths(lex)
             if err is not None:
                 return err
-            node = self._accept_operation_or_call(oplist, lex)
+
+            if lex.accept(TT.EQUALS):
+                node = self._build_reassignment(lex, oplist, start)
+            elif lex.accept(TT.SWAP):
+                node = self._build_swap(lex, oplist, start)
+            else:
+                node = self._accept_operation_or_call(oplist, lex)
 
         if node is not None and node.is_error:
             return cast(zast.Error, node)
@@ -713,6 +723,69 @@ class Parser:
 
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
+
+    def _build_reassignment(
+        self,
+        lex: Lexer,
+        oplist: List[NodeX[zast.Path]],
+        start: Token,
+    ) -> Union[NodeX[zast.Reassignment], zast.Error]:
+        """
+        Build a `Reassignment` from an already-consumed path list (LHS)
+        and the remaining token stream (RHS expression). The `=` token
+        has already been consumed.
+        """
+        if not oplist:
+            msg = "Reassignment requires a left hand side"
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+        if len(oplist) != 1:
+            msg = "Reassignment must be to a single path on the LHS"
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+        lhsx = oplist[0]
+        extern: Dict[str, zast.AtomId] = dict(lhsx.extern)
+
+        rhsx = self._accept_expression(lex)
+        if rhsx is not None and rhsx.is_error:
+            return cast(zast.Error, rhsx)
+        if not rhsx:
+            msg = "Expected an expression for the RHS of a reassignment"
+            return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
+        rhsx = cast(NodeX[zast.Expression], rhsx)
+
+        promoteexterns(addto=extern, addfrom=rhsx.extern)
+        reassignment = zast.Reassignment(topath=lhsx.node, value=rhsx.node, start=start)
+        return NodeX(node=reassignment, extern=extern)
+
+    def _build_swap(
+        self,
+        lex: Lexer,
+        oplist: List[NodeX[zast.Path]],
+        start: Token,
+    ) -> Union[NodeX[zast.Swap], zast.Error]:
+        """
+        Build a `Swap` from an already-consumed LHS path list and an
+        RHS path. The `swap` token has already been consumed.
+        """
+        if not oplist:
+            msg = "Swap requires a left hand side"
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+        if len(oplist) != 1:
+            msg = "Swap must be to a single path on the LHS"
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+        lhsx = oplist[0]
+        extern: Dict[str, zast.AtomId] = dict(lhsx.extern)
+
+        rhsx = self._accept_path(lex)
+        if rhsx is not None and rhsx.is_error:
+            return cast(zast.Error, rhsx)
+        if not rhsx:
+            msg = "Swap requires a right hand side"
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+        rhsx = cast(NodeX[zast.Path], rhsx)
+
+        promoteexterns(addto=extern, addfrom=rhsx.extern)
+        swap = zast.Swap(lhs=lhsx.node, rhs=rhsx.node, start=start)
+        return NodeX(node=swap, extern=extern)
 
     def _accept_operation_or_call(
         self, oplist: List[NodeX[zast.Path]], lex: Lexer
@@ -2420,11 +2493,9 @@ class Parser:
 
         Return a StatementLine, Error, or None.
         """
-        # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
-        extern: Dict[str, zast.AtomId] = {}
         start = lex.peek()
 
-        if start.toktype == TT.LABELPRE:  # label value assignment
+        if start.toktype == TT.LABELPRE:  # label-value shorthand `:name`
             lex.acceptany()
             lvx = self._make_label_value(start)
             expr = zast.Expression(expression=lvx.node, start=start)
@@ -2432,12 +2503,12 @@ class Parser:
             statementline = zast.StatementLine(statementline=assignment, start=start)
             return NodeX(node=statementline, extern=lvx.extern)
 
-        if start.toktype == TT.LABEL:  # an assignment to new var
-            lex.acceptany()  # label
-            lex.accept(TT.EOL)  # optional newline
+        if start.toktype == TT.LABEL:  # `name: expression` new-binding
+            lex.acceptany()
+            lex.accept(TT.EOL)  # optional newline between label and value
             exprx = self._accept_expression(lex)
             if exprx is not None and exprx.is_error:
-                return cast(zast.Error, exprx)  # propagate error
+                return cast(zast.Error, exprx)
             if not exprx:
                 msg = "Expected expression for assignment statement"
                 return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
@@ -2448,88 +2519,14 @@ class Parser:
             statementline = zast.StatementLine(statementline=assignment, start=start)
             return NodeX(node=statementline, extern=exprx.extern)
 
-        # now for the hard ones....
-        oplist, err = self._operation_paths(lex)
-        if err is not None:
-            return err
-
-        if lex.accept(TT.EQUALS):  # Reassignment
-            # get LHS from oplist
-            if not oplist:
-                msg = "Reassignment requires a left hand side"
-                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
-            lhsx = oplist[0]
-            if len(oplist) != 1:
-                msg = "Reassignment must be to a single path on the LHS"
-                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
-            # lhsx is a pathx
-            promoteexterns(addto=extern, addfrom=lhsx.extern)
-
-            # get RHS
-            rhsx = self._accept_expression(lex)
-            if rhsx is not None and rhsx.is_error:
-                return cast(zast.Error, rhsx)  # propagate error
-            if not rhsx:
-                msg = "Expected an expression for the RHS of a reassignment"
-                return zast.Error(start=lex.acceptany(), err=ERR.BADSTATEMENT, msg=msg)
-            rhsx = cast(NodeX[zast.Expression], rhsx)
-
-            promoteexterns(addto=extern, addfrom=rhsx.extern)
-            reassignment = zast.Reassignment(
-                topath=lhsx.node, value=rhsx.node, start=start
-            )
-            statementline = zast.StatementLine(statementline=reassignment, start=start)
-            return NodeX(node=statementline, extern=extern)
-
-        if lex.accept(TT.SWAP):  # a swap
-            if not oplist:
-                msg = "Swap requires a left hand side"
-                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
-            lhsx = oplist[0]
-            if len(oplist) != 1:
-                msg = "Swap must be to a single path on the LHS"
-                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
-            # lhsx is a pathx
-            promoteexterns(addto=extern, addfrom=lhsx.extern)
-
-            # get RHS
-            rhsx = self._accept_path(lex)
-            if rhsx is not None and rhsx.is_error:
-                return cast(zast.Error, rhsx)  # propagate error
-            if not rhsx:
-                msg = "Swap requires a right hand side"
-                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
-            rhsx = cast(NodeX[zast.Path], rhsx)
-
-            promoteexterns(addto=extern, addfrom=rhsx.extern)
-            swap = zast.Swap(lhs=lhsx.node, rhs=rhsx.node, start=start)
-            statementline = zast.StatementLine(statementline=swap, start=start)
-            return NodeX(node=statementline, extern=extern)
-
-        if oplist:  # consumed tokens, need to check if op or call now (else error)
-            oporcallx = self._accept_operation_or_call(oplist, lex)
-            if not oporcallx:
-                # this shouldn't happen, we know oplist is not empty
-                msg = "Bad statement"
-                return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
-
-            if oporcallx.is_error:
-                return cast(zast.Error, oporcallx)  # propagate error
-            oporcallx = cast(Union[NodeX[zast.Operation], NodeX[zast.Call]], oporcallx)
-
-            # must be Operation or Call
-            promoteexterns(addto=extern, addfrom=oporcallx.extern)
-            expr = zast.Expression(expression=oporcallx.node, start=start)
-            statementline = zast.StatementLine(statementline=expr, start=start)
-            return NodeX(node=statementline, extern=extern)
-
-        # haven't consumed anything yet..
-        # must be an expression (but not a operation or call); or an error
+        # Bare expression. Reassignment and swap are handled inside
+        # `_accept_expression` (they are grammar expressions that return
+        # `null`). A StatementLine just wraps whatever comes back.
         exprx = self._accept_expression(lex)
         if exprx is not None and exprx.is_error:
-            return cast(zast.Error, exprx)  # propagate error
+            return cast(zast.Error, exprx)
         if not exprx:
-            return None  # haven't consumed anything... not a statementline
+            return None
         exprx = cast(NodeX[zast.Expression], exprx)
         statementline = zast.StatementLine(statementline=exprx.node, start=start)
         return NodeX(node=statementline, extern=exprx.extern)

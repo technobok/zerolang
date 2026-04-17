@@ -538,6 +538,8 @@ ExpressionSubTypes = typing.Union[
     "Data",
     "Operation",
     "Call",  # "Array", "List"
+    "Reassignment",
+    "Swap",
 ]
 
 

@@ -238,7 +238,11 @@ class TestStatements:
         func = body["f"]
         stmts = func.body.statements
         assert len(stmts) == 2
-        assert isinstance(stmts[1].statementline, zast.Reassignment)
+        # reassignment is an expression per grammar; it is wrapped in
+        # zast.Expression at statement level.
+        sl = stmts[1].statementline
+        assert isinstance(sl, zast.Expression)
+        assert isinstance(sl.expression, zast.Reassignment)
 
     def test_swap(self):
         result = parse_unit("f: function {a: i64 b: i64} is { a swap b }")
@@ -246,7 +250,10 @@ class TestStatements:
         func = body["f"]
         stmts = func.body.statements
         sl = stmts[0].statementline
-        assert isinstance(sl, zast.Swap)
+        # swap is an expression per grammar; wrapped in zast.Expression
+        # at statement level.
+        assert isinstance(sl, zast.Expression)
+        assert isinstance(sl.expression, zast.Swap)
 
 
 class TestIfAtUnitLevel:

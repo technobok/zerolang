@@ -3618,6 +3618,10 @@ class CEmitter:
             return self._emit_with(cast(zast.With, inner))
         if inner.nodetype == zast.NodeType.CASE:
             return self._emit_case(cast(zast.Case, inner))
+        if inner.nodetype == zast.NodeType.REASSIGNMENT:
+            return self._emit_reassignment(cast(zast.Reassignment, inner))
+        if inner.nodetype == zast.NodeType.SWAP:
+            return self._emit_swap(cast(zast.Swap, inner))
         # string.shrink as zero-arg method statement (parsed as dotted path, not call)
         if inner.nodetype == zast.NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, inner)
