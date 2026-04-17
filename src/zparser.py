@@ -1931,17 +1931,22 @@ class Parser:
 
     def _acceptfor(self, lex: Lexer) -> Union[NodeX[zast.For], zast.Error, None]:
         """
-        acceptfor - accept a for clause (iteration)
+        acceptfor - accept a for clause (iteration) per grammar:
 
-            "for" [ operation ]
-            {
-                ( "while" [ newline ] operation )
-                | ( label [ newline ] operation )
-            }
-            [ "loop" statement ]
-            { "while" [ newline ] operation }
+            "for"
+              [ operation ]                # precondition, unnamed if first
+              { "while" operation }        # precondition(s)
+              [ label operation ]          # binding (at most one)
+              { "while" operation }        # precondition(s) (still)
+              [ "loop" primary-expression ]
+              { "while" operation }        # postcondition(s)
 
-        Return an For or Error or None for no unit (missing "for" keyword)
+        The grammar allows at most ONE binding label, and postconditions
+        (`while op`) are valid only after `loop`. A label appearing after
+        `loop` is a parse error (not a silent break to the enclosing
+        scope, as before).
+
+        Return a For or Error or None for no 'for' keyword.
         """
         # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
         start = lex.peek()
@@ -1952,11 +1957,12 @@ class Parser:
         postconditions: List[zast.Operation] = []
         loop: Optional[zast.Statement] = None
         local: Set[str] = set()
-
         extern: Dict[str, zast.AtomId] = {}
 
-        first = True  # first is allowed to not have a label/"when"
-        whileindex = 0  # counter for 'fake' binding names (for 'when' clauses)
+        first = True  # first condition may omit the 'while' keyword
+        bound = False  # whether a binding label has been consumed
+        whileindex = 0  # counter for anonymous 'while' clause names
+
         while True:
             t = lex.peek()
             if (first or t.toktype == TT.WHILE) and t.toktype not in (
@@ -1964,12 +1970,12 @@ class Parser:
                 TT.LOOP,
             ):
                 if t.toktype == TT.WHILE:
-                    lex.acceptany()  # 'while'
-                    lex.accept(TT.EOL)  # optional EOL
+                    lex.acceptany()
+                    lex.accept(TT.EOL)
 
                 op = self._acceptoperation(lex)
                 if op is not None and op.is_error:
-                    return cast(zast.Error, op)  # propagate error
+                    return cast(zast.Error, op)
                 if not op:
                     msg = "Expected operation (condition) for 'for'"
                     return zast.Error(
@@ -1980,22 +1986,31 @@ class Parser:
                 if loop:
                     postconditions.append(op.node)
                 else:
-                    # note leading space - cannot collide with real bindings
                     conditions[f" *{whileindex}"] = op.node
                     whileindex += 1
 
-                # nb: local - can refer to prior bindings...
                 promoteexterns(addto=extern, addfrom=op.extern, local=local)
                 first = False
 
             elif t.toktype == TT.LABEL:
                 if loop:
-                    break  # label after loop belongs to the enclosing scope
+                    msg = (
+                        "Binding label not allowed after 'loop'; bindings "
+                        "must appear before the 'loop' clause"
+                    )
+                    return zast.Error(start=t, err=ERR.BADFOR, msg=msg)
+                if bound:
+                    msg = (
+                        "'for' accepts at most one binding; move additional "
+                        "definitions into a preceding 'with' or the loop body"
+                    )
+                    return zast.Error(start=t, err=ERR.BADFOR, msg=msg)
+
                 name = lex.acceptany().tokstr
-                lex.accept(TT.EOL)  # optional EOL
+                lex.accept(TT.EOL)
                 op = self._acceptoperation(lex)
                 if op is not None and op.is_error:
-                    return cast(zast.Error, op)  # propagate error
+                    return cast(zast.Error, op)
                 if not op:
                     msg = f"Expected operation for 'for' binding label: {name}"
                     return zast.Error(
@@ -2004,9 +2019,9 @@ class Parser:
                 op = cast(NodeX[zast.Operation], op)
 
                 conditions[name] = op.node
-                # nb: local - can refer to prior bindings...
                 promoteexterns(addto=extern, addfrom=op.extern, local=local)
                 local.add(name)
+                bound = True
                 first = False
 
             elif t.toktype == TT.LOOP:
@@ -2017,7 +2032,7 @@ class Parser:
                 lex.acceptany()
                 statementx = self._accept_primary_expression(lex)
                 if statementx is not None and statementx.is_error:
-                    return cast(zast.Error, statementx)  # propagate error
+                    return cast(zast.Error, statementx)
                 if not statementx:
                     msg = "Expected primary-expression for 'loop'"
                     return zast.Error(
@@ -2031,7 +2046,7 @@ class Parser:
                 first = False
 
             else:
-                break  # nothing matched, end of 'if'
+                break  # nothing matched, end of 'for'
 
         if not conditions and not loop:
             msg = "Require at least one condition or a 'loop' specified for 'for'"
