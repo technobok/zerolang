@@ -16,7 +16,7 @@ from itertools import count
 import zvfs
 from zvfs import DEntryID
 from zlexer import Token, TT
-from ztypes import ZType, ZParamOwnership
+from ztypes import ZType, ZParamOwnership, ZOwnership
 
 
 @unique
@@ -697,6 +697,10 @@ class With(Node):
     name: str
     value: "Expression"
     doexpr: "Expression"
+    # set by the type checker: ownership of the `name` binding. BORROWED for
+    # bare-name / dotted-path / .borrow RHS (borrow-by-default); OWNED for
+    # call/constructor/.take RHS. Controls destructor emission.
+    ownership: Optional[ZOwnership] = field(default=None, init=False)
 
 
 @unique

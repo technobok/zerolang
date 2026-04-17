@@ -1891,6 +1891,109 @@ class TestLockEnforcement:
         )
 
 
+class TestWithOwnership:
+    """`with name: expr do body` ownership.
+
+    Mirrors function-argument rules:
+    - bare name / dotted path → BORROW (EXCLUSIVE-lock the source root)
+    - `.take` inline          → OWNED (source invalidated)
+    - `.borrow` inline        → BORROW (same as default for names)
+    - call / constructor      → OWNED (fresh value)
+    """
+
+    def test_bare_name_borrows_source(self):
+        """with a: c do ... borrows c; c is still usable after the do."""
+        check_ok(
+            "main: function is {\n"
+            '  c: "hi".string\n'
+            "  with a: c do print a\n"
+            "  print c\n"
+            "}"
+        )
+
+    def test_bare_name_locks_source_in_body(self):
+        """Inside the do, the source is EXCLUSIVE-locked and cannot mutate."""
+        errors = check_errors(
+            'main: function is {\n  c: "hi".string\n  with a: c do c.append " world"\n}'
+        )
+        assert any("lock" in e.msg.lower() and "'c'" in e.msg for e in errors)
+
+    def test_bare_name_releases_on_scope_exit(self):
+        """The lock ends with the do scope, allowing later mutation."""
+        check_ok(
+            "main: function is {\n"
+            '  c: "hi".string\n'
+            "  with a: c do print a\n"
+            '  c.append " world"\n'
+            "}"
+        )
+
+    def test_take_moves_ownership(self):
+        """with a: c.take do ... invalidates c."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  c: "hi".string\n'
+            "  with a: c.take do print a\n"
+            "  print c\n"
+            "}"
+        )
+        assert any("ownership" in e.msg.lower() for e in errors)
+
+    def test_borrow_explicit_locks_like_default(self):
+        """with a: c.borrow do ... behaves like default-borrow — source locked."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  c: "hi".string\n'
+            '  with a: c.borrow do c.append " !"\n'
+            "}"
+        )
+        assert any("lock" in e.msg.lower() and "'c'" in e.msg for e in errors)
+
+    def test_call_rhs_owns_result(self):
+        """Call RHS produces a fresh value that the with-binding owns."""
+        check_ok(
+            "bag: class { x: i64 } as {\n"
+            "  public: unit { :x }\n"
+            "  create: function { x: i64 } out this is {\n"
+            "    return meta.create x: x\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            '  with b: bag x: 1 do print "\\{b.x}"\n'
+            "}"
+        )
+
+    def test_dotted_path_locks_root(self):
+        """with a: r.f do ... locks the root r."""
+        errors = check_errors(
+            "pair: record { first: string other: string }\n"
+            "main: function is {\n"
+            '  p: pair first: "a".string other: "b".string\n'
+            "  with v: p.first do {\n"
+            '    p.other = "c".string\n'
+            "  }\n"
+            "}"
+        )
+        assert any("lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_release_rejected_in_with(self):
+        """`.release` cannot be a `with` value."""
+        errors = check_errors(
+            'main: function is {\n  c: "hi".string\n  with a: c.release do print a\n}'
+        )
+        assert any("release" in e.msg.lower() for e in errors)
+
+    def test_valtype_source_does_not_require_lock(self):
+        """Valtype sources don't need locks — borrowing copies them."""
+        check_ok(
+            "main: function is {\n"
+            "  n: 42\n"
+            '  with x: n do print "\\{x}"\n'
+            '  print "\\{n}"\n'
+            "}"
+        )
+
+
 class TestLockCheckingExamplePrograms:
     """Verify all v1 example programs still pass with lock checking."""
 

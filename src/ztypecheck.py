@@ -6981,13 +6981,91 @@ class TypeChecker:
         return self.t_null
 
     def _check_with(self, withnode: zast.With) -> Optional[ZType]:
+        """Type-check `with name: value do doexpr`.
+
+        Ownership follows function-argument rules:
+        - bare name / dotted path  → BORROW, EXCLUSIVE-lock the source root
+        - `.take` inline           → OWNED, source invalidated
+        - `.borrow` inline         → BORROW (same as default)
+        - call / literal / ctor    → OWNED (fresh value, no source to lock)
+        """
         self.symtab.push("with")
-        val_t = self._check_expression(withnode.value).ztype
-        if val_t:
-            self.symtab.define(withnode.name, val_t)
-        result = self._check_expression(withnode.doexpr).ztype
+        result = self._check_expression(withnode.value)
+        t = result.ztype
+        borrow_target = result.borrow_target
+
+        if t is None:
+            self.symtab.pop()
+            return None
+
+        # Reject .release as an RHS value (matches _check_assignment).
+        inner_expr = withnode.value.expression
+        if (
+            getattr(inner_expr, "nodetype", None) == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, inner_expr).child.name == "release"
+        ):
+            self._error(
+                "'.release' cannot be used as a value; "
+                "use '.take' to transfer ownership",
+                loc=withnode.start,
+                err=ERR.OWNERERROR,
+            )
+            self.symtab.pop()
+            return None
+
+        # Phase A: default-borrow for plain path RHS. If _check_expression
+        # didn't set a borrow_target and didn't invalidate the source (.take),
+        # and the RHS is a bare name or a plain dotted path, treat as BORROW
+        # and lock the source root.
+        if borrow_target is None and inner_expr is not None:
+            nt = getattr(inner_expr, "nodetype", None)
+            is_plain_path = False
+            if nt == NodeType.ATOMID:
+                # bare name bound to a runtime variable
+                name = cast(zast.AtomId, inner_expr).name
+                if self.symtab.lookup_var(name) is not None:
+                    is_plain_path = True
+            elif nt == NodeType.DOTTEDPATH:
+                dp_child = cast(zast.DottedPath, inner_expr).child.name
+                # take/release/borrow/lock/stringview/listview are already
+                # handled by _check_expression (take invalidates; the others
+                # set borrow_target). Anything else is a plain path access.
+                if dp_child not in (
+                    "take",
+                    "release",
+                    "borrow",
+                    "lock",
+                    "stringview",
+                    "listview",
+                ):
+                    is_plain_path = True
+            if is_plain_path:
+                borrow_target = self._get_arg_root_name(
+                    cast(zast.Operation, inner_expr)
+                )
+
+        # Define the with-bound variable.
+        ownership = ZOwnership.BORROWED if borrow_target else ZOwnership.OWNED
+        var = ZVariable(ztype=t, ownership=ownership, named=ZNaming.NAMED)
+        var.is_private_access = result.private_access
+        self.symtab.define_var(withnode.name, var)
+
+        # Acquire the exclusive lock on the source root for reftypes only.
+        # Valtype borrows are copies; they do not need a lock at this level
+        # (matches function-arg and _check_assignment behavior).
+        if borrow_target and not _is_valtype(t):
+            err = self.symtab.try_lock(
+                borrow_target, ZLockState.EXCLUSIVE, withnode.name
+            )
+            if err:
+                self._error(err, loc=withnode.start)
+
+        withnode.ownership = ownership
+        withnode.type = t
+
+        do_type = self._check_expression(withnode.doexpr).ztype
         self.symtab.pop()
-        return result
+        return do_type
 
     def _check_generic_type_match(
         self, casenode: zast.Case, concrete_type: ZType

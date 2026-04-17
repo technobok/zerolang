@@ -18,6 +18,7 @@ from ztypes import (
     ControlKind,
     parse_number,
     ZParamOwnership,
+    ZOwnership,
     NUMERIC_RANGES,
     TAG_ORIGIN,
 )
@@ -6857,14 +6858,29 @@ class CEmitter:
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
 
-        # if value is a reftype temp, the with var now owns it
-        if (is_string or is_class) and val in self._temp.frees:
+        # BORROW bindings do not own the value — no destructor at scope exit
+        # and no adoption of reftype temps.
+        is_owned = withnode.ownership != ZOwnership.BORROWED
+
+        # if value is a reftype temp and the with var owns it, adopt it
+        if is_owned and (is_string or is_class) and val in self._temp.frees:
             self._temp.frees.remove(val)
 
         parts.append(f"{indent}{{\n")
         self.indent_level += 1
         inner_indent = self._indent()
         parts.append(f"{inner_indent}{ctype} {cname} = {val};\n")
+
+        # If the RHS is `source.take`, invalidate the outer-scope source so
+        # scope exit doesn't double-free (ownership moved into cname).
+        if is_owned:
+            take_var = self._get_take_var_from_expr(withnode.value)
+            if take_var:
+                parts.append(
+                    self._emit_take_invalidation(
+                        take_var, withnode.value.type, inner_indent
+                    )
+                )
 
         # doexpr may reference the with variable, so its temps must be
         # declared inside the block (not prepended to the outer statement)
@@ -6887,14 +6903,15 @@ class CEmitter:
 
         self._temp_stack.pop()
 
-        if is_union and val_type:
-            parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
-        elif is_string:
-            parts.append(f"{inner_indent}z_string_free(&{cname});\n")
-        elif is_class and val_type:
-            parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
-        elif is_class:
-            parts.append(f"{inner_indent}if ({cname}) free({cname});\n")
+        if is_owned:
+            if is_union and val_type:
+                parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
+            elif is_string:
+                parts.append(f"{inner_indent}z_string_free(&{cname});\n")
+            elif is_class and val_type:
+                parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
+            elif is_class:
+                parts.append(f"{inner_indent}if ({cname}) free({cname});\n")
         self.indent_level -= 1
         parts.append(f"{indent}}}\n")
         return "".join(parts)
