@@ -4105,6 +4105,23 @@ class TestGenerics:
         )
         assert any("not a value type" in e.msg.lower() for e in errors)
 
+    def test_generic_function_stringlike_accepts_members(self):
+        """Union-as-constraint: stringlike admits both string and stringview."""
+        check_ok(
+            "id: function as { t: stringlike.generic } in { v: t } out t is "
+            "{ return v }\n"
+            'main: function is { a: id "hi"\n b: id "hi".string }'
+        )
+
+    def test_generic_function_stringlike_rejects_non_member(self):
+        """Union-as-constraint: stringlike rejects a non-member type."""
+        errors = check_errors(
+            "id: function as { t: stringlike.generic } in { v: t } out t is "
+            "{ return v }\n"
+            "main: function is { x: id 42 }"
+        )
+        assert any("does not satisfy constraint 'stringlike'" in e.msg for e in errors)
+
     def test_generic_function_monomorphization_cached(self):
         """Same instantiation produces one cached mono function."""
         program = check_ok(
