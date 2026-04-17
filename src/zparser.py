@@ -1174,131 +1174,94 @@ class Parser:
         )
         return NodeX(node=func, extern=extern)
 
-    def _acceptrecord(self, lex: Lexer) -> Union[NodeX[zast.Record], zast.Error, None]:
-        """
-        accept a record
+    # kind → (opening token, AST class). Record/Class carry
+    # field_ownership; Variant/Union carry tag.
+    _ITEM_TYPEDEF_MAP: Dict[ObjectBodyKind, tuple] = {
+        ObjectBodyKind.RECORD: (TT.RECORD, zast.Record),
+        ObjectBodyKind.CLASS: (TT.CLASS, zast.Class),
+        ObjectBodyKind.VARIANT: (TT.VARIANT, zast.Variant),
+        ObjectBodyKind.UNION: (TT.UNION, zast.Union),
+    }
 
-            record
-                "record" [ "is" ] "{" { recorditem | newline } "}"
-
-        Returns a Record or Error or None (if no 'record' keyword)
+    def _accept_item_definition(
+        self,
+        lex: Lexer,
+        kind: ObjectBodyKind,
+    ) -> Union[NodeX[zast.TypeDefinition], zast.Error, None]:
         """
+        Parse any of record / class / variant / union per the shared
+        grammar:
+
+            item: keyword [ "is" ] ( "{" ... "}" | "native" ) [ "as" "{" ... "}" ]
+
+        `kind` is one of RECORD / CLASS / VARIANT / UNION and maps to
+        the opening token and target AST class. Variant/Union add a
+        `tag` field; Record/Class add `field_ownership`.
+        """
+        tt, ast_cls = self._ITEM_TYPEDEF_MAP[kind]
         start = lex.peek()
-        if not lex.accept(TT.RECORD):
+        if not lex.accept(tt):
             return None
 
-        is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, ObjectBodyKind.RECORD
-        )
+        is_body, as_body, extern, err, native = self._acceptitembodies(lex, kind)
         if err:
             return err
 
-        record = zast.Record(
-            items=is_body.items if is_body else {},
-            implements=is_body.islist if is_body else [],
-            functions=is_body.functions if is_body else {},
-            as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
-            start=start,
-            is_native=native,
-            field_ownership=is_body.field_ownership if is_body else {},
+        items = is_body.items if is_body else {}
+        implements = is_body.islist if is_body else []
+        functions = is_body.functions if is_body else {}
+        as_items = as_body.items if as_body else {}
+        as_functions = as_body.functions if as_body else {}
+
+        if kind in (ObjectBodyKind.VARIANT, ObjectBodyKind.UNION):
+            node = ast_cls(
+                items=items,
+                implements=implements,
+                functions=functions,
+                tag=is_body.tag if is_body else None,
+                as_items=as_items,
+                as_functions=as_functions,
+                start=start,
+                is_native=native,
+            )
+        else:
+            node = ast_cls(
+                items=items,
+                implements=implements,
+                functions=functions,
+                as_items=as_items,
+                as_functions=as_functions,
+                start=start,
+                is_native=native,
+                field_ownership=is_body.field_ownership if is_body else {},
+            )
+        return NodeX(node=node, extern=extern)
+
+    def _acceptrecord(self, lex: Lexer) -> Union[NodeX[zast.Record], zast.Error, None]:
+        return cast(
+            Union[NodeX[zast.Record], zast.Error, None],
+            self._accept_item_definition(lex, ObjectBodyKind.RECORD),
         )
-        return NodeX(node=record, extern=extern)
 
     def _acceptclass(self, lex: Lexer) -> Union[NodeX[zast.Class], zast.Error, None]:
-        """
-        accept a class
-
-            class
-                "class" [ "is" ] "{" { recorditem | newline } "}"
-
-        Returns a Class or Error or None (if no 'class' keyword)
-        """
-        start = lex.peek()
-        if not lex.accept(TT.CLASS):
-            return None
-
-        is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, ObjectBodyKind.CLASS
+        return cast(
+            Union[NodeX[zast.Class], zast.Error, None],
+            self._accept_item_definition(lex, ObjectBodyKind.CLASS),
         )
-        if err:
-            return err
-
-        c = zast.Class(
-            items=is_body.items if is_body else {},
-            implements=is_body.islist if is_body else [],
-            functions=is_body.functions if is_body else {},
-            as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
-            start=start,
-            is_native=native,
-            field_ownership=is_body.field_ownership if is_body else {},
-        )
-        return NodeX(node=c, extern=extern)
 
     def _acceptvariant(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Variant], zast.Error, None]:
-        """
-        accept a variant
-
-            variant
-                "variant" [ "is" ] "{" { unionitem | newline } "}"
-
-        Returns a Variant or Error or None (if no 'variant' keyword)
-        """
-        start = lex.peek()
-        if not lex.accept(TT.VARIANT):
-            return None
-
-        is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, ObjectBodyKind.VARIANT
+        return cast(
+            Union[NodeX[zast.Variant], zast.Error, None],
+            self._accept_item_definition(lex, ObjectBodyKind.VARIANT),
         )
-        if err:
-            return err
-
-        variant = zast.Variant(
-            items=is_body.items if is_body else {},
-            implements=is_body.islist if is_body else [],
-            functions=is_body.functions if is_body else {},
-            tag=is_body.tag if is_body else None,
-            as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
-            start=start,
-            is_native=native,
-        )
-        return NodeX(node=variant, extern=extern)
 
     def _acceptunion(self, lex: Lexer) -> Union[NodeX[zast.Union], zast.Error, None]:
-        """
-        accept a union
-
-            union
-                "union" [ "is" ] "{" { unionitem | newline } "}"
-
-        Returns a Union or Error or None (if no 'record' keyword)
-        """
-        start = lex.peek()
-        if not lex.accept(TT.UNION):
-            return None
-
-        is_body, as_body, extern, err, native = self._acceptitembodies(
-            lex, ObjectBodyKind.UNION
+        return cast(
+            Union[NodeX[zast.Union], zast.Error, None],
+            self._accept_item_definition(lex, ObjectBodyKind.UNION),
         )
-        if err:
-            return err
-
-        union = zast.Union(
-            items=is_body.items if is_body else {},
-            implements=is_body.islist if is_body else [],
-            functions=is_body.functions if is_body else {},
-            tag=is_body.tag if is_body else None,
-            as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
-            start=start,
-            is_native=native,
-        )
-        return NodeX(node=union, extern=extern)
 
     def _acceptprotocol(
         self, lex: Lexer
