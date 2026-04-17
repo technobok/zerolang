@@ -26,7 +26,7 @@ class ObjectBodyKind(IntEnum):
     """
     What kind of item is having its body parsed. Replaces the legacy
     (allowtag, unlabelledpath, unlabelledid) triple-bool; the bools are
-    derived in `_getobjectbody` from kind + whether this is the `as`
+    derived in `_get_object_body` from kind + whether this is the `as`
     clause (static members) or the `is` clause (instance members).
 
     - FUNCTION_AS: generic params for a function's `as` clause (named only)
@@ -321,7 +321,7 @@ class Parser:
             reftoken: Optional[Token] = None
             if atomid:
                 reftoken = atomid.start
-            unit = self._acceptunitfile(
+            unit = self._accept_unitfile(
                 self.rootid, unitname=refname, reference=reftoken, core=core
             )
             if unit.is_error:
@@ -359,7 +359,7 @@ class Parser:
             vfs=self.vfs, units=definitions, mainunitname=self.mainunitname
         )
 
-    def _acceptunitfile(
+    def _accept_unitfile(
         self,
         parentid: DEntryID,
         unitname: str,
@@ -408,7 +408,7 @@ class Parser:
             if self._verbose_fn:
                 self._verbose_fn(f"  compiling: {self.vfs.path(fsid)}")
 
-            unitorerr = self._acceptunitbody(lex)
+            unitorerr = self._accept_unitbody(lex)
             if unitorerr.is_error:
                 return cast(zast.Error, unitorerr)  # propagate error
             unitorerr = cast(NodeX[zast.Unit], unitorerr)
@@ -446,7 +446,7 @@ class Parser:
                 start: Optional[Token] = None
                 if refid:
                     start = refid.start
-                subunitx = self._acceptunitfile(
+                subunitx = self._accept_unitfile(
                     parentid=dirid, unitname=refname, reference=start, core=core
                 )
                 if subunitx.is_error:
@@ -508,9 +508,9 @@ class Parser:
         lv = zast.LabelValue(start=tok, name=tok.tokstr)
         return NodeX(node=lv, extern={tok.tokstr: lv})
 
-    def _acceptunitbody(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error]:
+    def _accept_unitbody(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error]:
         """
-        _acceptunitbody = accept the body of a unit. Used by unitfile and
+        _accept_unitbody = accept the body of a unit. Used by unitfile and
         for subunits
 
         lex: lexer to read from (will stop before EOF for file unit and before
@@ -555,7 +555,7 @@ class Parser:
 
                 t = lex.peek()
                 lex.filtereol(True)  # filter EOLs within definition value
-                typedefinitionx = self._accepttypedefinition(lex)
+                typedefinitionx = self._accept_typedefinition(lex)
                 lex.filtereol(False)  # restore for next definition boundary
                 if typedefinitionx is None:
                     msg = (
@@ -601,7 +601,7 @@ class Parser:
 
         return NodeX(node=zast.Unit(start=start, body=definitions), extern=extern)
 
-    def _accepttypedefinition(
+    def _accept_typedefinition(
         self, lex: Lexer
     ) -> Union[NodeX[zast.TypeDefinition], zast.Error, None]:
         """
@@ -624,32 +624,32 @@ class Parser:
         t = lex.peek()
         tt = t.toktype
         if tt == TT.UNIT:
-            return self._acceptsubunit(lex)
+            return self._accept_unit_definition(lex)
         if tt == TT.FUNCTION:
-            return self._acceptfunction(lex)
+            return self._accept_function_definition(lex)
         if tt == TT.RECORD:
-            return self._acceptrecord(lex)
+            return self._accept_record(lex)
         if tt == TT.CLASS:
-            return self._acceptclass(lex)
+            return self._accept_class(lex)
         if tt == TT.VARIANT:
-            return self._acceptvariant(lex)
+            return self._accept_variant(lex)
         if tt == TT.UNION:
-            return self._acceptunion(lex)
+            return self._accept_union(lex)
         if tt == TT.PROTOCOL:
-            return self._acceptprotocol(lex)
+            return self._accept_protocol(lex)
         if tt == TT.FACET:
-            return self._acceptfacet(lex)
+            return self._accept_facet(lex)
         # at unit level, if / match / data are wrapped as Expression so
         # downstream treats them uniformly with operation-valued
         # definitions. Only operations (not calls) are valid for the
         # fall-through case.
         if tt == TT.IF:
-            return self._wrap_as_expression(self._acceptif(lex))
+            return self._wrap_as_expression(self._accept_if_expression(lex))
         if tt == TT.MATCH:
-            return self._wrap_as_expression(self._acceptmatch(lex))
+            return self._wrap_as_expression(self._accept_match_expression(lex))
         if tt == TT.DATA:
-            return self._wrap_as_expression(self._acceptdata(lex))
-        return self._acceptoperation(lex)
+            return self._wrap_as_expression(self._accept_data_definition(lex))
+        return self._accept_operation(lex)
 
     @staticmethod
     def _wrap_as_expression(
@@ -665,19 +665,19 @@ class Parser:
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
 
-    def _acceptexpression(
+    def _accept_expression(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """
         Accept an expression per grammar (minus assign/reassign/swap,
-        which currently still live in `_acceptstatementline`):
+        which currently still live in `_accept_blockline`):
 
             expression: for-expression | with-expression | if-expression
                       | match-expression | data-definition | block
                       | call | binop
 
         Dispatches on the leading keyword (IF/FOR/MATCH/DATA/WITH/
-        BRACEOPEN); otherwise falls through to `_acceptoperationorcall`
+        BRACEOPEN); otherwise falls through to `_accept_operation_or_call`
         which picks between `operation` and `call` via path-count and
         lookahead. Wraps the result in a `zast.Expression` for the caller.
 
@@ -688,22 +688,22 @@ class Parser:
         tt = t.toktype
         node: Union[NodeX[zast.ExpressionSubTypes], zast.Error, None]
         if tt == TT.IF:
-            node = self._acceptif(lex)
+            node = self._accept_if_expression(lex)
         elif tt == TT.FOR:
-            node = self._acceptfor(lex)
+            node = self._accept_for_expression(lex)
         elif tt == TT.MATCH:
-            node = self._acceptmatch(lex)
+            node = self._accept_match_expression(lex)
         elif tt == TT.DATA:
-            node = self._acceptdata(lex)
+            node = self._accept_data_definition(lex)
         elif tt == TT.WITH:
-            node = self._acceptwith(lex)
+            node = self._accept_with_expression(lex)
         elif tt == TT.BRACEOPEN:
-            node = self._acceptbareblock(lex)
+            node = self._accept_bareblock(lex)
         else:
-            oplist, err = self._getoplist(lex)
+            oplist, err = self._operation_paths(lex)
             if err is not None:
                 return err
-            node = self._acceptoperationorcall(oplist, lex)
+            node = self._accept_operation_or_call(oplist, lex)
 
         if node is not None and node.is_error:
             return cast(zast.Error, node)
@@ -714,7 +714,7 @@ class Parser:
         expression = zast.Expression(expression=node.node, start=node.node.start)
         return NodeX(node=expression, extern=node.extern)
 
-    def _acceptoperationorcall(
+    def _accept_operation_or_call(
         self, oplist: List[NodeX[zast.Path]], lex: Lexer
     ) -> Union[NodeX[zast.Operation], NodeX[zast.Call], zast.Error, None]:
         """
@@ -747,20 +747,20 @@ class Parser:
         if (len(oplist) == 1 and lex.peek().toktype in (TT.LABEL, TT.LABELPRE)) or (
             len(oplist) % 2 == 0
         ):
-            return self._acceptcall(lex=lex, paths=oplist)
+            return self._accept_call(lex=lex, paths=oplist)
 
         # else: op or error...
-        opx = self._getop(
+        opx = self._fold_binop(
             paths=oplist, nexttoken=lex.peek()
         )  # don't propagate error, may be call
         return opx
 
-    def _getoplist(
+    def _operation_paths(
         self, lex: Lexer
     ) -> tuple[List[NodeX[zast.Path]], Optional[zast.Error]]:
         """
         Get a greedy list of operation elements (operand/operator paths).
-        Used to decide between operation and call and to drive `_getop`.
+        Used to decide between operation and call and to drive `_fold_binop`.
 
         Returns a tuple `(paths, err)`:
         - `paths`: the accumulated list (possibly empty). Callers can use
@@ -771,7 +771,7 @@ class Parser:
         """
         ret: List[NodeX[zast.Path]] = []
         while True:
-            path = self._acceptpath(lex)
+            path = self._accept_path(lex)
             if path is not None and path.is_error:
                 return [], cast(zast.Error, path)
             if not path:
@@ -781,7 +781,7 @@ class Parser:
         return ret, None
 
     @staticmethod
-    def _getop(
+    def _fold_binop(
         paths: List[NodeX[zast.Path]], nexttoken: Token
     ) -> Union[NodeX[zast.Operation], zast.Error, None]:
         """
@@ -839,7 +839,7 @@ class Parser:
 
         return NodeX(operation, extern=extern)
 
-    def _acceptcall(
+    def _accept_call(
         self, lex: Lexer, paths: List[NodeX[zast.Path]]
     ) -> Union[NodeX[zast.Call], zast.Error, None]:
         """
@@ -867,7 +867,7 @@ class Parser:
 
         # assume the rest of paths is a first unnamed argument
         rest = paths[1:]
-        opx = self._getop(rest, nexttoken=lex.peek())
+        opx = self._fold_binop(rest, nexttoken=lex.peek())
         if opx is not None and opx.is_error:
             return cast(zast.Error, opx)  # propagate error
         opx = cast(Optional[NodeX[zast.Operation]], opx)
@@ -910,7 +910,7 @@ class Parser:
                 arguments.append(namedop)
                 promoteexterns(addto=extern, addfrom=lvx.extern)
             else:
-                opx = self._acceptoperation(lex)
+                opx = self._accept_operation(lex)
                 if opx is not None and opx.is_error:
                     return cast(zast.Error, opx)  # propagate error
                 opx = cast(Optional[NodeX[zast.Operation]], opx)
@@ -950,7 +950,7 @@ class Parser:
                 return path.parent, own
         return path, None
 
-    def _acceptfunction(
+    def _accept_function_definition(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Function], zast.Error, None]:
         """
@@ -997,7 +997,7 @@ class Parser:
                     msg = "Duplicate 'out'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
-                typeref = self._acceptpath(lex)
+                typeref = self._accept_path(lex)
                 if typeref is None:
                     msg = "Expected type reference for 'out'"
                     return zast.Error(
@@ -1024,7 +1024,7 @@ class Parser:
                     is_native = True
                     first = False
                 else:
-                    statement = self._acceptstatement(lex)
+                    statement = self._accept_block(lex)
                     if statement is None:
                         msg = "Expected Statement for 'is'"
                         return zast.Error(
@@ -1046,7 +1046,7 @@ class Parser:
                     msg = "Duplicate 'as'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
-                b = self._getobjectbody(lex, ObjectBodyKind.FUNCTION_AS)
+                b = self._get_object_body(lex, ObjectBodyKind.FUNCTION_AS)
                 if b.is_error:
                     return cast(zast.Error, b)
                 b = cast(ObjectBody, b)
@@ -1095,7 +1095,7 @@ class Parser:
                         msg = f"Duplicate parameter name: {paramname}"
                         return zast.Error(start=tok, err=ERR.BADPARAMETER, msg=msg)
 
-                    val = self._acceptpath(lex)
+                    val = self._accept_path(lex)
                     if val is None:
                         msg = "Expected typeref or number for parameter type"
                         return zast.Error(
@@ -1186,7 +1186,7 @@ class Parser:
         if not lex.accept(tt):
             return None
 
-        is_body, as_body, extern, err, native = self._acceptitembodies(lex, kind)
+        is_body, as_body, extern, err, native = self._accept_item_bodies(lex, kind)
         if err:
             return err
 
@@ -1220,19 +1220,19 @@ class Parser:
             )
         return NodeX(node=node, extern=extern)
 
-    def _acceptrecord(self, lex: Lexer) -> Union[NodeX[zast.Record], zast.Error, None]:
+    def _accept_record(self, lex: Lexer) -> Union[NodeX[zast.Record], zast.Error, None]:
         return cast(
             Union[NodeX[zast.Record], zast.Error, None],
             self._accept_item_definition(lex, ObjectBodyKind.RECORD),
         )
 
-    def _acceptclass(self, lex: Lexer) -> Union[NodeX[zast.Class], zast.Error, None]:
+    def _accept_class(self, lex: Lexer) -> Union[NodeX[zast.Class], zast.Error, None]:
         return cast(
             Union[NodeX[zast.Class], zast.Error, None],
             self._accept_item_definition(lex, ObjectBodyKind.CLASS),
         )
 
-    def _acceptvariant(
+    def _accept_variant(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Variant], zast.Error, None]:
         return cast(
@@ -1240,13 +1240,13 @@ class Parser:
             self._accept_item_definition(lex, ObjectBodyKind.VARIANT),
         )
 
-    def _acceptunion(self, lex: Lexer) -> Union[NodeX[zast.Union], zast.Error, None]:
+    def _accept_union(self, lex: Lexer) -> Union[NodeX[zast.Union], zast.Error, None]:
         return cast(
             Union[NodeX[zast.Union], zast.Error, None],
             self._accept_item_definition(lex, ObjectBodyKind.UNION),
         )
 
-    def _acceptprotocol(
+    def _accept_protocol(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Protocol], zast.Error, None]:
         """
@@ -1263,7 +1263,7 @@ class Parser:
 
         lex.accept(TT.IS)  # optional 'is'
 
-        b = self._getobjectbody(lex, ObjectBodyKind.PROTOCOL)
+        b = self._get_object_body(lex, ObjectBodyKind.PROTOCOL)
         if b.is_error:
             return cast(zast.Error, b)  # propagate error
         b = cast(ObjectBody, b)
@@ -1276,7 +1276,7 @@ class Parser:
         )
         return NodeX(node=protocol, extern=b.extern)
 
-    def _acceptfacet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
+    def _accept_facet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
         """
         accept a facet (value-type interface, same syntax as protocol)
 
@@ -1291,7 +1291,7 @@ class Parser:
 
         lex.accept(TT.IS)  # optional 'is'
 
-        b = self._getobjectbody(lex, ObjectBodyKind.FACET)
+        b = self._get_object_body(lex, ObjectBodyKind.FACET)
         if b.is_error:
             return cast(zast.Error, b)  # propagate error
         b = cast(ObjectBody, b)
@@ -1304,7 +1304,7 @@ class Parser:
         )
         return NodeX(node=facet, extern=b.extern)
 
-    def _acceptitembodies(
+    def _accept_item_bodies(
         self,
         lex: Lexer,
         kind: ObjectBodyKind,
@@ -1340,7 +1340,7 @@ class Parser:
                 if lex.accept(TT.NATIVE):
                     is_native = True
                 else:
-                    b = self._getobjectbody(lex, kind)
+                    b = self._get_object_body(lex, kind)
                     if b.is_error:
                         return None, None, None, cast(zast.Error, b), False
                     b = cast(ObjectBody, b)
@@ -1361,7 +1361,7 @@ class Parser:
                         False,
                     )
                 lex.acceptany()
-                b = self._getobjectbody(lex, kind, as_clause=True)
+                b = self._get_object_body(lex, kind, as_clause=True)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1369,7 +1369,7 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=b.extern)
             elif t.toktype == TT.BRACEOPEN and is_body is None and not is_native:
                 # unnamed first arg defaults to 'is'
-                b = self._getobjectbody(lex, kind)
+                b = self._get_object_body(lex, kind)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1397,7 +1397,7 @@ class Parser:
 
         return is_body, as_body, extern, None, is_native
 
-    def _getobjectbody(
+    def _get_object_body(
         self,
         lex: Lexer,
         kind: ObjectBodyKind,
@@ -1458,7 +1458,7 @@ class Parser:
             if tt == TT.IS:
                 # type being implemented (or included for protocols)
                 lex.acceptany()
-                typerefx = self._acceptpath(lex)
+                typerefx = self._accept_path(lex)
                 if typerefx is None:
                     msg = "Expected type reference for 'is'"
                     return zast.Error(
@@ -1486,7 +1486,7 @@ class Parser:
                 else:
                     lex.accept(TT.EOL)  # optional newline
                     # function
-                    funcx = self._acceptfunction(lex)
+                    funcx = self._accept_function_definition(lex)
                     if funcx is not None and funcx.is_error:
                         return cast(zast.Error, funcx)  # propagate error
                     funcx = cast(Optional[NodeX[zast.Function]], funcx)
@@ -1501,7 +1501,7 @@ class Parser:
                         )
                     elif lex.peek().toktype == TT.UNIT:
                         # inline unit definition (e.g., public: unit { ... })
-                        unitx = self._acceptsubunit(lex)
+                        unitx = self._accept_unit_definition(lex)
                         if unitx is not None and unitx.is_error:
                             return cast(zast.Error, unitx)
                         unitx = cast(Optional[NodeX[zast.Unit]], unitx)
@@ -1515,7 +1515,7 @@ class Parser:
                             # which are resolved by the type checker, not the parser
                     else:
                         # path/typeref/typeref_or_num or constant expression
-                        opx = self._acceptoperation(lex)
+                        opx = self._accept_operation(lex)
                         if opx is not None and opx.is_error:
                             return cast(zast.Error, opx)  # propagate error
                         opx = cast(Optional[NodeX[zast.Operation]], opx)
@@ -1549,7 +1549,7 @@ class Parser:
             elif unlabelledpath:
                 # try an unnamed path - path can only have an refid at the root...
                 if lex.peek().toktype == TT.REFID:
-                    dottedidx = self._acceptpath(lex)
+                    dottedidx = self._accept_path(lex)
                     if dottedidx is not None and dottedidx.is_error:
                         return cast(zast.Error, dottedidx)  # propagate error
                     dottedidx = cast(Optional[NodeX[zast.Path]], dottedidx)
@@ -1596,7 +1596,7 @@ class Parser:
                     return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
             elif unlabelledid:
                 # an unnamed id... for enum only
-                atomidx = self._acceptatomid(lex)
+                atomidx = self._accept_atomid(lex)
                 if atomidx:
                     atomid = atomidx.node
                     name = atomid.name
@@ -1623,9 +1623,11 @@ class Parser:
             field_ownership=field_ownership,
         )
 
-    def _acceptsubunit(self, lex: Lexer) -> Union[NodeX[zast.Unit], zast.Error, None]:
+    def _accept_unit_definition(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Unit], zast.Error, None]:
         """
-        _acceptsubunit - accept a subunit (unit keyword)
+        _accept_unit_definition - accept a subunit (unit keyword)
 
         Return a Unit or Error or None for no unit (missing "unit" keyword)
 
@@ -1642,7 +1644,7 @@ class Parser:
             msg = "Expected brace delimited 'is' argument for Unit body"
             return zast.Error(start=lex.peek(), err=ERR.BADARGUMENT, msg=msg)
 
-        unitorerr = self._acceptunitbody(lex)
+        unitorerr = self._accept_unitbody(lex)
         if unitorerr.is_error:
             err = cast(zast.Error, unitorerr)
             return err
@@ -1657,7 +1659,9 @@ class Parser:
         unitorerr.node.start = start  # change start to 'unit' keyword
         return unitorerr
 
-    def _acceptif(self, lex: Lexer) -> Union[NodeX[zast.If], zast.Error, None]:
+    def _accept_if_expression(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.If], zast.Error, None]:
         """
         acceptif - accept an if clause (conditional)
 
@@ -1694,7 +1698,7 @@ class Parser:
                     lex.acceptany()  # 'when'
                     lex.accept(TT.EOL)  # optional EOL
 
-                op = self._acceptoperation(lex)
+                op = self._accept_operation(lex)
                 if op is not None and op.is_error:
                     return cast(zast.Error, op)  # propagate error
                 if not op:
@@ -1771,7 +1775,9 @@ class Parser:
         ifnode = zast.If(clauses=clauses, elseclause=elseclause, start=start)
         return NodeX(ifnode, extern=extern)
 
-    def _acceptmatch(self, lex: Lexer) -> Union[NodeX[zast.Case], zast.Error, None]:
+    def _accept_match_expression(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Case], zast.Error, None]:
         """
         acceptcase - accept a match clause (exhaustive conditional)
 
@@ -1804,7 +1810,7 @@ class Parser:
 
         # -- 'on'
         lex.accept(TT.ON)  # optional 'on'
-        op = self._acceptoperation(lex)
+        op = self._accept_operation(lex)
         if op is not None and op.is_error:
             return cast(zast.Error, op)  # propagate error
         if not op:
@@ -1842,7 +1848,7 @@ class Parser:
             # ----- get id
 
             curid: zast.AtomId
-            atomidx = self._acceptatomid(lex)
+            atomidx = self._accept_atomid(lex)
             if atomidx is not None and atomidx.is_error:
                 return cast(zast.Error, atomidx)  # propagate error
             if atomidx:
@@ -1905,7 +1911,9 @@ class Parser:
         )
         return NodeX(casenode, extern=extern)
 
-    def _acceptfor(self, lex: Lexer) -> Union[NodeX[zast.For], zast.Error, None]:
+    def _accept_for_expression(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.For], zast.Error, None]:
         """
         acceptfor - accept a for clause (iteration) per grammar:
 
@@ -1949,7 +1957,7 @@ class Parser:
                     lex.acceptany()
                     lex.accept(TT.EOL)
 
-                op = self._acceptoperation(lex)
+                op = self._accept_operation(lex)
                 if op is not None and op.is_error:
                     return cast(zast.Error, op)
                 if not op:
@@ -1984,7 +1992,7 @@ class Parser:
 
                 name = lex.acceptany().tokstr
                 lex.accept(TT.EOL)
-                op = self._acceptoperation(lex)
+                op = self._accept_operation(lex)
                 if op is not None and op.is_error:
                     return cast(zast.Error, op)
                 if not op:
@@ -2033,7 +2041,9 @@ class Parser:
         )
         return NodeX(fornode, extern=extern)
 
-    def _acceptwith(self, lex: Lexer) -> Union[NodeX[zast.With], zast.Error, None]:
+    def _accept_with_expression(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.With], zast.Error, None]:
         """
         acceptwith - accept a with expression (scoped definition)
 
@@ -2058,8 +2068,8 @@ class Parser:
         # Per grammar (doc/grammar.pdoc), 'with' takes an operation — no
         # bare labels and no named-arg calls. Unnamed-arg calls (the
         # grammar `term binop` form, e.g. `abs -5`) are permitted because
-        # _acceptoperation materialises them as a Call/Operation.
-        valnode_raw = self._acceptoperation(lex)
+        # _accept_operation materialises them as a Call/Operation.
+        valnode_raw = self._accept_operation(lex)
         if valnode_raw is not None and valnode_raw.is_error:
             return cast(zast.Error, valnode_raw)
         if not valnode_raw:
@@ -2093,7 +2103,7 @@ class Parser:
             return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
 
         # accept the do expression - the name is in scope here
-        doexprx = self._acceptexpression(lex)
+        doexprx = self._accept_expression(lex)
         if doexprx is not None and doexprx.is_error:
             return cast(zast.Error, doexprx)
         if not doexprx:
@@ -2120,14 +2130,14 @@ class Parser:
 
         Used in slots the grammar restricts to a block-or-operation
         (if/match `then`/`else`, `for` loop body). This helper:
-        - accepts `{ ... }` blocks via `_acceptstatement`;
-        - for non-brace forms, delegates to `_acceptexpression`, which
+        - accepts `{ ... }` blocks via `_accept_block`;
+        - for non-brace forms, delegates to `_accept_expression`, which
           includes nested control-flow (`if`, `for`, `match`, `with`) so
           idioms like `else if ...` and `else for ...` parse without
           requiring explicit braces.
 
         It does NOT accept bare label-bindings, assignments, reassignments,
-        or swaps — those are only valid inside a block. `_acceptexpression`
+        or swaps — those are only valid inside a block. `_accept_expression`
         by construction does not emit those at its top level.
 
         Returns a Statement so the AST shape of IfClause/CaseClause/For.loop
@@ -2136,9 +2146,9 @@ class Parser:
         """
         start = lex.peek()
         if start.toktype == TT.BRACEOPEN:
-            return self._acceptstatement(lex)
+            return self._accept_block(lex)
 
-        exprx = self._acceptexpression(lex)
+        exprx = self._accept_expression(lex)
         if exprx is None:
             return None
         if exprx.is_error:
@@ -2148,7 +2158,7 @@ class Parser:
         stmt = zast.Statement(statements=[line], start=start)
         return NodeX(stmt, extern=exprx.extern)
 
-    def _acceptbareblock(self, lex: Lexer) -> Union[NodeX[zast.Do], zast.Error, None]:
+    def _accept_bareblock(self, lex: Lexer) -> Union[NodeX[zast.Do], zast.Error, None]:
         """
         acceptbareblock - accept a bare block as an expression
 
@@ -2156,7 +2166,7 @@ class Parser:
 
         Return a Do or Error or None for no opening brace
         """
-        stmtx = self._acceptstatement(lex)
+        stmtx = self._accept_block(lex)
         if stmtx is not None and stmtx.is_error:
             return cast(zast.Error, stmtx)
         if not stmtx:
@@ -2165,7 +2175,9 @@ class Parser:
         do = zast.Do(statement=stmtx.node, start=stmtx.node.start)
         return NodeX(do, extern=stmtx.extern)
 
-    def _acceptdata(self, lex: Lexer) -> Union[NodeX[zast.Data], zast.Error, None]:
+    def _accept_data_definition(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Data], zast.Error, None]:
         """
         acceptdata - accept a data clause
 
@@ -2230,7 +2242,7 @@ class Parser:
             # Unconstrained operations would make adjacent elements
             # ambiguous — e.g. `10 MIDDLE: 20 30` could fuse `20 30` as
             # a call with unnamed argument, eating the next element.
-            pathx = self._acceptpath(lex)
+            pathx = self._accept_path(lex)
             if pathx is not None and pathx.is_error:
                 return cast(zast.Error, pathx)
             pathx = cast(Optional[NodeX[zast.Path]], pathx)
@@ -2261,7 +2273,7 @@ class Parser:
         datanode = zast.Data(data=data, start=start)
         return NodeX(datanode, extern=extern)
 
-    def _acceptoperation(
+    def _accept_operation(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Operation], zast.Error, None]:
         """
@@ -2276,9 +2288,9 @@ class Parser:
 
         Named-argument calls are NOT grammar-operations: this helper never
         consumes a trailing LABEL / LABELPRE. Callers wanting to accept
-        named-arg calls should use `_acceptoperationorcall` instead.
+        named-arg calls should use `_accept_operation_or_call` instead.
         """
-        oplist, err = self._getoplist(lex)
+        oplist, err = self._operation_paths(lex)
         if err is not None:
             return err
         if not oplist:
@@ -2286,14 +2298,14 @@ class Parser:
 
         # Odd-count paths → pure binop / single term.
         if len(oplist) % 2 != 0:
-            return self._getop(paths=oplist, nexttoken=lex.peek())
+            return self._fold_binop(paths=oplist, nexttoken=lex.peek())
 
         # Even-count paths → (term binop) form: callable + one unnamed binop
-        # argument. Build the Call directly without invoking `_acceptcall`,
+        # argument. Build the Call directly without invoking `_accept_call`,
         # which would consume any trailing named arguments — those are not
         # part of a grammar operation.
         callablex = oplist[0]
-        argx_raw = self._getop(paths=oplist[1:], nexttoken=lex.peek())
+        argx_raw = self._fold_binop(paths=oplist[1:], nexttoken=lex.peek())
         if argx_raw is not None and argx_raw.is_error:
             return cast(zast.Error, argx_raw)
         argx = cast(Optional[NodeX[zast.Operation]], argx_raw)
@@ -2311,7 +2323,7 @@ class Parser:
         )
         return NodeX(node=call, extern=extern)
 
-    def _acceptstatement(
+    def _accept_block(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Statement], zast.Error, None]:
         """
@@ -2338,7 +2350,7 @@ class Parser:
                 # consume all separators (EOL and ";")
                 while lex.accept(TT.EOL) or lex.accept(TT.SEMICOLON):
                     pass
-                statementlinex = self._acceptstatementline(lex)
+                statementlinex = self._accept_blockline(lex)
                 if statementlinex is not None and statementlinex.is_error:
                     error = cast(zast.Error, statementlinex)  # propagate error
                     break
@@ -2377,7 +2389,7 @@ class Parser:
             return NodeX(statement, extern=extern)
 
         # bare statement (no braces) - single statementline
-        statementlinex = self._acceptstatementline(lex)
+        statementlinex = self._accept_blockline(lex)
         if statementlinex is not None and statementlinex.is_error:
             return cast(zast.Error, statementlinex)
         if not statementlinex:
@@ -2388,7 +2400,7 @@ class Parser:
         statement = zast.Statement(statements=[statementlinex.node], start=start)
         return NodeX(statement, extern=extern)
 
-    def _acceptstatementline(
+    def _accept_blockline(
         self, lex: Lexer
     ) -> Union[NodeX[zast.StatementLine], zast.Error, None]:
         """
@@ -2400,7 +2412,7 @@ class Parser:
             | ( path "swap" path )              # swap
             | expression                        # bare expression
 
-        Reassignment and swap are handled here (not in `_acceptexpression`)
+        Reassignment and swap are handled here (not in `_accept_expression`)
         — the grammar lists them as expressions but the parser keeps them
         at statement level until the typechecker gains a null-use rule
         (see plan A9.2).
@@ -2422,7 +2434,7 @@ class Parser:
         if start.toktype == TT.LABEL:  # an assignment to new var
             lex.acceptany()  # label
             lex.accept(TT.EOL)  # optional newline
-            exprx = self._acceptexpression(lex)
+            exprx = self._accept_expression(lex)
             if exprx is not None and exprx.is_error:
                 return cast(zast.Error, exprx)  # propagate error
             if not exprx:
@@ -2436,7 +2448,7 @@ class Parser:
             return NodeX(node=statementline, extern=exprx.extern)
 
         # now for the hard ones....
-        oplist, err = self._getoplist(lex)
+        oplist, err = self._operation_paths(lex)
         if err is not None:
             return err
 
@@ -2453,7 +2465,7 @@ class Parser:
             promoteexterns(addto=extern, addfrom=lhsx.extern)
 
             # get RHS
-            rhsx = self._acceptexpression(lex)
+            rhsx = self._accept_expression(lex)
             if rhsx is not None and rhsx.is_error:
                 return cast(zast.Error, rhsx)  # propagate error
             if not rhsx:
@@ -2480,7 +2492,7 @@ class Parser:
             promoteexterns(addto=extern, addfrom=lhsx.extern)
 
             # get RHS
-            rhsx = self._acceptpath(lex)
+            rhsx = self._accept_path(lex)
             if rhsx is not None and rhsx.is_error:
                 return cast(zast.Error, rhsx)  # propagate error
             if not rhsx:
@@ -2494,7 +2506,7 @@ class Parser:
             return NodeX(node=statementline, extern=extern)
 
         if oplist:  # consumed tokens, need to check if op or call now (else error)
-            oporcallx = self._acceptoperationorcall(oplist, lex)
+            oporcallx = self._accept_operation_or_call(oplist, lex)
             if not oporcallx:
                 # this shouldn't happen, we know oplist is not empty
                 msg = "Bad statement"
@@ -2512,7 +2524,7 @@ class Parser:
 
         # haven't consumed anything yet..
         # must be an expression (but not a operation or call); or an error
-        exprx = self._acceptexpression(lex)
+        exprx = self._accept_expression(lex)
         if exprx is not None and exprx.is_error:
             return cast(zast.Error, exprx)  # propagate error
         if not exprx:
@@ -2521,7 +2533,7 @@ class Parser:
         statementline = zast.StatementLine(statementline=exprx.node, start=start)
         return NodeX(node=statementline, extern=exprx.extern)
 
-    def _acceptpath(self, lex: Lexer) -> Union[NodeX[zast.Path], zast.Error, None]:
+    def _accept_path(self, lex: Lexer) -> Union[NodeX[zast.Path], zast.Error, None]:
         """
         accept a path/atom.
 
@@ -2531,7 +2543,7 @@ class Parser:
         Returns the Path (NodeX) or an Error or None if no atom found
         """
         start = lex.peek()
-        atomx = self._acceptatom(lex)
+        atomx = self._accept_atom(lex)
         if atomx is None:
             return None
 
@@ -2557,7 +2569,7 @@ class Parser:
 
         return NodeX(node=path, extern=atomx.extern)  # only atomx is extern
 
-    def _acceptatom(self, lex: Lexer) -> Union[NodeX[zast.Atom], zast.Error, None]:
+    def _accept_atom(self, lex: Lexer) -> Union[NodeX[zast.Atom], zast.Error, None]:
         """
         accept an atom
 
@@ -2572,18 +2584,18 @@ class Parser:
         t = lex.peek()
         tt = t.toktype
         if tt == TT.PARENOPEN:
-            return self._acceptatomexpr(lex)
+            return self._accept_atomexpr(lex)
 
         if tt == TT.REFID:
-            return self._acceptatomid(lex)
+            return self._accept_atomid(lex)
 
         if tt == TT.STRBEG:
-            return self._acceptatomstring(lex)
+            return self._accept_atomstring(lex)
 
         return None
 
     @staticmethod
-    def _acceptatomid(lex: Lexer) -> Union[NodeX[zast.AtomId], None]:
+    def _accept_atomid(lex: Lexer) -> Union[NodeX[zast.AtomId], None]:
         """
         accept an atomid
 
@@ -2603,7 +2615,7 @@ class Parser:
         extern[name] = atomid  # atom itself is an external reference
         return NodeX(node=atomid, extern=extern)
 
-    def _acceptatomexpr(
+    def _accept_atomexpr(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Expression], zast.Error, None]:
         """
@@ -2623,7 +2635,7 @@ class Parser:
         prev_filtereol = lex._filtereol
         lex.filtereol(True)  # enable EOL filtering. EOL's are ignored within parens
 
-        expr = self._acceptexpression(lex)
+        expr = self._accept_expression(lex)
         while True:
             if expr is None:
                 msg = "Expected a valid expression within parentheses"
@@ -2653,7 +2665,7 @@ class Parser:
         # we have a valid expression that was surrounded by parens
         return cast(NodeX[zast.Expression], expr)
 
-    def _acceptatomstring(
+    def _accept_atomstring(
         self, lex: Lexer
     ) -> Union[NodeX[zast.AtomString], zast.Error, None]:
         """
@@ -2695,7 +2707,7 @@ class Parser:
                 if not lex.accept(TT.BRACEOPEN):
                     msg = "Expected '{' after '\\' in string interpolation"
                     return zast.Error(start=lex.peek(), err=ERR.BADSTRING, msg=msg)
-                expr = self._acceptexpression(lex)
+                expr = self._accept_expression(lex)
                 if expr is None:
                     msg = "Bad expression in string interpolation"
                     return zast.Error(start=lex.peek(), err=ERR.BADEXPRESSION, msg=msg)
