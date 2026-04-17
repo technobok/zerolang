@@ -1811,16 +1811,19 @@ class Parser:
         """
         acceptcase - accept a match clause (exhaustive conditional)
 
-            "match"
-            ( ["on"] operation )
-            {
-                (
-                    ( "case" [ newline ] id )
-                    | ( label [ newline ] id )
-                )
-                "then" statement
-            }
-            | ( "else" statement )
+            "match" [ "on" ] operation
+            { "case" [ newline ] id "then" primary-expression }
+            [ "else" primary-expression ]
+
+        The subject is narrowed in place: if the subject is a simple
+        addressable name (an AtomId) the arm sees that name shadowed with
+        the matched variant type. For complex / anonymous subjects no
+        narrowed binding is introduced — the arm body can only perform
+        side effects predicated on the matched variant existing.
+
+        `.take` on the subject is rejected: `match` borrows the subject
+        for narrowing across arms; taking it would conflict with the
+        flow-narrowed shadow.
 
         Return a Case or Error or None for no unit (missing "match" keyword)
         """
@@ -1845,27 +1848,31 @@ class Parser:
             return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
         op = cast(NodeX[zast.Operation], op)
 
+        # Reject `.take` on the match subject. Narrowing requires the
+        # subject to remain addressable across arms; taking ownership
+        # into an arm would invalidate later arms. A subject carrying a
+        # `.take` suffix is a DottedPath whose leaf AtomId is `take`.
+        if op.node.nodetype in (NodeType.DOTTEDPATH, NodeType.ATOMID):
+            _stripped, subj_own = self._strip_ownership(cast(zast.Path, op.node))
+            if subj_own is ZParamOwnership.TAKE:
+                msg = (
+                    "cannot '.take' the subject of 'match'; the subject is "
+                    "borrowed for arm narrowing"
+                )
+                return zast.Error(start=op.node.start, err=ERR.BADCASE, msg=msg)
+
         subject = op.node
         promoteexterns(addto=extern, addfrom=op.extern)
 
-        ofindex = 0  # counter for 'fake' binding names (for 'case' clauses)
         while True:
             startclause = lex.peek()  # for each CaseClause
             local: Set[str] = set()  # for each CaseClause
 
             t = lex.peek()
-            if t.toktype not in (TT.LABEL, TT.CASE):
+            if t.toktype != TT.CASE:
                 break  # end of clauses
 
-            # ----- get label or 'case' (get name)
-            name: str
-            if t.toktype == TT.LABEL:
-                name = t.tokstr
-                local.add(name)
-            else:  # t.toktype == TT.CASE:
-                name = f" *{ofindex}"
-                ofindex += 1
-            lex.acceptany()  # label/'case'
+            lex.acceptany()  # 'case'
             lex.accept(TT.EOL)  # optional EOL
 
             # ----- get id
@@ -1880,6 +1887,11 @@ class Parser:
             else:
                 msg = "Case match expression expected (simple id)"
                 return zast.Error(start=lex.acceptany(), err=ERR.BADREFERENCE, msg=msg)
+
+            # Name the clause after the matched id. The clause's statement
+            # references the subject under its original name (narrowed) if
+            # addressable, or has no narrowed binding otherwise.
+            name = curid.name
 
             # ----- get then
 
