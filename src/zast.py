@@ -732,10 +732,15 @@ class CallKind(IntEnum):
 
 
 @dataclass
-class Call(Node):
+class Call(Operation):
     """
-    Call Node - represents and executable call and also a type reference (in
-    type context)
+    Call Node - represents an executable call and also a type reference (in
+    type context).
+
+    Subclasses Operation because grammar `operation = binop | (term binop)`
+    — the `(term binop)` alternative is materialised as a Call with a
+    single unnamed argument, so any site accepting an Operation must also
+    accept that Call form.
     """
 
     nodetype: NodeType = field(default=NodeType.CALL, init=False)

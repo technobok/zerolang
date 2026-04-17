@@ -2065,43 +2065,20 @@ class Parser:
         lex.acceptany()  # consume the label
 
         # Per grammar (doc/grammar.pdoc), 'with' takes an operation — no
-        # bare labels and no calls. Calls, if/for/match, and bare blocks
-        # must be wrapped in parentheses to become a term.
-        oplist_result = self._getoplist(lex)
-        if getattr(oplist_result, "is_error", False):
-            return cast(zast.Error, oplist_result)
-        oplist = cast(List[NodeX[zast.Path]], oplist_result)
-        if not oplist:
-            msg = (
-                "Expected operation for 'with' value; wrap calls, "
-                "if/for/match, or blocks in parentheses, e.g. "
-                "'with x: (...) do ...'"
-            )
-            return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
-        valnode_raw = self._acceptoperationorcall(oplist, lex)
+        # bare labels and no named-arg calls. Unnamed-arg calls (the
+        # grammar `term binop` form, e.g. `abs -5`) are permitted because
+        # _acceptoperation materialises them as a Call/Operation.
+        valnode_raw = self._acceptoperation(lex)
         if valnode_raw is not None and valnode_raw.is_error:
             return cast(zast.Error, valnode_raw)
         if not valnode_raw:
-            msg = "Expected operation for 'with' value"
+            msg = (
+                "Expected operation for 'with' value; wrap calls with "
+                "named arguments, if/for/match, or blocks in parentheses, "
+                "e.g. 'with x: (...) do ...'"
+            )
             return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
-        valnode = cast(NodeX[zast.Operation], valnode_raw)
-        if valnode.node.nodetype == zast.NodeType.CALL:
-            # Per grammar, operation = binop | (term binop). A call with one
-            # unnamed argument matches `term binop` (e.g. `abs -5`). Any
-            # call carrying a named argument is not an operation and must
-            # be parenthesized to become a term.
-            call_node = cast(zast.Call, valnode.node)
-            has_named_arg = any(a.name is not None for a in call_node.arguments)
-            if has_named_arg:
-                msg = (
-                    "Call with named arguments cannot appear as a 'with' "
-                    "value; wrap it in parentheses, e.g. "
-                    "'with x: (f a: 1 b: 2) do ...'"
-                )
-                return zast.Error(
-                    start=valnode.node.start, err=ERR.EXPECTEDEXP, msg=msg
-                )
-        opx = valnode
+        opx = cast(NodeX[zast.Operation], valnode_raw)
         value_expr = zast.Expression(expression=opx.node, start=opx.node.start)
         valuex = NodeX(node=value_expr, extern=opx.extern)
 
@@ -2110,7 +2087,18 @@ class Parser:
 
         # expect 'do'
         if not lex.accept(TT.DO):
-            msg = "Expected 'do' after 'with' definition"
+            # If a label follows, the user likely wrote a call with named
+            # arguments (e.g. `with b: bag x: 1 do b`) — `bag` parses as
+            # the operation and `x: 1` then appears where `do` is expected.
+            # Point them at parenthesization.
+            if lex.peek().toktype in (TT.LABEL, TT.LABELPRE):
+                msg = (
+                    "Expected 'do' after 'with' definition. If the value "
+                    "is a call with named arguments, wrap it in "
+                    "parentheses, e.g. 'with x: (f a: 1 b: 2) do ...'"
+                )
+            else:
+                msg = "Expected 'do' after 'with' definition"
             return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
 
         # accept the do expression - the name is in scope here
@@ -2234,16 +2222,47 @@ class Parser:
             operation: binop | ( term binop )
             binop:     term { id term }
 
-        Note: the `(term binop)` alternative (an unnamed-argument call shape
-        like `abs -5`) is not yet handled here — see plan A8. This helper
-        currently matches only the `binop` alternative (chained id operators).
+        The `(term binop)` alternative (unnamed-argument call shape, e.g.
+        `abs -5`) is materialised as a `zast.Call` with a single unnamed
+        argument. Call is an Operation subclass (see zast.py).
+
+        Named-argument calls are NOT grammar-operations: this helper never
+        consumes a trailing LABEL / LABELPRE. Callers wanting to accept
+        named-arg calls should use `_acceptoperationorcall` instead.
         """
-        oplist = self._getoplist(lex)
-        if getattr(oplist, "is_error", False):
-            return cast(zast.Error, oplist)  # propagate error
-        return self._getop(
-            paths=cast(List[NodeX[zast.Path]], oplist), nexttoken=lex.peek()
+        oplist_raw = self._getoplist(lex)
+        if getattr(oplist_raw, "is_error", False):
+            return cast(zast.Error, oplist_raw)
+        oplist = cast(List[NodeX[zast.Path]], oplist_raw)
+        if not oplist:
+            return None
+
+        # Odd-count paths → pure binop / single term.
+        if len(oplist) % 2 != 0:
+            return self._getop(paths=oplist, nexttoken=lex.peek())
+
+        # Even-count paths → (term binop) form: callable + one unnamed binop
+        # argument. Build the Call directly without invoking `_acceptcall`,
+        # which would consume any trailing named arguments — those are not
+        # part of a grammar operation.
+        callablex = oplist[0]
+        argx_raw = self._getop(paths=oplist[1:], nexttoken=lex.peek())
+        if argx_raw is not None and argx_raw.is_error:
+            return cast(zast.Error, argx_raw)
+        argx = cast(Optional[NodeX[zast.Operation]], argx_raw)
+        extern: Dict[str, zast.AtomId] = dict(callablex.extern)
+        arguments: List[zast.NamedOperation] = []
+        if argx is not None:
+            arguments.append(
+                zast.NamedOperation(name=None, valtype=argx.node, start=argx.node.start)
+            )
+            promoteexterns(addto=extern, addfrom=argx.extern)
+        call = zast.Call(
+            callable=callablex.node,
+            arguments=arguments,
+            start=callablex.node.start,
         )
+        return NodeX(node=call, extern=extern)
 
     def _acceptstatement(
         self, lex: Lexer
