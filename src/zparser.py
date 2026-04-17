@@ -682,10 +682,6 @@ class Parser:
             node = self._acceptwith(lex)
         elif tt == TT.BRACEOPEN:
             node = self._acceptbareblock(lex)
-        # elif tt == TT.ARRAY:
-        #     node = self._acceptarray(lex)
-        # elif tt == TT.LIST:
-        #     node = self._acceptlist(lex)
         else:
             oplist = self._getoplist(lex)
             if getattr(oplist, "is_error", False):
@@ -728,10 +724,6 @@ class Parser:
         #    as long as no label following)
         # if we found a call, always assume the first op is callable.
         #   Let the typechecker do further checking
-
-        # oplist = self._getoplist(lex)
-        # if getattr(oplist, 'is_error', False):
-        #     return oplist  # propagate error
 
         if not oplist:  # len(oplist) == 0
             return None
@@ -798,11 +790,8 @@ class Parser:
             return zast.Error(start=cast(Token, el), err=ERR.BADEXPRESSION, msg=msg)
         start = el.node.start
 
-        # operations: List[zast.OpArg] = []
         operation: zast.Operation = el.node
         extern: Dict[str, zast.AtomId] = el.extern
-        # el must be a Path
-        # lhs: zast.Path = el.node
 
         # loop over the remaining elements 2 at a time making OpArgs
         idx = 1
@@ -811,13 +800,8 @@ class Parser:
             el = paths[idx]
             path = el.node
             if path.nodetype != NodeType.ATOMID:
-                # print(repr(path))
                 msg = "Expected an operator (single identifier)"
                 return zast.Error(start=el.node.start, err=ERR.BADEXPRESSION, msg=msg)
-            # start = path.start
-            # take the single Id out of the AtomId, nb: externs from here are
-            # ignored (operator is a local ref againt the lhs)
-            # operator = path.lhs.ids[0]  # too many dots
             operator = cast(zast.AtomId, path)
             idx += 1
             if idx >= n:
@@ -876,7 +860,6 @@ class Parser:
             NodeType.NAMEDOPERATION,
             NodeType.LABELVALUE,
         ):
-            opx = self._fixcalloperation(opx)  # correct single Id's
             namedop = zast.NamedOperation(
                 name=None, valtype=opx.node, start=opx.node.start
             )
@@ -912,7 +895,6 @@ class Parser:
                     return cast(zast.Error, opx)  # propagate error
                 opx = cast(Optional[NodeX[zast.Operation]], opx)
                 if opx:
-                    opx = self._fixcalloperation(opx)  # correct single Id's
                     namedop = zast.NamedOperation(
                         name=label.tokstr, valtype=opx.node, start=label
                     )
@@ -1881,7 +1863,7 @@ class Parser:
                 name = t.tokstr
                 local.add(name)
             else:  # t.toktype == TT.CASE:
-                name = " *{ofindex}"
+                name = f" *{ofindex}"
                 ofindex += 1
             lex.acceptany()  # label/'case'
             lex.accept(TT.EOL)  # optional EOL
@@ -1966,13 +1948,10 @@ class Parser:
         if not lex.accept(TT.FOR):
             return None
 
-        # clauses: List[zast.IfClause] = []
-        # elseclause: Optional[zast.Statement] = None
         conditions: Dict[str, zast.Operation] = {}
         postconditions: List[zast.Operation] = []
         loop: Optional[zast.Statement] = None
         local: Set[str] = set()
-        # startclause = lex.peek()  # for each IfClause
 
         extern: Dict[str, zast.AtomId] = {}
 
@@ -2250,11 +2229,14 @@ class Parser:
         self, lex: Lexer
     ) -> Union[NodeX[zast.Operation], zast.Error, None]:
         """
-        Return an Operation. Will consume all Path/TT.AS
+        Return an Operation per grammar:
 
-            operation
-                path { ( "as" typeref ) | ( id path ) }
+            operation: binop | ( term binop )
+            binop:     term { id term }
 
+        Note: the `(term binop)` alternative (an unnamed-argument call shape
+        like `abs -5`) is not yet handled here — see plan A8. This helper
+        currently matches only the `binop` alternative (chained id operators).
         """
         oplist = self._getoplist(lex)
         if getattr(oplist, "is_error", False):
@@ -2262,19 +2244,6 @@ class Parser:
         return self._getop(
             paths=cast(List[NodeX[zast.Path]], oplist), nexttoken=lex.peek()
         )
-
-    @staticmethod
-    def _fixcalloperation(opx: NodeX[zast.Operation]) -> NodeX[zast.Operation]:
-        """
-
-        fixcalloperation - check a call value to see if it is a single Id. If
-        so, update the Id definition to show that this cannot be a module
-        reference.
-
-        Used for call arguments.
-
-        """
-        return opx
 
     def _acceptstatement(
         self, lex: Lexer
