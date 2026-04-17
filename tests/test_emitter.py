@@ -241,7 +241,7 @@ class TestEmitterBasic:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  with iter: counter i: 0 max: 3 do for x: iter loop {\n"
+            "  with iter: (counter i: 0 max: 3) do for x: iter loop {\n"
             '    print "\\{x}"\n'
             "  }\n"
             "}"
@@ -1517,7 +1517,7 @@ class TestEmitterClassDestructors:
         """With-block scope exit calls destructor."""
         csource = emit_source(
             "myclass: class { x: i64 }\n"
-            'main: function is { with c: myclass x: 1 do print "ok" }'
+            'main: function is { with c: (myclass x: 1) do print "ok" }'
         )
         # valtype-only class: no destructor needed
         assert "z_myclass_destroy" not in csource
@@ -3539,7 +3539,7 @@ class TestGenericsEmission:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  with iter: counter i: 0 max: 3 do for x: iter loop {\n"
+            "  with iter: (counter i: 0 max: 3) do for x: iter loop {\n"
             '    print "\\{x}"\n'
             "  }\n"
             "}"
@@ -3671,7 +3671,7 @@ class TestGenericsEmission:
             "  get_secret: function {:this} out i64 is { return this.secret }\n"
             "}\n"
             "main: function is {\n"
-            '  with c: myclass x: 1 secret: 42 do print "\\{c.get_secret}"\n'
+            '  with c: (myclass x: 1 secret: 42) do print "\\{c.get_secret}"\n'
             "}"
         )
         output = compile_and_run(csource)
@@ -6160,7 +6160,7 @@ class TestAliasBinding:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            '  with b: bag x: 1 do print "\\{b.x}"\n'
+            '  with b: (bag x: 1) do print "\\{b.x}"\n'
             "}"
         )
         assert "/* alias: b" not in csource

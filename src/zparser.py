@@ -2085,14 +2085,46 @@ class Parser:
         name = t.tokstr
         lex.acceptany()  # consume the label
 
-        # accept the value expression
-        valuex = self._acceptexpression(lex)
-        if valuex is not None and valuex.is_error:
-            return cast(zast.Error, valuex)
-        if not valuex:
-            msg = "Expected expression for 'with' value"
-            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDEXP, msg=msg)
-        valuex = cast(NodeX[zast.Expression], valuex)
+        # Per grammar (doc/grammar.pdoc), 'with' takes an operation — no
+        # bare labels and no calls. Calls, if/for/match, and bare blocks
+        # must be wrapped in parentheses to become a term.
+        oplist_result = self._getoplist(lex)
+        if getattr(oplist_result, "is_error", False):
+            return cast(zast.Error, oplist_result)
+        oplist = cast(List[NodeX[zast.Path]], oplist_result)
+        if not oplist:
+            msg = (
+                "Expected operation for 'with' value; wrap calls, "
+                "if/for/match, or blocks in parentheses, e.g. "
+                "'with x: (...) do ...'"
+            )
+            return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
+        valnode_raw = self._acceptoperationorcall(oplist, lex)
+        if valnode_raw is not None and valnode_raw.is_error:
+            return cast(zast.Error, valnode_raw)
+        if not valnode_raw:
+            msg = "Expected operation for 'with' value"
+            return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
+        valnode = cast(NodeX[zast.Operation], valnode_raw)
+        if valnode.node.nodetype == zast.NodeType.CALL:
+            # Per grammar, operation = binop | (term binop). A call with one
+            # unnamed argument matches `term binop` (e.g. `abs -5`). Any
+            # call carrying a named argument is not an operation and must
+            # be parenthesized to become a term.
+            call_node = cast(zast.Call, valnode.node)
+            has_named_arg = any(a.name is not None for a in call_node.arguments)
+            if has_named_arg:
+                msg = (
+                    "Call with named arguments cannot appear as a 'with' "
+                    "value; wrap it in parentheses, e.g. "
+                    "'with x: (f a: 1 b: 2) do ...'"
+                )
+                return zast.Error(
+                    start=valnode.node.start, err=ERR.EXPECTEDEXP, msg=msg
+                )
+        opx = valnode
+        value_expr = zast.Expression(expression=opx.node, start=opx.node.start)
+        valuex = NodeX(node=value_expr, extern=opx.extern)
 
         # the name is locally defined, don't propagate it as extern
         promoteexterns(addto=extern, addfrom=valuex.extern)

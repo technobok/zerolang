@@ -1959,7 +1959,7 @@ class TestWithOwnership:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            '  with b: bag x: 1 do print "\\{b.x}"\n'
+            '  with b: (bag x: 1) do print "\\{b.x}"\n'
             "}"
         )
 
@@ -6210,7 +6210,7 @@ class TestVisibility:
             "  get_y: function {:this} out i64 is { return this.y }\n"
             "}\n"
             "main: function is {\n"
-            '  with c: myclass x: 1 y: 2 do print "\\{c.get_y}"\n'
+            '  with c: (myclass x: 1 y: 2) do print "\\{c.get_y}"\n'
             "}"
         )
 
@@ -6221,7 +6221,7 @@ class TestVisibility:
             "  public: unit { :x }\n"
             "}\n"
             "main: function is {\n"
-            '  with c: myclass x: 1 secret: 42 do print "\\{c.secret}"\n'
+            '  with c: (myclass x: 1 secret: 42) do print "\\{c.secret}"\n'
             "}"
         )
         assert any("not public" in e.msg for e in errors)

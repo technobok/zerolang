@@ -455,6 +455,29 @@ class TestWithExpression:
         result = parse_unit("f: function is { with x: 42 1 }")
         assert isinstance(result, zast.Error)
 
+    def test_with_named_arg_call_rejected(self):
+        """with's value is an operation — calls with named args must be parenthesized."""
+        result = parse_unit("f: function is { with b: bag x: 1 do b }")
+        assert isinstance(result, zast.Error)
+        assert "parentheses" in result.msg.lower()
+
+    def test_with_parenthesized_named_arg_call_ok(self):
+        """Wrapping the call in parentheses makes it a valid with-value."""
+        src = "bag: record { x: i64 }\nf: function is { with b: (bag x: 1) do 0 }"
+        result = parse_unit(src)
+        body = get_unit_body(result)
+        assert isinstance(body["f"], zast.Function)
+
+    def test_with_single_positional_call_ok(self):
+        """Call with a single unnamed arg matches grammar's `term binop` form."""
+        src = (
+            "g: function {v: i64} out i64 is { return v }\n"
+            "f: function is { with y: g 5 do 0 }"
+        )
+        result = parse_unit(src)
+        body = get_unit_body(result)
+        assert isinstance(body["f"], zast.Function)
+
 
 class TestFacetDefinition:
     def test_simple_facet(self):
