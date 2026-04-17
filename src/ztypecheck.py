@@ -5499,8 +5499,14 @@ class TypeChecker:
             if not mono_ftype:
                 return None  # error already emitted
             call.callable.type = mono_ftype
-            call.type = mono_ftype.return_type
-            return mono_ftype.return_type
+            # functions with no `out` have return_type None — callers
+            # (match/if branch unification, expression typing) expect a
+            # ZType, so normalise to `null`.
+            ret = mono_ftype.return_type or self.t_null
+            call.type = ret
+            if call.call_kind == zast.CallKind.UNKNOWN:
+                call.call_kind = zast.CallKind.REGULAR
+            return ret
 
         # handle union/variant subtype construction: dotted path parent is a tagged type
         # (must be before record/class checks since subtypes may be records)

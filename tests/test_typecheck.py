@@ -5591,7 +5591,7 @@ class TestStrStringview:
             "main: function is {\n"
             '  s: "hi".str to: 32\n'
             "  { v: s.stringview\n    print v\n  }\n"
-            "  print s\n"
+            "  print s.stringview\n"
             "}"
         )
 

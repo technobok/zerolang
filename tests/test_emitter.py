@@ -4351,9 +4351,10 @@ class TestStr:
         assert output.strip() == "hello"
 
     def test_str_print(self):
-        """Print with str value uses printf directly."""
+        """Print a str via explicit .stringview projection."""
         csource = emit_source(
-            'main: function is {\n    s: "hi there".str to: 32\n    print s\n}'
+            'main: function is {\n    s: "hi there".str to: 32\n'
+            "    print s.stringview\n}"
         )
         output = compile_and_run(csource)
         assert output.strip() == "hi there"
@@ -4415,7 +4416,7 @@ class TestStr:
             '    s16: "hello".str to: 16\n'
             "    s64: s16.str to: 64\n"
             '    print "\\{s64.length} \\{s64.size}"\n'
-            "    print s64\n"
+            "    print s64.stringview\n"
             "}"
         )
         output = compile_and_run(csource)
@@ -4430,7 +4431,7 @@ class TestStr:
             '    s32: "hello world".str to: 32\n'
             "    s4: s32.str to: 4\n"
             '    print "\\{s4.length}"\n'
-            "    print s4\n"
+            "    print s4.stringview\n"
             "}"
         )
         output = compile_and_run(csource)
@@ -4445,7 +4446,7 @@ class TestStr:
             '    a: "hello".str to: 32\n'
             "    b: a.str to: 32\n"
             '    print "\\{b.length}"\n'
-            "    print b\n"
+            "    print b.stringview\n"
             "}"
         )
         output = compile_and_run(csource)
@@ -4469,7 +4470,7 @@ class TestStr:
             '    e: entry name: ("alice".str to: 16) age: 30\n'
             '    e.name = "bob".str to: 16\n'
             '    print "\\{e.name.length}"\n'
-            "    print e.name\n"
+            "    print e.name.stringview\n"
             "}"
         )
         output = compile_and_run(csource)
@@ -6171,7 +6172,7 @@ class TestAliasBinding:
             "entry: record { name: (str to: 16) age: i64 }\n"
             "main: function is {\n"
             '  e: entry name: ("alice".str to: 16) age: 30\n'
-            "  with v: e.name do print v\n"
+            "  with v: e.name do print v.stringview\n"
             "}"
         )
         assert "/* alias: v => e.name */" in csource
@@ -6214,7 +6215,7 @@ class TestAliasBinding:
             "main: function is {\n"
             '  e: entry name: ("alice".str to: 16) age: 30\n'
             "  with who: e.name do {\n"
-            "    print who\n"
+            "    print who.stringview\n"
             '    print "\\{who.length}"\n'
             "  }\n"
             "  with age: e.age do {\n"

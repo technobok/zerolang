@@ -3967,18 +3967,18 @@ class CEmitter:
 
         if callable_name == "print":
             self.needs_stdio = True
-            self.needs_stringview = True
             if call.arguments:
                 arg_op = call.arguments[0].valtype
                 arg_type = self._get_operation_type(arg_op)
                 arg = self._emit_operation_value(arg_op)
-                # convert to stringview at call site for z_stringview_print
-                if arg_type and _is_str_type(arg_type):
-                    arg = f"(z_stringview_t){{ {arg}.data, {arg}.len }}"
-                elif arg_type and arg_type.subtype == ZSubType.STRING:
+                # `print` is generic over `stringlike` (see lib/system/io.z).
+                # Monomorphization has already rejected non-member argument
+                # types; dispatch here is purely to the per-type runtime
+                # primitive, no conversion.
+                if arg_type and arg_type.subtype == ZSubType.STRING:
                     self.needs_string = True
-                    arg = f"(z_stringview_t){{ {arg}.data, {arg}.size }}"
-                # stringview: pass directly
+                    return f"{indent}z_string_print(&{arg});\n"
+                self.needs_stringview = True
                 return f"{indent}z_stringview_print({arg});\n"
             return f'{indent}printf("\\n");\n'
 
