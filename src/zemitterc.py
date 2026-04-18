@@ -1435,13 +1435,33 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _needs_eq_call(self, ztype: ZType) -> bool:
-        """Check if a type needs z_{name}_eq() call instead of C ==."""
+        """Check if a type needs a `z_{name}_eq()` call instead of C `==`.
+
+        - Auto-generated equality (record/class/variant synthesised by
+          the typechecker): always needs a call — structs have no `==`.
+        - Native types that provide an explicit `==` method (e.g.
+          `stringview.==`, `string.==`): also need a call, because
+          the C-level representation is a struct and `==` on structs
+          is not valid C.
+        - Primitives (numeric types, bool) use C `==` directly.
+        """
         if not ztype:
             return False
         eq = ztype.children.get("==")
-        if eq and eq.is_autogen_eq:
+        if eq is None:
+            return False
+        if eq.is_autogen_eq:
             return True
-        return False
+        # Native/user-defined ==. Primitives (ints, floats, bool) use
+        # C ==; everything else is a struct and needs the named function.
+        if ztype.name in NUMERIC_RANGES or ztype.name in (
+            "bool",
+            "f32",
+            "f64",
+            "f128",
+        ):
+            return False
+        return True
 
     def _use_memcmp_eq(self, name: str, eq_method: ZType) -> bool:
         """Check if a type should use memcmp for equality.
@@ -3998,15 +4018,16 @@ class CEmitter:
                         f"{indent}z_stringview_print("
                         f"(z_stringview_t){{{arg}.data, {arg}.len}});\n"
                     )
-                # Fallback: assume T exposes `.data` / `.length` (the
-                # layout the `text` conformance is meant to guarantee).
-                # If a future user type uses a different layout, it is
-                # expected to override `.stringview` with a real method
-                # the emitter would resolve instead of this inline form.
-                return (
-                    f"{indent}z_stringview_print("
-                    f"(z_stringview_t){{{arg}.data, {arg}.length}});\n"
-                )
+                # User type conforming to `text`: call the type's
+                # declared `.stringview` method. The method's C name
+                # follows the `z_<typename>_stringview` convention the
+                # rest of the emitter uses.
+                if arg_type:
+                    tname = arg_type.name.replace(".", "_")
+                    return f"{indent}z_stringview_print(z_{tname}_stringview({arg}));\n"
+                # Unknown type — shouldn't happen post-typecheck, but keep
+                # a safe fallback.
+                return f"{indent}z_stringview_print({arg});\n"
             return f'{indent}printf("\\n");\n'
 
         # check call_kind first, then fallback to callable type's control_kind

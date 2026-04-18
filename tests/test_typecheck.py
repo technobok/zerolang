@@ -4122,6 +4122,55 @@ class TestGenerics:
         )
         assert any("does not satisfy constraint 'stringlike'" in e.msg for e in errors)
 
+    def test_generic_function_stringlike_accepts_str_via_text(self):
+        """stringlike union includes `text` protocol; str conforms via :text."""
+        check_ok(
+            "show: function as { t: stringlike.generic } in { v: t } is "
+            "{ print v }\n"
+            'main: function is { s: "hi".str to: 16\n show s }'
+        )
+
+    def test_generic_function_stringlike_accepts_user_text_conformer(self):
+        """Any user type declaring :text and the spec method satisfies stringlike."""
+        check_ok(
+            "mytext: record { data_: stringview } as {\n"
+            "    :text\n"
+            "    stringview: function {t: this} out stringview is { return t.data_ }\n"
+            "}\n"
+            "show: function as { t: stringlike.generic } in { v: t } is "
+            "{ print v }\n"
+            'main: function is { m: mytext data_: "hi"\n show m }'
+        )
+
+    def test_generic_function_stringlike_rejects_missing_text_conformance(self):
+        """A type that does not declare :text but has a .stringview method
+        is still rejected — conformance is explicit, not structural."""
+        errors = check_errors(
+            "nottext: record { data_: stringview } as {\n"
+            "    stringview: function {t: this} out stringview is { return t.data_ }\n"
+            "}\n"
+            "show: function as { t: stringlike.generic } in { v: t } is "
+            "{ print v }\n"
+            'main: function is { n: nottext data_: "hi"\n show n }'
+        )
+        assert any("does not satisfy constraint 'stringlike'" in e.msg for e in errors)
+
+    def test_generic_function_stringlike_declaration_order_stringview_wins(self):
+        """stringlike declares :stringview before :text; a stringview T
+        matches :stringview even if stringview conformed to text."""
+        program = check_ok(
+            "show: function as { t: stringlike.generic } in { v: t } is "
+            "{ print v }\n"
+            'main: function is { show "hi" }'
+        )
+        # monomorphization for stringview, not text
+        sv_monos = [
+            m
+            for m, _ in program.mono_functions
+            if "stringview" in m.name and m.name.startswith("show_")
+        ]
+        assert len(sv_monos) == 1
+
     def test_generic_function_monomorphization_cached(self):
         """Same instantiation produces one cached mono function."""
         program = check_ok(
