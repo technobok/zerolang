@@ -1502,6 +1502,62 @@ Examples:
   x4: optionval.none i32
   """
 
+#-----: Heterogeneous union constraints
+
+A #~"union" used as a generic constraint via #~".generic" may contain a mix of
+concrete type members and protocol/facet members. A concrete member accepts an
+argument whose type is exactly that concrete type; a protocol/facet member
+accepts any argument whose type #_*"declares conformance" to that protocol or
+facet (an entry of the form #~"<label>: <protocol-name>" or the #~":<name>"
+shorthand in the type's #~"as" clause).
+
+Match precedence is #_*"declaration order": the typechecker walks the union's
+members from first to last and returns at the first match. There is no special
+"name-match beats protocol-match" rule — each member is tested on its own
+terms. The lib author controls dispatch entirely through the order in which
+members are listed.
+
+#_*"Compile time vs runtime" — this distinction applies to #~"any" heterogeneous
+union used as a generic constraint, not just the examples below:
+
+#ul:
+  [#*: #_*"Compile time" (the only case generic constraints use): when
+  #~"T: SomeUnion.generic" is being checked, T satisfies the constraint iff
+  the above walk finds a match. This is a pure compile-time set-membership
+  check; the generic function is monomorphized per concrete T, and there is
+  no runtime tag or dispatch.]
+  [#*: #_*"Runtime" (allowed but rare): the same union may be #~"constructed"
+  at runtime, in which case it is a tagged union — concrete members carry
+  their value directly, protocol members carry a protocol-erased instance
+  (vtable + opaque data) per zerolang's standard protocol-value machinery.
+  Programs that go this route pay one indirect call per protocol-tagged read.
+  No new runtime machinery is introduced; it is the same protocol-erasure
+  used elsewhere.]
+
+Example — a stringlike constraint for generic-over-string functions:
+
+#code language=zerolang: """
+  # text protocol: the converter method any "stringlike" conformer provides
+  text: protocol {
+      stringview: function {:this} out stringview
+  }
+
+  # heterogeneous union: one concrete type + one protocol
+  stringlike: union { :stringview :text }
+
+  # string and str both declare `:text` in their `as` clause, so both
+  # satisfy `stringlike` via the protocol member. stringview satisfies
+  # via the concrete member.
+
+  print: function as { T: stringlike.generic } in { msg: T } is native
+
+  main: function is {
+      print "hi"                     # T = stringview
+      print "hi".string              # T = string (conforms via :text)
+      print "hi".str to: 8           # T = str_8  (conforms via :text)
+  }
+  """
+
 Note: #~"option" is emitted as a nullable pointer in C. #~"option.some val" stores the
 reference directly; #~"option.none" is #~"NULL". This means #~"option(option(T))" has a
 known ambiguity: the outer #~"none" (NULL) is indistinguishable from the inner #~"none"

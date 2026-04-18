@@ -1425,6 +1425,54 @@ x3: optionval.some t: i64 from: 100
 # none takes only a single generic argument so the argument name can be
 # omitted
 x4: optionval.none i32</code></pre>
+<h5 id="heterogeneous-union-constraints">Heterogeneous union constraints</h5>
+<p>A <code>union</code> used as a generic constraint via <code>.generic</code> may contain a mix of
+concrete type members and protocol/facet members. A concrete member accepts an
+argument whose type is exactly that concrete type; a protocol/facet member
+accepts any argument whose type <em><strong>declares conformance</strong></em> to that protocol or
+facet (an entry of the form <code>&lt;label&gt;: &lt;protocol-name&gt;</code> or the <code>:&lt;name&gt;</code>
+shorthand in the type's <code>as</code> clause).</p>
+<p>Match precedence is <em><strong>declaration order</strong></em>: the typechecker walks the union's
+members from first to last and returns at the first match. There is no special
+"name-match beats protocol-match" rule &#x2014; each member is tested on its own
+terms. The lib author controls dispatch entirely through the order in which
+members are listed.</p>
+<p><em><strong>Compile time vs runtime</strong></em> &#x2014; this distinction applies to <code>any</code> heterogeneous
+union used as a generic constraint, not just the examples below:</p>
+<ul>
+<li><em><strong>Compile time</strong></em> (the only case generic constraints use): when
+<code>T: SomeUnion.generic</code> is being checked, T satisfies the constraint iff
+the above walk finds a match. This is a pure compile-time set-membership
+check; the generic function is monomorphized per concrete T, and there is
+no runtime tag or dispatch.</li>
+<li><em><strong>Runtime</strong></em> (allowed but rare): the same union may be <code>constructed</code>
+at runtime, in which case it is a tagged union &#x2014; concrete members carry
+their value directly, protocol members carry a protocol-erased instance
+(vtable + opaque data) per zerolang's standard protocol-value machinery.
+Programs that go this route pay one indirect call per protocol-tagged read.
+No new runtime machinery is introduced; it is the same protocol-erasure
+used elsewhere.</li>
+</ul>
+<p>Example &#x2014; a stringlike constraint for generic-over-string functions:</p>
+<pre><code class="language-zerolang"># text protocol: the converter method any "stringlike" conformer provides
+text: protocol {
+    stringview: function {:this} out stringview
+}
+
+# heterogeneous union: one concrete type + one protocol
+stringlike: union { :stringview :text }
+
+# string and str both declare `:text` in their `as` clause, so both
+# satisfy `stringlike` via the protocol member. stringview satisfies
+# via the concrete member.
+
+print: function as { T: stringlike.generic } in { msg: T } is native
+
+main: function is {
+    print "hi"                     # T = stringview
+    print "hi".string              # T = string (conforms via :text)
+    print "hi".str to: 8           # T = str_8  (conforms via :text)
+}</code></pre>
 <p>Note: <code>option</code> is emitted as a nullable pointer in C. <code>option.some val</code> stores the
 reference directly; <code>option.none</code> is <code>NULL</code>. This means <code>option(option(T))</code> has a
 known ambiguity: the outer <code>none</code> (NULL) is indistinguishable from the inner <code>none</code>
