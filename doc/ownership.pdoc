@@ -1048,6 +1048,35 @@ migration error pointing at #~".create" and #~".borrow". #~".take" remains
 available as the inline ownership method on runtime instances
 (#~"obj.take") as before.
 
+The #~"from:" parameter of a protocol's synthesised #~".create" is
+declared TAKE, so the compiler applies the standard ownership-transfer
+rules uniformly: writing #~"r: reader.create from: o" invalidates #~"o"
+afterward, with no call-site #~".take" required (writing #~"o.take" is
+accepted and equivalent). The same rule applies to #~"typedef.create".
+Facet #~".create" is a value-copy (facets are inline-data value
+existentials), so its #~"from:" source remains valid after the call.
+
+A borrowed protocol wrapper carries no ownership over the source; the
+source's storage lives where it was declared. Consequently, a borrowed
+wrapper cannot escape the scope of its source: the compiler rejects
+returning it, storing it in a record field, and passing it to a TAKE
+parameter. Use the owned form (#~".create") for a self-contained
+wrapper that is safe to return or store. These restrictions mirror the
+existing locked-reference escape rules from the previous section.
+
+Boxing (#~"b: box from: val") is itself an ownership transfer. The
+compiler invalidates the source after boxing: a stack class or record
+passed to #~"box from:" is consumed, mirroring the standard TAKE rule.
+Passing a boxed value to #~"box from:" again (which compiles to a
+zero-cost passthrough) likewise invalidates the earlier boxed name, so
+only the newly-bound name may be used afterward.
+
+Boxing a conformer and then passing the box to #~"proto.create" is not
+supported: #~".create" already heap-allocates the owned copy
+internally, so composition is unnecessary. The conformance check rejects
+#~"proto.create from: (box from: x)" with a hint steering the user to
+the direct form.
+
 
 #--: Common Errors
 

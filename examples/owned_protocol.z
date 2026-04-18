@@ -1,0 +1,36 @@
+# owned_protocol.z -- Owned protocol instance returned from a factory
+#
+# `.create` is a self-contained constructor that heap-allocates its
+# argument. The resulting protocol instance is escape-capable:
+# it can be returned from a function, stored in a data structure,
+# and passed around freely. Its destroy callback frees the heap data
+# when the protocol goes out of scope.
+
+reader: protocol {
+    read: function {:this b: i64} out i64
+}
+
+myfile: record {
+    fd: i64
+} as {
+    myreader: reader
+    read: function {f: this b: i64} out i64 is {
+        return f.fd + b
+    }
+}
+
+# factory returning an escape-capable owned protocol.
+# no call-site `.take` needed — the `from:` parameter of `.create`
+# is declared TAKE, and the source is invalidated automatically.
+make_reader: function {fd: i64} out reader is {
+    f: myfile fd: fd
+    r: reader.create from: f
+    return r
+}
+
+main: function is {
+    # receive an owned protocol from the factory
+    r: make_reader fd: 10
+    n: r.read b: 5
+    print "owned.read = \{n}"
+}

@@ -3885,6 +3885,425 @@ class TestProtocols:
         assert "borrow" not in t.children
 
 
+class TestProtocolCreateInvalidatesSource:
+    """Phase A: `.create` must invalidate its `from:` argument source.
+
+    `.create` has parameter ownership TAKE; passing a source to it consumes
+    ownership. Reads of the source after the call must be rejected with the
+    standard 'cannot use X after ownership transfer' error. This is enforced
+    at the type-checker level without requiring `.take` at the call site.
+    """
+
+    def _reader_and_myfile(self) -> str:
+        return (
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+        )
+
+    def test_create_from_record_invalidates_source(self):
+        """proto.create from: rec — `rec` unreadable afterward (no .take)."""
+        errors = check_errors(
+            self._reader_and_myfile() + "main: function is {\n"
+            "    o: myfile fd: 20\n"
+            "    r: reader.create from: o\n"
+            '    print "\\{o.fd}"\n'
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'o'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'o', got: {[e.msg for e in errors]}"
+
+    def test_create_bare_form_invalidates_source(self):
+        """Bare-name form `proto source` behaves the same as proto.create."""
+        errors = check_errors(
+            self._reader_and_myfile() + "main: function is {\n"
+            "    o: myfile fd: 20\n"
+            "    r: reader o\n"
+            '    print "\\{o.fd}"\n'
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'o'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'o', got: {[e.msg for e in errors]}"
+
+    def test_create_explicit_take_still_works(self):
+        """`.take` at the call site is idempotent with the implicit rule."""
+        check_ok(
+            self._reader_and_myfile() + "main: function is {\n"
+            "    o: myfile fd: 20\n"
+            "    r: reader.create from: o.take\n"
+            "}"
+        )
+
+    def test_create_from_class_invalidates_source(self):
+        """Classes: source invalidated by .create, no .take required at call site."""
+        errors = check_errors(
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: class {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    o: myfile fd: 20\n"
+            "    r: reader.create from: o\n"
+            '    print "\\{o.fd}"\n'
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'o'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'o', got: {[e.msg for e in errors]}"
+
+    def test_create_rejects_borrowed_source(self):
+        """Passing a borrowed local to .create yields the standard error."""
+        errors = check_errors(
+            self._reader_and_myfile() + "use_borrow: function {b: myfile.borrow} is {\n"
+            "    r: reader.create from: b\n"
+            "}\n"
+            "main: function is {\n"
+            "    o: myfile fd: 20\n"
+            "    use_borrow b: o\n"
+            "}"
+        )
+        assert any(
+            "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
+        ), f"expected borrowed-to-take error, got: {[e.msg for e in errors]}"
+
+
+class TestProtocolBorrowLocksSource:
+    """Phase A: `.borrow` and the label-form borrow must lock the source.
+
+    Borrowing already locks the source in today's code via
+    `_pending_borrow_lock`; these tests pin that behavior down as a
+    regression suite alongside the .create changes.
+    """
+
+    def _reader_and_myfile(self) -> str:
+        return (
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+        )
+
+    def test_label_borrow_does_not_invalidate_source(self):
+        """`r: f.myreader` leaves `f` readable (borrow, not take)."""
+        check_ok(
+            self._reader_and_myfile() + "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            "    n: r.read b: 5\n"
+            '    print "\\{n}"\n'
+            "}"
+        )
+
+    def test_explicit_borrow_does_not_invalidate_source(self):
+        """`reader.borrow from: f` mirrors the label form."""
+        check_ok(
+            self._reader_and_myfile() + "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.borrow from: f\n"
+            "    n: r.read b: 5\n"
+            '    print "\\{n}"\n'
+            "}"
+        )
+
+
+class TestTypedefCreateInvalidatesSource:
+    """Phase A: typedef `.create` must invalidate its `from:` argument.
+
+    Typedefs wrap a base type via `field: base.typedef` pattern; their
+    `.create` shares the TAKE semantics of protocol/facet `.create`.
+    """
+
+    def test_typedef_create_wrapping_i64_literal(self):
+        """Literal source: no named source to invalidate — continues to work."""
+        check_ok(
+            "meters: record { val: i64.typedef }\n"
+            "main: function is {\n"
+            "    m: meters.create from: 42\n"
+            "}"
+        )
+
+    def test_typedef_create_chained_invalidates_inner(self):
+        """Chained typedef: outer.create from: inner_local — inner invalidated."""
+        errors = check_errors(
+            "meters: record { val: i64.typedef }\n"
+            "height: record { h: meters.typedef }\n"
+            "main: function is {\n"
+            "    m: meters.create from: 100\n"
+            "    h: height.create from: m\n"
+            '    print "\\{m}"\n'
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'m'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'm', got: {[e.msg for e in errors]}"
+
+    def test_typedef_create_invalidates_without_call_site_take(self):
+        """Same as chained test — confirms no `.take` at call site needed."""
+        errors = check_errors(
+            "meters: record { val: i64.typedef }\n"
+            "height: record { h: meters.typedef }\n"
+            "takes: function {m: meters} out i64 is { return m }\n"
+            "main: function is {\n"
+            "    m: meters.create from: 100\n"
+            "    h: height.create from: m\n"
+            "    n: takes m: m\n"
+            "}"
+        )
+        # invalidation should surface on the subsequent use of `m`
+        assert any(
+            "after ownership transfer" in e.msg and "'m'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'm', got: {[e.msg for e in errors]}"
+
+
+class TestBoxInvalidatesSource:
+    """Phase B: `box from:` must invalidate its source name.
+
+    Boxing is an ownership transfer from the source into the box — the
+    source becomes inaccessible afterward. Literals remain legal (nothing
+    to invalidate).
+
+    Applies to both BOX_CREATE (stack valtype → heap copy) and
+    BOX_PASSTHROUGH (already-heap source, ownership handed off).
+    """
+
+    def test_box_from_literal_ok(self):
+        """Literal sources have no root name — unaffected."""
+        check_ok("main: function is { b: box from: 42 }")
+        check_ok('main: function is { b: box from: "hi".string }')
+
+    def test_box_passthrough_invalidates_source(self):
+        """Nested box: `box from: b` invalidates `b`; later read is rejected."""
+        errors = check_errors(
+            "main: function is {\n"
+            "    b: box from: 42\n"
+            "    b2: box from: b\n"
+            '    print "\\{b}"\n'
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'b'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'b', got: {[e.msg for e in errors]}"
+
+    def test_box_passthrough_chain_final_user_ok(self):
+        """Long passthrough chain — only the final name is usable afterward."""
+        check_ok(
+            "main: function is {\n"
+            "    b: box from: 42\n"
+            "    b2: box from: b\n"
+            "    b3: box from: b2\n"
+            '    print "\\{b3}"\n'
+            "}"
+        )
+
+    def test_box_from_valtype_record_invalidates_source(self):
+        """Boxing a stack record consumes it."""
+        errors = check_errors(
+            "myrec: record { n: i64 }\n"
+            "main: function is {\n"
+            "    r: myrec n: 5\n"
+            "    b: box from: r\n"
+            '    print "\\{r.n}"\n'
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'r'" in e.msg for e in errors
+        ), f"expected ownership-transfer error on 'r', got: {[e.msg for e in errors]}"
+
+    def test_box_in_second_position_uses_fresh_sources(self):
+        """After boxing source1, a second box requires a separate source."""
+        check_ok(
+            "main: function is {\n"
+            "    b1: box from: 42\n"
+            "    b2: box from: 99\n"
+            '    print "\\{b1}"\n'
+            '    print "\\{b2}"\n'
+            "}"
+        )
+
+
+class TestBorrowedProtocolEscape:
+    """Phase C: a borrowed protocol value cannot escape its source's scope.
+
+    A borrowed protocol is a 3-word struct with `data` pointing into the
+    source's storage and `destroy == NULL`. If the wrapper escapes (return
+    from function, stored in a data structure, passed to a TAKE parameter
+    that stores it), the source can die before the protocol is used, and
+    dispatch reads freed memory.
+
+    The compiler already locks the source for the protocol's local scope;
+    this phase extends that to reject escape of the wrapper itself.
+    """
+
+    def _reader_and_myfile(self) -> str:
+        return (
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+        )
+
+    def test_return_label_borrowed_protocol_rejected(self):
+        """`r: f.myreader; return r` — borrow cannot escape."""
+        errors = check_errors(
+            self._reader_and_myfile() + "make_reader: function out reader is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            "    return r\n"
+            "}\n"
+            "main: function is { }"
+        )
+        assert any(
+            "borrow" in e.msg.lower() and "return" in e.msg.lower() for e in errors
+        ) or any("cannot return" in e.msg.lower() and "'r'" in e.msg for e in errors), (
+            f"expected borrow-escape error, got: {[e.msg for e in errors]}"
+        )
+
+    def test_return_explicit_borrow_protocol_rejected(self):
+        """Same via `reader.borrow from: f`."""
+        errors = check_errors(
+            self._reader_and_myfile() + "make_reader: function out reader is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.borrow from: f\n"
+            "    return r\n"
+            "}\n"
+            "main: function is { }"
+        )
+        assert any(
+            "borrow" in e.msg.lower() and "return" in e.msg.lower() for e in errors
+        ) or any("cannot return" in e.msg.lower() and "'r'" in e.msg for e in errors), (
+            f"expected borrow-escape error, got: {[e.msg for e in errors]}"
+        )
+
+    def test_return_owned_protocol_accepted(self):
+        """Owned protocol is escape-capable — legal to return."""
+        check_ok(
+            self._reader_and_myfile() + "make_reader: function out reader is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: reader.create from: f\n"
+            "    return r\n"
+            "}\n"
+            "main: function is {\n"
+            "    r: make_reader\n"
+            "}"
+        )
+
+    def test_store_borrowed_protocol_in_record_field_rejected(self):
+        """Borrowed protocol cannot be stored in a wrapper record."""
+        errors = check_errors(
+            self._reader_and_myfile() + "wrapper: record { r: reader }\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            "    w: wrapper r: r\n"
+            "}"
+        )
+        assert any("borrow" in e.msg.lower() and "'r'" in e.msg for e in errors), (
+            f"expected borrow-escape error on field store, got: {[e.msg for e in errors]}"
+        )
+
+    def test_pass_borrowed_protocol_to_take_param_rejected(self):
+        """Borrowed protocol cannot flow into a TAKE parameter."""
+        errors = check_errors(
+            self._reader_and_myfile() + "store: function {r: reader.take} out i64 is "
+            "{ return r.read b: 0 }\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    r: f.myreader\n"
+            "    n: store r: r\n"
+            "}"
+        )
+        assert any("borrowed variable" in e.msg and "take" in e.msg for e in errors), (
+            f"expected borrowed-to-take error, got: {[e.msg for e in errors]}"
+        )
+
+
+class TestBoxProtocolComposition:
+    """Phase D: `box → protocol.create` composition.
+
+    Investigation confirmed: `box(T)` does not propagate protocol
+    conformance, so `proto.create from: b` where `b: box from: T` fails at
+    the conformance check. This is the intended design — `proto.create`
+    already heap-allocates internally, making the box-first composition
+    redundant. The error message hints at the direct form.
+    """
+
+    def _proto_and_myfile(self) -> str:
+        return (
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+        )
+
+    def test_box_protocol_create_rejected_with_hint(self):
+        """Boxing first and then protocol.create is rejected; hint steers user."""
+        errors = check_errors(
+            self._proto_and_myfile() + "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    b: box from: f\n"
+            "    p: reader.create from: b\n"
+            "}"
+        )
+        assert any("does not conform" in e.msg for e in errors), (
+            f"expected conformance error, got: {[e.msg for e in errors]}"
+        )
+        assert any(
+            e.hint is not None and "heap-allocates internally" in e.hint for e in errors
+        ), f"expected hint on reader.create, got: {[e.hint for e in errors]}"
+
+    def test_direct_create_from_record_is_the_supported_form(self):
+        """`.create` already produces an escape-capable owned protocol."""
+        check_ok(
+            self._proto_and_myfile() + "make: function out reader is {\n"
+            "    f: myfile fd: 10\n"
+            "    p: reader.create from: f\n"
+            "    return p\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: make\n"
+            '    print "\\{p.read b: 5}"\n'
+            "}"
+        )
+
+
 class TestGenerics:
     """Tests for generic type resolution and monomorphization."""
 

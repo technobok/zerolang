@@ -2529,13 +2529,16 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.pop()
 
-        # create: owned facet creation (copies value). Bare-name `facet obj`
-        # routes through children["create"] via the unified call dispatch.
+        # create: owned facet creation (copies value). Facets are value-type
+        # existentials — the source is read and copied into inline storage,
+        # the source remains valid afterward. So from: is a COPY, not a
+        # TAKE. Bare-name `facet obj` routes through children["create"] via
+        # the unified call dispatch.
         if not ftype.isgeneric:
             create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
             create_type.return_type = ftype
             create_type.children["from"] = self.t_null
-            create_type.param_ownership["from"] = ZParamOwnership.TAKE
+            # not TAKE: facet.create copies, does not consume
             ftype.children["create"] = create_type
 
             # borrow: borrowed facet creation (copies value, locks source)
@@ -4759,6 +4762,7 @@ class TypeChecker:
                     ztype=t, ownership=ZOwnership.BORROWED, named=ZNaming.NAMED
                 )
                 var.is_private_access = private_access
+                var.borrow_origin = borrow_target
                 self.symtab.define_var(assign.name, var)
                 # skip locking for valtypes — they are copies, not references.
                 # this handles generic monomorphization where .borrow was allowed
@@ -5711,6 +5715,7 @@ class TypeChecker:
                     ) or any(not arg.name for arg in call.arguments)
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
+                    self._reject_borrow_escape_into_record(call)
                     return mono_type
                 return None  # error already emitted
             for arg in call.arguments:
@@ -5718,6 +5723,7 @@ class TypeChecker:
             call.type = callee_type
             call.call_kind = zast.CallKind.RECORD_CREATE
             self._check_missing_create_args(callee_type, call)
+            self._reject_borrow_escape_into_record(call)
             return callee_type
 
         # handle box construction: box from: val (system box only — empty class body)
@@ -5939,25 +5945,7 @@ class TypeChecker:
                 if effective_own is None:
                     effective_own = ZParamOwnership.BORROW
                 if effective_own == ZParamOwnership.TAKE:
-                    arg_root = self._get_arg_root_name(arg.valtype)
-                    if arg_root:
-                        var = self.symtab.lookup_var(arg_root)
-                        if var and var.ownership == ZOwnership.BORROWED:
-                            self._error(
-                                f"Cannot pass borrowed variable '{arg_root}' to "
-                                f"'take' parameter '{pname}'",
-                                loc=arg.start,
-                                err=ERR.OWNERERROR,
-                            )
-                        else:
-                            # .take parameter: invalidate the caller's name
-                            self.symtab.release_held_locks(arg_root)
-                            take_loc = (
-                                (arg.start.lineno, arg.start.colno, arg.start.fsno)
-                                if arg.start
-                                else None
-                            )
-                            self.symtab.invalidate(arg_root, loc=take_loc)
+                    self._apply_take_to_arg(arg, pname)
 
             # locking algorithm: take locks on arguments
             if arg_type and not _is_valtype(arg_type):
@@ -6268,6 +6256,54 @@ class TypeChecker:
             return f"{parent_path}.{child_name}"
         return None
 
+    def _reject_borrow_escape_into_record(self, call: zast.Call) -> None:
+        """Reject borrowed-local arguments flowing into a record constructor.
+
+        A record instance may outlive its constructor's scope (returned,
+        stored, etc.). Putting a borrow into a field that can escape lets
+        the borrow outlive its source, so reject at construction.
+        """
+        for arg in call.arguments:
+            arg_root = self._get_arg_root_name(arg.valtype)
+            if not arg_root:
+                continue
+            var = self.symtab.lookup_var(arg_root)
+            if var and var.borrow_origin is not None:
+                self._error(
+                    f"Cannot store borrowed value '{arg_root}' in a record "
+                    f"field; it borrows from local '{var.borrow_origin}' "
+                    f"which may die before the record. Use '.create' for an "
+                    f"owned value.",
+                    loc=arg.start,
+                    err=ERR.OWNERERROR,
+                )
+
+    def _apply_take_to_arg(self, arg: zast.NamedOperation, pname: str) -> None:
+        """Apply TAKE semantics to a call argument: reject a borrowed source,
+        otherwise release its held locks and invalidate its root name.
+
+        Used by the standard call-ownership loop and by constructor-style
+        dispatch paths (`Type.create`, `box from:`, typedef `.create`) that
+        bypass that loop but still need to enforce a declared TAKE parameter.
+        """
+        arg_root = self._get_arg_root_name(arg.valtype)
+        if not arg_root:
+            return
+        var = self.symtab.lookup_var(arg_root)
+        if var and var.ownership == ZOwnership.BORROWED:
+            self._error(
+                f"Cannot pass borrowed variable '{arg_root}' to "
+                f"'take' parameter '{pname}'",
+                loc=arg.start,
+                err=ERR.OWNERERROR,
+            )
+            return
+        self.symtab.release_held_locks(arg_root)
+        take_loc = (
+            (arg.start.lineno, arg.start.colno, arg.start.fsno) if arg.start else None
+        )
+        self.symtab.invalidate(arg_root, loc=take_loc)
+
     def _check_protocol_create(
         self, proto_type: ZType, call: zast.Call
     ) -> Optional[ZType]:
@@ -6308,12 +6344,38 @@ class TypeChecker:
                 found_label = label
                 break
         if not found_label:
+            # when the source is a boxed conformer, steer the user to the
+            # direct form: .create already heap-allocates internally, so
+            # box+create composition is unnecessary.
+            hint = None
+            if arg_type.is_box:
+                inner = arg_type.generic_args.get("t")
+                inner_name = inner.name if inner else "the inner value"
+                inner_labels = (
+                    self._protocol_labels.get(inner.name, []) if inner else []
+                )
+                if any(pt.name == proto_type.name for _, pt in inner_labels):
+                    hint = (
+                        f"{proto_type.name}.create already heap-allocates "
+                        f"internally — pass {inner_name} directly instead "
+                        f"of boxing first"
+                    )
             self._error(
                 f"Type '{arg_type.name}' does not conform to {kind} "
                 f"'{proto_type.name}'",
                 loc=call.start,
+                hint=hint,
             )
             return None
+
+        # `.create` for a protocol takes ownership (move); for a facet it
+        # copies the value into inline storage (no ownership change). This
+        # dispatch path bypasses the standard call-ownership loop, so apply
+        # the declared `from:` param ownership here.
+        create_fn = proto_type.children.get("create")
+        own = create_fn.param_ownership.get("from") if create_fn is not None else None
+        if own == ZParamOwnership.TAKE:
+            self._apply_take_to_arg(from_arg, "from")
 
         call.type = proto_type
         return proto_type
@@ -6395,6 +6457,9 @@ class TypeChecker:
                 loc=call.start,
             )
             return None
+
+        # `.create` takes ownership of the source.
+        self._apply_take_to_arg(from_arg, "from")
 
         call.type = typedef_type
         return typedef_type
@@ -6570,6 +6635,26 @@ class TypeChecker:
                             f"borrowed return values must originate from a 'lock' parameter",
                             loc=call.start,
                         )
+
+        # escape check: a borrowed local cannot be returned. `borrow_origin`
+        # marks variables that borrow from a function-local source; returning
+        # such a variable would outlive its source. (Parameters with
+        # ownership=BORROWED have no borrow_origin — they are borrowed from
+        # the caller, not from a local, so returning them is fine.)
+        if call.arguments:
+            arg_op = call.arguments[0].valtype
+            arg_name = self._get_arg_root_name(arg_op)
+            if arg_name:
+                var = self.symtab.lookup_var(arg_name)
+                if var and var.borrow_origin is not None:
+                    self._error(
+                        f"Cannot return borrowed value '{arg_name}'; "
+                        f"it borrows from local '{var.borrow_origin}' which "
+                        f"dies at function exit. Use '.create' for an owned "
+                        f"value that can escape.",
+                        loc=call.start,
+                        err=ERR.OWNERERROR,
+                    )
 
         # return has type 'never' (control flow doesn't continue)
         never = self._resolve_name("never")
@@ -7017,6 +7102,12 @@ class TypeChecker:
         inner_type = self._check_operation(from_arg.valtype)
         if not inner_type:
             return None
+
+        # Boxing transfers ownership of the source into the box. The
+        # box-construction dispatch bypasses the standard call-ownership
+        # loop at _check_call, so apply TAKE enforcement here. Literals
+        # have no root name and are unaffected.
+        self._apply_take_to_arg(from_arg, "from")
 
         # With stack-allocated classes and unions, all user-defined types
         # are stack-allocated values. Box always heap-allocates a copy.

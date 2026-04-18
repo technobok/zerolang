@@ -382,6 +382,11 @@ class ZVariable:
     named: ZNaming
     # private access: variable declared with .private type, bypasses public_members
     is_private_access: bool = False
+    # escape-analysis: name of the function-local source this variable
+    # borrows from (set on `x: y.borrow`, label-form borrows, and borrowed
+    # protocol/facet wrappers). None for parameters (whose ownership is
+    # BORROWED by default but whose borrow origin is outside this function).
+    borrow_origin: Optional[str] = None
 
 
 class TypeTable:

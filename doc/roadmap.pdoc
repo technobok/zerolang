@@ -2074,6 +2074,39 @@ Implementation:
   [#*: Tests: type checker tests for valtype/reftype box, emitter tests for
     arithmetic, comparison, passthrough. #~"box.z" example]
 
+#---: Phase 45a: Ownership soundness closures (Phase 24 + 45) \[COMPLETE\]
+
+Closes three latent soundness gaps in the construction paths that previously
+bypassed the standard call-ownership enforcement loop:
+
+#ol:
+  [#*: #~"protocol.create" and #~"typedef.create" now route their #~"from:"
+    argument through the standard TAKE enforcement: the source name is
+    invalidated after the call. No call-site #~".take" required --
+    uniform with function parameter TAKE semantics.]
+  [#*: #~"facet.create" is explicitly a value-copy (facets are inline-data
+    value existentials), so its #~"from:" source remains valid after the
+    call. Declared with no TAKE ownership in the synthesised constructor.]
+  [#*: #~"box from:" invalidates its source name too: boxing is an
+    ownership transfer. Applies to both #~"BOX_CREATE" and
+    #~"BOX_PASSTHROUGH" branches.]
+  [#*: Borrowed protocol wrappers (label form, #~".borrow" form) now track
+    a #~"borrow_origin" on the resulting local. Returning a borrow-tagged
+    local, storing one in a record field, or passing it to a TAKE parameter
+    is rejected. Function parameters (BORROWED ownership without
+    borrow_origin) are unaffected.]
+  [#*: Conformance check: #~"box(T)" does not propagate protocol conformance.
+    #~"proto.create from: (box from: x)" is rejected with a hint steering
+    the user to the direct #~"proto.create from: x" form, which already
+    heap-allocates internally.]
+
+Implementation: #~"_apply_take_to_arg" helper in #~"ztypecheck.py" reuses
+the existing invalidation logic from the #~"_check_call" ownership loop;
+invoked by #~"_check_protocol_create", #~"_check_typedef_create", and
+#~"_check_box_construction" to cover the previously-bypassed dispatch
+paths. New #~"borrow_origin" field on #~"ZVariable" drives escape analysis
+in #~"_check_return_call" and #~"_reject_borrow_escape_into_record".
+
 #---: Phase 46: public / private accessibility \[COMPLETE\]
 
 'public' and 'private' are predefined identifiers for controlling access to the

@@ -201,6 +201,8 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-45-box-type-complete">Phase 45: Box type [COMPLETE]</a>
 </li>
+<li><a href="#phase-45a-ownership-soundness-closures-phase-24-45-complete">Phase 45a: Ownership soundness closures (Phase 24 + 45) [COMPLETE]</a>
+</li>
 <li><a href="#phase-46-public-private-accessibility-complete">Phase 46: public / private accessibility [COMPLETE]</a>
 </li>
 <li><a href="#phase-47-c-runtime-library-complete">Phase 47: C Runtime Library [COMPLETE]</a>
@@ -2073,7 +2075,37 @@ similar way, introduce a new generic type called 'box'.</p>
 <li>Tests: type checker tests for valtype/reftype box, emitter tests for
     arithmetic, comparison, passthrough. <code>box.z</code> example</li>
 </ol>
-<h3 id="phase-46-public-private-accessibility-complete"><a href="#phase-46-public-private-accessibility-complete">5.46. Phase 46: public / private accessibility [COMPLETE]</a></h3>
+<h3 id="phase-45a-ownership-soundness-closures-phase-24-45-complete"><a href="#phase-45a-ownership-soundness-closures-phase-24-45-complete">5.46. Phase 45a: Ownership soundness closures (Phase 24 + 45) [COMPLETE]</a></h3>
+<p>Closes three latent soundness gaps in the construction paths that previously
+bypassed the standard call-ownership enforcement loop:</p>
+<ol>
+<li><code>protocol.create</code> and <code>typedef.create</code> now route their <code>from:</code>
+argument through the standard TAKE enforcement: the source name is
+invalidated after the call. No call-site <code>.take</code> required --
+uniform with function parameter TAKE semantics.</li>
+<li><code>facet.create</code> is explicitly a value-copy (facets are inline-data
+value existentials), so its <code>from:</code> source remains valid after the
+call. Declared with no TAKE ownership in the synthesised constructor.</li>
+<li><code>box from:</code> invalidates its source name too: boxing is an
+ownership transfer. Applies to both <code>BOX_CREATE</code> and
+<code>BOX_PASSTHROUGH</code> branches.</li>
+<li>Borrowed protocol wrappers (label form, <code>.borrow</code> form) now track
+    a <code>borrow_origin</code> on the resulting local. Returning a borrow-tagged
+    local, storing one in a record field, or passing it to a TAKE parameter
+    is rejected. Function parameters (BORROWED ownership without
+    borrow_origin) are unaffected.</li>
+<li>Conformance check: <code>box(T)</code> does not propagate protocol conformance.
+    <code>proto.create from: (box from: x)</code> is rejected with a hint steering
+    the user to the direct <code>proto.create from: x</code> form, which already
+    heap-allocates internally.</li>
+</ol>
+<p>Implementation: <code>_apply_take_to_arg</code> helper in <code>ztypecheck.py</code> reuses
+the existing invalidation logic from the <code>_check_call</code> ownership loop;
+invoked by <code>_check_protocol_create</code>, <code>_check_typedef_create</code>, and
+<code>_check_box_construction</code> to cover the previously-bypassed dispatch
+paths. New <code>borrow_origin</code> field on <code>ZVariable</code> drives escape analysis
+in <code>_check_return_call</code> and <code>_reject_borrow_escape_into_record</code>.</p>
+<h3 id="phase-46-public-private-accessibility-complete"><a href="#phase-46-public-private-accessibility-complete">5.47. Phase 46: public / private accessibility [COMPLETE]</a></h3>
 <p>'public' and 'private' are predefined identifiers for controlling access to the
 members (fields and methods) of objects.</p>
 <ol>
@@ -2147,11 +2179,11 @@ members (fields and methods) of objects.</p>
     type, purely compile-time access control. Tracked via
     <code>ZVariable.is_private_access</code> and <code>ZType.private_fields</code>.</li>
 </ol>
-<h3 id="phase-47-c-runtime-library-complete"><a href="#phase-47-c-runtime-library-complete">5.47. Phase 47: C Runtime Library [COMPLETE]</a></h3>
+<h3 id="phase-47-c-runtime-library-complete"><a href="#phase-47-c-runtime-library-complete">5.48. Phase 47: C Runtime Library [COMPLETE]</a></h3>
 <p>Consolidate runtime C boilerplate into a dedicated Python module so the
 boundary between runtime support code and user program code is clear, and
 future extraction to a precompiled static library is straightforward.</p>
-<h4 id="47-1-runtime-module-stage-1"><a href="#47-1-runtime-module-stage-1">5.47.1. 47.1 Runtime module (<code>src/zemitterc_runtime.py</code>) &#x2014; stage 1</a></h4>
+<h4 id="47-1-runtime-module-stage-1"><a href="#47-1-runtime-module-stage-1">5.48.1. 47.1 Runtime module (<code>src/zemitterc_runtime.py</code>) &#x2014; stage 1</a></h4>
 <ol>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Create <code>zemitterc_runtime.py</code> with pure functions (no AST
 access, no emitter state). All runtime C code lives here as string
@@ -2174,7 +2206,7 @@ for fixed-length arrays (compile-time length in message)</li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>emit_empty_check()</code>: empty-container check with
 <code>fprintf</code>/<code>exit</code> (e.g. list pop)</li>
 </ol>
-<h4 id="47-2-emitter-integration"><a href="#47-2-emitter-integration">5.47.2. 47.2 Emitter integration</a></h4>
+<h4 id="47-2-emitter-integration"><a href="#47-2-emitter-integration">5.48.2. 47.2 Emitter integration</a></h4>
 <ol>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Update <code>zemitterc.py</code> to import <code>zemitterc_runtime</code> and
 delegate runtime code emission via <code>emit_runtime()</code> and
@@ -2187,7 +2219,7 @@ delegate runtime code emission via <code>emit_runtime()</code> and
 <code>zrt.emit_bounds_check()</code></li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Verify all 1166 tests pass with zero output changes</li>
 </ol>
-<h4 id="47-3-future-stage-2-not-in-this-phase"><a href="#47-3-future-stage-2-not-in-this-phase">5.47.3. 47.3 Future &#x2014; stage 2 (not in this phase)</a></h4>
+<h4 id="47-3-future-stage-2-not-in-this-phase"><a href="#47-3-future-stage-2-not-in-this-phase">5.48.3. 47.3 Future &#x2014; stage 2 (not in this phase)</a></h4>
 <ul>
 <li>Extract <code>emit_runtime_zstr()</code> output to <code>runtime/zrt_string.c</code>
     / <code>zrt_string.h</code></li>
@@ -2204,7 +2236,7 @@ delegate runtime code emission via <code>emit_runtime()</code> and
 </ul>
 <p>Files: <code>src/zemitterc_runtime.py</code>, <code>src/zemitterc.py</code>,
 <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-48-implicit-return-complete"><a href="#phase-48-implicit-return-complete">5.48. Phase 48: Implicit return [COMPLETE]</a></h3>
+<h3 id="phase-48-implicit-return-complete"><a href="#phase-48-implicit-return-complete">5.49. Phase 48: Implicit return [COMPLETE]</a></h3>
 <p>The return call should only be required for early returns. When return is used
 in the final expression location, it is optional. 'for', 'if' , 'with', 'match'
 can already be used as an expression, so that naturally should also extend to
@@ -2227,7 +2259,7 @@ return value.</p>
 <p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
 <code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/roadmap.pdoc</code>, <code>doc/grammar.pdoc</code>, <code>doc/spec.pdoc</code></p>
-<h3 id="phase-48a-match-case-as-expression-value-complete"><a href="#phase-48a-match-case-as-expression-value-complete">5.49. Phase 48a: Match/case as expression value [COMPLETE]</a></h3>
+<h3 id="phase-48a-match-case-as-expression-value-complete"><a href="#phase-48a-match-case-as-expression-value-complete">5.50. Phase 48a: Match/case as expression value [COMPLETE]</a></h3>
 <p>Match expressions can now be used as values when exhaustive (all subtypes
 covered or else clause present). Branch types are unified and checked for
 compatibility. The emitter generates temp-variable patterns for all match
@@ -2242,7 +2274,7 @@ variants (simple enum, union switch, variant switch, nullable-ptr).</p>
 <p>Files: <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
 <code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/roadmap.pdoc</code>, <code>doc/grammar.pdoc</code>, <code>doc/spec.pdoc</code></p>
-<h3 id="phase-48b-typed-injected-identifiers-return-break-continue-done"><a href="#phase-48b-typed-injected-identifiers-return-break-continue-done">5.50. Phase 48b: Typed injected identifiers (return, break, continue) [DONE]</a></h3>
+<h3 id="phase-48b-typed-injected-identifiers-return-break-continue-done"><a href="#phase-48b-typed-injected-identifiers-return-break-continue-done">5.51. Phase 48b: Typed injected identifiers (return, break, continue) [DONE]</a></h3>
 <p>Replaced all string-based control flow detection with enum-based dispatch.</p>
 <ol>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Added <code>ControlKind</code> enum to <code>ZType</code> (<code>RETURN</code>, <code>BREAK</code>,
@@ -2258,7 +2290,7 @@ through to <code>typedef_base</code> so typedef methods can use base-type operat
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Added <code>CALL</code> handling to <code>_check_operation()</code> so nested calls
 in return arguments are properly type-checked.</li>
 </ol>
-<h3 id="phase-48c-missing-return-control-flow-analysis-done"><a href="#phase-48c-missing-return-control-flow-analysis-done">5.51. Phase 48c: Missing-return control flow analysis [DONE]</a></h3>
+<h3 id="phase-48c-missing-return-control-flow-analysis-done"><a href="#phase-48c-missing-return-control-flow-analysis-done">5.52. Phase 48c: Missing-return control flow analysis [DONE]</a></h3>
 <p>The implicit return validation in <code>_check_function_body</code> catches
 functions where the last statement does not produce a value matching
 the declared return type. Combined with <code>_last_statement_type</code>
@@ -2271,7 +2303,7 @@ declared <code>out</code> type, or an error is emitted.</li>
 <li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>_last_statement_type</code> uses <code>CallKind</code> enum to detect
 non-completing branches (return, break, continue, error).</li>
 </ol>
-<h3 id="phase-48d-eliminate-isinstance-field-based-dispatch-done"><a href="#phase-48d-eliminate-isinstance-field-based-dispatch-done">5.52. Phase 48d: Eliminate isinstance &#x2014; field-based dispatch [DONE]</a></h3>
+<h3 id="phase-48d-eliminate-isinstance-field-based-dispatch-done"><a href="#phase-48d-eliminate-isinstance-field-based-dispatch-done">5.53. Phase 48d: Eliminate isinstance &#x2014; field-based dispatch [DONE]</a></h3>
 <p>Eliminated all 459 <code>isinstance()</code> calls with field-based dispatch.</p>
 <ol>
 <li>Error made a Node subclass with <code>nodetype = ERROR</code> and
@@ -2293,7 +2325,7 @@ non-completing branches (return, break, continue, error).</li>
     <code>cast()</code> for <code>UnionList, Error]" returns.
   [#*: TrackedList: #~</code>is_tracked_list" field.</li>
 </ol>
-<h3 id="phase-49a-type-narrowing-flow-typing"><a href="#phase-49a-type-narrowing-flow-typing">5.53. Phase 49a: Type Narrowing (Flow Typing)</a></h3>
+<h3 id="phase-49a-type-narrowing-flow-typing"><a href="#phase-49a-type-narrowing-flow-typing">5.54. Phase 49a: Type Narrowing (Flow Typing)</a></h3>
 <p>Implement compile-time type narrowing for union and variant types via
 a TypeState flow-typing system. Narrowing occurs within match arms,
 after match arms that diverge (return/break/continue), and on
@@ -2319,7 +2351,7 @@ match section, and TODO.pdoc to mark narrowing as implemented.</li>
 <p>Files: <code>src/ztypes.py</code>, <code>src/ztypecheck.py</code>,
 <code>doc/roadmap.pdoc</code>, <code>doc/spec.pdoc</code>, <code>doc/grammar.pdoc</code>, <code>doc/TODO.pdoc</code>,
 <code>examples/narrowing.z</code>, <code>tests/test_typecheck.py</code></p>
-<h3 id="phase-49b-is-as-section-semantics-complete"><a href="#phase-49b-is-as-section-semantics-complete">5.54. Phase 49b: 'is'/'as' Section Semantics [COMPLETE]</a></h3>
+<h3 id="phase-49b-is-as-section-semantics-complete"><a href="#phase-49b-is-as-section-semantics-complete">5.55. Phase 49b: 'is'/'as' Section Semantics [COMPLETE]</a></h3>
 <p>Enforce and document the semantics of <code>is</code> and <code>as</code> sections on objects
 (records, classes, unions, variants). Add namespace collision detection,
 verify function pointer field replacement, and implement integer constants in
@@ -2348,7 +2380,7 @@ static constant demonstrations.</li>
 <p>Files: <code>src/ztypecheck.py</code>, <code>src/ztypes.py</code>, <code>src/zemitterc.py</code>,
 <code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>, <code>tests/test_parser.py</code>,
 <code>examples/specs.z</code>, <code>doc/spec.pdoc</code>, <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-49c-take-in-match-arms-complete"><a href="#phase-49c-take-in-match-arms-complete">5.55. Phase 49c: Take in Match Arms [COMPLETE]</a></h3>
+<h3 id="phase-49c-take-in-match-arms-complete"><a href="#phase-49c-take-in-match-arms-complete">5.56. Phase 49c: Take in Match Arms [COMPLETE]</a></h3>
 <p>Allow <code>.take</code> on the match subject inside arm bodies for ownership
 transfer. Remove the unnecessary EXCLUSIVE lock from match (arms are
 mutually exclusive, subject evaluated once). Implement deferred
@@ -2373,14 +2405,14 @@ take-in-arms semantics), <code>spec.pdoc</code> (match section), and roadmap.</l
 <p>Files: <code>src/zast.py</code>, <code>src/ztypecheck.py</code>, <code>src/zemitterc.py</code>,
 <code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/ownership.pdoc</code>, <code>doc/spec.pdoc</code>, <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.56. Phase 49: Expand to v3 (Full Language)</a></h3>
+<h3 id="phase-49-expand-to-v3-full-language"><a href="#phase-49-expand-to-v3-full-language">5.57. Phase 49: Expand to v3 (Full Language)</a></h3>
 <ol>
 <li>Generators/yield (state machine transformation).</li>
 <li>Compile-time evaluation.</li>
 <li>Iterator protocol.</li>
 <li>Full standard library.</li>
 </ol>
-<h3 id="phase-49d-as-section-expanded-static-namespace-complete"><a href="#phase-49d-as-section-expanded-static-namespace-complete">5.57. Phase 49d: 'as' Section &#x2014; Expanded Static Namespace [COMPLETE]</a></h3>
+<h3 id="phase-49d-as-section-expanded-static-namespace-complete"><a href="#phase-49d-as-section-expanded-static-namespace-complete">5.58. Phase 49d: 'as' Section &#x2014; Expanded Static Namespace [COMPLETE]</a></h3>
 <p>Expand the <code>as</code> section to accept a wider range of static items beyond
 integer constants: float constants, computed constant expressions, and
 references to externally-defined definitions.</p>
@@ -2406,7 +2438,7 @@ to external definitions cover the common cases).</li>
 <code>src/zast.py</code>, <code>src/ztypes.py</code>,
 <code>tests/test_typecheck.py</code>, <code>tests/test_emitter.py</code>,
 <code>doc/spec.pdoc</code>, <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-49e-auto-generated-equality-for-value-types-complete"><a href="#phase-49e-auto-generated-equality-for-value-types-complete">5.58. Phase 49e: Auto-Generated Equality for Value Types [COMPLETE]</a></h3>
+<h3 id="phase-49e-auto-generated-equality-for-value-types-complete"><a href="#phase-49e-auto-generated-equality-for-value-types-complete">5.59. Phase 49e: Auto-Generated Equality for Value Types [COMPLETE]</a></h3>
 <p>Auto-generate == and != operators for all value types (records, variants,
 arrays, str). Structural equality by default: field-by-field for records,
 tag+payload for variants, element-wise for arrays, byte-wise for str.
@@ -2450,7 +2482,7 @@ generic function inference when that feature is implemented.</li>
 <code>lib/system/system.z</code>, <code>lib/system/core.z</code>,
 <code>examples/equality.z</code>, <code>doc/spec.pdoc</code>, <code>doc/faq.pdoc</code>,
 <code>doc/roadmap.pdoc</code></p>
-<h3 id="phase-50-developer-tools"><a href="#phase-50-developer-tools">5.59. Phase 50: Developer Tools</a></h3>
+<h3 id="phase-50-developer-tools"><a href="#phase-50-developer-tools">5.60. Phase 50: Developer Tools</a></h3>
 <p>Language server, linter, and formatter to support editing zerolang
 source files in IDEs and editors.</p>
 <ol>
@@ -2459,13 +2491,13 @@ source files in IDEs and editors.</p>
 <li>Formatter: canonical source formatter that reads .z files and rewrites them with consistent indentation, spacing, and line wrapping. Idempotent (running twice produces the same output).</li>
 <li>Editor integration: VS Code extension and/or tree-sitter grammar for syntax highlighting. Wire LSP server into the extension.</li>
 </ol>
-<h3 id="phase-51-self-hosting"><a href="#phase-51-self-hosting">5.60. Phase 51: Self-Hosting</a></h3>
+<h3 id="phase-51-self-hosting"><a href="#phase-51-self-hosting">5.61. Phase 51: Self-Hosting</a></h3>
 <ol>
 <li>Write the zerolang compiler in zerolang.</li>
 <li>Bootstrap: Python compiler produces C, C compiler compiles the zerolang-written compiler.</li>
 <li>Verify both compilers produce identical output.</li>
 </ol>
-<h3 id="phase-48-string-redesign-v2-types-and-mutable-operations-complete"><a href="#phase-48-string-redesign-v2-types-and-mutable-operations-complete">5.61. Phase 48: String Redesign &#x2014; v2 Types and Mutable Operations [COMPLETE]</a></h3>
+<h3 id="phase-48-string-redesign-v2-types-and-mutable-operations-complete"><a href="#phase-48-string-redesign-v2-types-and-mutable-operations-complete">5.62. Phase 48: String Redesign &#x2014; v2 Types and Mutable Operations [COMPLETE]</a></h3>
 <p>Redesign the string type system for v2: rename C runtime types, add
 <code>stringview</code> type, compact <code>str</code> length, and add mutable string
 operations.</p>
