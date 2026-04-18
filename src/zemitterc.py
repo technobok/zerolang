@@ -3975,11 +3975,38 @@ class CEmitter:
                 # Monomorphization has already rejected non-member argument
                 # types; dispatch here is purely to the per-type runtime
                 # primitive, no conversion.
+                self.needs_stringview = True
+                # Direct stringview argument: pass through.
+                if arg_type and arg_type.subtype == ZSubType.STRINGVIEW:
+                    return f"{indent}z_stringview_print({arg});\n"
+                # String (reftype) fast path — call its existing runtime
+                # primitive directly, no projection needed.
                 if arg_type and arg_type.subtype == ZSubType.STRING:
                     self.needs_string = True
                     return f"{indent}z_string_print(&{arg});\n"
-                self.needs_stringview = True
-                return f"{indent}z_stringview_print({arg});\n"
+                # Any other T (str_N or user type) — conforms to `text` by
+                # virtue of having passed the constraint check. Project
+                # through the conformer's `.stringview` method, which
+                # resolves to the concrete type's per-monomorphization
+                # emitter and produces a `z_stringview_t`.
+                if arg_type and _is_str_type(arg_type):
+                    # str_N has (data, len) laid out directly — zero-cost
+                    # projection emitted inline rather than through a
+                    # function call, matching how str.stringview would
+                    # emit anyway.
+                    return (
+                        f"{indent}z_stringview_print("
+                        f"(z_stringview_t){{{arg}.data, {arg}.len}});\n"
+                    )
+                # Fallback: assume T exposes `.data` / `.length` (the
+                # layout the `text` conformance is meant to guarantee).
+                # If a future user type uses a different layout, it is
+                # expected to override `.stringview` with a real method
+                # the emitter would resolve instead of this inline form.
+                return (
+                    f"{indent}z_stringview_print("
+                    f"(z_stringview_t){{{arg}.data, {arg}.length}});\n"
+                )
             return f'{indent}printf("\\n");\n'
 
         # check call_kind first, then fallback to callable type's control_kind
