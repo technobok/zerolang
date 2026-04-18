@@ -2099,6 +2099,9 @@ class TypeChecker:
                 continue  # data/tag data
             if ftype.typetype == ZTypeType.NULL:
                 continue  # null subtypes in variants (compared by tag)
+            if ftype.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+                continue  # protocol/facet conformance entries are converter
+                # methods, not value fields — don't participate in equality
             if ftype.typetype == ZTypeType.GENERIC_PARAM:
                 return  # cannot verify, skip synthesis
             if ftype.generic_origin is TAG_ORIGIN:
