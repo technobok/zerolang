@@ -63,7 +63,7 @@ be constant.
 #code:
   : { 
       ( #>"label" #>"constant-expression" )
-      | #>"label-value"
+      | #>"label-shorthand"
   } #>"eof"
 
 
@@ -74,11 +74,13 @@ Definition identifier. No intervening whitespace is allowed before the colon.
 #code:
   : #>"id" ":"
 
-#---: label_value
+#---: label_shorthand
 
-A definition identifier that is set to the value of the item from the current
-environment that has the same #>"id". #~"x" is #_*"almost" equivalent to #~"x: x", 
-except the definition will not bind to itself.
+A definition whose name and value are the same identifier: #~":x" is
+#_*"almost" equivalent to #~"x: x", except the definition will not bind to
+itself. The leading colon distinguishes it from a plain reference. Used
+in labelled-list contexts (item bodies, unit bodies, function parameter
+lists, blocks) wherever a #>"label" plus value would be accepted.
 
 No intervening whitespace is allowed after the colon.
 
@@ -112,11 +114,15 @@ interpreting as a single float identifier): #~"(123).456"
 
 #---: id_char
 
-Allowable characters in all locations in an identifier.
+Allowable characters in an identifier. The set below is the full inclusion
+list. Any character that is not in this list, including the structural
+delimiters #~"." #~"," #~";" #~"{" #~"}" #~"(" #~")" #~"[" #~"]" and whitespace, terminates the
+identifier. #~"." in particular is only accepted inside an #>"id-float";
+elsewhere it begins a dotted path.
 
 #code:
   : "a" . "z" | "A" . "Z" | "0" . "9"
-  | "!" | "$" | "%" | "&" | "'" | "*" | "+" | "-" | "/" | "<" 
+  | "!" | "$" | "%" | "&" | "'" | "*" | "+" | "-" | "/" | "<"
   | "=" | ">" | "?" | "@" | "\\" | "^" | "_" | "|" | "~"
 
 #---: constant_expression
@@ -130,7 +136,7 @@ for top level definitions in units and items.
     a #>"function-definition" (function value). Definition is uplifted to unit
     level and the result of this definition will be a function reference. The
     definition #_*"must" only have static references and parameter references
-    within it (ie. it is not a closure (yet?)).]
+    within it (ie. it is not a closure).]
   [#*: a [#> to=unit-definition: unit], an inline subunit.]
   [#*: an #>"item-definition". Definition is uplifted to unit level and
     the result of this definition will be a #_*"constant type" reference (exists
@@ -152,26 +158,38 @@ for top level definitions in units and items.
 
 #---: if_expression
 
-Conditional. 
+Conditional.
 
 Arguments named #~"when" are boolean conditions. #~"when" is the default argument:
-the argument name can be omitted for first condition. Multiple #~"when"
+the argument name can be omitted for the first condition. Multiple #~"when"
 arguments can be provided before a #~"then" clause. At least one #~"when" #_*"must" be
 provided before #~"then".
 
 All #~"when" conditions must be true for the following #~"then" clause to execute.
-Order matters, #~"when" conditions will short-circuit when false. 
+Order matters; #~"when" conditions short-circuit when false.
 
-There must be at least one #~"when" + #~"then" before an #~"else" (why?, if/else
-should be allowed? Similar to 'unless' in perl?)
+At least one #~"when" + #~"then" #_*"must" appear before an #~"else".
 
-#~"if" can be used as an expression. The result will be the value of the
-#~"then"/#~"else" statement. All #~"then"/#~"else" statements must return a value of
-the same type (or will be an anonymous union/variant type?). #~"else" #_*"must" be
-given to ensure the expression is exhaustive. If there is no #~"then" clause
-supplied (ie. #~"if operation else return it") then the value of the expression
-if true, is the unwrapped result of #~"operation" and the unwrapped false value
-is available as #~"it" in the #~"else" clause. 
+#~"else" is optional. When used as a statement, a missing #~"else" simply
+means the #~"if" produces no value on the false path.
+
+#~"if" can be used as an expression. When used as an expression, every
+completing #~"then" / #~"else" branch contributes to the result type.
+Non-completing branches (#~"return", #~"break", #~"continue") are excluded
+from type unification.
+
+#ul:
+  [#*: If #~"else" is present and every completing branch produces the
+    same type #~"T", the expression's type is #~"T".]
+  [#*: If #~"else" is absent, or branch types do not unify, the compiler
+    cannot prove the expression is exhaustive and lifts the result into an
+    optional: the expression's type becomes #~"optional(T)", with #~"null"
+    on any uncovered path.]
+
+If there is no #~"then" clause supplied (ie. #~"if operation else return it")
+then the value of the expression if true is the unwrapped result of
+#~"operation" and the unwrapped false value is available as #~"it" in the
+#~"else" clause.
 
 For top level #~"if", test and result #_*"must" be constants. #~"then" and #~"else"
 blocks may return different types.
@@ -185,17 +203,19 @@ statement can be used immediately before the #~"if".
   {
     { "when" #>"operation" }
     "then" #>"primary-expression"
-  } 
-  "else" #>"primary-expression"
+  }
+  \[ "else" #>"primary-expression" \]
 
 #---: match_expression
 
-#~"match" is used to dissect a union, variant, enum or generic field type into
+#~"match" is used to dissect a union, variant or generic field type into
 its child types. The initial operation (the target) must return one of these
-types.
+types. Enum-style types are not a distinct form — they are a union or
+variant whose arms carry only the discriminator (data elements are
+#~"null"); the same dissection rules apply.
 
 Types are narrowed within the #~"then" clauses. Unless the #~"match" is dissecting
-on the descriminator only (eg. an 'enum'), it is most useful if the target is a
+on the discriminator only, it is most useful if the target is a
 simple id or path ('addressable'). The target path/id can then be used by name
 in the #~"then" clause and will have the narrowed type. Accessing a different
 subtype within the arm is a compile error. For this reason, it is not useful to
@@ -307,11 +327,11 @@ Methods and generic parameters:
   : "function" {
     ( \[ "in" \] "{" {
       ( #>"label" #>"operation" )
-      | #>"label-value"
+      | #>"label-shorthand"
     } "}" )
     | ( "out" #>"operation" )
     | ( "is" ( #>"primary-expression" | "native" ) )
-    | ( "as" "{" { ( #>"label" #>"operation" ) | #>"label-value" } "}" )
+    | ( "as" "{" { ( #>"label" #>"operation" ) | #>"label-shorthand" } "}" )
   }
 
 #---: unit_definition
@@ -326,7 +346,7 @@ All unit components must be static / constant.
 #code:
   : "unit" \[ "as" \] "{" {
     ( #>"label" #>"constant-expression" ) 
-    | #>"label-value" 
+    | #>"label-shorthand" 
   } "}"
 
 
@@ -345,6 +365,11 @@ Can take maximum one each of the arguments in any order.
 
 All subcomponents of an item *_must_* be static / constant.
 
+There is no dedicated #~"typedef" keyword: a typedef is written as a
+#~"record" containing a single field of type #~"base.typedef", for example
+#~"meters: record { val: i64.typedef }". The resulting type is
+zero-overhead and may carry its own methods via an #~"as" clause.
+
 #code:
   : (
       "record" | "class" |
@@ -352,10 +377,10 @@ All subcomponents of an item *_must_* be static / constant.
       "facet" | "protocol"
   )
   \[ "is" \] (
-      "{" { ( #>"label" #>"constant-expression" ) | #>"label-value" } "}"
+      "{" { ( #>"label" #>"constant-expression" ) | #>"label-shorthand" } "}"
       | "native"
     )
-  \[ "as" "{" { ( #>"label" #>"constant-expression" ) | #>"label-value" } "}" \]
+  \[ "as" "{" { ( #>"label" #>"constant-expression" ) | #>"label-shorthand" } "}" \]
 
 #---: data_definition
 
@@ -390,7 +415,7 @@ Optional #>"label" can be an integer label only.
 
 #code:
   : "data" \[ "is" \] "{"
-      { ( \[ #>"label" \] #>"term" ) | #>"label-value" }
+      { ( \[ #>"label" \] #>"term" ) | #>"label-shorthand" }
   "}"
 
 
@@ -433,16 +458,7 @@ An assignment or a bare expression.
 
 #code:
   : ( \[ #>"label" { #>"eol" } \] #>"expression" )
-  | #>"label-value"
-
-#---: eol
-
-End of line. This *may* be filtered depending on context. At unit level, it is
-ignored/filtered (token separator only); within a block, it is an expression
-separator; and within a string, it is a literal eol.
-
-#code: 
-  : "\\n"
+  | #>"label-shorthand"
 
 #---: operation
 
@@ -463,13 +479,21 @@ Note that operations do not have any labels or keywords that are bare (ie. not
 in within parens). That enables them to be unambiguously used directly within a
 call or control flow production, for example.
 
+There is #_*"no operator precedence". Binary operations are evaluated
+strictly left-to-right: #~"a + b * c" is #~"((a + b) * c)", not
+#~"(a + (b * c))". Parentheses are the only way to bump precedence — write
+#~"a + (b * c)" when right-first evaluation is desired. This applies
+uniformly to every operator (arithmetic, comparison, logical, and
+user-defined methods invoked in infix form).
+
 #code:
   : #>"binop"
   | ( #>"term" #>"binop" )
 
 #---: binop
 
-Binary operation. Can be chained.
+Binary operation. Can be chained. Evaluated strictly left-to-right with
+no precedence between operators (see #>"operation").
 
 binop MUST be greedy (use every term/id up to
 label/eol/closingparen/closingbrace) or fail and consume nothing. (Because it
@@ -587,7 +611,7 @@ Must be greedy. #_*"Must" use every #>"term" (which includes #>"id").
 #code:
   : #>"term" \[ #>"binop" \] { 
       ( #>"label" #>"operation" ) 
-      | #>"label-value" 
+      | #>"label-shorthand" 
   }
 
 #---: term
@@ -654,6 +678,19 @@ starting quotes must be the same.
 
 #code:
   : "\"\"\"" { "\"" } { #>"stringmid" | #>"eol" } "\"\"\"" { "\"" } 
+
+#---: eol
+
+End of line. Context-sensitive:
+
+#ul:
+  #*: at unit level — filtered (token separator only).
+  #*: within a #>"block" — expression separator (significant).
+  #*: inside parentheses — filtered.
+  #*: inside a string literal — a literal eol.
+
+#code:
+  : "\\n"
 
 #---: whitespace
 
