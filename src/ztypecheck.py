@@ -4402,20 +4402,51 @@ class TypeChecker:
                 continue
             if constraint.name != "any":
                 if constraint.typetype == ZTypeType.UNION:
-                    subtype_names = {
-                        k
-                        for k, v in constraint.children.items()
-                        if k != "tag"
-                        and v.typetype != ZTypeType.FUNCTION
-                        and v.typetype != ZTypeType.DATA
-                        and v.typetype != ZTypeType.TAG
-                        and v.typetype != ZTypeType.ENUM
-                        and v.generic_origin is not TAG_ORIGIN
-                    }
-                    if concrete_type.name not in subtype_names:
+                    # Walk union members in declaration order; first match
+                    # wins. Concrete members match by name; protocol/facet
+                    # members match if the concrete type declares conformance.
+                    matched = False
+                    concrete_members: list[str] = []
+                    proto_members: list[str] = []
+                    for k, v in constraint.children.items():
+                        if (
+                            k == "tag"
+                            or v.typetype
+                            in (
+                                ZTypeType.FUNCTION,
+                                ZTypeType.DATA,
+                                ZTypeType.TAG,
+                                ZTypeType.ENUM,
+                            )
+                            or v.generic_origin is TAG_ORIGIN
+                        ):
+                            continue
+                        if v.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+                            proto_members.append(v.name)
+                            if self._type_conforms_to_protocol(concrete_type, v):
+                                matched = True
+                                break
+                        else:
+                            concrete_members.append(k)
+                            if concrete_type.name == k or concrete_type.name == v.name:
+                                matched = True
+                                break
+                    if not matched:
+                        parts: list[str] = []
+                        if concrete_members:
+                            parts.append(
+                                "must be one of " + ", ".join(concrete_members)
+                            )
+                        if proto_members:
+                            parts.append(
+                                ("or implement " if parts else "must implement ")
+                                + ", ".join(proto_members)
+                            )
+                        detail = f" ({'; '.join(parts)})" if parts else ""
                         self._error(
                             f"Type '{concrete_type.name}' does not satisfy constraint "
-                            f"'{constraint.name}' for generic parameter '{param_name}'",
+                            f"'{constraint.name}' for generic parameter "
+                            f"'{param_name}'{detail}",
                             loc=call.start,
                         )
 
@@ -4524,6 +4555,37 @@ class TypeChecker:
             break
 
         return mono
+
+    def _type_conforms_to_protocol(self, concrete: ZType, protocol: ZType) -> bool:
+        """Does `concrete` declare conformance to `protocol`?
+
+        Conformance is declared in a type's `as` clause as
+        `<label>: <protocol-name>` (or the `:name` shorthand). That
+        entry becomes a child of the concrete type whose child-type is
+        the protocol ZType. So conformance is a linear scan over the
+        concrete's children for an entry whose type is the protocol.
+
+        Also traverses `generic_origin` so that a monomorphized type
+        (e.g. `str_64`) inherits conformance from its template (`str`).
+        """
+        t: Optional[ZType] = concrete
+        seen: set[int] = set()
+        while t is not None and id(t) not in seen:
+            seen.add(id(t))
+            for child_type in t.children.values():
+                if child_type is protocol:
+                    return True
+                if (
+                    child_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET)
+                    and child_type.name == protocol.name
+                ):
+                    return True
+            origin = t.generic_origin
+            if origin is None or origin is TAG_ORIGIN:
+                t = None
+            else:
+                t = cast(ZType, origin)
+        return False
 
     def _find_generic_func_defn(self, template: ZType) -> Optional[zast.Function]:
         """Find the Function AST node for a generic function template."""
