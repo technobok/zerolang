@@ -5144,6 +5144,19 @@ class CEmitter:
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_write")
                     return f"z_file_write({parent_val}, {from_val})"
+                if method_name == "seek":
+                    # args: to: i64, from: seekorigin
+                    to_val = None
+                    origin_val = None
+                    for arg in call.arguments:
+                        if arg.name == "to":
+                            to_val = self._emit_operation_value(arg.valtype)
+                        elif arg.name == "from":
+                            origin_val = self._emit_operation_value(arg.valtype)
+                    self.needs_io = True
+                    self.needs_stdio = True
+                    self.needs_io_natives.add("file_seek")
+                    return f"z_file_seek({parent_val}, {to_val}, {origin_val})"
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:

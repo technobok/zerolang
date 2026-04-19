@@ -1,0 +1,56 @@
+# io_seek.z -- write bytes, reopen, seek past a prefix, read the
+# suffix.
+#
+# file.seek to: i64 from: seekorigin repositions the fd head. The
+# return (a result) carries the new absolute position measured from
+# the start of the file; a negative underlying lseek surfaces in the
+# err arm as an ioerror.
+
+main: function is {
+    # prepare "Hello" = 5 bytes
+    outbuf: list of: u8
+    outbuf.append from: 72u8
+    outbuf.append from: 101u8
+    outbuf.append from: 108u8
+    outbuf.append from: 108u8
+    outbuf.append from: 111u8
+
+    w: io.open path: "/tmp/z_io_seek.txt".string mode: openmode.write
+    match (
+        w
+    ) case ok then {
+        wr: w.ok.write from: outbuf
+        match (
+            wr
+        ) case ok then {} case err then {
+            io.eprintln "write failed"
+        }
+    } case err then {
+        io.eprintln "open-w failed"
+    }
+
+    r: io.open path: "/tmp/z_io_seek.txt".string mode: openmode.read
+    match (
+        r
+    ) case ok then {
+        # seek to byte 2 from start. Should land on "llo".
+        sk: r.ok.seek to: 2i64 from: seekorigin.start
+        match (
+            sk
+        ) case ok then {} case err then {
+            io.eprintln "seek failed"
+        }
+        buf: list of: u8
+        rr: r.ok.read into: buf max: 16u64
+        match (
+            rr
+        ) case ok then {
+            n: buf.length
+            print "read \{n} bytes after seek"
+        } case err then {
+            io.eprintln "read failed"
+        }
+    } case err then {
+        io.eprintln "open-r failed"
+    }
+}

@@ -468,6 +468,29 @@ _Z_FILE_WRITE = (
     "}\n\n"
 )
 
+_Z_FILE_SEEK = (
+    "/* file.seek — reposition the fd head. Maps seekorigin to the\n"
+    "   matching POSIX whence constant. Returns the new absolute\n"
+    "   position measured from the start of the file. */\n"
+    "static z_result_u64_ioerror_t z_file_seek(\n"
+    "    z_file_t* f, int64_t off, z_seekorigin_t origin\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_file_seek(\n"
+    "    z_file_t* f, int64_t off, z_seekorigin_t origin\n"
+    ") {\n"
+    "    int whence;\n"
+    "    switch (origin.tag) {\n"
+    "        case Z_SEEKORIGIN_TAG_START:   whence = SEEK_SET; break;\n"
+    "        case Z_SEEKORIGIN_TAG_CURRENT: whence = SEEK_CUR; break;\n"
+    "        case Z_SEEKORIGIN_TAG_END:     whence = SEEK_END; break;\n"
+    "        default:                       whence = SEEK_SET; break;\n"
+    "    }\n"
+    "    off_t pos = lseek(f->fd, (off_t)off, whence);\n"
+    "    if (pos < 0) return z_io_u64_err(errno);\n"
+    "    return z_io_u64_ok((uint64_t)pos);\n"
+    "}\n\n"
+)
+
 
 def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
     """Emit io-unit native function implementations per requested name.
@@ -492,12 +515,14 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "file_close",
         "file_read",
         "file_write",
+        "file_seek",
     }
     # result(null, ioerror) wrapper used by mkdir / remove / rename /
     # file_close
     null_wrap = natives & {"mkdir", "remove", "rename", "file_close"}
-    # result(u64, ioerror) wrapper used by file_read / file_write
-    u64_wrap = natives & {"file_read", "file_write"}
+    # result(u64, ioerror) wrapper used by file_read / file_write /
+    # file_seek
+    u64_wrap = natives & {"file_read", "file_write", "file_seek"}
     if "eprintln" in natives:
         parts.append(_Z_IO_EPRINTLN)
     if fallible:
@@ -530,6 +555,8 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_FILE_READ)
     if "file_write" in natives:
         parts.append(_Z_FILE_WRITE)
+    if "file_seek" in natives:
+        parts.append(_Z_FILE_SEEK)
     return "".join(parts)
 
 

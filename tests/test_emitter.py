@@ -6313,6 +6313,58 @@ class TestIOFileStreaming:
         assert output.strip() == "2"
         assert target.read_bytes() == b"HI"
 
+    def test_file_seek_roundtrip(self, tmp_path):
+        """Write bytes, reopen, seek past a prefix, read the remainder."""
+        target = tmp_path / "seek.bin"
+        csource = emit_source(
+            "main: function is {\n"
+            "    buf: list of: u8\n"
+            "    buf.append from: 72u8\n"
+            "    buf.append from: 101u8\n"
+            "    buf.append from: 108u8\n"
+            "    buf.append from: 108u8\n"
+            "    buf.append from: 111u8\n"
+            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        w\n"
+            "    ) case ok then {\n"
+            "        wr: w.ok.write from: buf\n"
+            "        match (\n"
+            "            wr\n"
+            "        ) case ok then { } case err then {\n"
+            '            print "write err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-w err"\n'
+            "    }\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        sk: r.ok.seek to: 2i64 from: seekorigin.start\n"
+            "        match (\n"
+            "            sk\n"
+            "        ) case ok then { } case err then {\n"
+            '            print "seek err"\n'
+            "        }\n"
+            "        b2: list of: u8\n"
+            "        rr: r.ok.read into: b2 max: 16u64\n"
+            "        match (\n"
+            "            rr\n"
+            "        ) case ok then {\n"
+            '            print "\\{b2.length}"\n'
+            "        } case err then {\n"
+            '            print "read err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-r err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        # "Hello" (5 bytes) seeked past 2 -> "llo" (3 bytes) remaining
+        assert output.strip() == "3"
+
     def test_explicit_close_idempotent_with_raii(self, tmp_path):
         """Calling file.close and then letting RAII run must not double-close."""
         target = tmp_path / "close.txt"
