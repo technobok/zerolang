@@ -268,6 +268,7 @@ class CEmitter:
         self.needs_stdbool = False
         self.needs_string = False
         self.needs_stringview = False
+        self.needs_io = False
         self.forward_decls: List[str] = []
         self.struct_defs: "TrackedList" = TrackedList(self)
         self.func_defs: "TrackedList" = TrackedList(self)
@@ -554,7 +555,14 @@ class CEmitter:
                 if "." in func_name:
                     return _mangle_func(func_name)
         callable_name = self._get_callable_name(call.callable)
-        return self._mangle_callable(callable_name)
+        mangled = self._mangle_callable(callable_name)
+        # track use of io-unit natives so the runtime emitter includes
+        # their C implementations. `print` is hardcoded separately and
+        # does not go through this path.
+        if mangled.startswith("z_io_"):
+            self.needs_io = True
+            self.needs_stdio = True
+        return mangled
 
     def _qualify(self, prefix: str, name: str) -> str:
         return f"{prefix}.{name}" if prefix else name
@@ -993,6 +1001,7 @@ class CEmitter:
                 needs_stdbool=self.needs_stdbool,
                 needs_string=self.needs_string,
                 needs_stringview=self.needs_stringview,
+                needs_io=self.needs_io,
             )
         )
         parts.append(zrt.emit_static_stringviews(self._string_literals))

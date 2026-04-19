@@ -151,6 +151,25 @@ def emit_runtime_z_stringview(*, needs_stringview: bool) -> str:
     return ""
 
 
+_Z_IO_RUNTIME = (
+    "static void z_io_eprintln(z_stringview_t sv) {\n"
+    '    fprintf(stderr, "%.*s\\n", (int)sv.length, sv.data);\n'
+    "}\n\n"
+)
+
+
+def emit_runtime_io(*, needs_io: bool) -> str:
+    """Emit io-unit native function implementations (stderr / file helpers).
+
+    Depends on z_stringview_t (needs_stringview must also be set by the
+    caller for the stringview struct to be in scope). Conditional so
+    programs that do not use io pay no bloat.
+    """
+    if needs_io:
+        return _Z_IO_RUNTIME
+    return ""
+
+
 def emit_runtime(
     *,
     needs_stdio: bool,
@@ -159,6 +178,7 @@ def emit_runtime(
     needs_stdbool: bool,
     needs_string: bool,
     needs_stringview: bool = False,
+    needs_io: bool = False,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
     # z_string_t runtime uses malloc/free (stdlib.h), strlen/memcpy (string.h),
@@ -166,7 +186,7 @@ def emit_runtime(
     has_z_string = needs_string or needs_stdio
     return (
         emit_runtime_includes(
-            needs_stdio=needs_stdio,
+            needs_stdio=needs_stdio or needs_io,
             needs_stdint=needs_stdint,
             needs_stdlib=needs_stdlib or has_z_string or needs_stringview,
             needs_stdbool=needs_stdbool or has_z_string or needs_stringview,
@@ -174,6 +194,7 @@ def emit_runtime(
         )
         + emit_runtime_z_string(needs_string=needs_string, needs_stdio=needs_stdio)
         + emit_runtime_z_stringview(needs_stringview=needs_stringview)
+        + emit_runtime_io(needs_io=needs_io)
     )
 
 

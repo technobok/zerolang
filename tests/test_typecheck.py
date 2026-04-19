@@ -4494,6 +4494,30 @@ class TestStreamProtocolsAndFile:
             )
 
 
+class TestIoNativeDispatch:
+    """I/O Phase 5a: native function dispatch + io.eprintln.
+
+    First io native beyond the hardcoded `print`. Proves the generic
+    dispatch path: calls to `io.<name>` that are declared `is native`
+    emit as `z_io_<name>(args)` and the runtime emitter includes the
+    C implementation when `needs_io` is set.
+    """
+
+    def test_eprintln_typechecks(self):
+        """io.eprintln msg: stringview is callable."""
+        check_ok(
+            "main: function is {\n"
+            '    io.eprintln "diag"\n'
+            "}"
+        )
+
+    def test_eprintln_with_stringview_literal(self):
+        """io.eprintln accepts a bare string literal (auto-projects to stringview)."""
+        check_ok(
+            'main: function is { io.eprintln "error" }'
+        )
+
+
 class TestBytesAndPathTypedefs:
     """I/O Phase 1: bytes / byteview / path / pathview typedefs.
 
