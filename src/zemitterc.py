@@ -269,6 +269,10 @@ class CEmitter:
         self.needs_string = False
         self.needs_stringview = False
         self.needs_io = False
+        # per-native flags; the runtime emits a helper only when its
+        # flag is set, so unused natives do not pull in types the user
+        # never monomorphized.
+        self.needs_io_natives: set[str] = set()
         self.forward_decls: List[str] = []
         self.struct_defs: "TrackedList" = TrackedList(self)
         self.func_defs: "TrackedList" = TrackedList(self)
@@ -558,10 +562,13 @@ class CEmitter:
         mangled = self._mangle_callable(callable_name)
         # track use of io-unit natives so the runtime emitter includes
         # their C implementations. `print` is hardcoded separately and
-        # does not go through this path.
+        # does not go through this path. Per-function granularity so
+        # only the helpers the program actually calls are emitted.
         if mangled.startswith("z_io_"):
             self.needs_io = True
             self.needs_stdio = True
+            # strip "z_io_" prefix: `z_io_read_text` -> `read_text`.
+            self.needs_io_natives.add(mangled[len("z_io_") :])
         return mangled
 
     def _qualify(self, prefix: str, name: str) -> str:
@@ -1017,7 +1024,12 @@ class CEmitter:
         # io runtime helpers reference the compiler-generated struct
         # names (z_ioerror_t, z_result_<T>_ioerror_t, ...) so they land
         # AFTER struct_defs rather than with the base runtime helpers.
-        parts.append(zrt.emit_runtime_io(needs_io=self.needs_io))
+        parts.append(
+            zrt.emit_runtime_io(
+                needs_io=self.needs_io,
+                natives=self.needs_io_natives,
+            )
+        )
 
         for ft in self.func_typedefs:
             parts.append(ft)

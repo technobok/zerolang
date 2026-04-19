@@ -156,10 +156,13 @@ def emit_runtime_z_stringview(*, needs_stringview: bool) -> str:
     return ""
 
 
-_Z_IO_RUNTIME = (
+_Z_IO_EPRINTLN = (
     "static void z_io_eprintln(z_stringview_t sv) {\n"
     '    fprintf(stderr, "%.*s\\n", (int)sv.length, sv.data);\n'
     "}\n\n"
+)
+
+_Z_IO_ERRNO_MAP = (
     "static z_ioerror_t z_io_errno_to_ioerror(int e) {\n"
     "    z_ioerror_t r = {0};\n"
     "    r.data = NULL;\n"
@@ -176,6 +179,9 @@ _Z_IO_RUNTIME = (
     "    }\n"
     "    return r;\n"
     "}\n\n"
+)
+
+_Z_IO_READ_TEXT = (
     "static z_result_string_ioerror_t z_io_read_text(z_string_t path) {\n"
     "    /* path arg owned by this callee per zerolang string-arg convention */\n"
     "    z_result_string_ioerror_t result = {0};\n"
@@ -217,17 +223,101 @@ _Z_IO_RUNTIME = (
     "}\n\n"
 )
 
+_Z_IO_WRITE_COMMON = (
+    "/* shared helper: write all bytes; returns 0 ok, errno on failure. */\n"
+    "static int z_io_write_all(int fd, const char* data, uint64_t size) {\n"
+    "    uint64_t off = 0;\n"
+    "    while (off < size) {\n"
+    "        long n = write(fd, data + off, size - off);\n"
+    "        if (n < 0) {\n"
+    "            if (errno == EINTR) continue;\n"
+    "            return errno;\n"
+    "        }\n"
+    "        off += (uint64_t)n;\n"
+    "    }\n"
+    "    return 0;\n"
+    "}\n\n"
+    "/* shared helper: path + open flags -> write content -> close.\n"
+    "   Frees path and content (callee owns per string-arg convention). */\n"
+    "static z_result_null_ioerror_t z_io_write_common(\n"
+    "    z_string_t path, z_string_t content, int flags\n"
+    ") {\n"
+    "    z_result_null_ioerror_t result = {0};\n"
+    "    int fd = open(path.data, flags, 0644);\n"
+    "    if (fd < 0) {\n"
+    "        int e = errno;\n"
+    "        z_string_free(&path);\n"
+    "        z_string_free(&content);\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_string_free(&path);\n"
+    "    int werr = z_io_write_all(fd, content.data, content.size);\n"
+    "    z_string_free(&content);\n"
+    "    close(fd);\n"
+    "    if (werr != 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(werr);\n"
+    "        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "    result.data = NULL;\n"
+    "    return result;\n"
+    "}\n\n"
+)
 
-def emit_runtime_io(*, needs_io: bool) -> str:
-    """Emit io-unit native function implementations (stderr / file helpers).
+_Z_IO_WRITE_TEXT = (
+    "static z_result_null_ioerror_t z_io_write_text(\n"
+    "    z_string_t path, z_string_t content\n"
+    ") {\n"
+    "    return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_TRUNC);\n"
+    "}\n\n"
+)
 
-    Depends on z_stringview_t (needs_stringview must also be set by the
-    caller for the stringview struct to be in scope). Conditional so
-    programs that do not use io pay no bloat.
+_Z_IO_APPEND_TEXT = (
+    "static z_result_null_ioerror_t z_io_append_text(\n"
+    "    z_string_t path, z_string_t content\n"
+    ") {\n"
+    "    return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_APPEND);\n"
+    "}\n\n"
+)
+
+
+def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
+    """Emit io-unit native function implementations per requested name.
+
+    `natives` is the set of io-native function names the program
+    actually calls (e.g. `{"eprintln", "read_text"}`). Per-name
+    granularity so unused natives never pull in the
+    compiler-generated types they would reference.
     """
-    if needs_io:
-        return _Z_IO_RUNTIME
-    return ""
+    if not needs_io or not natives:
+        return ""
+    parts: list[str] = []
+    # errno mapping is shared; include if any fallible native is used
+    fallible = natives & {
+        "read_text",
+        "write_text",
+        "append_text",
+    }
+    if "eprintln" in natives:
+        parts.append(_Z_IO_EPRINTLN)
+    if fallible:
+        parts.append(_Z_IO_ERRNO_MAP)
+    if "read_text" in natives:
+        parts.append(_Z_IO_READ_TEXT)
+    if natives & {"write_text", "append_text"}:
+        parts.append(_Z_IO_WRITE_COMMON)
+    if "write_text" in natives:
+        parts.append(_Z_IO_WRITE_TEXT)
+    if "append_text" in natives:
+        parts.append(_Z_IO_APPEND_TEXT)
+    return "".join(parts)
 
 
 def emit_runtime(

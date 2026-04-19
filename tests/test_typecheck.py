@@ -4517,6 +4517,22 @@ class TestIoNativeDispatch:
         resolve."""
         check_ok('main: function is {\n    r: io.read_text "/tmp/x".string\n}')
 
+    def test_write_text_typechecks(self):
+        """io.write_text returns result(null, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.write_text path: "/tmp/x".string content: "hi".string\n'
+            "}"
+        )
+
+    def test_append_text_typechecks(self):
+        """io.append_text has the same shape as write_text."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.append_text path: "/tmp/x".string content: "hi".string\n'
+            "}"
+        )
+
     def test_read_text_pattern_match(self):
         """Result of io.read_text can be matched on ok/err arms."""
         check_ok(
