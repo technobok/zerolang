@@ -4364,6 +4364,21 @@ class TestIoErrorVariant:
             "}"
         )
 
+    def test_ioerror_construction_from_mainunit(self):
+        """Phase 4 regression: bare `ioerror.<arm>` resolves and emits
+        proper construction when used in a main unit that does not
+        redeclare ioerror. Before the emitter's cross-unit resolver
+        fallback, the bare name failed to resolve and the emitter fell
+        through to literal-text output that wouldn't compile.
+        """
+        check_ok(
+            "main: function is {\n"
+            "    e: ioerror.notfound\n"
+            '    e2: ioerror.invalidpath "p".string\n'
+            "    s: seekorigin.start\n"
+            "}"
+        )
+
     def test_ioerror_pattern_match(self):
         """Match on ioerror reaches every variant."""
         check_ok(

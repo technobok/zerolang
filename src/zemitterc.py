@@ -327,13 +327,23 @@ class CEmitter:
     def _resolved_type(self, name: str) -> Optional[ZType]:
         """Look up a name in the type checker's resolved dict.
 
-        Tries the bare name first, then prefixed with the main unit name.
-        This bridges the emitter's convention (bare names for main unit defs)
-        with the type checker's convention (unitname.name keys).
+        Tries the bare name first, then prefixed with the main unit name,
+        then each other loaded unit. Mainunit has priority so that user
+        definitions shadow any system namesake; the final fallback lets
+        names re-exported through core (like `ioerror`, `seekorigin`)
+        resolve against their definition unit when the caller writes
+        them bare in a mainunit that does not redefine them.
         """
         t = self.program.resolved.get(name)
         if t is None:
             t = self.program.resolved.get(f"{self.program.mainunitname}.{name}")
+        if t is None:
+            for unitname in self.program.units:
+                if unitname == self.program.mainunitname:
+                    continue
+                t = self.program.resolved.get(f"{unitname}.{name}")
+                if t is not None:
+                    break
         return t
 
     def _typetype_of(self, name: str) -> Optional[ZTypeType]:
@@ -825,6 +835,42 @@ class CEmitter:
                         ):
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
+    def _emit_system_unit_definitions(self) -> None:
+        """Emit non-generic non-native union and variant types from
+        system units (io today) so user code can reference them.
+
+        Scope is intentionally narrow:
+
+        - Unions/variants only. These are data shapes that the emitter
+          can lay out without needing method-body resolution for
+          cross-unit types.
+        - Classes/records/protocols from system units are NOT emitted
+          here; their method signatures can reference generics (e.g.
+          `result` in stream protocol methods) that only resolve
+          correctly once the per-monomorphization emission pass runs.
+          Those types come online as future phases add usage-driven
+          emission.
+
+        Generic types (option, optionval, result, list, etc.) are
+        emitted per-monomorphization elsewhere and skipped here.
+        Native types (bool, str, ...) are in the runtime emitter.
+        """
+        for unitname in ("io",):
+            unit = self.program.units.get(unitname)
+            if unit is None:
+                continue
+            for name, defn in unit.body.items():
+                if getattr(defn, "is_native", False):
+                    continue
+                if self._is_generic_template(defn):
+                    continue
+                self._current_node_id = getattr(defn, "nodeid", None)
+                defn_type = type(defn)
+                if defn_type == zast.Union:
+                    self._emit_union(name, cast(zast.Union, defn))
+                elif defn_type == zast.Variant:
+                    self._emit_variant(name, cast(zast.Variant, defn))
+
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
         if not mainunit:
@@ -902,6 +948,11 @@ class CEmitter:
         # pre-register field info for all non-generic records/classes
         # so that construction calls work regardless of definition order
         self._pre_register_fields("", mainunit.body)
+
+        # emit non-generic union/variant types from system units (io
+        # today) so user code can reference cross-unit types like
+        # ioerror and seekorigin.
+        self._emit_system_unit_definitions()
 
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
@@ -5969,9 +6020,21 @@ class CEmitter:
                 if not is_null:
                     subtype_ctype_resolved = _ctype(sub_ztype)
         else:
-            # non-generic: look up from AST
+            # non-generic: look up from AST. Prefer mainunit (so a user
+            # definition shadows any system namesake), then search other
+            # units for unions defined only in the system library (e.g.
+            # `ioerror` in lib/system/io.z).
             mainunit = self.program.units.get(self.program.mainunitname)
             union_defn = mainunit.body.get(union_name) if mainunit else None
+            if union_defn is None or union_defn.nodetype != NodeType.UNION:
+                union_defn = None
+                for _uname, _u in self.program.units.items():
+                    if _uname == self.program.mainunitname:
+                        continue
+                    cand = _u.body.get(union_name)
+                    if cand is not None and cand.nodetype == NodeType.UNION:
+                        union_defn = cand
+                        break
             subtype_path = None
             if union_defn is not None and union_defn.nodetype == NodeType.UNION:
                 subtype_path = cast(zast.Union, union_defn).items.get(subtype_name)
