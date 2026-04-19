@@ -448,12 +448,13 @@ _Z_FILE_READ = (
 
 _Z_FILE_WRITE = (
     "/* file.write — write all bytes from `src`. Loops on short writes;\n"
-    "   retries on EINTR. Returns total bytes written on success. */\n"
+    "   retries on EINTR. Returns total bytes written on success.\n"
+    "   `src` is a listview (layout: length, data*), matching byteview. */\n"
     "static z_result_u64_ioerror_t z_file_write(\n"
-    "    z_file_t* f, z_list_u8_t* src\n"
+    "    z_file_t* f, z_listview_u8_t* src\n"
     ");\n"
     "static z_result_u64_ioerror_t z_file_write(\n"
-    "    z_file_t* f, z_list_u8_t* src\n"
+    "    z_file_t* f, z_listview_u8_t* src\n"
     ") {\n"
     "    uint64_t total = 0;\n"
     "    while (total < src->length) {\n"
@@ -465,6 +466,20 @@ _Z_FILE_WRITE = (
     "        total += (uint64_t)n;\n"
     "    }\n"
     "    return z_io_u64_ok(total);\n"
+    "}\n\n"
+)
+
+_Z_FILE_FLUSH = (
+    "/* file.flush — no-op for raw file descriptors (POSIX write goes\n"
+    "   directly to the kernel, no userspace buffer to drain). Exists\n"
+    "   so file satisfies the `writer` protocol signature. */\n"
+    "static z_result_null_ioerror_t z_file_flush(z_file_t* f);\n"
+    "static z_result_null_ioerror_t z_file_flush(z_file_t* f) {\n"
+    "    (void)f;\n"
+    "    z_result_null_ioerror_t result = {0};\n"
+    "    result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "    result.data = NULL;\n"
+    "    return result;\n"
     "}\n\n"
 )
 
@@ -555,6 +570,8 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_FILE_READ)
     if "file_write" in natives:
         parts.append(_Z_FILE_WRITE)
+    if "file_flush" in natives:
+        parts.append(_Z_FILE_FLUSH)
     if "file_seek" in natives:
         parts.append(_Z_FILE_SEEK)
     return "".join(parts)

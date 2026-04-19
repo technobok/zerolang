@@ -37,7 +37,24 @@ from ztypeutil import (
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
     is_stringview_type as _is_stringview_type,
+    _unwrap_typedef,
 )
+
+
+def _mono_name(ztype: Optional[ZType]) -> str:
+    """Return the mangled base name of a (possibly typedef-wrapped) type.
+
+    Typedef wrappers (e.g. `bytes` → `list of: u8`) emit no C struct
+    of their own; downstream code must use the wrapped type's name
+    when generating mangled identifiers like `z_<name>_create` or
+    `z_<name>_append`. Defensive against None (falls back to the
+    wrapper name — callers have already checked the predicate)."""
+    base = _unwrap_typedef(ztype) if ztype is not None else None
+    if base is not None:
+        return base.name
+    if ztype is not None:
+        return ztype.name
+    return ""
 
 
 @dataclass
@@ -4971,12 +4988,12 @@ class CEmitter:
 
         # str construction: (str to: N) — always empty
         if call.callable.type and _is_str_type(call.callable.type):
-            str_name = call.callable.type.name
+            str_name = _mono_name(call.callable.type)
             return f"z_{str_name}_create()"
 
         # list construction: (list of: T) or (list of: T) capacity: N
         if call.callable.type and _is_list_type(call.callable.type):
-            list_name = call.callable.type.name
+            list_name = _mono_name(call.callable.type)
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":
@@ -4989,7 +5006,7 @@ class CEmitter:
 
         # map construction: (map key: K value: V) or with capacity:
         if call.callable.type and _is_map_type(call.callable.type):
-            map_name = call.callable.type.name
+            map_name = _mono_name(call.callable.type)
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":
@@ -5008,7 +5025,7 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                arr_type_name = dp_parent_type.name
+                arr_type_name = _mono_name(dp_parent_type)
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{arr_type_name}_get({parent_val}, {idx_val})"
@@ -5025,7 +5042,7 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                str_type_name = dp_parent_type.name
+                str_type_name = _mono_name(dp_parent_type)
                 if method_name == "string":
                     result = f"z_{str_type_name}_string({parent_val})"
                     return self._alloc_temp(result)
@@ -5157,6 +5174,13 @@ class CEmitter:
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_seek")
                     return f"z_file_seek({parent_val}, {to_val}, {origin_val})"
+                if method_name == "flush":
+                    # no-op on raw POSIX fds; declared for writer
+                    # protocol conformance.
+                    self.needs_io = True
+                    self.needs_stdio = True
+                    self.needs_io_natives.add("file_flush")
+                    return f"z_file_flush({parent_val})"
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -5172,7 +5196,7 @@ class CEmitter:
                     parent_path
                 ) and not parent_val.startswith("&"):
                     parent_val = f"&{parent_val}"
-                list_type_name = dp_parent_type.name
+                list_type_name = _mono_name(dp_parent_type)
                 if method_name == "append" and call.arguments:
                     from_arg = call.arguments[0]
                     val = self._emit_operation_value(from_arg.valtype)
@@ -5231,7 +5255,7 @@ class CEmitter:
                     parent_path
                 ) and not parent_val.startswith("&"):
                     parent_val = f"&{parent_val}"
-                lv_type_name = dp_parent_type.name
+                lv_type_name = _mono_name(dp_parent_type)
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{lv_type_name}_get({parent_val}, {idx_val})"
@@ -5244,7 +5268,7 @@ class CEmitter:
                 parent_val = self._emit_path_value(
                     cast(zast.DottedPath, call.callable).parent
                 )
-                map_type_name = dp_parent_type.name
+                map_type_name = _mono_name(dp_parent_type)
                 if method_name == "set" and len(call.arguments) >= 2:
                     key_arg = None
                     val_arg = None
@@ -5550,16 +5574,29 @@ class CEmitter:
             return self._alloc_temp("z_string_create((uint64_t)0)")
         if tt == ZTypeType.CLASS and resolved is not None and resolved.name == name:
             self.needs_stdlib = True
-            ctype = f"z_{name}_t"
-            zero_args = self._zero_args_for_ctypes(name)
+            # Follow typedef wrappers (e.g. `bytes` → `list of: u8`)
+            # so construction uses the base type's emitted `create`.
+            # The wrapped collection's signature takes a single
+            # capacity argument, not per-field zeroes.
+            base = _unwrap_typedef(resolved)
+            mangled = base.name if base is not None else name
+            ctype = _ctype(resolved)
+            if (
+                base is not None
+                and base is not resolved
+                and (_is_list_type(base) or _is_map_type(base) or _is_str_type(base))
+            ):
+                create_args = "0"
+            else:
+                create_args = self._zero_args_for_ctypes(mangled)
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(
-                f"{indent}{ctype} {tmp} = z_{name}_create({zero_args});\n"
+                f"{indent}{ctype} {tmp} = z_{mangled}_create({create_args});\n"
             )
             if resolved.needs_destructor:
                 self._temp.frees.append(tmp)
-                self._temp.class_set[tmp] = name
+                self._temp.class_set[tmp] = mangled
             return tmp
         return _mangle_var(name)
 
@@ -5788,7 +5825,7 @@ class CEmitter:
                 "&"
             ):
                 parent = f"&{parent}"
-            return f"z_{parent_type_dp.name}_pop({parent})"
+            return f"z_{_mono_name(parent_type_dp)}_pop({parent})"
         # list: .listview as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "listview":
             parent = self._emit_path_value(path.parent)
@@ -5796,7 +5833,7 @@ class CEmitter:
                 "&"
             ):
                 parent = f"&{parent}"
-            return f"z_{parent_type_dp.name}_listview({parent})"
+            return f"z_{_mono_name(parent_type_dp)}_listview({parent})"
         # map: .length field access
         if parent_type_dp and _is_map_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)

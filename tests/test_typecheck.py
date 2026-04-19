@@ -4615,7 +4615,7 @@ class TestIoNativeDispatch:
         assert file_type.destructor_name == "z_file_destroy"
 
     def test_file_read_typechecks(self):
-        """file.read takes (into: list of u8, max: u64) and returns
+        """file.read takes (into: bytes, max: u64) and returns
         result(u64, ioerror). Exercised through the match-ok narrowing
         pattern that unwraps the file handle out of io.open's result."""
         check_ok(
@@ -4624,8 +4624,8 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        buf: list of: u8\n"
-            "        n: r.ok.read into: buf max: 1024u64\n"
+            "        buf: bytes\n"
+            "        n: r.ok.read into: buf max: 1024.u64\n"
             '        print "ok"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -4634,7 +4634,7 @@ class TestIoNativeDispatch:
         )
 
     def test_file_write_typechecks(self):
-        """file.write takes (from: list of u8) and returns
+        """file.write takes (from: byteview) and returns
         result(u64, ioerror)."""
         check_ok(
             "main: function is {\n"
@@ -4642,9 +4642,10 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        buf: list of: u8\n"
-            "        buf.append from: 65u8\n"
-            "        n: r.ok.write from: buf\n"
+            "        buf: bytes\n"
+            "        buf.append from: 65.u8\n"
+            "        bv: byteview.borrow from: buf.listview\n"
+            "        n: r.ok.write from: bv\n"
             '        print "ok"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -4661,7 +4662,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        n: r.ok.seek to: 0i64 from: seekorigin.end\n"
+            "        n: r.ok.seek to: 0.i64 from: seekorigin.end\n"
             '        print "ok"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -4669,23 +4670,21 @@ class TestIoNativeDispatch:
             "}"
         )
 
-    def test_file_declares_closer_seeker_conformance(self):
-        """io.file declares `:closer :seeker` in its `as` block so that
-        values of type file are recognised as satisfying those
-        protocols. `:reader`/`:writer` are intentionally deferred
-        until the bytes/byteview typedefs emit."""
+    def test_file_declares_all_stream_protocol_conformance(self):
+        """io.file declares `:reader :writer :closer :seeker`. Protocol
+        conformance validation compares method signatures against each
+        protocol; all four must match for this to typecheck."""
         program, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         file_type = tc._resolved.get("io.file")
         assert file_type is not None
-        # conformance labels recorded for the emitter's benefit
         labels = [lbl for (lbl, _) in tc._protocol_labels.get("file", [])]
-        assert "closer" in labels
-        assert "seeker" in labels
-        # and surfaced as children of the class
-        assert file_type.children.get("closer") is not None
-        assert file_type.children.get("seeker") is not None
+        for expected in ("reader", "writer", "closer", "seeker"):
+            assert expected in labels, (
+                f"file should declare :{expected} conformance; labels: {labels}"
+            )
+            assert file_type.children.get(expected) is not None
 
     def test_union_payload_method_call(self):
         """Method calls on a union subtype (r.ok.X) lower correctly —
@@ -4725,11 +4724,16 @@ class TestBytesAndPathTypedefs:
         check_ok("main: function is {\n    b: bytes\n}")
 
     def test_bytes_inherits_list_methods(self):
-        """append, length etc. work because bytes typedefs over list of: u8."""
+        """append, length etc. work because bytes typedefs over list of: u8.
+
+        The monomorphized list of: u8 synthesizes its `append` with
+        `from:` as the parameter name (see _monomorphize in
+        ztypecheck), so callers use `from:` on bytes too.
+        """
         check_ok(
             "main: function is {\n"
             "    b: bytes\n"
-            "    b.append item: 65\n"
+            "    b.append from: 65.u8\n"
             "    n: b.length\n"
             "}"
         )
@@ -4751,7 +4755,7 @@ class TestBytesAndPathTypedefs:
         check_ok(
             "main: function is {\n"
             "    b: bytes\n"
-            "    b.append item: 65\n"
+            "    b.append from: 65.u8\n"
             "    v: b.listview\n"
             "}"
         )

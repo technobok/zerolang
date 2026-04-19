@@ -6275,14 +6275,15 @@ class TestIOFileStreaming:
         target = tmp_path / "rw.bin"
         csource = emit_source(
             "main: function is {\n"
-            "    buf: list of: u8\n"
-            "    buf.append from: 72u8\n"
-            "    buf.append from: 73u8\n"
+            "    buf: bytes\n"
+            "    buf.append from: 72.u8\n"
+            "    buf.append from: 73.u8\n"
             f'    w: io.open path: "{target}".string mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        wr: w.ok.write from: buf\n"
+            "        bv: byteview.borrow from: buf.listview\n"
+            "        wr: w.ok.write from: bv\n"
             "        match (\n"
             "            wr\n"
             "        ) case ok then { } case err then {\n"
@@ -6295,8 +6296,8 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        b2: list of: u8\n"
-            "        rr: r.ok.read into: b2 max: 16u64\n"
+            "        b2: bytes\n"
+            "        rr: r.ok.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
             "        ) case ok then {\n"
@@ -6313,22 +6314,48 @@ class TestIOFileStreaming:
         assert output.strip() == "2"
         assert target.read_bytes() == b"HI"
 
+    def test_bytes_typedef_emits_to_list_u8(self):
+        """`bytes` — a class typedef over `list of: u8` — must lower to
+        the base list type end-to-end: construction, append, length,
+        scope cleanup. Regression guard for Phase 6d (the bytes typedef
+        was previously not being followed in the emitter)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    b: bytes\n"
+            "    b.append from: 72.u8\n"
+            "    b.append from: 73.u8\n"
+            '    print "\\{b.length}"\n'
+            "}"
+        )
+        # C must reference the base type, never `z_bytes_t` /
+        # `z_bytes_create` / `z_bytes_destroy` — none of those are
+        # defined anywhere.
+        assert "z_bytes_t" not in csource
+        assert "z_bytes_create" not in csource
+        assert "z_bytes_destroy" not in csource
+        assert "z_list_u8_create" in csource
+        assert "z_list_u8_append" in csource
+        assert "z_list_u8_destroy" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
     def test_file_seek_roundtrip(self, tmp_path):
         """Write bytes, reopen, seek past a prefix, read the remainder."""
         target = tmp_path / "seek.bin"
         csource = emit_source(
             "main: function is {\n"
-            "    buf: list of: u8\n"
-            "    buf.append from: 72u8\n"
-            "    buf.append from: 101u8\n"
-            "    buf.append from: 108u8\n"
-            "    buf.append from: 108u8\n"
-            "    buf.append from: 111u8\n"
+            "    buf: bytes\n"
+            "    buf.append from: 72.u8\n"
+            "    buf.append from: 101.u8\n"
+            "    buf.append from: 108.u8\n"
+            "    buf.append from: 108.u8\n"
+            "    buf.append from: 111.u8\n"
             f'    w: io.open path: "{target}".string mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        wr: w.ok.write from: buf\n"
+            "        bv: byteview.borrow from: buf.listview\n"
+            "        wr: w.ok.write from: bv\n"
             "        match (\n"
             "            wr\n"
             "        ) case ok then { } case err then {\n"
@@ -6341,14 +6368,14 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        sk: r.ok.seek to: 2i64 from: seekorigin.start\n"
+            "        sk: r.ok.seek to: 2.i64 from: seekorigin.start\n"
             "        match (\n"
             "            sk\n"
             "        ) case ok then { } case err then {\n"
             '            print "seek err"\n'
             "        }\n"
-            "        b2: list of: u8\n"
-            "        rr: r.ok.read into: b2 max: 16u64\n"
+            "        b2: bytes\n"
+            "        rr: r.ok.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
             "        ) case ok then {\n"

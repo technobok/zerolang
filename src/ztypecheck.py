@@ -2191,6 +2191,16 @@ class TypeChecker:
         """Build a typedef ZType wrapping base_type."""
         rtype.typedef_base = base_type
         rtype.is_valtype = base_type.is_valtype
+        # Destructor + heap-allocation state must follow the base so
+        # scope cleanup calls the emitted destroy function (the typedef
+        # wrapper itself emits no struct / no destructor).
+        if base_type.needs_destructor:
+            rtype.needs_destructor = True
+            rtype.destructor_name = base_type.destructor_name
+        else:
+            rtype.needs_destructor = False
+            rtype.destructor_name = None
+        rtype.is_heap_allocated = base_type.is_heap_allocated
 
         # No function pointer fields allowed in typedef is-section
         if is_functions:
@@ -2990,6 +3000,13 @@ class TypeChecker:
             parent_type = self._resolve_dotted_path(cast(zast.DottedPath, path.parent))
         elif path.parent.nodetype == NodeType.EXPRESSION:
             parent_type = getattr(path.parent, "type", None)
+            if parent_type is None:
+                # Field / typeref resolution can see a DottedPath whose
+                # parent Expression has not been type-checked yet (for
+                # example `(list of: u8).typedef` in a record field).
+                # Resolve the expression now so `.typedef` / `.generic`
+                # / etc. on parenthesised type applications work.
+                parent_type = self._resolve_typeref(path.parent)
         elif path.parent.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path.parent)
             has_interp = any(
