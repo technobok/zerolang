@@ -35,6 +35,8 @@ def emit_runtime_includes(
         parts.append("#include <fcntl.h>\n")
         parts.append("#include <unistd.h>\n")
         parts.append("#include <errno.h>\n")
+        parts.append("#include <sys/stat.h>\n")
+        parts.append("#include <sys/types.h>\n")
     if parts:
         parts.append("\n")
     return "".join(parts)
@@ -287,6 +289,65 @@ _Z_IO_APPEND_TEXT = (
     "}\n\n"
 )
 
+_Z_IO_EXISTS = (
+    "static bool z_io_exists(z_string_t path) {\n"
+    "    int r = access(path.data, F_OK);\n"
+    "    z_string_free(&path);\n"
+    "    return r == 0;\n"
+    "}\n\n"
+)
+
+# shared helper: wrap an int return (0 ok, -1 err-with-errno) + path
+# free into a z_result_null_ioerror_t. Used by mkdir / remove / rename.
+_Z_IO_WRAP_NULL_RESULT = (
+    "static z_result_null_ioerror_t z_io_wrap_null_result(int rc, int saved_errno) {\n"
+    "    z_result_null_ioerror_t result = {0};\n"
+    "    if (rc == 0) {\n"
+    "        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "        result.data = NULL;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "    *boxed = z_io_errno_to_ioerror(saved_errno);\n"
+    "    result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
+_Z_IO_MKDIR = (
+    "static z_result_null_ioerror_t z_io_mkdir(z_string_t path) {\n"
+    "    int rc = mkdir(path.data, 0755);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&path);\n"
+    "    return z_io_wrap_null_result(rc, e);\n"
+    "}\n\n"
+)
+
+_Z_IO_REMOVE = (
+    "static z_result_null_ioerror_t z_io_remove(z_string_t path) {\n"
+    "    /* try unlink first; if EISDIR, fall back to rmdir */\n"
+    "    int rc = unlink(path.data);\n"
+    "    int e = errno;\n"
+    "    if (rc != 0 && e == EISDIR) {\n"
+    "        rc = rmdir(path.data);\n"
+    "        e = errno;\n"
+    "    }\n"
+    "    z_string_free(&path);\n"
+    "    return z_io_wrap_null_result(rc, e);\n"
+    "}\n\n"
+)
+
+_Z_IO_RENAME = (
+    "static z_result_null_ioerror_t z_io_rename(z_string_t from, z_string_t to) {\n"
+    "    int rc = rename(from.data, to.data);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&from);\n"
+    "    z_string_free(&to);\n"
+    "    return z_io_wrap_null_result(rc, e);\n"
+    "}\n\n"
+)
+
 
 def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
     """Emit io-unit native function implementations per requested name.
@@ -304,11 +365,18 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "read_text",
         "write_text",
         "append_text",
+        "mkdir",
+        "remove",
+        "rename",
     }
+    # result(null, ioerror) wrapper used by mkdir / remove / rename
+    null_wrap = natives & {"mkdir", "remove", "rename"}
     if "eprintln" in natives:
         parts.append(_Z_IO_EPRINTLN)
     if fallible:
         parts.append(_Z_IO_ERRNO_MAP)
+    if null_wrap:
+        parts.append(_Z_IO_WRAP_NULL_RESULT)
     if "read_text" in natives:
         parts.append(_Z_IO_READ_TEXT)
     if natives & {"write_text", "append_text"}:
@@ -317,6 +385,14 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_WRITE_TEXT)
     if "append_text" in natives:
         parts.append(_Z_IO_APPEND_TEXT)
+    if "exists" in natives:
+        parts.append(_Z_IO_EXISTS)
+    if "mkdir" in natives:
+        parts.append(_Z_IO_MKDIR)
+    if "remove" in natives:
+        parts.append(_Z_IO_REMOVE)
+    if "rename" in natives:
+        parts.append(_Z_IO_RENAME)
     return "".join(parts)
 
 

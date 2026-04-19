@@ -4533,6 +4533,25 @@ class TestIoNativeDispatch:
             "}"
         )
 
+    def test_exists_returns_bool(self):
+        """io.exists returns plain bool — no result wrapper."""
+        check_ok(
+            "main: function is {\n"
+            '    b: io.exists "/tmp/x".string\n'
+            '    if b then print "y" else print "n"\n'
+            "}"
+        )
+
+    def test_mkdir_remove_rename_typecheck(self):
+        """mkdir / remove / rename all return result(null, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            '    r1: io.mkdir "/tmp/d".string\n'
+            '    r2: io.remove "/tmp/d".string\n'
+            '    r3: io.rename from: "/tmp/a".string to: "/tmp/b".string\n'
+            "}"
+        )
+
     def test_read_text_pattern_match(self):
         """Result of io.read_text can be matched on ok/err arms."""
         check_ok(
