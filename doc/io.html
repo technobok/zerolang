@@ -1,0 +1,459 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang I/O</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-04-19">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="zerolang-i-o"><a href="#zerolang-i-o">Zerolang I/O</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#zerolang-i-o">Zerolang I/O</a>
+<ul>
+<li><a href="#status">Status</a>
+</li>
+<li><a href="#design-principles">Design Principles</a>
+</li>
+<li><a href="#the-result-type">The result Type</a>
+</li>
+<li><a href="#the-ioerror-union">The ioerror Union</a>
+</li>
+<li><a href="#bytes-strings-and-paths">Bytes, Strings, and Paths</a>
+</li>
+<li><a href="#stream-protocols">Stream Protocols</a>
+</li>
+<li><a href="#file-handles">File Handles</a>
+</li>
+<li><a href="#one-shot-file-helpers">One-Shot File Helpers</a>
+</li>
+<li><a href="#filesystem-operations">Filesystem Operations</a>
+</li>
+<li><a href="#stderr-helper">Stderr Helper</a>
+</li>
+<li><a href="#ownership-conventions-for-native-calls">Ownership Conventions for Native Calls</a>
+</li>
+<li><a href="#sandboxing">Sandboxing</a>
+</li>
+<li><a href="#recipes">Recipes</a>
+<ul>
+<li><a href="#read-a-file-with-error-fallback">Read a file with error fallback</a>
+</li>
+<li><a href="#atomic-write-via-temp-rename">Atomic write via temp + rename</a>
+</li>
+<li><a href="#create-a-directory-if-missing">Create a directory if missing</a>
+</li>
+</ul>
+</li>
+<li><a href="#implementation-notes">Implementation Notes</a>
+</li>
+<li><a href="#future-work">Future Work</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<p>This document describes the I/O subsystem: stream protocols, file operations,
+error handling, and the design principles that shape them. The goal is to
+make the easy case terse and make the wrong case hard to write.</p>
+<h2 id="status"><a href="#status">1. Status</a></h2>
+<p>The subsystem lands in phases. Currently shipped:</p>
+<ul>
+<li><code>result t: type, e: type</code> generic union, <code>ioerror</code> failure
+variant, <code>bytes</code> / <code>byteview</code> / <code>path</code> / <code>pathview</code> typedefs</li>
+<li>Stream protocol declarations (<code>reader</code>, <code>writer</code>, <code>closer</code>,
+    <code>seeker</code>) -- the type-level contract</li>
+<li>File class scaffold (fields only; methods to come)</li>
+<li>One-shot file helpers: <code>io.read_text</code>, <code>io.write_text</code>,
+    <code>io.append_text</code></li>
+<li>Filesystem ops: <code>io.exists</code>, <code>io.mkdir</code>, <code>io.remove</code>,
+    <code>io.rename</code></li>
+<li>Stderr helper: <code>io.eprintln</code></li>
+</ul>
+<p>Not yet shipped:</p>
+<ul>
+<li>File class methods (read / write / close / seek) and explicit
+    stream composition</li>
+<li>Standard streams (<code>io.stdin</code> / <code>io.stdout</code> / <code>io.stderr</code>)
+    beyond <code>print</code> and <code>eprintln</code></li>
+<li>Directory iteration (<code>io.list_dir</code>), <code>io.stat</code>, <code>io.mkdirp</code></li>
+<li>Buffered and text wrappers (<code>bufreader</code>, <code>bufwriter</code>,
+    <code>textreader</code>, <code>textwriter</code>), UTF-8 validation</li>
+<li>Process / argv / env (planned for a separate <code>os</code> unit)</li>
+<li>Async, sockets, symlinks, advisory locks</li>
+</ul>
+<h2 id="design-principles"><a href="#design-principles">2. Design Principles</a></h2>
+<ul>
+<li><em><strong>Make bad code unrepresentable</strong></em> where the type system can
+express it -- forgotten close becomes a destructor invocation
+rather than a runtime leak; use-after-close becomes a type error;
+binary data in a text signature becomes a type mismatch.</li>
+<li><em><strong>One way to say it</strong></em> -- I/O errors are always
+<code>result(T, ioerror)</code>. There is no second error convention.</li>
+<li><em><strong>Sync only, for now</strong></em> -- the compiler targets C and has no
+async runtime. Streams are synchronous. Async lands later as a
+separate layer.</li>
+<li><em><strong>Ambient stdio, cooperative sandboxing</strong></em> -- <code>io.stdout</code>,
+<code>io.open(...)</code> are callable from anywhere, matching the mental
+model of C / Go / Python. Test sandboxing is available by
+shadowing <code>lib/system/io.z</code> in the VFS bind order before the
+stdlib copy.</li>
+<li><em><strong>Cross-platform, POSIX first</strong></em> -- initial backend uses libc
+(open, read, write, close, ...). Windows is a follow-up with the
+same Z-level API.</li>
+</ul>
+<h2 id="the-result-type"><a href="#the-result-type">3. The result Type</a></h2>
+<p>Every fallible I/O operation returns a two-armed generic union:</p>
+<pre><code>: result: union {
+      ok: t
+      err: e
+  } as {
+      t: any.generic
+      e: any.generic
+  }</code></pre>
+<p>Callers pattern-match:</p>
+<pre><code>: r: io.read_text "notes.md".string
+  match (
+      r
+  ) case ok then {
+      # use ok arm (when full narrowing is wired)
+      print "ok"
+  } case err then {
+      # handle the ioerror
+      io.eprintln "read failed"
+  }</code></pre>
+<p>The generic is used directly (<code>result.ok 42 e: i64</code>) with explicit
+type arguments for whichever arm the value does not pin. In signature
+position, parenthesise the instantiation: <code>out (result t: string e: ioerror)</code>.</p>
+<p><code>result</code> lives in <code>lib/system/system.z</code> and is re-exported through
+<code>core.z</code>. It is not I/O-specific -- any stdlib API that wants
+pattern-matchable success / failure can reuse it.</p>
+<h2 id="the-ioerror-union"><a href="#the-ioerror-union">4. The ioerror Union</a></h2>
+<p>All I/O failures collapse into one of these arms:</p>
+<table>
+<colgroup>
+<col style="width: 25%">
+<col style="width: 75%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Arm</th><th style="text-align: left">Meaning</th></tr>
+</thead>
+<tbody>
+<tr><td><code>notfound</code></td><td>ENOENT -- the entity at the given path does not exist</td></tr>
+<tr><td><code>permissiondenied</code></td><td>EACCES / EPERM -- the kernel rejected the access</td></tr>
+<tr><td><code>interrupted</code></td><td>EINTR -- a signal interrupted the call (low-level helpers retry)</td></tr>
+<tr><td><code>invalidpath</code></td><td>payload: a <code>string</code> describing why the path was rejected</td></tr>
+<tr><td><code>eof</code></td><td>End of file reached unexpectedly (streaming-only; v1 is silent)</td></tr>
+<tr><td><code>badencoding</code></td><td>Reserved -- future use when a text reader validates UTF-8</td></tr>
+<tr><td><code>exists</code></td><td>EEXIST -- a create-new operation hit an existing entity</td></tr>
+<tr><td><code>isdir</code></td><td>EISDIR -- file operation attempted on a directory</td></tr>
+<tr><td><code>notdir</code></td><td>ENOTDIR -- directory operation attempted on a non-directory</td></tr>
+<tr><td><code>nospace</code></td><td>ENOSPC -- filesystem full</td></tr>
+<tr><td><code>other</code></td><td>payload: a <code>string</code> with an opaque message for anything uncategorised</td></tr>
+</tbody>
+</table>
+<p><code>ioerror</code> is defined as a <code>union</code> (not a <code>variant</code>) because two
+arms carry a <code>string</code> payload; variants may only hold valtype arms.</p>
+<p>The compiler's C runtime builds <code>ioerror</code> values from POSIX <code>errno</code>
+via <code>z_io_errno_to_ioerror</code> (see <code>src/zemitterc_runtime.py</code>). Any
+errno not in the explicit table falls into <code>other</code>.</p>
+<h2 id="bytes-strings-and-paths"><a href="#bytes-strings-and-paths">5. Bytes, Strings, and Paths</a></h2>
+<p>Zerolang strings are heap-backed UTF-8 byte buffers (<code>z_string_t</code> at
+the C level). Stringviews (<code>stringview</code>) are borrowed views into that
+storage. For binary I/O, the same byte-buffer primitive is wrapped
+under a distinct type:</p>
+<pre><code>: bytes:     class { val: (list of: u8).typedef }
+  byteview:  class { val: (listview of: u8).typedef }</code></pre>
+<p>Signatures that say <code>bytes</code> announce "binary data, no UTF-8
+guarantees"; signatures that say <code>string</code> announce text. The wrappers
+delegate to the list / listview machinery, so operations like
+<code>.length</code> and <code>.append</code> flow through.</p>
+<p><code>path</code> / <code>pathview</code> are similar typedefs over <code>string</code> /
+<code>stringview</code>, introduced so filesystem operations read as "this is a
+path" rather than "this is an arbitrary string". Cross-platform
+normalisation (forward-slash / backslash, drive letters) is a future
+enhancement; v1 treats paths as opaque byte sequences.</p>
+<h2 id="stream-protocols"><a href="#stream-protocols">6. Stream Protocols</a></h2>
+<p>The stream contracts are declared in <code>lib/system/io.z</code>. Each one
+returns its payload in a <code>result</code> wrapper so failures propagate
+uniformly.</p>
+<pre><code>: reader: protocol {
+      read: function {:this into: bytes max: u64}
+          out (result t: u64 e: ioerror)
+  }</code></pre>
+<p>    writer: protocol {
+        write: function {:this from: byteview}
+            out (result t: u64 e: ioerror)
+        flush: function {:this}
+            out (result t: null e: ioerror)
+    }</p>
+<p>    closer: protocol {
+        close: function {:this}
+            out (result t: null e: ioerror)
+    }</p>
+<p>    seeker: protocol {
+        seek: function {:this to: i64 from: seekorigin}
+            out (result t: u64 e: ioerror)
+    }</p>
+<p>A file implements all four via separate conformance labels. Buffered
+and text wrappers (future phase) hold a <code>.lock</code> borrow of their
+underlying stream so the parent cannot be touched directly while a
+wrapper is live -- the interleaved-write footgun is unrepresentable.</p>
+<p><code>seekorigin</code> is a variant for the offset basis:</p>
+<pre><code>: seekorigin: variant {
+      start: null
+      current: null
+      end: null
+  }</code></pre>
+<h2 id="file-handles"><a href="#file-handles">7. File Handles</a></h2>
+<p>The <code>file</code> class wraps a POSIX file descriptor:</p>
+<pre><code>: file: class {
+      fd: i32
+      closed: bool
+  }</code></pre>
+<p>Lifetime model: <em><strong>RAII + with sugar, both supported</strong></em>.</p>
+<ul>
+<li>A <code>file</code> falls out of scope with an open <code>fd</code>? The destructor
+    calls <code>close(fd)</code>. Forgetting is physically impossible -- the
+    language does not have an "uninitialised local" path for a reftype.</li>
+<li>Need to surface a close error? Use
+    <code>with f: io.open(...) do { ... }</code> and call <code>f.close</code> explicitly
+    inside the block. The destructor sees <code>closed = true</code> and
+    skips the second close.</li>
+</ul>
+<p>(File methods land with the next phase; this section documents the
+contract the scaffold already establishes.)</p>
+<h2 id="one-shot-file-helpers"><a href="#one-shot-file-helpers">8. One-Shot File Helpers</a></h2>
+<p>For programs that do not need streaming, three entry points cover the
+typical script work:</p>
+<table>
+<colgroup>
+<col style="width: 25%">
+<col style="width: 33%">
+<col style="width: 41%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Call</th><th style="text-align: left">Returns</th><th style="text-align: left">Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>io.read_text path: string</code></td><td><code>result(string, ioerror)</code></td><td>Reads the full file as UTF-8 bytes; no encoding validation in v1</td></tr>
+<tr><td><code>io.write_text path: string content: string</code></td><td><code>result(null, ioerror)</code></td><td>Truncates (or creates) with mode 0644. Parent directory must exist.</td></tr>
+<tr><td><code>io.append_text path: string content: string</code></td><td><code>result(null, ioerror)</code></td><td>Opens <code>O_APPEND | O_CREAT</code>.</td></tr>
+</tbody>
+</table>
+<p>All three take ownership of their <code>string</code> arguments (zerolang's
+string-arg convention -- the callee frees). Callers typically pass
+literals projected through <code>.string</code>:</p>
+<pre><code>: io.write_text path: "notes.md".string content: body.string</code></pre>
+<h2 id="filesystem-operations"><a href="#filesystem-operations">9. Filesystem Operations</a></h2>
+<table>
+<colgroup>
+<col style="width: 30%">
+<col style="width: 30%">
+<col style="width: 38%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Call</th><th style="text-align: left">Returns</th><th style="text-align: left">Notes</th></tr>
+</thead>
+<tbody>
+<tr><td><code>io.exists path: string</code></td><td><code>bool</code></td><td>Thin <code>access(F_OK)</code> wrapper. Permission-denied on parent surfaces as <code>false</code>; use <code>stat</code> (future phase) when the distinction matters.</td></tr>
+<tr><td><code>io.mkdir path: string</code></td><td><code>result(null, ioerror)</code></td><td>Creates a single directory with mode 0755. Parent must exist. For recursive creation see <code>mkdirp</code> (future).</td></tr>
+<tr><td><code>io.remove path: string</code></td><td><code>result(null, ioerror)</code></td><td>Deletes a file <em><strong>or</strong></em> an empty directory. Non-empty directories error with the <code>other</code> arm (ENOTEMPTY).</td></tr>
+<tr><td><code>io.rename from: to:</code></td><td><code>result(null, ioerror)</code></td><td>POSIX <code>rename</code>. Atomic within the same filesystem. If <code>to</code> exists, POSIX replaces it (file over file, empty dir over empty dir).</td></tr>
+</tbody>
+</table>
+<h2 id="stderr-helper"><a href="#stderr-helper">10. Stderr Helper</a></h2>
+<p><code>io.eprintln msg: stringview</code> writes <code>msg</code> followed by a newline
+to stderr. Void return; errors are silently dropped by design.</p>
+<p>For per-write error reporting use a writer handle over stderr (future
+phase when the stdio constants land).</p>
+<h2 id="ownership-conventions-for-native-calls"><a href="#ownership-conventions-for-native-calls">11. Ownership Conventions for Native Calls</a></h2>
+<p>The stdlib's native I/O entries follow a few rules that are useful to
+know when extending them:</p>
+<ul>
+<li><em><strong>String arguments are consumed</strong></em>. Passing a <code>string</code> to a
+native (for example <code>path</code>) transfers ownership; the C callee is
+responsible for <code>z_string_free</code>. The compiler invalidates the
+caller's temp so there is no double-free. If you want to keep the
+caller's string, make a copy before the call.</li>
+<li><em><strong>Values returned by value</strong></em>. Native functions that return a
+<code>result</code> return the union struct by value. The caller's scope
+owns it; its destructor (<code>z_result_&lt;T&gt;_&lt;E&gt;_destroy</code>) is called
+on scope exit and frees any heap payload (the boxed ok value or
+the boxed ioerror).</li>
+<li><em><strong>errno to ioerror mapping</strong></em>. A shared helper maps POSIX
+<code>errno</code> values to <code>ioerror</code> variants. New natives can reuse
+it (see <code>z_io_errno_to_ioerror</code> and <code>z_io_wrap_null_result</code>
+in the runtime).</li>
+</ul>
+<h2 id="sandboxing"><a href="#sandboxing">12. Sandboxing</a></h2>
+<p>Because <code>io.*</code> lives in <code>lib/system/io.z</code> and all accesses route
+through that unit, a caller who needs to lock down I/O can bind a
+replacement <code>io.z</code> before the stdlib copy in the VFS. The
+replacement can expose only a whitelisted subset of operations, or
+redirect everything to a test harness. This controls what
+<em><strong>cooperating</strong></em> code can see.</p>
+<p>It does <em><strong>not</strong></em> prevent malicious code from re-declaring
+<code>is native</code> against the runtime C symbols and reaching libc
+directly. Treat unit-replacement sandboxing as protection against
+accidents and against well-behaved dependencies, not against a
+deliberate attacker.</p>
+<h2 id="recipes"><a href="#recipes">13. Recipes</a></h2>
+<h3 id="read-a-file-with-error-fallback"><a href="#read-a-file-with-error-fallback">13.1. Read a file with error fallback</a></h3>
+<pre><code>: main: function is {
+      r: io.read_text "config.txt".string
+      match (
+          r
+      ) case ok then {
+          print "loaded config"
+      } case err then {
+          io.eprintln "config missing; using defaults"
+      }
+  }</code></pre>
+<h3 id="atomic-write-via-temp-rename"><a href="#atomic-write-via-temp-rename">13.2. Atomic write via temp + rename</a></h3>
+<p>Write to a temp file, then rename over the target. Rename is atomic
+within the same filesystem so a reader never sees a half-written
+file.</p>
+<pre><code>: main: function is {
+      wr: io.write_text path: "out.tmp".string content: payload.string
+      match (
+          wr
+      ) case ok then {
+          io.rename from: "out.tmp".string to: "out.txt".string
+      } case err then {
+          io.eprintln "write failed"
+      }
+  }</code></pre>
+<h3 id="create-a-directory-if-missing"><a href="#create-a-directory-if-missing">13.3. Create a directory if missing</a></h3>
+<pre><code>: main: function is {
+      if io.exists "cache".string then {
+          print "cache present"
+      } else {
+          io.mkdir "cache".string
+      }
+  }</code></pre>
+<h2 id="implementation-notes"><a href="#implementation-notes">14. Implementation Notes</a></h2>
+<p>The I/O stack is three layers:</p>
+<ul>
+<li><em><strong>Native C primitives</strong></em> (in <code>src/zemitterc_runtime.py</code>) --
+thin libc wrappers: <code>z_io_read_text</code>, <code>z_io_write_text</code>,
+<code>z_io_mkdir</code>, <code>z_io_remove</code>, <code>z_io_rename</code>, <code>z_io_exists</code>,
+<code>z_io_eprintln</code>, plus the <code>z_io_errno_to_ioerror</code> helper. The
+emitter includes only the helpers the program actually calls
+(tracked in <code>needs_io_natives</code>).</li>
+<li><em><strong>Zerolang declarations</strong></em> (in <code>lib/system/io.z</code>) -- each
+native has an <code>is native</code> signature. The typechecker sees them
+as ordinary functions for the purpose of argument checking and
+return-type monomorphization.</li>
+<li><em><strong>User-facing API</strong></em> -- the names in <code>core.z</code>
+(<code>io.read_text</code> etc.). User code writes calls, the emitter
+dispatches to <code>z_&lt;qualified&gt;</code> via the generic native path, and
+the runtime provides the body.</li>
+</ul>
+<p>When the user calls a native that returns a monomorphized
+<code>result</code>, the emitter walks the corresponding <code>mono_types</code> entry
+and emits the tag enum + struct + destructor. The io runtime block
+that references those names is appended <em><strong>after</strong></em> the struct
+definitions so the generated C compiles cleanly.</p>
+<h2 id="future-work"><a href="#future-work">15. Future Work</a></h2>
+<p>Roughly in implementation order:</p>
+<ol>
+<li>File class methods -- <code>file.open</code>, <code>file.read</code>,
+    <code>file.write</code>, <code>file.close</code>, <code>file.seek</code>, and the four
+    protocol conformance labels. Enables streaming and buffered
+    wrappers.</li>
+<li>Standard streams -- <code>io.stdin</code>, <code>io.stdout</code>,
+    <code>io.stderr</code> as singleton borrowed handles.</li>
+<li><code>io.stat</code> returning <code>result(metadata, ioerror)</code> for file
+size / mtime / type.</li>
+<li>Directory iteration -- <code>io.list_dir</code> returning a closable
+    iterator of <code>direntry</code>.</li>
+<li>Buffered + text wrappers -- <code>bufreader</code>, <code>bufwriter</code>,
+    <code>textreader</code> (<code>.lines</code> iterator), <code>textwriter</code>
+    (<code>write_line</code>).</li>
+<li>UTF-8 validation on text reads; the <code>badencoding</code> ioerror
+    arm becomes reachable.</li>
+<li>Recursive <code>mkdirp</code>, symlink handling, advisory file locks.</li>
+<li>Process / argv / env -- separate <code>os</code> unit.</li>
+<li>Windows backend behind the same zerolang-level API.</li>
+</ol>
+</main>
+<footer>
+<p>Version 0.1 2026-04-19</p>
+
+<p>Last updated:</p>
+</footer>
+</body>
+</html>

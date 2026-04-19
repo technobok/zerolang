@@ -1,0 +1,404 @@
+#doc.lang: en
+
+#//: Zerolang I/O
+
+#doc.title: Zerolang I/O
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-04-19
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zerolang I/O
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+This document describes the I/O subsystem: stream protocols, file operations,
+error handling, and the design principles that shape them. The goal is to
+make the easy case terse and make the wrong case hard to write.
+
+#--: Status
+
+The subsystem lands in phases. Currently shipped:
+
+#ul:
+  [#*: #~"result t: type, e: type" generic union, #~"ioerror" failure
+    variant, #~"bytes" / #~"byteview" / #~"path" / #~"pathview" typedefs]
+  [#*: Stream protocol declarations (#~"reader", #~"writer", #~"closer",
+    #~"seeker") -- the type-level contract]
+  [#*: File class scaffold (fields only; methods to come)]
+  [#*: One-shot file helpers: #~"io.read_text", #~"io.write_text",
+    #~"io.append_text"]
+  [#*: Filesystem ops: #~"io.exists", #~"io.mkdir", #~"io.remove",
+    #~"io.rename"]
+  [#*: Stderr helper: #~"io.eprintln"]
+
+Not yet shipped:
+
+#ul:
+  [#*: File class methods (read / write / close / seek) and explicit
+    stream composition]
+  [#*: Standard streams (#~"io.stdin" / #~"io.stdout" / #~"io.stderr")
+    beyond #~"print" and #~"eprintln"]
+  [#*: Directory iteration (#~"io.list_dir"), #~"io.stat", #~"io.mkdirp"]
+  [#*: Buffered and text wrappers (#~"bufreader", #~"bufwriter",
+    #~"textreader", #~"textwriter"), UTF-8 validation]
+  [#*: Process / argv / env (planned for a separate #~"os" unit)]
+  [#*: Async, sockets, symlinks, advisory locks]
+
+#--: Design Principles
+
+#ul:
+  [#*: #_*"Make bad code unrepresentable" where the type system can
+    express it -- forgotten close becomes a destructor invocation
+    rather than a runtime leak; use-after-close becomes a type error;
+    binary data in a text signature becomes a type mismatch.]
+  [#*: #_*"One way to say it" -- I/O errors are always
+    #~"result(T, ioerror)". There is no second error convention.]
+  [#*: #_*"Sync only, for now" -- the compiler targets C and has no
+    async runtime. Streams are synchronous. Async lands later as a
+    separate layer.]
+  [#*: #_*"Ambient stdio, cooperative sandboxing" -- #~"io.stdout",
+    #~"io.open(...)" are callable from anywhere, matching the mental
+    model of C / Go / Python. Test sandboxing is available by
+    shadowing #~"lib/system/io.z" in the VFS bind order before the
+    stdlib copy.]
+  [#*: #_*"Cross-platform, POSIX first" -- initial backend uses libc
+    (open, read, write, close, ...). Windows is a follow-up with the
+    same Z-level API.]
+
+#--: The result Type
+
+Every fallible I/O operation returns a two-armed generic union:
+
+#code:
+  : result: union {
+        ok: t
+        err: e
+    } as {
+        t: any.generic
+        e: any.generic
+    }
+
+Callers pattern-match:
+
+#code:
+  : r: io.read_text "notes.md".string
+    match (
+        r
+    ) case ok then {
+        \# use ok arm (when full narrowing is wired)
+        print "ok"
+    } case err then {
+        \# handle the ioerror
+        io.eprintln "read failed"
+    }
+
+The generic is used directly (#~"result.ok 42 e: i64") with explicit
+type arguments for whichever arm the value does not pin. In signature
+position, parenthesise the instantiation: #~"out (result t: string e: ioerror)".
+
+#~"result" lives in #~"lib/system/system.z" and is re-exported through
+#~"core.z". It is not I/O-specific -- any stdlib API that wants
+pattern-matchable success / failure can reuse it.
+
+#--: The ioerror Union
+
+All I/O failures collapse into one of these arms:
+
+#table cols="3 9":
+  Arm                       |Meaning
+  #~"notfound"              |ENOENT -- the entity at the given path does not exist
+  #~"permissiondenied"      |EACCES / EPERM -- the kernel rejected the access
+  #~"interrupted"           |EINTR -- a signal interrupted the call (low-level helpers retry)
+  #~"invalidpath"           |payload: a #~"string" describing why the path was rejected
+  #~"eof"                   |End of file reached unexpectedly (streaming-only; v1 is silent)
+  #~"badencoding"           |Reserved -- future use when a text reader validates UTF-8
+  #~"exists"                |EEXIST -- a create-new operation hit an existing entity
+  #~"isdir"                 |EISDIR -- file operation attempted on a directory
+  #~"notdir"                |ENOTDIR -- directory operation attempted on a non-directory
+  #~"nospace"               |ENOSPC -- filesystem full
+  #~"other"                 |payload: a #~"string" with an opaque message for anything uncategorised
+
+#~"ioerror" is defined as a #~"union" (not a #~"variant") because two
+arms carry a #~"string" payload; variants may only hold valtype arms.
+
+The compiler's C runtime builds #~"ioerror" values from POSIX #~"errno"
+via #~"z_io_errno_to_ioerror" (see #~"src/zemitterc_runtime.py"). Any
+errno not in the explicit table falls into #~"other".
+
+#--: Bytes, Strings, and Paths
+
+Zerolang strings are heap-backed UTF-8 byte buffers (#~"z_string_t" at
+the C level). Stringviews (#~"stringview") are borrowed views into that
+storage. For binary I/O, the same byte-buffer primitive is wrapped
+under a distinct type:
+
+#code:
+  : bytes:     class { val: (list of: u8).typedef }
+    byteview:  class { val: (listview of: u8).typedef }
+
+Signatures that say #~"bytes" announce "binary data, no UTF-8
+guarantees"; signatures that say #~"string" announce text. The wrappers
+delegate to the list / listview machinery, so operations like
+#~".length" and #~".append" flow through.
+
+#~"path" / #~"pathview" are similar typedefs over #~"string" /
+#~"stringview", introduced so filesystem operations read as "this is a
+path" rather than "this is an arbitrary string". Cross-platform
+normalisation (forward-slash / backslash, drive letters) is a future
+enhancement; v1 treats paths as opaque byte sequences.
+
+#--: Stream Protocols
+
+The stream contracts are declared in #~"lib/system/io.z". Each one
+returns its payload in a #~"result" wrapper so failures propagate
+uniformly.
+
+#code:
+  : reader: protocol {
+        read: function {:this into: bytes max: u64}
+            out (result t: u64 e: ioerror)
+    }
+
+    writer: protocol {
+        write: function {:this from: byteview}
+            out (result t: u64 e: ioerror)
+        flush: function {:this}
+            out (result t: null e: ioerror)
+    }
+
+    closer: protocol {
+        close: function {:this}
+            out (result t: null e: ioerror)
+    }
+
+    seeker: protocol {
+        seek: function {:this to: i64 from: seekorigin}
+            out (result t: u64 e: ioerror)
+    }
+
+A file implements all four via separate conformance labels. Buffered
+and text wrappers (future phase) hold a #~".lock" borrow of their
+underlying stream so the parent cannot be touched directly while a
+wrapper is live -- the interleaved-write footgun is unrepresentable.
+
+#~"seekorigin" is a variant for the offset basis:
+
+#code:
+  : seekorigin: variant {
+        start: null
+        current: null
+        end: null
+    }
+
+#--: File Handles
+
+The #~"file" class wraps a POSIX file descriptor:
+
+#code:
+  : file: class {
+        fd: i32
+        closed: bool
+    }
+
+Lifetime model: #_*"RAII + with sugar, both supported".
+
+#ul:
+  [#*: A #~"file" falls out of scope with an open #~"fd"? The destructor
+    calls #~"close(fd)". Forgetting is physically impossible -- the
+    language does not have an "uninitialised local" path for a reftype.]
+  [#*: Need to surface a close error? Use
+    #~"with f: io.open(...) do { ... }" and call #~"f.close" explicitly
+    inside the block. The destructor sees #~"closed = true" and
+    skips the second close.]
+
+(File methods land with the next phase; this section documents the
+contract the scaffold already establishes.)
+
+#--: One-Shot File Helpers
+
+For programs that do not need streaming, three entry points cover the
+typical script work:
+
+#table cols="3 4 5":
+  Call                                        |Returns                                   |Notes
+  #~"io.read_text path: string"               |#~"result(string, ioerror)"               |Reads the full file as UTF-8 bytes; no encoding validation in v1
+  #~"io.write_text path: string content: string" |#~"result(null, ioerror)"               |Truncates (or creates) with mode 0644. Parent directory must exist.
+  #~"io.append_text path: string content: string" |#~"result(null, ioerror)"             |Opens #~"O_APPEND | O_CREAT".
+
+All three take ownership of their #~"string" arguments (zerolang's
+string-arg convention -- the callee frees). Callers typically pass
+literals projected through #~".string":
+
+#code:
+  : io.write_text path: "notes.md".string content: body.string
+
+#--: Filesystem Operations
+
+#table cols="4 4 5":
+  Call                            |Returns                  |Notes
+  #~"io.exists path: string"      |#~"bool"                 |Thin #~"access(F_OK)" wrapper. Permission-denied on parent surfaces as #~"false"; use #~"stat" (future phase) when the distinction matters.
+  #~"io.mkdir path: string"       |#~"result(null, ioerror)"|Creates a single directory with mode 0755. Parent must exist. For recursive creation see #~"mkdirp" (future).
+  #~"io.remove path: string"      |#~"result(null, ioerror)"|Deletes a file #_*"or" an empty directory. Non-empty directories error with the #~"other" arm (ENOTEMPTY).
+  #~"io.rename from: to:"         |#~"result(null, ioerror)"|POSIX #~"rename". Atomic within the same filesystem. If #~"to" exists, POSIX replaces it (file over file, empty dir over empty dir).
+
+#--: Stderr Helper
+
+#~"io.eprintln msg: stringview" writes #~"msg" followed by a newline
+to stderr. Void return; errors are silently dropped by design.
+
+For per-write error reporting use a writer handle over stderr (future
+phase when the stdio constants land).
+
+#--: Ownership Conventions for Native Calls
+
+The stdlib's native I/O entries follow a few rules that are useful to
+know when extending them:
+
+#ul:
+  [#*: #_*"String arguments are consumed". Passing a #~"string" to a
+    native (for example #~"path") transfers ownership; the C callee is
+    responsible for #~"z_string_free". The compiler invalidates the
+    caller's temp so there is no double-free. If you want to keep the
+    caller's string, make a copy before the call.]
+  [#*: #_*"Values returned by value". Native functions that return a
+    #~"result" return the union struct by value. The caller's scope
+    owns it; its destructor (#~"z_result_<T>_<E>_destroy") is called
+    on scope exit and frees any heap payload (the boxed ok value or
+    the boxed ioerror).]
+  [#*: #_*"errno to ioerror mapping". A shared helper maps POSIX
+    #~"errno" values to #~"ioerror" variants. New natives can reuse
+    it (see #~"z_io_errno_to_ioerror" and #~"z_io_wrap_null_result"
+    in the runtime).]
+
+#--: Sandboxing
+
+Because #~"io.*" lives in #~"lib/system/io.z" and all accesses route
+through that unit, a caller who needs to lock down I/O can bind a
+replacement #~"io.z" before the stdlib copy in the VFS. The
+replacement can expose only a whitelisted subset of operations, or
+redirect everything to a test harness. This controls what
+#_*"cooperating" code can see.
+
+It does #_*"not" prevent malicious code from re-declaring
+#~"is native" against the runtime C symbols and reaching libc
+directly. Treat unit-replacement sandboxing as protection against
+accidents and against well-behaved dependencies, not against a
+deliberate attacker.
+
+#--: Recipes
+
+#---: Read a file with error fallback
+
+#code:
+  : main: function is {
+        r: io.read_text "config.txt".string
+        match (
+            r
+        ) case ok then {
+            print "loaded config"
+        } case err then {
+            io.eprintln "config missing; using defaults"
+        }
+    }
+
+#---: Atomic write via temp + rename
+
+Write to a temp file, then rename over the target. Rename is atomic
+within the same filesystem so a reader never sees a half-written
+file.
+
+#code:
+  : main: function is {
+        wr: io.write_text path: "out.tmp".string content: payload.string
+        match (
+            wr
+        ) case ok then {
+            io.rename from: "out.tmp".string to: "out.txt".string
+        } case err then {
+            io.eprintln "write failed"
+        }
+    }
+
+#---: Create a directory if missing
+
+#code:
+  : main: function is {
+        if io.exists "cache".string then {
+            print "cache present"
+        } else {
+            io.mkdir "cache".string
+        }
+    }
+
+#--: Implementation Notes
+
+The I/O stack is three layers:
+
+#ul:
+  [#*: #_*"Native C primitives" (in #~"src/zemitterc_runtime.py") --
+    thin libc wrappers: #~"z_io_read_text", #~"z_io_write_text",
+    #~"z_io_mkdir", #~"z_io_remove", #~"z_io_rename", #~"z_io_exists",
+    #~"z_io_eprintln", plus the #~"z_io_errno_to_ioerror" helper. The
+    emitter includes only the helpers the program actually calls
+    (tracked in #~"needs_io_natives").]
+  [#*: #_*"Zerolang declarations" (in #~"lib/system/io.z") -- each
+    native has an #~"is native" signature. The typechecker sees them
+    as ordinary functions for the purpose of argument checking and
+    return-type monomorphization.]
+  [#*: #_*"User-facing API" -- the names in #~"core.z"
+    (#~"io.read_text" etc.). User code writes calls, the emitter
+    dispatches to #~"z_<qualified>" via the generic native path, and
+    the runtime provides the body.]
+
+When the user calls a native that returns a monomorphized
+#~"result", the emitter walks the corresponding #~"mono_types" entry
+and emits the tag enum + struct + destructor. The io runtime block
+that references those names is appended #_*"after" the struct
+definitions so the generated C compiles cleanly.
+
+#--: Future Work
+
+Roughly in implementation order:
+
+#ol:
+  [#*: File class methods -- #~"file.open", #~"file.read",
+    #~"file.write", #~"file.close", #~"file.seek", and the four
+    protocol conformance labels. Enables streaming and buffered
+    wrappers.]
+  [#*: Standard streams -- #~"io.stdin", #~"io.stdout",
+    #~"io.stderr" as singleton borrowed handles.]
+  [#*: #~"io.stat" returning #~"result(metadata, ioerror)" for file
+    size / mtime / type.]
+  [#*: Directory iteration -- #~"io.list_dir" returning a closable
+    iterator of #~"direntry".]
+  [#*: Buffered + text wrappers -- #~"bufreader", #~"bufwriter",
+    #~"textreader" (#~".lines" iterator), #~"textwriter"
+    (#~"write_line").]
+  [#*: UTF-8 validation on text reads; the #~"badencoding" ioerror
+    arm becomes reachable.]
+  [#*: Recursive #~"mkdirp", symlink handling, advisory file locks.]
+  [#*: Process / argv / env -- separate #~"os" unit.]
+  [#*: Windows backend behind the same zerolang-level API.]
+
+#footer:
+  #p: Version 0.1 2026-04-19
+  #p: Last updated:
