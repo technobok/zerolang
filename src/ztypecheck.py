@@ -213,6 +213,15 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
         if child_type.needs_destructor:
             ztype.needs_field_cleanup = True
             return
+    # io.file: compiler-provided class whose destructor closes the
+    # underlying fd (RAII). The fd/closed fields don't themselves
+    # need cleanup, so the general rule below would wrongly clear
+    # the destructor.
+    if ztype.typetype == ZTypeType.CLASS and ztype.name == "file":
+        ztype.needs_destructor = True
+        ztype.destructor_name = "z_file_destroy"
+        return
+
     # Stack-allocated class with no heap fields needs no destructor.
     # Skip types that manage their own heap data: box (is_box=True),
     # list, and map — identified by is_heap_allocated which is set
@@ -3218,6 +3227,17 @@ class TypeChecker:
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
+        # for io.file: .close is a zero-arg method returning
+        # result(null, ioerror). Coerce path access to the return type
+        # so `cr: f.close` types cr as the result, not the function.
+        if (
+            parent_type.typetype == ZTypeType.CLASS
+            and parent_type.name == "file"
+            and child_name == "close"
+        ):
+            close_fn = parent_type.children.get("close")
+            if close_fn and close_fn.return_type:
+                return close_fn.return_type
         # for list types: .listview returns the listview type directly (zero-arg method)
         # and acquires an exclusive lock on the source list
         if _is_list_type(parent_type) and child_name == "listview":

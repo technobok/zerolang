@@ -850,6 +850,41 @@ class CEmitter:
                         ):
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
+    def _emit_io_file_class(self) -> None:
+        """Emit the io.file struct and its RAII destructor in struct_defs.
+
+        The struct and destructor land early so that other type
+        destructors (notably result(file, ioerror)) can call
+        z_file_destroy at their own emission site. The public close
+        method, z_file_close, lives in the io runtime (after the
+        result/ioerror struct defs it depends on) — see
+        emit_runtime_io.
+
+        Fields: `fd` is a POSIX file descriptor; `closed` makes the
+        destructor idempotent with respect to an explicit close that
+        ran earlier in the scope. Destructor errors are swallowed
+        (callers that want to surface close errors call .close
+        explicitly before scope exit).
+        """
+        self.needs_stdint = True
+        self.needs_stdbool = True
+        self.needs_io = True
+        self.needs_stdio = True
+        lines = [
+            "typedef struct {\n",
+            "    int32_t fd;\n",
+            "    bool closed;\n",
+            "} z_file_t;\n\n",
+            "static void z_file_destroy(z_file_t* p);\n",
+            "static void z_file_destroy(z_file_t* p) {\n",
+            "    if (!p) return;\n",
+            "    if (p->closed) return;\n",
+            "    close(p->fd);\n",
+            "    p->closed = true;\n",
+            "}\n\n",
+        ]
+        self.struct_defs.append("".join(lines))
+
     def _emit_system_unit_definitions(self) -> None:
         """Emit non-generic non-native union and variant types from
         system units (io today) so user code can reference them.
@@ -870,6 +905,7 @@ class CEmitter:
         emitted per-monomorphization elsewhere and skipped here.
         Native types (bool, str, ...) are in the runtime emitter.
         """
+        io_file_used = self._io_file_referenced()
         for unitname in ("io",):
             unit = self.program.units.get(unitname)
             if unit is None:
@@ -885,6 +921,25 @@ class CEmitter:
                     self._emit_union(name, cast(zast.Union, defn))
                 elif defn_type == zast.Variant:
                     self._emit_variant(name, cast(zast.Variant, defn))
+                elif defn_type == zast.Class and name == "file" and io_file_used:
+                    # io.file: compiler-provided class. struct +
+                    # destructor + close method come from the runtime.
+                    # Emit inline (here, before mono types) so
+                    # result(file, ioerror) destructors can reference
+                    # z_file_destroy. Skipped if `file` is never
+                    # referenced — otherwise every program would drag
+                    # in <unistd.h> for close() via the destructor.
+                    self._emit_io_file_class()
+
+    def _io_file_referenced(self) -> bool:
+        """True when the program references io.file anywhere that the
+        emitter needs to materialise its struct/destructor (e.g. as
+        the ok-arm of a result monomorphization, or as a local)."""
+        for mono, _ in getattr(self.program, "mono_types", []):
+            for child in mono.children.values():
+                if child.typetype == ZTypeType.CLASS and child.name == "file":
+                    return True
+        return False
 
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
@@ -5044,6 +5099,29 @@ class CEmitter:
                             f"z_string_to_{target_name}"
                             f"({parent_val}.data, {parent_val}.len)"
                         )
+
+        # io.file method calls: .close (read/write/seek land in later phases)
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            if (
+                dp_parent_type
+                and dp_parent_type.typetype == ZTypeType.CLASS
+                and dp_parent_type.name == "file"
+            ):
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                parent_path = cast(zast.DottedPath, call.callable).parent
+                if not self._is_class_pointer_path(
+                    parent_path
+                ) and not parent_val.startswith("&"):
+                    parent_val = f"&{parent_val}"
+                if method_name == "close":
+                    self.needs_io = True
+                    self.needs_stdio = True
+                    self.needs_io_natives.add("file_close")
+                    return f"z_file_close({parent_val})"
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:

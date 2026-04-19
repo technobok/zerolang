@@ -131,10 +131,29 @@ seeker: protocol {
 # `closed` lets the destructor be idempotent across an explicit close
 # that happens earlier in the scope.
 #
-# Methods (read/write/seek/close) and protocol conformances will be
-# added once the native FS primitives are in place; for now this is
-# the structural type that downstream code will hold.
+# `close` releases the fd and returns a result so callers can surface
+# a delayed write error (the kernel may have buffered data whose
+# write fails only on close). Calling close twice is not a type
+# error: the second call returns `ok null` because the destructor
+# observes `closed = true` and does nothing.
 file: class {
     fd: i32
     closed: bool
+    close: function {:this} out (result t: null e: ioerror) is native
 }
+
+# openmode -- how `io.open` should acquire the underlying fd.
+# `read`    -- O_RDONLY. File must exist.
+# `write`   -- O_WRONLY | O_CREAT | O_TRUNC, mode 0644.
+# `append`  -- O_WRONLY | O_CREAT | O_APPEND, mode 0644.
+openmode: variant {
+    read: null
+    write: null
+    append: null
+}
+
+# open -- acquire a `file` handle at `path` in the requested `mode`.
+# The returned file owns its fd: it is closed by the destructor on
+# scope exit, or explicitly via `file.close` to surface a delayed
+# write error.
+open: function {path: string mode: openmode} out (result t: file e: ioerror) is native

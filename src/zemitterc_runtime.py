@@ -348,6 +348,55 @@ _Z_IO_RENAME = (
     "}\n\n"
 )
 
+_Z_IO_OPEN = (
+    "/* translate openmode variant tag to open(2) flags + default mode */\n"
+    "static z_result_file_ioerror_t z_io_open(z_string_t path, z_openmode_t mode) {\n"
+    "    z_result_file_ioerror_t result = {0};\n"
+    "    int flags;\n"
+    "    mode_t perm = 0644;\n"
+    "    switch (mode.tag) {\n"
+    "        case Z_OPENMODE_TAG_READ:   flags = O_RDONLY; break;\n"
+    "        case Z_OPENMODE_TAG_WRITE:  flags = O_WRONLY | O_CREAT | O_TRUNC; break;\n"
+    "        case Z_OPENMODE_TAG_APPEND: flags = O_WRONLY | O_CREAT | O_APPEND; break;\n"
+    "        default:                    flags = O_RDONLY; break;\n"
+    "    }\n"
+    "    int fd = open(path.data, flags, perm);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&path);\n"
+    "    if (fd < 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        result.tag = Z_RESULT_FILE_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_file_t* boxed = (z_file_t*)malloc(sizeof(z_file_t));\n"
+    "    boxed->fd = (int32_t)fd;\n"
+    "    boxed->closed = false;\n"
+    "    result.tag = Z_RESULT_FILE_IOERROR_TAG_OK;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
+_Z_FILE_CLOSE = (
+    "/* file.close — explicit close that surfaces delayed write errors.\n"
+    "   Marks the file as closed so z_file_destroy skips a second close. */\n"
+    "static z_result_null_ioerror_t z_file_close(z_file_t* p);\n"
+    "static z_result_null_ioerror_t z_file_close(z_file_t* p) {\n"
+    "    z_result_null_ioerror_t result = {0};\n"
+    "    if (!p || p->closed) {\n"
+    "        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "        result.data = NULL;\n"
+    "        return result;\n"
+    "    }\n"
+    "    int rc = close(p->fd);\n"
+    "    int e = errno;\n"
+    "    p->closed = true;\n"
+    "    return z_io_wrap_null_result(rc, e);\n"
+    "}\n\n"
+)
+
 
 def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
     """Emit io-unit native function implementations per requested name.
@@ -368,9 +417,12 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "mkdir",
         "remove",
         "rename",
+        "open",
+        "file_close",
     }
-    # result(null, ioerror) wrapper used by mkdir / remove / rename
-    null_wrap = natives & {"mkdir", "remove", "rename"}
+    # result(null, ioerror) wrapper used by mkdir / remove / rename /
+    # file_close
+    null_wrap = natives & {"mkdir", "remove", "rename", "file_close"}
     if "eprintln" in natives:
         parts.append(_Z_IO_EPRINTLN)
     if fallible:
@@ -393,6 +445,10 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_REMOVE)
     if "rename" in natives:
         parts.append(_Z_IO_RENAME)
+    if "open" in natives:
+        parts.append(_Z_IO_OPEN)
+    if "file_close" in natives:
+        parts.append(_Z_FILE_CLOSE)
     return "".join(parts)
 
 

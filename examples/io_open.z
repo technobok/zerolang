@@ -1,0 +1,33 @@
+# io_open.z -- open a file handle and let RAII close it on scope exit.
+#
+# `io.open` returns `result(file, ioerror)`. The `file` handle owns
+# its fd: when `r` goes out of scope, the compiler-emitted destructor
+# calls `close(fd)` automatically. Forgetting to close is physically
+# impossible.
+#
+# Future phases will add file.read / file.write / file.seek so the
+# handle is useful for streaming; for now this example exercises the
+# open + RAII path end-to-end.
+
+main: function is {
+    # happy path — open a file for writing (creates/truncates).
+    r: io.open path: "/tmp/z_io_open.txt".string mode: openmode.write
+    match (
+        r
+    ) case ok then {
+        print "opened /tmp/z_io_open.txt"
+    } case err then {
+        io.eprintln "unexpected open failure"
+    }
+    # r (and therefore the fd) is closed here by the result destructor.
+
+    # error path — open a file that does not exist for reading.
+    r2: io.open path: "/does/not/exist".string mode: openmode.read
+    match (
+        r2
+    ) case ok then {
+        io.eprintln "unexpected: file should not exist"
+    } case err then {
+        io.eprintln "expected notfound"
+    }
+}

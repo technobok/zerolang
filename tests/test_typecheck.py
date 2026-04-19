@@ -4567,6 +4567,53 @@ class TestIoNativeDispatch:
             "}"
         )
 
+    def test_open_returns_result_file(self):
+        """io.open path:_ mode:_ returns result(file, ioerror).
+
+        Exercises cross-unit reference to `openmode` (re-exported from
+        core) and the result-monomorphization path over the file class.
+        """
+        check_ok(
+            "main: function is {\n"
+            '    r: io.open path: "/tmp/x".string mode: openmode.read\n'
+            "}"
+        )
+
+    def test_open_all_modes_typecheck(self):
+        """All three openmode arms are accepted by io.open."""
+        for mode in ("read", "write", "append"):
+            check_ok(
+                "main: function is {\n"
+                f'    r: io.open path: "/tmp/x".string mode: openmode.{mode}\n'
+                "}"
+            )
+
+    def test_open_pattern_match(self):
+        """Result of io.open can be pattern-matched on ok/err."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "opened"\n'
+            "    } case err then {\n"
+            '        print "open failed"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_file_has_destructor(self):
+        """The io.file class must carry a destructor so result(file, _)
+        destructors invoke z_file_destroy on the ok payload (RAII close)."""
+        program, _ = parse_and_check("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        file_type = tc._resolved.get("io.file")
+        assert file_type is not None
+        assert file_type.needs_destructor is True
+        assert file_type.destructor_name == "z_file_destroy"
+
 
 class TestBytesAndPathTypedefs:
     """I/O Phase 1: bytes / byteview / path / pathview typedefs.
