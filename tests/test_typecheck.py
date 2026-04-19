@@ -4413,6 +4413,72 @@ class TestIoErrorVariant:
         )
 
 
+class TestStreamProtocolsAndFile:
+    """I/O Phase 3: reader/writer/closer/seeker protocols + file class.
+
+    Type-system scaffolding only. Native operations and method bodies
+    arrive in Phase 4 along with the dispatch infrastructure.
+    """
+
+    def test_seekorigin_constructs(self):
+        """seekorigin variant arms construct cleanly."""
+        check_ok(
+            "main: function is {\n"
+            "    a: seekorigin.start\n"
+            "    b: seekorigin.current\n"
+            "    c: seekorigin.end\n"
+            "}"
+        )
+
+    def test_file_class_can_be_declared(self):
+        """file class instances can be constructed."""
+        check_ok("main: function is {\n    f: file fd: 0 closed: 0 == 1\n}")
+
+    def test_file_class_resolves_as_class(self):
+        """file is a CLASS type with fd and closed fields."""
+        program = check_ok("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        f = tc._resolved.get("system.io.file") or tc._resolved.get("io.file")
+        assert f is not None
+        assert f.typetype == ZTypeType.CLASS
+        assert "fd" in f.children
+        assert "closed" in f.children
+
+    def test_protocols_resolve(self):
+        """reader/writer/closer/seeker resolve as PROTOCOL types."""
+        program = check_ok("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        for p in ("reader", "writer", "closer", "seeker"):
+            t = tc._resolved.get(f"system.io.{p}") or tc._resolved.get(f"io.{p}")
+            assert t is not None, f"protocol {p} not resolved"
+            assert t.typetype == ZTypeType.PROTOCOL, (
+                f"{p} expected PROTOCOL, got {t.typetype}"
+            )
+
+    def test_protocols_have_their_methods(self):
+        """Each protocol declares the expected method set."""
+        program = check_ok("main: function is {}")
+        tc = TypeChecker(program)
+        tc.check(full=True)
+        expected = {
+            "reader": {"read"},
+            "writer": {"write", "flush"},
+            "closer": {"close"},
+            "seeker": {"seek"},
+        }
+        for proto, methods in expected.items():
+            t = tc._resolved.get(f"system.io.{proto}") or tc._resolved.get(
+                f"io.{proto}"
+            )
+            assert t is not None
+            actual = {k for k in t.children if k not in ("create", "borrow")}
+            assert methods.issubset(actual), (
+                f"protocol {proto}: expected {methods}, got {actual}"
+            )
+
+
 class TestBytesAndPathTypedefs:
     """I/O Phase 1: bytes / byteview / path / pathview typedefs.
 

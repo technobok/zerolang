@@ -28,3 +28,65 @@ ioerror: union {
 # argument whose type is not one of the union's members. `str` values
 # must be explicitly projected: `print mystr.stringview`.
 print: function as { T: stringlike.generic } in { msg: T } is native
+
+# seekorigin -- where a `seek` operation interprets its offset.
+# `start`: from byte 0. `current`: from current position. `end`: from
+# the end (typically with a negative offset to seek backwards).
+seekorigin: variant {
+    start: null
+    current: null
+    end: null
+}
+
+# Stream protocols. Operations are byte-oriented; text helpers (UTF-8
+# decoding, line splitting) layer on top in later units.
+#
+# `reader.read into: buf max: n`
+#   Reads up to `n` bytes into `buf`. Returns the number of bytes
+#   actually read (0 indicates EOF) or an ioerror.
+reader: protocol {
+    read: function {:this into: bytes max: u64} out (result t: u64 e: ioerror)
+}
+
+# `writer.write from: bv`
+#   Writes the byteview's bytes. Returns count actually written
+#   (may be less than the input length) or an ioerror.
+# `writer.flush`
+#   Forces buffered output to its final destination.
+writer: protocol {
+    write: function {:this from: byteview} out (result t: u64 e: ioerror)
+    flush: function {:this} out (result t: null e: ioerror)
+}
+
+# `closer.close`
+#   Releases the underlying resource. Errors that surface here
+#   typically indicate a delayed write failure (the kernel buffered
+#   data couldn't be flushed). Calling close more than once is a
+#   compile-time error per the standard ownership rules.
+closer: protocol {
+    close: function {:this} out (result t: null e: ioerror)
+}
+
+# `seeker.seek to: offset from: origin`
+#   Reposition the read/write head. Returns the new absolute position
+#   from the start of the resource, or an ioerror.
+seeker: protocol {
+    seek: function {:this to: i64 from: seekorigin} out (result t: u64 e: ioerror)
+}
+
+# `file` -- an open OS file handle. Wraps a POSIX-style file
+# descriptor. Single-owner; closed automatically by the destructor on
+# scope exit (RAII). Use `with f: io.open(...) do { ... }` when you
+# need to surface close errors explicitly; otherwise let RAII clean
+# up.
+#
+# `closed` lets the destructor be idempotent across an explicit close
+# that happens earlier in the scope.
+#
+# Methods (read/write/seek/close) and protocol conformances will be
+# added once the native FS primitives are in place; for now this is
+# the structural type that downstream code will hold.
+file: class {
+    fd: i32
+    closed: bool
+}

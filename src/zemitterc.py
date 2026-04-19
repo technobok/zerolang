@@ -5886,6 +5886,10 @@ class CEmitter:
 
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
+        # a regular function call that happens to return a union is NOT a
+        # union construction; defer to the standard call emission path.
+        if call.call_kind == zast.CallKind.REGULAR:
+            return False
         # check type annotation for monomorphized union types
         call_type = call.type
         if (
