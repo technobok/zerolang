@@ -4344,6 +4344,75 @@ class TestResultGenericType:
         check_ok('main: function is {\n    r: result.err "boom".string t: i64\n}')
 
 
+class TestIoErrorVariant:
+    """I/O Phase 2: `ioerror` variant + result-with-ioerror integration.
+
+    `ioerror` is the failure side of every fallible io operation; it's
+    constructed in the C runtime from the underlying errno. User code
+    pattern-matches the specific variants it cares about and treats the
+    rest as `other`.
+    """
+
+    def test_ioerror_can_be_constructed(self):
+        """Each ioerror variant arm is constructable."""
+        check_ok(
+            "main: function is {\n"
+            "    a: ioerror.notfound\n"
+            "    b: ioerror.permissiondenied\n"
+            "    c: ioerror.eof\n"
+            '    d: ioerror.invalidpath "x"\n'
+            "}"
+        )
+
+    def test_ioerror_pattern_match(self):
+        """Match on ioerror reaches every variant."""
+        check_ok(
+            "main: function is {\n"
+            "    e: ioerror.notfound\n"
+            "    match (\n"
+            "        e\n"
+            "    ) case notfound then {\n"
+            '        print "nf"\n'
+            "    } case permissiondenied then {\n"
+            '        print "perm"\n'
+            "    } case interrupted then {\n"
+            '        print "intr"\n'
+            "    } case invalidpath then {\n"
+            '        print "inval"\n'
+            "    } case eof then {\n"
+            '        print "eof"\n'
+            "    } case badencoding then {\n"
+            '        print "enc"\n'
+            "    } case exists then {\n"
+            '        print "exists"\n'
+            "    } case isdir then {\n"
+            '        print "isdir"\n'
+            "    } case notdir then {\n"
+            '        print "notdir"\n'
+            "    } case nospace then {\n"
+            '        print "nospc"\n'
+            "    } case other then {\n"
+            '        print "other"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_result_with_ioerror_in_err_arm(self):
+        """`result` parameterized with ioerror in the err arm — the canonical io return shape."""
+        check_ok(
+            "main: function is {\n"
+            "    r: result.ok 42 e: ioerror\n"
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "got n"\n'
+            "    } case err then {\n"
+            '        print "got err"\n'
+            "    }\n"
+            "}"
+        )
+
+
 class TestBytesAndPathTypedefs:
     """I/O Phase 1: bytes / byteview / path / pathview typedefs.
 
