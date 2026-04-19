@@ -1010,8 +1010,15 @@ class CEmitter:
             parts.append(st)
         if self.spec_typedefs:
             parts.append("\n")
+
         for i, sd in enumerate(self.struct_defs):
             parts.append(sd)
+
+        # io runtime helpers reference the compiler-generated struct
+        # names (z_ioerror_t, z_result_<T>_ioerror_t, ...) so they land
+        # AFTER struct_defs rather than with the base runtime helpers.
+        parts.append(zrt.emit_runtime_io(needs_io=self.needs_io))
+
         for ft in self.func_typedefs:
             parts.append(ft)
         if self.func_typedefs:
@@ -4730,8 +4737,10 @@ class CEmitter:
                     ctype = f"z_{call.type.name}_t"
                     tmp = self._temp_name("c")
                     indent = self._indent()
-                    self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-                    self._temp.frees.append(tmp)
+                    self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
+                    if call.type.needs_destructor:
+                        self._temp.frees.append(tmp)
+                        self._temp.class_set[tmp] = call.type.name
                     return tmp
             return result
 
@@ -5268,10 +5277,17 @@ class CEmitter:
                 self._apply_call_implicit_takes(call, indent)
                 return tmp
             if call.type.typetype == ZTypeType.UNION:
+                # The callee returns a union by value; wrap in a local
+                # so the subsequent assignment/destroy can take its
+                # address. Cleanup routes through class_set so scope
+                # exit emits `z_<T>_destroy(&tmp)` (freeing the inner
+                # payload without trying to free the stack slot).
                 ctype = f"z_{call.type.name}_t"
                 tmp = self._temp_name("c")
-                self._temp.decls.append(f"{indent}{ctype}* {tmp} = {result};\n")
-                self._temp.frees.append(tmp)
+                self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
+                if call.type.needs_destructor:
+                    self._temp.frees.append(tmp)
+                    self._temp.class_set[tmp] = call.type.name
                 self._apply_call_implicit_takes(call, indent)
                 return tmp
 

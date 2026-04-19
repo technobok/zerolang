@@ -17,6 +17,7 @@ def emit_runtime_includes(
     needs_stdlib: bool,
     needs_stdbool: bool,
     needs_string: bool,
+    needs_io: bool = False,
 ) -> str:
     """Emit #include directives for required C standard headers."""
     parts: list[str] = []
@@ -30,6 +31,10 @@ def emit_runtime_includes(
         parts.append("#include <stdbool.h>\n")
     if needs_string:
         parts.append("#include <string.h>\n")
+    if needs_io:
+        parts.append("#include <fcntl.h>\n")
+        parts.append("#include <unistd.h>\n")
+        parts.append("#include <errno.h>\n")
     if parts:
         parts.append("\n")
     return "".join(parts)
@@ -155,6 +160,61 @@ _Z_IO_RUNTIME = (
     "static void z_io_eprintln(z_stringview_t sv) {\n"
     '    fprintf(stderr, "%.*s\\n", (int)sv.length, sv.data);\n'
     "}\n\n"
+    "static z_ioerror_t z_io_errno_to_ioerror(int e) {\n"
+    "    z_ioerror_t r = {0};\n"
+    "    r.data = NULL;\n"
+    "    switch (e) {\n"
+    "        case ENOENT:  r.tag = Z_IOERROR_TAG_NOTFOUND; break;\n"
+    "        case EACCES:\n"
+    "        case EPERM:   r.tag = Z_IOERROR_TAG_PERMISSIONDENIED; break;\n"
+    "        case EINTR:   r.tag = Z_IOERROR_TAG_INTERRUPTED; break;\n"
+    "        case EEXIST:  r.tag = Z_IOERROR_TAG_EXISTS; break;\n"
+    "        case EISDIR:  r.tag = Z_IOERROR_TAG_ISDIR; break;\n"
+    "        case ENOTDIR: r.tag = Z_IOERROR_TAG_NOTDIR; break;\n"
+    "        case ENOSPC:  r.tag = Z_IOERROR_TAG_NOSPACE; break;\n"
+    "        default:      r.tag = Z_IOERROR_TAG_OTHER; break;\n"
+    "    }\n"
+    "    return r;\n"
+    "}\n\n"
+    "static z_result_string_ioerror_t z_io_read_text(z_string_t path) {\n"
+    "    /* path arg owned by this callee per zerolang string-arg convention */\n"
+    "    z_result_string_ioerror_t result = {0};\n"
+    "    int fd = open(path.data, O_RDONLY);\n"
+    "    if (fd < 0) {\n"
+    "        int e = errno;\n"
+    "        z_string_free(&path);\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_string_free(&path);\n"
+    "    z_string_t content = z_string_create((uint64_t)4096);\n"
+    "    char buf[4096];\n"
+    "    for (;;) {\n"
+    "        long n = read(fd, buf, sizeof(buf));\n"
+    "        if (n == 0) break;\n"
+    "        if (n < 0) {\n"
+    "            if (errno == EINTR) continue;\n"
+    "            int e = errno;\n"
+    "            close(fd);\n"
+    "            z_string_free(&content);\n"
+    "            z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "            *boxed = z_io_errno_to_ioerror(e);\n"
+    "            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "            result.data = boxed;\n"
+    "            return result;\n"
+    "        }\n"
+    "        z_string_append(&content, buf, (uint64_t)n);\n"
+    "    }\n"
+    "    close(fd);\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = content;\n"
+    "    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
 )
 
 
@@ -191,10 +251,14 @@ def emit_runtime(
             needs_stdlib=needs_stdlib or has_z_string or needs_stringview,
             needs_stdbool=needs_stdbool or has_z_string or needs_stringview,
             needs_string=needs_string or has_z_string or needs_stringview,
+            needs_io=needs_io,
         )
         + emit_runtime_z_string(needs_string=needs_string, needs_stdio=needs_stdio)
         + emit_runtime_z_stringview(needs_stringview=needs_stringview)
-        + emit_runtime_io(needs_io=needs_io)
+        # io helpers are NOT emitted here — they reference compiler-generated
+        # struct names (z_ioerror_t, z_result_string_ioerror_t, ...) that
+        # only exist after struct_defs. The emitter calls emit_runtime_io
+        # separately, after the struct definitions block.
     )
 
 

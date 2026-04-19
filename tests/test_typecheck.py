@@ -4505,16 +4505,31 @@ class TestIoNativeDispatch:
 
     def test_eprintln_typechecks(self):
         """io.eprintln msg: stringview is callable."""
-        check_ok(
-            "main: function is {\n"
-            '    io.eprintln "diag"\n'
-            "}"
-        )
+        check_ok('main: function is {\n    io.eprintln "diag"\n}')
 
     def test_eprintln_with_stringview_literal(self):
         """io.eprintln accepts a bare string literal (auto-projects to stringview)."""
+        check_ok('main: function is { io.eprintln "error" }')
+
+    def test_read_text_typechecks(self):
+        """io.read_text path: string returns result(string, ioerror).
+        The native dispatch plus result union monomorphization must both
+        resolve."""
+        check_ok('main: function is {\n    r: io.read_text "/tmp/x".string\n}')
+
+    def test_read_text_pattern_match(self):
+        """Result of io.read_text can be matched on ok/err arms."""
         check_ok(
-            'main: function is { io.eprintln "error" }'
+            "main: function is {\n"
+            '    r: io.read_text "/tmp/x".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "got ok"\n'
+            "    } case err then {\n"
+            '        print "got err"\n'
+            "    }\n"
+            "}"
         )
 
 
