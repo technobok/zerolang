@@ -6228,3 +6228,111 @@ class TestAliasBinding:
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert result.stdout.strip().split("\n") == ["alice", "5", "30"]
+
+
+class TestIOFileStreaming:
+    """I/O Phase 6: file handles, RAII close, streaming read/write.
+
+    Runs the compiled binary end-to-end. Temp files live in /tmp and
+    are cleaned up inside the test body.
+    """
+
+    def test_io_open_raii_close(self, tmp_path):
+        """io.open returns a file whose fd is closed by its destructor."""
+        target = tmp_path / "io_open_test.txt"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (r) case ok then {\n"
+            '        print "opened"\n'
+            "    } case err then {\n"
+            '        print "failed"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "opened"
+        assert target.exists()
+
+    def test_io_open_nonexistent_returns_err(self, tmp_path):
+        """Opening a missing file for read returns the err arm."""
+        missing = tmp_path / "does-not-exist"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{missing}".string mode: openmode.read\n'
+            "    match (r) case ok then {\n"
+            '        print "unexpected ok"\n'
+            "    } case err then {\n"
+            '        print "got err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "got err"
+
+    def test_file_write_read_roundtrip(self, tmp_path):
+        """Write bytes, close, reopen, read — content survives."""
+        target = tmp_path / "rw.bin"
+        csource = emit_source(
+            "main: function is {\n"
+            "    buf: list of: u8\n"
+            "    buf.append from: 72u8\n"
+            "    buf.append from: 73u8\n"
+            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        w\n"
+            "    ) case ok then {\n"
+            "        wr: w.ok.write from: buf\n"
+            "        match (\n"
+            "            wr\n"
+            "        ) case ok then { } case err then {\n"
+            '            print "write err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-w err"\n'
+            "    }\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        b2: list of: u8\n"
+            "        rr: r.ok.read into: b2 max: 16u64\n"
+            "        match (\n"
+            "            rr\n"
+            "        ) case ok then {\n"
+            '            print "\\{b2.length}"\n'
+            "        } case err then {\n"
+            '            print "read err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-r err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+        assert target.read_bytes() == b"HI"
+
+    def test_explicit_close_idempotent_with_raii(self, tmp_path):
+        """Calling file.close and then letting RAII run must not double-close."""
+        target = tmp_path / "close.txt"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (r) case ok then {\n"
+            "        cr: r.ok.close\n"
+            "        match (cr) case ok then {\n"
+            '            print "closed ok"\n'
+            "        } case err then {\n"
+            '            print "close err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        # Primary assertion: clean exit and single expected line.
+        # If RAII had double-closed, EBADF would surface or the
+        # process would abort under stricter allocators.
+        assert output.strip() == "closed ok"

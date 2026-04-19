@@ -5100,19 +5100,12 @@ class CEmitter:
                             f"({parent_val}.data, {parent_val}.len)"
                         )
 
-        # io.file method calls: .close (read/write/seek land in later phases)
+        # io.file method calls: .close / .read / .write
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
-            if (
-                dp_parent_type
-                and dp_parent_type.typetype == ZTypeType.CLASS
-                and dp_parent_type.name == "file"
-            ):
+            parent_path = cast(zast.DottedPath, call.callable).parent
+            if self._effective_file_type(parent_path):
                 method_name = cast(zast.DottedPath, call.callable).child.name
-                parent_val = self._emit_path_value(
-                    cast(zast.DottedPath, call.callable).parent
-                )
-                parent_path = cast(zast.DottedPath, call.callable).parent
+                parent_val = self._emit_path_value(parent_path)
                 if not self._is_class_pointer_path(
                     parent_path
                 ) and not parent_val.startswith("&"):
@@ -5122,6 +5115,35 @@ class CEmitter:
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_close")
                     return f"z_file_close({parent_val})"
+                if method_name == "read":
+                    # args: into: (list of u8), max: u64
+                    into_val = None
+                    max_val = None
+                    for arg in call.arguments:
+                        if arg.name == "into":
+                            into_val = self._emit_operation_value(arg.valtype)
+                            # list is stack-allocated; pass pointer for
+                            # in-place mutation.
+                            if not into_val.startswith("&"):
+                                into_val = f"&{into_val}"
+                        elif arg.name == "max":
+                            max_val = self._emit_operation_value(arg.valtype)
+                    self.needs_io = True
+                    self.needs_stdio = True
+                    self.needs_io_natives.add("file_read")
+                    return f"z_file_read({parent_val}, {into_val}, {max_val})"
+                if method_name == "write":
+                    # args: from: (list of u8)
+                    from_val = None
+                    for arg in call.arguments:
+                        if arg.name == "from":
+                            from_val = self._emit_operation_value(arg.valtype)
+                            if not from_val.startswith("&"):
+                                from_val = f"&{from_val}"
+                    self.needs_io = True
+                    self.needs_stdio = True
+                    self.needs_io_natives.add("file_write")
+                    return f"z_file_write({parent_val}, {from_val})"
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -5725,6 +5747,27 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"{parent}{acc}length"
+        # io.file: .close as dotted path (zero-arg method call).
+        # The typechecker coerces f.close to its return type, so the
+        # path form appears wherever a plain call would work. Matches
+        # the call-form dispatch in _emit_call_value.
+        #
+        # Parent may be either a direct `file` (a local of class type)
+        # or a union subtype selection `r.ok` whose resolved subtype
+        # is file — in the latter case `path.parent.type` is the
+        # enclosing union, not file, per the typechecker convention
+        # where union/variant subtype paths keep the parent type.
+        if child == "close" and self._effective_file_type(path.parent):
+            parent = self._emit_path_value(path.parent)
+            if not self._is_class_pointer_path(path.parent) and not parent.startswith(
+                "&"
+            ):
+                parent = f"&{parent}"
+            self.needs_io = True
+            self.needs_stdio = True
+            self.needs_io_natives.add("file_close")
+            return f"z_file_close({parent})"
+
         # list: .pop as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
             parent = self._emit_path_value(path.parent)
@@ -5849,7 +5892,46 @@ class CEmitter:
             child_type = parent_type.children.get(child)
             if child_type and child_type.typetype != ZTypeType.FUNCTION:
                 return f"{parent}.data.{child}"
+        # union payload access: u.subname → *(T*)u.data (heap-boxed)
+        # Non-null subtypes are stored as malloc'd boxes behind a void*
+        # data pointer; deref and cast to T. Null subtypes have no
+        # payload and should not be accessed this way — the typechecker
+        # rejects it.
+        if parent_type and parent_type.typetype == ZTypeType.UNION:
+            child_type = parent_type.children.get(child)
+            if (
+                child_type
+                and child_type.typetype != ZTypeType.FUNCTION
+                and child_type.typetype != ZTypeType.NULL
+            ):
+                inner_ctype = _ctype(child_type)
+                return f"(*({inner_ctype}*){parent}.data)"
         return f"{parent}.{child}"
+
+    def _effective_file_type(self, path: zast.Path) -> bool:
+        """True if `path` resolves (semantically) to an io.file value.
+
+        A file can appear in two AST shapes:
+          * Direct path (local of class type) — `path.type` is the
+            file class.
+          * Union subtype selection — `path.type` is the enclosing
+            union (per the typechecker's parent_tagged_type rule); the
+            selected child is the real file. E.g. `r.ok` where
+            `r: result(file, ioerror)`.
+        """
+        pt = path.type
+        if pt and pt.typetype == ZTypeType.CLASS and pt.name == "file":
+            return True
+        if (
+            pt
+            and pt.typetype == ZTypeType.UNION
+            and path.nodetype == NodeType.DOTTEDPATH
+        ):
+            dp = cast(zast.DottedPath, path)
+            sub = pt.children.get(dp.child.name)
+            if sub and sub.typetype == ZTypeType.CLASS and sub.name == "file":
+                return True
+        return False
 
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
         """Check if a path refers to a pointer type (for -> vs . dispatch).

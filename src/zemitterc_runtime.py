@@ -397,6 +397,77 @@ _Z_FILE_CLOSE = (
     "}\n\n"
 )
 
+# shared helper: box a u64 into result(u64, ioerror) ok arm
+_Z_IO_WRAP_U64_RESULT = (
+    "static z_result_u64_ioerror_t z_io_u64_ok(uint64_t v);\n"
+    "static z_result_u64_ioerror_t z_io_u64_ok(uint64_t v) {\n"
+    "    z_result_u64_ioerror_t result = {0};\n"
+    "    uint64_t* boxed = (uint64_t*)malloc(sizeof(uint64_t));\n"
+    "    *boxed = v;\n"
+    "    result.tag = Z_RESULT_U64_IOERROR_TAG_OK;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+    "static z_result_u64_ioerror_t z_io_u64_err(int saved_errno);\n"
+    "static z_result_u64_ioerror_t z_io_u64_err(int saved_errno) {\n"
+    "    z_result_u64_ioerror_t result = {0};\n"
+    "    z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "    *boxed = z_io_errno_to_ioerror(saved_errno);\n"
+    "    result.tag = Z_RESULT_U64_IOERROR_TAG_ERR;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
+_Z_FILE_READ = (
+    "/* file.read — read up to `max` bytes, appending to `buf`.\n"
+    "   Grows the list capacity as needed. Returns actual bytes read\n"
+    "   (0 indicates EOF); retries on EINTR. */\n"
+    "static z_result_u64_ioerror_t z_file_read(\n"
+    "    z_file_t* f, z_list_u8_t* buf, uint64_t max\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_file_read(\n"
+    "    z_file_t* f, z_list_u8_t* buf, uint64_t max\n"
+    ") {\n"
+    "    if (buf->capacity < buf->length + max) {\n"
+    "        uint64_t newcap = buf->length + max;\n"
+    "        buf->data = (uint8_t*)realloc(buf->data, newcap);\n"
+    "        buf->capacity = newcap;\n"
+    "    }\n"
+    "    for (;;) {\n"
+    "        long n = read(f->fd, buf->data + buf->length, max);\n"
+    "        if (n >= 0) {\n"
+    "            buf->length += (uint64_t)n;\n"
+    "            return z_io_u64_ok((uint64_t)n);\n"
+    "        }\n"
+    "        if (errno == EINTR) continue;\n"
+    "        return z_io_u64_err(errno);\n"
+    "    }\n"
+    "}\n\n"
+)
+
+_Z_FILE_WRITE = (
+    "/* file.write — write all bytes from `src`. Loops on short writes;\n"
+    "   retries on EINTR. Returns total bytes written on success. */\n"
+    "static z_result_u64_ioerror_t z_file_write(\n"
+    "    z_file_t* f, z_list_u8_t* src\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_file_write(\n"
+    "    z_file_t* f, z_list_u8_t* src\n"
+    ") {\n"
+    "    uint64_t total = 0;\n"
+    "    while (total < src->length) {\n"
+    "        long n = write(f->fd, src->data + total, src->length - total);\n"
+    "        if (n < 0) {\n"
+    "            if (errno == EINTR) continue;\n"
+    "            return z_io_u64_err(errno);\n"
+    "        }\n"
+    "        total += (uint64_t)n;\n"
+    "    }\n"
+    "    return z_io_u64_ok(total);\n"
+    "}\n\n"
+)
+
 
 def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
     """Emit io-unit native function implementations per requested name.
@@ -419,10 +490,14 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "rename",
         "open",
         "file_close",
+        "file_read",
+        "file_write",
     }
     # result(null, ioerror) wrapper used by mkdir / remove / rename /
     # file_close
     null_wrap = natives & {"mkdir", "remove", "rename", "file_close"}
+    # result(u64, ioerror) wrapper used by file_read / file_write
+    u64_wrap = natives & {"file_read", "file_write"}
     if "eprintln" in natives:
         parts.append(_Z_IO_EPRINTLN)
     if fallible:
@@ -449,6 +524,12 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_OPEN)
     if "file_close" in natives:
         parts.append(_Z_FILE_CLOSE)
+    if u64_wrap:
+        parts.append(_Z_IO_WRAP_U64_RESULT)
+    if "file_read" in natives:
+        parts.append(_Z_FILE_READ)
+    if "file_write" in natives:
+        parts.append(_Z_FILE_WRITE)
     return "".join(parts)
 
 

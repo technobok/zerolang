@@ -4614,6 +4614,68 @@ class TestIoNativeDispatch:
         assert file_type.needs_destructor is True
         assert file_type.destructor_name == "z_file_destroy"
 
+    def test_file_read_typechecks(self):
+        """file.read takes (into: list of u8, max: u64) and returns
+        result(u64, ioerror). Exercised through the match-ok narrowing
+        pattern that unwraps the file handle out of io.open's result."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.open path: "/tmp/x".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        buf: list of: u8\n"
+            "        n: r.ok.read into: buf max: 1024u64\n"
+            '        print "ok"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_file_write_typechecks(self):
+        """file.write takes (from: list of u8) and returns
+        result(u64, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        buf: list of: u8\n"
+            "        buf.append from: 65u8\n"
+            "        n: r.ok.write from: buf\n"
+            '        print "ok"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_union_payload_method_call(self):
+        """Method calls on a union subtype (r.ok.X) lower correctly —
+        regression for the emitter gap that blocked Phase 6a's explicit
+        close. Structured through file.close to exercise the full path."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        cr: r.ok.close\n"
+            "        match (\n"
+            "            cr\n"
+            "        ) case ok then {\n"
+            '            print "ok"\n'
+            "        } case err then {\n"
+            '            print "err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+
 
 class TestBytesAndPathTypedefs:
     """I/O Phase 1: bytes / byteview / path / pathview typedefs.
