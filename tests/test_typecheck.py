@@ -4304,6 +4304,91 @@ class TestBoxProtocolComposition:
         )
 
 
+class TestResultGenericType:
+    """I/O Phase 1: built-in generic `result t: type, e: type`.
+
+    `result` is a two-arm union (ok / err) parameterized over both arms.
+    Used as the foundation for I/O fallible operations and any future
+    API that wants pattern-matchable success/failure.
+    """
+
+    def test_result_ok_construction_with_explicit_err_type(self):
+        """`result.ok 42 e: i64` constructs the ok arm; e supplied explicitly."""
+        check_ok("main: function is {\n    r: result.ok 42 e: i64\n}")
+
+    def test_result_err_construction_with_explicit_t_type(self):
+        """`result.err msg t: u64` constructs the err arm; t supplied explicitly."""
+        check_ok("main: function is {\n    r: result.err 99 t: u64\n}")
+
+    def test_result_pattern_match_dispatches_arms(self):
+        """Match on result reaches both arms."""
+        check_ok(
+            "main: function is {\n"
+            "    r: result.ok 42 e: i64\n"
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "got ok"\n'
+            "    } case err then {\n"
+            '        print "got err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_result_with_reftype_ok_arm(self):
+        """ok arm may be a reftype (string), err a valtype (i64)."""
+        check_ok('main: function is {\n    r: result.ok "hi".string e: i64\n}')
+
+    def test_result_with_reftype_err_arm(self):
+        """err arm may be a reftype (string), ok a valtype (i64)."""
+        check_ok('main: function is {\n    r: result.err "boom".string t: i64\n}')
+
+
+class TestBytesAndPathTypedefs:
+    """I/O Phase 1: bytes / byteview / path / pathview typedefs.
+
+    Typedef wrappers over `list of: u8` / `listview of: u8` / `string` /
+    `stringview` so that signatures read for what they mean. Backward-
+    compatible: list / string operations on bytes / path work via the
+    typedef rule.
+    """
+
+    def test_bytes_can_be_declared(self):
+        check_ok("main: function is {\n    b: bytes\n}")
+
+    def test_bytes_inherits_list_methods(self):
+        """append, length etc. work because bytes typedefs over list of: u8."""
+        check_ok(
+            "main: function is {\n"
+            "    b: bytes\n"
+            "    b.append item: 65\n"
+            "    n: b.length\n"
+            "}"
+        )
+
+    def test_path_can_be_declared(self):
+        check_ok('main: function is {\n    p: path.create from: "hello.txt".string\n}')
+
+    def test_path_inherits_string_methods(self):
+        """length etc. work because path typedefs over string."""
+        check_ok(
+            "main: function is {\n"
+            '    p: path.create from: "hello.txt".string\n'
+            "    n: p.length\n"
+            "}"
+        )
+
+    def test_byteview_can_be_obtained_from_bytes(self):
+        """byteview borrowed from a bytes value via the inherited listview method."""
+        check_ok(
+            "main: function is {\n"
+            "    b: bytes\n"
+            "    b.append item: 65\n"
+            "    v: b.listview\n"
+            "}"
+        )
+
+
 class TestGenerics:
     """Tests for generic type resolution and monomorphization."""
 
