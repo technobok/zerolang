@@ -5603,6 +5603,12 @@ class TypeChecker:
                 ):
                     parent_atom.narrowed_subtype = entry.narrowed_subtype
                     parent_atom.original_ztype = entry.original_ztype
+                    # Phase 7b: stamp narrowed-subtype child_id against the
+                    # outer union/variant (mirrors _check_atomid path).
+                    if parent_atom.child_id == -1:
+                        parent_atom.child_id = entry.original_ztype.child_id_for(
+                            entry.narrowed_subtype
+                        )
                 # Borrow-scoped lock enforcement: locked variables are
                 # completely unavailable (reads AND writes).
                 if self.symtab.lookup_var(parent_atom.name):
@@ -5641,6 +5647,12 @@ class TypeChecker:
                 garg = parent_type.generic_args.get(child_name)
                 if garg and garg.numeric_value is not None:
                     path.const_value = garg.numeric_value
+            # Phase 7b: stamp child_id against parent's ZType so the
+            # emitter can dispatch by id on hot paths (union/variant
+            # arm access, record field, method dispatch). Falls back to
+            # name lookup when child_id stays -1.
+            if parent_type is not None and path.child_id == -1:
+                path.child_id = parent_type.child_id_for(path.child.name)
             # protocol/facet borrow: lock the root of the source path
             if t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                 root_name = self._get_arg_root_name(path.parent)
@@ -5707,6 +5719,13 @@ class TypeChecker:
             if entry and entry.narrowed_subtype and entry.original_ztype is not None:
                 atom.narrowed_subtype = entry.narrowed_subtype
                 atom.original_ztype = entry.original_ztype
+                # Phase 7b: stamp child_id of narrowed subtype against the
+                # outer union/variant so the emitter's payload-unwrap can
+                # dispatch by id.
+                if atom.child_id == -1:
+                    atom.child_id = entry.original_ztype.child_id_for(
+                        entry.narrowed_subtype
+                    )
             # constant folding: propagate const_value for true/false literals
             if name == "true":
                 atom.const_value = True
@@ -7754,6 +7773,15 @@ class TypeChecker:
                         clause.match.name,
                         shadow=True,
                     )
+            # Phase 7b: stamp arm-name child id against the scrutinee's
+            # union/variant type so the emitter can read clause.match.child_id
+            # without another name→id resolution pass.
+            if (
+                subject_type is not None
+                and subject_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT)
+                and clause.match.child_id == -1
+            ):
+                clause.match.child_id = subject_type.child_id_for(clause.match.name)
 
             # resolve match pattern const_value for scalar const folding
             suppress_arm = False

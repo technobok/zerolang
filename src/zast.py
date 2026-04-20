@@ -870,6 +870,9 @@ class DottedPath(Path):
     child: "AtomId"
     parent_tagged_type: "Optional[ZType]" = field(default=None, init=False)
     narrowed_subtype: "Optional[str]" = field(default=None, init=False)
+    # Phase 7b: child id stamped at typecheck against parent's ZType. -1
+    # when unstamped — emitter falls back to name lookup in that case.
+    child_id: int = field(default=-1, init=False)
 
 
 @dataclass
@@ -885,6 +888,9 @@ class AtomId(Atom):
     # to decide whether to emit a payload-unwrap in place of the bare name.
     narrowed_subtype: "Optional[str]" = field(default=None, init=False)
     original_ztype: "Optional[ZType]" = field(default=None, init=False)
+    # Phase 7b: child id against a contextually-known parent type (e.g.
+    # the scrutinee's union type inside a match clause). -1 when unstamped.
+    child_id: int = field(default=-1, init=False)
 
 
 @dataclass

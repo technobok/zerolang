@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS type_children (
     child_name    TEXT NOT NULL,
     child_type_id INTEGER NOT NULL REFERENCES types(type_id),
     position      INTEGER NOT NULL,
+    child_id      INTEGER,
     PRIMARY KEY (type_id, child_name)
 );
 
@@ -271,12 +272,16 @@ def dump_sql(
             f"{_sql_str(ztype.cname if ztype.cname else None)});"
         )
 
-    # type_children
+    # type_children (Phase 7b: child_id column populated from
+    # children_id_map when a name was asked for during compilation;
+    # NULL otherwise).
     for ztype in all_types.values():
         for i, (cname, ctype) in enumerate(ztype.children.items()):
+            cid = ztype.children_id_map.get(cname)
+            cid_sql = "NULL" if cid is None else str(cid)
             lines.append(
                 f"INSERT OR IGNORE INTO type_children VALUES ("
-                f"{ztype.nodeid}, {_sql_str(cname)}, {ctype.nodeid}, {i});"
+                f"{ztype.nodeid}, {_sql_str(cname)}, {ctype.nodeid}, {i}, {cid_sql});"
             )
 
     # Stage 5: typed nodes (AST nodes with type annotations)

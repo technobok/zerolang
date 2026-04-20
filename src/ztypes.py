@@ -130,6 +130,20 @@ def _alloc_type_id() -> int:
     return tid
 
 
+# monotonic counter for child-name identities on ZType. Globally unique so a
+# child_id never collides across parents and can be used directly as a SQL key.
+# Per-process only — not persisted across compiler invocations.
+_next_child_id: int = 0
+
+
+def _alloc_child_id() -> int:
+    """Allocate the next auto-incrementing child ID."""
+    global _next_child_id
+    cid = _next_child_id
+    _next_child_id += 1
+    return cid
+
+
 class _TagOrigin:
     """Sentinel for generic_origin when the origin is a tag discriminator type.
 
@@ -194,6 +208,10 @@ class ZType:
 
     # plain dict (insertion-ordered since Python 3.7+, replaces OrderedDict)
     children: "dict[str, ZType]" = field(default_factory=dict, init=False)
+
+    # parallel name→id map for children. Lazily populated by child_id_for;
+    # never pre-seeded. Enables id-based lookup on hot paths (Phase 7b).
+    children_id_map: "dict[str, int]" = field(default_factory=dict, init=False)
 
     # return type for function types (None for non-functions or void functions)
     return_type: "Optional[ZType]" = field(default=None, init=False)
@@ -306,6 +324,29 @@ class ZType:
     # For type definitions: "z_point_t", "z_list_i64_t", etc.
     # For function types: "z_math_add", "z_point_distance", etc.
     cname: str = field(default="", init=False)
+
+    def child_id_for(self, name: str) -> int:
+        """Return the monotonic id for this child name on this type, minting
+        one if absent. Stable per ZType instance per process. Does not
+        require `name` to currently be present in `children` — the id is an
+        identity for the name on this type, independent of whether the child
+        entry exists yet.
+        """
+        cid = self.children_id_map.get(name)
+        if cid is None:
+            cid = _alloc_child_id()
+            self.children_id_map[name] = cid
+        return cid
+
+    def resolve_child_by_id(self, cid: int) -> "Optional[ZType]":
+        """Reverse lookup: find the child ZType whose id was minted by
+        child_id_for on this parent. Returns None if the id has no live
+        child. Linear scan — scopes-of-children are small (≤ handful).
+        """
+        for name, mapped in self.children_id_map.items():
+            if mapped == cid:
+                return self.children.get(name)
+        return None
 
     def __repr__(self) -> str:
         return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"

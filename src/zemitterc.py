@@ -4347,7 +4347,12 @@ class CEmitter:
         # argument expression when the spec declares a collection
         # parameter — looking up the method's spec on the protocol
         # type gives the param-by-position ZType.
-        spec = parent_type.children.get(method)
+        # Phase 7b: id-first, name-fallback child lookup.
+        spec = (
+            parent_type.resolve_child_by_id(dp.child_id) if dp.child_id != -1 else None
+        )
+        if spec is None:
+            spec = parent_type.children.get(method)
         spec_params = (
             [(n, t) for n, t in spec.children.items() if n != "this"]
             if spec is not None
@@ -5851,13 +5856,20 @@ class CEmitter:
         if atom.narrowed_subtype and atom.original_ztype is not None:
             sub = atom.narrowed_subtype
             outer = atom.original_ztype
-            if outer.typetype == ZTypeType.UNION:
+            # Phase 7b: id-first, name-fallback child lookup against the
+            # outer union/variant.
+            payload_type = (
+                outer.resolve_child_by_id(atom.child_id)
+                if atom.child_id != -1
+                else None
+            )
+            if payload_type is None:
                 payload_type = outer.children.get(sub)
+            if outer.typetype == ZTypeType.UNION:
                 if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
                     payload_ctype = _ctype(payload_type)
                     return f"(*({payload_ctype}*){name}.data)"
             elif outer.typetype == ZTypeType.VARIANT:
-                payload_type = outer.children.get(sub)
                 if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
                     return f"{name}.data.{sub}"
         # check if this refers to a function, constant, data, or record
@@ -6216,7 +6228,14 @@ class CEmitter:
         # dispatch is vtable-based).
         if path.parent.type and path.parent.type.typetype == ZTypeType.PROTOCOL:
             parent_type_p = path.parent.type
-            spec = parent_type_p.children.get(child)
+            # Phase 7b: id-first, name-fallback child lookup.
+            spec = (
+                parent_type_p.resolve_child_by_id(path.child_id)
+                if path.child_id != -1
+                else None
+            )
+            if spec is None:
+                spec = parent_type_p.children.get(child)
             if spec is not None and spec.typetype == ZTypeType.FUNCTION:
                 parent = self._emit_path_value(path.parent)
                 acc = "->" if self._is_class_pointer_path(path.parent) else "."
@@ -6291,8 +6310,15 @@ class CEmitter:
         # variant payload access: v.subname → v.data.subname
         parent_type = path.parent.type
         if parent_type and parent_type.typetype == ZTypeType.VARIANT:
-            # check if child is a subtype name (not a method)
-            child_type = parent_type.children.get(child)
+            # check if child is a subtype name (not a method). Phase 7b:
+            # id-first lookup, falling back to name when unstamped.
+            child_type = (
+                parent_type.resolve_child_by_id(path.child_id)
+                if path.child_id != -1
+                else None
+            )
+            if child_type is None:
+                child_type = parent_type.children.get(child)
             if child_type and child_type.typetype != ZTypeType.FUNCTION:
                 return f"{parent}.data.{child}"
         # union payload access: u.subname → *(T*)u.data (heap-boxed)
@@ -6301,7 +6327,13 @@ class CEmitter:
         # payload and should not be accessed this way — the typechecker
         # rejects it.
         if parent_type and parent_type.typetype == ZTypeType.UNION:
-            child_type = parent_type.children.get(child)
+            child_type = (
+                parent_type.resolve_child_by_id(path.child_id)
+                if path.child_id != -1
+                else None
+            )
+            if child_type is None:
+                child_type = parent_type.children.get(child)
             if (
                 child_type
                 and child_type.typetype != ZTypeType.FUNCTION
