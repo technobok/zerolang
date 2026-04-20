@@ -97,6 +97,42 @@ CREATE TABLE IF NOT EXISTS emitted_lines (
     node_id     INTEGER REFERENCES ast_nodes(node_id),
     text        TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS scope (
+    scope_id    INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    depth       INTEGER NOT NULL,
+    unreachable BOOLEAN NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS variable (
+    variable_id       INTEGER PRIMARY KEY,
+    ztype_id          INTEGER REFERENCES types(type_id),
+    ownership         TEXT NOT NULL,
+    named             TEXT NOT NULL,
+    is_private_access BOOLEAN NOT NULL,
+    borrow_origin     TEXT
+);
+
+CREATE TABLE IF NOT EXISTS entry (
+    entry_id              INTEGER PRIMARY KEY,
+    scope_id              INTEGER NOT NULL REFERENCES scope(scope_id),
+    position              INTEGER NOT NULL,
+    name                  TEXT NOT NULL,
+    ztype_id              INTEGER NOT NULL REFERENCES types(type_id),
+    is_definition         BOOLEAN NOT NULL,
+    variable_id           INTEGER REFERENCES variable(variable_id),
+    narrowed_subtype      TEXT,
+    narrowed_subtype_id   INTEGER,
+    excluded_subtypes     TEXT,
+    excluded_subtype_ids  TEXT,
+    original_ztype_id     INTEGER REFERENCES types(type_id),
+    is_taken              BOOLEAN NOT NULL,
+    taken_at_line         INTEGER,
+    taken_at_col          INTEGER,
+    taken_at_file         INTEGER
+);
 """
 
 
@@ -290,6 +326,71 @@ def dump_sql(
             lines.append(
                 f"INSERT OR IGNORE INTO typed_nodes VALUES ("
                 f"{node.nodeid}, {node.type.nodeid});"
+            )
+
+    # Stage 6a: symbol table (Phase 7c) — scopes, variables, entries.
+    # Walks the archived history plus any remaining live scopes. The
+    # dumper tolerates a missing symbol_table (e.g. when called without
+    # running typecheck): simply emits no rows for the symtab tables.
+    symtab = getattr(program, "symbol_table", None)
+    if symtab is not None:
+        scopes_iter = list(getattr(symtab, "_history", [])) + list(
+            getattr(symtab, "_scopes", [])
+        )
+        seen_scopes: set[int] = set()
+        seen_vars: dict[int, object] = {}
+        for depth, scope in enumerate(scopes_iter):
+            if scope.scope_id in seen_scopes:
+                continue
+            seen_scopes.add(scope.scope_id)
+            lines.append(
+                f"INSERT OR IGNORE INTO scope VALUES ("
+                f"{scope.scope_id}, {_sql_str(scope.kind.name)}, "
+                f"{_sql_str(scope.name)}, {depth}, "
+                f"{_sql_bool(scope.unreachable)});"
+            )
+            for pos, entry in enumerate(scope.entries):
+                var_id_sql = "NULL"
+                if entry.var is not None:
+                    vid = entry.var.variableid
+                    if vid not in seen_vars:
+                        seen_vars[vid] = entry.var
+                    var_id_sql = str(vid)
+                orig_id_sql = (
+                    _sql_int(entry.original_ztype.nodeid)
+                    if entry.original_ztype is not None
+                    else "NULL"
+                )
+                ns_id_sql = _sql_int(entry.narrowed_subtype_id)
+                exs = entry.excluded_subtypes
+                exs_sql = _sql_str(",".join(sorted(exs))) if exs else "NULL"
+                exs_ids = entry.excluded_subtype_ids
+                exs_ids_sql = (
+                    _sql_str(",".join(str(i) for i in sorted(exs_ids)))
+                    if exs_ids
+                    else "NULL"
+                )
+                taken_line = _sql_int(entry.taken_at[0]) if entry.taken_at else "NULL"
+                taken_col = _sql_int(entry.taken_at[1]) if entry.taken_at else "NULL"
+                taken_file = _sql_int(entry.taken_at[2]) if entry.taken_at else "NULL"
+                lines.append(
+                    f"INSERT OR IGNORE INTO entry VALUES ("
+                    f"{entry.entry_id}, {scope.scope_id}, {pos}, "
+                    f"{_sql_str(entry.name)}, {entry.ztype.nodeid}, "
+                    f"{_sql_bool(entry.is_definition)}, {var_id_sql}, "
+                    f"{_sql_str(entry.narrowed_subtype)}, {ns_id_sql}, "
+                    f"{exs_sql}, {exs_ids_sql}, {orig_id_sql}, "
+                    f"{_sql_bool(entry.is_taken)}, "
+                    f"{taken_line}, {taken_col}, {taken_file});"
+                )
+        for vid, var in seen_vars.items():
+            lines.append(
+                f"INSERT OR IGNORE INTO variable VALUES ("
+                f"{vid}, {_sql_int(var.ztype.nodeid)}, "  # type: ignore[attr-defined]
+                f"{_sql_str(var.ownership.name)}, "  # type: ignore[attr-defined]
+                f"{_sql_str(var.named.name)}, "  # type: ignore[attr-defined]
+                f"{_sql_bool(var.is_private_access)}, "  # type: ignore[attr-defined]
+                f"{_sql_str(var.borrow_origin)});"  # type: ignore[attr-defined]
             )
 
     # Stage 6: emitted lines (if emitter provided)

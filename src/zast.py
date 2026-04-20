@@ -285,6 +285,11 @@ class Program:
     # populated by type checker after resolution
     resolved: Dict[str, "ZType"] = field(default_factory=dict)
 
+    # Phase 7c: SymbolTable attached by typecheck() so the SQL dumper can
+    # emit scope/entry/variable rows. Typed as Optional[object] to avoid a
+    # zast <-> zenv import cycle; the dumper uses getattr / duck-typing.
+    symbol_table: "Optional[object]" = field(default=None, init=False)
+
 
 def clone_function(func: "Function") -> "Function":
     """Deep copy a Function AST node for monomorphization."""

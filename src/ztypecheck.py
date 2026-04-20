@@ -8021,6 +8021,8 @@ def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     program.func_aliases = tc._func_aliases
     program.cloned_methods = tc._cloned_methods
     program.resolved = dict(tc._resolved)
+    # Phase 7c: expose the symbol table for the SQL dumper.
+    program.symbol_table = tc.symtab
     return errors
 
 

@@ -56,6 +56,11 @@ class SymbolTable:
 
     def __init__(self) -> None:
         self._scopes: List[Scope] = []
+        # Phase 7c: archive of popped scopes, in pop order. The SQL dumper
+        # reads this plus `_scopes` to reconstruct the full scope history.
+        # Popped scopes keep their entries/scope_id so an id-based dump is
+        # deterministic across runs.
+        self._history: List[Scope] = []
 
     # ---- scope management ----
 
@@ -103,6 +108,7 @@ class SymbolTable:
                             taken_at=entry.taken_at,
                         )
                         self._scopes[-1].append(taken_entry)
+        self._history.append(top)
         return top
 
     def pop_to(self, marker: int) -> None:
@@ -372,11 +378,15 @@ class SymbolTable:
                 entry_ztype = payload
         else:
             entry_ztype = original_type
+        # Phase 7c: mint narrowed_subtype_id against the outer type so the
+        # symbol table exposes an id-addressable handle on the arm.
+        nsid = original_type.child_id_for(subtype_name) if subtype_name else None
         entry = Entry(
             name=name,
             ztype=entry_ztype,
             is_definition=False,
             narrowed_subtype=subtype_name if subtype_name else None,
+            narrowed_subtype_id=nsid,
             original_ztype=original_type if shadow else None,
         )
         self._scopes[-1].append(entry)
@@ -414,6 +424,10 @@ class SymbolTable:
             sname, _ = next(iter(remaining.items()))
             narrowed_sub = sname
 
+        # Phase 7c: mint id parallels against the full outer type.
+        narrowed_sub_id = full_type.child_id_for(narrowed_sub) if narrowed_sub else None
+        excluded_ids = frozenset(full_type.child_id_for(s) for s in new_excluded)
+
         # exclude() is only called post-match (for arms that exit the
         # scope); the remaining-scope view of the variable is still
         # whole-program value-typed (no shadow). Keep full_type as ztype.
@@ -422,7 +436,9 @@ class SymbolTable:
             ztype=full_type,
             is_definition=False,
             narrowed_subtype=narrowed_sub,
+            narrowed_subtype_id=narrowed_sub_id,
             excluded_subtypes=frozenset(new_excluded),
+            excluded_subtype_ids=excluded_ids,
         )
         self._scopes[-1].append(entry)
 

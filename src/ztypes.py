@@ -387,6 +387,19 @@ def _alloc_scope_id() -> int:
     return sid
 
 
+# monotonic counter for symbol-table Entry identities. Globally unique;
+# per-process only (not persisted across compiler invocations).
+_next_entry_id: int = 0
+
+
+def _alloc_entry_id() -> int:
+    """Allocate the next auto-incrementing entry ID."""
+    global _next_entry_id
+    eid = _next_entry_id
+    _next_entry_id += 1
+    return eid
+
+
 @dataclass
 class LockInfo:
     """Lock state on a variable — stored on Entry, not on ZVariable."""
@@ -401,7 +414,12 @@ class Entry:
 
     Represents either a definition (introduces a name) or a shadow/overlay
     (modifies state of a name from an outer scope).
+
+    `entry_id` is a monotonic per-process identity (Phase 7c) for SQL
+    dumps and future hot-path migrations.
     """
+
+    entry_id: int = field(default_factory=_alloc_entry_id, init=False)
 
     name: str
     ztype: ZType
@@ -412,7 +430,14 @@ class Entry:
     lock: Optional[LockInfo] = None
     # narrowing state (for match/if arms)
     narrowed_subtype: Optional[str] = None  # "ok", "err" — narrowed in match arm
+    # Phase 7c: id parallel to narrowed_subtype. Minted via the outer
+    # union/variant's child_id_for(subtype_name). String remains
+    # authoritative; id is the hot-path key for future migrations.
+    narrowed_subtype_id: Optional[int] = None
     excluded_subtypes: "Optional[frozenset[str]]" = None  # subtypes ruled out
+    # Phase 7c: id parallel to excluded_subtypes. Same cardinality as the
+    # string set by construction (child_id_for is globally monotonic).
+    excluded_subtype_ids: "Optional[frozenset[int]]" = None
     # original union/variant type when ztype is the narrowed payload — the
     # emitter uses this to generate the C-level unwrap (original is still the
     # storage type, narrowed is the typecheck-visible type).
