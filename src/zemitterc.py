@@ -707,9 +707,12 @@ class CEmitter:
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
+                        # `:foo` parses as LABELVALUE, `foo: bar` parses as
+                        # ATOMID — both carry a .name. LabelValue subclasses
+                        # AtomId but has its own NodeType tag.
                         proto_name = (
                             cast(zast.AtomId, apath).name
-                            if apath.nodetype == NodeType.ATOMID
+                            if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                             else None
                         )
                         if (
@@ -887,7 +890,7 @@ class CEmitter:
                     for label, apath in defn.as_items.items():
                         facet_name = (
                             cast(zast.AtomId, apath).name
-                            if apath.nodetype == NodeType.ATOMID
+                            if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                             else None
                         )
                         if (
@@ -1734,7 +1737,7 @@ class CEmitter:
             for label, apath in rec.as_items.items():
                 proto_name = (
                     cast(zast.AtomId, apath).name
-                    if apath.nodetype == NodeType.ATOMID
+                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                     else None
                 )
                 if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
@@ -1789,7 +1792,7 @@ class CEmitter:
         for label, apath in rec.as_items.items():
             proto_name = (
                 cast(zast.AtomId, apath).name
-                if apath.nodetype == NodeType.ATOMID
+                if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 else None
             )
             if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
@@ -2169,7 +2172,7 @@ class CEmitter:
             for label, apath in cls.as_items.items():
                 proto_name = (
                     cast(zast.AtomId, apath).name
-                    if apath.nodetype == NodeType.ATOMID
+                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                     else None
                 )
                 if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
@@ -2230,7 +2233,7 @@ class CEmitter:
         for label, apath in cls.as_items.items():
             proto_name = (
                 cast(zast.AtomId, apath).name
-                if apath.nodetype == NodeType.ATOMID
+                if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 else None
             )
             if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
@@ -6247,12 +6250,19 @@ class CEmitter:
                 parent = f"&{parent}"
             return f"{_mangle_func(func_name)}({parent})"
 
-        # protocol instance creation: obj.label where label maps to a protocol
+        # protocol instance creation: obj.label where label maps to a
+        # protocol conformance (synthesize a protocol value via
+        # z_<type>_<label>_create). Must NOT fire for regular fields
+        # whose declared type happens to be a protocol (`source:
+        # reader.lock` on a class) — those need a plain struct-field
+        # access which falls through to the general path below.
         if path.type and path.type.typetype == ZTypeType.PROTOCOL:
             parent_type = path.parent.type
-            if parent_type and parent_type.typetype in (
-                ZTypeType.RECORD,
-                ZTypeType.CLASS,
+            if (
+                parent_type
+                and parent_type.typetype in (ZTypeType.RECORD, ZTypeType.CLASS)
+                and self._proto_conformance.get((parent_type.name, path.type.name))
+                == child
             ):
                 self.needs_stdlib = True
                 parent_val = self._emit_path_value(path.parent)
