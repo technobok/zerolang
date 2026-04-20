@@ -94,18 +94,30 @@ filekind: variant {
     other: null
 }
 
-# filestat -- metadata returned by `io.stat`. Kept small on purpose;
-# richer fields (mtime, permissions, device / inode) will land with
-# a follow-up that introduces a time type.
+# filestat -- metadata returned by `io.stat` / `io.lstat`.
+# `mtime_seconds` is Unix epoch seconds; when a `time` type lands it
+# will be migrated to a typed field in a follow-up. `mode` is the raw
+# POSIX mode bits (file type + permission bits, as from `stat(2)`);
+# callers test it with bit operations (the common permission bits are
+# 0o400 / 0o200 / 0o100 for owner r/w/x, shifted for group / other).
+# Richer fields (device, inode, nlink, access / ctime) can be added
+# later without breaking callers.
 filestat: record {
     kind: filekind
     size: u64
+    mtime_seconds: u64
+    mode: u32
 }
 
-# stat -- return metadata for `path`. Follows symlinks; use a future
+# stat -- return metadata for `path`. Follows symlinks; use
 # `io.lstat` to inspect the link itself. Errors surface in the
 # standard ioerror shape (notfound, permissiondenied, ...).
 stat: function {path: string} out (result t: filestat e: ioerror) is native
+
+# lstat -- like `stat`, but does not follow symlinks. On a symbolic
+# link, `kind` is `symlink` and `size` / `mtime_seconds` / `mode`
+# describe the link itself rather than its target.
+lstat: function {path: string} out (result t: filestat e: ioerror) is native
 
 # seekorigin -- where a `seek` operation interprets its offset.
 # `start`: from byte 0. `current`: from current position. `end`: from

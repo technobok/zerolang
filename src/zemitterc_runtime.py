@@ -348,9 +348,25 @@ _Z_IO_RENAME = (
     "}\n\n"
 )
 
+_Z_IO_STAT_FILL = (
+    "/* Populate fs from a struct stat. Shared by z_io_stat / z_io_lstat —\n"
+    "   the only behavioral split between them lives in the syscall call\n"
+    "   site (stat(2) follows symlinks, lstat(2) does not). */\n"
+    "static void z_io_fill_filestat(z_filestat_t* fs, const struct stat* sb);\n"
+    "static void z_io_fill_filestat(z_filestat_t* fs, const struct stat* sb) {\n"
+    "    if (S_ISREG(sb->st_mode))       fs->kind.tag = Z_FILEKIND_TAG_FILE;\n"
+    "    else if (S_ISDIR(sb->st_mode))  fs->kind.tag = Z_FILEKIND_TAG_DIR;\n"
+    "    else if (S_ISLNK(sb->st_mode))  fs->kind.tag = Z_FILEKIND_TAG_SYMLINK;\n"
+    "    else                            fs->kind.tag = Z_FILEKIND_TAG_OTHER;\n"
+    "    fs->size = (uint64_t)sb->st_size;\n"
+    "    fs->mtime_seconds = (uint64_t)sb->st_mtime;\n"
+    "    fs->mode = (uint32_t)sb->st_mode;\n"
+    "}\n\n"
+)
+
 _Z_IO_STAT = (
-    "/* stat(2) follows symlinks; S_ISLNK never fires here — that arm\n"
-    "   is reserved for a future lstat-based call. Returns the filestat\n"
+    "/* stat(2) follows symlinks; the SYMLINK arm never fires here —\n"
+    "   that arm is reached through z_io_lstat. Returns the filestat\n"
     "   value by value (not boxed); the compiler-generated result\n"
     "   destructor frees the ok payload's heap copy. */\n"
     "static z_result_filestat_ioerror_t z_io_stat(z_string_t path);\n"
@@ -368,11 +384,34 @@ _Z_IO_STAT = (
     "        return result;\n"
     "    }\n"
     "    z_filestat_t fs = {0};\n"
-    "    if (S_ISREG(sb.st_mode))       fs.kind.tag = Z_FILEKIND_TAG_FILE;\n"
-    "    else if (S_ISDIR(sb.st_mode))  fs.kind.tag = Z_FILEKIND_TAG_DIR;\n"
-    "    else if (S_ISLNK(sb.st_mode))  fs.kind.tag = Z_FILEKIND_TAG_SYMLINK;\n"
-    "    else                           fs.kind.tag = Z_FILEKIND_TAG_OTHER;\n"
-    "    fs.size = (uint64_t)sb.st_size;\n"
+    "    z_io_fill_filestat(&fs, &sb);\n"
+    "    z_filestat_t* boxed = (z_filestat_t*)malloc(sizeof(z_filestat_t));\n"
+    "    *boxed = fs;\n"
+    "    result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
+_Z_IO_LSTAT = (
+    "/* lstat(2) — like stat but does not follow symlinks. The SYMLINK\n"
+    "   arm of filekind fires here when the target path is a symlink. */\n"
+    "static z_result_filestat_ioerror_t z_io_lstat(z_string_t path);\n"
+    "static z_result_filestat_ioerror_t z_io_lstat(z_string_t path) {\n"
+    "    z_result_filestat_ioerror_t result = {0};\n"
+    "    struct stat sb;\n"
+    "    int rc = lstat(path.data, &sb);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&path);\n"
+    "    if (rc != 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_filestat_t fs = {0};\n"
+    "    z_io_fill_filestat(&fs, &sb);\n"
     "    z_filestat_t* boxed = (z_filestat_t*)malloc(sizeof(z_filestat_t));\n"
     "    *boxed = fs;\n"
     "    result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;\n"
@@ -645,6 +684,7 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "remove",
         "rename",
         "stat",
+        "lstat",
         "open",
         "file_close",
         "file_read",
@@ -681,8 +721,12 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_RENAME)
     if "mkdirp" in natives:
         parts.append(_Z_IO_MKDIRP)
+    if natives & {"stat", "lstat"}:
+        parts.append(_Z_IO_STAT_FILL)
     if "stat" in natives:
         parts.append(_Z_IO_STAT)
+    if "lstat" in natives:
+        parts.append(_Z_IO_LSTAT)
     if "open" in natives:
         parts.append(_Z_IO_OPEN)
     if "file_close" in natives:

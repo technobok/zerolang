@@ -6501,6 +6501,63 @@ class TestIOFileStreaming:
         assert output.strip() == "dir"
         assert target.is_dir()
 
+    def test_stat_reports_mtime_and_mode(self, tmp_path):
+        """filestat carries mtime_seconds (Unix epoch) and raw POSIX
+        mode bits; stat on a just-created directory populates both
+        with non-zero values."""
+        target = tmp_path / "statfields"
+        target.mkdir()
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        hasmtime: s.ok.mtime_seconds > 0.u64\n"
+            "        hasmode: s.ok.mode > 0.u32\n"
+            '        print "mtime=\\{hasmtime} mode=\\{hasmode}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "mtime_seconds" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "mtime=1 mode=1"
+
+    def test_lstat_reports_symlink_kind(self, tmp_path):
+        """lstat does not follow symlinks — on a symlink target, kind
+        is symlink (not whatever the link points at)."""
+        real = tmp_path / "real.txt"
+        real.write_text("hello")
+        link = tmp_path / "link.txt"
+        link.symlink_to(real)
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.lstat "{link}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        match (\n"
+            "            s.ok.kind\n"
+            "        ) case symlink then {\n"
+            '            print "link"\n'
+            "        } case file then {\n"
+            '            print "file"\n'
+            "        } case dir then {\n"
+            '            print "dir"\n'
+            "        } case other then {\n"
+            '            print "other"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_io_lstat" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "link"
+
     def test_io_stdout_writes_to_stdout(self):
         """`io.stdout` returns a borrowed writer over fd 1; writing
         to it goes directly to the process's stdout (captured by

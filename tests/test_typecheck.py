@@ -4784,6 +4784,37 @@ class TestIoNativeDispatch:
             "}"
         )
 
+    def test_lstat_typechecks(self):
+        """io.lstat shares stat's signature: result(filestat, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            '    s: io.lstat "/tmp/x".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.ok.size}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_filestat_mtime_and_mode_typecheck(self):
+        """filestat exposes mtime_seconds: u64 and mode: u32 for
+        callers that want freshness or permission bits."""
+        check_ok(
+            "main: function is {\n"
+            '    s: io.stat "/tmp/x".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.ok.mtime_seconds} \\{s.ok.mode}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
     def test_protocol_zero_arg_method_coerces_to_return_type(self):
         """Accessing a zero-arg protocol spec as an rvalue types as
         the spec's return type, not as the function pointer. Enables
