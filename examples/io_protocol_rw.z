@@ -1,0 +1,57 @@
+# io_protocol_rw.z -- project an open file through the `reader` and
+# `writer` protocols.
+#
+# Exercises the full protocol-wrapper pipeline: file.write /
+# file.read are invoked via vtable dispatch rather than through the
+# file handle directly. Collection-type parameters (`bytes` /
+# `byteview`) travel by pointer through the vtable so mutations
+# (bytes.length growing after a read) are visible to the caller.
+
+write_line: function {w: writer} is {
+    msg: bytes
+    msg.append from: 104.u8   # 'h'
+    msg.append from: 105.u8   # 'i'
+    msg.append from: 10.u8    # '\n'
+    bv: byteview.borrow from: msg.listview
+    r: w.write from: bv
+    match (
+        r
+    ) case ok then {
+        print "wrote via writer"
+    } case err then {
+        io.eprintln "write via writer failed"
+    }
+}
+
+read_line: function {rd: reader} is {
+    buf: bytes
+    r: rd.read into: buf max: 32.u64
+    match (
+        r
+    ) case ok then {
+        n: buf.length
+        print "read via reader: \{n} bytes"
+    } case err then {
+        io.eprintln "read via reader failed"
+    }
+}
+
+main: function is {
+    w: io.open path: "/tmp/z_io_protocol_rw.txt".string mode: openmode.write
+    match (
+        w
+    ) case ok then {
+        write_line w: w.ok.writer
+    } case err then {
+        io.eprintln "open-w failed"
+    }
+
+    r: io.open path: "/tmp/z_io_protocol_rw.txt".string mode: openmode.read
+    match (
+        r
+    ) case ok then {
+        read_line rd: r.ok.reader
+    } case err then {
+        io.eprintln "open-r failed"
+    }
+}

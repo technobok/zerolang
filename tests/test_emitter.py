@@ -6351,6 +6351,67 @@ class TestIOFileStreaming:
         assert output.strip() == "closed"
         assert target.exists()
 
+    def test_file_projected_to_reader_writer_through_vtable(self, tmp_path):
+        """Project a file through `writer` to write bytes, reopen and
+        project through `reader` to read them back. Exercises the
+        full vtable pipeline for protocols with collection-typed
+        parameters (bytes / byteview)."""
+        target = tmp_path / "proj_rw.bin"
+        csource = emit_source(
+            "send: function {w: writer} is {\n"
+            "    msg: bytes\n"
+            "    msg.append from: 65.u8\n"
+            "    msg.append from: 66.u8\n"
+            "    bv: byteview.borrow from: msg.listview\n"
+            "    r: w.write from: bv\n"
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "sent"\n'
+            "    } case err then {\n"
+            '        print "send err"\n'
+            "    }\n"
+            "}\n"
+            "recv: function {rd: reader} is {\n"
+            "    buf: bytes\n"
+            "    r: rd.read into: buf max: 32.u64\n"
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "\\{buf.length}"\n'
+            "    } case err then {\n"
+            '        print "recv err"\n'
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        w\n"
+            "    ) case ok then {\n"
+            "        send w: w.ok.writer\n"
+            "    } case err then {\n"
+            '        print "open-w"\n'
+            "    }\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        recv rd: r.ok.reader\n"
+            "    } case err then {\n"
+            '        print "open-r"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_file_reader_create" in csource
+        assert "z_file_writer_create" in csource
+        assert "z_file_reader_read_wrapper" in csource
+        assert "z_file_writer_write_wrapper" in csource
+        output = compile_and_run(csource)
+        lines = output.strip().splitlines()
+        assert "sent" in lines
+        assert "2" in lines  # read count — proves bytes.length grew through vtable
+        assert target.read_bytes() == b"AB"
+
     def test_file_projected_to_seeker_through_vtable(self, tmp_path):
         """Seek via the seeker protocol (not via the file handle
         directly) — the vtable entry forwards to z_file_seek."""

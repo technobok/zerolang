@@ -41,6 +41,31 @@ from ztypeutil import (
 )
 
 
+def _is_collection_param_type(ptype: Optional[ZType]) -> bool:
+    """True for list / listview / map (directly or via typedef) —
+    the types that must be passed by pointer across a protocol
+    boundary so in-place mutation stays visible."""
+    return _is_list_type(ptype) or _is_listview_type(ptype) or _is_map_type(ptype)
+
+
+def _proto_param_ctype(ptype: Optional[ZType]) -> str:
+    """C type for a parameter in a protocol vtable / wrapper signature.
+
+    Mutable-collection parameters (list, listview, map — directly or
+    via a typedef wrapper like `bytes` / `byteview`) are passed by
+    pointer so mutations (append, grow) are visible to the caller
+    through the protocol boundary. This matches the native class-
+    method ABI, which already takes these by pointer.
+
+    Scalars, variants, records, strings, and other value types keep
+    their usual by-value `_ctype`.
+    """
+    ct = _ctype(ptype)
+    if _is_collection_param_type(ptype) and not ct.endswith("*"):
+        return f"{ct}*"
+    return ct
+
+
 def _mono_name(ztype: Optional[ZType]) -> str:
     """Return the mangled base name of a (possibly typedef-wrapped) type.
 
@@ -894,22 +919,21 @@ class CEmitter:
         self.struct_defs = saved
         return out
 
-    # Protocols whose vtable signatures consist only of scalar /
-    # variant types — safe to wrap a file value for without resolving
-    # the collection-param ABI mismatch (protocol spec says value,
-    # native impl takes pointer). reader and writer are excluded
-    # until that mismatch is addressed (separate phase).
-    _IO_FILE_WRAPPABLE_PROTOCOLS = ("closer", "seeker")
+    # All four stream protocols can now be wrapped: the vtable ABI
+    # takes collection params by pointer (see _proto_param_ctype),
+    # which matches the native file impl without an extra adapter.
+    _IO_FILE_WRAPPABLE_PROTOCOLS = ("reader", "writer", "closer", "seeker")
 
     def _emit_io_file_protocol_impls(self) -> str:
-        """Emit vtables + wrappers + create functions for the file
-        protocols whose signatures match the native ABI directly.
+        """Emit vtables + wrappers + create functions for every
+        protocol io.file conforms to.
 
-        Depends on (a) the io runtime functions (z_file_close /
-        z_file_seek) being declared earlier, and (b) the protocol
-        structs (z_closer_t, z_seeker_vtable_t, ...) existing from
-        the deferred stream-protocol emission. Both are guaranteed
-        by the emit() pipeline — this buffer lands after both.
+        Depends on (a) the io runtime functions (z_file_read /
+        z_file_write / z_file_close / z_file_flush / z_file_seek)
+        being declared earlier, and (b) the protocol structs
+        (z_reader_t, z_writer_vtable_t, ...) existing from the
+        deferred stream-protocol emission. Both are guaranteed by
+        the emit() pipeline — this buffer lands after both.
         """
         io_unit = self.program.units.get("io")
         if io_unit is None:
@@ -918,13 +942,11 @@ class CEmitter:
         if file_defn is None or type(file_defn) is not zast.Class:
             return ""
         file_cls = file_defn
-        # Pull the natives the wrappers reference into the runtime
-        # block (emitted next), so forward declarations exist when
-        # the wrappers are compiled.
-        if "closer" in self._IO_FILE_WRAPPABLE_PROTOCOLS:
-            self.needs_io_natives.add("file_close")
-        if "seeker" in self._IO_FILE_WRAPPABLE_PROTOCOLS:
-            self.needs_io_natives.add("file_seek")
+        # Pull every file native into the runtime block so forward
+        # declarations exist when the wrappers are compiled.
+        self.needs_io_natives.update(
+            {"file_close", "file_read", "file_write", "file_flush", "file_seek"}
+        )
         saved = self.struct_defs
         self.struct_defs = TrackedList(self)
         for label, apath in file_cls.as_items.items():
@@ -1292,7 +1314,7 @@ class CEmitter:
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                params.append(_ctype(ppath.type))
+                params.append(_proto_param_ctype(ppath.type))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
@@ -1360,13 +1382,16 @@ class CEmitter:
         # wrapper functions for each spec
         for sname, sfunc in proto.specs.items():
             ret_ctype = self._return_ctype(sfunc)
-            # wrapper params: void* _data, then remaining non-this params
+            # wrapper params: void* _data, then remaining non-this params.
+            # Collection types travel through the vtable as pointers
+            # (see _proto_param_ctype) so they match the native impl's
+            # ABI without an extra adaptor.
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                pctype = _ctype(ppath.type)
+                pctype = _proto_param_ctype(ppath.type)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
@@ -3395,7 +3420,7 @@ class CEmitter:
             for pname, ptype in stype.children.items():
                 if pname == "this":
                     continue
-                params.append(_ctype(ptype))
+                params.append(_proto_param_ctype(ptype))
             lines.append(f"    {ret_ctype} (*{sname})({', '.join(params)});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
 
@@ -4182,9 +4207,25 @@ class CEmitter:
         method = dp.child.name
         # stack-allocated protocol: use . for locals, -> for pointers
         acc = "->" if self._is_class_pointer_path(dp.parent) else "."
+        # Collection-type arguments travel by pointer through the
+        # vtable (see _proto_param_ctype). Take the address of the
+        # argument expression when the spec declares a collection
+        # parameter — looking up the method's spec on the protocol
+        # type gives the param-by-position ZType.
+        spec = parent_type.children.get(method)
+        spec_params = (
+            [(n, t) for n, t in spec.children.items() if n != "this"]
+            if spec is not None
+            else []
+        )
         args = [f"{parent_val}{acc}data"]
-        for arg in call.arguments:
-            args.append(self._emit_operation_value(arg.valtype))
+        for i, arg in enumerate(call.arguments):
+            val = self._emit_operation_value(arg.valtype)
+            if i < len(spec_params):
+                _, spec_ptype = spec_params[i]
+                if _is_collection_param_type(spec_ptype) and not val.startswith("&"):
+                    val = f"&{val}"
+            args.append(val)
         return f"{parent_val}{acc}vtable->{method}({', '.join(args)})"
 
     def _emit_callable_dispatch(self, call: zast.Call) -> str:

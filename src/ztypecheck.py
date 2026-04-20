@@ -3256,8 +3256,12 @@ class TypeChecker:
                 and spec.typetype == ZTypeType.FUNCTION
                 and spec.return_type is not None
             ):
-                non_this = [p for p in spec.children if p != "this"]
-                if not non_this:
+                has_non_this = False
+                for p in spec.children:
+                    if p != "this":
+                        has_non_this = True
+                        break
+                if not has_non_this:
                     return spec.return_type
         # for io.file: .close is a zero-arg method returning
         # result(null, ioerror). Coerce path access to the return type
