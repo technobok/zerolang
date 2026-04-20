@@ -305,6 +305,10 @@ class CEmitter:
         # track numeric constant names (no distinct ZTypeType for these)
         self._const_names: set[str] = set()
         self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
+        # Separate slot for the io stream protocols so io.file's
+        # wrapper emission can find them even when user code shadows
+        # the short name (e.g. a user-declared `reader` protocol).
+        self._io_protocol_defs: dict[str, zast.Protocol] = {}
         self._facet_defs: dict[str, zast.Facet] = {}  # name -> AST node
         self._facet_conformers: dict[
             str, list
@@ -867,6 +871,80 @@ class CEmitter:
                         ):
                             self._emit_facet_impl(qname, label, facet_name, defn)
 
+    def _emit_io_stream_protocols(self) -> str:
+        """Emit the stream protocol struct + vtable types (reader,
+        writer, closer, seeker) into a deferred buffer so they land
+        after the list_u8 / listview_u8 monomorphizations their
+        signatures reference. Only emits when the program references
+        io.file (otherwise these vtables are dead code).
+        """
+        if not self._io_file_referenced():
+            return ""
+        io_unit = self.program.units.get("io")
+        if io_unit is None:
+            return ""
+        saved = self.struct_defs
+        self.struct_defs = TrackedList(self)
+        for pname in ("reader", "writer", "closer", "seeker"):
+            defn = io_unit.body.get(pname)
+            if defn is not None and type(defn) is zast.Protocol:
+                self._current_node_id = getattr(defn, "nodeid", None)
+                self._emit_protocol(pname, defn)
+        out = "".join(self.struct_defs)
+        self.struct_defs = saved
+        return out
+
+    # Protocols whose vtable signatures consist only of scalar /
+    # variant types — safe to wrap a file value for without resolving
+    # the collection-param ABI mismatch (protocol spec says value,
+    # native impl takes pointer). reader and writer are excluded
+    # until that mismatch is addressed (separate phase).
+    _IO_FILE_WRAPPABLE_PROTOCOLS = ("closer", "seeker")
+
+    def _emit_io_file_protocol_impls(self) -> str:
+        """Emit vtables + wrappers + create functions for the file
+        protocols whose signatures match the native ABI directly.
+
+        Depends on (a) the io runtime functions (z_file_close /
+        z_file_seek) being declared earlier, and (b) the protocol
+        structs (z_closer_t, z_seeker_vtable_t, ...) existing from
+        the deferred stream-protocol emission. Both are guaranteed
+        by the emit() pipeline — this buffer lands after both.
+        """
+        io_unit = self.program.units.get("io")
+        if io_unit is None:
+            return ""
+        file_defn = io_unit.body.get("file")
+        if file_defn is None or type(file_defn) is not zast.Class:
+            return ""
+        file_cls = file_defn
+        # Pull the natives the wrappers reference into the runtime
+        # block (emitted next), so forward declarations exist when
+        # the wrappers are compiled.
+        if "closer" in self._IO_FILE_WRAPPABLE_PROTOCOLS:
+            self.needs_io_natives.add("file_close")
+        if "seeker" in self._IO_FILE_WRAPPABLE_PROTOCOLS:
+            self.needs_io_natives.add("file_seek")
+        saved = self.struct_defs
+        self.struct_defs = TrackedList(self)
+        for label, apath in file_cls.as_items.items():
+            if label not in self._IO_FILE_WRAPPABLE_PROTOCOLS:
+                continue
+            proto_name = (
+                cast(zast.AtomId, apath).name
+                if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                else None
+            )
+            if proto_name:
+                proto = self._io_protocol_defs.get(proto_name)
+                if proto is not None:
+                    self._emit_protocol_impl(
+                        "file", label, proto_name, file_cls, proto=proto
+                    )
+        out = "".join(self.struct_defs)
+        self.struct_defs = saved
+        return out
+
     def _emit_io_file_class(self) -> None:
         """Emit the io.file struct and its RAII destructor in struct_defs.
 
@@ -964,6 +1042,17 @@ class CEmitter:
             return "/* empty program */\n"
 
         # pre-emission pass: collect supplementary data
+        # Collect io first so user-code definitions shadow system
+        # ones (e.g. a user-declared `reader` protocol wins the slot
+        # in _protocol_defs). The io stream protocols are kept in a
+        # separate map so file's wrapper emission can find them.
+        io_unit = self.program.units.get("io")
+        if io_unit is not None:
+            self._collect_pre_emission("", io_unit.body)
+            for pname in ("reader", "writer", "closer", "seeker"):
+                proto = self._protocol_defs.get(pname)
+                if proto is not None:
+                    self._io_protocol_defs[pname] = proto
         self._collect_pre_emission("", mainunit.body)
 
         # register monomorphized type names before emission
@@ -1093,6 +1182,20 @@ class CEmitter:
         for i, sd in enumerate(self.struct_defs):
             parts.append(sd)
 
+        # Stream protocol struct + vtable types (reader/writer/closer/
+        # seeker). Deferred to here so their signatures can reference
+        # z_list_u8_t / z_listview_u8_t from the mono pass.
+        parts.append(self._emit_io_stream_protocols())
+
+        # io.file protocol wrappers. Emitted AFTER the stream protocol
+        # types above (so z_reader_t etc. exist) and stored in a
+        # buffer, appended after emit_runtime_io. Building the buffer
+        # here (before runtime_io) lets us record every z_file_*
+        # native the wrappers will call, so the runtime emits them.
+        file_impls = ""
+        if self.needs_io_natives and self._io_file_referenced():
+            file_impls = self._emit_io_file_protocol_impls()
+
         # io runtime helpers reference the compiler-generated struct
         # names (z_ioerror_t, z_result_<T>_ioerror_t, ...) so they land
         # AFTER struct_defs rather than with the base runtime helpers.
@@ -1102,6 +1205,8 @@ class CEmitter:
                 natives=self.needs_io_natives,
             )
         )
+
+        parts.append(file_impls)
 
         for ft in self.func_typedefs:
             parts.append(ft)
@@ -1215,9 +1320,11 @@ class CEmitter:
         label: str,
         proto_name: str,
         impl_defn: "zast.Record | zast.Class",
+        proto: "Optional[zast.Protocol]" = None,
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a protocol implementation."""
-        proto = self._protocol_defs.get(proto_name)
+        if proto is None:
+            proto = self._protocol_defs.get(proto_name)
         if not proto:
             return
         is_class = impl_defn.nodetype == NodeType.CLASS
@@ -5818,6 +5925,21 @@ class CEmitter:
             self.needs_io_natives.add("file_close")
             return f"z_file_close({parent})"
 
+        # io.file: protocol projection. `f.closer` / `f.seeker` emit
+        # a call to the matching `z_file_<proto>_create` wrapper
+        # (borrowed — no copy, no destroy). `reader` / `writer` are
+        # held back until the vtable collection-param ABI mismatch
+        # is resolved; they typecheck but don't project yet.
+        if child in self._IO_FILE_WRAPPABLE_PROTOCOLS and (
+            self._effective_file_type(path.parent)
+        ):
+            parent = self._emit_path_value(path.parent)
+            if not self._is_class_pointer_path(path.parent) and not parent.startswith(
+                "&"
+            ):
+                parent = f"&{parent}"
+            return f"z_file_{child}_create({parent})"
+
         # list: .pop as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
             parent = self._emit_path_value(path.parent)
@@ -5868,6 +5990,24 @@ class CEmitter:
                 const_qname = f"{parent_type_dp.name}.{child}"
                 if const_qname in self._const_names:
                     return _mangle_func(const_qname)
+
+        # protocol method call via path (zero-arg form). When the
+        # parent is a protocol value and the child names a spec, emit
+        # `proto.vtable->spec(proto.data)`. Method calls with args go
+        # through _emit_protocol_dispatch on the Call node. This path
+        # form handles cases where a zero-arg spec appears as an
+        # rvalue (assignment, return, condition) — `c.close`.
+        # Must run before the generic FUNCTION-typed dotted-path
+        # branch below, which would otherwise emit a function name
+        # like `z_closer_close` (no such free function exists — the
+        # dispatch is vtable-based).
+        if path.parent.type and path.parent.type.typetype == ZTypeType.PROTOCOL:
+            parent_type_p = path.parent.type
+            spec = parent_type_p.children.get(child)
+            if spec is not None and spec.typetype == ZTypeType.FUNCTION:
+                parent = self._emit_path_value(path.parent)
+                acc = "->" if self._is_class_pointer_path(path.parent) else "."
+                return f"{parent}{acc}vtable->{child}({parent}{acc}data)"
 
         # check if the dotted path resolves to a function (method call or field access)
         if path.type and path.type.typetype == ZTypeType.FUNCTION:

@@ -6314,6 +6314,92 @@ class TestIOFileStreaming:
         assert output.strip() == "2"
         assert target.read_bytes() == b"HI"
 
+    def test_file_projected_to_closer_runs_close(self, tmp_path):
+        """Project a file value to `closer` and invoke `close` through
+        the protocol vtable. Exercises the wrapper + static vtable +
+        create function emitted for io.file's `:closer` conformance.
+        """
+        target = tmp_path / "proj_closer.txt"
+        csource = emit_source(
+            "tidy: function {c: closer} is {\n"
+            "    r: c.close\n"
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "closed"\n'
+            "    } case err then {\n"
+            '        print "close err"\n'
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            f'    fr: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        fr\n"
+            "    ) case ok then {\n"
+            "        tidy c: fr.ok.closer\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        # Emitter must produce the wrapper, static vtable, and create
+        # function — the symptoms of an absent conformance codegen.
+        assert "z_file_closer_create" in csource
+        assert "z_file_closer_vtable" in csource
+        assert "z_file_closer_close_wrapper" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "closed"
+        assert target.exists()
+
+    def test_file_projected_to_seeker_through_vtable(self, tmp_path):
+        """Seek via the seeker protocol (not via the file handle
+        directly) — the vtable entry forwards to z_file_seek."""
+        target = tmp_path / "proj_seeker.bin"
+        csource = emit_source(
+            "main: function is {\n"
+            "    buf: bytes\n"
+            "    buf.append from: 65.u8\n"
+            "    buf.append from: 66.u8\n"
+            "    buf.append from: 67.u8\n"
+            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        w\n"
+            "    ) case ok then {\n"
+            "        bv: byteview.borrow from: buf.listview\n"
+            "        wr: w.ok.write from: bv\n"
+            "        match (\n"
+            "            wr\n"
+            "        ) case ok then {\n"
+            '            print "w ok"\n'
+            "        } case err then {\n"
+            '            print "w err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-w err"\n'
+            "    }\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        s: r.ok.seeker\n"
+            "        pos: s.seek to: 0.i64 from: seekorigin.end\n"
+            "        match (\n"
+            "            pos\n"
+            "        ) case ok then {\n"
+            '            print "seeked to end"\n'
+            "        } case err then {\n"
+            '            print "seek err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-r err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_file_seeker_create" in csource
+        assert "z_file_seeker_vtable" in csource
+        output = compile_and_run(csource)
+        assert "seeked to end" in output.splitlines()
+
     def test_bytes_typedef_emits_to_list_u8(self):
         """`bytes` — a class typedef over `list of: u8` — must lower to
         the base list type end-to-end: construction, append, length,

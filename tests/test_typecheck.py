@@ -4686,6 +4686,50 @@ class TestIoNativeDispatch:
             )
             assert file_type.children.get(expected) is not None
 
+    def test_file_projects_to_closer(self):
+        """A file value can be passed as a `closer` parameter via the
+        `.closer` projection. Verifies that the typechecker accepts
+        projection through `fr.ok.closer` inside the ok arm of a
+        result match."""
+        check_ok(
+            "use_closer: function {c: closer} is {\n"
+            '    print "got closer"\n'
+            "}\n"
+            "main: function is {\n"
+            '    fr: io.open path: "/tmp/x".string mode: openmode.write\n'
+            "    match (\n"
+            "        fr\n"
+            "    ) case ok then {\n"
+            "        use_closer c: fr.ok.closer\n"
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_protocol_zero_arg_method_coerces_to_return_type(self):
+        """Accessing a zero-arg protocol spec as an rvalue types as
+        the spec's return type, not as the function pointer. Enables
+        `r: c.close` to typecheck cleanly without explicit call
+        parens when the method has no non-this params."""
+        check_ok(
+            "myproto: protocol {\n"
+            "    tick: function {:this} out i64\n"
+            "}\n"
+            "mything: record { x: i64 } as {\n"
+            "    mp: myproto\n"
+            "    tick: function {:this} out i64 is { return this.x }\n"
+            "}\n"
+            "use_proto: function {p: myproto} is {\n"
+            "    n: p.tick\n"
+            '    print "\\{n}"\n'
+            "}\n"
+            "main: function is {\n"
+            "    t: mything x: 42\n"
+            "    use_proto p: t.mp\n"
+            "}"
+        )
+
     def test_union_payload_method_call(self):
         """Method calls on a union subtype (r.ok.X) lower correctly —
         regression for the emitter gap that blocked Phase 6a's explicit

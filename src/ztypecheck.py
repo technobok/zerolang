@@ -3244,6 +3244,21 @@ class TypeChecker:
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
+        # Protocol zero-arg methods appearing as rvalues: `c.close`
+        # where c is a protocol with a no-arg spec coerces to the
+        # spec's return type so `r: c.close` binds r to the result
+        # type rather than a function pointer. Non-zero-arg specs
+        # still need the explicit call form (`p.write from: bv`).
+        if parent_type.typetype == ZTypeType.PROTOCOL:
+            spec = parent_type.children.get(child_name)
+            if (
+                spec is not None
+                and spec.typetype == ZTypeType.FUNCTION
+                and spec.return_type is not None
+            ):
+                non_this = [p for p in spec.children if p != "this"]
+                if not non_this:
+                    return spec.return_type
         # for io.file: .close is a zero-arg method returning
         # result(null, ioerror). Coerce path access to the return type
         # so `cr: f.close` types cr as the result, not the function.
