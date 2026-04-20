@@ -38,13 +38,10 @@ class TestUnitTypesById:
 
     def test_id_lookup_hits_after_resolution(self):
         program = _parse_check('main: function is { print "hi" }')
-        # program.unit_types is a snapshot of tc.unit_types at end of typecheck
-        assert "system" in program.unit_types
         # after typecheck, system unit's ZType is reachable by its AST nodeid
         system_ast = program.units["system"]
-        # via the snapshot
-        system_type = program.unit_types["system"]
-        # the type's nodeid matches what the SQL dump emits for unit_type_id
+        assert system_ast.nodeid in program.unit_types_by_id
+        system_type = program.unit_types_by_id[system_ast.nodeid]
         assert system_type.nodeid >= 0
         # sanity: Unit AST nodeid is distinct from unit ZType nodeid
         assert system_ast.nodeid != system_type.nodeid
@@ -94,7 +91,7 @@ class TestUnitSqlDump:
 
     def test_dump_tolerates_missing_unit_types_snapshot(self):
         program = _parse_check('main: function is { print "hi" }')
-        program.unit_types = {}
+        program.unit_types_by_id = {}
         sql = dump_sql(program)
         con = sqlite3.connect(":memory:")
         con.executescript(sql)

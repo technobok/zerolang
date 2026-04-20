@@ -336,11 +336,11 @@ def dump_sql(
             )
 
     # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
-    # unit_type_id is filled when a resolved ZType exists in the
-    # typechecker's unit_types snapshot; NULL otherwise.
-    unit_types_map = getattr(program, "unit_types", {}) or {}
+    # unit_type_id is filled from the id-keyed unit_types snapshot; NULL
+    # when a unit was never materialized by typecheck.
+    unit_types_map = getattr(program, "unit_types_by_id", {}) or {}
     for unitname, unit_ast in program.units.items():
-        utype = unit_types_map.get(unitname)
+        utype = unit_types_map.get(unit_ast.nodeid)
         unit_type_id = _sql_int(utype.nodeid) if utype is not None else "NULL"
         lines.append(
             f"INSERT OR IGNORE INTO unit VALUES ("

@@ -4347,12 +4347,8 @@ class CEmitter:
         # argument expression when the spec declares a collection
         # parameter — looking up the method's spec on the protocol
         # type gives the param-by-position ZType.
-        # Phase 7b: id-first, name-fallback child lookup.
-        spec = (
-            parent_type.resolve_child_by_id(dp.child_id) if dp.child_id != -1 else None
-        )
-        if spec is None:
-            spec = parent_type.children.get(method)
+        # Id-only child lookup — typecheck stamps child_id on every DottedPath.
+        spec = parent_type.resolve_child_by_id(dp.child_id)
         spec_params = (
             [(n, t) for n, t in spec.children.items() if n != "this"]
             if spec is not None
@@ -5856,15 +5852,8 @@ class CEmitter:
         if atom.narrowed_subtype and atom.original_ztype is not None:
             sub = atom.narrowed_subtype
             outer = atom.original_ztype
-            # Phase 7b: id-first, name-fallback child lookup against the
-            # outer union/variant.
-            payload_type = (
-                outer.resolve_child_by_id(atom.child_id)
-                if atom.child_id != -1
-                else None
-            )
-            if payload_type is None:
-                payload_type = outer.children.get(sub)
+            # Id-only child lookup — narrowing always stamps atom.child_id.
+            payload_type = outer.resolve_child_by_id(atom.child_id)
             if outer.typetype == ZTypeType.UNION:
                 if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
                     payload_ctype = _ctype(payload_type)
@@ -6228,14 +6217,8 @@ class CEmitter:
         # dispatch is vtable-based).
         if path.parent.type and path.parent.type.typetype == ZTypeType.PROTOCOL:
             parent_type_p = path.parent.type
-            # Phase 7b: id-first, name-fallback child lookup.
-            spec = (
-                parent_type_p.resolve_child_by_id(path.child_id)
-                if path.child_id != -1
-                else None
-            )
-            if spec is None:
-                spec = parent_type_p.children.get(child)
+            # Id-only child lookup — PROTOCOL parent is always stamped.
+            spec = parent_type_p.resolve_child_by_id(path.child_id)
             if spec is not None and spec.typetype == ZTypeType.FUNCTION:
                 parent = self._emit_path_value(path.parent)
                 acc = "->" if self._is_class_pointer_path(path.parent) else "."
@@ -6310,15 +6293,9 @@ class CEmitter:
         # variant payload access: v.subname → v.data.subname
         parent_type = path.parent.type
         if parent_type and parent_type.typetype == ZTypeType.VARIANT:
-            # check if child is a subtype name (not a method). Phase 7b:
-            # id-first lookup, falling back to name when unstamped.
-            child_type = (
-                parent_type.resolve_child_by_id(path.child_id)
-                if path.child_id != -1
-                else None
-            )
-            if child_type is None:
-                child_type = parent_type.children.get(child)
+            # Id-only lookup — typecheck stamps child_id on every DottedPath
+            # with a known parent_type, so we should never see -1 here.
+            child_type = parent_type.resolve_child_by_id(path.child_id)
             if child_type and child_type.typetype != ZTypeType.FUNCTION:
                 return f"{parent}.data.{child}"
         # union payload access: u.subname → *(T*)u.data (heap-boxed)
@@ -6327,13 +6304,7 @@ class CEmitter:
         # payload and should not be accessed this way — the typechecker
         # rejects it.
         if parent_type and parent_type.typetype == ZTypeType.UNION:
-            child_type = (
-                parent_type.resolve_child_by_id(path.child_id)
-                if path.child_id != -1
-                else None
-            )
-            if child_type is None:
-                child_type = parent_type.children.get(child)
+            child_type = parent_type.resolve_child_by_id(path.child_id)
             if (
                 child_type
                 and child_type.typetype != ZTypeType.FUNCTION

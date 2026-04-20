@@ -7277,19 +7277,12 @@ class TypeChecker:
         if unitname not in self.program.units:
             return None
         file_unit = self.program.units[unitname]
-        # Phase 7d: id-first cache hit on the AST Unit's nodeid; name
-        # fallback retained for safety (the id cache may be empty for
-        # units registered via synthetic / monomorphized names).
-        if unitname in self._resolved_file_units:
-            cached = self.unit_types_by_id.get(file_unit.nodeid)
-            if cached is not None:
-                return cached
-            return self.unit_types.get(unitname)
-        if unitname in self._SYSTEM_UNITS:
-            cached = self.unit_types_by_id.get(file_unit.nodeid)
-            if cached is not None:
-                return cached
-            return self.unit_types.get(unitname)
+        # Id-only lookup — __init__ registers every file unit via
+        # _register_unit_type, so the id cache is guaranteed to hold an
+        # entry for `file_unit.nodeid` on both the already-resolved and
+        # system-unit branches.
+        if unitname in self._resolved_file_units or unitname in self._SYSTEM_UNITS:
+            return self.unit_types_by_id.get(file_unit.nodeid)
         self._resolved_file_units.add(unitname)
         # replace the bare ZType with a fully resolved one
         utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
@@ -8066,9 +8059,9 @@ def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     program.resolved = dict(tc._resolved)
     # Phase 7c: expose the symbol table for the SQL dumper.
     program.symbol_table = tc.symtab
-    # Phase 7d: expose the name-keyed unit_types map for the dumper so
+    # Phase 7d: expose the id-keyed unit_types map for the dumper so
     # it can stamp `unit.unit_type_id` when a unit was materialized.
-    program.unit_types = dict(tc.unit_types)
+    program.unit_types_by_id = dict(tc.unit_types_by_id)
     return errors
 
 
