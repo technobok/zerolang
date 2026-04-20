@@ -2474,7 +2474,9 @@ class TestEmitterVariant:
         assert output.strip() == "ok"
 
     def test_variant_payload_access_run(self):
-        """Compile and run: access payload inside match case."""
+        """Compile and run: access payload inside match case — under
+        shadow narrowing, `x` inside `case a then` IS the i64 payload,
+        so bare `x` prints the value."""
         csource = emit_source(
             "myvar: variant { a: i64\n b: null }\n"
             "main: function is {\n"
@@ -2482,7 +2484,7 @@ class TestEmitterVariant:
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
-            '    print "\\{x.a}"\n'
+            '    print "\\{x}"\n'
             "  } case b then {\n"
             '    print "none"\n'
             "  }\n"
@@ -5623,14 +5625,17 @@ class TestMatchTake:
     """Take ownership of match subject inside arms."""
 
     def test_union_match_take_one_arm(self):
-        """Take in one arm, not the other — compiles and runs correctly."""
+        """Take in one arm, not the other — compiles and runs correctly.
+        Under shadow narrowing the narrowed name is the payload type,
+        so consume takes `box.take` (not `r.take`)."""
         csource = emit_source(
-            "r: union { ok: i64  err: i64 }\n"
-            "consume: function {x: r.take} is {\n"
+            "box: class { n: i64 }\n"
+            "r: union { ok: box  err: box }\n"
+            "consume: function {x: box.take} is {\n"
             '  print "consumed"\n'
             "}\n"
             "main: function is {\n"
-            "  u: r.ok 42\n"
+            "  u: r.ok (box n: 42)\n"
             "  match (u) case ok then {\n"
             "    consume u\n"
             "  } case err then {\n"
@@ -5644,12 +5649,13 @@ class TestMatchTake:
     def test_union_match_take_all_arms(self):
         """Take in all arms — compiles and runs correctly."""
         csource = emit_source(
-            "r: union { ok: i64  err: i64 }\n"
-            "consume: function {x: r.take} is {\n"
+            "box: class { n: i64 }\n"
+            "r: union { ok: box  err: box }\n"
+            "consume: function {x: box.take} is {\n"
             '  print "consumed"\n'
             "}\n"
             "main: function is {\n"
-            "  u: r.ok 42\n"
+            "  u: r.ok (box n: 42)\n"
             "  match (u) case ok then {\n"
             "    consume u\n"
             "  } case err then {\n"
@@ -6283,7 +6289,7 @@ class TestIOFileStreaming:
             "        w\n"
             "    ) case ok then {\n"
             "        bv: byteview.borrow from: buf.listview\n"
-            "        wr: w.ok.write from: bv\n"
+            "        wr: w.write from: bv\n"
             "        match (\n"
             "            wr\n"
             "        ) case ok then { } case err then {\n"
@@ -6297,7 +6303,7 @@ class TestIOFileStreaming:
             "        r\n"
             "    ) case ok then {\n"
             "        b2: bytes\n"
-            "        rr: r.ok.read into: b2 max: 16.u64\n"
+            "        rr: r.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
             "        ) case ok then {\n"
@@ -6336,7 +6342,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        fr\n"
             "    ) case ok then {\n"
-            "        tidy c: fr.ok.closer\n"
+            "        tidy c: fr.closer\n"
             "    } case err then {\n"
             '        print "open err"\n'
             "    }\n"
@@ -6388,7 +6394,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        send w: w.ok.writer\n"
+            "        send w: w.writer\n"
             "    } case err then {\n"
             '        print "open-w"\n'
             "    }\n"
@@ -6396,7 +6402,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        recv rd: r.ok.reader\n"
+            "        recv rd: r.reader\n"
             "    } case err then {\n"
             '        print "open-r"\n'
             "    }\n"
@@ -6427,7 +6433,7 @@ class TestIOFileStreaming:
             "        w\n"
             "    ) case ok then {\n"
             "        bv: byteview.borrow from: buf.listview\n"
-            "        wr: w.ok.write from: bv\n"
+            "        wr: w.write from: bv\n"
             "        match (\n"
             "            wr\n"
             "        ) case ok then {\n"
@@ -6442,7 +6448,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        s: r.ok.seeker\n"
+            "        s: r.seeker\n"
             "        pos: s.seek to: 0.i64 from: seekorigin.end\n"
             "        match (\n"
             "            pos\n"
@@ -6478,7 +6484,7 @@ class TestIOFileStreaming:
             "        s\n"
             "    ) case ok then {\n"
             "        match (\n"
-            "            s.ok.kind\n"
+            "            s.kind\n"
             "        ) case dir then {\n"
             '            print "dir"\n'
             "        } case file then {\n"
@@ -6513,8 +6519,8 @@ class TestIOFileStreaming:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            "        hasmtime: s.ok.mtime_seconds > 0.u64\n"
-            "        hasmode: s.ok.mode > 0.u32\n"
+            "        hasmtime: s.mtime_seconds > 0.u64\n"
+            "        hasmode: s.mode > 0.u32\n"
             '        print "mtime=\\{hasmtime} mode=\\{hasmode}"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -6539,7 +6545,7 @@ class TestIOFileStreaming:
             "        s\n"
             "    ) case ok then {\n"
             "        match (\n"
-            "            s.ok.kind\n"
+            "            s.kind\n"
             "        ) case symlink then {\n"
             '            print "link"\n'
             "        } case file then {\n"
@@ -6624,7 +6630,7 @@ class TestIOFileStreaming:
             "        w\n"
             "    ) case ok then {\n"
             "        bv: byteview.borrow from: buf.listview\n"
-            "        wr: w.ok.write from: bv\n"
+            "        wr: w.write from: bv\n"
             "        match (\n"
             "            wr\n"
             "        ) case ok then { } case err then {\n"
@@ -6637,14 +6643,14 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        sk: r.ok.seek to: 2.i64 from: seekorigin.start\n"
+            "        sk: r.seek to: 2.i64 from: seekorigin.start\n"
             "        match (\n"
             "            sk\n"
             "        ) case ok then { } case err then {\n"
             '            print "seek err"\n'
             "        }\n"
             "        b2: bytes\n"
-            "        rr: r.ok.read into: b2 max: 16.u64\n"
+            "        rr: r.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
             "        ) case ok then {\n"
@@ -6668,7 +6674,7 @@ class TestIOFileStreaming:
             "main: function is {\n"
             f'    r: io.open path: "{target}".string mode: openmode.write\n'
             "    match (r) case ok then {\n"
-            "        cr: r.ok.close\n"
+            "        cr: r.close\n"
             "        match (cr) case ok then {\n"
             '            print "closed ok"\n'
             "        } case err then {\n"
@@ -6814,7 +6820,7 @@ class TestNarrowedFieldAccess:
 
     def test_union_narrowed_nested_kind_match(self, tmp_path):
         """`s.kind` returns the narrowed sub-field, then can be matched
-        further — no `s.ok.kind` workaround needed."""
+        further — no `s.kind` workaround needed."""
         target = tmp_path / "narrowedkind"
         target.mkdir()
         csource = emit_source(
@@ -6842,25 +6848,32 @@ class TestNarrowedFieldAccess:
         output = compile_and_run(csource)
         assert output.strip() == "dir"
 
-    def test_explicit_ok_access_still_works(self, tmp_path):
-        """Regression: the explicit `s.ok.size` form must keep lowering
-        through the same payload-unwrap it always did."""
+    def test_explicit_arm_access_errors_under_shadow(self, tmp_path):
+        """Under shadow narrowing, `s.ok.size` reaches back into the
+        shadowed parent union; it's a targeted type error. Bare
+        `s.size` is the supported form (tested above)."""
         target = tmp_path / "explicit"
         target.mkdir()
-        csource = emit_source(
+        vfs, name = make_parser_vfs(
             "main: function is {\n"
             f'    s: io.stat "{target}".string\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            '        print "size=\\{s.ok.size}"\n'
+            '        print "\\{s.ok.size}"\n'
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
-            "}"
+            "}",
+            unitname="test",
+            src_dir=LIB_DIR,
         )
-        output = compile_and_run(csource)
-        assert output.strip().startswith("size=")
+        p = Parser(vfs, name)
+        program = p.parse()
+        errors = typecheck(program)
+        assert any("shadowed parent" in e.msg for e in errors), (
+            f"Expected shadow error, got: {[e.msg for e in errors]}"
+        )
 
     def test_variant_narrowed_field_access(self):
         """Variant narrowing: `r.x` inside `case pt then` reads the
@@ -6888,3 +6901,181 @@ class TestNarrowedFieldAccess:
         assert ".data.pt.x" in csource
         output = compile_and_run(csource)
         assert output.strip() == "x=7"
+
+
+class TestNarrowedFullSemantics:
+    """Phase 6l: match-arm narrowing shadows the parent and exposes
+    the payload type as-if. Method dispatch, re-matching, and passing
+    the narrowed value all flow through the payload; reaching back to
+    the parent arm is a targeted type error."""
+
+    def test_method_dispatch_on_narrowed_list(self, tmp_path):
+        """`r.get 0.u64` on a narrowed `list of: string` threads the
+        list payload as `_this`, returning the first entry."""
+        (tmp_path / "only.txt").write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.list_dir "{tmp_path}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        name: r.get 0.u64\n"
+            '        print "name=\\{name}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_list_string_get(&(*(z_list_string_t*)r.data)" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "name=only.txt"
+
+    def test_method_dispatch_on_narrowed_class(self, tmp_path):
+        """`r.close` on a narrowed `io.file` dispatches to the file
+        class's close method."""
+        target = tmp_path / "a.txt"
+        target.write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        cr: r.close\n"
+            "        match (\n"
+            "            cr\n"
+            "        ) case ok then {\n"
+            '            print "closed"\n'
+            "        } case err then {\n"
+            '            print "close err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "closed"
+
+    def test_rematch_on_narrowed_subject(self, tmp_path):
+        """Re-matching the narrowed subject inside its arm dispatches
+        on the PAYLOAD's tag (ioerror), not the outer result's tag.
+        This is the canonical form — `match (r)` when r is already
+        narrowed to ioerror — not the old `match (r.err)` compound
+        form (which reaches into the shadowed parent)."""
+        missing = tmp_path / "nope"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.list_dir "{missing}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "ok"\n'
+            "    } case err then {\n"
+            "        match (\n"
+            "            r\n"
+            "        ) case notfound then {\n"
+            '            print "notfound"\n'
+            "        } else {\n"
+            '            print "otherr"\n'
+            "        }\n"
+            "    }\n"
+            "}"
+        )
+        assert "Z_IOERROR_TAG_NOTFOUND" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "notfound"
+
+    def test_shadow_parent_arm_access_errors(self):
+        """Accessing `.ok` / `.err` on a narrowed name reaches back
+        into the shadowed parent and is a targeted error."""
+        vfs, name = make_parser_vfs(
+            "main: function is {\n"
+            '    s: io.stat "/tmp".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.ok}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}",
+            unitname="test",
+            src_dir=LIB_DIR,
+        )
+        p = Parser(vfs, name)
+        program = p.parse()
+        errors = typecheck(program)
+        assert any("shadowed parent" in e.msg for e in errors), (
+            f"Expected shadow-parent error, got: {[e.msg for e in errors]}"
+        )
+
+    def test_shadow_outer_union_arg_rejected(self):
+        """Passing a narrowed name to a function expecting the outer
+        union type is a type error — the parent view is shadowed."""
+        vfs, name = make_parser_vfs(
+            "u: union { a: i64  b: i64 }\n"
+            "take_union: function {x: u} is { }\n"
+            "main: function is {\n"
+            "  v: u.a 42\n"
+            "  match (v) case a then {\n"
+            "    take_union x: v\n"
+            "  } case b then {\n"
+            '    print "b"\n'
+            "  }\n"
+            "}",
+            unitname="test",
+            src_dir=LIB_DIR,
+        )
+        p = Parser(vfs, name)
+        program = p.parse()
+        errors = typecheck(program)
+        assert any(
+            "argument type mismatch" in e.msg or "expected u" in e.msg for e in errors
+        ), f"Expected type-mismatch error, got: {[e.msg for e in errors]}"
+
+    def test_shadow_missing_field_error(self):
+        """Accessing an unknown field on a narrowed name is a targeted
+        error (not a silent None)."""
+        vfs, name = make_parser_vfs(
+            "main: function is {\n"
+            '    s: io.stat "/tmp".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.bogus}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}",
+            unitname="test",
+            src_dir=LIB_DIR,
+        )
+        p = Parser(vfs, name)
+        program = p.parse()
+        errors = typecheck(program)
+        assert any("has no field 'bogus'" in e.msg for e in errors), (
+            f"Expected missing-field error, got: {[e.msg for e in errors]}"
+        )
+
+    def test_narrowed_take_then_follow_on_access(self, tmp_path):
+        """`.take` on a narrowed name transfers ownership and the
+        taken value retains the narrowed type — `stolen.size` reads
+        through the payload-unwrap on the alias."""
+        target = tmp_path / "d"
+        target.mkdir()
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        stolen: s.take\n"
+            '        print "size=\\{stolen.size}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().startswith("size=")

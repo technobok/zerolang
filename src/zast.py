@@ -880,6 +880,11 @@ class AtomId(Atom):
 
     nodetype: NodeType = field(default=NodeType.ATOMID, init=False)
     name: str  # this is also in the start token
+    # narrowing stamp — set by typecheck when this AtomId references a
+    # variable narrowed in an enclosing match arm. The emitter reads these
+    # to decide whether to emit a payload-unwrap in place of the bare name.
+    narrowed_subtype: "Optional[str]" = field(default=None, init=False)
+    original_ztype: "Optional[ZType]" = field(default=None, init=False)
 
 
 @dataclass

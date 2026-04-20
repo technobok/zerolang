@@ -3150,8 +3150,10 @@ class TypeChecker:
                         loc=path.start,
                     )
                     return None
-                # type narrowing: check if this subtype access is on a variable
-                # with excluded subtypes (not a type construction)
+                # Narrowing checks for non-shadow narrowing (assignment-
+                # based `x: r.ok 42` — x stays typed as the union with a
+                # narrowed_subtype sidecar). Reject wrong-arm access and
+                # excluded-arm access.
                 if (
                     path.parent.nodetype == NodeType.ATOMID
                     and child_name != "tag"
@@ -3159,8 +3161,6 @@ class TypeChecker:
                 ):
                     pname = cast(zast.AtomId, path.parent).name
                     if self.symtab.lookup_var(pname) is not None:
-                        # this is a variable access, not a type construction
-                        # check narrowing: is this subtype excluded?
                         if self.symtab.is_excluded(pname, child_name):
                             self._error(
                                 f"Cannot access '{child_name}' on '{pname}': "
@@ -3168,8 +3168,6 @@ class TypeChecker:
                                 loc=path.start,
                             )
                             return None
-                        # check narrowing: is variable narrowed to a different
-                        # single subtype?
                         narrowed_subtype_name = self.symtab.get_subtype_name(pname)
                         if (
                             narrowed_subtype_name
@@ -3177,7 +3175,8 @@ class TypeChecker:
                         ):
                             self._error(
                                 f"Cannot access '{child_name}' on '{pname}': "
-                                f"type has been narrowed to '{narrowed_subtype_name}'",
+                                f"type has been narrowed to "
+                                f"'{narrowed_subtype_name}'",
                                 loc=path.start,
                             )
                             return None
@@ -3186,40 +3185,11 @@ class TypeChecker:
                 if child_name != "tag" and child.typetype != ZTypeType.FUNCTION:
                     path.parent_tagged_type = parent_type
                 return child
-            # child is not a direct union/variant arm. If the parent is a
-            # narrowed variable, resolve the child through the narrowed
-            # subtype's payload — `s.size` reads as `filestat.size` when
-            # `s` is narrowed to `ok` in a match arm.
-            if path.parent.nodetype == NodeType.ATOMID and child_name != "tag":
-                pname = cast(zast.AtomId, path.parent).name
-                if self.symtab.lookup_var(pname) is not None:
-                    subtype_name = self.symtab.get_subtype_name(pname)
-                    if subtype_name:
-                        narrowed_payload = parent_type.children.get(subtype_name)
-                        if (
-                            narrowed_payload is not None
-                            and narrowed_payload.typetype != ZTypeType.NULL
-                        ):
-                            narrowed_child = narrowed_payload.children.get(child_name)
-                            if narrowed_child is not None:
-                                path.narrowed_subtype = subtype_name
-                                return narrowed_child
-                            self._error(
-                                f"'{pname}' is narrowed to '{subtype_name}', "
-                                f"which has no field '{child_name}'",
-                                loc=path.start,
-                            )
-                            return None
-                        if (
-                            narrowed_payload is not None
-                            and narrowed_payload.typetype == ZTypeType.NULL
-                        ):
-                            self._error(
-                                f"Cannot access '{child_name}' on '{pname}': "
-                                f"narrowed to '{subtype_name}' which has no payload",
-                                loc=path.start,
-                            )
-                            return None
+            # child is not an arm of the (narrowed) union/variant. If the
+            # parent is a narrowed AtomId and the child is an arm of the
+            # shadowed original, emit a targeted error instead of
+            # falling through silently to return None.
+            self._maybe_report_shadowed_parent_access(path, child_name)
             return None
         # for data: .array method returns a new array of matching type/length
         if parent_type.typetype == ZTypeType.DATA and child_name == "array":
@@ -3388,7 +3358,46 @@ class TypeChecker:
             if child:
                 return child
             base = base.typedef_base
+        # Targeted errors for failed lookup on a narrowed AtomId parent.
+        self._maybe_report_shadowed_parent_access(path, child_name)
         return None
+
+    def _maybe_report_shadowed_parent_access(
+        self, path: zast.DottedPath, child_name: str
+    ) -> None:
+        """Emit a targeted error when a failed field/arm lookup looks
+        like reaching back to the shadowed parent union/variant, or an
+        unknown field on the narrowed payload. Silent no-op otherwise.
+        """
+        if path.parent.nodetype != NodeType.ATOMID:
+            return
+        parent_atom = cast(zast.AtomId, path.parent)
+        entry = self.symtab.lookup_entry(parent_atom.name)
+        if (
+            entry is None
+            or entry.narrowed_subtype is None
+            or entry.original_ztype is None
+        ):
+            return
+        if child_name in entry.original_ztype.children:
+            self._error(
+                f"'{parent_atom.name}' is narrowed to "
+                f"'{entry.ztype.name}' in this arm; "
+                f"'{parent_atom.name}.{child_name}' would reach "
+                f"into the shadowed parent "
+                f"'{entry.original_ztype.name}'. Access the "
+                f"narrowed value directly, e.g. "
+                f"'{parent_atom.name}' on its own.",
+                loc=path.start,
+            )
+        else:
+            self._error(
+                f"'{parent_atom.name}' is narrowed to "
+                f"'{entry.ztype.name}' in this arm; "
+                f"'{entry.ztype.name}' has no field "
+                f"'{child_name}'.",
+                loc=path.start,
+            )
 
     def _resolve_numeric(
         self, name: str, loc: Optional[Token] = None
@@ -5519,6 +5528,17 @@ class TypeChecker:
             parent_type = self._resolve_name(parent_atom.name)
             if parent_type:
                 path.parent.type = parent_type
+                # Narrowing stamp: same as in _check_atomid, so the
+                # emitter's AtomId lowering can unwrap the union/variant
+                # payload when the parent is a narrowed name.
+                entry = self.symtab.lookup_entry(parent_atom.name)
+                if (
+                    entry is not None
+                    and entry.narrowed_subtype is not None
+                    and entry.original_ztype is not None
+                ):
+                    parent_atom.narrowed_subtype = entry.narrowed_subtype
+                    parent_atom.original_ztype = entry.original_ztype
                 # Borrow-scoped lock enforcement: locked variables are
                 # completely unavailable (reads AND writes).
                 if self.symtab.lookup_var(parent_atom.name):
@@ -5569,11 +5589,22 @@ class TypeChecker:
                         loc=path.start,
                         err=ERR.OWNERERROR,
                     )
-            # if this is a union subtype reference (null subtype used as value),
-            # the type should be the parent union type
+            # Null-subtype construction: a bare `result.ok` written where a
+            # value is expected is the null-payload constructor of the outer
+            # type. Only apply this override when the parent is a TYPE
+            # NAME (no variable binding). For variable access — `s.err`
+            # where s is a value — return the arm's payload type, not the
+            # outer union, so callers like `match (s.err)` dispatch on the
+            # payload's tag.
             if path.parent_tagged_type:
-                path.type = path.parent_tagged_type
-                return path.parent_tagged_type
+                parent_is_variable = (
+                    path.parent.nodetype == NodeType.ATOMID
+                    and self.symtab.lookup_var(cast(zast.AtomId, path.parent).name)
+                    is not None
+                )
+                if not parent_is_variable:
+                    path.type = path.parent_tagged_type
+                    return path.parent_tagged_type
         return t
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
@@ -5604,6 +5635,14 @@ class TypeChecker:
             if self.symtab.lookup_var(name):
                 self._check_not_locked(name, "Cannot access", atom.start)
             atom.type = t
+            # Narrowing stamp: if the name was narrowed via shadow=True
+            # (match arm narrowing), record the subtype + original outer
+            # type so the emitter can generate the C-level payload unwrap
+            # at this AtomId's lowering site.
+            entry = self.symtab.lookup_entry(name)
+            if entry and entry.narrowed_subtype and entry.original_ztype is not None:
+                atom.narrowed_subtype = entry.narrowed_subtype
+                atom.original_ztype = entry.original_ztype
             # constant folding: propagate const_value for true/false literals
             if name == "true":
                 atom.const_value = True
@@ -7637,11 +7676,20 @@ class TypeChecker:
 
         for clause in casenode.clauses:
             arm_marker = self.symtab.push_block(f"arm:{clause.match.name}")
-            # narrow to this arm's subtype
+            # narrow to this arm's subtype. Shadow mode: the narrowed
+            # name resolves directly to the payload type in the arm body,
+            # so field access / method dispatch / re-match all work as
+            # if the name were the payload. The outer union/variant is
+            # stashed in Entry.original_ztype for the emitter's unwrap.
             if target_name and subject_type:
                 arm_subtype = subject_type.children.get(clause.match.name)
                 if arm_subtype:
-                    self.symtab.narrow(target_name, arm_subtype, clause.match.name)
+                    self.symtab.narrow(
+                        target_name,
+                        arm_subtype,
+                        clause.match.name,
+                        shadow=True,
+                    )
 
             # resolve match pattern const_value for scalar const folding
             suppress_arm = False

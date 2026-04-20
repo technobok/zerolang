@@ -1301,16 +1301,27 @@ intra-function only and does not cross function call boundaries.
 [#> to=sum-types: Sum types] can be 'narrowed' back to their specific child types
 by using #>"match" expressions or by assignment to a specific subtype.
 
-Within a successful #~"then" clause of a #~"match", the target variable will be
-narrowed to the type(s) listed in the related #~"of" clause(s). Accessing a
-different subtype within the arm is a compile error.
+Within a successful #~"then" clause of a #~"match", the narrowed name
+SHADOWS the parent binding — it takes on the payload type for the
+duration of the arm. Field access, method dispatch, re-matching, and
+ownership transfer (#~".take") all flow through the narrowed name as
+if it were the payload value. Inside #~"case ok then" on a
+#~"result(filestat, ioerror)", #~"s" IS the filestat — #~"s.size",
+#~"s.kind", and #~"s.mtime_seconds" resolve directly; #~"match (s)"
+dispatches on filestat's layout; #~"stolen: s.take" transfers ownership
+and the resulting alias retains the narrowed view.
 
-Field access on the narrowed name resolves through the narrowed subtype's
-payload: inside #~"case ok then" on a #~"result(filestat, ioerror)" the
-expression #~"s.size" reads #~"filestat.size" directly. The explicit form
-#~"s.ok.size" stays valid. Method dispatch on narrowed names still requires
-the explicit arm hop (#~"s.ok.some_method"); that is a deliberate scope
-limit and may lift later.
+Because the parent binding is shadowed, reaching back into the outer
+union through an explicit arm hop (#~"s.ok", #~"s.err") is a compile
+error within the arm — the shadowed view has no such member and the
+typechecker emits a targeted diagnostic pointing at the shadowing.
+Passing the narrowed name to a function expecting the outer
+union/variant is also a type error for the same reason.
+
+Assignment-based narrowing is different — a variable assigned a
+specific subtype (#~"x: result.ok 42") keeps its outer type so it
+remains passable as the full union; the compiler tracks a
+#~"narrowed_subtype" sidecar that rejects accessing other arms.
 
 Also, a #~"match" clause that exits the current scope (using a #~"return", #~"break"
 or #~"continue") will also 'narrow' a named target for the remainder of that

@@ -332,21 +332,52 @@ class SymbolTable:
 
     # ---- narrowing (replaces TypeState) ----
 
-    def narrow(self, name: str, to_type: "ZType", subtype_name: str = "") -> None:
+    def narrow(
+        self,
+        name: str,
+        to_type: "ZType",
+        subtype_name: str = "",
+        shadow: bool = False,
+    ) -> None:
         """Narrow a variable to a specific subtype. Pushes overlay entry.
 
-        The entry keeps the ORIGINAL declared type in ztype (so name resolution
-        continues to return the union/variant type). The narrowed_subtype field
-        records which subtype the variable is known to be.
+        Two modes:
+
+        * `shadow=True` (match-arm narrowing): the entry's `ztype` is the
+          narrowed PAYLOAD type — name resolution returns the payload
+          directly, so `r.size` resolves through the normal field-lookup
+          path, `match (r)` dispatches on the payload's tag, method calls
+          thread `_this` correctly. The outer union/variant is stashed in
+          `original_ztype` for the emitter's C-level unwrap (the C storage
+          is still the outer struct). For null-payload arms there is no
+          payload value to access, so `ztype` stays the original (any field
+          access errors cleanly).
+
+        * `shadow=False` (assignment-based narrowing, default): the entry's
+          `ztype` stays the OUTER union/variant type — `x: result.ok 42`
+          leaves x typed as `result`, so `return x` / passing x to a
+          function expecting the union still works. Only `narrowed_subtype`
+          records which arm is active (for exhaustiveness / exclusion).
         """
-        # find the original declared type for this variable
+        from ztypes import ZTypeType
+
         existing = self.lookup_entry(name)
         original_type = existing.ztype if existing else to_type
+        if shadow:
+            payload = original_type.children.get(subtype_name) if subtype_name else None
+            if payload is None or payload.typetype == ZTypeType.NULL:
+                # null-payload or missing arm: keep outer as ztype.
+                entry_ztype = original_type
+            else:
+                entry_ztype = payload
+        else:
+            entry_ztype = original_type
         entry = Entry(
             name=name,
-            ztype=original_type,
+            ztype=entry_ztype,
             is_definition=False,
             narrowed_subtype=subtype_name if subtype_name else None,
+            original_ztype=original_type if shadow else None,
         )
         self._scopes[-1].append(entry)
 
@@ -383,9 +414,12 @@ class SymbolTable:
             sname, _ = next(iter(remaining.items()))
             narrowed_sub = sname
 
+        # exclude() is only called post-match (for arms that exit the
+        # scope); the remaining-scope view of the variable is still
+        # whole-program value-typed (no shadow). Keep full_type as ztype.
         entry = Entry(
             name=name,
-            ztype=full_type,  # keep original type for name resolution
+            ztype=full_type,
             is_definition=False,
             narrowed_subtype=narrowed_sub,
             excluded_subtypes=frozenset(new_excluded),
@@ -412,18 +446,6 @@ class SymbolTable:
                     return
                 j -= 1
             i -= 1
-
-    def lookup_narrowed(self, name: str) -> "Optional[ZType]":
-        """Return the narrowed type for a name, or None if not narrowed."""
-        i = len(self._scopes) - 1
-        while i >= 0:
-            entry = self._scopes[i].find(name)
-            if entry is not None:
-                if entry.narrowed_subtype is not None:
-                    return entry.ztype
-                return None  # found an entry but not narrowed
-            i -= 1
-        return None
 
     def is_excluded(self, name: str, subtype_name: str) -> bool:
         """Check if a subtype has been excluded for a variable."""

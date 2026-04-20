@@ -3945,7 +3945,16 @@ class CEmitter:
         # no local declaration, no destructor, substitute at reference
         # sites. The alias lives until the enclosing function ends.
         if assign.alias_of is not None:
-            alias_expr = self._alias_c_expr(assign.alias_of)
+            # If the source expression rooted at a narrowed AtomId
+            # (e.g., `stolen: s.take` where s is narrowed), the alias
+            # must embed the payload-unwrap — plain name substitution
+            # would reference the outer union's C storage and emit
+            # invalid field access later. Fall through to the
+            # AST-aware path value when the root is stamped; otherwise
+            # keep the lightweight string-based alias.
+            alias_expr = self._narrowed_alias_expr(assign.value)
+            if alias_expr is None:
+                alias_expr = self._alias_c_expr(assign.alias_of)
             cname = _mangle_var(assign.name)
             self._alias_map[assign.name] = alias_expr
             return f"{indent}/* alias: {cname} => {alias_expr} */\n"
@@ -4578,7 +4587,12 @@ class CEmitter:
                         if not take_var:
                             root = self._get_implicit_take_var(arg.valtype)
                             if root:
-                                arg_t = self._get_operation_type(arg.valtype)
+                                # Use storage type so the zero-init cast
+                                # matches the variable's C declaration (matters
+                                # when the root is a narrowed name — its
+                                # typecheck type is the payload, but the C
+                                # struct is still the outer union/variant).
+                                arg_t = self._get_storage_type(arg.valtype)
                                 code += self._emit_take_invalidation(
                                     root, arg_t, indent
                                 )
@@ -5834,6 +5848,23 @@ class CEmitter:
         # (set by alias-optimized `with` and inline .take/.borrow bindings).
         if name in self._alias_map:
             return self._alias_map[name]
+        # Narrowing unwrap: `atom.narrowed_subtype` is stamped when the name
+        # refers to a variable narrowed by a match arm. The typecheck-visible
+        # type is the payload, but the C-level storage is still the outer
+        # union/variant struct. Emit the unwrap here so field access, method
+        # dispatch, and re-match all see the payload value.
+        if atom.narrowed_subtype and atom.original_ztype is not None:
+            sub = atom.narrowed_subtype
+            outer = atom.original_ztype
+            if outer.typetype == ZTypeType.UNION:
+                payload_type = outer.children.get(sub)
+                if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
+                    payload_ctype = _ctype(payload_type)
+                    return f"(*({payload_ctype}*){name}.data)"
+            elif outer.typetype == ZTypeType.VARIANT:
+                payload_type = outer.children.get(sub)
+                if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
+                    return f"{name}.data.{sub}"
         # check if this refers to a function, constant, data, or record
         resolved = self._resolved_type(name)
         tt = resolved.typetype if resolved else None
@@ -6283,18 +6314,6 @@ class CEmitter:
             ):
                 inner_ctype = _ctype(child_type)
                 return f"(*({inner_ctype}*){parent}.data)"
-        # narrowed field access: `s.field` where `s` was narrowed by a
-        # match arm. The typechecker stamped `narrowed_subtype` on the
-        # path and resolved `field` through the narrowed payload type.
-        # Unwrap through the payload here so C sees the right struct.
-        if path.narrowed_subtype and parent_type:
-            payload_type = parent_type.children.get(path.narrowed_subtype)
-            if payload_type is not None:
-                if parent_type.typetype == ZTypeType.UNION:
-                    payload_ctype = _ctype(payload_type)
-                    return f"(*({payload_ctype}*){parent}.data).{child}"
-                if parent_type.typetype == ZTypeType.VARIANT:
-                    return f"{parent}.data.{path.narrowed_subtype}.{child}"
         return f"{parent}.{child}"
 
     def _effective_file_type(self, path: zast.Path) -> bool:
@@ -6362,6 +6381,26 @@ class CEmitter:
         if type_name:
             return f"z_{type_name}_destroy(&{var});"
         return ""
+
+    def _narrowed_alias_expr(self, value: "zast.Expression") -> "Optional[str]":
+        """If `value` is `<narrowed_atomid>.take` (or `.borrow`),
+        return the emitter's AtomId lowering of that AtomId (which
+        includes the payload-unwrap), suitable to seed _alias_map.
+        Otherwise return None so the caller falls back to the string
+        alias path.
+        """
+        inner = value.expression if value.nodetype == NodeType.EXPRESSION else value
+        if inner is None or inner.nodetype != NodeType.DOTTEDPATH:
+            return None
+        dp = cast(zast.DottedPath, inner)
+        if dp.child.name not in ("take", "borrow"):
+            return None
+        if dp.parent.nodetype != NodeType.ATOMID:
+            return None
+        atom = cast(zast.AtomId, dp.parent)
+        if atom.narrowed_subtype is None or atom.original_ztype is None:
+            return None
+        return self._emit_atomid_value(atom)
 
     def _alias_c_expr(self, path: str) -> str:
         """Render a zerolang-level alias path (e.g. `r.f.g`) as a C
@@ -7040,6 +7079,27 @@ class CEmitter:
         if op.nodetype == NodeType.EXPRESSION:
             return self._get_expression_type(cast(zast.Expression, op))
         return None
+
+    def _get_storage_type(self, op: zast.Operation) -> Optional[ZType]:
+        """Storage (declared) type for an expression — for a narrowed
+        AtomId, return the ORIGINAL union/variant type (which matches
+        the C-level variable declaration), not the narrowed payload.
+
+        Used when the emitter needs the actual C struct shape for
+        casts, zero-initializers, or scope-exit destructors. Regular
+        type lookup via `_get_operation_type` returns the narrowed
+        view, which is wrong for those sites.
+        """
+        if op.nodetype == NodeType.ATOMID:
+            atom = cast(zast.AtomId, op)
+            if atom.original_ztype is not None:
+                return atom.original_ztype
+        if op.nodetype == NodeType.EXPRESSION:
+            expr = cast(zast.Expression, op)
+            inner = expr.expression
+            if inner is not None and inner.nodetype == NodeType.ATOMID:
+                return self._get_storage_type(cast(zast.Operation, inner))
+        return self._get_operation_type(op)
 
     def _emit_if(self, ifnode: zast.If) -> str:
         indent = self._indent()

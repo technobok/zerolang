@@ -354,6 +354,10 @@ class Entry:
     # narrowing state (for match/if arms)
     narrowed_subtype: Optional[str] = None  # "ok", "err" — narrowed in match arm
     excluded_subtypes: "Optional[frozenset[str]]" = None  # subtypes ruled out
+    # original union/variant type when ztype is the narrowed payload — the
+    # emitter uses this to generate the C-level unwrap (original is still the
+    # storage type, narrowed is the typecheck-visible type).
+    original_ztype: "Optional[ZType]" = None
     # taken state
     is_taken: bool = False
     taken_at: Optional[Tuple[int, int, int]] = None

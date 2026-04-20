@@ -4625,7 +4625,7 @@ class TestIoNativeDispatch:
             "        r\n"
             "    ) case ok then {\n"
             "        buf: bytes\n"
-            "        n: r.ok.read into: buf max: 1024.u64\n"
+            "        n: r.read into: buf max: 1024.u64\n"
             '        print "ok"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -4645,7 +4645,7 @@ class TestIoNativeDispatch:
             "        buf: bytes\n"
             "        buf.append from: 65.u8\n"
             "        bv: byteview.borrow from: buf.listview\n"
-            "        n: r.ok.write from: bv\n"
+            "        n: r.write from: bv\n"
             '        print "ok"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -4662,7 +4662,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        n: r.ok.seek to: 0.i64 from: seekorigin.end\n"
+            "        n: r.seek to: 0.i64 from: seekorigin.end\n"
             '        print "ok"\n'
             "    } case err then {\n"
             '        print "err"\n'
@@ -4689,7 +4689,7 @@ class TestIoNativeDispatch:
     def test_file_projects_to_closer(self):
         """A file value can be passed as a `closer` parameter via the
         `.closer` projection. Verifies that the typechecker accepts
-        projection through `fr.ok.closer` inside the ok arm of a
+        projection through `fr.closer` inside the ok arm of a
         result match."""
         check_ok(
             "use_closer: function {c: closer} is {\n"
@@ -4700,7 +4700,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        fr\n"
             "    ) case ok then {\n"
-            "        use_closer c: fr.ok.closer\n"
+            "        use_closer c: fr.closer\n"
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -4736,7 +4736,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            '        print "\\{s.ok.size}"\n'
+            '        print "\\{s.size}"\n'
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -4768,7 +4768,7 @@ class TestIoNativeDispatch:
             "        s\n"
             "    ) case ok then {\n"
             "        match (\n"
-            "            s.ok.kind\n"
+            "            s.kind\n"
             "        ) case file then {\n"
             '            print "file"\n'
             "        } case dir then {\n"
@@ -4792,7 +4792,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            '        print "\\{s.ok.size}"\n'
+            '        print "\\{s.size}"\n'
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -4808,7 +4808,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            '        print "\\{s.ok.mtime_seconds} \\{s.ok.mode}"\n'
+            '        print "\\{s.mtime_seconds} \\{s.mode}"\n'
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -4889,16 +4889,17 @@ class TestIoNativeDispatch:
         )
 
     def test_union_payload_method_call(self):
-        """Method calls on a union subtype (r.ok.X) lower correctly —
-        regression for the emitter gap that blocked Phase 6a's explicit
-        close. Structured through file.close to exercise the full path."""
+        """Method calls on a narrowed union subject dispatch through the
+        payload type: inside `case ok then` the narrowed `r` IS the
+        file, so `r.close` dispatches directly. The inner match on the
+        fresh `cr` value uses the standard (non-narrowed) ok/err path."""
         check_ok(
             "main: function is {\n"
             '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        cr: r.ok.close\n"
+            "        cr: r.close\n"
             "        match (\n"
             "            cr\n"
             "        ) case ok then {\n"
@@ -7948,15 +7949,18 @@ class TestTypeNarrowing:
     # -- Match arm narrowing --
 
     def test_narrow_within_match_arm(self):
-        """Within a match arm, the variable is narrowed to that arm's subtype."""
+        """Within a match arm, the variable is narrowed to that arm's
+        subtype — `x` inside `case ok then` has type i64 (the payload),
+        so bare `x` prints the value. Reaching back via `x.ok` is an
+        error (the parent union is shadowed)."""
         check_ok(
             "r: variant { ok: i64  err: i64  none: null }\n"
             "main: function is {\n"
             "  x: r.ok 42\n"
             "  match (\n    x\n  ) case ok then {\n"
-            '    print "\\{x.ok}"\n'
+            '    print "\\{x}"\n'
             "  } case err then {\n"
-            '    print "\\{x.err}"\n'
+            '    print "\\{x}"\n'
             "  } case none then {\n"
             '    print "none"\n'
             "  }\n"
@@ -8078,14 +8082,16 @@ class TestTypeNarrowing:
     # -- Function boundary --
 
     def test_narrow_does_not_cross_function_boundary(self):
-        """Narrowing is intra-function: callee sees full type."""
+        """Narrowing is intra-function: callee sees full type. Inside
+        the match arms, `x` is narrowed to the payload (i64), so bare
+        `x` prints it directly."""
         check_ok(
             "r: variant { ok: i64  err: i64 }\n"
             "f: function {x: r} is {\n"
             "  match (\n    x\n  ) case ok then {\n"
-            '    print "\\{x.ok}"\n'
+            '    print "\\{x}"\n'
             "  } case err then {\n"
-            '    print "\\{x.err}"\n'
+            '    print "\\{x}"\n'
             "  }\n"
             "}\n"
             "main: function is {\n"
@@ -8097,17 +8103,18 @@ class TestTypeNarrowing:
     # -- Nested match --
 
     def test_narrow_nested_match(self):
-        """Inner match narrows independently of outer."""
+        """Inner match narrows independently of outer. `x` inside each
+        arm is the narrowed payload (i64); bare `x` reads it."""
         check_ok(
             "r: variant { a: i64  b: i64  c: i64 }\n"
             "main: function is {\n"
             "  x: r.a 1\n"
             "  match (\n    x\n  ) case a then {\n"
-            '    print "\\{x.a}"\n'
+            '    print "\\{x}"\n'
             "  } case b then {\n"
-            '    print "\\{x.b}"\n'
+            '    print "\\{x}"\n'
             "  } case c then {\n"
-            '    print "\\{x.c}"\n'
+            '    print "\\{x}"\n'
             "  }\n"
             "}"
         )
@@ -8370,15 +8377,17 @@ class TestMatchTake:
         assert errors != []
 
     def test_union_no_take_subject_still_valid(self):
-        """Match without take — subject still valid after match."""
+        """Match without take — subject still valid after match. Under
+        shadow narrowing, `u` inside each arm IS the narrowed payload
+        (i64); bare `u` prints the value."""
         check_ok(
             "r: union { ok: i64  err: i64 }\n"
             "main: function is {\n"
             "  u: r.ok 42\n"
             "  match (u) case ok then {\n"
-            '    print "\\{u.ok}"\n'
+            '    print "\\{u}"\n'
             "  } case err then {\n"
-            '    print "\\{u.err}"\n'
+            '    print "\\{u}"\n'
             "  }\n"
             '  print "done"\n'
             "}"
