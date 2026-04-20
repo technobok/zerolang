@@ -23,6 +23,7 @@ check:
 
 # Baseline counts of existing violations (update when migrating away)
 # isinstance:1  comprehension:14  lambda:0  try/except:8  hasattr:16
+# name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
@@ -60,6 +61,14 @@ bootstrap-lint:
 		echo "ERROR: hasattr() usage increased ($$count > 16 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn 'hasattr(' src/*.py | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' src/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
+	if [ $$count -gt 14 ]; then \
+		echo "ERROR: cross-structure .name comparisons increased ($$count > 14 baseline)"; \
+		echo "  Phase 7e: compare by id (nodeid/entry_id/variableid) instead."; \
+		echo "  Intentional string compare? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' src/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
 	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail
