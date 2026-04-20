@@ -4725,10 +4725,62 @@ class TestIoNativeDispatch:
     def test_stdio_handles_reexported_in_core(self):
         """core re-exports `stdin` / `stdout` / `stderr` so users
         can drop the `io.` prefix."""
+        check_ok('main: function is {\n    w: stdout\n    print "ok"\n}')
+
+    def test_stat_typechecks(self):
+        """io.stat returns result(filestat, ioerror); filestat has
+        `kind: filekind` and `size: u64`."""
         check_ok(
             "main: function is {\n"
-            "    w: stdout\n"
-            '    print "ok"\n'
+            '    s: io.stat "/tmp/x".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.ok.size}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_mkdirp_typechecks(self):
+        """io.mkdirp returns result(null, ioerror), same shape as mkdir."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.mkdirp "/tmp/x/y/z".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "ok"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_filekind_variant_subtypes(self):
+        """filekind has file / dir / symlink / other arms; each is
+        pattern-matchable through a stat result."""
+        check_ok(
+            "main: function is {\n"
+            '    s: io.stat "/tmp/x".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        match (\n"
+            "            s.ok.kind\n"
+            "        ) case file then {\n"
+            '            print "file"\n'
+            "        } case dir then {\n"
+            '            print "dir"\n'
+            "        } case symlink then {\n"
+            '            print "link"\n'
+            "        } case other then {\n"
+            '            print "other"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
             "}"
         )
 

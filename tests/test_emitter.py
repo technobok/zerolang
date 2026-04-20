@@ -6461,6 +6461,46 @@ class TestIOFileStreaming:
         output = compile_and_run(csource)
         assert "seeked to end" in output.splitlines()
 
+    def test_mkdirp_and_stat_roundtrip(self, tmp_path):
+        """io.mkdirp creates a nested path; io.stat confirms it's a
+        directory and reports a non-zero byte size."""
+        target = tmp_path / "a" / "b" / "c"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.mkdirp "{target}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then { } case err then {\n"
+            '        print "mkdirp err"\n'
+            "    }\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        match (\n"
+            "            s.ok.kind\n"
+            "        ) case dir then {\n"
+            '            print "dir"\n'
+            "        } case file then {\n"
+            '            print "file"\n'
+            "        } case symlink then {\n"
+            '            print "link"\n'
+            "        } case other then {\n"
+            '            print "other"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "stat err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_io_mkdirp" in csource
+        assert "z_io_stat" in csource
+        assert "z_filestat_t" in csource
+        assert "z_filekind_t" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "dir"
+        assert target.is_dir()
+
     def test_io_stdout_writes_to_stdout(self):
         """`io.stdout` returns a borrowed writer over fd 1; writing
         to it goes directly to the process's stdout (captured by

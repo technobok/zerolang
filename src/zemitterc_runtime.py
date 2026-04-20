@@ -348,6 +348,74 @@ _Z_IO_RENAME = (
     "}\n\n"
 )
 
+_Z_IO_STAT = (
+    "/* stat(2) follows symlinks; S_ISLNK never fires here — that arm\n"
+    "   is reserved for a future lstat-based call. Returns the filestat\n"
+    "   value by value (not boxed); the compiler-generated result\n"
+    "   destructor frees the ok payload's heap copy. */\n"
+    "static z_result_filestat_ioerror_t z_io_stat(z_string_t path);\n"
+    "static z_result_filestat_ioerror_t z_io_stat(z_string_t path) {\n"
+    "    z_result_filestat_ioerror_t result = {0};\n"
+    "    struct stat sb;\n"
+    "    int rc = stat(path.data, &sb);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&path);\n"
+    "    if (rc != 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_filestat_t fs = {0};\n"
+    "    if (S_ISREG(sb.st_mode))       fs.kind.tag = Z_FILEKIND_TAG_FILE;\n"
+    "    else if (S_ISDIR(sb.st_mode))  fs.kind.tag = Z_FILEKIND_TAG_DIR;\n"
+    "    else if (S_ISLNK(sb.st_mode))  fs.kind.tag = Z_FILEKIND_TAG_SYMLINK;\n"
+    "    else                           fs.kind.tag = Z_FILEKIND_TAG_OTHER;\n"
+    "    fs.size = (uint64_t)sb.st_size;\n"
+    "    z_filestat_t* boxed = (z_filestat_t*)malloc(sizeof(z_filestat_t));\n"
+    "    *boxed = fs;\n"
+    "    result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
+_Z_IO_MKDIRP = (
+    "/* mkdir -p path. Walks components, creating each missing\n"
+    "   directory with mode 0755. Succeeds if the final path already\n"
+    "   exists as a directory; fails with ioerror if any component\n"
+    "   exists as a non-directory. Allocates a mutable copy of path\n"
+    "   so it can null-terminate prefixes in place. */\n"
+    "static z_result_null_ioerror_t z_io_mkdirp(z_string_t path);\n"
+    "static z_result_null_ioerror_t z_io_mkdirp(z_string_t path) {\n"
+    "    uint64_t n = path.size;\n"
+    "    char* buf = (char*)malloc(n + 1);\n"
+    "    if (!buf) { int e = errno; z_string_free(&path); return z_io_wrap_null_result(-1, e); }\n"
+    "    memcpy(buf, path.data, n);\n"
+    "    buf[n] = '\\0';\n"
+    "    z_string_free(&path);\n"
+    "    /* walk, splitting at '/' boundaries */\n"
+    "    for (uint64_t i = 1; i <= n; i++) {\n"
+    "        if (i == n || buf[i] == '/') {\n"
+    "            char saved = buf[i];\n"
+    "            buf[i] = '\\0';\n"
+    "            if (buf[0] != '\\0') {\n"
+    "                int rc = mkdir(buf, 0755);\n"
+    "                if (rc != 0 && errno != EEXIST) {\n"
+    "                    int e = errno;\n"
+    "                    free(buf);\n"
+    "                    return z_io_wrap_null_result(-1, e);\n"
+    "                }\n"
+    "            }\n"
+    "            buf[i] = saved;\n"
+    "        }\n"
+    "    }\n"
+    "    free(buf);\n"
+    "    return z_io_wrap_null_result(0, 0);\n"
+    "}\n\n"
+)
+
 _Z_IO_OPEN = (
     "/* translate openmode variant tag to open(2) flags + default mode */\n"
     "static z_result_file_ioerror_t z_io_open(z_string_t path, z_openmode_t mode) {\n"
@@ -573,17 +641,19 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "write_text",
         "append_text",
         "mkdir",
+        "mkdirp",
         "remove",
         "rename",
+        "stat",
         "open",
         "file_close",
         "file_read",
         "file_write",
         "file_seek",
     }
-    # result(null, ioerror) wrapper used by mkdir / remove / rename /
-    # file_close
-    null_wrap = natives & {"mkdir", "remove", "rename", "file_close"}
+    # result(null, ioerror) wrapper used by mkdir / mkdirp / remove /
+    # rename / file_close
+    null_wrap = natives & {"mkdir", "mkdirp", "remove", "rename", "file_close"}
     # result(u64, ioerror) wrapper used by file_read / file_write /
     # file_seek
     u64_wrap = natives & {"file_read", "file_write", "file_seek"}
@@ -609,6 +679,10 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_REMOVE)
     if "rename" in natives:
         parts.append(_Z_IO_RENAME)
+    if "mkdirp" in natives:
+        parts.append(_Z_IO_MKDIRP)
+    if "stat" in natives:
+        parts.append(_Z_IO_STAT)
     if "open" in natives:
         parts.append(_Z_IO_OPEN)
     if "file_close" in natives:

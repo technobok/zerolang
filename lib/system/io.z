@@ -65,8 +65,14 @@ exists: function {path: string} out bool is native
 # mkdir -- create a directory at `path` with default permissions (0755).
 # Fails with ioerror.exists if the target already exists, and with
 # ioerror.notfound if the parent directory is missing. To create
-# intermediates, see mkdirp (future phase).
+# intermediates (mkdir -p), use io.mkdirp below.
 mkdir: function {path: string} out (result t: null e: ioerror) is native
+
+# mkdirp -- create `path` and every missing parent directory along
+# the way (like `mkdir -p`). Permissions 0755 on each new directory.
+# Succeeds silently if `path` already exists as a directory; fails
+# with ioerror.exists if it exists as a file.
+mkdirp: function {path: string} out (result t: null e: ioerror) is native
 
 # remove -- delete a file or an empty directory at `path`. For
 # non-empty directories this fails with ioerror.other (ENOTEMPTY).
@@ -76,6 +82,30 @@ remove: function {path: string} out (result t: null e: ioerror) is native
 # POSIX replaces it (file overwrites file, directory overwrites empty
 # directory, otherwise ioerror). Atomic on the same filesystem.
 rename: function {from: string to: string} out (result t: null e: ioerror) is native
+
+# filekind -- coarse classification reported by `io.stat`. Symlinks
+# are distinguished only when the underlying call was `lstat`-like;
+# today `stat` follows symlinks, so `symlink` is reserved for a
+# future `io.lstat`.
+filekind: variant {
+    file: null
+    dir: null
+    symlink: null
+    other: null
+}
+
+# filestat -- metadata returned by `io.stat`. Kept small on purpose;
+# richer fields (mtime, permissions, device / inode) will land with
+# a follow-up that introduces a time type.
+filestat: record {
+    kind: filekind
+    size: u64
+}
+
+# stat -- return metadata for `path`. Follows symlinks; use a future
+# `io.lstat` to inspect the link itself. Errors surface in the
+# standard ioerror shape (notfound, permissiondenied, ...).
+stat: function {path: string} out (result t: filestat e: ioerror) is native
 
 # seekorigin -- where a `seek` operation interprets its offset.
 # `start`: from byte 0. `current`: from current position. `end`: from

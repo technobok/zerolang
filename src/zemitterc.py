@@ -1045,6 +1045,8 @@ class CEmitter:
                     self._emit_union(name, cast(zast.Union, defn))
                 elif defn_type == zast.Variant:
                     self._emit_variant(name, cast(zast.Variant, defn))
+                elif defn_type == zast.Record and self._io_record_referenced(name):
+                    self._emit_record(name, cast(zast.Record, defn))
                 elif defn_type == zast.Class and name == "file" and io_file_used:
                     # io.file: compiler-provided class. struct +
                     # destructor + close method come from the runtime.
@@ -1054,6 +1056,16 @@ class CEmitter:
                     # referenced — otherwise every program would drag
                     # in <unistd.h> for close() via the destructor.
                     self._emit_io_file_class()
+
+    def _io_record_referenced(self, name: str) -> bool:
+        """True when a system io record is used by the program (e.g.
+        as the ok-arm payload of a monomorphized result). Avoids
+        emitting dead struct definitions for unused types."""
+        for mono, _ in getattr(self.program, "mono_types", []):
+            for child in mono.children.values():
+                if child.typetype == ZTypeType.RECORD and child.name == name:
+                    return True
+        return False
 
     def _io_file_referenced(self) -> bool:
         """True when the program references io.file anywhere that the
@@ -1735,13 +1747,19 @@ class CEmitter:
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in rec.items.items():
-            ftype = _ctype(fpath.type)
+            # System-unit records may reach the emitter before the
+            # typechecker has attached types to AST paths; fall back
+            # to the resolved ZType's children for a concrete type.
+            field_type = fpath.type
+            if field_type is None and ztype is not None:
+                field_type = ztype.children.get(fname)
+            ftype = _ctype(field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
                 fname in lock_fields
-                and fpath.type
-                and fpath.type.typetype == ZTypeType.CLASS
-                and not fpath.type.is_heap_allocated
+                and field_type
+                and field_type.typetype == ZTypeType.CLASS
+                and not field_type.is_heap_allocated
                 and not ftype.endswith("*")
             ):
                 ftype = f"{ftype}*"
@@ -1993,13 +2011,19 @@ class CEmitter:
         field_names: List[str] = []
         field_ctypes: List[str] = []
         for fname, fpath in items.items():
-            fct = _ctype(fpath.type)
+            # System-unit records may reach this path with unresolved
+            # AST fpath.type; fall back to the resolved ZType's
+            # child for a concrete C type.
+            field_type = fpath.type
+            if field_type is None and ztype is not None:
+                field_type = ztype.children.get(fname)
+            fct = _ctype(field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
                 fname in lock_fields
-                and fpath.type
-                and fpath.type.typetype == ZTypeType.CLASS
-                and not fpath.type.is_heap_allocated
+                and field_type
+                and field_type.typetype == ZTypeType.CLASS
+                and not field_type.is_heap_allocated
                 and not fct.endswith("*")
             ):
                 fct = f"{fct}*"
