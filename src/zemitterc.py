@@ -3041,7 +3041,6 @@ class CEmitter:
         val_ctype = _ctype(value_type)
         key_is_string = key_ctype == "z_string_t"
         val_is_string = val_ctype == "z_string_t"
-        key_is_reftype = key_ctype.endswith("*")
         val_is_reftype = val_ctype.endswith("*")
         bucket_type = f"z_{name}_bucket_t"
         lines: List[str] = []
@@ -3116,17 +3115,15 @@ class CEmitter:
             lines.append("    return _a == _b;\n")
         lines.append("}\n\n")
 
-        # helper: free a key if reftype
+        # helper: free a key if it carries a destructor
         def emit_free_key(var: str, indent: str = "    ") -> str:
             if key_type and key_type.needs_destructor and key_type.destructor_name:
                 if not key_type.is_heap_allocated:
                     return f"{indent}{key_type.destructor_name}(&{var});\n"
                 return f"{indent}{key_type.destructor_name}({var});\n"
-            if key_is_reftype:
-                return f"{indent}if ({var}) free({var});\n"
             return ""
 
-        # helper: free a value if reftype
+        # helper: free a value if it carries a destructor
         def emit_free_val(var: str, indent: str = "    ") -> str:
             if (
                 value_type
@@ -3136,21 +3133,19 @@ class CEmitter:
                 if not value_type.is_heap_allocated:
                     return f"{indent}{value_type.destructor_name}(&{var});\n"
                 return f"{indent}{value_type.destructor_name}({var});\n"
-            if val_is_reftype:
-                return f"{indent}if ({var}) free({var});\n"
             return ""
 
-        # destroy
+        # destroy — iterate buckets when the key or value carries a
+        # destructor. needs_destructor is the complete driver: the type
+        # system only sets it True when there's actual cleanup work
+        # (either heap-internal or the outer heap allocation itself),
+        # and clears it for self-contained valtypes. No extra pointer-
+        # suffix fallback is needed.
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
-        # iterate buckets if either key or value needs per-entry cleanup —
-        # includes stack-struct-with-heap-data types (e.g. string) which the
-        # `*`-suffix heuristic of key_is_reftype / val_is_reftype misses.
-        key_needs_free = key_is_reftype or bool(key_type and key_type.needs_destructor)
-        val_needs_free = val_is_reftype or bool(
-            value_type and value_type.needs_destructor
-        )
+        key_needs_free = bool(key_type and key_type.needs_destructor)
+        val_needs_free = bool(value_type and value_type.needs_destructor)
         if key_needs_free or val_needs_free:
             lines.append("    for (uint64_t i = 0; i < p->capacity; i++) {\n")
             lines.append(

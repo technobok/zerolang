@@ -28,12 +28,14 @@ Supporting modules:
 
 ## Key Conventions
 
-- Do not use single underscore prefix for "private" methods
 - Do not add Co-Authored-By to commits
 - Run `make check` before every commit (must pass with zero errors)
 - `isinstance` is eliminated from src/ - use field-based dispatch (`is_node`, `is_error`, `is_expression`, `nodetype`, `type() is`, `getattr`)
 - AST node dispatch uses `nodetype` enum + `cast()`, not isinstance
 - `native` keyword marks compiler-provided implementations in `.z` files
+- use monotonically increasing integers (keys) for instances of all of the key compiler data structures
+- all compiler data structures need to be of a form that can be dumped to sql tables
+- minimize string comparison for all parts of the compiler (string compare once, check by id after), use the data structure keys to compare types etc. 
 
 ## Standard Library
 
