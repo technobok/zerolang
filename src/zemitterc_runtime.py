@@ -37,6 +37,7 @@ def emit_runtime_includes(
         parts.append("#include <errno.h>\n")
         parts.append("#include <sys/stat.h>\n")
         parts.append("#include <sys/types.h>\n")
+        parts.append("#include <dirent.h>\n")
     if parts:
         parts.append("\n")
     return "".join(parts)
@@ -455,6 +456,45 @@ _Z_IO_MKDIRP = (
     "}\n\n"
 )
 
+_Z_IO_LIST_DIR = (
+    "/* Enumerate directory entries via opendir/readdir/closedir.\n"
+    "   Returns bare entry names (not full paths), skipping `.` and\n"
+    "   `..`, in filesystem order. The list is constructed on stack and\n"
+    "   then boxed heap-side so the result union's void* data can\n"
+    "   carry it; the compiler-generated result destructor calls\n"
+    "   z_list_string_destroy on the ok payload, which in turn frees\n"
+    "   each entry's z_string_t. */\n"
+    "static z_result_list_string_ioerror_t z_io_list_dir(z_string_t path);\n"
+    "static z_result_list_string_ioerror_t z_io_list_dir(z_string_t path) {\n"
+    "    z_result_list_string_ioerror_t result = {0};\n"
+    "    DIR* d = opendir(path.data);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&path);\n"
+    "    if (!d) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        result.tag = Z_RESULT_LIST_STRING_IOERROR_TAG_ERR;\n"
+    "        result.data = boxed;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_list_string_t list = z_list_string_create((uint64_t)0);\n"
+    "    struct dirent* entry;\n"
+    "    errno = 0;\n"
+    "    while ((entry = readdir(d)) != NULL) {\n"
+    "        const char* name = entry->d_name;\n"
+    "        if (name[0] == '.' && (name[1] == '\\0' ||\n"
+    "            (name[1] == '.' && name[2] == '\\0'))) continue;\n"
+    "        z_list_string_append(&list, z_string_new(name));\n"
+    "    }\n"
+    "    closedir(d);\n"
+    "    z_list_string_t* boxed = (z_list_string_t*)malloc(sizeof(z_list_string_t));\n"
+    "    *boxed = list;\n"
+    "    result.tag = Z_RESULT_LIST_STRING_IOERROR_TAG_OK;\n"
+    "    result.data = boxed;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
 _Z_IO_OPEN = (
     "/* translate openmode variant tag to open(2) flags + default mode */\n"
     "static z_result_file_ioerror_t z_io_open(z_string_t path, z_openmode_t mode) {\n"
@@ -685,6 +725,7 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "rename",
         "stat",
         "lstat",
+        "list_dir",
         "open",
         "file_close",
         "file_read",
@@ -727,6 +768,8 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_STAT)
     if "lstat" in natives:
         parts.append(_Z_IO_LSTAT)
+    if "list_dir" in natives:
+        parts.append(_Z_IO_LIST_DIR)
     if "open" in natives:
         parts.append(_Z_IO_OPEN)
     if "file_close" in natives:

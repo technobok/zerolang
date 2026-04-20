@@ -2851,7 +2851,6 @@ class CEmitter:
         if elem_type is None:
             return
         elem_ctype = _ctype(elem_type)
-        elem_is_reftype = elem_ctype.endswith("*")
         lines: List[str] = []
 
         # struct definition — field order: length, data*, capacity
@@ -2862,21 +2861,23 @@ class CEmitter:
         lines.append("    uint64_t capacity;\n")
         lines.append(f"}} {ctype};\n\n")
 
-        # destroy — free data buffer only (struct is on the stack)
+        # destroy — drive per-element cleanup off the element type's
+        # needs_destructor flag. The type-checker only sets that True
+        # when there's actual work (heap-internal cleanup or freeing a
+        # heap allocation), and clears it for self-contained valtypes,
+        # so no dead calls get generated for trivial element types.
+        # `&` prefix for value-layout elements (stack struct with heap
+        # internals, e.g. string); no prefix when the element is already
+        # heap-allocated (already a pointer).
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
-        if elem_is_reftype:
-            if elem_type and elem_type.needs_destructor and elem_type.destructor_name:
-                elem_destr = elem_type.destructor_name
-                elem_addr = "" if elem_type.is_heap_allocated else "&"
-                lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
-                lines.append(f"        {elem_destr}({elem_addr}p->data[i]);\n")
-                lines.append("    }\n")
-            else:
-                lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
-                lines.append("        if (p->data[i]) free(p->data[i]);\n")
-                lines.append("    }\n")
+        if elem_type and elem_type.needs_destructor and elem_type.destructor_name:
+            elem_destr = elem_type.destructor_name
+            elem_addr = "" if elem_type.is_heap_allocated else "&"
+            lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
+            lines.append(f"        {elem_destr}({elem_addr}p->data[i]);\n")
+            lines.append("    }\n")
         lines.append("    free(p->data);\n")
         lines.append("}\n\n")
 

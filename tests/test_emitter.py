@@ -6685,6 +6685,103 @@ class TestIOFileStreaming:
         # process would abort under stricter allocators.
         assert output.strip() == "closed ok"
 
+    def test_list_dir_happy_path(self, tmp_path):
+        """io.list_dir on a populated directory returns the correct
+        entry count, excluding `.` and `..`."""
+        for n in ("a.txt", "b.txt", "c.txt"):
+            (tmp_path / n).write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.list_dir "{tmp_path}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "len=\\{r.length}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_io_list_dir" in csource
+        assert "z_list_string_t" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "len=3"
+
+    def test_list_dir_notfound(self, tmp_path):
+        """list_dir on a nonexistent path takes the err arm. Drilling
+        into the specific ioerror variant is a separate test via a
+        helper function; direct re-matching on a narrowed union subject
+        is a Phase 6j narrowing limitation."""
+        missing = tmp_path / "does-not-exist"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.list_dir "{missing}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "ok"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "err"
+
+    def test_list_dir_notdir(self, tmp_path):
+        """list_dir on a regular file takes the err arm (ENOTDIR). The
+        specific ioerror-variant discrimination is tested indirectly:
+        the emitted ioerror tag enum must include NOTDIR, and the errno
+        map must route ENOTDIR to it."""
+        target = tmp_path / "regular.txt"
+        target.write_text("hello")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.list_dir "{target}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "ok"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "Z_IOERROR_TAG_NOTDIR" in csource
+        assert "case ENOTDIR:" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "err"
+
+
+class TestListOfStringDestructor:
+    """The list destructor iterates and calls z_string_free per element
+    when the element type carries a destructor. Before this phase the
+    element loop fired only when the C ctype was pointer-suffixed, so
+    list of: string leaked per-element heap data."""
+
+    def test_list_of_string_destructor_frees_elements(self, tmp_path):
+        """Emitted list_string destructor must call z_string_free on
+        each element, not just free the data array."""
+        (tmp_path / "a.txt").write_text("x")
+        (tmp_path / "b.txt").write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.list_dir "{tmp_path}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "\\{r.length}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        # the per-element free loop must be present
+        assert "z_string_free(&p->data[i])" in csource
+        # and the overall run must still succeed
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
 
 class TestNarrowedFieldAccess:
     """Narrowed-subject field access. Inside `case ok then { ... }` a

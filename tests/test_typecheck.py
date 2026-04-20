@@ -4815,6 +4815,22 @@ class TestIoNativeDispatch:
             "}"
         )
 
+    def test_list_dir_typechecks(self):
+        """io.list_dir signature parses and resolves; ok-arm is a list
+        of strings, err-arm is ioerror."""
+        check_ok(
+            "main: function is {\n"
+            '    r: io.list_dir "/tmp".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "\\{r.length}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
     def test_narrowed_bare_field_typechecks(self):
         """Inside `case ok then`, `s.size` reads through the narrowed
         filestat payload — no explicit `s.ok` required."""
