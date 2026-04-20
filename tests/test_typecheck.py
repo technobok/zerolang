@@ -4707,6 +4707,31 @@ class TestIoNativeDispatch:
             "}"
         )
 
+    def test_stdio_handles_coerce_to_protocol(self):
+        """`io.stdin` / `io.stdout` / `io.stderr` are declared as
+        zero-arg native functions; accessing them via bare path
+        coerces to their return type (`reader` / `writer`) so users
+        can write `w: io.stdout` and immediately treat `w` as a
+        writer."""
+        check_ok(
+            "main: function is {\n"
+            "    w: io.stdout\n"
+            "    e: io.stderr\n"
+            "    r: io.stdin\n"
+            '    print "ok"\n'
+            "}"
+        )
+
+    def test_stdio_handles_reexported_in_core(self):
+        """core re-exports `stdin` / `stdout` / `stderr` so users
+        can drop the `io.` prefix."""
+        check_ok(
+            "main: function is {\n"
+            "    w: stdout\n"
+            '    print "ok"\n'
+            "}"
+        )
+
     def test_protocol_zero_arg_method_coerces_to_return_type(self):
         """Accessing a zero-arg protocol spec as an rvalue types as
         the spec's return type, not as the function pointer. Enables

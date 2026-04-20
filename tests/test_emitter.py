@@ -6461,6 +6461,31 @@ class TestIOFileStreaming:
         output = compile_and_run(csource)
         assert "seeked to end" in output.splitlines()
 
+    def test_io_stdout_writes_to_stdout(self):
+        """`io.stdout` returns a borrowed writer over fd 1; writing
+        to it goes directly to the process's stdout (captured by
+        compile_and_run)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    w: io.stdout\n"
+            "    msg: bytes\n"
+            "    msg.append from: 104.u8\n"
+            "    msg.append from: 105.u8\n"
+            "    msg.append from: 10.u8\n"
+            "    bv: byteview.borrow from: msg.listview\n"
+            "    r: w.write from: bv\n"
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then { } case err then {\n"
+            '        print "write err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_io_stdout" in csource
+        assert "z_io_stdout_file" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "hi"
+
     def test_bytes_typedef_emits_to_list_u8(self):
         """`bytes` — a class typedef over `list of: u8` — must lower to
         the base list type end-to-end: construction, append, length,

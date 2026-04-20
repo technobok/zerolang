@@ -483,6 +483,55 @@ _Z_FILE_FLUSH = (
     "}\n\n"
 )
 
+
+def emit_io_std_streams(natives: "set[str]") -> str:
+    """Emit the static file handles + accessor functions for
+    io.stdin / io.stdout / io.stderr — only those actually used,
+    since unused ones would reference undefined protocol types if
+    the corresponding conformance wasn't emitted."""
+    want = natives & {"stdin", "stdout", "stderr"}
+    if not want:
+        return ""
+    parts: list[str] = []
+    header = (
+        "/* Standard stream file handles. `closed = true` sentinels prevent\n"
+        "   z_file_destroy from calling close() on fds 0/1/2 via an\n"
+        "   accidental scope exit (the returned protocol handles are\n"
+        "   borrowed, but belt-and-braces). write/read/seek on these\n"
+        "   fds still work — `closed` only gates the close() syscall. */\n"
+    )
+    parts.append(header)
+    if "stdin" in want:
+        parts.append("static z_file_t z_io_stdin_file  = { 0, true };\n")
+    if "stdout" in want:
+        parts.append("static z_file_t z_io_stdout_file = { 1, true };\n")
+    if "stderr" in want:
+        parts.append("static z_file_t z_io_stderr_file = { 2, true };\n")
+    parts.append("\n")
+    if "stdin" in want:
+        parts.append(
+            "static z_reader_t z_io_stdin(void);\n"
+            "static z_reader_t z_io_stdin(void) {\n"
+            "    return z_file_reader_create(&z_io_stdin_file);\n"
+            "}\n\n"
+        )
+    if "stdout" in want:
+        parts.append(
+            "static z_writer_t z_io_stdout(void);\n"
+            "static z_writer_t z_io_stdout(void) {\n"
+            "    return z_file_writer_create(&z_io_stdout_file);\n"
+            "}\n\n"
+        )
+    if "stderr" in want:
+        parts.append(
+            "static z_writer_t z_io_stderr(void);\n"
+            "static z_writer_t z_io_stderr(void) {\n"
+            "    return z_file_writer_create(&z_io_stderr_file);\n"
+            "}\n\n"
+        )
+    return "".join(parts)
+
+
 _Z_FILE_SEEK = (
     "/* file.seek — reposition the fd head. Maps seekorigin to the\n"
     "   matching POSIX whence constant. Returns the new absolute\n"

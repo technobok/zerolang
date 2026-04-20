@@ -915,6 +915,7 @@ class TypeChecker:
     ) -> ZType:
         key = f"{unitname}.{name}"
         ftype = _make_type(name, ZTypeType.FUNCTION)
+        ftype.is_native = func.is_native
         self._resolved[key] = ftype  # early register for self-reference
         self._resolving.append((key, ftype))
 
@@ -2978,10 +2979,44 @@ class TypeChecker:
                 if utype:
                     child = utype.children.get(path.child.name)
                     if child:
+                        # Zero-arg native functions accessed via a
+                        # bare unit-qualified path coerce to the
+                        # return type, so `w: io.stdout` binds `w`
+                        # to the writer rather than the function
+                        # pointer. Matches the convention already in
+                        # place for zero-arg class/protocol methods.
+                        if (
+                            child.typetype == ZTypeType.FUNCTION
+                            and child.is_native
+                            and child.return_type is not None
+                        ):
+                            has_non_this = False
+                            for p in child.children:
+                                if p != "this":
+                                    has_non_this = True
+                                    break
+                            if not has_non_this:
+                                return child.return_type
                         return child
                 # fallback: demand-resolve the child
                 t = self._resolve_unit_name(pname, path.child.name)
                 if t:
+                    # Same zero-arg native coercion as the utype path
+                    # above, for children resolved via demand-driven
+                    # fallback (happens for system-unit members before
+                    # full unit resolution).
+                    if (
+                        t.typetype == ZTypeType.FUNCTION
+                        and t.is_native
+                        and t.return_type is not None
+                    ):
+                        has_non_this = False
+                        for p in t.children:
+                            if p != "this":
+                                has_non_this = True
+                                break
+                        if not has_non_this:
+                            return t.return_type
                     return t
                 return None
             # check if it's an inline unit name

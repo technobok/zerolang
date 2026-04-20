@@ -913,6 +913,13 @@ class CEmitter:
         for pname in ("reader", "writer", "closer", "seeker"):
             defn = io_unit.body.get(pname)
             if defn is not None and type(defn) is zast.Protocol:
+                # Only emit protocols whose ZType is resolved — an
+                # unresolved protocol has spec parameters with no
+                # type information and would emit `void`-typed
+                # vtable entries. Programs that don't touch a given
+                # stream protocol don't need its vtable struct.
+                if self._resolved_type(pname) is None:
+                    continue
                 self._current_node_id = getattr(defn, "nodeid", None)
                 self._emit_protocol(pname, defn)
         out = "".join(self.struct_defs)
@@ -957,7 +964,7 @@ class CEmitter:
                 if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 else None
             )
-            if proto_name:
+            if proto_name and self._resolved_type(proto_name) is not None:
                 proto = self._io_protocol_defs.get(proto_name)
                 if proto is not None:
                     self._emit_protocol_impl(
@@ -1051,12 +1058,91 @@ class CEmitter:
     def _io_file_referenced(self) -> bool:
         """True when the program references io.file anywhere that the
         emitter needs to materialise its struct/destructor (e.g. as
-        the ok-arm of a result monomorphization, or as a local)."""
+        the ok-arm of a result monomorphization, a local, or the
+        static backing store for io.stdin / io.stdout / io.stderr)."""
+        if self.needs_io_natives & {"stdin", "stdout", "stderr"}:
+            return True
         for mono, _ in getattr(self.program, "mono_types", []):
             for child in mono.children.values():
                 if child.typetype == ZTypeType.CLASS and child.name == "file":
                     return True
+        # Scan the main unit AST for `io.<std-stream>` paths; those
+        # force file-struct emission even before function-body
+        # dispatch populates `needs_io_natives`.
+        mainunit = self.program.units.get(self.program.mainunitname)
+        if mainunit is not None and self._ast_uses_std_streams(mainunit.body):
+            return True
         return False
+
+    _STD_STREAM_NAMES = ("stdin", "stdout", "stderr")
+
+    def _ast_uses_std_streams(self, body: dict) -> bool:
+        """Does the AST contain a DottedPath `io.stdin|stdout|stderr`?
+        Runs a nodetype-driven walk (no isinstance / try-except) so
+        it stays inside the bootstrap-lint baseline."""
+        stack: List = []
+        for defn in body.values():
+            if defn is not None and defn.is_node:
+                stack.append(defn)
+        while stack:
+            n = stack.pop()
+            if n.nodetype == NodeType.DOTTEDPATH:
+                dp = cast(zast.DottedPath, n)
+                if (
+                    dp.parent.nodetype == NodeType.ATOMID
+                    and cast(zast.AtomId, dp.parent).name == "io"
+                    and dp.child.name in self._STD_STREAM_NAMES
+                ):
+                    return True
+            # walk known child-carrying fields by nodetype
+            for child in self._walk_children(n):
+                stack.append(child)
+        return False
+
+    def _walk_children(self, n: zast.Node) -> List[zast.Node]:
+        """Enumerate zast.Node children of n for the std-stream scan.
+        Covers the shapes that can contain DottedPath nodes without
+        resorting to isinstance / getattr probing."""
+        out: List[zast.Node] = []
+        nt = n.nodetype
+        if nt == NodeType.FUNCTION:
+            fn = cast(zast.Function, n)
+            if fn.body is not None:
+                out.append(fn.body)
+        elif nt == NodeType.STATEMENT:
+            for s in cast(zast.Statement, n).statements:
+                out.append(s)
+        elif nt == NodeType.STATEMENTLINE:
+            sl = cast(zast.StatementLine, n)
+            if sl.statementline is not None:
+                out.append(sl.statementline)
+        elif nt == NodeType.ASSIGNMENT:
+            out.append(cast(zast.Assignment, n).value)
+        elif nt == NodeType.EXPRESSION:
+            out.append(cast(zast.Expression, n).expression)
+        elif nt == NodeType.CALL:
+            c = cast(zast.Call, n)
+            out.append(c.callable)
+            for a in c.arguments:
+                out.append(a)
+        elif nt == NodeType.NAMEDOPERATION:
+            out.append(cast(zast.NamedOperation, n).valtype)
+        elif nt == NodeType.CASE:
+            cn = cast(zast.Case, n)
+            out.append(cn.subject)
+            for cl in cn.clauses:
+                if cl.statement is not None:
+                    out.append(cl.statement)
+            if cn.elseclause is not None:
+                out.append(cn.elseclause)
+        elif nt == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, n)
+            out.append(dp.parent)
+        elif nt == NodeType.WITH:
+            w = cast(zast.With, n)
+            out.append(w.value)
+            out.append(w.doexpr)
+        return out
 
     def emit(self) -> str:
         mainunit = self.program.units.get(self.program.mainunitname)
@@ -1230,6 +1316,10 @@ class CEmitter:
 
         parts.append(file_impls)
 
+        # io.stdin / io.stdout / io.stderr — emit after file_impls so
+        # z_file_reader_create / z_file_writer_create are declared.
+        parts.append(zrt.emit_io_std_streams(self.needs_io_natives))
+
         for ft in self.func_typedefs:
             parts.append(ft)
         if self.func_typedefs:
@@ -1306,15 +1396,26 @@ class CEmitter:
         self.needs_stdlib = True
         lines: List[str] = []
 
+        # Prefer the resolved ZType for param types — the AST's
+        # `ppath.type` can remain None for system-library protocols
+        # until they're explicitly instantiated. The resolved type's
+        # children hold function ZTypes whose own children hold
+        # fully-resolved parameter types.
+        proto_type = self._resolved_type(name)
+
         # vtable struct — function pointers with void* as first param
         lines.append("typedef struct {\n")
         for sname, sfunc in proto.specs.items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
+            spec_type = proto_type.children.get(sname) if proto_type else None
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                params.append(_proto_param_ctype(ppath.type))
+                ptype: Optional[ZType] = ppath.type
+                if ptype is None and spec_type is not None:
+                    ptype = spec_type.children.get(pname)
+                params.append(_proto_param_ctype(ptype))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
@@ -1380,18 +1481,23 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
+        proto_type = self._resolved_type(proto_name)
         for sname, sfunc in proto.specs.items():
             ret_ctype = self._return_ctype(sfunc)
             # wrapper params: void* _data, then remaining non-this params.
             # Collection types travel through the vtable as pointers
             # (see _proto_param_ctype) so they match the native impl's
             # ABI without an extra adaptor.
+            spec_type = proto_type.children.get(sname) if proto_type else None
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                pctype = _proto_param_ctype(ppath.type)
+                ptype: Optional[ZType] = ppath.type
+                if ptype is None and spec_type is not None:
+                    ptype = spec_type.children.get(pname)
+                pctype = _proto_param_ctype(ptype)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
@@ -5821,6 +5927,21 @@ class CEmitter:
                 if typename.startswith("f"):
                     return f"(({ctype}){value})"
                 return f"(({ctype}){int(value)})"
+            # io.stdin / io.stdout / io.stderr — zero-arg native
+            # accessors whose return type (reader / writer) has been
+            # substituted by the typechecker. Emit the call directly;
+            # the generic path handler below would otherwise emit a
+            # bare function name (no `()`), yielding invalid C.
+            if (
+                pname == "io"
+                and child in ("stdin", "stdout", "stderr")
+                and path.type is not None
+                and path.type.typetype != ZTypeType.FUNCTION
+            ):
+                self.needs_io = True
+                self.needs_stdio = True
+                self.needs_io_natives.add(child)
+                return f"z_io_{child}()"
             # unit.name reference (file-level units)
             if pname in self.program.units and pname not in ("system", "core", "io"):
                 return _mangle_func(f"{pname}.{child}")
