@@ -25,6 +25,7 @@ from ztypes import (
     ExprResult,
     NUMERIC_RANGES,
     TAG_ORIGIN,
+    is_tag_origin,
     parse_number,
 )
 from ztypeutil import (
@@ -240,6 +241,38 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
 
 # Sentinel for definitions currently being resolved
 _RESOLVING = object()
+
+
+_PRIMITIVE_TYPE_NAMES: frozenset[str] = frozenset(NUMERIC_RANGES.keys()) | frozenset(
+    {"bool", "null", "f32", "f64", "f128"}
+)
+
+
+def _is_primitive_name(name: str) -> bool:
+    """True for globally-singleton primitive type names (numerics, bool,
+    null, floats). Used by `_types_compatible` as a safe name-based
+    fallback while full ZType interning is pending — these types are
+    conceptually unique by name regardless of which resolver produced
+    a given ZType instance.
+    """
+    return name in _PRIMITIVE_TYPE_NAMES
+
+
+def _mono_arg_key(t: "ZType") -> Tuple:
+    """Identity key for a monomorphization argument. ZType interning
+    hasn't landed yet, so primitives (u64, i32, bool, ...), generic
+    parameters, and numeric-literal value types may be re-created with
+    distinct nodeids despite representing the same logical argument.
+    Fall back to name + numeric_value for those; use nodeid for
+    structural types where identity is stable.
+    """
+    if t.typetype == ZTypeType.GENERIC_PARAM:
+        return ("gp", t.name)
+    if _is_primitive_name(t.name):
+        return ("p", t.name)
+    if t.numeric_value is not None:
+        return ("nv", t.numeric_value)
+    return ("n", t.nodeid)
 
 
 def _extract_public_members(as_items: dict) -> Optional[dict[str, str]]:
@@ -1341,7 +1374,7 @@ class TypeChecker:
             )
             is_tag = (
                 (as_type and as_type.typetype == ZTypeType.TAG)
-                or (as_type and as_type.generic_origin is TAG_ORIGIN)
+                or (as_type and is_tag_origin(as_type.generic_origin))
                 or (as_type and as_type.isgeneric and as_type.name == "tag")
             )
             if is_tag:
@@ -2114,7 +2147,7 @@ class TypeChecker:
                 # methods, not value fields — don't participate in equality
             if ftype.typetype == ZTypeType.GENERIC_PARAM:
                 return  # cannot verify, skip synthesis
-            if ftype.generic_origin is TAG_ORIGIN:
+            if is_tag_origin(ftype.generic_origin):
                 continue  # tag access helper
             # float fields disqualify memcmp (NaN != NaN, -0.0 == +0.0)
             if ftype.name in self._FLOAT_TYPES:
@@ -3424,42 +3457,70 @@ class TypeChecker:
         return None
 
     def _types_compatible(self, a: ZType, b: ZType) -> bool:
-        """Check if two types are compatible (identity, name match, or structural equiv for functions).
+        """Check if two types are compatible (identity, id match after
+        typedef unwrap, or structural equiv for functions).
 
         Zerolang does not perform implicit conversions between distinct
         types: there are no silent str↔string↔stringview bridges at
         parameter-passing or assignment boundaries. Callers must use the
         explicit zero-cost projections (`.stringview`, `.string`) where
         the receiver expects a specific string type.
+
+        Fast path: identity, then nodeid after typedef unwrap on both
+        sides — avoids repeated string compares on a hot path that's
+        exercised on every assignment / return-type / arg-match check.
         """
         if a is b:
             return True
-        if a.name == b.name:
+        # Fast path: exact id match.
+        if a.nodeid == b.nodeid:
+            return True
+        # Generic parameters (e.g., `t` in `f: function {x: t} out t`) are
+        # synthetic placeholders that may be re-created by the resolver;
+        # two `t`s in the same template context are the same parameter
+        # despite having distinct ZType instances.
+        if (
+            a.typetype == ZTypeType.GENERIC_PARAM
+            and b.typetype == ZTypeType.GENERIC_PARAM
+        ):
+            return a.name == b.name
+        # Primitive types (numerics, bool, null) are conceptually global
+        # singletons — the resolver may still hand out separate ZType
+        # instances in different contexts, so name is the canonical
+        # identity for them until the interning work lands.
+        if _is_primitive_name(a.name) and a.name == b.name:
             return True
         if a.typetype == ZTypeType.FUNCTION and b.typetype == ZTypeType.FUNCTION:
             return self._function_types_equivalent(a, b)
-        # Typedef backward compat: a (actual) is a typedef wrapping b (expected)
+        # Typedef backward compat: `a` (actual) may be a typedef wrapping
+        # `b` (expected). Walk only `a`'s chain — this is deliberately
+        # asymmetric. Passing a `meters` (typedef over i64) where i64 is
+        # expected is fine; passing raw i64 where `meters` is expected
+        # is not (the typedef carries intent that the base type lacks).
         base = a.typedef_base
         while base is not None:
-            if base is b or base.name == b.name:
+            if base is b or base.nodeid == b.nodeid:
                 return True
             base = base.typedef_base
         return False
 
     def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
-        """Check structural equivalence of two function types (same params + return)."""
+        """Check structural equivalence of two function types (same
+        params + return). Recurses through `_types_compatible` so the
+        primitive / generic-param fallbacks apply on inner types too.
+        """
         a_ret = a.return_type
         b_ret = b.return_type
         if (a_ret is None) != (b_ret is None):
             return False
-        if a_ret and b_ret and a_ret.name != b_ret.name:
+        if a_ret and b_ret and not self._types_compatible(a_ret, b_ret):
             return False
         a_params = list(a.children.items())
         b_params = list(b.children.items())
         if len(a_params) != len(b_params):
             return False
         for (ak, av), (bk, bv) in zip(a_params, b_params):
-            if ak != bk or av.name != bv.name:
+            if ak != bk or not self._types_compatible(av, bv):
                 return False
         return True
 
@@ -3476,10 +3537,13 @@ class TypeChecker:
         Returns a cached or newly created concrete type with all generic
         parameters replaced by concrete types.
         """
-        # build cache key
+        # Identity-based cache key via `_mono_arg_key`, which uses the
+        # nodeid for structural types and falls back to name / numeric
+        # value for primitives + generic params + numeric literals
+        # (which aren't interned yet).
         cache_key = (
-            template_type.name,
-            tuple(sorted((k, v.name) for k, v in generic_args.items())),
+            template_type.nodeid,
+            tuple(sorted((k, _mono_arg_key(v)) for k, v in generic_args.items())),
         )
         if cache_key in self._mono_cache:
             return self._mono_cache[cache_key]
@@ -3525,7 +3589,7 @@ class TypeChecker:
                         and v.typetype != ZTypeType.DATA
                         and v.typetype != ZTypeType.TAG
                         and v.typetype != ZTypeType.ENUM
-                        and v.generic_origin is not TAG_ORIGIN
+                        and not is_tag_origin(v.generic_origin)
                     }
                     if concrete_type.name not in subtype_names:
                         self._error(
@@ -3591,7 +3655,7 @@ class TypeChecker:
             elif (
                 child_type.isgeneric
                 and child_type.generic_origin is not None
-                and child_type.generic_origin is not TAG_ORIGIN
+                and not is_tag_origin(child_type.generic_origin)
                 and not is_partial
                 and child_type.typetype != ZTypeType.UNIT
             ):
@@ -3664,7 +3728,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
-                and mono.children[k].generic_origin is not TAG_ORIGIN
+                and not is_tag_origin(mono.children[k].generic_origin)
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -3691,7 +3755,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
-                and mono.children[k].generic_origin is not TAG_ORIGIN
+                and not is_tag_origin(mono.children[k].generic_origin)
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -4125,7 +4189,7 @@ class TypeChecker:
         if "." in name:
             parts = name.rsplit(".", 1)
             origin = template_type.generic_origin
-            if origin is not None and origin is not TAG_ORIGIN:
+            if origin is not None and not is_tag_origin(origin):
                 # the generic origin IS the original definition
                 origin_defn = self._find_generic_defn(cast(ZType, origin))
                 if origin_defn is not None:
@@ -4504,10 +4568,10 @@ class TypeChecker:
         call: zast.Call,
     ) -> Optional[ZType]:
         """Monomorphize a generic function with concrete type arguments."""
-        # build cache key
+        # Identity-based cache key (see _monomorphize above for rationale).
         cache_key = (
-            template.name,
-            tuple(sorted((k, v.name) for k, v in generic_args.items())),
+            template.nodeid,
+            tuple(sorted((k, _mono_arg_key(v)) for k, v in generic_args.items())),
         )
         if cache_key in self._mono_cache:
             return self._mono_cache[cache_key]
@@ -4555,7 +4619,7 @@ class TypeChecker:
                                 ZTypeType.TAG,
                                 ZTypeType.ENUM,
                             )
-                            or v.generic_origin is TAG_ORIGIN
+                            or is_tag_origin(v.generic_origin)
                         ):
                             continue
                         if v.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
@@ -4718,7 +4782,7 @@ class TypeChecker:
                 ):
                     return True
             origin = t.generic_origin
-            if origin is None or origin is TAG_ORIGIN:
+            if origin is None or is_tag_origin(origin):
                 t = None
             else:
                 t = cast(ZType, origin)
@@ -7306,7 +7370,7 @@ class TypeChecker:
         return (
             t.typetype == ZTypeType.UNION
             and t.generic_origin is not None
-            and t.generic_origin is not TAG_ORIGIN
+            and not is_tag_origin(t.generic_origin)
             and t.generic_origin.name == "option"
         )
 
@@ -7315,7 +7379,7 @@ class TypeChecker:
         return (
             t.typetype == ZTypeType.VARIANT
             and t.generic_origin is not None
-            and t.generic_origin is not TAG_ORIGIN
+            and not is_tag_origin(t.generic_origin)
             and t.generic_origin.name == "optionval"
         )
 
@@ -7633,7 +7697,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
-                and v.generic_origin is not TAG_ORIGIN
+                and not is_tag_origin(v.generic_origin)
             }
             covered = {clause.match.name for clause in casenode.clauses}
             missing = subtypes - covered
@@ -7851,7 +7915,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
-                and v.generic_origin is not TAG_ORIGIN
+                and not is_tag_origin(v.generic_origin)
             }
             covered_for_exhaust = {clause.match.name for clause in casenode.clauses}
             if not (subtypes_for_exhaust - covered_for_exhaust):

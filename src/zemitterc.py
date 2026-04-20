@@ -20,7 +20,7 @@ from ztypes import (
     ZParamOwnership,
     ZOwnership,
     NUMERIC_RANGES,
-    TAG_ORIGIN,
+    is_tag_origin,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -1916,7 +1916,7 @@ class CEmitter:
                     ZTypeType.NULL,
                 ):
                     continue
-                if ftype.generic_origin is TAG_ORIGIN:
+                if is_tag_origin(ftype.generic_origin):
                     continue
                 ct = _ctype(ftype)
                 sz = CTYPE_SIZES.get(ct, 0)
@@ -1938,7 +1938,7 @@ class CEmitter:
                 ZTypeType.NULL,
             ):
                 continue
-            if ftype.generic_origin is TAG_ORIGIN:
+            if is_tag_origin(ftype.generic_origin):
                 continue
             ct = _ctype(ftype)
             sz = CTYPE_SIZES.get(ct, 0)
@@ -2452,7 +2452,7 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
-            if stype.generic_origin is TAG_ORIGIN:
+            if is_tag_origin(stype.generic_origin):
                 continue
             subtype_items.append((sname, stype))
 
@@ -2541,7 +2541,7 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
-            if stype.generic_origin is TAG_ORIGIN:
+            if is_tag_origin(stype.generic_origin):
                 continue
             subtype_items.append((sname, stype))
 

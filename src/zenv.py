@@ -387,7 +387,7 @@ class SymbolTable:
         If only one subtype remains, auto-collapses to narrowed_subtype.
         Adds an overlay entry to the current scope.
         """
-        from ztypes import ZTypeType, TAG_ORIGIN
+        from ztypes import ZTypeType, is_tag_origin
 
         # collect all subtypes of the full union/variant
         all_subtypes = {
@@ -395,7 +395,7 @@ class SymbolTable:
             for k, v in full_type.children.items()
             if v.typetype
             not in (ZTypeType.FUNCTION, ZTypeType.DATA, ZTypeType.TAG, ZTypeType.ENUM)
-            and getattr(v, "generic_origin", None) is not TAG_ORIGIN
+            and not is_tag_origin(getattr(v, "generic_origin", None))
         }
 
         # get current exclusions for this variable

@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple, cast
 
 import zast
 from zlexer import Token
-from ztypes import ZType, TAG_ORIGIN
+from ztypes import ZType, is_tag_origin
 import zemitterc
 
 
@@ -240,7 +240,7 @@ def dump_sql(
             _register_type(zt.parent)
         if zt.typedef_base:
             _register_type(zt.typedef_base)
-        if zt.generic_origin is not None and zt.generic_origin is not TAG_ORIGIN:
+        if zt.generic_origin is not None and not is_tag_origin(zt.generic_origin):
             _register_type(cast(ZType, zt.generic_origin))
 
     # from resolved dict
@@ -257,7 +257,7 @@ def dump_sql(
             _sql_int(ztype.typedef_base.nodeid) if ztype.typedef_base else "NULL"
         )
         origin_id = "NULL"
-        if ztype.generic_origin is not None and ztype.generic_origin is not TAG_ORIGIN:
+        if ztype.generic_origin is not None and not is_tag_origin(ztype.generic_origin):
             origin_id = _sql_int(ztype.generic_origin.nodeid)
         lines.append(
             f"INSERT OR IGNORE INTO types VALUES ("
