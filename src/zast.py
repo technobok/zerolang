@@ -290,6 +290,11 @@ class Program:
     # zast <-> zenv import cycle; the dumper uses getattr / duck-typing.
     symbol_table: "Optional[object]" = field(default=None, init=False)
 
+    # Phase 7d: name → resolved unit ZType (a snapshot of TypeChecker
+    # .unit_types). Attached by typecheck(). Used by the SQL dumper to
+    # populate `unit.unit_type_id`.
+    unit_types: Dict[str, "ZType"] = field(default_factory=dict, init=False)
+
 
 def clone_function(func: "Function") -> "Function":
     """Deep copy a Function AST node for monomorphization."""

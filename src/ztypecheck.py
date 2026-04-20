@@ -354,8 +354,14 @@ class TypeChecker:
 
         # unit types (for dotted path resolution like mathutil.square)
         self.unit_types: dict[str, ZType] = {}
-        for unitname in self.program.units:
-            self.unit_types[unitname] = _make_type(unitname, ZTypeType.UNIT)
+        # Phase 7d: id-keyed parallel cache. Keyed by unit_ast.nodeid (the
+        # Unit AST node's monotonic id from Phase 7a). Populated alongside
+        # `unit_types` via `_register_unit_type`. Safe to be incomplete —
+        # id-first readers always fall back to the name cache.
+        self.unit_types_by_id: dict[int, ZType] = {}
+        for unitname, unit_ast in self.program.units.items():
+            t = _make_type(unitname, ZTypeType.UNIT)
+            self._register_unit_type(unitname, unit_ast, t)
         # track which file units have been fully resolved (generic params detected)
         self._resolved_file_units: set[str] = set()
 
@@ -2651,7 +2657,7 @@ class TypeChecker:
         key = f"{unitname}.{name}"
         utype = _make_type(name, ZTypeType.UNIT)
         self._resolved[key] = utype
-        self.unit_types[name] = utype
+        self._register_unit_type(name, unit, utype)
 
         # detect generic params in unit body (DottedPath items like t: any.generic)
         generic_ctx: dict[str, ZType] = {}
@@ -2707,6 +2713,23 @@ class TypeChecker:
         return utype
 
     # ---- Name resolution (local -> unit body -> core -> system) ----
+
+    def _register_unit_type(
+        self,
+        unitname: str,
+        unit_ast: "Optional[zast.Unit]",
+        t: ZType,
+    ) -> None:
+        """Phase 7d: record a unit's ZType in both name- and id-keyed caches.
+
+        `unit_ast` may be None when the caller only has a name (e.g. a
+        monomorphization-registration loop re-registering a synthetic
+        unit). Callers that hold the AST node SHOULD pass it so the
+        id-keyed cache stays populated.
+        """
+        self.unit_types[unitname] = t
+        if unit_ast is not None:
+            self.unit_types_by_id[unit_ast.nodeid] = t
 
     def _current_unit_name(self) -> str:
         """Return the unit name we're currently resolving inside."""
@@ -3052,12 +3075,23 @@ class TypeChecker:
                             return t.return_type
                     return t
                 return None
-            # check if it's an inline unit name
-            if (
-                pname in self.unit_types
-                and self.unit_types[pname].typetype == ZTypeType.UNIT
-            ):
+            # check if it's an inline unit name. Phase 7d: prefer id-keyed
+            # cache when an inline unit AST handle is reachable via the
+            # unit-context stack; fall back to name lookup otherwise.
+            parent_type = None
+            for ctx_name, ctx_unit in reversed(self._unit_context):
+                inline = ctx_unit.body.get(pname)
+                if (
+                    inline is not None
+                    and getattr(inline, "nodetype", None) == NodeType.UNIT
+                ):
+                    parent_type = self.unit_types_by_id.get(
+                        cast(zast.Unit, inline).nodeid
+                    )
+                    break
+            if parent_type is None and pname in self.unit_types:
                 parent_type = self.unit_types[pname]
+            if parent_type is not None and parent_type.typetype == ZTypeType.UNIT:
                 child = parent_type.children.get(path.child.name)
                 if child:
                     return child
@@ -4103,7 +4137,7 @@ class TypeChecker:
         self._partially_instantiate_subunits(mono, mangled, generic_args)
 
         # 3. register and clone function bodies
-        self.unit_types[mangled] = mono
+        self._register_unit_type(mangled, None, mono)
         cloned_methods: dict[str, zast.Function] = {}
         all_args = dict(getattr(template_type, "generic_args", {}) or {})
         all_args.update(generic_args)
@@ -4158,7 +4192,7 @@ class TypeChecker:
                 else:
                     sub_unit.children[ck] = cv
             parent.children[child_name] = sub_unit
-            self.unit_types[sub_name] = sub_unit
+            self._register_unit_type(sub_name, None, sub_unit)
             self._partially_instantiate_subunits(sub_unit, sub_name, args)
 
     def _make_optional_type(self, value_type: ZType) -> Optional[ZType]:
@@ -7240,14 +7274,23 @@ class TypeChecker:
         resolution via _resolve_inline_unit_type on first access.
         Skips system/library units which are handled by the standard pipeline.
         """
-        if unitname in self._resolved_file_units:
-            return self.unit_types.get(unitname)
         if unitname not in self.program.units:
             return None
+        file_unit = self.program.units[unitname]
+        # Phase 7d: id-first cache hit on the AST Unit's nodeid; name
+        # fallback retained for safety (the id cache may be empty for
+        # units registered via synthetic / monomorphized names).
+        if unitname in self._resolved_file_units:
+            cached = self.unit_types_by_id.get(file_unit.nodeid)
+            if cached is not None:
+                return cached
+            return self.unit_types.get(unitname)
         if unitname in self._SYSTEM_UNITS:
+            cached = self.unit_types_by_id.get(file_unit.nodeid)
+            if cached is not None:
+                return cached
             return self.unit_types.get(unitname)
         self._resolved_file_units.add(unitname)
-        file_unit = self.program.units[unitname]
         # replace the bare ZType with a fully resolved one
         utype = self._resolve_inline_unit_type(unitname, unitname, file_unit)
         return utype
@@ -8023,6 +8066,9 @@ def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     program.resolved = dict(tc._resolved)
     # Phase 7c: expose the symbol table for the SQL dumper.
     program.symbol_table = tc.symtab
+    # Phase 7d: expose the name-keyed unit_types map for the dumper so
+    # it can stamp `unit.unit_type_id` when a unit was materialized.
+    program.unit_types = dict(tc.unit_types)
     return errors
 
 

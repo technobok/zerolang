@@ -98,6 +98,13 @@ CREATE TABLE IF NOT EXISTS emitted_lines (
     text        TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS unit (
+    unit_id      INTEGER PRIMARY KEY,
+    name         TEXT NOT NULL,
+    is_main      BOOLEAN NOT NULL,
+    unit_type_id INTEGER REFERENCES types(type_id)
+);
+
 CREATE TABLE IF NOT EXISTS scope (
     scope_id    INTEGER PRIMARY KEY,
     kind        TEXT NOT NULL,
@@ -327,6 +334,20 @@ def dump_sql(
                 f"INSERT OR IGNORE INTO typed_nodes VALUES ("
                 f"{node.nodeid}, {node.type.nodeid});"
             )
+
+    # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
+    # unit_type_id is filled when a resolved ZType exists in the
+    # typechecker's unit_types snapshot; NULL otherwise.
+    unit_types_map = getattr(program, "unit_types", {}) or {}
+    for unitname, unit_ast in program.units.items():
+        utype = unit_types_map.get(unitname)
+        unit_type_id = _sql_int(utype.nodeid) if utype is not None else "NULL"
+        lines.append(
+            f"INSERT OR IGNORE INTO unit VALUES ("
+            f"{unit_ast.nodeid}, {_sql_str(unitname)}, "
+            f"{_sql_bool(unitname == program.mainunitname)}, "
+            f"{unit_type_id});"
+        )
 
     # Stage 6a: symbol table (Phase 7c) — scopes, variables, entries.
     # Walks the archived history plus any remaining live scopes. The
