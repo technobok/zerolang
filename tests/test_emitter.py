@@ -6684,3 +6684,110 @@ class TestIOFileStreaming:
         # If RAII had double-closed, EBADF would surface or the
         # process would abort under stricter allocators.
         assert output.strip() == "closed ok"
+
+
+class TestNarrowedFieldAccess:
+    """Narrowed-subject field access. Inside `case ok then { ... }` a
+    variable bound to a union/variant is narrowed to the payload type,
+    so `s.size` reads as `filestat.size` with no explicit `s.ok` hop.
+    The explicit form stays valid as a regression."""
+
+    def test_union_narrowed_field_bare(self, tmp_path):
+        """`s.size` inside a narrowed arm lowers to payload-unwrap and
+        matches `s.ok.size`."""
+        target = tmp_path / "narrowed"
+        target.mkdir()
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "size=\\{s.size}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_filestat_t*" in csource
+        output = compile_and_run(csource)
+        assert output.strip().startswith("size=")
+        size_str = output.strip().split("=")[1]
+        assert int(size_str) > 0
+
+    def test_union_narrowed_nested_kind_match(self, tmp_path):
+        """`s.kind` returns the narrowed sub-field, then can be matched
+        further — no `s.ok.kind` workaround needed."""
+        target = tmp_path / "narrowedkind"
+        target.mkdir()
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        match (\n"
+            "            s.kind\n"
+            "        ) case dir then {\n"
+            '            print "dir"\n'
+            "        } case file then {\n"
+            '            print "file"\n'
+            "        } case symlink then {\n"
+            '            print "link"\n'
+            "        } case other then {\n"
+            '            print "other"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "dir"
+
+    def test_explicit_ok_access_still_works(self, tmp_path):
+        """Regression: the explicit `s.ok.size` form must keep lowering
+        through the same payload-unwrap it always did."""
+        target = tmp_path / "explicit"
+        target.mkdir()
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "size=\\{s.ok.size}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().startswith("size=")
+
+    def test_variant_narrowed_field_access(self):
+        """Variant narrowing: `r.x` inside `case pt then` reads the
+        inline payload via `r.data.pt.x`."""
+        csource = emit_source(
+            "point: record {\n"
+            "    x: i64\n"
+            "    y: i64\n"
+            "}\n"
+            "shape: variant {\n"
+            "    pt: point\n"
+            "    none: null\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: shape.pt (point x: 7 y: 11)\n"
+            "    match (\n"
+            "        s\n"
+            "    ) case pt then {\n"
+            '        print "x=\\{s.x}"\n'
+            "    } case none then {\n"
+            '        print "none"\n'
+            "    }\n"
+            "}"
+        )
+        assert ".data.pt.x" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "x=7"

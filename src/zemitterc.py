@@ -6282,6 +6282,18 @@ class CEmitter:
             ):
                 inner_ctype = _ctype(child_type)
                 return f"(*({inner_ctype}*){parent}.data)"
+        # narrowed field access: `s.field` where `s` was narrowed by a
+        # match arm. The typechecker stamped `narrowed_subtype` on the
+        # path and resolved `field` through the narrowed payload type.
+        # Unwrap through the payload here so C sees the right struct.
+        if path.narrowed_subtype and parent_type:
+            payload_type = parent_type.children.get(path.narrowed_subtype)
+            if payload_type is not None:
+                if parent_type.typetype == ZTypeType.UNION:
+                    payload_ctype = _ctype(payload_type)
+                    return f"(*({payload_ctype}*){parent}.data).{child}"
+                if parent_type.typetype == ZTypeType.VARIANT:
+                    return f"{parent}.data.{path.narrowed_subtype}.{child}"
         return f"{parent}.{child}"
 
     def _effective_file_type(self, path: zast.Path) -> bool:

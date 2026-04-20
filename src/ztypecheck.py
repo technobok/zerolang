@@ -3186,6 +3186,40 @@ class TypeChecker:
                 if child_name != "tag" and child.typetype != ZTypeType.FUNCTION:
                     path.parent_tagged_type = parent_type
                 return child
+            # child is not a direct union/variant arm. If the parent is a
+            # narrowed variable, resolve the child through the narrowed
+            # subtype's payload — `s.size` reads as `filestat.size` when
+            # `s` is narrowed to `ok` in a match arm.
+            if path.parent.nodetype == NodeType.ATOMID and child_name != "tag":
+                pname = cast(zast.AtomId, path.parent).name
+                if self.symtab.lookup_var(pname) is not None:
+                    subtype_name = self.symtab.get_subtype_name(pname)
+                    if subtype_name:
+                        narrowed_payload = parent_type.children.get(subtype_name)
+                        if (
+                            narrowed_payload is not None
+                            and narrowed_payload.typetype != ZTypeType.NULL
+                        ):
+                            narrowed_child = narrowed_payload.children.get(child_name)
+                            if narrowed_child is not None:
+                                path.narrowed_subtype = subtype_name
+                                return narrowed_child
+                            self._error(
+                                f"'{pname}' is narrowed to '{subtype_name}', "
+                                f"which has no field '{child_name}'",
+                                loc=path.start,
+                            )
+                            return None
+                        if (
+                            narrowed_payload is not None
+                            and narrowed_payload.typetype == ZTypeType.NULL
+                        ):
+                            self._error(
+                                f"Cannot access '{child_name}' on '{pname}': "
+                                f"narrowed to '{subtype_name}' which has no payload",
+                                loc=path.start,
+                            )
+                            return None
             return None
         # for data: .array method returns a new array of matching type/length
         if parent_type.typetype == ZTypeType.DATA and child_name == "array":

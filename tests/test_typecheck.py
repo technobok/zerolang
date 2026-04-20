@@ -4815,6 +4815,40 @@ class TestIoNativeDispatch:
             "}"
         )
 
+    def test_narrowed_bare_field_typechecks(self):
+        """Inside `case ok then`, `s.size` reads through the narrowed
+        filestat payload — no explicit `s.ok` required."""
+        check_ok(
+            "main: function is {\n"
+            '    s: io.stat "/tmp/x".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.size} \\{s.mtime_seconds}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_narrowed_missing_field_errors(self):
+        """Accessing a field that isn't on the narrowed payload type
+        is a clear error — not the old silent None."""
+        errors = check_errors(
+            "main: function is {\n"
+            '    s: io.stat "/tmp/x".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "\\{s.bogus}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert any("bogus" in e.msg for e in errors)
+        assert any("narrowed" in e.msg for e in errors)
+
     def test_protocol_zero_arg_method_coerces_to_return_type(self):
         """Accessing a zero-arg protocol spec as an rvalue types as
         the spec's return type, not as the function pointer. Enables

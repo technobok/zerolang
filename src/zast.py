@@ -869,6 +869,7 @@ class DottedPath(Path):
     parent: "Path"
     child: "AtomId"
     parent_tagged_type: "Optional[ZType]" = field(default=None, init=False)
+    narrowed_subtype: "Optional[str]" = field(default=None, init=False)
 
 
 @dataclass
