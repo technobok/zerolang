@@ -7362,6 +7362,99 @@ class TestIOFileStreaming:
         assert output.strip().splitlines() == ["ok", "bad"]
 
 
+class TestIoSymlink:
+    """io.symlink creates a symbolic link; io.readlink reads its target.
+    Both route through standard ioerror mapping; readlink additionally
+    surfaces `invalidpath` when the path exists but isn't a symlink."""
+
+    def test_symlink_creates_link_and_readlink_reads_target(self, tmp_path):
+        """symlink `link` -> `target`; readlink(link) returns `target`
+        verbatim (no resolution, no normalization)."""
+        real = tmp_path / "real.txt"
+        real.write_text("x")
+        link = tmp_path / "link.txt"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.symlink target: "{real}".string link: "{link}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "made"\n'
+            "    } case err then {\n"
+            '        print "sym err"\n'
+            "    }\n"
+            f'    r: io.readlink "{link}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        print r\n"
+            "    } case err then {\n"
+            '        print "read err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_io_symlink" in csource
+        assert "z_io_readlink" in csource
+        output = compile_and_run(csource)
+        lines = output.strip().splitlines()
+        assert lines[0] == "made"
+        assert lines[1] == str(real)
+        assert link.is_symlink()
+
+    def test_readlink_on_non_symlink_returns_invalidpath(self, tmp_path):
+        """EINVAL from readlink(2) means the path exists but isn't a
+        symbolic link; surface as invalidpath so callers can tell it
+        apart from notfound / permissiondenied."""
+        real = tmp_path / "plain.txt"
+        real.write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.readlink "{real}".string\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            '        print "unexpected"\n'
+            "    } case err then {\n"
+            "        match (\n"
+            "            r\n"
+            "        ) case invalidpath then {\n"
+            '            print "invalidpath"\n'
+            "        } else {\n"
+            '            print "other err"\n'
+            "        }\n"
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "invalidpath"
+
+    def test_symlink_exists_errors_on_existing_target(self, tmp_path):
+        """EEXIST from symlink(2) maps to ioerror.exists when the `link`
+        path already refers to something."""
+        occupied = tmp_path / "existing"
+        occupied.write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.symlink target: "x".string link: "{occupied}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            '        print "unexpected"\n'
+            "    } case err then {\n"
+            "        match (\n"
+            "            s\n"
+            "        ) case exists then {\n"
+            '            print "exists"\n'
+            "        } else {\n"
+            '            print "other"\n'
+            "        }\n"
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "exists"
+
+
 class TestOsUnit:
     """`os` unit: process-level primitives. argv/env/exit have no
     companion struct types (unlike the `io` file/stream stack) so the

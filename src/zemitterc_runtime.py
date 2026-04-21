@@ -290,6 +290,83 @@ _Z_IO_APPEND_TEXT = (
     "}\n\n"
 )
 
+_Z_IO_READLINK = (
+    "/* readlink — follow-free read of a symlink's target. readlink(2)\n"
+    "   does not NUL-terminate, and we don't know the exact target size\n"
+    "   up front; loop with a growing buffer until the kernel says the\n"
+    "   full target fit. EINVAL from readlink means the path exists but\n"
+    "   isn't a symbolic link -- surfaced as invalidpath with a\n"
+    "   caller-readable message. */\n"
+    "static z_result_string_ioerror_t z_io_readlink(z_string_t path);\n"
+    "static z_result_string_ioerror_t z_io_readlink(z_string_t path) {\n"
+    "    z_result_string_ioerror_t result = {0};\n"
+    "    uint64_t cap = (uint64_t)256;\n"
+    "    char* buf = (char*)malloc(cap);\n"
+    "    for (;;) {\n"
+    "        ssize_t n = readlink(path.data, buf, cap);\n"
+    "        if (n < 0) {\n"
+    "            int e = errno;\n"
+    "            free(buf);\n"
+    "            z_ioerror_t* boxed = "
+    "(z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "            if (e == EINVAL) {\n"
+    "                z_ioerror_t v = {0};\n"
+    "                v.tag = Z_IOERROR_TAG_INVALIDPATH;\n"
+    "                z_string_t* sp = "
+    "(z_string_t*)malloc(sizeof(z_string_t));\n"
+    '                *sp = z_string_new("not a symbolic link");\n'
+    "                v.data = sp;\n"
+    "                *boxed = v;\n"
+    "            } else {\n"
+    "                *boxed = z_io_errno_to_ioerror(e);\n"
+    "            }\n"
+    "            z_string_free(&path);\n"
+    "            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "            result.data = boxed;\n"
+    "            return result;\n"
+    "        }\n"
+    "        if ((uint64_t)n < cap) {\n"
+    "            z_string_t target = {0};\n"
+    "            target.size = (uint64_t)n;\n"
+    "            target.capacity = target.size + 1;\n"
+    "            target.data = (char*)malloc(target.capacity);\n"
+    "            memcpy(target.data, buf, target.size);\n"
+    "            target.data[target.size] = '\\0';\n"
+    "            free(buf);\n"
+    "            z_string_free(&path);\n"
+    "            z_string_t* boxed = "
+    "(z_string_t*)malloc(sizeof(z_string_t));\n"
+    "            *boxed = target;\n"
+    "            result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
+    "            result.data = boxed;\n"
+    "            return result;\n"
+    "        }\n"
+    "        cap *= 2;\n"
+    "        buf = (char*)realloc(buf, cap);\n"
+    "    }\n"
+    "}\n\n"
+)
+
+_Z_IO_SYMLINK = (
+    "/* symlink — create a symbolic link at `link` with `target` as the\n"
+    "   link content. Both strings are caller-freed inside via\n"
+    "   z_io_wrap_null_result's sibling pattern. EEXIST maps to\n"
+    "   ioerror.exists so callers can distinguish 'already there' from\n"
+    "   other failures. */\n"
+    "static z_result_null_ioerror_t z_io_symlink(\n"
+    "    z_string_t target, z_string_t link\n"
+    ");\n"
+    "static z_result_null_ioerror_t z_io_symlink(\n"
+    "    z_string_t target, z_string_t link\n"
+    ") {\n"
+    "    int rc = symlink(target.data, link.data);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&target);\n"
+    "    z_string_free(&link);\n"
+    "    return z_io_wrap_null_result(rc, e);\n"
+    "}\n\n"
+)
+
 _Z_IO_EXISTS = (
     "static bool z_io_exists(z_string_t path) {\n"
     "    int r = access(path.data, F_OK);\n"
@@ -1139,10 +1216,19 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "file_read",
         "file_write",
         "file_seek",
+        "readlink",
+        "symlink",
     }
     # result(null, ioerror) wrapper used by mkdir / mkdirp / remove /
-    # rename / file_close
-    null_wrap = natives & {"mkdir", "mkdirp", "remove", "rename", "file_close"}
+    # rename / file_close / symlink
+    null_wrap = natives & {
+        "mkdir",
+        "mkdirp",
+        "remove",
+        "rename",
+        "file_close",
+        "symlink",
+    }
     # result(u64, ioerror) wrapper used by file_read / file_write /
     # file_seek
     u64_wrap = natives & {
@@ -1176,6 +1262,10 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_IO_RENAME)
     if "mkdirp" in natives:
         parts.append(_Z_IO_MKDIRP)
+    if "readlink" in natives:
+        parts.append(_Z_IO_READLINK)
+    if "symlink" in natives:
+        parts.append(_Z_IO_SYMLINK)
     if natives & {"stat", "lstat"}:
         parts.append(_Z_IO_STAT_FILL)
     if "stat" in natives:
