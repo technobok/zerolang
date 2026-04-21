@@ -189,6 +189,33 @@ class TestAssignment:
             "}\n"
         )
 
+    def test_method_calls_self_protocol_lock_field(self):
+        """A method can call a protocol method through a `.lock` field
+        on `this`. The outer `:this` shared lock must not block the
+        inner call's access to the field."""
+        check_ok(
+            "p: protocol {\n"
+            "  read: function {:this into: bytes max: u64}"
+            " out (result t: u64 e: ioerror)\n"
+            "}\n"
+            "w: class {\n"
+            "  source: p.lock\n"
+            "  buf: bytes\n"
+            "  cap: u64\n"
+            "} as {\n"
+            "  create: function {from: p.lock} out this is {\n"
+            "    return meta.create source: from buf: bytes cap: 16.u64\n"
+            "  }\n"
+            "  fill: function {:this}"
+            " out (result t: u64 e: ioerror) is {\n"
+            "    this.buf = bytes\n"
+            "    r: this.source.read into: this.buf max: this.cap\n"
+            "    return r\n"
+            "  }\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
     def test_protocol_autoproject_nonconforming_errors(self):
         """Passing a type that does NOT conform still errs as a type
         mismatch."""
