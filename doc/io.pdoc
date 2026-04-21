@@ -95,8 +95,9 @@ Not yet shipped:
 #ul:
   [#*: Further #~"filestat" fields (device, inode, access / ctime,
     nlink)]
-  [#*: Text wrappers (#~"textreader", #~"textwriter") with UTF-8
-    validation and a line iterator -- Phase 1c]
+  [#*: #~"textreader" (#~".lines" iterator) with UTF-8 validation on
+    read paths and the #~"badencoding" ioerror arm -- Phase 1c
+    remainder, #~"textwriter" already shipped]
   [#*: Process / argv / env (planned for a separate #~"os" unit)]
   [#*: Async, sockets, symlinks, advisory locks]
 
@@ -138,6 +139,47 @@ match (w) case ok then {
   fr: bw.flush        # REQUIRED before bw scope ends
 } case err then { ... }
 #``
+
+#--: Text wrappers (Phase 1c)
+
+#~"textwriter" is a string-oriented adapter over a #~"bufwriter",
+so callers can write #~"stringview" values and get buffered,
+line-terminated output. It exposes three methods:
+
+#ul:
+  [#*: #~"write from: sv" -- forwards the stringview's bytes to the
+    underlying bufwriter. Returns #~"result(u64, ioerror)" with the
+    byte count on success.]
+  [#*: #~"write_line from: sv" -- emits the stringview followed by a
+    single #~"\n". Returns the total byte count (content + newline)
+    on success. A partial-write error on the newline returns the
+    newline's err arm and leaves the content count unobserved.]
+  [#*: #~"flush" -- delegates to the underlying bufwriter's flush.
+    Same semantics as #~"bufwriter.flush" -- REQUIRED before the
+    textwriter scope ends; no auto-flush on drop.]
+
+Holds a path-scoped borrow on its #~"bufwriter.lock" source, so the
+buffered wrapper cannot be flushed, mutated, or re-borrowed while
+the textwriter is alive. Typical three-layer shape:
+
+#++:
+#`code:
+w: io.open path: p mode: openmode.write
+match (w) case ok then {
+  bw: io.bufwriter.create to: w.lock capacity: 4096.u64
+  tw: io.textwriter.create to: bw.lock
+  wr: tw.write_line from: "hello"
+  fr: tw.flush
+} case err then { ... }
+#``
+
+Encoding: #~"textwriter" assumes the input is already valid UTF-8
+and emits the bytes verbatim. Zerolang's #~"string" and
+#~"stringview" types are UTF-8 by construction (the compiler's
+string ingress validates at the boundary), so no re-validation is
+done on write. The #~"textreader" half of this phase adds UTF-8
+validation on #_*"read" paths, where the source is genuinely
+untrusted; it is not yet shipped.
 
 #--: Design Principles
 
@@ -470,9 +512,9 @@ Roughly in implementation order:
     size / mtime / type.]
   [#*: Directory iteration -- #~"io.list_dir" returning a closable
     iterator of #~"direntry".]
-  [#*: Text wrappers on top of the shipped buffered wrappers --
-    #~"textreader" (#~".lines" iterator), #~"textwriter"
-    (#~"write_line"). Planned for Phase 1c.]
+  [#*: Complete the text wrapper family -- #~"textreader"
+    (#~".lines" iterator) with UTF-8 validation on reads.
+    #~"textwriter" (#~"write_line") has shipped.]
   [#*: UTF-8 validation on text reads; the #~"badencoding" ioerror
     arm becomes reachable.]
   [#*: Recursive #~"mkdirp", symlink handling, advisory file locks.]

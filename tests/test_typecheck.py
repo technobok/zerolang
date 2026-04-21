@@ -2486,6 +2486,52 @@ class TestIoWrappers:
             "}\n"
         )
 
+    def test_textwriter_create_and_write_line_typecheck(self):
+        """textwriter.create takes (to: bufwriter.lock), and
+        write_line takes a stringview and returns result(u64, ioerror).
+        Exercises the two-layer wrapper construction (file -> bufwriter
+        -> textwriter) that's the canonical Phase 1c caller shape."""
+        check_ok(
+            "main: function is {\n"
+            "  w: io.stdout\n"
+            "  bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
+            "  tw: io.textwriter.create to: bw.lock\n"
+            '  wr: tw.write_line from: "hi"\n'
+            "  match (wr) case ok then {} case err then {}\n"
+            "}\n"
+        )
+
+    def test_textwriter_locks_bufwriter_source(self):
+        """While tw holds a borrow on bw via bufwriter.lock, calling
+        bw.flush is rejected -- the source bufwriter cannot be drained
+        directly while the textwriter is alive."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  w: io.stdout\n"
+            "  bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
+            "  tw: io.textwriter.create to: bw.lock\n"
+            "  fr: bw.flush\n"
+            "}\n"
+        )
+        assert any("lock" in e.msg.lower() and "'bw'" in e.msg for e in errors), (
+            f"expected lock-conflict error referencing 'bw'; got: "
+            f"{[e.msg for e in errors]}"
+        )
+
+    def test_textwriter_flush_zero_arg_coerces_to_return_type(self):
+        """`fr: tw.flush` must bind fr to result(null, ioerror) via
+        the generalised zero-arg class-method coercion (previously
+        required a per-class special case in the typechecker)."""
+        check_ok(
+            "main: function is {\n"
+            "  w: io.stdout\n"
+            "  bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
+            "  tw: io.textwriter.create to: bw.lock\n"
+            "  fr: tw.flush\n"
+            "  match (fr) case ok then {} case err then {}\n"
+            "}\n"
+        )
+
     def test_bufwriter_flush_zero_arg_call_form(self):
         """The `bw.flush` dotted-path form must produce a call whose
         result typechecks as result(null, ioerror) — not a function

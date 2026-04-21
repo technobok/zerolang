@@ -1,0 +1,46 @@
+# io_textwriter.z -- string-oriented writes through a buffered sink.
+#
+# Three-layer stack, each with its own path-scoped lock:
+#
+#   io.open -> file
+#   io.bufwriter.create -> holds the file via writer.lock
+#   io.textwriter.create -> holds the bufwriter via bufwriter.lock
+#
+# While tw is alive, bw cannot be flushed directly (its lock is
+# held by tw); while bw is alive, the underlying file cannot be
+# written directly. RAII: scope exit runs destructors in reverse
+# order, but none of them auto-flush -- call tw.flush explicitly.
+
+main: function is {
+    w: io.open path: "/tmp/z_io_textwriter.txt".string mode: openmode.write
+    match (
+        w
+    ) case ok then {
+        bw: io.bufwriter.create to: w.lock capacity: 128.u64
+        tw: io.textwriter.create to: bw.lock
+        wr: tw.write_line from: "hello via textwriter"        match (
+            wr
+        ) case ok then {
+            print "write_line queued"
+        } case err then {
+            io.eprintln "write_line failed"
+        }
+        wr2: tw.write_line from: "second line"        match (
+            wr2
+        ) case ok then {
+            print "second write queued"
+        } case err then {
+            io.eprintln "second write failed"
+        }
+        fr: tw.flush
+        match (
+            fr
+        ) case ok then {
+            print "flushed"
+        } case err then {
+            io.eprintln "flush failed"
+        }
+    } case err then {
+        io.eprintln "open for write failed"
+    }
+}

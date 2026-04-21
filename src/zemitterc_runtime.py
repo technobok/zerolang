@@ -769,6 +769,77 @@ _Z_BUFREADER_CREATE = (
     "}\n\n"
 )
 
+_Z_TEXTWRITER_CREATE = (
+    "/* textwriter.create -- wrap a bufwriter. The sink is held by\n"
+    "   borrow (path-scoped lock on the bufwriter keeps it stable\n"
+    "   for the wrapper's lifetime). No backing buffer of our own --\n"
+    "   we delegate to the bufwriter's buffer. */\n"
+    "static z_textwriter_t z_textwriter_create(z_bufwriter_t* sink);\n"
+    "static z_textwriter_t z_textwriter_create(z_bufwriter_t* sink) {\n"
+    "    z_textwriter_t self = {0};\n"
+    "    self.sink = sink;\n"
+    "    return self;\n"
+    "}\n\n"
+)
+
+_Z_TEXTWRITER_WRITE = (
+    "/* textwriter.write -- forward the stringview's bytes to the\n"
+    "   underlying bufwriter. Stringviews are UTF-8 by construction\n"
+    "   (the compiler's string/stringview types enforce it at their\n"
+    "   ingress points), so no validation is performed here. */\n"
+    "static z_result_u64_ioerror_t z_textwriter_write(\n"
+    "    z_textwriter_t* self, z_stringview_t* from\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_textwriter_write(\n"
+    "    z_textwriter_t* self, z_stringview_t* from\n"
+    ") {\n"
+    "    z_listview_u8_t view = { from->length, (uint8_t*)from->data };\n"
+    "    return z_bufwriter_write(self->sink, &view);\n"
+    "}\n\n"
+)
+
+_Z_TEXTWRITER_WRITE_LINE = (
+    "/* textwriter.write_line -- emit the stringview followed by an\n"
+    "   LF ('\\n'). Two sink writes: content then newline. Returns the\n"
+    "   total byte count on ok; on a partial-write err from the\n"
+    "   newline, the content is still considered written (its count\n"
+    "   would have been reported by a plain `write` call) so the\n"
+    "   caller can distinguish 'nothing landed' from 'content landed,\n"
+    "   newline did not' by inspecting the ok count. Errors from the\n"
+    "   content write short-circuit. */\n"
+    "static z_result_u64_ioerror_t z_textwriter_write_line(\n"
+    "    z_textwriter_t* self, z_stringview_t* from\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_textwriter_write_line(\n"
+    "    z_textwriter_t* self, z_stringview_t* from\n"
+    ") {\n"
+    "    z_listview_u8_t body = { from->length, (uint8_t*)from->data };\n"
+    "    z_result_u64_ioerror_t br = z_bufwriter_write(self->sink, &body);\n"
+    "    if (br.tag != Z_RESULT_U64_IOERROR_TAG_OK) return br;\n"
+    "    uint8_t nl = (uint8_t)'\\n';\n"
+    "    z_listview_u8_t tail = { (uint64_t)1, &nl };\n"
+    "    z_result_u64_ioerror_t tr = z_bufwriter_write(self->sink, &tail);\n"
+    "    if (tr.tag != Z_RESULT_U64_IOERROR_TAG_OK) {\n"
+    "        free(br.data);\n"
+    "        return tr;\n"
+    "    }\n"
+    "    uint64_t body_n = *(uint64_t*)br.data;\n"
+    "    uint64_t tail_n = *(uint64_t*)tr.data;\n"
+    "    free(br.data);\n"
+    "    free(tr.data);\n"
+    "    return z_io_u64_ok(body_n + tail_n);\n"
+    "}\n\n"
+)
+
+_Z_TEXTWRITER_FLUSH = (
+    "/* textwriter.flush -- delegate to the bufwriter's flush. The\n"
+    "   textwriter has no buffer of its own to drain. */\n"
+    "static z_result_null_ioerror_t z_textwriter_flush(z_textwriter_t* self);\n"
+    "static z_result_null_ioerror_t z_textwriter_flush(z_textwriter_t* self) {\n"
+    "    return z_bufwriter_flush(self->sink);\n"
+    "}\n\n"
+)
+
 _Z_BUFREADER_READ = (
     "/* bufreader.read — pass-through to the underlying reader. Phase\n"
     "   1c adds chunk buffering on top of this for UTF-8 boundary\n"
@@ -841,7 +912,13 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
     null_wrap = natives & {"mkdir", "mkdirp", "remove", "rename", "file_close"}
     # result(u64, ioerror) wrapper used by file_read / file_write /
     # file_seek
-    u64_wrap = natives & {"file_read", "file_write", "file_seek"}
+    u64_wrap = natives & {
+        "file_read",
+        "file_write",
+        "file_seek",
+        "bufwriter_write",
+        "textwriter_write_line",
+    }
     if "eprintln" in natives:
         parts.append(_Z_IO_EPRINTLN)
     if fallible:
@@ -901,6 +978,16 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_BUFREADER_CREATE)
     if "bufreader_read" in natives:
         parts.append(_Z_BUFREADER_READ)
+    # textwriter forwards to bufwriter; its bodies must land after the
+    # bufwriter bodies above.
+    if "textwriter_create" in natives:
+        parts.append(_Z_TEXTWRITER_CREATE)
+    if "textwriter_write" in natives:
+        parts.append(_Z_TEXTWRITER_WRITE)
+    if "textwriter_write_line" in natives:
+        parts.append(_Z_TEXTWRITER_WRITE_LINE)
+    if "textwriter_flush" in natives:
+        parts.append(_Z_TEXTWRITER_FLUSH)
     return "".join(parts)
 
 

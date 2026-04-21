@@ -1021,6 +1021,24 @@ class CEmitter:
                 )
             elif name == "bufreader":
                 self.needs_io_natives.update({"bufreader_create", "bufreader_read"})
+            elif name == "textwriter":
+                # textwriter forwards to bufwriter; the bufwriter
+                # runtime bodies are needed too. bufwriter's struct
+                # is emitted earlier in this loop because it appears
+                # before textwriter in _IO_WRAPPER_NAMES and the user
+                # program must reference io.bufwriter to obtain a
+                # bufwriter instance to pass into textwriter.create.
+                self.needs_io_natives.update(
+                    {
+                        "textwriter_create",
+                        "textwriter_write",
+                        "textwriter_write_line",
+                        "textwriter_flush",
+                        "bufwriter_create",
+                        "bufwriter_write",
+                        "bufwriter_flush",
+                    }
+                )
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -1166,7 +1184,9 @@ class CEmitter:
         return False
 
     _STD_STREAM_NAMES = ("stdin", "stdout", "stderr")
-    _IO_WRAPPER_NAMES = ("bufwriter", "bufreader")
+    # Emission order matters: textwriter wraps bufwriter, so
+    # bufwriter's struct must be declared before textwriter's.
+    _IO_WRAPPER_NAMES = ("bufwriter", "bufreader", "textwriter")
 
     def _ast_uses_std_streams(self, body: dict) -> bool:
         return self._ast_uses_io_names(body, self._STD_STREAM_NAMES)
@@ -6641,6 +6661,7 @@ class CEmitter:
     _IO_CLASS_METHOD_NATIVES: "dict[tuple[str, str], str]" = {
         ("file", "close"): "file_close",
         ("bufwriter", "flush"): "bufwriter_flush",
+        ("textwriter", "flush"): "textwriter_flush",
     }
 
     def _record_io_native_for_class_method(

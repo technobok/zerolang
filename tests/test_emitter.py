@@ -7006,6 +7006,65 @@ class TestIOFileStreaming:
         assert output.strip() == "flushed\n3"
         assert target.read_bytes() == b"ABC"
 
+    def test_textwriter_roundtrip_over_file(self, tmp_path):
+        """Phase 1c: three-layer stack (file -> bufwriter -> textwriter).
+        write_line emits content + LF through the buffered sink; flush
+        drains the buffered bytes to the fd. Reopen for read and
+        verify the file contains 'hi\\nbye\\n'."""
+        target = tmp_path / "tw.txt"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        w\n"
+            "    ) case ok then {\n"
+            "        bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
+            "        tw: io.textwriter.create to: bw.lock\n"
+            '        wr: tw.write_line from: "hi"\n'
+            "        match (\n"
+            "            wr\n"
+            "        ) case ok then { } case err then {\n"
+            '            print "write err"\n'
+            "        }\n"
+            '        wr2: tw.write_line from: "bye"\n'
+            "        match (\n"
+            "            wr2\n"
+            "        ) case ok then { } case err then {\n"
+            '            print "write2 err"\n'
+            "        }\n"
+            "        fr: tw.flush\n"
+            "        match (\n"
+            "            fr\n"
+            "        ) case ok then {\n"
+            '            print "flushed"\n'
+            "        } case err then {\n"
+            '            print "flush err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        # textwriter struct must land after bufwriter struct (it
+        # holds a bufwriter.lock field). Textwriter runtime bodies
+        # must land after bufwriter runtime bodies (write_line
+        # forwards to bufwriter_write).
+        assert "} z_bufwriter_t;" in csource
+        assert "} z_textwriter_t;" in csource
+        bufwriter_struct_pos = csource.index("} z_bufwriter_t;")
+        textwriter_struct_pos = csource.index("} z_textwriter_t;")
+        assert bufwriter_struct_pos < textwriter_struct_pos, (
+            "z_bufwriter_t struct must be declared before z_textwriter_t"
+        )
+        bufwriter_body_pos = csource.index("z_bufwriter_write(\n")
+        textwriter_body_pos = csource.index("z_textwriter_write_line(\n")
+        assert bufwriter_body_pos < textwriter_body_pos, (
+            "z_bufwriter_write body must precede z_textwriter_write_line"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "flushed"
+        assert target.read_bytes() == b"hi\nbye\n"
+
 
 class TestListOfStringDestructor:
     """The list destructor iterates and calls z_string_free per element
