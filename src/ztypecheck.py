@@ -5079,14 +5079,36 @@ class TypeChecker:
                     loc=reassign.start,
                 )
 
-        # ownership check: reftype fields can only be changed with swap
+        # Reftype reassignment uses drop-and-transfer semantics:
+        # destroy the old LHS value, move the RHS into the slot, and
+        # invalidate the RHS source name so its destructor cannot fire
+        # on the transferred storage. `swap` remains available when
+        # both sides need to stay live (keeps two initialised slots
+        # without a move).
         if existing and not _is_valtype(existing):
-            if reassign.topath.nodetype == NodeType.DOTTEDPATH:
-                self._error(
-                    f"Cannot reassign reftype field '{cast(zast.DottedPath, reassign.topath).child.name}' "
-                    f"with '='; use 'swap' instead",
-                    loc=reassign.start,
-                )
+            rhs_root = self._get_arg_root_name(reassign.value)
+            if rhs_root:
+                rhs_var = self.symtab.lookup_var(rhs_root)
+                if rhs_var and rhs_var.ownership == ZOwnership.BORROWED:
+                    self._error(
+                        f"Cannot move borrowed variable '{rhs_root}' into "
+                        f"reftype field — borrowed names stay bound to their "
+                        f"source for the full scope",
+                        loc=reassign.start,
+                        err=ERR.OWNERERROR,
+                    )
+                else:
+                    take_loc = (
+                        (
+                            reassign.start.lineno,
+                            reassign.start.colno,
+                            reassign.start.fsno,
+                        )
+                        if reassign.start
+                        else None
+                    )
+                    self.symtab.release_held_locks(rhs_root)
+                    self.symtab.invalidate(rhs_root, loc=take_loc)
 
         # Phase B: .lock fields are immutable after construction.
         if reassign.topath.nodetype == NodeType.DOTTEDPATH:

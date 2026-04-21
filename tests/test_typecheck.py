@@ -120,6 +120,55 @@ class TestAssignment:
             "}"
         )
 
+    def test_reftype_field_reassign_with_take(self):
+        """Reftype field '=' reassignment moves RHS into LHS (drop-and-
+        transfer); the RHS name is invalidated after the move."""
+        check_ok(
+            "h: class { msg: string } as {\n"
+            "  set: function {x: this v: string.take} is { x.msg = v }\n"
+            "}\n"
+            'main: function is { a: h msg: "init".string\n'
+            '  b: "next".string\n'
+            "  h.set a v: b\n"
+            "}\n"
+        )
+
+    def test_reftype_field_reassign_invalidates_source(self):
+        """After `this.field = v`, the source name `v` is invalidated —
+        re-using it is an ownership error."""
+        errors = check_errors(
+            "h: class { msg: string } as {\n"
+            "  set: function {x: this v: string.take} out u64 is {\n"
+            "    x.msg = v\n"
+            "    n: v.length\n"
+            "    return n\n"
+            "  }\n"
+            "}\n"
+            'main: function is { a: h msg: "init".string\n'
+            '  b: "s".string\n'
+            "  n: h.set a v: b\n"
+            "}\n"
+        )
+        assert any(
+            "'v'" in e.msg
+            and ("ownership" in e.msg.lower() or "after" in e.msg.lower())
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_reftype_field_reassign_rejects_borrowed_source(self):
+        """A borrowed RHS can't be moved into a reftype field (borrow
+        binding must stay live for its full scope)."""
+        errors = check_errors(
+            "h: class { msg: string } as {\n"
+            "  set: function {x: this v: string.borrow} is { x.msg = v }\n"
+            "}\n"
+            'main: function is { a: h msg: "init".string\n'
+            '  b: "s".string\n'
+            "  h.set a v: b.borrow\n"
+            "}\n"
+        )
+        assert any("borrow" in e.msg.lower() for e in errors), [e.msg for e in errors]
+
 
 class TestNonRuntimeTypes:
     def test_null_assignment_error(self):

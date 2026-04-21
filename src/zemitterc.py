@@ -4022,6 +4022,19 @@ class CEmitter:
             if rhs in self._temp.frees:
                 self._temp.frees.remove(rhs)
         result += f"{indent}{lhs} = {rhs};\n"
+        # Drop-and-transfer: when the RHS is a named variable (or an
+        # explicit `.take`), zero it out so its scope-exit destructor
+        # does not free the storage we just moved into the LHS. No-op
+        # when the RHS is a fresh constructor (no source name) or a
+        # valtype (copy semantics, nothing to invalidate).
+        if lhs_type and lhs_type.needs_destructor:
+            take_var = self._get_take_var_from_expr(reassign.value)
+            if take_var is None:
+                inner = reassign.value.expression
+                if inner.nodetype in (NodeType.ATOMID, NodeType.DOTTEDPATH):
+                    take_var = self._get_implicit_take_var(cast(zast.Operation, inner))
+            if take_var is not None and take_var != lhs:
+                result += self._emit_take_invalidation(take_var, lhs_type, indent)
         return result
 
     def _emit_swap(self, swap: zast.Swap) -> str:
