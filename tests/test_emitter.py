@@ -6820,6 +6820,40 @@ class TestIOFileStreaming:
         output = compile_and_run(csource)
         assert output.strip() == "mtime=1 mode=1"
 
+    def test_stat_reports_extended_identity_fields(self, tmp_path):
+        """Extended filestat carries device, inode, nlink, and the two
+        additional timestamps. For a freshly-created regular file: inode
+        is non-zero (POSIX guarantees it), nlink is 1 (no hard links),
+        device is non-zero (any backing fs), atime/ctime are populated."""
+        target = tmp_path / "extfields.txt"
+        target.write_text("x")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    s: io.stat "{target}".string\n'
+            "    match (\n"
+            "        s\n"
+            "    ) case ok then {\n"
+            "        hasdev:   s.device > 0.u64\n"
+            "        hasinode: s.inode > 0.u64\n"
+            "        nlink_one: s.nlink == 1.u64\n"
+            "        hasatime: s.atime_seconds > 0.u64\n"
+            "        hasctime: s.ctime_seconds > 0.u64\n"
+            '        print "dev=\\{hasdev} ino=\\{hasinode} nl=\\{nlink_one}"\n'
+            '        print "at=\\{hasatime} ct=\\{hasctime}"\n'
+            "    } case err then {\n"
+            '        print "err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "fs->device" in csource
+        assert "fs->inode" in csource
+        assert "fs->nlink" in csource
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == [
+            "dev=1 ino=1 nl=1",
+            "at=1 ct=1",
+        ]
+
     def test_lstat_reports_symlink_kind(self, tmp_path):
         """lstat does not follow symlinks — on a symlink target, kind
         is symlink (not whatever the link points at)."""

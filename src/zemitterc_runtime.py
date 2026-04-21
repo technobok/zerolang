@@ -361,7 +361,12 @@ _Z_IO_STAT_FILL = (
     "    else                            fs->kind.tag = Z_FILEKIND_TAG_OTHER;\n"
     "    fs->size = (uint64_t)sb->st_size;\n"
     "    fs->mtime_seconds = (uint64_t)sb->st_mtime;\n"
+    "    fs->atime_seconds = (uint64_t)sb->st_atime;\n"
+    "    fs->ctime_seconds = (uint64_t)sb->st_ctime;\n"
     "    fs->mode = (uint32_t)sb->st_mode;\n"
+    "    fs->device = (uint64_t)sb->st_dev;\n"
+    "    fs->inode = (uint64_t)sb->st_ino;\n"
+    "    fs->nlink = (uint64_t)sb->st_nlink;\n"
     "}\n\n"
 )
 
