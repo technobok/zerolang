@@ -90,14 +90,23 @@ The subsystem lands in phases. Currently shipped:
     rather than the generic #~"other", matching the precedent set
     by #~"notfound" / #~"permissiondenied"]
 
+Also shipped:
+
+#ul:
+  [#*: #~"textreader" with #~"read_line" and per-line UTF-8 validation.
+    Invalid UTF-8 surfaces as #~"ioerror.badencoding"; end of stream
+    surfaces as #~"ioerror.eof" once the internal line buffer drains.
+    Unterminated trailing content is returned once as an ok line before
+    eof. The #~".lines" iterator is not yet shipped.]
+
 Not yet shipped:
 
 #ul:
   [#*: Further #~"filestat" fields (device, inode, access / ctime,
     nlink)]
-  [#*: #~"textreader" (#~".lines" iterator) with UTF-8 validation on
-    read paths and the #~"badencoding" ioerror arm -- Phase 1c
-    remainder, #~"textwriter" already shipped]
+  [#*: #~"textreader.lines" iterator and internal-buffering
+    #~"bufreader" (v1 stays pass-through; textreader does its own
+    line accumulation)]
   [#*: Process / argv / env (planned for a separate #~"os" unit)]
   [#*: Async, sockets, symlinks, advisory locks]
 
@@ -177,9 +186,26 @@ Encoding: #~"textwriter" assumes the input is already valid UTF-8
 and emits the bytes verbatim. Zerolang's #~"string" and
 #~"stringview" types are UTF-8 by construction (the compiler's
 string ingress validates at the boundary), so no re-validation is
-done on write. The #~"textreader" half of this phase adds UTF-8
-validation on #_*"read" paths, where the source is genuinely
-untrusted; it is not yet shipped.
+done on write.
+
+#~"textreader" is the read-side counterpart. It holds a borrow on
+its source #~"bufreader" via #~"bufreader.lock" and surfaces one
+line at a time through #~"read_line". Each call scans the internal
+accumulator for LF, validates the emitted line as UTF-8 (without the
+trailing LF), and boxes it into #~"result.ok". Validation failures
+become #~"ioerror.badencoding"; draining the stream yields
+#~"ioerror.eof" (after one final ok for any unterminated tail).
+Typical shape:
+
+#++:
+#`code:
+r: io.open path: p mode: openmode.read
+match (r) case ok then {
+  br: io.bufreader.create from: r.lock capacity: 4096.u64
+  tr: io.textreader.create from: br.lock
+  for line: tr.read_line loop { ... }   # manual loop for now
+} case err then { ... }
+#``
 
 #--: Design Principles
 

@@ -2518,6 +2518,38 @@ class TestIoWrappers:
             f"{[e.msg for e in errors]}"
         )
 
+    def test_textreader_create_and_read_line_typecheck(self):
+        """textreader.create takes (from: bufreader.lock); read_line
+        returns result(string, ioerror). Mirrors the textwriter shape
+        on the read side of the stack."""
+        check_ok(
+            "main: function is {\n"
+            "  r: io.stdin\n"
+            "  br: io.bufreader.create from: r.lock capacity: 64.u64\n"
+            "  tr: io.textreader.create from: br.lock\n"
+            "  l: tr.read_line\n"
+            "  match (l) case ok then {} case err then {}\n"
+            "}\n"
+        )
+
+    def test_textreader_locks_bufreader_source(self):
+        """While tr holds a borrow on br via bufreader.lock, calling
+        br.read is rejected -- the source bufreader cannot be consumed
+        directly while the textreader is alive."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  r: io.stdin\n"
+            "  br: io.bufreader.create from: r.lock capacity: 64.u64\n"
+            "  tr: io.textreader.create from: br.lock\n"
+            "  buf: (bytes)\n"
+            "  rr: br.read into: buf.borrow max: 16.u64\n"
+            "}\n"
+        )
+        assert any("lock" in e.msg.lower() and "'br'" in e.msg for e in errors), (
+            f"expected lock-conflict error referencing 'br'; got: "
+            f"{[e.msg for e in errors]}"
+        )
+
     def test_textwriter_flush_zero_arg_coerces_to_return_type(self):
         """`fr: tw.flush` must bind fr to result(null, ioerror) via
         the generalised zero-arg class-method coercion (previously

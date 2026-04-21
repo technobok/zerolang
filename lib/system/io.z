@@ -298,3 +298,31 @@ textwriter: class {
     write_line: function {:this from: stringview} out (result t: u64 e: ioerror) is native
     flush:      function {:this} out (result t: null e: ioerror) is native
 }
+
+# `textreader` -- string-oriented adapter over a `bufreader`. Reads
+# are pulled through the buffered source; line boundaries are tracked
+# by scanning the accumulated `buf` for LF (`\n`). UTF-8 validation
+# runs on each complete line before it is surfaced as a `string`;
+# invalid sequences surface as `ioerror.badencoding`.
+#
+# Holds a borrow on `source` via `bufreader.lock`, so the buffered
+# wrapper cannot be read, mutated, or re-borrowed while the
+# textreader is alive.
+#
+# `read_line` semantics:
+#
+#   - ok(s)       -- one line read; the trailing LF is stripped.
+#                    An empty `s` corresponds to a bare LF in the
+#                    source.
+#   - ok(tail)    -- end of stream reached with a trailing
+#                    unterminated line; that tail is returned once.
+#   - err(eof)    -- nothing left to read.
+#   - err(badencoding) -- the completed line was not valid UTF-8.
+#   - err(other)  -- underlying reader surfaced an I/O failure.
+textreader: class {
+    source: bufreader.lock
+    buf:    bytes
+} as {
+    create:    function {from: bufreader.lock} out this is native
+    read_line: function {:this} out (result t: string e: ioerror) is native
+}

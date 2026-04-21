@@ -1039,6 +1039,17 @@ class CEmitter:
                         "bufwriter_flush",
                     }
                 )
+            elif name == "textreader":
+                # textreader forwards to bufreader; same ordering
+                # constraint as textwriter -> bufwriter.
+                self.needs_io_natives.update(
+                    {
+                        "textreader_create",
+                        "textreader_read_line",
+                        "bufreader_create",
+                        "bufreader_read",
+                    }
+                )
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -1186,7 +1197,7 @@ class CEmitter:
     _STD_STREAM_NAMES = ("stdin", "stdout", "stderr")
     # Emission order matters: textwriter wraps bufwriter, so
     # bufwriter's struct must be declared before textwriter's.
-    _IO_WRAPPER_NAMES = ("bufwriter", "bufreader", "textwriter")
+    _IO_WRAPPER_NAMES = ("bufwriter", "bufreader", "textwriter", "textreader")
 
     def _ast_uses_std_streams(self, body: dict) -> bool:
         return self._ast_uses_io_names(body, self._STD_STREAM_NAMES)

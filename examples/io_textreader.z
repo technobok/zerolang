@@ -1,0 +1,61 @@
+# io_textreader.z -- string-oriented reads through a buffered source.
+#
+# Three-layer stack, mirror of io_textwriter:
+#
+#   io.open -> file
+#   io.bufreader.create -> holds the file via reader.lock
+#   io.textreader.create -> holds the bufreader via bufreader.lock
+#
+# `read_line` strips the trailing LF from each line; at end-of-stream
+# it surfaces any unterminated tail once, then `ioerror.eof`.
+
+main: function is {
+    # Fixture: write two lines with a real LF between them via the
+    # buffered-text writer stack. Zerolang string literals don't
+    # interpret `\n`, so going through textwriter.write_line is the
+    # most direct way to produce file content with actual newlines.
+    w: io.open path: "/tmp/z_io_textreader.txt".string mode: openmode.write
+    match (
+        w
+    ) case ok then {
+        bw: io.bufwriter.create to: w.lock capacity: 64.u64
+        tw: io.textwriter.create to: bw.lock
+        wr1: tw.write_line from: "first"
+        match (
+            wr1
+        ) case ok then { print "fixture line 1" } case err then { io.eprintln "fail 1" }
+        wr2: tw.write_line from: "second"
+        match (
+            wr2
+        ) case ok then { print "fixture line 2" } case err then { io.eprintln "fail 2" }
+        fr: tw.flush
+        match (
+            fr
+        ) case ok then { print "flushed" } case err then { io.eprintln "flush err" }
+    } case err then {
+        io.eprintln "open for write failed"
+    }
+
+    # Now read the lines back.
+    r: io.open path: "/tmp/z_io_textreader.txt".string mode: openmode.read
+    match (
+        r
+    ) case ok then {
+        br: io.bufreader.create from: r.lock capacity: 64.u64
+        tr: io.textreader.create from: br.lock
+        l1: tr.read_line
+        match (
+            l1
+        ) case ok then { print l1 } case err then { io.eprintln "line 1 failed" }
+        l2: tr.read_line
+        match (
+            l2
+        ) case ok then { print l2 } case err then { io.eprintln "line 2 failed" }
+        l3: tr.read_line
+        match (
+            l3
+        ) case ok then { print "unexpected extra line" } case err then { print "eof reached" }
+    } case err then {
+        io.eprintln "open for read failed"
+    }
+}

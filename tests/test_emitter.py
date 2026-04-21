@@ -7184,6 +7184,149 @@ class TestIOFileStreaming:
         assert output.strip() == "flushed"
         assert target.read_bytes() == b"hi\nbye\n"
 
+    def test_textreader_reads_lines_and_reports_eof(self, tmp_path):
+        """Phase 1c/2: three-layer read stack (file -> bufreader ->
+        textreader). Fixture written via write_text with real LFs;
+        textreader strips each line's LF and surfaces `ioerror.eof`
+        once the stream is drained."""
+        target = tmp_path / "tr.txt"
+        target.write_bytes(b"alpha\nbeta\ngamma\n")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            "        l1: tr.read_line\n"
+            "        match (\n"
+            "            l1\n"
+            "        ) case ok then { print l1 } case err then {\n"
+            '            print "l1 err"\n'
+            "        }\n"
+            "        l2: tr.read_line\n"
+            "        match (\n"
+            "            l2\n"
+            "        ) case ok then { print l2 } case err then {\n"
+            '            print "l2 err"\n'
+            "        }\n"
+            "        l3: tr.read_line\n"
+            "        match (\n"
+            "            l3\n"
+            "        ) case ok then { print l3 } case err then {\n"
+            '            print "l3 err"\n'
+            "        }\n"
+            "        l4: tr.read_line\n"
+            "        match (\n"
+            "            l4\n"
+            "        ) case ok then {\n"
+            '            print "unexpected"\n'
+            "        } case err then {\n"
+            '            print "eof"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        # textreader struct + runtime body must follow bufreader
+        assert "} z_bufreader_t;" in csource
+        assert "} z_textreader_t;" in csource
+        bufreader_struct_pos = csource.index("} z_bufreader_t;")
+        textreader_struct_pos = csource.index("} z_textreader_t;")
+        assert bufreader_struct_pos < textreader_struct_pos, (
+            "z_bufreader_t struct must be declared before z_textreader_t"
+        )
+        bufreader_body_pos = csource.index("z_bufreader_read(\n")
+        textreader_body_pos = csource.index("z_textreader_read_line(\n")
+        assert bufreader_body_pos < textreader_body_pos, (
+            "z_bufreader_read body must precede z_textreader_read_line"
+        )
+        # UTF-8 validator must be emitted (read_line calls it)
+        assert "z_io_utf8_is_valid(" in csource
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == [
+            "alpha",
+            "beta",
+            "gamma",
+            "eof",
+        ]
+
+    def test_textreader_returns_unterminated_tail_then_eof(self, tmp_path):
+        """A trailing unterminated chunk is surfaced once as ok(tail);
+        the next read_line returns err(eof)."""
+        target = tmp_path / "tail.txt"
+        target.write_bytes(b"one\ntwo")  # note: no trailing LF
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 16.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            "        l1: tr.read_line\n"
+            "        match (\n"
+            "            l1\n"
+            "        ) case ok then { print l1 } case err then {\n"
+            '            print "l1 err"\n'
+            "        }\n"
+            "        l2: tr.read_line\n"
+            "        match (\n"
+            "            l2\n"
+            "        ) case ok then { print l2 } case err then {\n"
+            '            print "l2 err"\n'
+            "        }\n"
+            "        l3: tr.read_line\n"
+            "        match (\n"
+            "            l3\n"
+            "        ) case ok then {\n"
+            '            print "unexpected"\n'
+            "        } case err then {\n"
+            '            print "eof"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["one", "two", "eof"]
+
+    def test_textreader_badencoding_on_invalid_utf8(self, tmp_path):
+        """Invalid UTF-8 inside a line yields the `badencoding` arm.
+        Fixture: the byte 0xFF is never valid as a UTF-8 lead byte."""
+        target = tmp_path / "bad.txt"
+        target.write_bytes(b"ok\n\xff\nafter\n")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            "        l1: tr.read_line\n"
+            "        match (\n"
+            "            l1\n"
+            "        ) case ok then { print l1 } case err then {\n"
+            '            print "l1 err"\n'
+            "        }\n"
+            "        l2: tr.read_line\n"
+            "        match (\n"
+            "            l2\n"
+            "        ) case ok then { print l2 } case err then {\n"
+            '            print "bad"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["ok", "bad"]
+
 
 class TestListOfStringDestructor:
     """The list destructor iterates and calls z_string_free per element
