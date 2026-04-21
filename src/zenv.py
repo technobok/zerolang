@@ -77,12 +77,15 @@ def _format_lock_conflict(
     root = requested_path[0]
     req_kind = requested_type.name.lower()
     held_kind = existing.lock_type.name.lower()
-    detail = ""
+    req_detail = ""
+    if len(requested_path) > 1:
+        req_detail = f" on '{_format_path(requested_path)}'"
+    held_detail = ""
     if existing.path != requested_path:
-        detail = f" on '{_format_path(existing.path)}'"
+        held_detail = f" on '{_format_path(existing.path)}'"
     return (
-        f"Cannot take {req_kind} lock on '{root}': "
-        f"already has {held_kind} lock{detail} held by '{existing.holder}'"
+        f"Cannot take {req_kind} lock on '{root}'{req_detail}: "
+        f"already has {held_kind} lock{held_detail} held by '{existing.holder}'"
     )
 
 

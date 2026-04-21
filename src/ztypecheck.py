@@ -3945,14 +3945,12 @@ class TypeChecker:
             mono.needs_field_cleanup = True  # data buffer needs cleanup
             elem_type = _list_element_type(mono)
             t_u64 = self._resolve_name("u64") or self.t_null
-            # synthesize .length field (runtime, u64)
-            length_type = _make_type("u64", ZTypeType.RECORD)
-            length_type.is_valtype = True
-            mono.children["length"] = length_type
-            # synthesize .capacity field (runtime, u64)
-            cap_type = _make_type("u64", ZTypeType.RECORD)
-            cap_type.is_valtype = True
-            mono.children["capacity"] = cap_type
+            # .length / .capacity expose the global u64 type so arithmetic
+            # operators (+, -, <, ...) declared on u64 resolve through
+            # children["+"] etc. when users do `l.length + n`. Synthesising
+            # a fresh empty u64 record here would drop those methods.
+            mono.children["length"] = t_u64
+            mono.children["capacity"] = t_u64
             if elem_type:
                 # synthesize .append method: function {from: <elem>}
                 append_type = _make_type(f"{mangled}.append", ZTypeType.FUNCTION)
@@ -5920,6 +5918,15 @@ class TypeChecker:
         callee_type = self._check_path(call.callable)
         if not callee_type:
             return None
+        # `_check_path` on a protocol/facet dotted callable (e.g.
+        # `obj.protofield.method`) stamps `_pending_borrow_lock` to the
+        # source path so an assignment like `p: obj.protofield` would
+        # install a borrow-scoped lock on `obj`. In a call context the
+        # receiver lock is installed separately by `_lock_receiver`, so
+        # drop the pending lift here — otherwise the first argument's
+        # processing would see it as if the arg had been a `.lock` /
+        # `.borrow` path and try to re-lock the receiver root.
+        self._pending_borrow_lock = None
 
         # handle control flow: return, break, continue, error
         if callee_type.control_kind == ControlKind.RETURN:

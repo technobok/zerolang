@@ -2063,6 +2063,49 @@ class TestLockEnforcement:
         )
         assert any("exclusive lock" in e.msg.lower() and "'w'" in e.msg for e in errors)
 
+    def test_bufwriter_style_flush_pattern_typechecks(self):
+        """Regression: the buffered-wrapper `flush` pattern must
+        type-check cleanly. It exercises two things together:
+
+        * A protocol-typed .lock field on `this` (sink). Reading
+          `this.sink` as the callable lifts a pending borrow on
+          `(this,)`; the call must drop that pending lock before
+          processing the first argument, otherwise `bv` (which already
+          holds EXCLUSIVE on `(this, buf)`) would conflict with a
+          re-lock of `this` during arg handling.
+        * Arithmetic on `list.length` (u64). The synthesized u64
+          record previously had no `+` method, so
+          `this.buf.length + from.length` failed to resolve. Wiring
+          length/capacity to the global u64 type restores arithmetic
+          operators on list-length results."""
+        check_ok(
+            "myproto: protocol {\n"
+            "  write: function {:this from: byteview}"
+            " out (result t: u64 e: ioerror)\n"
+            "}\n"
+            "holder: class {\n"
+            "  sink: myproto.lock\n"
+            "  buf:  bytes\n"
+            "  cap:  u64\n"
+            "} as {\n"
+            "  flush: function {:this}"
+            " out (result t: null e: ioerror) is {\n"
+            "    if this.buf.length + this.cap > this.cap then {\n"
+            "      bv: byteview.borrow from: this.buf.listview\n"
+            "      fr: this.sink.write from: bv\n"
+            "      bv.release\n"
+            "      match (fr) case ok then {\n"
+            "        return (result.ok null e: ioerror)\n"
+            "      } case err then {\n"
+            "        return (result.err fr t: null)\n"
+            "      }\n"
+            "    }\n"
+            "    return (result.ok null e: ioerror)\n"
+            "  }\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
     def test_self_field_mutation_of_sibling_permitted(self):
         """Within a method, mutating a sibling field of the locked leaf is
         permitted under the path-scoped lock model."""
