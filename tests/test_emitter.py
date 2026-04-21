@@ -4629,6 +4629,36 @@ class TestStr:
         output = compile_and_run(csource)
         assert output.strip() == "alice"
 
+    def test_string_stringview_zero_arg_shape(self):
+        """string.stringview emits (z_stringview_t){ s.data, s.size }. Same
+        struct shape as str.stringview, but the length field is `size` (not
+        `len`) because that's what `z_string_t` declares."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: "hello".string\n'
+            "    v: s.stringview\n"
+            "    print v\n"
+            "}"
+        )
+        assert "(z_stringview_t){ s.data, s.size }" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "hello"
+
+    def test_string_stringview_substring_bounds_check(self):
+        """Substring form on a string emits a runtime bounds check against
+        s.size, mirroring the str form's check against s.len."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    s: "hello world".string\n'
+            "    v: s.stringview from: 6 to: 11\n"
+            "    print v\n"
+            "}"
+        )
+        assert "> s.size" in csource
+        assert "stringview: bounds error" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "world"
+
     def test_z_string_to_str_deduplication(self):
         """One z_string_to_str_N function per target capacity regardless of sources."""
         csource = emit_source(

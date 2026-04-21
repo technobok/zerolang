@@ -5451,16 +5451,18 @@ class CEmitter:
                     self.needs_stringview = True
                     return f"{parent_val}.length"
 
-        # string class method calls: .stringview, .length, .capacity
+        # string and str method calls: .stringview (both), .length / .capacity (string)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
-            if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
-                method_name = cast(zast.DottedPath, call.callable).child.name
-                parent_val = self._emit_path_value(
-                    cast(zast.DottedPath, call.callable).parent
-                )
+            dp = cast(zast.DottedPath, call.callable)
+            dp_parent_type = dp.parent.type
+            is_string = dp_parent_type is not None and (
+                dp_parent_type.subtype == ZSubType.STRING
+            )
+            is_str = dp_parent_type is not None and _is_str_type(dp_parent_type)
+            if dp_parent_type is not None and (is_string or is_str):
+                method_name = dp.child.name
+                parent_val = self._emit_path_value(dp.parent)
                 if method_name == "stringview":
-                    self.needs_stringview = True
                     from_val = None
                     to_val = None
                     for arg in call.arguments:
@@ -5468,64 +5470,20 @@ class CEmitter:
                             from_val = self._emit_operation_value(arg.valtype)
                         elif arg.name == "to":
                             to_val = self._emit_operation_value(arg.valtype)
-                    if from_val is not None and to_val is not None:
-                        self.needs_stdlib = True
-                        self.needs_stdio = True
-                        indent = self._indent()
-                        self._temp.decls.append(
-                            f"{indent}if ((uint64_t){from_val} > {parent_val}->size"
-                            f" || (uint64_t){to_val} > {parent_val}->size"
-                            f" || (uint64_t){from_val} > (uint64_t){to_val})"
-                            f' {{ fprintf(stderr, "stringview: bounds error\\n");'
-                            f" exit(1); }}\n"
-                        )
-                        return (
-                            f"(z_stringview_t){{ {parent_val}->data"
-                            f" + (uint64_t){from_val},"
-                            f" (uint64_t){to_val} - (uint64_t){from_val} }}"
-                        )
-                    return (
-                        f"(z_stringview_t){{ {parent_val}->data, {parent_val}->size }}"
+                    is_pointer_path = is_string and self._is_class_pointer_path(
+                        dp.parent
                     )
-                if method_name == "length":
+                    return self._emit_stringview_value(
+                        parent_val,
+                        dp_parent_type,
+                        is_pointer_path,
+                        from_val,
+                        to_val,
+                    )
+                if is_string and method_name == "length":
                     return f"{parent_val}->size"
-                if method_name == "capacity":
+                if is_string and method_name == "capacity":
                     return f"{parent_val}->capacity"
-
-        # str valtype method calls: .stringview (zero-arg or from: to: substring)
-        if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
-            if dp_parent_type and _is_str_type(dp_parent_type):
-                method_name = cast(zast.DottedPath, call.callable).child.name
-                if method_name == "stringview":
-                    self.needs_stringview = True
-                    parent_val = self._emit_path_value(
-                        cast(zast.DottedPath, call.callable).parent
-                    )
-                    from_val = None
-                    to_val = None
-                    for arg in call.arguments:
-                        if arg.name == "from":
-                            from_val = self._emit_operation_value(arg.valtype)
-                        elif arg.name == "to":
-                            to_val = self._emit_operation_value(arg.valtype)
-                    if from_val is not None and to_val is not None:
-                        self.needs_stdlib = True
-                        self.needs_stdio = True
-                        indent = self._indent()
-                        self._temp.decls.append(
-                            f"{indent}if ((uint64_t){from_val} > {parent_val}.len"
-                            f" || (uint64_t){to_val} > {parent_val}.len"
-                            f" || (uint64_t){from_val} > (uint64_t){to_val})"
-                            f' {{ fprintf(stderr, "stringview: bounds error\\n");'
-                            f" exit(1); }}\n"
-                        )
-                        return (
-                            f"(z_stringview_t){{ {parent_val}.data"
-                            f" + (uint64_t){from_val},"
-                            f" (uint64_t){to_val} - (uint64_t){from_val} }}"
-                        )
-                    return f"(z_stringview_t){{ {parent_val}.data, {parent_val}.len }}"
 
         # string construction: string or string capacity: N
         if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
@@ -6412,21 +6370,26 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"{parent}{acc}size"
-        # string: .stringview conversion (string -> z_stringview_t)
+        # .stringview conversion at path-access position, for both `string`
+        # (reftype) and `str_N` (valtype). Only str differs in the length
+        # field name (`len` vs `size`); pointer-vs-value access depends on
+        # whether the parent path traverses a class pointer.
         if (
             parent_type_dp
-            and parent_type_dp.subtype == ZSubType.STRING
             and child == "stringview"
+            and (
+                parent_type_dp.subtype == ZSubType.STRING
+                or _is_str_type(parent_type_dp)
+            )
         ):
-            self.needs_stringview = True
             parent = self._emit_path_value(path.parent)
-            acc = "->" if self._is_class_pointer_path(path.parent) else "."
-            return f"(z_stringview_t){{ {parent}{acc}data, {parent}{acc}size }}"
-        # str: .stringview conversion (str -> z_stringview_t) at path-access position
-        if parent_type_dp and _is_str_type(parent_type_dp) and child == "stringview":
-            self.needs_stringview = True
-            parent = self._emit_path_value(path.parent)
-            return f"(z_stringview_t){{ {parent}.data, {parent}.len }}"
+            is_pointer_path = (
+                parent_type_dp.subtype == ZSubType.STRING
+                and self._is_class_pointer_path(path.parent)
+            )
+            return self._emit_stringview_value(
+                parent, parent_type_dp, is_pointer_path, None, None
+            )
         # list: .length field access
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "length":
             parent = self._emit_path_value(path.parent)
@@ -6809,6 +6772,43 @@ class CEmitter:
         if atom.narrowed_subtype is None or atom.original_ztype is None:
             return None
         return self._emit_atomid_value(atom)
+
+    def _emit_stringview_value(
+        self,
+        parent_val: str,
+        parent_type: ZType,
+        is_pointer_path: bool,
+        from_val: Optional[str],
+        to_val: Optional[str],
+    ) -> str:
+        """Build a `z_stringview_t` literal from a string or str operand.
+
+        `string` exposes `size`; `str_N` exposes `len`. Field access is via
+        `->` when reading through a class-pointer path, `.` otherwise.
+        """
+        self.needs_stringview = True
+        is_string = parent_type.subtype == ZSubType.STRING
+        acc = "->" if is_pointer_path else "."
+        len_field = "size" if is_string else "len"
+        data_access = f"{parent_val}{acc}data"
+        len_access = f"{parent_val}{acc}{len_field}"
+        if from_val is None or to_val is None:
+            return f"(z_stringview_t){{ {data_access}, {len_access} }}"
+        self.needs_stdlib = True
+        self.needs_stdio = True
+        indent = self._indent()
+        self._temp.decls.append(
+            f"{indent}if ((uint64_t){from_val} > {len_access}"
+            f" || (uint64_t){to_val} > {len_access}"
+            f" || (uint64_t){from_val} > (uint64_t){to_val})"
+            f' {{ fprintf(stderr, "stringview: bounds error\\n");'
+            f" exit(1); }}\n"
+        )
+        return (
+            f"(z_stringview_t){{ {data_access}"
+            f" + (uint64_t){from_val},"
+            f" (uint64_t){to_val} - (uint64_t){from_val} }}"
+        )
 
     def _alias_c_expr(self, path: str) -> str:
         """Render a zerolang-level alias path (e.g. `r.f.g`) as a C

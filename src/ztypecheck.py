@@ -3301,23 +3301,11 @@ class TypeChecker:
         # for string class: .string returns the same string type (no-op identity)
         if parent_type.subtype == ZSubType.STRING and child_name == "string":
             return self._resolve_name("string")
-        # for string class: .stringview returns the stringview type directly
-        # and acquires an exclusive lock on the source string
-        if parent_type.subtype == ZSubType.STRING and child_name == "stringview":
-            src_path = self._get_dotted_path_tuple(path.parent)
-            if src_path:
-                self._pending_borrow_lock = src_path
-            else:
-                self._error(
-                    "Cannot create view from temporary expression; "
-                    "assign the value to a variable first",
-                    loc=path.start,
-                    err=ERR.OWNERERROR,
-                )
-            return self._resolve_name("stringview")
-        # for str valtype: .stringview returns the stringview type directly
-        # and acquires an exclusive lock on the source path
-        if _is_str_type(parent_type) and child_name == "stringview":
+        # .stringview on a string (reftype) or str (valtype) returns the
+        # stringview type and acquires an exclusive lock on the source path.
+        if child_name == "stringview" and (
+            parent_type.subtype == ZSubType.STRING or _is_str_type(parent_type)
+        ):
             src_path = self._get_dotted_path_tuple(path.parent)
             if src_path:
                 self._pending_borrow_lock = src_path
