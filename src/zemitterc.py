@@ -6,7 +6,7 @@ Includes ownership-based memory management for strings (z_string_t*).
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Tuple, cast
+from typing import Optional, List, Dict, Tuple, Callable, cast
 
 import zast
 from zast import NodeType
@@ -6084,31 +6084,100 @@ class CEmitter:
             return self._emit_dotted_path_value(cast(zast.DottedPath, path))
         return "0"
 
+    def _narrow_unwrap_expr(
+        self,
+        outer: ZType,
+        subtype_name: str,
+        child_id: int,
+        subject_cexpr: str,
+    ) -> Optional[str]:
+        """Render the C unwrap expression for a match-arm-narrowed reference.
+
+        Returns None when the subtype has a null payload (nothing to unwrap).
+        """
+        payload_type = outer.resolve_child_by_id(child_id)
+        if payload_type is None or payload_type.typetype == ZTypeType.NULL:
+            return None
+        if outer.typetype == ZTypeType.UNION:
+            payload_ctype = _ctype(payload_type)
+            return f"(*({payload_ctype}*){subject_cexpr}.data)"
+        if outer.typetype == ZTypeType.VARIANT:
+            return f"{subject_cexpr}.data.{subtype_name}"
+        return None
+
+    def _narrow_alias_name(self, subject: zast.Operation) -> Optional[str]:
+        """Zerolang-level name of the match subject, or None if not a bare name.
+
+        Narrowing is only applied by the typechecker when the subject is a
+        simple addressable name (ztypecheck.py `_check_case`); for anything
+        else there is nothing to alias.
+        """
+        node: zast.Node = subject
+        while node.nodetype == NodeType.EXPRESSION:
+            node = cast(zast.Expression, node).expression
+        if node.nodetype != NodeType.ATOMID:
+            return None
+        name = cast(zast.AtomId, node).name
+        if _is_numeric_id(name):
+            return None
+        return name
+
+    def _push_narrow_alias(
+        self,
+        alias_name: Optional[str],
+        outer: ZType,
+        subtype_name: str,
+        child_id: int,
+        subject_cexpr: str,
+        parts: List[str],
+        arm_indent: str,
+    ) -> Callable[[], None]:
+        """Seed `_alias_map` with the arm's unwrap expression and return a
+        restore callback to run after the arm body.
+
+        Routes arm-narrowed references through the same substitution path used
+        by Phase B `with` / inline alias bindings. When aliasing doesn't apply
+        (no bare-name subject, null-payload arm), returns a no-op restorer.
+        """
+        if alias_name is None:
+            return lambda: None
+        unwrap = self._narrow_unwrap_expr(outer, subtype_name, child_id, subject_cexpr)
+        if unwrap is None:
+            return lambda: None
+        parts.append(f"{arm_indent}/* alias: {alias_name} => {unwrap} */\n")
+        prev = self._alias_map.get(alias_name)
+        self._alias_map[alias_name] = unwrap
+
+        def restore() -> None:
+            if prev is None:
+                self._alias_map.pop(alias_name, None)
+            else:
+                self._alias_map[alias_name] = prev
+
+        return restore
+
     def _emit_atomid_value(self, atom: zast.AtomId) -> str:
         name = atom.name
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
         # binding alias: substitute the source expression at the reference site
-        # (set by alias-optimized `with` and inline .take/.borrow bindings).
+        # (set by alias-optimized `with`, inline .take/.borrow bindings, and
+        # match-arm narrowed subjects).
         if name in self._alias_map:
             return self._alias_map[name]
-        # Narrowing unwrap: `atom.narrowed_subtype` is stamped when the name
-        # refers to a variable narrowed by a match arm. The typecheck-visible
-        # type is the payload, but the C-level storage is still the outer
-        # union/variant struct. Emit the unwrap here so field access, method
-        # dispatch, and re-match all see the payload value.
+        # Narrowing unwrap fallback: handles any AtomId stamped with
+        # `narrowed_subtype` that wasn't seeded into `_alias_map` (e.g.
+        # subjects not bound to a simple addressable name). Match-arm emission
+        # seeds the alias map for the common case.
         if atom.narrowed_subtype and atom.original_ztype is not None:
-            sub = atom.narrowed_subtype
-            outer = atom.original_ztype
-            # Id-only child lookup — narrowing always stamps atom.child_id.
-            payload_type = outer.resolve_child_by_id(atom.child_id)
-            if outer.typetype == ZTypeType.UNION:
-                if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
-                    payload_ctype = _ctype(payload_type)
-                    return f"(*({payload_ctype}*){name}.data)"
-            elif outer.typetype == ZTypeType.VARIANT:
-                if payload_type is not None and payload_type.typetype != ZTypeType.NULL:
-                    return f"{name}.data.{sub}"
+            unwrap = self._narrow_unwrap_expr(
+                atom.original_ztype,
+                atom.narrowed_subtype,
+                atom.child_id,
+                _mangle_var(name),
+            )
+            if unwrap is not None:
+                return unwrap
         # check if this refers to a function, constant, data, or record
         resolved = self._resolved_type(name)
         tt = resolved.typetype if resolved else None
@@ -8164,6 +8233,7 @@ class CEmitter:
         union_name = union_type.name
 
         subject = self._emit_operation_value(casenode.subject)
+        alias_name = self._narrow_alias_name(casenode.subject)
 
         parts.append(f"{indent}switch ({subject}.tag) {{\n")
         for clause in casenode.clauses:
@@ -8171,10 +8241,21 @@ class CEmitter:
             tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
+            arm_indent = self._indent()
+            restore = self._push_narrow_alias(
+                alias_name,
+                union_type,
+                sname,
+                clause.match.child_id,
+                subject,
+                parts,
+                arm_indent,
+            )
             saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(clause.statement))
             parts.append(self._emit_arm_local_cleanup(saved_len))
-            parts.append(f"{self._indent()}break;\n")
+            restore()
+            parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
 
@@ -8283,6 +8364,7 @@ class CEmitter:
         variant_name = variant_type.name
 
         subject = self._emit_operation_value(casenode.subject)
+        alias_name = self._narrow_alias_name(casenode.subject)
 
         parts.append(f"{indent}switch ({subject}.tag) {{\n")
         for clause in casenode.clauses:
@@ -8290,10 +8372,21 @@ class CEmitter:
             tag = f"Z_{variant_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
+            arm_indent = self._indent()
+            restore = self._push_narrow_alias(
+                alias_name,
+                variant_type,
+                sname,
+                clause.match.child_id,
+                subject,
+                parts,
+                arm_indent,
+            )
             saved_len = len(self._scope.cleanup_vars)
             parts.append(self._emit_statement(clause.statement))
             parts.append(self._emit_arm_local_cleanup(saved_len))
-            parts.append(f"{self._indent()}break;\n")
+            restore()
+            parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
 
@@ -8412,6 +8505,7 @@ class CEmitter:
         parts: List[str] = []
         union_name = union_type.name
         subject = self._emit_operation_value(casenode.subject)
+        alias_name = self._narrow_alias_name(casenode.subject)
 
         parts.append(f"{indent}switch ({subject}.tag) {{\n")
         for clause in casenode.clauses:
@@ -8419,8 +8513,19 @@ class CEmitter:
             tag = f"Z_{union_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
+            arm_indent = self._indent()
+            restore = self._push_narrow_alias(
+                alias_name,
+                union_type,
+                sname,
+                clause.match.child_id,
+                subject,
+                parts,
+                arm_indent,
+            )
             parts.append(self._emit_branch_with_result(clause.statement, result_var))
-            parts.append(f"{self._indent()}break;\n")
+            restore()
+            parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
 
@@ -8506,6 +8611,7 @@ class CEmitter:
         parts: List[str] = []
         variant_name = variant_type.name
         subject = self._emit_operation_value(casenode.subject)
+        alias_name = self._narrow_alias_name(casenode.subject)
 
         parts.append(f"{indent}switch ({subject}.tag) {{\n")
         for clause in casenode.clauses:
@@ -8513,8 +8619,19 @@ class CEmitter:
             tag = f"Z_{variant_name.upper()}_TAG_{sname.upper()}"
             parts.append(f"{indent}    case {tag}: {{\n")
             self.indent_level += 2
+            arm_indent = self._indent()
+            restore = self._push_narrow_alias(
+                alias_name,
+                variant_type,
+                sname,
+                clause.match.child_id,
+                subject,
+                parts,
+                arm_indent,
+            )
             parts.append(self._emit_branch_with_result(clause.statement, result_var))
-            parts.append(f"{self._indent()}break;\n")
+            restore()
+            parts.append(f"{arm_indent}break;\n")
             self.indent_level -= 2
             parts.append(f"{indent}    }}\n")
 

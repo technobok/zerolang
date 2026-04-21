@@ -6406,6 +6406,95 @@ class TestAliasBinding:
         assert result.stdout.strip().split("\n") == ["alice", "5", "30"]
 
 
+class TestMatchArmAlias:
+    """Phase C: match-arm subject binding alias.
+
+    Inside a `case <subtype> then { ... }` arm, references to the (shadow-
+    narrowed) subject name route through `_alias_map` just like Phase B
+    `with` bindings. The unwrap expression — `(*(payload_t*)s.data)` for
+    union, `s.data.subtype` for variant — is emitted once at arm entry as
+    an alias comment; reference sites substitute it in place.
+    """
+
+    def test_variant_arm_aliased(self):
+        """Variant arm seeds an alias comment and substitutes at use sites."""
+        csource = emit_source(
+            "result: variant { ok: i64 err: i64 none: null }\n"
+            "main: function is {\n"
+            "  c: result.ok 99\n"
+            "  match ( c ) case ok then {\n"
+            '    print "\\{c}"\n'
+            "  } case err then {\n"
+            '    print "\\{c}"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+        assert "/* alias: c => c.data.ok */" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "99"
+
+    def test_union_arm_aliased_with_payload(self):
+        """Union arm with a record payload emits the cast-deref unwrap alias."""
+        csource = emit_source(
+            "pt: record { x: i64 y: i64 }\n"
+            "circle: record { radius: i64 }\n"
+            "shape: union { :pt :circle }\n"
+            "main: function is {\n"
+            "  s: shape.pt (pt x: 10 y: 20)\n"
+            "  match ( s ) case pt then {\n"
+            '    print "\\{s.x}"\n'
+            "  } case circle then {\n"
+            '    print "\\{s.radius}"\n'
+            "  }\n"
+            "}"
+        )
+        assert "/* alias: s => (*(z_pt_t*)s.data) */" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "10"
+
+    def test_null_payload_arm_not_aliased(self):
+        """Null-payload arms have nothing to unwrap; no alias is emitted."""
+        csource = emit_source(
+            "result: variant { ok: i64 none: null }\n"
+            "main: function is {\n"
+            "  r: result.none\n"
+            "  match ( r ) case ok then {\n"
+            '    print "ok"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+        assert "/* alias: r => r.data.ok */" in csource
+        # the `none` arm payload is null — no alias for it
+        assert "/* alias: r => r.data.none" not in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "none"
+
+    def test_arm_alias_end_to_end(self):
+        """Multiple arms each seed their own alias; program runs under ASan."""
+        csource = emit_source(
+            "result: variant { ok: i64 err: i64 none: null }\n"
+            "main: function is {\n"
+            "  r: result.ok 42\n"
+            "  match ( r ) case ok then {\n"
+            '    print "\\{r}"\n'
+            "  } case err then {\n"
+            '    print "\\{r}"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}"
+        )
+        assert "/* alias: r => r.data.ok */" in csource
+        assert "/* alias: r => r.data.err */" in csource
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip() == "42"
+
+
 class TestIOFileStreaming:
     """I/O Phase 6: file handles, RAII close, streaming read/write.
 
