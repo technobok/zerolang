@@ -95,10 +95,49 @@ Not yet shipped:
 #ul:
   [#*: Further #~"filestat" fields (device, inode, access / ctime,
     nlink)]
-  [#*: Buffered and text wrappers (#~"bufreader", #~"bufwriter",
-    #~"textreader", #~"textwriter"), UTF-8 validation]
+  [#*: Text wrappers (#~"textreader", #~"textwriter") with UTF-8
+    validation and a line iterator -- Phase 1c]
   [#*: Process / argv / env (planned for a separate #~"os" unit)]
   [#*: Async, sockets, symlinks, advisory locks]
+
+#--: Buffered wrappers (Phase 1b)
+
+#~"bufwriter" and #~"bufreader" are compiler-provided classes in
+#~"io" that adapt any #~"writer" / #~"reader" to a buffered form.
+The source is held via a #~"writer.lock" / #~"reader.lock" field,
+which installs a path-scoped borrow on the underlying stream for the
+wrapper's lifetime -- the source handle cannot be mutated, re-
+borrowed, or locked while the wrapper is alive (see also
+doc/ownership.pdoc #_* "Lock Keys Are Paths").
+
+#~"bufwriter" accumulates writes in a #~"bytes" buffer up to the
+#~"capacity" the caller provided. When an incoming write would push
+past #~"capacity", the wrapper drains the buffer to the sink first,
+then appends the new bytes; writes larger than #~"capacity" bypass
+the buffer entirely. #-_ Flush is NOT automatic on scope exit --
+call #~"bw.flush" explicitly before #~"bw" is dropped, or the buffer
+contents are lost (the destructor frees the buffer without draining
+it). Auto-flush-on-drop is a v2 concern; it requires destructors to
+surface the sink's write error, which today's void-return destructor
+cannot do.
+
+#~"bufreader" is a pass-through in Phase 1b -- it records
+#~"capacity" for future chunk sizing but forwards every #~"read"
+straight to the source. Internal buffering arrives in Phase 1c
+together with #~"textreader", where chunk reads are needed for UTF-8
+boundary handling.
+
+Typical shape:
+
+#++:
+#`code:
+w: io.open path: p mode: openmode.write
+match (w) case ok then {
+  bw: io.bufwriter.create to: w.lock capacity: 4096.u64
+  wr: bw.write from: bv
+  fr: bw.flush        # REQUIRED before bw scope ends
+} case err then { ... }
+#``
 
 #--: Design Principles
 
@@ -431,9 +470,9 @@ Roughly in implementation order:
     size / mtime / type.]
   [#*: Directory iteration -- #~"io.list_dir" returning a closable
     iterator of #~"direntry".]
-  [#*: Buffered + text wrappers -- #~"bufreader", #~"bufwriter",
+  [#*: Text wrappers on top of the shipped buffered wrappers --
     #~"textreader" (#~".lines" iterator), #~"textwriter"
-    (#~"write_line").]
+    (#~"write_line"). Planned for Phase 1c.]
   [#*: UTF-8 validation on text reads; the #~"badencoding" ioerror
     arm becomes reachable.]
   [#*: Recursive #~"mkdirp", symlink handling, advisory file locks.]

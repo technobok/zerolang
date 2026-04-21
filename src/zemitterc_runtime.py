@@ -679,6 +679,110 @@ def emit_io_std_streams(natives: "set[str]") -> str:
     return "".join(parts)
 
 
+_Z_BUFWRITER_CREATE = (
+    "/* bufwriter.create — allocate a buffered writer with an empty\n"
+    "   backing buffer of the requested capacity. The sink is held by\n"
+    "   borrow (the source writer is locked by the typechecker's\n"
+    "   path-scoped lock for the wrapper's lifetime). */\n"
+    "static z_bufwriter_t z_bufwriter_create(z_writer_t sink, uint64_t cap);\n"
+    "static z_bufwriter_t z_bufwriter_create(z_writer_t sink, uint64_t cap) {\n"
+    "    z_bufwriter_t self = {0};\n"
+    "    self.sink = sink;\n"
+    "    self.buf = z_list_u8_create(cap);\n"
+    "    self.cap = cap;\n"
+    "    return self;\n"
+    "}\n\n"
+)
+
+_Z_BUFWRITER_FLUSH = (
+    "/* bufwriter.flush — drain the backing buffer to the sink via its\n"
+    "   writer vtable. On ok, the buffer length is reset to 0. On err,\n"
+    "   the underlying ioerror is transferred into the returned\n"
+    "   result(null, ioerror) so callers see exactly one error. */\n"
+    "static z_result_null_ioerror_t z_bufwriter_flush(z_bufwriter_t* self);\n"
+    "static z_result_null_ioerror_t z_bufwriter_flush(z_bufwriter_t* self) {\n"
+    "    z_result_null_ioerror_t result = {0};\n"
+    "    if (self->buf.length == 0) {\n"
+    "        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "        result.data = NULL;\n"
+    "        return result;\n"
+    "    }\n"
+    "    z_listview_u8_t view = { self->buf.length, self->buf.data };\n"
+    "    z_result_u64_ioerror_t wr =\n"
+    "        self->sink.vtable->write(self->sink.data, &view);\n"
+    "    if (wr.tag == Z_RESULT_U64_IOERROR_TAG_OK) {\n"
+    "        free(wr.data);\n"
+    "        self->buf.length = 0;\n"
+    "        result.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "        result.data = NULL;\n"
+    "        return result;\n"
+    "    }\n"
+    "    /* err: transfer ioerror box into result(null, ioerror) */\n"
+    "    result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "    result.data = wr.data;\n"
+    "    return result;\n"
+    "}\n\n"
+)
+
+_Z_BUFWRITER_WRITE = (
+    "/* bufwriter.write — append `from` to the backing buffer. If the\n"
+    "   combined length would exceed `cap`, flush first (propagating\n"
+    "   any write error). Chunks larger than `cap` bypass the buffer\n"
+    "   and go straight to the sink. */\n"
+    "static z_result_u64_ioerror_t z_bufwriter_write(\n"
+    "    z_bufwriter_t* self, z_listview_u8_t* from\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_bufwriter_write(\n"
+    "    z_bufwriter_t* self, z_listview_u8_t* from\n"
+    ") {\n"
+    "    if (self->buf.length + from->length > self->cap) {\n"
+    "        z_result_null_ioerror_t fr = z_bufwriter_flush(self);\n"
+    "        if (fr.tag != Z_RESULT_NULL_IOERROR_TAG_OK) {\n"
+    "            z_result_u64_ioerror_t result = {0};\n"
+    "            result.tag = Z_RESULT_U64_IOERROR_TAG_ERR;\n"
+    "            result.data = fr.data;\n"
+    "            return result;\n"
+    "        }\n"
+    "    }\n"
+    "    if (from->length > self->cap) {\n"
+    "        /* oversize write: bypass the buffer */\n"
+    "        return self->sink.vtable->write(self->sink.data, from);\n"
+    "    }\n"
+    "    z_list_u8_grow(&self->buf, self->buf.length + from->length);\n"
+    "    memcpy(self->buf.data + self->buf.length, from->data, from->length);\n"
+    "    self->buf.length += from->length;\n"
+    "    return z_io_u64_ok(from->length);\n"
+    "}\n\n"
+)
+
+_Z_BUFREADER_CREATE = (
+    "/* bufreader.create — wrap a reader. v1 is a pass-through (no\n"
+    "   internal buffer); `cap` is recorded for Phase 1c textreader\n"
+    "   chunk sizing. The source is held by borrow via the typechecker's\n"
+    "   path-scoped lock. */\n"
+    "static z_bufreader_t z_bufreader_create(z_reader_t source, uint64_t cap);\n"
+    "static z_bufreader_t z_bufreader_create(z_reader_t source, uint64_t cap) {\n"
+    "    z_bufreader_t self = {0};\n"
+    "    self.source = source;\n"
+    "    self.cap = cap;\n"
+    "    return self;\n"
+    "}\n\n"
+)
+
+_Z_BUFREADER_READ = (
+    "/* bufreader.read — pass-through to the underlying reader. Phase\n"
+    "   1c adds chunk buffering on top of this for UTF-8 boundary\n"
+    "   handling in textreader. */\n"
+    "static z_result_u64_ioerror_t z_bufreader_read(\n"
+    "    z_bufreader_t* self, z_list_u8_t* into, uint64_t max\n"
+    ");\n"
+    "static z_result_u64_ioerror_t z_bufreader_read(\n"
+    "    z_bufreader_t* self, z_list_u8_t* into, uint64_t max\n"
+    ") {\n"
+    "    return self->source.vtable->read(self->source.data, into, max);\n"
+    "}\n\n"
+)
+
 _Z_FILE_SEEK = (
     "/* file.seek — reposition the fd head. Maps seekorigin to the\n"
     "   matching POSIX whence constant. Returns the new absolute\n"
@@ -784,6 +888,19 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_FILE_FLUSH)
     if "file_seek" in natives:
         parts.append(_Z_FILE_SEEK)
+    # Buffered wrappers — emit flush before write so the write-side
+    # overflow branch can call the forward-declared flush. create is
+    # self-contained and can come in any order.
+    if "bufwriter_create" in natives:
+        parts.append(_Z_BUFWRITER_CREATE)
+    if "bufwriter_flush" in natives or "bufwriter_write" in natives:
+        parts.append(_Z_BUFWRITER_FLUSH)
+    if "bufwriter_write" in natives:
+        parts.append(_Z_BUFWRITER_WRITE)
+    if "bufreader_create" in natives:
+        parts.append(_Z_BUFREADER_CREATE)
+    if "bufreader_read" in natives:
+        parts.append(_Z_BUFREADER_READ)
     return "".join(parts)
 
 

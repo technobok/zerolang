@@ -6181,6 +6181,59 @@ class TestClassLockFields:
         output = compile_and_run(csource)
         assert output.strip() == "42"
 
+    def test_mixed_lock_and_owned_destructor_field_destructor(self):
+        """A class that holds BOTH a `.lock` field and a field whose
+        type carries a destructor must have its destructor clean up
+        the owned field while leaving the `.lock` field untouched.
+        This is the exact shape a pure-Zerolang bufwriter would have
+        (`sink: writer.lock` + an owned payload) — the native Phase
+        1b implementation skipped this path in the test suite.
+
+        Uses an inner user class with a string field to force
+        `needs_field_cleanup` without depending on generic-type mono
+        ordering (user classes with `bytes` fields hit a separate
+        pre-existing emitter ordering bug unrelated to lock semantics)."""
+        csource = emit_source(
+            "bag: class { a: i64 }\n"
+            "payload: class { label: string }\n"
+            "mixed: class {\n"
+            "  target: bag.lock\n"
+            "  inner:  payload\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: bag a: 1\n"
+            '  s: string from: "hi"\n'
+            "  p: payload label: s\n"
+            "  m: mixed target: b inner: p\n"
+            '  print "done"\n'
+            "}"
+        )
+        # Destructor must exist because the `inner` field's type
+        # (payload) carries its own destructor, so mixed needs to
+        # cascade cleanup — this is what forces needs_field_cleanup.
+        assert "static void z_mixed_destroy(z_mixed_t* p)" in csource
+        # Extract the destructor body and verify only the owned field
+        # is cleaned up.
+        body_start = csource.index("static void z_mixed_destroy(z_mixed_t* p) {")
+        body_end = csource.index("}", body_start)
+        destructor = csource[body_start:body_end]
+        assert "z_payload_destroy(&p->inner)" in destructor, (
+            f"destructor should cascade into z_payload_destroy on the "
+            f"owned inner field; got:\n{destructor}"
+        )
+        assert "p->target" not in destructor, (
+            f".lock field (target) must not be touched in destructor; "
+            f"got:\n{destructor}"
+        )
+        assert "z_bag_destroy" not in destructor, (
+            f"destructor must not destroy the locked bag; got:\n{destructor}"
+        )
+        # End-to-end: compile + run. A double-free on the `.lock`
+        # field would surface here (z_bag_destroy on a stack local
+        # would crash or ASan would flag).
+        output = compile_and_run(csource)
+        assert output.strip() == "done"
+
 
 class TestTakeInArmMemorySafety:
     """Memory safety tests for .take inside if/match arms using ASan."""
@@ -6874,6 +6927,84 @@ class TestIOFileStreaming:
         assert "case ENOTDIR:" in csource
         output = compile_and_run(csource)
         assert output.strip() == "err"
+
+    def test_bufwriter_roundtrip_over_file(self, tmp_path):
+        """Phase 1b: open a file for write, wrap it in bufwriter, write
+        bytes (smaller than capacity so they stay buffered), flush to
+        drain to the fd, close; reopen for read and verify the file
+        content survived the buffered path."""
+        target = tmp_path / "buf.bin"
+        csource = emit_source(
+            "main: function is {\n"
+            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            "    match (\n"
+            "        w\n"
+            "    ) case ok then {\n"
+            "        bw: io.bufwriter.create to: w.lock capacity: 32.u64\n"
+            "        buf: bytes\n"
+            "        buf.append from: 65.u8\n"
+            "        buf.append from: 66.u8\n"
+            "        buf.append from: 67.u8\n"
+            "        bv: byteview.borrow from: buf.listview\n"
+            "        wr: bw.write from: bv\n"
+            "        bv.release\n"
+            "        match (\n"
+            "            wr\n"
+            "        ) case ok then { } case err then {\n"
+            '            print "write err"\n'
+            "        }\n"
+            "        fr: bw.flush\n"
+            "        match (\n"
+            "            fr\n"
+            "        ) case ok then {\n"
+            '            print "flushed"\n'
+            "        } case err then {\n"
+            '            print "flush err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-w err"\n'
+            "    }\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        b2: bytes\n"
+            "        rr: r.read into: b2 max: 16.u64\n"
+            "        match (\n"
+            "            rr\n"
+            "        ) case ok then {\n"
+            '            print "\\{b2.length}"\n'
+            "        } case err then {\n"
+            '            print "read err"\n'
+            "        }\n"
+            "    } case err then {\n"
+            '        print "open-r err"\n'
+            "    }\n"
+            "}"
+        )
+        # emission order: struct_defs must place z_list_u8_t + z_writer_t
+        # before z_bufwriter_t (struct references both), and z_bufwriter_*
+        # runtime bodies must land before the vtable wrappers that call
+        # them. Check positional ordering.
+        assert "} z_list_u8_t;" in csource
+        assert "} z_writer_t;" in csource
+        assert "} z_bufwriter_t;" in csource
+        list_pos = csource.index("} z_list_u8_t;")
+        writer_pos = csource.index("} z_writer_t;")
+        wrapper_pos = csource.index("} z_bufwriter_t;")
+        runtime_pos = csource.index("z_bufwriter_write(\n")
+        assert list_pos < wrapper_pos, (
+            "z_list_u8_t must be declared before z_bufwriter_t struct"
+        )
+        assert writer_pos < wrapper_pos, (
+            "z_writer_t must be declared before z_bufwriter_t struct"
+        )
+        assert wrapper_pos < runtime_pos, (
+            "z_bufwriter_t struct must be declared before z_bufwriter_write body"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "flushed\n3"
+        assert target.read_bytes() == b"ABC"
 
 
 class TestListOfStringDestructor:

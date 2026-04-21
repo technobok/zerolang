@@ -3351,36 +3351,24 @@ class TypeChecker:
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
-        # Protocol zero-arg methods appearing as rvalues: `c.close`
-        # where c is a protocol with a no-arg spec coerces to the
-        # spec's return type so `r: c.close` binds r to the result
-        # type rather than a function pointer. Non-zero-arg specs
-        # still need the explicit call form (`p.write from: bv`).
+        # Protocol zero-arg method accessed as an rvalue coerces to the
+        # method's return type. Without this, `fr: c.close` binds fr
+        # to a function-pointer type, making `match (fr) ...` fail.
+        # Non-zero-arg methods still need the explicit call form.
         if parent_type.typetype == ZTypeType.PROTOCOL:
-            spec = parent_type.children.get(child_name)
+            method = parent_type.children.get(child_name)
             if (
-                spec is not None
-                and spec.typetype == ZTypeType.FUNCTION
-                and spec.return_type is not None
+                method is not None
+                and method.typetype == ZTypeType.FUNCTION
+                and method.return_type is not None
             ):
                 has_non_this = False
-                for p in spec.children:
+                for p in method.children:
                     if p != "this":
                         has_non_this = True
                         break
                 if not has_non_this:
-                    return spec.return_type
-        # for io.file: .close is a zero-arg method returning
-        # result(null, ioerror). Coerce path access to the return type
-        # so `cr: f.close` types cr as the result, not the function.
-        if (
-            parent_type.typetype == ZTypeType.CLASS
-            and parent_type.name == "file"
-            and child_name == "close"
-        ):
-            close_fn = parent_type.children.get("close")
-            if close_fn and close_fn.return_type:
-                return close_fn.return_type
+                    return method.return_type
         # for list types: .listview returns the listview type directly (zero-arg method)
         # and acquires an exclusive lock on the source list
         if _is_list_type(parent_type) and child_name == "listview":
@@ -3397,6 +3385,30 @@ class TypeChecker:
             listview_child = parent_type.children.get("listview")
             if listview_child and listview_child.return_type:
                 return listview_child.return_type
+        # Zero-arg method on a concrete class accessed as an rvalue
+        # coerces to the method's return type, so `fr: obj.flush` binds
+        # fr to the result rather than a function-pointer type. Placed
+        # after the type-specific shortcut rules (string.length,
+        # list.pop, list.listview) so those still win; placed before
+        # the generic child lookup so non-method children (e.g.
+        # list.length which is stored as a t_u64 child) still pass
+        # through unchanged. Previously implemented as ad-hoc per-class
+        # branches for `file.close`, `bufwriter.flush`, and
+        # `bufreader.read`; this unified rule subsumes them.
+        if parent_type.typetype == ZTypeType.CLASS:
+            method = parent_type.children.get(child_name)
+            if (
+                method is not None
+                and method.typetype == ZTypeType.FUNCTION
+                and method.return_type is not None
+            ):
+                has_non_this = False
+                for p in method.children:
+                    if p != "this":
+                        has_non_this = True
+                        break
+                if not has_non_this:
+                    return method.return_type
         # for records/enums, look up child in children
         # resolve public name (may redirect renamed members)
         resolved_name = self._resolve_public_name(parent_type, child_name, path)

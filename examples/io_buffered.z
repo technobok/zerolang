@@ -1,0 +1,67 @@
+# io_buffered.z -- write bytes to a file through a bufwriter, then
+# read them back through a bufreader.
+#
+# Phase 1b buffered wrappers in action:
+#   * `io.bufwriter.create to: ...lock capacity: ...` holds a borrow
+#     on the underlying file for the wrapper's lifetime (path-scoped
+#     lock). The source handle is inaccessible while bw is alive.
+#   * Writes accumulate in the wrapper's buf until the capacity would
+#     overflow (or an explicit `flush` drains it).
+#   * bufreader is a pass-through in Phase 1b — internal buffering
+#     is added alongside textreader in Phase 1c.
+#
+# RAII still applies to the underlying file: the wrapper borrows
+# rather than owns, so scope exit on the file closes the fd.
+
+main: function is {
+    # --- write phase ---
+    w: io.open path: "/tmp/z_io_buffered.txt".string mode: openmode.write
+    match (
+        w
+    ) case ok then {
+        bw: io.bufwriter.create to: w.lock capacity: 16.u64
+        outbuf: bytes
+        outbuf.append from: 104.u8
+        outbuf.append from: 105.u8
+        outbuf.append from: 10.u8
+        bv: byteview.borrow from: outbuf.listview
+        wr: bw.write from: bv
+        match (
+            wr
+        ) case ok then {
+            print "buffered write queued"
+        } case err then {
+            io.eprintln "buffered write failed"
+        }
+        fr: bw.flush
+        match (
+            fr
+        ) case ok then {
+            print "flushed"
+        } case err then {
+            io.eprintln "flush failed"
+        }
+    } case err then {
+        io.eprintln "open for write failed"
+    }
+
+    # --- read phase ---
+    r: io.open path: "/tmp/z_io_buffered.txt".string mode: openmode.read
+    match (
+        r
+    ) case ok then {
+        br: io.bufreader.create from: r.lock capacity: 16.u64
+        buf: bytes
+        rr: br.read into: buf max: 64.u64
+        match (
+            rr
+        ) case ok then {
+            n: buf.length
+            print "buffered read: \{n} bytes"
+        } case err then {
+            io.eprintln "buffered read failed"
+        }
+    } case err then {
+        io.eprintln "open for read failed"
+    }
+}

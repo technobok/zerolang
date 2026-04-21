@@ -239,3 +239,39 @@ open: function {path: string mode: openmode} out (result t: file e: ioerror) is 
 stdin:  function out reader is native
 stdout: function out writer is native
 stderr: function out writer is native
+
+# `bufwriter` -- buffered adapter over any `writer`. Accumulates up
+# to `cap` bytes in `buf`, flushing to the underlying sink when the
+# buffer would overflow or on an explicit `flush` call. v1 does NOT
+# auto-flush on scope exit: callers must invoke `flush` before the
+# wrapper's scope ends, or data will be lost.
+#
+# Owns a borrow on `sink` via `writer.lock`. While the bufwriter is
+# alive, the original writer cannot be mutated, borrowed again, or
+# locked -- path-scoped locking rejects such access at the source.
+bufwriter: class {
+    sink: writer.lock
+    buf:  bytes
+    cap:  u64
+} as {
+    :writer
+    create: function {to: writer.lock capacity: u64} out this is native
+    write:  function {:this from: byteview} out (result t: u64 e: ioerror) is native
+    flush:  function {:this} out (result t: null e: ioerror) is native
+}
+
+# `bufreader` -- buffered adapter over any `reader`. v1 is a
+# pass-through for Phase 1b (see doc/io.pdoc); internal buffering is
+# introduced alongside `textreader` in Phase 1c, which needs chunk
+# reads for UTF-8 boundary handling.
+#
+# Holds a borrow on `source` via `reader.lock` so the original reader
+# is locked for the wrapper's lifetime.
+bufreader: class {
+    source: reader.lock
+    cap:    u64
+} as {
+    :reader
+    create: function {from: reader.lock capacity: u64} out this is native
+    read:   function {:this into: bytes max: u64} out (result t: u64 e: ioerror) is native
+}

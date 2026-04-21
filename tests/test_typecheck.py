@@ -2106,6 +2106,35 @@ class TestLockEnforcement:
             "main: function is {}\n"
         )
 
+    def test_return_lock_method_with_borrowed_param_typechecks(self):
+        """Companion to the flush-pattern regression above: a method
+        that `return`s the result of a `.lock`-field protocol call
+        whose argument is a sibling `:this` parameter borrow. Mirrors
+        the oversize-bypass branch a pure-Zerolang `bufwriter.write`
+        would contain:
+
+            return this.sink.write from: from
+
+        Exercises lifetime flow through the `.lock` callable without
+        the result being decomposed into explicit `result.ok`/`err`
+        arms — the flush pattern covers decomposition; this covers
+        the straight-through path."""
+        check_ok(
+            "mysink: protocol {\n"
+            "  write: function {:this from: byteview}"
+            " out (result t: u64 e: ioerror)\n"
+            "}\n"
+            "holder: class {\n"
+            "  sink: mysink.lock\n"
+            "} as {\n"
+            "  write: function {:this from: byteview}"
+            " out (result t: u64 e: ioerror) is {\n"
+            "    return this.sink.write from: from\n"
+            "  }\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
     def test_self_field_mutation_of_sibling_permitted(self):
         """Within a method, mutating a sibling field of the locked leaf is
         permitted under the path-scoped lock model."""
@@ -2384,6 +2413,207 @@ class TestWithOwnership:
             '  with x: n do print "\\{x}"\n'
             '  print "\\{n}"\n'
             "}"
+        )
+
+
+class TestIoWrappers:
+    """Phase 1b buffered wrappers: typecheck-level behavior.
+
+    The wrapper classes are declared in lib/system/io.z with native
+    methods. These tests exercise the contracts the typechecker has to
+    enforce: construction signatures, return-type coercion on zero-arg
+    `.flush`, and the path-scoped lock transfer that blocks access to
+    the source writer/reader while the wrapper is alive."""
+
+    def test_bufwriter_create_and_flush_typecheck(self):
+        """bufwriter.create accepts (to: writer.lock, capacity: u64) and
+        `.flush` on the resulting class coerces to its return type so
+        `fr: bw.flush` binds fr to `result(null, ioerror)`."""
+        check_ok(
+            "main: function is {\n"
+            "  w: io.stdout\n"
+            "  bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "  fr: bw.flush\n"
+            "  match (fr) case ok then {} case err then {}\n"
+            "}\n"
+        )
+
+    def test_bufwriter_write_byteview(self):
+        """bufwriter.write takes a byteview and returns result(u64, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            "  w: io.stdout\n"
+            "  bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "  msg: bytes\n"
+            "  msg.append from: 72.u8\n"
+            "  bv: byteview.borrow from: msg.listview\n"
+            "  wr: bw.write from: bv\n"
+            "  bv.release\n"
+            "  match (wr) case ok then {} case err then {}\n"
+            "}\n"
+        )
+
+    def test_bufwriter_locks_source_writer(self):
+        """While bw holds a borrow on w via writer.lock, calling a method
+        on w is rejected (path-scoped lock conflict)."""
+        errors = check_errors(
+            "main: function is {\n"
+            '  w: io.open path: "/tmp/x".string mode: openmode.write\n'
+            "  match (w) case ok then {\n"
+            "    bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "    cr: w.close\n"
+            "  } case err then {}\n"
+            "}\n"
+        )
+        assert any("lock" in e.msg.lower() and "'w'" in e.msg for e in errors), (
+            f"expected a lock-conflict error referencing 'w'; got: {[e.msg for e in errors]}"
+        )
+
+    def test_bufreader_create_and_read(self):
+        """bufreader.create takes (from: reader.lock, capacity: u64) and
+        .read returns result(u64, ioerror) with bytes appended to `into`."""
+        check_ok(
+            "main: function is {\n"
+            '  r: io.open path: "/tmp/x".string mode: openmode.read\n'
+            "  match (r) case ok then {\n"
+            "    br: io.bufreader.create from: r.lock capacity: 16.u64\n"
+            "    buf: bytes\n"
+            "    rr: br.read into: buf max: 32.u64\n"
+            '    print "read"\n'
+            "  } case err then {\n"
+            '    print "open failed"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_bufwriter_flush_zero_arg_call_form(self):
+        """The `bw.flush` dotted-path form must produce a call whose
+        result typechecks as result(null, ioerror) — not a function
+        reference. Covers the path-value coercion added alongside
+        the file.close precedent in ztypecheck._resolve_dotted_child."""
+        check_ok(
+            "main: function is {\n"
+            "  w: io.stdout\n"
+            "  bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "  fr: bw.flush\n"
+            "  match (fr) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestPureZerolangBufferedShapes:
+    """Ownership-path coverage for the shapes a pure-Zerolang
+    bufwriter/bufreader body would have exercised.
+
+    Phase 1b shipped the wrappers with native C method bodies, so
+    these ownership paths never got user-code exercise in the test
+    suite. Each test below mirrors one shape from a hypothetical
+    pure-Zerolang implementation, written against user classes so
+    the ownership machinery is genuinely exercised."""
+
+    def test_self_dispatch_in_method_body_typechecks(self):
+        """Inside `write`, calling `this.flush` — a zero-arg method
+        on the same concrete class — must typecheck and bind `fr` to
+        `result<null, ioerror>` (the flush return type), not to a
+        function-pointer. Exercises the typechecker's generalised
+        zero-arg class-method coercion (previously only file.close /
+        bufwriter.flush got this treatment via per-class branches)
+        and the emitter's matching dispatch. A pure-Zerolang
+        `bufwriter.write` would call `this.flush` when the buffer
+        would overflow."""
+        check_ok(
+            "mysink: protocol {\n"
+            "  write: function {:this from: byteview}"
+            " out (result t: u64 e: ioerror)\n"
+            "}\n"
+            "holder: class {\n"
+            "  sink: mysink.lock\n"
+            "  buf:  bytes\n"
+            "  cap:  u64\n"
+            "} as {\n"
+            "  flush: function {:this}"
+            " out (result t: null e: ioerror) is {\n"
+            "    bv: byteview.borrow from: this.buf.listview\n"
+            "    fr: this.sink.write from: bv\n"
+            "    bv.release\n"
+            "    match (fr) case ok then {\n"
+            "      return (result.ok null e: ioerror)\n"
+            "    } case err then {\n"
+            "      return (result.err fr t: null)\n"
+            "    }\n"
+            "  }\n"
+            "  write: function {:this from: byteview}"
+            " out (result t: u64 e: ioerror) is {\n"
+            "    fr: this.flush\n"
+            "    match (fr) case ok then {\n"
+            "      return (result.ok 0.u64 e: ioerror)\n"
+            "    } case err then {\n"
+            "      return (result.err fr t: u64)\n"
+            "    }\n"
+            "  }\n"
+            "}\n"
+            "main: function is {}\n"
+        )
+
+    def test_extend_view_from_param_into_self_field_typechecks(self):
+        """A method holds a parameter borrow live across a mutation
+        of a sibling self field: `this.buf.extend_view other: from`
+        where `from: byteview` is the parameter and `buf: bytes` is a
+        self field. Path-scoped locking must treat `from` and
+        `(this, buf)` as disjoint paths — both can hold their locks
+        simultaneously. A pure-Zerolang `bufwriter.write` fast-path
+        does exactly this to append incoming bytes into the buffer."""
+        check_ok(
+            "holder: class {\n"
+            "  buf: bytes\n"
+            "  cap: u64\n"
+            "} as {\n"
+            "  stash: function {:this from: byteview} is {\n"
+            "    this.buf.extend_view other: from\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  h: holder buf: bytes cap: 16.u64\n"
+            "  src: bytes\n"
+            "  src.append from: 65.u8\n"
+            "  bv: byteview.borrow from: src.listview\n"
+            "  h.stash from: bv\n"
+            "  bv.release\n"
+            "}\n"
+        )
+
+    def test_passthrough_mut_param_via_lock_field_typechecks(self):
+        """A method forwards its mutable parameter through a protocol
+        method on a `.lock`-typed self field:
+
+            return this.source.read into: into max: max
+
+        Exercises the same pending-borrow-lift-on-`(this,)` mechanism
+        the existing flush regression (test_bufwriter_style_flush_...)
+        covered for a borrowed param, but with a mutable `into: bytes`
+        parameter — the call must drop the pending lock on `this`
+        before processing `into`, otherwise `into` would conflict
+        with a re-lock of `this`. This is the shape of a
+        pure-Zerolang `bufreader.read` pass-through."""
+        check_ok(
+            "mysource: protocol {\n"
+            "  read: function {:this into: bytes max: u64}"
+            " out (result t: u64 e: ioerror)\n"
+            "}\n"
+            "holder: class {\n"
+            "  source: mysource.lock\n"
+            "  cap:    u64\n"
+            "} as {\n"
+            "  read: function {:this into: bytes max: u64}"
+            " out (result t: u64 e: ioerror) is {\n"
+            "    return this.source.read into: into max: max\n"
+            "  }\n"
+            "}\n"
+            "main: function is {}\n"
         )
 
 

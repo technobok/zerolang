@@ -904,9 +904,10 @@ class CEmitter:
         writer, closer, seeker) into a deferred buffer so they land
         after the list_u8 / listview_u8 monomorphizations their
         signatures reference. Only emits when the program references
-        io.file (otherwise these vtables are dead code).
+        io.file or one of the buffered wrappers (otherwise these
+        vtables are dead code).
         """
-        if not self._io_file_referenced():
+        if not (self._io_file_referenced() or self._io_wrappers_referenced()):
             return ""
         io_unit = self.program.units.get("io")
         if io_unit is None:
@@ -973,6 +974,81 @@ class CEmitter:
                     self._emit_protocol_impl(
                         "file", label, proto_name, file_cls, proto=proto
                     )
+        out = "".join(self.struct_defs)
+        self.struct_defs = saved
+        return out
+
+    def _emit_io_wrapper_classes(self) -> str:
+        """Emit the bufwriter / bufreader class structs (+ destructors
+        + meta_create) into a deferred buffer. Called AFTER the stream
+        protocol structs (writer_t / reader_t) so the `sink: writer.lock`
+        / `source: reader.lock` field types resolve, and AFTER the
+        mono pass so `buf: bytes` → z_list_u8_t is defined.
+
+        Returns the concatenated C string; assembled into parts by
+        the emit pipeline before io runtime functions (which dispatch
+        z_bufwriter_write / z_bufreader_read through the struct).
+        """
+        if not self._io_wrappers_referenced():
+            return ""
+        io_unit = self.program.units.get("io")
+        if io_unit is None:
+            return ""
+        saved = self.struct_defs
+        self.struct_defs = TrackedList(self)
+        for name in self._IO_WRAPPER_NAMES:
+            if not self._io_class_referenced(name):
+                continue
+            defn = io_unit.body.get(name)
+            if defn is None or type(defn) is not zast.Class:
+                continue
+            self._current_node_id = getattr(defn, "nodeid", None)
+            # Skip protocol-impl emission here; it needs the runtime
+            # bodies (z_bufwriter_write, ...) to be declared first.
+            # The impls are emitted separately via
+            # _emit_io_wrapper_protocol_impls, after emit_runtime_io.
+            self._emit_class(name, defn, skip_protocol_impls=True)
+            # Record the wrapper's runtime natives so emit_runtime_io
+            # emits the C bodies. Granularity is per-class (not per-
+            # method) because once the wrapper's struct is emitted its
+            # protocol vtable already references every method body via
+            # the auto-generated wrapper — emitting a subset would leave
+            # undefined references.
+            self.needs_io = True
+            if name == "bufwriter":
+                self.needs_io_natives.update(
+                    {"bufwriter_create", "bufwriter_write", "bufwriter_flush"}
+                )
+            elif name == "bufreader":
+                self.needs_io_natives.update({"bufreader_create", "bufreader_read"})
+        out = "".join(self.struct_defs)
+        self.struct_defs = saved
+        return out
+
+    def _emit_io_wrapper_protocol_impls(self) -> str:
+        """Emit bufwriter / bufreader protocol vtables + wrappers. Lands
+        AFTER emit_runtime_io (which defines z_bufwriter_write etc.)
+        so the vtable wrappers can forward to the runtime functions
+        without needing separate forward declarations."""
+        io_unit = self.program.units.get("io")
+        if io_unit is None:
+            return ""
+        saved = self.struct_defs
+        self.struct_defs = TrackedList(self)
+        for name in self._IO_WRAPPER_NAMES:
+            if not self._io_class_referenced(name):
+                continue
+            defn = io_unit.body.get(name)
+            if defn is None or type(defn) is not zast.Class:
+                continue
+            for label, apath in defn.as_items.items():
+                proto_name = (
+                    cast(zast.AtomId, apath).name
+                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                    else None
+                )
+                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+                    self._emit_protocol_impl(name, label, proto_name, defn)
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -1090,11 +1166,15 @@ class CEmitter:
         return False
 
     _STD_STREAM_NAMES = ("stdin", "stdout", "stderr")
+    _IO_WRAPPER_NAMES = ("bufwriter", "bufreader")
 
     def _ast_uses_std_streams(self, body: dict) -> bool:
-        """Does the AST contain a DottedPath `io.stdin|stdout|stderr`?
-        Runs a nodetype-driven walk (no isinstance / try-except) so
-        it stays inside the bootstrap-lint baseline."""
+        return self._ast_uses_io_names(body, self._STD_STREAM_NAMES)
+
+    def _ast_uses_io_names(self, body: dict, names: tuple) -> bool:
+        """Does the AST contain a DottedPath `io.<name>` for any name
+        in the given tuple? Runs a nodetype-driven walk (no isinstance /
+        try-except) so it stays inside the bootstrap-lint baseline."""
         stack: List = []
         for defn in body.values():
             if defn is not None and defn.is_node:
@@ -1106,13 +1186,30 @@ class CEmitter:
                 if (
                     dp.parent.nodetype == NodeType.ATOMID
                     and cast(zast.AtomId, dp.parent).name == "io"
-                    and dp.child.name in self._STD_STREAM_NAMES
+                    and dp.child.name in names
                 ):
                     return True
             # walk known child-carrying fields by nodetype
             for child in self._walk_children(n):
                 stack.append(child)
         return False
+
+    def _io_wrappers_referenced(self) -> bool:
+        """True when the program references any io wrapper class."""
+        mainunit = self.program.units.get(self.program.mainunitname)
+        if mainunit is None:
+            return False
+        return self._ast_uses_io_names(mainunit.body, self._IO_WRAPPER_NAMES)
+
+    def _io_class_referenced(self, name: str) -> bool:
+        """True when the program references `io.<name>` in the main
+        unit AST. Used to gate emission of individual wrapper class
+        structs (so `io.bufwriter`-only programs don't drag in the
+        bufreader struct, and vice versa)."""
+        mainunit = self.program.units.get(self.program.mainunitname)
+        if mainunit is None:
+            return False
+        return self._ast_uses_io_names(mainunit.body, (name,))
 
     def _walk_children(self, n: zast.Node) -> List[zast.Node]:
         """Enumerate zast.Node children of n for the std-stream scan.
@@ -1310,6 +1407,12 @@ class CEmitter:
         # z_list_u8_t / z_listview_u8_t from the mono pass.
         parts.append(self._emit_io_stream_protocols())
 
+        # Buffered wrappers (bufwriter / bufreader). Lands AFTER the
+        # stream protocol structs (so writer.lock / reader.lock field
+        # types resolve) and BEFORE the io runtime (which references
+        # z_bufwriter_t / z_bufreader_t in its dispatch helpers).
+        parts.append(self._emit_io_wrapper_classes())
+
         # io.file protocol wrappers. Emitted AFTER the stream protocol
         # types above (so z_reader_t etc. exist) and stored in a
         # buffer, appended after emit_runtime_io. Building the buffer
@@ -1318,6 +1421,11 @@ class CEmitter:
         file_impls = ""
         if self.needs_io_natives and self._io_file_referenced():
             file_impls = self._emit_io_file_protocol_impls()
+
+        # Buffered-wrapper protocol vtables + wrappers. Same deferral
+        # as file_impls — these reference z_bufwriter_* / z_bufreader_*
+        # bodies emitted by emit_runtime_io.
+        wrapper_impls = self._emit_io_wrapper_protocol_impls()
 
         # io runtime helpers reference the compiler-generated struct
         # names (z_ioerror_t, z_result_<T>_ioerror_t, ...) so they land
@@ -1330,6 +1438,7 @@ class CEmitter:
         )
 
         parts.append(file_impls)
+        parts.append(wrapper_impls)
 
         # io.stdin / io.stdout / io.stderr — emit after file_impls so
         # z_file_reader_create / z_file_writer_create are declared.
@@ -2162,21 +2271,27 @@ class CEmitter:
         if lines is None:
             self.struct_defs.append("".join(target))
 
-    def _emit_class(self, name: str, cls: zast.Class) -> None:
+    def _emit_class(
+        self, name: str, cls: zast.Class, skip_protocol_impls: bool = False
+    ) -> None:
         if self._is_typedef(name):
             # Typedef: no struct, no destructor, no meta.create — just emit as/is functions
             for mname, mfunc in cls.as_functions.items():
                 if mfunc.body:
                     self._emit_func_typedef(f"{name}.{mname}", mfunc)
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
-            for label, apath in cls.as_items.items():
-                proto_name = (
-                    cast(zast.AtomId, apath).name
-                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
-                    else None
-                )
-                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
-                    self._emit_protocol_impl(name, label, proto_name, cls)
+            if not skip_protocol_impls:
+                for label, apath in cls.as_items.items():
+                    proto_name = (
+                        cast(zast.AtomId, apath).name
+                        if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                        else None
+                    )
+                    if (
+                        proto_name
+                        and self._typetype_of(proto_name) == ZTypeType.PROTOCOL
+                    ):
+                        self._emit_protocol_impl(name, label, proto_name, cls)
             return
 
         self.needs_stdint = True
@@ -2230,14 +2345,15 @@ class CEmitter:
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit protocol implementations
-        for label, apath in cls.as_items.items():
-            proto_name = (
-                cast(zast.AtomId, apath).name
-                if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
-                else None
-            )
-            if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
-                self._emit_protocol_impl(name, label, proto_name, cls)
+        if not skip_protocol_impls:
+            for label, apath in cls.as_items.items():
+                proto_name = (
+                    cast(zast.AtomId, apath).name
+                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                    else None
+                )
+                if proto_name and self._typetype_of(proto_name) == ZTypeType.PROTOCOL:
+                    self._emit_protocol_impl(name, label, proto_name, cls)
         # emit 'as' constants
         self._emit_as_constants(name, cls.as_items)
 
@@ -6237,26 +6353,25 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"{parent}{acc}length"
-        # io.file: .close as dotted path (zero-arg method call).
-        # The typechecker coerces f.close to its return type, so the
-        # path form appears wherever a plain call would work. Matches
-        # the call-form dispatch in _emit_call_value.
+        # Zero-arg class method accessed as a path value. Mirrors the
+        # typechecker coercion in ztypecheck._resolve_dotted_child: a
+        # zero-arg method on a concrete class resolves to its return
+        # type here rather than a function-pointer, so we must emit a
+        # call. Matches the call-form dispatch in _emit_call_value.
         #
-        # Parent may be either a direct `file` (a local of class type)
-        # or a union subtype selection `r.ok` whose resolved subtype
-        # is file — in the latter case `path.parent.type` is the
-        # enclosing union, not file, per the typechecker convention
-        # where union/variant subtype paths keep the parent type.
-        if child == "close" and self._effective_file_type(path.parent):
+        # Parent may be either a direct class local or a union subtype
+        # selection `r.ok` whose resolved subtype is the class — in
+        # the latter case `path.parent.type` is the enclosing union,
+        # handled below via _effective_class_zero_arg_method.
+        cls_name, method_fn = self._effective_class_zero_arg_method(path)
+        if cls_name is not None and method_fn is not None:
             parent = self._emit_path_value(path.parent)
             if not self._is_class_pointer_path(path.parent) and not parent.startswith(
                 "&"
             ):
                 parent = f"&{parent}"
-            self.needs_io = True
-            self.needs_stdio = True
-            self.needs_io_natives.add("file_close")
-            return f"z_file_close({parent})"
+            self._record_io_native_for_class_method(cls_name, child)
+            return f"z_{cls_name}_{child}({parent})"
 
         # io.file: protocol projection. `f.closer` / `f.seeker` emit
         # a call to the matching `z_file_<proto>_create` wrapper
@@ -6464,6 +6579,85 @@ class CEmitter:
             if sub and sub.typetype == ZTypeType.CLASS and sub.name == "file":
                 return True
         return False
+
+    def _effective_class_type(
+        self, path: zast.Path, class_name: "str | None" = None
+    ) -> "ZType | None":
+        """Return the concrete class ZType `path.parent` resolves to,
+        or None. Handles both direct class locals and union-subtype
+        selections (see `_effective_file_type` for the latter pattern).
+
+        If `class_name` is given, only return a match for that class.
+        """
+        pt = path.type
+        if pt and pt.typetype == ZTypeType.CLASS:
+            if class_name is None or pt.name == class_name:
+                return pt
+        if (
+            pt
+            and pt.typetype == ZTypeType.UNION
+            and path.nodetype == NodeType.DOTTEDPATH
+        ):
+            dp = cast(zast.DottedPath, path)
+            sub = pt.children.get(dp.child.name)
+            if sub and sub.typetype == ZTypeType.CLASS:
+                if class_name is None or sub.name == class_name:
+                    return sub
+        return None
+
+    def _effective_class_zero_arg_method(
+        self, path: zast.DottedPath
+    ) -> "tuple[str | None, ZType | None]":
+        """If `path` resolves to a zero-arg method on a concrete
+        non-native class, return (class_name, method_type). Otherwise
+        (None, None).
+
+        Mirrors the typechecker coercion in
+        ztypecheck._resolve_dotted_child, but excludes classes marked
+        `is native` (string, list, listview, map, ...). Native classes
+        declare `.length`/`.capacity`/etc. as 0-arg `is native` methods
+        in system.z / collections.z for typechecking convenience, but
+        at emit time those resolve to struct-field access
+        (`s->capacity`) rather than a C function call — routing them
+        through this branch would produce calls to non-existent
+        `z_string_capacity` symbols. Field-access emission happens in
+        the fallthrough path at the end of _emit_dotted_path_value.
+        """
+        cls = self._effective_class_type(path.parent)
+        if cls is None:
+            return (None, None)
+        if cls.is_native:
+            return (None, None)
+        method = cls.children.get(path.child.name)
+        if method is None or method.typetype != ZTypeType.FUNCTION:
+            return (None, None)
+        if method.return_type is None:
+            return (None, None)
+        for p in method.children:
+            if p != "this":
+                return (None, None)
+        return (cls.name, method)
+
+    _IO_CLASS_METHOD_NATIVES: "dict[tuple[str, str], str]" = {
+        ("file", "close"): "file_close",
+        ("bufwriter", "flush"): "bufwriter_flush",
+    }
+
+    def _record_io_native_for_class_method(
+        self, class_name: str, method_name: str
+    ) -> None:
+        """Populate needs_io_natives for zero-arg methods on io-provided
+        classes so emit_runtime_io emits the corresponding C bodies.
+        No-op for user classes — their method bodies are emitted via
+        the normal _emit_function path and don't need runtime
+        registration."""
+        native = self._IO_CLASS_METHOD_NATIVES.get((class_name, method_name))
+        if native is None:
+            return
+        self.needs_io = True
+        if native == "file_close":
+            self.needs_stdio = True
+        self.needs_io_natives.add(native)
 
     def _is_class_pointer_path(self, path: zast.Path) -> bool:
         """Check if a path refers to a pointer type (for -> vs . dispatch).
