@@ -2981,6 +2981,7 @@ class CEmitter:
 
         # listview — zero-cost cast from list to listview (same first two fields)
         listview_child = mono_type.children.get("listview")
+        lv_ctype: Optional[str] = None
         if listview_child and listview_child.return_type:
             lv_type = listview_child.return_type
             lv_name = lv_type.name
@@ -2988,6 +2989,24 @@ class CEmitter:
             lines.append(f"static {lv_ctype} z_{name}_listview({ctype}* _this);\n")
             lines.append(f"static {lv_ctype} z_{name}_listview({ctype}* _this) {{\n")
             lines.append(f"    return *({lv_ctype}*)_this;\n")
+            lines.append("}\n\n")
+
+        # extend_view — copy from a listview; does NOT consume (views don't
+        # own their data). Grows capacity as needed and memcpy's the bytes
+        # into place. Safe to call with an empty view.
+        if lv_ctype is not None:
+            lines.append(
+                f"static void z_{name}_extend_view({ctype}* _this, {lv_ctype} _from);\n"
+            )
+            lines.append(
+                f"static void z_{name}_extend_view({ctype}* _this, {lv_ctype} _from) {{\n"
+            )
+            lines.append(f"    {grow_fn}(_this, _this->length + _from.length);\n")
+            lines.append(
+                f"    memcpy(&_this->data[_this->length], _from.data, "
+                f"_from.length * sizeof({elem_ctype}));\n"
+            )
+            lines.append("    _this->length += _from.length;\n")
             lines.append("}\n\n")
 
         self.struct_defs.append("".join(lines))
@@ -5618,6 +5637,13 @@ class CEmitter:
                     # extend takes a pointer to the source list
                     from_tmp = self._alloc_arg_temp(f"z_{list_type_name}_t", from_val)
                     return f"z_{list_type_name}_extend({parent_val}, &{from_tmp})"
+                if method_name == "extend_view" and call.arguments:
+                    # extend_view takes a listview by value (copies, does
+                    # not consume). The argument is typed as a listview of
+                    # the list's element; the mono emitter generates a
+                    # z_{listname}_extend_view(z_{listname}_t*, z_listview_T_t).
+                    from_val = self._emit_operation_value(call.arguments[0].valtype)
+                    return f"z_{list_type_name}_extend_view({parent_val}, {from_val})"
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{list_type_name}_get({parent_val}, {idx_val})"
@@ -6091,9 +6117,16 @@ class CEmitter:
                     # will be resolved by further dotted path traversal
                     return _mangle_func(qname)
                 return _mangle_func(qname)
-            # record_name.method or class_name.method — method call with no extra args
+            # record_name.method or class_name.method — method call with no
+            # extra args. Only fire when `pname` resolves to the type itself
+            # (e.g. `myclass.method`), not a variable that happens to have
+            # class / record type — variables flow to the per-type dispatch
+            # branches below so zero-arg methods like `list.listview` emit
+            # as method calls instead of bare field accesses.
             ptt = self._typetype_of(pname)
-            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS):
+            resolved_pname = self._resolved_type(pname)
+            is_type_name = resolved_pname is not None and resolved_pname.name == pname
+            if ptt in (ZTypeType.RECORD, ZTypeType.CLASS) and is_type_name:
                 return _mangle_func(f"{pname}.{child}")
             # union_name.subtype — emit null subtype construction
             if ptt == ZTypeType.UNION:

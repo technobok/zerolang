@@ -4693,6 +4693,33 @@ class TestResultGenericType:
         """err arm may be a reftype (string), ok a valtype (i64)."""
         check_ok('main: function is {\n    r: result.err "boom".string t: i64\n}')
 
+    def test_result_err_with_null_t_type_arg(self):
+        """`t: null` is valid for constructing `result<null, E>.err` — the
+        null-arm case is exactly what `writer.flush` returns, and
+        downstream code (e.g. bufwriter.flush) needs to forward
+        incoming errs with `result.err x t: null`."""
+        check_ok("main: function is {\n    r: result.err 42 t: null\n}")
+
+    def test_result_err_forward_across_result_shapes(self):
+        """Propagation pattern: a function that converts a
+        `result<u64, ioerror>` into a `result<null, ioerror>` by
+        returning ok-null on success and reconstructing err on failure
+        using the narrowed err payload."""
+        check_ok(
+            "forward: function {r: (result t: u64 e: i64)}"
+            " out (result t: null e: i64) is {\n"
+            "    match (r) case ok then {\n"
+            "        return (result.ok null e: i64)\n"
+            "    } case err then {\n"
+            "        return (result.err r t: null)\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: (result.err 42 t: u64)\n"
+            "    o: (forward r: s)\n"
+            "}\n"
+        )
+
 
 class TestIoErrorVariant:
     """I/O Phase 2: `ioerror` variant + result-with-ioerror integration.

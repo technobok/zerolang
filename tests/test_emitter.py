@@ -1780,6 +1780,57 @@ class TestEmitterUnionCustomTag:
 class TestEmitterUnionIntegration:
     """Integration tests: compile and run union programs."""
 
+    def test_result_err_forward_across_result_shapes(self):
+        """End-to-end: a function receives a `result<u64, i64>`, returns
+        `result<null, i64>` by matching and reconstructing. Exercises
+        the err-propagation pattern that bufwriter.flush needs
+        (`return result.err r t: null` in the narrowed err arm)."""
+        csource = emit_source(
+            "forward: function {r: (result t: u64 e: i64)}"
+            " out (result t: null e: i64) is {\n"
+            "    match (r) case ok then {\n"
+            "        return (result.ok null e: i64)\n"
+            "    } case err then {\n"
+            "        return (result.err r t: null)\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: (result.err 42 t: u64)\n"
+            "    o: (forward r: s)\n"
+            "    match (o) case ok then {\n"
+            '        print "ok branch"\n'
+            "    } case err then {\n"
+            '        print "err branch"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "err branch"
+
+    def test_result_ok_forward_across_result_shapes(self):
+        """Same pattern but the ok arm is taken."""
+        csource = emit_source(
+            "forward: function {r: (result t: u64 e: i64)}"
+            " out (result t: null e: i64) is {\n"
+            "    match (r) case ok then {\n"
+            "        return (result.ok null e: i64)\n"
+            "    } case err then {\n"
+            "        return (result.err r t: null)\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: (result.ok 7.u64 e: i64)\n"
+            "    o: (forward r: s)\n"
+            "    match (o) case ok then {\n"
+            '        print "ok branch"\n'
+            "    } case err then {\n"
+            '        print "err branch"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "ok branch"
+
     def test_union_basic(self):
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\n"
@@ -4707,6 +4758,42 @@ class TestList:
         )
         output = compile_and_run(csource)
         assert output.strip() == "4 3 4"
+
+    def test_list_extend_view_copies_without_consuming(self):
+        """extend_view copies elements from a listview (borrowed); the
+        source remains usable after the call. Needed so `bytes` can
+        append from a `byteview` without consuming the view's backing
+        buffer."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: bytes\n"
+            "    a.append from: 104.u8\n"
+            "    a.append from: 105.u8\n"
+            "    b: bytes\n"
+            "    bv: byteview.borrow from: a.listview\n"
+            "    b.extend_view other: bv\n"
+            '    print "\\{b.length} \\{b.get i: 0.u64} \\{b.get i: 1.u64}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2 104 105"
+
+    def test_list_extend_view_generic_over_element(self):
+        """extend_view lives on list<T>, so non-u8 element types get it
+        via the same generic monomorphization path as other list
+        methods."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (list of: i64)\n"
+            "    a.append from: 10\n"
+            "    a.append from: 20\n"
+            "    b: (list of: i64)\n"
+            "    b.extend_view other: a.listview\n"
+            '    print "\\{b.length} \\{b.get i: 1.u64}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2 20"
 
     def test_list_capacity_preallocation(self):
         """Pre-allocated capacity is reported correctly."""

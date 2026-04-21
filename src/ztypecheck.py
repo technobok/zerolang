@@ -3990,6 +3990,7 @@ class TypeChecker:
                 # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
                 # Get or create the monomorphized listview type
                 listview_template = self._resolve_name("listview")
+                listview_mono = None
                 if listview_template:
                     lv_defn = self._find_generic_defn(listview_template)
                     if lv_defn:
@@ -4001,6 +4002,15 @@ class TypeChecker:
                         )
                         listview_type.return_type = listview_mono
                         mono.children["listview"] = listview_type
+                # synthesize .extend_view method: function {other: listview<elem>}
+                # — copies bytes from a borrowed view (does NOT consume).
+                if listview_mono is not None:
+                    extend_view_type = _make_type(
+                        f"{mangled}.extend_view", ZTypeType.FUNCTION
+                    )
+                    extend_view_type.children["other"] = listview_mono
+                    extend_view_type.param_ownership["other"] = ZParamOwnership.BORROW
+                    mono.children["extend_view"] = extend_view_type
 
         # for map types: set reftype, synthesize methods
         # Maps remain heap-allocated for now.
@@ -4427,7 +4437,14 @@ class TypeChecker:
         return self._monomorphize(template, generic_args, defn)
 
     def _resolve_typeref_from_operation(self, op: zast.Operation) -> Optional[ZType]:
-        """Try to resolve an operation as a type reference (for explicit type args)."""
+        """Try to resolve an operation as a type reference (for explicit type args).
+
+        `null` is accepted as a type argument so generic unions/variants with a
+        null payload arm can be constructed explicitly — e.g.
+        `result.err e t: null` for a `result<null, E>`. Its stored typetype
+        is ZTypeType.NULL even though it is declared as a `record` in the
+        stdlib.
+        """
         if op.nodetype == NodeType.ATOMID:
             name = cast(zast.AtomId, op).name
             if not _is_numeric_id(name):
@@ -4438,6 +4455,7 @@ class TypeChecker:
                     ZTypeType.CLASS,
                     ZTypeType.VARIANT,
                     ZTypeType.ENUM,
+                    ZTypeType.NULL,
                 ):
                     return t
         return None
