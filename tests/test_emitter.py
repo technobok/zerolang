@@ -7362,6 +7362,99 @@ class TestIOFileStreaming:
         assert output.strip().splitlines() == ["ok", "bad"]
 
 
+class TestOsUnit:
+    """`os` unit: process-level primitives. argv/env/exit have no
+    companion struct types (unlike the `io` file/stream stack) so the
+    plumbing is smaller: three native function bodies plus two globals
+    populated by main() for `args` to read."""
+
+    def test_exit_with_status(self, tmp_path):
+        """os.exit terminates immediately with the given status."""
+        csource = emit_source("main: function is {\n    os.exit code: 7.i32\n}")
+        assert "z_os_exit(" in csource
+        assert "static void z_os_exit(int32_t code)" in csource
+        # Run and check the exit code. compile_and_run asserts success
+        # so invoke the binary manually.
+        import subprocess
+        import shutil
+
+        src = tmp_path / "exit.c"
+        src.write_text(csource)
+        bin_path = tmp_path / "exit"
+        gcc = shutil.which("gcc")
+        assert gcc is not None
+        subprocess.run([gcc, "-o", str(bin_path), str(src)], check=True)
+        r = subprocess.run([str(bin_path)], capture_output=True)
+        assert r.returncode == 7
+
+    def test_args_exposes_argv(self, tmp_path):
+        """os.args returns a list of strings copied from argv. When the
+        program is run with extra args, the count reflects that."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    argv: os.args\n"
+            '    print "argc=\\{argv.length}"\n'
+            "}"
+        )
+        assert "z_os_argc_g" in csource
+        assert "z_os_argv_g" in csource
+        assert "z_os_argc_g = argc;" in csource
+        import subprocess
+        import shutil
+
+        src = tmp_path / "args.c"
+        src.write_text(csource)
+        bin_path = tmp_path / "args"
+        gcc = shutil.which("gcc")
+        assert gcc is not None
+        subprocess.run([gcc, "-o", str(bin_path), str(src)], check=True)
+        r = subprocess.run(
+            [str(bin_path), "one", "two"], capture_output=True, text=True
+        )
+        # argv includes argv[0] (program path) so the total is 3.
+        assert r.stdout.strip() == "argc=3"
+
+    def test_get_env_some_and_none(self, tmp_path):
+        """option.some payload on hit, option.none on miss."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    ev: os.get_env key: "Z_OS_TEST_VAR".string\n'
+            "    match (\n"
+            "        ev\n"
+            "    ) case some then {\n"
+            "        print ev\n"
+            "    } case none then {\n"
+            '        print "missing"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_os_get_env(" in csource
+        assert "getenv(" in csource
+        import subprocess
+        import shutil
+        import os
+
+        src = tmp_path / "env.c"
+        src.write_text(csource)
+        bin_path = tmp_path / "env"
+        gcc = shutil.which("gcc")
+        assert gcc is not None
+        subprocess.run([gcc, "-o", str(bin_path), str(src)], check=True)
+
+        env_hit = {**os.environ, "Z_OS_TEST_VAR": "hello world"}
+        env_miss = {k: v for k, v in os.environ.items() if k != "Z_OS_TEST_VAR"}
+
+        r_hit = subprocess.run(
+            [str(bin_path)], capture_output=True, text=True, env=env_hit
+        )
+        assert r_hit.stdout.strip() == "hello world"
+
+        r_miss = subprocess.run(
+            [str(bin_path)], capture_output=True, text=True, env=env_miss
+        )
+        assert r_miss.stdout.strip() == "missing"
+
+
 class TestListOfStringDestructor:
     """The list destructor iterates and calls z_string_free per element
     when the element type carries a destructor. Before this phase the

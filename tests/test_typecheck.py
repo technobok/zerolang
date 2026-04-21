@@ -2583,6 +2583,47 @@ class TestIoWrappers:
         )
 
 
+class TestOsUnit:
+    """`os` unit: process-level primitives (argv / env / exit).
+    Thin compared to io -- only three natives -- but exercises the
+    same machinery: unit-qualified dispatch, zero-arg native
+    coercion, and ownership of string-returning results."""
+
+    def test_args_returns_list_of_string(self):
+        """os.args is a zero-arg native whose return type coerces to
+        `list of: string`, so `argv: os.args` binds argv to the list
+        directly (not to a function pointer)."""
+        check_ok(
+            "main: function is {\n"
+            "  argv: os.args\n"
+            '  print "\\{argv.length}"\n'
+            "}\n"
+        )
+
+    def test_get_env_returns_option_string(self):
+        """os.get_env returns option(string); the typechecker accepts
+        matching on some/none arms in the usual way."""
+        check_ok(
+            "main: function is {\n"
+            '  ev: os.get_env key: "PATH".string\n'
+            "  match (ev) case some then {\n"
+            "    print ev\n"
+            "  } case none then {\n"
+            '    print "missing"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_exit_is_no_return(self):
+        """os.exit has no return; calling it with a numeric i32 is
+        legal and the scope does not need to dispatch a result."""
+        check_ok(
+            "main: function is {\n"
+            "  os.exit code: 0.i32\n"
+            "}\n"
+        )
+
+
 class TestPureZerolangBufferedShapes:
     """Ownership-path coverage for the shapes a pure-Zerolang
     bufwriter/bufreader body would have exercised.

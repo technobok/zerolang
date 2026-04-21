@@ -1031,6 +1031,86 @@ _Z_FILE_SEEK = (
 )
 
 
+_Z_OS_ARGV_GLOBALS = (
+    "/* Process argc/argv captured by main() before z_main runs, so\n"
+    "   os.args can expose them without threading them through every\n"
+    "   call site. Only emitted when the program references os.args. */\n"
+    "static int z_os_argc_g;\n"
+    "static char** z_os_argv_g;\n\n"
+)
+
+_Z_OS_ARGS = (
+    "/* os.args -- copy argv into a freshly-allocated list of strings.\n"
+    "   The caller owns the outer list and every string inside; scope\n"
+    "   exit runs the list destructor which frees each element. */\n"
+    "static z_list_string_t z_os_args(void);\n"
+    "static z_list_string_t z_os_args(void) {\n"
+    "    uint64_t n = (uint64_t)(z_os_argc_g > 0 ? z_os_argc_g : 0);\n"
+    "    z_list_string_t out = {0};\n"
+    "    out.length = n;\n"
+    "    out.capacity = n;\n"
+    "    if (n > 0) {\n"
+    "        out.data = (z_string_t*)malloc(n * sizeof(z_string_t));\n"
+    "        for (uint64_t i = 0; i < n; i++) {\n"
+    "            out.data[i] = z_string_new(z_os_argv_g[i]);\n"
+    "        }\n"
+    "    }\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_GET_ENV = (
+    "/* os.get_env -- look up the POSIX environment by name. Returns\n"
+    "   option.some(string) on hit (copying the value so the caller\n"
+    "   owns the heap buffer and libc's environ isn't aliased); returns\n"
+    "   option.none on miss. The caller retains ownership of `key` and\n"
+    "   frees it after the call returns. */\n"
+    "static z_option_string_t z_os_get_env(z_string_t* key);\n"
+    "static z_option_string_t z_os_get_env(z_string_t* key) {\n"
+    "    z_option_string_t out = {0};\n"
+    "    const char* v = getenv(key->data);\n"
+    "    if (v == NULL) {\n"
+    "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = z_string_new(v);\n"
+    "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_EXIT = (
+    "/* os.exit -- libc exit with the given status. Does not return;\n"
+    "   in-scope zerolang destructors are skipped. */\n"
+    "static void z_os_exit(int32_t code);\n"
+    "static void z_os_exit(int32_t code) {\n"
+    "    exit((int)code);\n"
+    "}\n\n"
+)
+
+
+def emit_runtime_os(*, needs_os: bool, natives: "set[str] | None" = None) -> str:
+    """Emit os-unit native function implementations per requested name.
+
+    Mirrors emit_runtime_io's per-name gating so each program only
+    pays for the natives it actually calls. `args` additionally pulls
+    in two file-scope globals that main() populates from argc/argv.
+    """
+    if not needs_os or not natives:
+        return ""
+    parts: list[str] = []
+    if "args" in natives:
+        parts.append(_Z_OS_ARGV_GLOBALS)
+        parts.append(_Z_OS_ARGS)
+    if "get_env" in natives:
+        parts.append(_Z_OS_GET_ENV)
+    if "exit" in natives:
+        parts.append(_Z_OS_EXIT)
+    return "".join(parts)
+
+
 def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
     """Emit io-unit native function implementations per requested name.
 

@@ -311,10 +311,12 @@ class CEmitter:
         self.needs_string = False
         self.needs_stringview = False
         self.needs_io = False
+        self.needs_os = False
         # per-native flags; the runtime emits a helper only when its
         # flag is set, so unused natives do not pull in types the user
         # never monomorphized.
         self.needs_io_natives: set[str] = set()
+        self.needs_os_natives: set[str] = set()
         self.forward_decls: List[str] = []
         self.struct_defs: "TrackedList" = TrackedList(self)
         self.func_defs: "TrackedList" = TrackedList(self)
@@ -577,6 +579,22 @@ class CEmitter:
             return _mangle_func(name)
         return _mangle_var(name)
 
+    def _track_stdlib_unit_native(self, mangled: str) -> None:
+        """Record use of an io- or os-unit native so emit_runtime_io /
+        emit_runtime_os includes its C body. Per-name granularity keeps
+        unused helpers out of every compiled program. Called from every
+        path that turns a callable AST node into a C name, not just
+        `_emit_callable_expr` — definition-name dotted paths are
+        short-circuited earlier and would otherwise miss tracking."""
+        if mangled.startswith("z_io_"):
+            self.needs_io = True
+            self.needs_stdio = True
+            self.needs_io_natives.add(mangled[len("z_io_") :])
+        elif mangled.startswith("z_os_"):
+            self.needs_os = True
+            self.needs_stdlib = True
+            self.needs_os_natives.add(mangled[len("z_os_") :])
+
     def _emit_callable_expr(self, call: zast.Call) -> str:
         """Emit the callable expression for a function call.
 
@@ -603,18 +621,12 @@ class CEmitter:
                 # use the resolved type name for proper qualification
                 # (handles subunit functions like mymod.helper.square)
                 if "." in func_name:
-                    return _mangle_func(func_name)
+                    mangled = _mangle_func(func_name)
+                    self._track_stdlib_unit_native(mangled)
+                    return mangled
         callable_name = self._get_callable_name(call.callable)
         mangled = self._mangle_callable(callable_name)
-        # track use of io-unit natives so the runtime emitter includes
-        # their C implementations. `print` is hardcoded separately and
-        # does not go through this path. Per-function granularity so
-        # only the helpers the program actually calls are emitted.
-        if mangled.startswith("z_io_"):
-            self.needs_io = True
-            self.needs_stdio = True
-            # strip "z_io_" prefix: `z_io_read_text` -> `read_text`.
-            self.needs_io_natives.add(mangled[len("z_io_") :])
+        self._track_stdlib_unit_native(mangled)
         return mangled
 
     def _qualify(self, prefix: str, name: str) -> str:
@@ -1401,7 +1413,7 @@ class CEmitter:
                 self._emit_function(mono_ftype.name, cloned_func)
 
         for unitname, unit in self.program.units.items():
-            if unitname in ("system", "core", "io", self.program.mainunitname):
+            if unitname in ("system", "core", "io", "os", self.program.mainunitname):
                 continue
             # skip generic file unit templates (emitted via mono_types)
             if self._is_generic_template(unit):
@@ -1475,6 +1487,16 @@ class CEmitter:
         # z_file_reader_create / z_file_writer_create are declared.
         parts.append(zrt.emit_io_std_streams(self.needs_io_natives))
 
+        # os-unit helpers (exit / args / get_env). Independent of io;
+        # the only shared state is the argc/argv globals emitted below
+        # when args is referenced.
+        parts.append(
+            zrt.emit_runtime_os(
+                needs_os=self.needs_os,
+                natives=self.needs_os_natives,
+            )
+        )
+
         for ft in self.func_typedefs:
             parts.append(ft)
         if self.func_typedefs:
@@ -1493,6 +1515,12 @@ class CEmitter:
             parts.append(fd)
 
         parts.append("int main(int argc, char* argv[]) {\n")
+        if "args" in self.needs_os_natives:
+            # Capture the process argv into module-level globals so
+            # os.args can materialise a list of strings without having
+            # to thread argc/argv through z_main.
+            parts.append("    z_os_argc_g = argc;\n")
+            parts.append("    z_os_argv_g = argv;\n")
         parts.append("    z_main();\n")
         parts.append("    return 0;\n")
         parts.append("}\n")
@@ -6265,23 +6293,46 @@ class CEmitter:
                 if typename.startswith("f"):
                     return f"(({ctype}){value})"
                 return f"(({ctype}){int(value)})"
-            # io.stdin / io.stdout / io.stderr — zero-arg native
-            # accessors whose return type (reader / writer) has been
-            # substituted by the typechecker. Emit the call directly;
-            # the generic path handler below would otherwise emit a
-            # bare function name (no `()`), yielding invalid C.
+            # Zero-arg native unit-level functions accessed as a bare
+            # dotted path: the typechecker coerces their type to the
+            # return type (so `w: io.stdout` binds w to a writer, not a
+            # function pointer). The emitter must match by inserting
+            # `()` here; otherwise the generic path handler below emits
+            # a bare function name, yielding invalid C. Covers io.stdin/
+            # stdout/stderr as well as os.args and any future
+            # analogous helpers.
             if (
-                pname == "io"
-                and child in ("stdin", "stdout", "stderr")
+                pname in self.program.units
                 and path.type is not None
                 and path.type.typetype != ZTypeType.FUNCTION
             ):
-                self.needs_io = True
-                self.needs_stdio = True
-                self.needs_io_natives.add(child)
-                return f"z_io_{child}()"
+                unit_body = self.program.units[pname].body
+                child_defn = unit_body.get(child)
+                if (
+                    child_defn is not None
+                    and getattr(child_defn, "nodetype", None) == NodeType.FUNCTION
+                    and getattr(child_defn, "is_native", False)
+                ):
+                    fn_type = getattr(child_defn, "type", None)
+                    has_runtime_params = False
+                    if fn_type is not None:
+                        for p in fn_type.children:
+                            if p != "this":
+                                has_runtime_params = True
+                                break
+                    if not has_runtime_params:
+                        mangled = _mangle_func(f"{pname}.{child}")
+                        self._track_stdlib_unit_native(mangled)
+                        if pname == "io":
+                            self.needs_stdio = True
+                        return f"{mangled}()"
             # unit.name reference (file-level units)
-            if pname in self.program.units and pname not in ("system", "core", "io"):
+            if pname in self.program.units and pname not in (
+                "system",
+                "core",
+                "io",
+                "os",
+            ):
                 return _mangle_func(f"{pname}.{child}")
             # inline unit.name reference
             if self._typetype_of(pname) == ZTypeType.UNIT:
