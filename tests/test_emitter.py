@@ -1307,6 +1307,36 @@ class TestEmitterClassIntegration:
         output = compile_and_run(csource)
         assert output.strip() == "7"
 
+    def test_self_field_method_call_statement_prepends_receiver(self):
+        """Regression for the emitter gap unblocked by path-scoped locks:
+        `this.field.method arg` on a concrete class field in statement
+        position must emit `z_method(&this->field, arg)`, not
+        `z_method(arg)`. Before Commit D, the pattern was rejected at
+        typecheck; the emitter's statement path never handled it."""
+        csource = emit_source(
+            "sink: class { total: i64 } as {\n"
+            "  add: function {:this n: i64} is {\n"
+            "    this.total = this.total + n\n"
+            "  }\n"
+            "}\n"
+            "pipe: class { dst: sink } as {\n"
+            "  pump: function {:this n: i64} is {\n"
+            "    this.dst.add n: n\n"
+            "  }\n"
+            "  total: function {:this} out i64 is {\n"
+            "    return this.dst.total\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  p: pipe dst: (sink total: 0)\n"
+            "  p.pump n: 3\n"
+            "  p.pump n: 4\n"
+            '  print "\\{p.total}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "7"
+
     def test_class_method_mutation(self):
         csource = emit_source(
             "counter: class { value: i64 } as {\n"

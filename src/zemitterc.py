@@ -4575,6 +4575,7 @@ class CEmitter:
                     return f"{indent}z_string_shrink(&{parent_val});\n"
 
         args = self._emit_call_args(call)
+        args = self._prepend_method_receiver(call, args)
         cname = self._emit_callable_expr(call)
         code = f"{indent}{cname}({args});\n"
 
@@ -4869,6 +4870,33 @@ class CEmitter:
         self._temp.frees.append(tmp)
         self._temp.proto_set[tmp] = proto_type.name
         return tmp
+
+    def _prepend_method_receiver(self, call: zast.Call, args: str) -> str:
+        """If `call` is a method call via a dotted path (`obj.method`) and the
+        callable's FUNCTION type has a `this` parameter, prepend the
+        receiver to the emitted args. Stack-allocated class receivers get
+        `&` added. No-op in every other case (protocol/facet dispatch has
+        its own path; free function calls have no receiver).
+        """
+        if call.callable.nodetype != NodeType.DOTTEDPATH:
+            return args
+        ftype = cast(zast.DottedPath, call.callable).type
+        if not (ftype and ftype.typetype == ZTypeType.FUNCTION):
+            return args
+        if "this" not in ftype.children:
+            return args
+        parent_path = cast(zast.DottedPath, call.callable).parent
+        receiver = self._emit_path_value(parent_path)
+        parent_type = parent_path.type
+        if (
+            parent_type
+            and not parent_type.is_heap_allocated
+            and parent_type.typetype == ZTypeType.CLASS
+            and not receiver.startswith("&")
+            and not self._is_class_pointer_path(parent_path)
+        ):
+            receiver = f"&{receiver}"
+        return f"{receiver}, {args}" if args else receiver
 
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
@@ -5744,29 +5772,7 @@ class CEmitter:
             return tmp
 
         args = self._emit_call_args(call)
-
-        # dotted path method call: prepend receiver as 'this' argument
-        if call.callable.nodetype == NodeType.DOTTEDPATH:
-            ftype = cast(zast.DottedPath, call.callable).type
-            if ftype and ftype.typetype == ZTypeType.FUNCTION:
-                # check if the function has a 'this' parameter (method)
-                has_this = "this" in ftype.children
-                if has_this:
-                    receiver = self._emit_path_value(
-                        cast(zast.DottedPath, call.callable).parent
-                    )
-                    # stack-allocated class: wrap with &
-                    parent_path = cast(zast.DottedPath, call.callable).parent
-                    parent_type = parent_path.type
-                    if (
-                        parent_type
-                        and not parent_type.is_heap_allocated
-                        and parent_type.typetype == ZTypeType.CLASS
-                        and not receiver.startswith("&")
-                        and not self._is_class_pointer_path(parent_path)
-                    ):
-                        receiver = f"&{receiver}"
-                    args = f"{receiver}, {args}" if args else receiver
+        args = self._prepend_method_receiver(call, args)
 
         cname = self._emit_callable_expr(call)
         result = f"{cname}({args})"
