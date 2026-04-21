@@ -1,0 +1,36 @@
+# autoproject.z -- Implicit protocol projection at call sites
+#
+# When a function parameter's declared type is a protocol (or
+# facet), passing a concrete value that conforms to the protocol is
+# accepted without an explicit `protocol.borrow from: x` /
+# `protocol.take from: x` wrapper. The compiler synthesises the
+# projection automatically, picking `borrow` by default and `take`
+# when the parameter is annotated `.take`.
+
+greeter: protocol {
+    greet: function {:this n: i64} out i64
+}
+
+cat: record {
+    k: i64
+} as {
+    :greeter
+    greet: function {c: this n: i64} out i64 is {
+        return c.k + n
+    }
+}
+
+# Parameter typed `p: greeter` accepts any conformer of `greeter`;
+# the caller below passes a plain `cat`.
+use_greeter: function {p: greeter n: i64} out i64 is {
+    r: p.greet n: n
+    return r
+}
+
+main: function is {
+    c: cat k: 40
+    # No explicit `greeter.borrow from: c` needed. The compiler
+    # projects `c` onto the greeter protocol at the call boundary.
+    v: use_greeter p: c n: 2
+    print "greet = \{v}"
+}

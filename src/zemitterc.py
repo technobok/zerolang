@@ -4815,6 +4815,61 @@ class CEmitter:
             return []
         return [_ctype(v) for k, v in ftype.children.items()]
 
+    def _emit_projected_arg(self, arg: zast.NamedOperation) -> str:
+        """Emit an implicit protocol-projected argument.
+
+        Typecheck stamped `arg.projected_protocol`, `arg.projected_label`,
+        and `arg.projected_kind` when the caller passed a concrete arg
+        to a protocol parameter. We synthesise the wrapper here — same
+        C pattern as the explicit `proto.borrow` / `proto.create` forms
+        emitted by `_emit_protocol_borrow_call` / `_emit_protocol_create_call`.
+        """
+        assert arg.projected_protocol is not None
+        assert arg.projected_label is not None
+        proto_type = arg.projected_protocol
+        label = arg.projected_label
+        arg_val = self._emit_operation_value(arg.valtype)
+        arg_type = self._get_operation_type(arg.valtype)
+        impl_name = arg_type.name if arg_type else ""
+        # Stack-allocated CLASS conformers are passed by pointer; RECORD
+        # (valtype) conformers are passed by value. Heap classes already
+        # flow as pointers at the call site.
+        needs_addr = (
+            arg_type is not None
+            and arg_type.typetype == ZTypeType.CLASS
+            and not arg_type.is_heap_allocated
+        )
+        arg_expr = (
+            f"&{arg_val}" if needs_addr and not arg_val.startswith("&") else arg_val
+        )
+        if arg.projected_kind == "take":
+            create_name = f"z_{impl_name}_{label}_create_owned"
+            tmp = self._temp_name("c")
+            indent = self._indent()
+            self._temp.decls.append(
+                f"{indent}z_{proto_type.name}_t {tmp} = {create_name}({arg_expr});\n"
+            )
+            self._temp.frees.append(tmp)
+            self._temp.proto_set[tmp] = proto_type.name
+            # invalidate the source (take semantics) when the arg was a
+            # named variable — mirror _apply_take_to_arg's C-side zero.
+            src = self._get_implicit_take_var(arg.valtype) if arg_type else None
+            if src is not None:
+                self._temp.decls.append(
+                    self._emit_take_invalidation(src, arg_type, indent)
+                )
+            return tmp
+        # borrow (default): stack-allocated protocol handle, no destroy.
+        create_name = f"z_{impl_name}_{label}_create"
+        tmp = self._temp_name("p")
+        indent = self._indent()
+        self._temp.decls.append(
+            f"{indent}z_{proto_type.name}_t {tmp} = {create_name}({arg_expr});\n"
+        )
+        self._temp.frees.append(tmp)
+        self._temp.proto_set[tmp] = proto_type.name
+        return tmp
+
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
         param_ctypes = self._get_param_ctypes(call)
@@ -4835,6 +4890,15 @@ class CEmitter:
             # skip generic type args (they are compile-time only)
             if arg.name and arg.name in generic_param_names:
                 self._last_emitted_arg_vals.append("")
+                continue
+            # Implicit protocol projection stamped by typecheck: emit
+            # `z_<impl>_<label>_create` over the concrete argument value
+            # so the callee sees a protocol handle.
+            if arg.projected_protocol is not None and arg.projected_label is not None:
+                val = self._emit_projected_arg(arg)
+                parts.append(val)
+                self._last_emitted_arg_vals.append(val)
+                ctype_idx += 1
                 continue
             val = self._emit_operation_value(arg.valtype)
             if self._has_call(arg.valtype):

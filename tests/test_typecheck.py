@@ -169,6 +169,40 @@ class TestAssignment:
         )
         assert any("borrow" in e.msg.lower() for e in errors), [e.msg for e in errors]
 
+    def test_protocol_autoproject_record(self):
+        """A concrete record that conforms to a protocol may be passed
+        directly to a parameter of that protocol type — the compiler
+        auto-projects the wrapper."""
+        check_ok(
+            "p: protocol { m: function {:this n: i64} out i64 }\n"
+            "c: record { k: i64 } as {\n"
+            "  :p\n"
+            "  m: function {x: this n: i64} out i64 is { return x.k + n }\n"
+            "}\n"
+            "use_p: function {q: p n: i64} out i64 is {\n"
+            "  r: q.m n: n\n"
+            "  return r\n"
+            "}\n"
+            "main: function is {\n"
+            "  a: c k: 1\n"
+            "  n: use_p q: a n: 2\n"
+            "}\n"
+        )
+
+    def test_protocol_autoproject_nonconforming_errors(self):
+        """Passing a type that does NOT conform still errs as a type
+        mismatch."""
+        errors = check_errors(
+            "p: protocol { m: function {:this n: i64} out i64 }\n"
+            "c: record { k: i64 }\n"
+            "use_p: function {q: p n: i64} out i64 is { return 0 }\n"
+            "main: function is {\n"
+            "  a: c k: 1\n"
+            "  n: use_p q: a n: 2\n"
+            "}\n"
+        )
+        assert any("type mismatch" in e.msg for e in errors), [e.msg for e in errors]
+
 
 class TestNonRuntimeTypes:
     def test_null_assignment_error(self):

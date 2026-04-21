@@ -3538,6 +3538,70 @@ class TypeChecker:
             base = base.typedef_base
         return False
 
+    def _find_conformance_label(
+        self, impl_type: ZType, proto_type: ZType
+    ) -> Optional[str]:
+        """If `impl_type` (a class or record) declares conformance to
+        `proto_type`, return the conformance label; else None.
+
+        The typechecker records each `as { :proto }` / `as { lbl: proto }`
+        entry as a child of the implementor's ZType (child name = label,
+        child type = the protocol's ZType). Conformance walks the same
+        generic_origin chain as `_type_conforms_to_protocol` so that a
+        monomorphized type (e.g. `str_64`) inherits the label from its
+        template.
+        """
+        if impl_type.typetype not in (ZTypeType.CLASS, ZTypeType.RECORD):
+            return None
+        if proto_type.typetype not in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+            return None
+        t: Optional[ZType] = impl_type
+        seen: set[int] = set()
+        while t is not None and id(t) not in seen:
+            seen.add(id(t))
+            for label, child in t.children.items():
+                if child is proto_type or child.nodeid == proto_type.nodeid:
+                    return label
+                if child.typetype in (
+                    ZTypeType.PROTOCOL,
+                    ZTypeType.FACET,
+                ) and self._types_compatible(child, proto_type):
+                    return label
+            origin = t.generic_origin
+            if origin is None or is_tag_origin(origin):
+                t = None
+            else:
+                t = cast(ZType, origin)
+        return None
+
+    def _try_protocol_coerce(
+        self,
+        arg: zast.NamedOperation,
+        arg_type: ZType,
+        formal_type: ZType,
+        ownership: Optional["ZParamOwnership"],
+    ) -> bool:
+        """Phase: auto-project a concrete arg onto a protocol parameter.
+
+        When the parameter expects a protocol/facet and the concrete arg
+        type conforms, stamp `arg` so the emitter synthesises
+        `z_<impl>_<label>_create` (borrow or owned, per the declared
+        ownership). Returns True if a projection was applied.
+        """
+        label = self._find_conformance_label(arg_type, formal_type)
+        if label is None:
+            return False
+        arg.projected_protocol = formal_type
+        arg.projected_label = label
+        # Ownership selection: explicit TAKE or BORROW annotation wins;
+        # otherwise reftype parameters default to take semantics (the
+        # usual ownership rule).
+        if ownership == ZParamOwnership.BORROW or ownership == ZParamOwnership.LOCK:
+            arg.projected_kind = "borrow"
+        else:
+            arg.projected_kind = "take"
+        return True
+
     def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
         """Check structural equivalence of two function types (same
         params + return). Recurses through `_types_compatible` so the
@@ -6191,12 +6255,19 @@ class TypeChecker:
                         break
                 if matched:
                     if not self._types_compatible(arg_type, matched):
-                        self._error(
-                            f"argument '{arg.name}' type mismatch: expected "
-                            f"{matched.name}, got {arg_type.name}",
-                            loc=arg.start,
-                            err=ERR.CALLERROR,
-                        )
+                        # Try implicit protocol projection: if the parameter
+                        # expects a protocol/facet and the concrete arg
+                        # type conforms, synthesise the wrapper.
+                        own = callee_type.param_ownership.get(arg.name)
+                        if self._try_protocol_coerce(arg, arg_type, matched, own):
+                            arg_type = matched
+                        else:
+                            self._error(
+                                f"argument '{arg.name}' type mismatch: expected "
+                                f"{matched.name}, got {arg_type.name}",
+                                loc=arg.start,
+                                err=ERR.CALLERROR,
+                            )
                 else:
                     # unknown named argument — suggest similar parameter names
                     param_names = [p for p, _ in params]
@@ -6211,13 +6282,17 @@ class TypeChecker:
                 # positional argument
                 pname, ptype = params[i]
                 if not self._types_compatible(arg_type, ptype):
-                    self._error(
-                        f"argument type mismatch: expected {ptype.name}, "
-                        f"got {arg_type.name}",
-                        loc=arg.start,
-                        err=ERR.CALLERROR,
-                        note=f"parameter '{pname}' expects type {ptype.name}",
-                    )
+                    own = callee_type.param_ownership.get(pname)
+                    if self._try_protocol_coerce(arg, arg_type, ptype, own):
+                        arg_type = ptype
+                    else:
+                        self._error(
+                            f"argument type mismatch: expected {ptype.name}, "
+                            f"got {arg_type.name}",
+                            loc=arg.start,
+                            err=ERR.CALLERROR,
+                            note=f"parameter '{pname}' expects type {ptype.name}",
+                        )
             elif arg_type and not arg.name and i >= len(params):
                 # too many positional arguments
                 if params:
