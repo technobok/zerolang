@@ -17,6 +17,75 @@ from ztypes import (
 )
 
 
+def _paths_overlap(p1: Tuple[str, ...], p2: Tuple[str, ...]) -> bool:
+    """Two lock paths overlap iff one is a (non-strict) prefix of the other."""
+    n = len(p1) if len(p1) < len(p2) else len(p2)
+    return p1[:n] == p2[:n]
+
+
+def _lock_acquire_conflict(
+    existing: LockInfo,
+    req_path: Tuple[str, ...],
+    req_type: ZLockState,
+) -> bool:
+    """Multi-granularity conflict check for a NEW lock acquisition.
+
+    Caller has already filtered by `entry.name == req_path[0]` so both
+    paths share the same root. Rule:
+
+    - Same path: conflict iff at least one is EXCLUSIVE.
+    - Strict-ancestor existing + descendant requested:
+      conflict iff the ancestor is EXCLUSIVE (it owns the whole subtree).
+    - Strict-ancestor requested + descendant existing:
+      conflict iff the requested is EXCLUSIVE (it would absorb the subtree
+      containing an outstanding lock).
+    - Sibling (no prefix relation): never conflict.
+
+    SHARED on an ancestor is treated as INTENT-shared in the multi-
+    granularity sense — it permits any locks (S or X) on descendants.
+    This is what allows a single operation to install SHARED on every
+    intermediate plus EXCLUSIVE on the leaf without self-conflict.
+    """
+    ep = existing.path
+    rp = req_path
+    if ep == rp:
+        return (
+            existing.lock_type == ZLockState.EXCLUSIVE
+            or req_type == ZLockState.EXCLUSIVE
+        )
+    if len(ep) < len(rp) and ep == rp[: len(ep)]:
+        # existing is strict ancestor of requested
+        return existing.lock_type == ZLockState.EXCLUSIVE
+    if len(rp) < len(ep) and rp == ep[: len(rp)]:
+        # requested is strict ancestor of existing
+        return req_type == ZLockState.EXCLUSIVE
+    return False
+
+
+def _format_path(path: Tuple[str, ...]) -> str:
+    """Render a lock path as `root.f1.f2` for error messages."""
+    return ".".join(path) if path else "<unknown>"
+
+
+def _format_lock_conflict(
+    requested_path: Tuple[str, ...],
+    requested_type: ZLockState,
+    existing: LockInfo,
+) -> str:
+    """Path-aware conflict message. Mentions the root variable name in
+    quotes so existing test assertions matching `"'name'"` keep working."""
+    root = requested_path[0]
+    req_kind = requested_type.name.lower()
+    held_kind = existing.lock_type.name.lower()
+    detail = ""
+    if existing.path != requested_path:
+        detail = f" on '{_format_path(existing.path)}'"
+    return (
+        f"Cannot take {req_kind} lock on '{root}': "
+        f"already has {held_kind} lock{detail} held by '{existing.holder}'"
+    )
+
+
 class Scope:
     """
     A single scope level in the symbol table.
@@ -245,53 +314,73 @@ class SymbolTable:
     # ---- lock operations (scope-based: locks are Entry.lock in scope chain) ----
 
     def try_lock(
-        self, target_name: str, lock_type: ZLockState, holder: str
+        self, path: Tuple[str, ...], lock_type: ZLockState, holder: str
     ) -> Optional[str]:
-        """Try to take a lock on target_name. Returns error message or None on success.
+        """Try to take a lock on `path`. Returns error message or None on success.
 
-        Searches the scope chain for existing locks. On success, appends a lock
-        Entry to the current scope.
+        `path` is `(root, f1, f2, ...)` — the full addressable lock target.
+        `path[0]` must resolve to a known variable; otherwise no lock is taken.
+
+        Conflict rule (prefix-overlap): two paths conflict iff one is a prefix
+        of the other AND at least one is EXCLUSIVE. SHARED-on-SHARED never
+        conflicts; SHARED-on-same-full-path dedupes (no entry added).
+
+        On success, appends a lock Entry to the current scope keyed by
+        `path[0]` so the existing scope-chain machinery (release on pop,
+        release_held_locks) keeps working unchanged.
         """
-        # check the target exists as a variable
+        if not path:
+            return None
+        target_name = path[0]
         target_var = self.lookup_var(target_name)
         if target_var is None:
             return None  # unknown variable, skip lock checking
 
-        # check for conflicts in scope chain
-        existing = self.find_lock(target_name)
-        if existing is not None:
-            if lock_type == ZLockState.EXCLUSIVE:
-                return (
-                    f"Cannot take exclusive lock on '{target_name}': "
-                    f"already has {existing.lock_type.name.lower()} lock held by '{existing.holder}'"
-                )
-            if (
-                lock_type == ZLockState.SHARED
-                and existing.lock_type == ZLockState.EXCLUSIVE
-            ):
-                return (
-                    f"Cannot take shared lock on '{target_name}': "
-                    f"already has exclusive lock held by '{existing.holder}'"
-                )
-            # shared + shared: already locked at this level, no need to add another
-            if (
-                lock_type == ZLockState.SHARED
-                and existing.lock_type == ZLockState.SHARED
-            ):
-                return None
+        # scan scope chain for locks rooted at target_name and apply
+        # multi-granularity conflict rule
+        idempotent = False
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if entry.name == target_name and entry.lock is not None:
+                    existing = entry.lock
+                    if _lock_acquire_conflict(existing, path, lock_type):
+                        return _format_lock_conflict(path, lock_type, existing)
+                    # SHARED-on-same-path is idempotent — skip adding a new
+                    # entry to keep the scope chain compact (release stays
+                    # correct since the original entry's holder lives at
+                    # least as long as the redundant request).
+                    if (
+                        existing.path == path
+                        and existing.lock_type == ZLockState.SHARED
+                        and lock_type == ZLockState.SHARED
+                    ):
+                        idempotent = True
+                j -= 1
+            i -= 1
+        if idempotent:
+            return None
 
         # add lock entry to current scope
         lock_entry = Entry(
             name=target_name,
             ztype=target_var.ztype,
             is_definition=False,
-            lock=LockInfo(lock_type=lock_type, holder=holder),
+            lock=LockInfo(lock_type=lock_type, holder=holder, path=path),
         )
         self._scopes[-1].append(lock_entry)
         return None
 
     def find_lock(self, name: str) -> Optional[LockInfo]:
-        """Search scope chain for any lock on name. Returns LockInfo or None."""
+        """Search scope chain for any lock rooted at `name`. Returns the
+        innermost LockInfo or None.
+
+        Name-based wrapper for legacy callers (e.g. .release checks). For
+        precise prefix-overlap queries use `find_exclusive_lock(path)`.
+        """
         i = len(self._scopes) - 1
         while i >= 0:
             scope = self._scopes[i]
@@ -304,14 +393,34 @@ class SymbolTable:
             i -= 1
         return None
 
-    def find_exclusive_lock(self, name: str) -> Optional[Tuple[str, str]]:
-        """Return (name, holder) if name has an outstanding EXCLUSIVE lock.
+    def find_exclusive_lock(
+        self, path: Tuple[str, ...]
+    ) -> Optional[Tuple[Tuple[str, ...], str]]:
+        """Return `(conflicting_path, holder)` if any EXCLUSIVE lock prefix-
+        overlaps with `path`. Used by reassignment / swap / access guards.
 
-        Compatibility wrapper around find_lock for existing callers.
+        Path semantics: `(root,)` matches any EXCLUSIVE lock rooted at root
+        (covers the legacy name-only behavior). A longer path only conflicts
+        with locks whose path is a prefix of it or vice versa.
         """
-        lock = self.find_lock(name)
-        if lock is not None and lock.lock_type == ZLockState.EXCLUSIVE:
-            return (name, lock.holder)
+        if not path:
+            return None
+        target_name = path[0]
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if (
+                    entry.name == target_name
+                    and entry.lock is not None
+                    and entry.lock.lock_type == ZLockState.EXCLUSIVE
+                    and _paths_overlap(entry.lock.path, path)
+                ):
+                    return (entry.lock.path, entry.lock.holder)
+                j -= 1
+            i -= 1
         return None
 
     def release_held_locks(self, holder_name: str) -> None:

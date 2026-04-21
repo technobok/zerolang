@@ -402,10 +402,17 @@ def _alloc_entry_id() -> int:
 
 @dataclass
 class LockInfo:
-    """Lock state on a variable — stored on Entry, not on ZVariable."""
+    """Lock state on a variable — stored on Entry, not on ZVariable.
+
+    `path` is the addressable lock target as a tuple `(root, f1, f2, ...)`.
+    `Entry.name` always equals `path[0]` so scope-chain lookup remains a
+    simple linear scan keyed by root. The full tuple is consulted to
+    apply the prefix-overlap conflict rule.
+    """
 
     lock_type: ZLockState  # EXCLUSIVE or SHARED
     holder: str  # borrow variable name or call identifier
+    path: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -450,10 +457,15 @@ class Entry:
 @dataclass
 class ExprResult:
     """Result of checking an expression: the resolved type plus any
-    borrow/private intent that the enclosing assignment should consume."""
+    borrow/private intent that the enclosing assignment should consume.
+
+    `borrow_target` is the addressable lock path (root + descents) of the
+    source the result borrows from, e.g. `("rec", "field")`. None when
+    no borrow lock is pending.
+    """
 
     ztype: Optional[ZType] = None
-    borrow_target: Optional[str] = None
+    borrow_target: Optional[Tuple[str, ...]] = None
     private_access: bool = False
 
 

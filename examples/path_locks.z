@@ -1,0 +1,29 @@
+# path_locks.z -- Path-scoped lock semantics
+#
+# Demonstrates the path-scoped lock model: locking one field of a
+# record does not lock its siblings. A local view into one string field
+# coexists with mutation of a sibling i64 field — under the older
+# name-scoped lock model the view on `p.name` would have locked all of
+# `p`, rejecting the `p.age = ...` write.
+#
+# See doc/ownership.pdoc, "Path-scoped locks" for the full semantics.
+
+# A small class with two independent fields.
+person: class {
+    name: string
+    age: i64
+}
+
+main: function is {
+    p: person name: "alice".string age: 30
+
+    # Borrow a stringview of p.name — the lock targets `(p, name)`:
+    # EXCLUSIVE on the leaf plus SHARED on `(p,)`. Sibling-path access to
+    # `p.age` remains permitted.
+    v: p.name.stringview
+    p.age = p.age + 1
+
+    print "\{v}, age=\{p.age}"
+
+    # v falls out of main's scope — the lock on p.name releases.
+}

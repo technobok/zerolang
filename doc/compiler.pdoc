@@ -209,25 +209,41 @@ SQL output.
 
 #---: Lock Checking
 
-Lock enforcement is fully active. Two lock scopes exist:
+Lock keys are #_+"paths" -- tuples #~"(root, f1, f2, ..., fn)". Scope
+chain entries (#~"Entry.name") are keyed by the root so the linear scan
+stays cheap; the full path lives on #~"Entry.lock.path" and is consulted
+to apply the prefix-overlap conflict rule. Two lock scopes exist:
 
 #ul:
   [#*: #+ Call-scoped locks -- taken on function arguments during a call.
-  A call scope is pushed before argument processing. After the call returns,
-  the scope is popped and all call-scoped locks are released. For #~".lock"
-  parameters, the lock transfers to the return value (installed as a
-  borrow-scoped lock in the parent scope).]
-  [#*: #+ Borrow-scoped locks -- taken when #~".borrow" or #~".lock"
-  creates a borrowed binding. An exclusive lock entry is placed in the
-  scope where the borrow variable is defined. The lock persists for the
-  lifetime of that scope. When the scope exits, the lock vanishes and
-  the locked variable becomes available again.]
+  A call scope is pushed before argument processing. For each reftype
+  argument, SHARED locks are taken on every intermediate prefix of the
+  source path and EXCLUSIVE on the leaf. The receiver path locks
+  identically. After the call returns, the scope is popped and all
+  call-scoped locks are released. For #~".lock" parameters, the leaf
+  lock transfers to the return value (installed as a borrow-scoped lock
+  in the parent scope).]
+  [#*: #+ Borrow-scoped locks -- taken when #~".borrow", #~".lock",
+  #~".stringview", #~".listview", a #~"with"-binding, or a
+  #~".lock"-param transfer creates a borrowed binding. SHARED entries
+  are placed on each intermediate prefix and EXCLUSIVE on the leaf in
+  the scope where the borrow variable is defined. The locks persist
+  for the lifetime of that scope (released on scope exit or explicit
+  #~".release").]
 
-Lock state is queried by searching the scope chain from innermost to
-outermost. An exclusive lock on a variable blocks all access (reads and
-writes) for the duration of the lock. Shared locks (used during calls for
-dotted-path arguments) do not block other shared locks but do block
-exclusive locks.
+Conflict check (multi-granularity): same-path locks dedupe when both
+SHARED and conflict when either is EXCLUSIVE; a strict ancestor
+SHARED is intent-shared and permits any lock on descendants; a strict
+ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
+prefix relation) never conflict. Enforcement for access / mutation
+sites uses the same prefix-overlap test: any EXCLUSIVE whose path
+prefix-overlaps the target path is a conflict.
+
+Key code: #~"try_lock" / #~"find_exclusive_lock" /
+#~"_lock_acquire_conflict" in #~"src/zenv.py"; #~"_lock_arg" /
+#~"_lock_receiver" / #~"_install_borrow_locks" /
+#~"_get_dotted_path_tuple" / #~"_check_not_locked" in
+#~"src/ztypecheck.py".
 
 All parameters default to #~".borrow" regardless of type family.
 For valtypes, #~".borrow" means a copy (no lock, source not invalidated).

@@ -384,8 +384,9 @@ class TypeChecker:
 
         # pending borrow lock: set by deep methods (.borrow, .lock, .stringview,
         # protocol paths), captured and cleared by _check_expression into
-        # ExprResult.borrow_target so it cannot leak between statements.
-        self._pending_borrow_lock: Optional[str] = None
+        # ExprResult.borrow_target so it cannot leak between statements. Stored
+        # as the addressable path tuple `(root, f1, f2, ...)`.
+        self._pending_borrow_lock: Optional[Tuple[str, ...]] = None
         # pending private access: set by .private, captured and cleared by
         # _check_expression into ExprResult.private_access.
         self._pending_private_access: bool = False
@@ -3303,9 +3304,9 @@ class TypeChecker:
         # for string class: .stringview returns the stringview type directly
         # and acquires an exclusive lock on the source string
         if parent_type.subtype == ZSubType.STRING and child_name == "stringview":
-            root_name = self._get_arg_root_name(path.parent)
-            if root_name:
-                self._pending_borrow_lock = root_name
+            src_path = self._get_dotted_path_tuple(path.parent)
+            if src_path:
+                self._pending_borrow_lock = src_path
             else:
                 self._error(
                     "Cannot create view from temporary expression; "
@@ -3315,11 +3316,11 @@ class TypeChecker:
                 )
             return self._resolve_name("stringview")
         # for str valtype: .stringview returns the stringview type directly
-        # and acquires an exclusive lock on the root of the source path
+        # and acquires an exclusive lock on the source path
         if _is_str_type(parent_type) and child_name == "stringview":
-            root_name = self._get_arg_root_name(path.parent)
-            if root_name:
-                self._pending_borrow_lock = root_name
+            src_path = self._get_dotted_path_tuple(path.parent)
+            if src_path:
+                self._pending_borrow_lock = src_path
             else:
                 self._error(
                     "Cannot create view from temporary expression; "
@@ -3383,9 +3384,9 @@ class TypeChecker:
         # for list types: .listview returns the listview type directly (zero-arg method)
         # and acquires an exclusive lock on the source list
         if _is_list_type(parent_type) and child_name == "listview":
-            root_name = self._get_arg_root_name(path.parent)
-            if root_name:
-                self._pending_borrow_lock = root_name
+            src_path = self._get_dotted_path_tuple(path.parent)
+            if src_path:
+                self._pending_borrow_lock = src_path
             else:
                 self._error(
                     "Cannot create view from temporary expression; "
@@ -5053,22 +5054,23 @@ class TypeChecker:
             private_access = result.private_access
 
             if borrow_target:
-                # the new variable is borrowed and holds an exclusive lock on the target
+                # the new variable is borrowed and holds an exclusive lock
+                # on the leaf of the source path, plus SHARED on each
+                # intermediate so siblings remain accessible.
                 var = ZVariable(
                     ztype=t, ownership=ZOwnership.BORROWED, named=ZNaming.NAMED
                 )
                 var.is_private_access = private_access
-                var.borrow_origin = borrow_target
+                # borrow_origin records only the root for legacy escape-
+                # analysis / SQL dump consumers; full path lives on the
+                # installed lock entries.
+                var.borrow_origin = borrow_target[0]
                 self.symtab.define_var(assign.name, var)
                 # skip locking for valtypes — they are copies, not references.
                 # this handles generic monomorphization where .borrow was allowed
                 # at definition but the concrete type is a valtype.
                 if not _is_valtype(t):
-                    err = self.symtab.try_lock(
-                        borrow_target, ZLockState.EXCLUSIVE, assign.name
-                    )
-                    if err:
-                        self._error(err, loc=assign.start)
+                    self._install_borrow_locks(borrow_target, assign.name, assign.start)
             else:
                 # new local variables are owned by default.
                 var = ZVariable(
@@ -5203,12 +5205,13 @@ class TypeChecker:
                     ),
                 )
 
-        # Borrow-scoped lock enforcement: reject reassignment whose path is
-        # rooted at a variable with an outstanding exclusive lock. Works for
-        # `x = v` (root is x) and `rec.f = v` (root is rec). See ownership.pdoc.
-        root = self._get_arg_root_name(reassign.topath)
-        if root:
-            self._check_not_locked(root, "Cannot reassign", reassign.start)
+        # Borrow-scoped lock enforcement: reject reassignment whose path
+        # collides with an outstanding exclusive lock. Works for `x = v`
+        # (path is `(x,)`) and `rec.f = v` (path is `(rec, f)`). Sibling
+        # field paths don't conflict. See ownership.pdoc.
+        target_path = self._get_dotted_path_tuple(reassign.topath)
+        if target_path:
+            self._check_not_locked(target_path, "Cannot reassign", reassign.start)
 
         # reassignment narrowing: reset and optionally re-narrow
         if reassign.topath.nodetype == NodeType.ATOMID:
@@ -5241,17 +5244,23 @@ class TypeChecker:
         self._check_swap_ownership(swap.lhs, "left", swap.start)
         self._check_swap_ownership(swap.rhs, "right", swap.start)
 
-    def _check_not_locked(self, name: str, context: str, loc: Token) -> None:
-        """Emit an error if `name` has an outstanding exclusive lock.
+    def _check_not_locked(
+        self, path: Tuple[str, ...], context: str, loc: Token
+    ) -> None:
+        """Emit an error if `path` collides with an outstanding exclusive lock.
 
-        context is a phrase like "Cannot reassign" or "Cannot swap left operand"
-        that is placed at the start of the error message.
+        Conflict uses prefix-overlap: the requested path conflicts with any
+        EXCLUSIVE lock whose path is a prefix of it or vice versa. `context`
+        is a phrase like "Cannot reassign" or "Cannot swap left operand"
+        placed at the start of the error message.
         """
-        conflict = self.symtab.find_exclusive_lock(name)
+        if not path:
+            return
+        conflict = self.symtab.find_exclusive_lock(path)
         if conflict:
             _, holder = conflict
             self._error(
-                f"{context}: '{name}' has exclusive lock held by '{holder}'",
+                f"{context}: '{path[0]}' has exclusive lock held by '{holder}'",
                 loc=loc,
                 err=ERR.OWNERERROR,
             )
@@ -5280,11 +5289,11 @@ class TypeChecker:
                         loc=loc,
                     )
 
-        # Borrow-scoped lock enforcement: reject swap whose path is rooted at
-        # a variable with an outstanding exclusive lock. See ownership.pdoc.
-        root_name = self._get_arg_root_name(path)
-        if root_name:
-            self._check_not_locked(root_name, f"Cannot swap {side} operand", loc)
+        # Borrow-scoped lock enforcement: reject swap whose path collides
+        # with an outstanding exclusive lock. See ownership.pdoc.
+        target_path = self._get_dotted_path_tuple(path)
+        if target_path:
+            self._check_not_locked(target_path, f"Cannot swap {side} operand", loc)
 
     def _check_expression(self, expr: zast.Expression) -> ExprResult:
         inner = expr.expression
@@ -5605,12 +5614,13 @@ class TypeChecker:
                 elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
                 else:
-                    # .borrow takes an exclusive lock on the root of the path
-                    # (for reftypes). For valtypes, the lock is skipped in
-                    # _check_assignment — the result is just a copy.
-                    root_name = self._get_arg_root_name(path.parent)
-                    if root_name:
-                        self._pending_borrow_lock = root_name
+                    # .borrow takes an exclusive lock on the leaf path and
+                    # SHARED on intermediates (for reftypes). For valtypes,
+                    # the lock is skipped in _check_assignment — the result
+                    # is just a copy.
+                    src_path = self._get_dotted_path_tuple(path.parent)
+                    if src_path:
+                        self._pending_borrow_lock = src_path
                     else:
                         self._error(
                             "Cannot borrow temporary expression; "
@@ -5625,9 +5635,9 @@ class TypeChecker:
         if child_name == "lock":
             parent_type = self._check_path(path.parent)
             if parent_type:
-                root_name = self._get_arg_root_name(path.parent)
-                if root_name:
-                    self._pending_borrow_lock = root_name
+                src_path = self._get_dotted_path_tuple(path.parent)
+                if src_path:
+                    self._pending_borrow_lock = src_path
                 else:
                     self._error(
                         "Cannot lock temporary expression; "
@@ -5729,12 +5739,15 @@ class TypeChecker:
                         parent_atom.child_id = entry.original_ztype.child_id_for(
                             entry.narrowed_subtype
                         )
-                # Borrow-scoped lock enforcement: locked variables are
-                # completely unavailable (reads AND writes).
+                # Borrow-scoped lock enforcement: locked paths are completely
+                # unavailable (reads AND writes). Check the full path being
+                # accessed so sibling-path reads aren't blocked.
                 if self.symtab.lookup_var(parent_atom.name):
-                    self._check_not_locked(
-                        parent_atom.name, "Cannot access", path.start
+                    target_path = self._get_dotted_path_tuple(
+                        cast(zast.Operation, path)
                     )
+                    if target_path:
+                        self._check_not_locked(target_path, "Cannot access", path.start)
             else:
                 taken_loc = self.symtab.get_taken_location(parent_atom.name)
                 if taken_loc:
@@ -5773,11 +5786,11 @@ class TypeChecker:
             # name lookup when child_id stays -1.
             if parent_type is not None and path.child_id == -1:
                 path.child_id = parent_type.child_id_for(path.child.name)
-            # protocol/facet borrow: lock the root of the source path
+            # protocol/facet borrow: lock the source path
             if t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
-                root_name = self._get_arg_root_name(path.parent)
-                if root_name:
-                    self._pending_borrow_lock = root_name
+                src_path = self._get_dotted_path_tuple(path.parent)
+                if src_path:
+                    self._pending_borrow_lock = src_path
                 else:
                     self._error(
                         "Cannot borrow temporary expression; "
@@ -5826,10 +5839,10 @@ class TypeChecker:
 
         t = self._resolve_name(name)
         if t:
-            # Borrow-scoped lock enforcement: locked variables are completely
+            # Borrow-scoped lock enforcement: locked paths are completely
             # unavailable (reads AND writes) for the duration of the lock.
             if self.symtab.lookup_var(name):
-                self._check_not_locked(name, "Cannot access", atom.start)
+                self._check_not_locked((name,), "Cannot access", atom.start)
             atom.type = t
             # Narrowing stamp: if the name was narrowed via shadow=True
             # (match arm narrowing), record the subtype + original outer
@@ -6224,10 +6237,16 @@ class TypeChecker:
         # push a call scope for call-scoped locking
         call_marker = self.symtab.push_call()
         # track which lock targets correspond to .lock parameters (for transfer)
-        lock_param_targets: List[Tuple[str, Optional[str]]] = []
+        lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]] = []
 
         for i, arg in enumerate(call.arguments):
             arg_type = self._check_operation(arg.valtype)
+            # Capture the source path that `.lock` / `.borrow` / `.stringview`
+            # / `.listview` or protocol projection would have lifted to the
+            # binding. For a bare `m2.lock` arg, this is `(m2,)`, not
+            # `(m2, lock)` — the `.lock` suffix is a wrapper marker, not a
+            # field access, so the call-scoped lock must target the source.
+            arg_borrow_path = self._pending_borrow_lock
             self._pending_borrow_lock = None  # clear protocol borrow for call args
 
             # reftype aliasing check
@@ -6325,11 +6344,19 @@ class TypeChecker:
                 if effective_own == ZParamOwnership.TAKE:
                     self._apply_take_to_arg(arg, pname)
 
-            # locking algorithm: take locks on arguments
+            # locking algorithm: take locks on arguments. Prefer the source
+            # path captured from `.lock`/`.borrow`/protocol projection; it
+            # points at the true source (e.g. `(m2,)` for `m2.lock`). Fall
+            # back to `_lock_arg` building the path from raw syntax for
+            # plain dotted arguments without a lifting suffix.
             if arg_type and not _is_valtype(arg_type):
-                locked = self._lock_arg(arg.valtype, arg.start)
-                for target_name in locked:
-                    lock_param_targets.append((target_name, pname_for_lock))
+                leaf: Optional[Tuple[str, ...]]
+                if arg_borrow_path is not None:
+                    leaf = self._lock_source_path(arg_borrow_path, arg.start)
+                else:
+                    leaf = self._lock_arg(arg.valtype, arg.start)
+                if leaf is not None:
+                    lock_param_targets.append((leaf, pname_for_lock))
 
         # check for missing required arguments (no default value)
         if params:
@@ -6365,11 +6392,14 @@ class TypeChecker:
             for k, v in callee_type.param_ownership.items()
             if v == ZParamOwnership.LOCK
         }
-        for target_name, pname in lock_param_targets:
+        for target_path, pname in lock_param_targets:
             if pname in lock_param_names:
                 # Transfer: set _pending_borrow_lock so the receiving variable
                 # installs a borrow-scoped lock in _check_assignment.
-                self._pending_borrow_lock = target_name
+                # We transfer only the leaf path (the EXCLUSIVE one); any
+                # SHARED ancestors will be reinstalled by the consumer's
+                # path walk in the result binding's scope.
+                self._pending_borrow_lock = target_path
         # pop the call scope — all call-scoped locks vanish
         self.symtab.pop_to(call_marker)
 
@@ -6418,46 +6448,73 @@ class TypeChecker:
                     err=ERR.CALLERROR,
                 )
 
-    def _lock_arg(self, op: zast.Operation, loc: Token) -> List[str]:
-        """Take call-scoped locks for a function call argument.
+    def _install_borrow_locks(
+        self,
+        target_path: Tuple[str, ...],
+        holder: str,
+        loc: Token,
+    ) -> None:
+        """Install borrow-scoped locks on the source path of a binding.
 
-        Locks go in the current scope (the call scope). Returns list of
-        locked target names.
+        SHARED on every intermediate prefix, EXCLUSIVE on the leaf. Called
+        from `_check_assignment` and `_check_with` after a borrow-bearing
+        expression. The locks live for the holder binding's scope; they
+        are released when the scope pops (or when the holder itself is
+        invalidated via `.take` / `.release`).
         """
-        locked: List[str] = []
-        holder = "__call"  # generic holder name for error messages
-
-        if op.nodetype == NodeType.ATOMID:
-            name = cast(zast.AtomId, op).name
-            if _is_numeric_id(name):
-                return locked
-            var = self.symtab.lookup_var(name)
-            if not var:
-                return locked
-            if var.ztype.typetype == ZTypeType.DATA:
-                return locked
-            err = self.symtab.try_lock(name, ZLockState.EXCLUSIVE, holder)
+        for end in range(1, len(target_path)):
+            sub = target_path[:end]
+            err = self.symtab.try_lock(sub, ZLockState.SHARED, holder)
             if err:
                 self._error(err, loc=loc)
-            else:
-                locked.append(name)
+        err = self.symtab.try_lock(target_path, ZLockState.EXCLUSIVE, holder)
+        if err:
+            self._error(err, loc=loc)
 
-        elif op.nodetype == NodeType.DOTTEDPATH:
-            chain = self._get_dotted_chain(cast(zast.DottedPath, op))
-            for parent_name in chain:
-                parent_var = self.symtab.lookup_var(parent_name)
-                if parent_var and parent_var.ztype.typetype != ZTypeType.DATA:
-                    err = self.symtab.try_lock(parent_name, ZLockState.SHARED, holder)
-                    if err:
-                        self._error(err, loc=loc)
-                    else:
-                        locked.append(parent_name)
+    def _lock_source_path(
+        self, path_tuple: Tuple[str, ...], loc: Token
+    ) -> Optional[Tuple[str, ...]]:
+        """Install call-scoped SHARED-on-prefixes + EXCLUSIVE-on-leaf locks
+        for a pre-resolved source path (e.g. captured from `.lock`/`.borrow`).
 
-        elif op.nodetype == NodeType.EXPRESSION:
+        Returns the leaf path on success (for transfer to a `.lock`
+        parameter's binding), or None if the root is not a lockable
+        variable.
+        """
+        if not path_tuple:
+            return None
+        root_var = self.symtab.lookup_var(path_tuple[0])
+        if root_var is None or root_var.ztype.typetype == ZTypeType.DATA:
+            return None
+        holder = "__call"
+        for end in range(1, len(path_tuple)):
+            sub = path_tuple[:end]
+            err = self.symtab.try_lock(sub, ZLockState.SHARED, holder)
+            if err:
+                self._error(err, loc=loc)
+        err = self.symtab.try_lock(path_tuple, ZLockState.EXCLUSIVE, holder)
+        if err:
+            self._error(err, loc=loc)
+            return None
+        return path_tuple
+
+    def _lock_arg(self, op: zast.Operation, loc: Token) -> Optional[Tuple[str, ...]]:
+        """Take call-scoped locks for a function call argument.
+
+        Builds the full addressable path from the argument source, takes
+        SHARED on every intermediate prefix and EXCLUSIVE on the leaf.
+        Locks go in the current scope (the call scope). Returns the leaf
+        path (the EXCLUSIVE entry) so callers can transfer it out of the
+        call scope on `.lock` parameters, or None if no lock was installed
+        (temp expressions, DATA, unresolved names).
+        """
+        holder = "__call"
+
+        if op.nodetype == NodeType.EXPRESSION:
             inner = cast(zast.Expression, op).expression
             if inner.nodetype == NodeType.CALL:
-                pass  # sub-call: locks handled recursively by _check_call
-            elif inner.nodetype in (
+                return None  # sub-call: locks handled recursively by _check_call
+            if inner.nodetype in (
                 NodeType.BINOP,
                 NodeType.DOTTEDPATH,
                 NodeType.ATOMID,
@@ -6467,8 +6524,29 @@ class TypeChecker:
                 NodeType.LABELVALUE,
             ):
                 return self._lock_arg(cast(zast.Operation, inner), loc)
+            return None
 
-        return locked
+        path_tuple = self._get_dotted_path_tuple(op)
+        if not path_tuple:
+            return None
+
+        root_var = self.symtab.lookup_var(path_tuple[0])
+        if root_var is None or root_var.ztype.typetype == ZTypeType.DATA:
+            return None
+
+        # SHARED on each intermediate prefix
+        for end in range(1, len(path_tuple)):
+            sub = path_tuple[:end]
+            err = self.symtab.try_lock(sub, ZLockState.SHARED, holder)
+            if err:
+                self._error(err, loc=loc)
+
+        # EXCLUSIVE on the leaf path
+        err = self.symtab.try_lock(path_tuple, ZLockState.EXCLUSIVE, holder)
+        if err:
+            self._error(err, loc=loc)
+            return None
+        return path_tuple
 
     def _get_dotted_chain(self, path: zast.DottedPath) -> List[str]:
         """Get the chain of variable names in a dotted path (root first)."""
@@ -6486,22 +6564,31 @@ class TypeChecker:
     def _lock_receiver(self, callable_path: zast.Path) -> None:
         """Lock the receiver of a method call (dotted chain on the callable).
 
-        The lock goes in the call scope and vanishes when the scope is popped.
+        Builds the receiver path (everything to the left of the method name)
+        and locks SHARED on each intermediate plus EXCLUSIVE on the leaf.
+        Locks go in the call scope and vanish when the scope is popped.
         """
         if callable_path.nodetype != NodeType.DOTTEDPATH:
             return
-        chain = self._get_dotted_chain(cast(zast.DottedPath, callable_path))
-        if len(chain) < 2:
+        # the receiver is the parent path; the dotted child is the method name
+        receiver = cast(zast.DottedPath, callable_path).parent
+        receiver_path = self._get_dotted_path_tuple(cast(zast.Operation, receiver))
+        if not receiver_path:
             return
-        root = chain[0]
+        root = receiver_path[0]
         if root in self.program.units:
             return
         root_var = self.symtab.lookup_var(root)
-        if not root_var:
+        if not root_var or root_var.ztype.typetype == ZTypeType.DATA:
             return
-        if root_var.ztype.typetype == ZTypeType.DATA:
-            return
-        err = self.symtab.try_lock(root, ZLockState.EXCLUSIVE, "__recv")
+        # SHARED on each intermediate prefix
+        for end in range(1, len(receiver_path)):
+            sub = receiver_path[:end]
+            err = self.symtab.try_lock(sub, ZLockState.SHARED, "__recv")
+            if err:
+                self._error(err, loc=callable_path.start)
+        # EXCLUSIVE on the leaf
+        err = self.symtab.try_lock(receiver_path, ZLockState.EXCLUSIVE, "__recv")
         if err:
             self._error(err, loc=callable_path.start)
 
@@ -6547,6 +6634,48 @@ class TypeChecker:
                 NodeType.LABELVALUE,
             ):
                 return self._get_arg_root_name(cast(zast.Operation, inner))
+        return None
+
+    def _get_dotted_path_tuple(self, op: zast.Operation) -> Optional[Tuple[str, ...]]:
+        """Build the addressable path tuple from an operation source.
+
+        Returns `(root, f1, f2, ...)` for `root.f1.f2`-style sources,
+        or `(name,)` for a bare name. Returns None for temp expressions
+        (matches `_get_arg_root_name` semantics — temps have no
+        bindable storage to lock).
+        """
+        if op.nodetype == NodeType.ATOMID:
+            op_atom = cast(zast.AtomId, op)
+            if not _is_numeric_id(op_atom.name):
+                return (op_atom.name,)
+            return None
+        if op.nodetype == NodeType.DOTTEDPATH:
+            parts: List[str] = []
+            node: zast.Path = cast(zast.Path, op)
+            while node.nodetype == NodeType.DOTTEDPATH:
+                node_dp = cast(zast.DottedPath, node)
+                parts.append(node_dp.child.name)
+                node = node_dp.parent
+            if node.nodetype == NodeType.ATOMID:
+                root_name = cast(zast.AtomId, node).name
+                if _is_numeric_id(root_name):
+                    return None
+                parts.append(root_name)
+                parts.reverse()
+                return tuple(parts)
+            return None
+        if op.nodetype == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, op).expression
+            if inner.nodetype in (
+                NodeType.BINOP,
+                NodeType.DOTTEDPATH,
+                NodeType.ATOMID,
+                NodeType.ATOMSTRING,
+                NodeType.EXPRESSION,
+                NodeType.NAMEDOPERATION,
+                NodeType.LABELVALUE,
+            ):
+                return self._get_dotted_path_tuple(cast(zast.Operation, inner))
         return None
 
     def _alias_target(self, expr: zast.Expression) -> Optional[str]:
@@ -6773,8 +6902,11 @@ class TypeChecker:
             self._error(f"{kind}.borrow requires 'from:' argument", loc=call.start)
             return None
 
-        # type-check the from: argument
+        # type-check the from: argument. If the arg is `.lock` / `.borrow`,
+        # `_check_operation` has already set `_pending_borrow_lock` to the
+        # SOURCE path (e.g. `(m,)` for `m.lock`). Capture it before overwrite.
         arg_type = self._check_operation(from_arg.valtype)
+        source_from_lift = self._pending_borrow_lock
         if not arg_type:
             return None
 
@@ -6793,10 +6925,14 @@ class TypeChecker:
             )
             return None
 
-        # set borrow lock on the source variable (same as obj.label path)
-        root_name = self._get_arg_root_name(from_arg.valtype)
-        if root_name:
-            self._pending_borrow_lock = root_name
+        # set borrow lock on the source path: prefer the lifted path
+        # (`m.lock` → `(m,)`) over the raw arg syntax (which would include
+        # the `.lock` suffix as a pseudo-field).
+        src_path = source_from_lift
+        if src_path is None:
+            src_path = self._get_dotted_path_tuple(from_arg.valtype)
+        if src_path:
+            self._pending_borrow_lock = src_path
 
         call.type = proto_type
         return proto_type
@@ -6859,6 +6995,7 @@ class TypeChecker:
             return None
 
         arg_type = self._check_operation(from_arg.valtype)
+        source_from_lift = self._pending_borrow_lock
         if not arg_type:
             return None
 
@@ -6871,9 +7008,11 @@ class TypeChecker:
             )
             return None
 
-        root_name = self._get_arg_root_name(from_arg.valtype)
-        if root_name:
-            self._pending_borrow_lock = root_name
+        src_path = source_from_lift
+        if src_path is None:
+            src_path = self._get_dotted_path_tuple(from_arg.valtype)
+        if src_path:
+            self._pending_borrow_lock = src_path
 
         call.type = typedef_type
         return typedef_type
@@ -7589,7 +7728,7 @@ class TypeChecker:
                 # lock the iteration target to prevent mutation in body
                 # lock goes in the for scope; released when scope pops
                 if not _is_valtype(t):
-                    self.symtab.try_lock(name, ZLockState.EXCLUSIVE, "__for")
+                    self.symtab.try_lock((name,), ZLockState.EXCLUSIVE, "__for")
         for postcond in fornode.postconditions:
             self._check_operation(postcond)
         elem_type = None
@@ -7682,7 +7821,7 @@ class TypeChecker:
                 ):
                     is_plain_path = True
             if is_plain_path:
-                borrow_target = self._get_arg_root_name(
+                borrow_target = self._get_dotted_path_tuple(
                     cast(zast.Operation, inner_expr)
                 )
 
@@ -7692,15 +7831,11 @@ class TypeChecker:
         var.is_private_access = result.private_access
         self.symtab.define_var(withnode.name, var)
 
-        # Acquire the exclusive lock on the source root for reftypes only.
+        # Acquire borrow-scoped locks on the source path for reftypes only.
         # Valtype borrows are copies; they do not need a lock at this level
         # (matches function-arg and _check_assignment behavior).
         if borrow_target and not _is_valtype(t):
-            err = self.symtab.try_lock(
-                borrow_target, ZLockState.EXCLUSIVE, withnode.name
-            )
-            if err:
-                self._error(err, loc=withnode.start)
+            self._install_borrow_locks(borrow_target, withnode.name, withnode.start)
 
         withnode.ownership = ownership
         withnode.type = t

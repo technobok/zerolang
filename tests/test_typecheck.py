@@ -1615,7 +1615,7 @@ class TestSymbolTableLocking:
 
     def test_try_lock_exclusive_on_unlocked(self):
         st = self._make_symtab_with_vars("x", "y")
-        err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
         assert err is None
         lock = st.find_lock("x")
         assert lock is not None
@@ -1623,17 +1623,17 @@ class TestSymbolTableLocking:
 
     def test_try_lock_exclusive_on_exclusive_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
         assert err is None
-        err = st.try_lock("x", ZLockState.EXCLUSIVE, "z")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "z")
         assert err is not None
         assert "exclusive" in err.lower()
 
     def test_try_lock_shared_on_shared_ok(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock("x", ZLockState.SHARED, "y")
+        err = st.try_lock(("x",), ZLockState.SHARED, "y")
         assert err is None
-        err = st.try_lock("x", ZLockState.SHARED, "z")
+        err = st.try_lock(("x",), ZLockState.SHARED, "z")
         assert err is None
         # shared + shared is OK (deduplicated to single entry)
         lock = st.find_lock("x")
@@ -1642,33 +1642,81 @@ class TestSymbolTableLocking:
 
     def test_try_lock_shared_on_exclusive_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
         assert err is None
-        err = st.try_lock("x", ZLockState.SHARED, "z")
+        err = st.try_lock(("x",), ZLockState.SHARED, "z")
         assert err is not None
         assert "exclusive" in err.lower()
 
     def test_try_lock_exclusive_on_shared_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock("x", ZLockState.SHARED, "y")
+        err = st.try_lock(("x",), ZLockState.SHARED, "y")
         assert err is None
-        err = st.try_lock("x", ZLockState.EXCLUSIVE, "z")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "z")
         assert err is not None
 
     def test_lock_released_by_scope_pop(self):
         """Locks are released when the scope containing them is popped."""
         st = self._make_symtab_with_vars("x", "y")
-        st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
         assert st.find_lock("x") is not None
         st.pop()
         assert st.find_lock("x") is None
 
     def test_release_held_locks(self):
         st = self._make_symtab_with_vars("x", "y")
-        st.try_lock("x", ZLockState.EXCLUSIVE, "y")
+        st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
         assert st.find_lock("x") is not None
         st.release_held_locks("y")
         assert st.find_lock("x") is None
+
+    # --- path-scoped lock semantics (Commit D) ---
+
+    def test_sibling_paths_do_not_conflict(self):
+        """EXCLUSIVE on (obj, a) and EXCLUSIVE on (obj, b) both succeed —
+        sibling paths have no prefix relation and cannot conflict."""
+        st = self._make_symtab_with_vars("obj", "h1", "h2")
+        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
+        assert st.try_lock(("obj", "b"), ZLockState.EXCLUSIVE, "h2") is None
+
+    def test_ancestor_exclusive_blocks_descendant_lock(self):
+        """EXCLUSIVE on (obj,) owns the whole subtree — any new lock below
+        is rejected with a path-aware message."""
+        st = self._make_symtab_with_vars("obj", "h1", "h2")
+        assert st.try_lock(("obj",), ZLockState.EXCLUSIVE, "h1") is None
+        err = st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h2")
+        assert err is not None
+        assert "'obj'" in err
+        assert "exclusive" in err.lower()
+
+    def test_descendant_lock_blocks_ancestor_exclusive(self):
+        """A new EXCLUSIVE on an ancestor would absorb any outstanding
+        sub-lock; rejected."""
+        st = self._make_symtab_with_vars("obj", "h1", "h2")
+        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
+        err = st.try_lock(("obj",), ZLockState.EXCLUSIVE, "h2")
+        assert err is not None
+        assert "'obj'" in err
+
+    def test_shared_ancestor_permits_exclusive_descendant(self):
+        """Multi-granularity: SHARED on an ancestor is INTENT-shared and
+        allows any lock (S or X) on descendants. This is what lets a
+        single operation install SHARED on each intermediate prefix and
+        EXCLUSIVE on the leaf without self-conflict."""
+        st = self._make_symtab_with_vars("obj", "h1")
+        assert st.try_lock(("obj",), ZLockState.SHARED, "h1") is None
+        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
+
+    def test_shared_stacking_and_idempotence(self):
+        """Two SHARED on the same full path dedupe (no extra entry); SHARED
+        on ancestor and SHARED on descendant both live (distinct entries,
+        independent release)."""
+        st = self._make_symtab_with_vars("obj", "h1", "h2")
+        assert st.try_lock(("obj",), ZLockState.SHARED, "h1") is None
+        # same path: idempotent, still no conflict, no second entry
+        assert st.try_lock(("obj",), ZLockState.SHARED, "h2") is None
+        # descendant: both live
+        assert st.try_lock(("obj", "a"), ZLockState.SHARED, "h2") is None
 
 
 class TestLockCheckingBorrow:
@@ -1743,22 +1791,23 @@ class TestLockEnforcement:
         )
         assert any("exclusive lock" in e.msg.lower() for e in errors)
 
-    def test_field_reassign_rejects_locked_root(self):
-        """Reassigning a field of a record whose string field is viewed errors —
-        the view installs a Borrow-scoped Lock on the root record."""
+    def test_field_reassign_of_locked_leaf_rejected(self):
+        """Reassigning the locked leaf field errors — the view installs an
+        EXCLUSIVE Borrow-scoped Lock on the leaf path `(p, name)`."""
         errors = check_errors(
             "namepair: record { name: string other: string }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
             "  v: p.name.stringview\n"
-            '  p.other = "c".string\n'
+            '  p.name = "c".string\n'
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
 
-    def test_sibling_field_reassign_rejected_when_root_locked(self):
-        """Root-locking is coarse — reassigning a sibling field is blocked."""
-        errors = check_errors(
+    def test_sibling_field_reassign_permitted(self):
+        """Path-scoped locks: reassigning a sibling field is permitted while
+        another field is borrowed."""
+        check_ok(
             "namepair: record { name: string other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
@@ -1766,7 +1815,6 @@ class TestLockEnforcement:
             "  p.other = 3\n"
             "}"
         )
-        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
 
     def test_swap_rejects_locked_var(self):
         """Swap with a locked var on either side errors."""
@@ -1783,9 +1831,25 @@ class TestLockEnforcement:
             for e in errors
         )
 
-    def test_swap_rejects_locked_root(self):
-        """Swap where a side's root has an outstanding lock errors."""
+    def test_swap_rejects_locked_leaf(self):
+        """Swap on the locked leaf path errors — sibling-field swaps are OK."""
         errors = check_errors(
+            "namepair: record { name: string other: string }\n"
+            "main: function is {\n"
+            '  p: namepair name: "a".string other: "b".string\n'
+            '  a: "c".string\n'
+            "  v: p.name.stringview\n"
+            "  p.name swap a\n"
+            "}"
+        )
+        assert any(
+            "exclusive lock" in e.msg.lower() and "swap" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_swap_sibling_field_permitted(self):
+        """Sibling-field swap is permitted while another field is borrowed."""
+        check_ok(
             "namepair: record { name: string other: string }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
@@ -1793,10 +1857,6 @@ class TestLockEnforcement:
             "  v: p.name.stringview\n"
             "  p.other swap a\n"
             "}"
-        )
-        assert any(
-            "exclusive lock" in e.msg.lower() and "swap" in e.msg.lower()
-            for e in errors
         )
 
     def test_method_call_on_locked_receiver_rejected(self):
@@ -1836,10 +1896,23 @@ class TestLockEnforcement:
 
     # --- Phase 2: acquisition-path coverage ---
 
-    def test_borrow_on_dotted_path_locks_root(self):
-        """.borrow on a field path should lock the root, preventing sibling
-        mutation. (Fix A: routes through _get_arg_root_name.)"""
+    def test_borrow_on_dotted_path_locks_leaf(self):
+        """.borrow on a field path locks the leaf path EXCLUSIVE; reassigning
+        the locked field errors but sibling fields remain mutable."""
         errors = check_errors(
+            "inner: class { value: 0 }\n"
+            "point: record { a: inner b: inner }\n"
+            "main: function is {\n"
+            "  p: point a: inner b: inner\n"
+            "  y: p.a.borrow\n"
+            "  p.a = inner\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_borrow_on_dotted_path_permits_sibling(self):
+        """.borrow on `p.a` does not block reassignment of sibling `p.b`."""
+        check_ok(
             "inner: class { value: 0 }\n"
             "point: record { a: inner b: inner }\n"
             "main: function is {\n"
@@ -1848,17 +1921,16 @@ class TestLockEnforcement:
             "  p.b = inner\n"
             "}"
         )
-        assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
 
-    def test_lock_inline_on_dotted_path_locks_root(self):
-        """.lock on a field path should lock the root (alias for .borrow)."""
+    def test_lock_inline_on_dotted_path_locks_leaf(self):
+        """.lock on a field path locks the leaf (alias for .borrow)."""
         errors = check_errors(
             "inner: class { value: 0 }\n"
             "point: record { a: inner b: inner }\n"
             "main: function is {\n"
             "  p: point a: inner b: inner\n"
             "  y: p.a.lock\n"
-            "  p.b = inner\n"
+            "  p.a = inner\n"
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
@@ -1937,6 +2009,149 @@ class TestLockEnforcement:
         )
         assert any("lock" in e.msg.lower() for e in errors)
 
+    # --- Commit D: path-scoped lock integration ---
+
+    def test_self_field_borrow_and_sibling_method_call(self):
+        """bufwriter-style flush: a method that borrows one self field and
+        calls a method through a sibling self field must type-check under
+        the path-scoped lock model. Under the old name-scoped model this
+        was rejected because both operations took a root lock on `this`.
+
+        The method body is only checked if `pipe` is instantiated and
+        `flush` reached, so `main` does the instantiation."""
+        check_ok(
+            "src: class { x: i64 }\n"
+            "dst: class { count: i64 } as {\n"
+            "  write: function {:this n: i64} is {\n"
+            "    this.count = this.count + n\n"
+            "  }\n"
+            "}\n"
+            "pipe: class {\n"
+            "  src: src\n"
+            "  dst: dst\n"
+            "} as {\n"
+            "  flush: function {:this} is {\n"
+            "    r: this.src.borrow\n"
+            "    this.dst.write n: r.x\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  p: pipe src: (src x: 7) dst: (dst count: 0)\n"
+            "  p.flush\n"
+            "}\n"
+        )
+
+    def test_self_field_mutation_of_locked_leaf_rejected(self):
+        """Within a method, mutating the locked leaf field errors."""
+        errors = check_errors(
+            "inner: class { val: i64 } as {\n"
+            "  peek: function {i: this} out i64 is { return i.val }\n"
+            "}\n"
+            "wrap: class {\n"
+            "  a: inner\n"
+            "  b: inner\n"
+            "} as {\n"
+            "  go: function {w: this} is {\n"
+            "    r: w.a.borrow\n"
+            "    w.a = inner val: 42\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  w: wrap a: (inner val: 1) b: (inner val: 2)\n"
+            "  w.go\n"
+            "}\n"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'w'" in e.msg for e in errors)
+
+    def test_self_field_mutation_of_sibling_permitted(self):
+        """Within a method, mutating a sibling field of the locked leaf is
+        permitted under the path-scoped lock model."""
+        check_ok(
+            "inner: class { val: i64 } as {\n"
+            "  peek: function {i: this} out i64 is { return i.val }\n"
+            "}\n"
+            "wrap: class {\n"
+            "  a: inner\n"
+            "  b: inner\n"
+            "} as {\n"
+            "  go: function {w: this} is {\n"
+            "    r: w.a.borrow\n"
+            "    w.b = inner val: 42\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  w: wrap a: (inner val: 1) b: (inner val: 2)\n"
+            "  w.go\n"
+            "}\n"
+        )
+
+    # --- Commit D: path-scoped lock transfer on return ---
+
+    def test_lock_field_capture_transfers_lock_to_binding(self):
+        """A protocol `.borrow from: X.lock` constructor retains the source
+        lock through its `.lock` field. The transferred lock moves into the
+        result binding's scope — mutating the source while the wrapper is
+        alive errors."""
+        errors = check_errors(
+            "provider: protocol {\n"
+            "  get: function {:this seed: i64} out i64\n"
+            "}\n"
+            "multiplier: class { factor: i64 } as {\n"
+            "  prov: provider\n"
+            "  get: function {m: this seed: i64} out i64 is {\n"
+            "    return m.factor * seed\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  m: multiplier factor: 5\n"
+            "  borrowed: provider.borrow from: m.lock\n"
+            "  m.factor = 10\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'m'" in e.msg for e in errors)
+
+    def test_lock_released_when_wrapper_scope_exits(self):
+        """The transferred lock lives for the wrapper binding's scope;
+        once the wrapper falls out of an inner block, the source is
+        mutable again."""
+        check_ok(
+            "provider: protocol {\n"
+            "  get: function {:this seed: i64} out i64\n"
+            "}\n"
+            "multiplier: class { factor: i64 } as {\n"
+            "  prov: provider\n"
+            "  get: function {m: this seed: i64} out i64 is {\n"
+            "    return m.factor * seed\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  m: multiplier factor: 5\n"
+            "  {\n"
+            "    borrowed: provider.borrow from: m.lock\n"
+            "    r: borrowed.get seed: 3\n"
+            "  }\n"
+            "  m.factor = 10\n"
+            "}"
+        )
+
+    def test_call_scoped_arg_lock_released_after_non_retaining_call(self):
+        """A plain reftype borrow passed as a call argument does not retain
+        the lock after the call returns. A subsequent mutation of the source
+        is permitted — the call-scoped lock released when the call scope
+        popped."""
+        check_ok(
+            "counter: class { n: i64 } as {\n"
+            "  inc_by: function {:this by: i64} out i64 is {\n"
+            "    return by + 1\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: counter n: 0\n"
+            "  x: c.inc_by by: 5\n"
+            "  c.n = 42\n"
+            "}"
+        )
+
     def test_stale_borrow_lock_cleared_after_expression(self):
         """_pending_borrow_lock is cleared between statements, so a standalone
         expression that sets it doesn't affect the next assignment."""
@@ -1967,14 +2182,26 @@ class TestLockEnforcement:
         )
         assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
 
-    def test_read_locked_field_rejected(self):
-        """Reading a field of a locked record is an error."""
-        errors = check_errors(
+    def test_read_sibling_field_permitted(self):
+        """Reading a sibling field of a locked-leaf record is permitted under
+        the path-scoped lock model."""
+        check_ok(
             "namepair: record { name: string other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
             "  x: p.other\n"
+            "}"
+        )
+
+    def test_read_locked_leaf_field_rejected(self):
+        """Reading the locked leaf path itself remains an error."""
+        errors = check_errors(
+            "namepair: record { name: string other: i64 }\n"
+            "main: function is {\n"
+            '  p: namepair name: "a".string other: 0\n'
+            "  v: p.name.stringview\n"
+            "  m: p.name.length\n"
             "}"
         )
         assert any("cannot access" in e.msg.lower() and "'p'" in e.msg for e in errors)
@@ -2073,9 +2300,23 @@ class TestWithOwnership:
             "}"
         )
 
-    def test_dotted_path_locks_root(self):
-        """with a: r.f do ... locks the root r."""
+    def test_dotted_path_locks_leaf(self):
+        """`with a: r.f do ...` locks the leaf path; reassigning that leaf
+        errors but sibling fields stay mutable."""
         errors = check_errors(
+            "pair: record { first: string other: string }\n"
+            "main: function is {\n"
+            '  p: pair first: "a".string other: "b".string\n'
+            "  with v: p.first do {\n"
+            '    p.first = "c".string\n'
+            "  }\n"
+            "}"
+        )
+        assert any("lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
+
+    def test_dotted_path_permits_sibling_in_with(self):
+        """`with a: r.f do ...` permits mutation of sibling fields in the body."""
+        check_ok(
             "pair: record { first: string other: string }\n"
             "main: function is {\n"
             '  p: pair first: "a".string other: "b".string\n'
@@ -2084,7 +2325,6 @@ class TestWithOwnership:
             "  }\n"
             "}"
         )
-        assert any("lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
 
     def test_release_rejected_in_with(self):
         """`.release` cannot be a `with` value."""
@@ -6716,12 +6956,10 @@ class TestStr:
 class TestStrStringview:
     """stringview created from a str valtype.
 
-    str.stringview takes a borrow-scoped exclusive lock on the root of the
-    source path, identical in kind to string.stringview. The class-identity
-    lock on the view (stringview is a class) is what makes it safe to lend
-    a pointer into a stack buffer: the root and every subordinate along the
-    path are fully inaccessible while the view is alive; only the view may
-    read the leaf data.
+    str.stringview installs a borrow-scoped path lock on the source: SHARED
+    on each intermediate prefix and EXCLUSIVE on the leaf path. Sibling
+    paths remain accessible; reads / writes that overlap with the locked
+    leaf (the leaf itself, any descendant, or any prefix) are rejected.
     """
 
     def test_returns_stringview(self):
@@ -6769,14 +7007,27 @@ class TestStrStringview:
         )
         assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
 
-    def test_blocks_parent_of_leaf(self):
-        """View of e.name locks root `e` — reading `e.age` errors."""
-        errors = check_errors(
+    def test_permits_sibling_field_read(self):
+        """View of `e.name` locks the leaf `(e, name)` — reading `e.age`
+        (a sibling) is permitted under the path-scoped lock model."""
+        check_ok(
             "entry: record { name: (str to: 16) age: i64 }\n"
             "main: function is {\n"
             '  e: entry name: ("a".str to: 16) age: 1\n'
             "  v: e.name.stringview\n"
             "  x: e.age\n"
+            "}"
+        )
+
+    def test_blocks_read_of_parent_record(self):
+        """Reading the parent record `e` while `e.name` is locked errors —
+        a whole-record read would expose the locked leaf."""
+        errors = check_errors(
+            "entry: record { name: (str to: 16) age: i64 }\n"
+            "main: function is {\n"
+            '  e: entry name: ("a".str to: 16) age: 1\n'
+            "  v: e.name.stringview\n"
+            "  print e\n"
             "}"
         )
         assert any("cannot access" in e.msg.lower() and "'e'" in e.msg for e in errors)
@@ -6793,8 +7044,10 @@ class TestStrStringview:
         )
         assert any("cannot access" in e.msg.lower() and "'e'" in e.msg for e in errors)
 
-    def test_blocks_field_reassign(self):
-        errors = check_errors(
+    def test_permits_sibling_field_reassign(self):
+        """Sibling-field reassignment is permitted while another field is
+        viewed (path-scoped lock model)."""
+        check_ok(
             "entry: record { name: (str to: 16) age: i64 }\n"
             "main: function is {\n"
             '  e: entry name: ("a".str to: 16) age: 1\n'
@@ -6802,7 +7055,6 @@ class TestStrStringview:
             "  e.age = 2\n"
             "}"
         )
-        assert any("exclusive lock" in e.msg.lower() and "'e'" in e.msg for e in errors)
 
     def test_reads_via_view_permitted(self):
         check_ok(

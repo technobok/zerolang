@@ -395,15 +395,45 @@ refers to as:
 Both use the same EXCLUSIVE/SHARED states and the same storage; they
 differ only in lifetime and acquisition policy.
 
+#---: Lock Keys Are Paths
+
+Lock targets are #_+"paths", not bare variable names. A lock path is a
+tuple #~"(root, f1, f2, ..., fn)" where #~"root" is a bound variable
+(including #~"this") and #~"f1..fn" are addressable descents: field
+names, labels, or numeric indices. Array indexing extends the path
+exactly like a field access -- #~"arr.0" and #~"arr.1" are distinct
+leaves, not a special case. Method calls terminate the path: a method's
+return value starts a fresh path rooted at the call's result binding.
+Valtype leaves skip locking (the read is a copy; there is no identity
+to protect).
+
 #---: Lock States
 
-Each variable can have locks placed on it by other variables:
+Each path can have locks placed on it:
 
 #ul:
-  [#*: unlocked -- no locks held (default)]
-  [#*: exclusive -- an exclusive lock is held. No other locks may be taken.]
-  [#*: shared -- a shared lock is held. Other shared locks are permitted but
-  exclusive locks are not.]
+  [#*: unlocked -- no locks held on this path (default)]
+  [#*: exclusive -- full control over the path and its entire subtree]
+  [#*: shared -- intent access along the path; other shared locks on
+  overlapping paths are permitted but exclusive acquisition on any
+  overlapping path is not]
+
+#_+"Conflict rule". Two locks conflict exactly when their paths overlap
+(one is a non-strict prefix of the other) AND the combination is not
+permitted by multi-granularity semantics:
+
+#ul:
+  [#*: Same path: conflict iff at least one is exclusive. Two shared
+  locks on the same path dedupe.]
+  [#*: Strict ancestor/descendant: the ancestor shared is #_+"intent
+  shared" -- it permits any lock (shared or exclusive) on a descendant.
+  An ancestor exclusive, by contrast, owns the whole subtree and
+  conflicts with any descendant lock.]
+  [#*: Sibling paths (no prefix relation): never conflict.]
+
+Intent-shared on ancestors is the rule that makes the standard
+acquisition pattern (shared on every intermediate prefix plus exclusive
+on the leaf) self-consistent.
 
 A reftype can only appear once as an argument or as a receiver in a single
 function call (enforced by the Call-scoped Locking algorithm below). This
@@ -413,32 +443,40 @@ and never locked.
 
 #---: Call-scoped Locking Algorithm
 
-When a function is called, locks are taken on arguments and the receiver
-and released when the call returns:
+When a function is called, locks are taken on argument paths and the
+receiver path, then released when the call returns:
 
 #ol:
   [#*: Each argument is processed left to right.]
   [#*: If the argument is a top-level #~"data" item, no lock is taken
   (immutable, freely shared).]
-  [#*: If the argument is a bare variable, an exclusive lock is taken on it.]
-  [#*: If the argument is a dotted chain, a shared lock is taken on every
-  variable name in the chain (root and intermediate parents). No
-  additional lock is taken on the leaf because field names do not have
-  independent lock identity -- aliasing is prevented by the shared locks
-  on the shared ancestors.]
-  [#*: Additional shared locks on already-shared-locked parents are
-  permitted.]
-  [#*: If there is already an exclusive or shared lock on the argument
-  being passed, it is an error (prevents aliasing).]
+  [#*: For an argument whose source is a path #~"(root, f1, ..., fn)"
+  resolving to a reftype leaf, a #_+"shared" lock is taken on every
+  intermediate prefix (#~"(root,)", #~"(root, f1)", ...,
+  #~"(root, f1, ..., fn-1)") and an #_+"exclusive" lock is taken on
+  the leaf #~"(root, f1, ..., fn)". The intent-shared ancestors permit
+  sibling paths to be locked independently by later arguments.]
+  [#*: For an argument written as #~"x.lock" / #~"x.borrow" (and
+  similarly for stringview/listview), the call-scoped lock targets the
+  #_+"source path" -- the parent of the lifting suffix -- not the
+  syntactic path with the suffix appended. #~"m.lock" passed as an
+  argument locks path #~"(m,)", not #~"(m, lock)".]
+  [#*: If the requested lock conflicts with an outstanding lock on an
+  overlapping path (see Conflict rule above), it is an error.]
   [#*: If the argument is a sub-call, locking is applied recursively.
   After the sub-call, its argument locks are cleared or assigned to the
   sub-call result.]
-  [#*: After all arguments are processed, an exclusive lock is taken on
-  the root of the receiver chain for the duration of the call.]
+  [#*: After all arguments are processed, locks are taken on the receiver
+  path -- shared on each intermediate prefix, exclusive on the leaf.
+  For a bare-receiver call #~"x.method", this is exclusive on #~"(x,)".
+  For a method call via a field path #~"this.sub.method", it is shared
+  on #~"(this,)" and exclusive on #~"(this, sub)", leaving other fields
+  of #~"this" freely accessible inside the call.]
   [#*: The call is made.]
-  [#*: After the call, for any #~".lock" parameters, their locks transfer
-  to the returned value and become Borrow-scoped Locks held by that
-  returned value. All other argument locks are released.]
+  [#*: After the call, for any #~".lock" parameters, their leaf locks
+  transfer to the returned value and become Borrow-scoped Locks held
+  by that returned value. All other argument and receiver locks are
+  released when the call scope pops.]
 
 #~"for" loops over a reftype iteration target take an exclusive lock on
 the target for the duration of the body, preventing mutation of the
@@ -455,45 +493,52 @@ source), the analogous #~"list.listview", a #~"with name: path do
 body" whose right-hand side is a bare name or dotted path (borrow by
 default, same rule as function parameters), the transfer from
 #~".lock" parameters to a return value, and #~".lock" fields on
-classes. The lock is:
+classes. The lock targets the #_+"source path":
 
 #ul:
-  [#*: exclusive]
-  [#*: placed on the #_+"root variable" of the path the borrow was
-  taken from. For #~"v: rec.field.stringview" the lock is on
-  #~"rec", not on #~"field".]
+  [#*: #_+"shared" on every intermediate prefix of the source path.
+  For #~"v: rec.field.stringview" the intermediate is #~"(rec,)".]
+  [#*: #_+"exclusive" on the leaf of the source path. For
+  #~"v: rec.field.stringview" the leaf is #~"(rec, field)"; for
+  #~"v: s.stringview" the leaf is #~"(s,)".]
   [#*: held for the full scope of the borrowing variable; released
   automatically on scope exit or via #~".release".]
 
-Root-only placement is sufficient: any mutation attempt -- regardless
-of how deep into the locked variable's structure it reaches -- is
-checked against the root's lock (see #~"Mutation-Site Enforcement"
-below).
+Path-scoped placement preserves all the safety properties of the
+previous root-only model (any access that overlaps the locked path is
+caught -- see #~"Mutation-Site Enforcement" below) while allowing
+sibling paths to be borrowed or mutated independently. A method that
+takes a view over #~"this.a" can, in the same block, mutate
+#~"this.b" -- the two operations target disjoint paths.
 
 #---: Lock Enforcement
 
-While a variable has an outstanding exclusive Borrow-scoped Lock,
-the variable is #_+"completely unavailable". The compiler rejects
-#_*"any" access whose path is rooted at the locked variable -- both
-reads and writes:
+While an exclusive Borrow-scoped Lock is outstanding on some path #~"P",
+every operation whose target path overlaps #~"P" is rejected -- both
+reads and writes. Overlap means #~"P" is a prefix of the target path
+or vice versa; sibling paths do #_*"not" overlap.
 
 #ul:
-  [#*: reading the variable or any field through it
-  (#~"x", #~"x.field", #~"x.a.b")]
-  [#*: reassignment (#~"x = v") or field reassignment (#~"x.f = v")]
-  [#*: swap with either side rooted at the locked variable]
-  [#*: method calls on the locked variable]
+  [#*: reading the locked path or any descendant of it (#~"p.f",
+  #~"p.f.sub") -- a whole-record read of an ancestor (#~"p") also
+  overlaps and is rejected.]
+  [#*: reassignment or field reassignment on an overlapping path
+  (#~"p.f = v", or #~"p = ..." for any ancestor).]
+  [#*: swap with either side on an overlapping path.]
+  [#*: method calls whose receiver path overlaps the locked path.]
   [#*: further #~".borrow", #~".stringview", #~".listview", #~".take",
-  or #~".release" on it]
-  [#*: passing the locked variable as an argument]
+  or #~".release" on an overlapping path.]
+  [#*: passing a value with an overlapping path as an argument.]
 
-The only code that can access the locked data is the lock holder
-(the borrow or view variable) through its own interface.
+Sibling-path accesses remain permitted: while #~"(p, f)" is exclusively
+locked, reading or writing #~"(p, g)" is fine. The only code that can
+access the locked sub-tree is the lock holder (the borrow or view
+variable) through its own interface.
 
-This strict approach prevents aliasing through field reads (which
-would create references that bypass the lock) and makes the
-programmer's intent clear: a locked variable is off-limits until
-the borrow ends.
+This path-scoped approach prevents aliasing through field reads (which
+would create references that bypass the lock) while supporting
+field-granular independence -- essential for classes whose methods need
+to read one of their fields and mutate another in the same body.
 
 #~"match" does #_*"not" lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation
