@@ -7,6 +7,7 @@ Future: extract output to runtime/ directory as zrt_string.c,
 zrt_error.c, etc. and compile into libzrt.a.
 """
 
+import os
 from typing import List
 
 
@@ -43,140 +44,57 @@ def emit_runtime_includes(
     return "".join(parts)
 
 
-_Z_STRING_RUNTIME = (
-    "typedef struct {\n"
-    "    uint64_t size;       /* byte count of current content */\n"
-    "    char* data;          /* heap-allocated data buffer */\n"
-    "    uint64_t capacity;   /* allocated buffer size */\n"
-    "} z_string_t;\n\n"
-    "static z_string_t z_string_new(const char* s) {\n"
-    "    z_string_t z = {0};\n"
-    "    z.size = (uint64_t)strlen(s);\n"
-    "    z.capacity = z.size + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
-    "    memcpy(z.data, s, z.size);\n"
-    "    z.data[z.size] = '\\0';\n"
-    "    return z;\n"
-    "}\n\n"
-    "static z_string_t z_string_cat(z_string_t* a, z_string_t* b) {\n"
-    "    z_string_t z = {0};\n"
-    "    z.size = a->size + b->size;\n"
-    "    z.capacity = z.size + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
-    "    memcpy(z.data, a->data, a->size);\n"
-    "    memcpy(z.data + a->size, b->data, b->size);\n"
-    "    z.data[z.size] = '\\0';\n"
-    "    return z;\n"
-    "}\n\n"
-    "static z_string_t z_string_from_i64(int64_t n) {\n"
-    "    char buf[32];\n"
-    '    snprintf(buf, sizeof(buf), "%ld", (long)n);\n'
-    "    return z_string_new(buf);\n"
-    "}\n\n"
-    "static z_string_t z_string_from_f64(double n) {\n"
-    "    char buf[64];\n"
-    '    snprintf(buf, sizeof(buf), "%g", n);\n'
-    "    return z_string_new(buf);\n"
-    "}\n\n"
-    "static void z_string_print(z_string_t* s) {\n"
-    '    printf("%.*s\\n", (int)s->size, s->data);\n'
-    "}\n\n"
-    "static void z_string_free(z_string_t* s) {\n"
-    "    if (s && s->data) free(s->data);\n"
-    "}\n\n"
-    "static bool z_string_eq(z_string_t* a, z_string_t* b) {\n"
-    "    if (a == b) return true;\n"
-    "    return a->size == b->size && memcmp(a->data, b->data, a->size) == 0;\n"
-    "}\n\n"
-    "/* byte-wise lexicographic compare: returns -1 / 0 / 1. Shorter\n"
-    "   string is less than longer when they share a prefix. */\n"
-    "static int32_t z_string_cmp(z_string_t* a, z_string_t* b) {\n"
-    "    if (a == b) return 0;\n"
-    "    uint64_t n = a->size < b->size ? a->size : b->size;\n"
-    "    int c = n > 0 ? memcmp(a->data, b->data, n) : 0;\n"
-    "    if (c != 0) return c < 0 ? -1 : 1;\n"
-    "    if (a->size < b->size) return -1;\n"
-    "    if (a->size > b->size) return 1;\n"
-    "    return 0;\n"
-    "}\n\n"
-    "static void z_string_reserve(z_string_t* s, uint64_t additional) {\n"
-    "    uint64_t needed = s->size + additional;\n"
-    "    if (needed <= s->capacity) return;\n"
-    "    uint64_t new_cap = s->capacity + (s->capacity >> 1) + 16;\n"
-    "    if (new_cap < needed) new_cap = needed;\n"
-    "    s->data = (char*)realloc(s->data, new_cap + 1);\n"
-    "    s->capacity = new_cap;\n"
-    "}\n\n"
-    "static void z_string_append(z_string_t* s, const char* data, uint64_t len) {\n"
-    "    z_string_reserve(s, len);\n"
-    "    memcpy(s->data + s->size, data, len);\n"
-    "    s->size += len;\n"
-    "    s->data[s->size] = '\\0';\n"
-    "}\n\n"
-    "static void z_string_shrink(z_string_t* s) {\n"
-    "    if (s->size == s->capacity) return;\n"
-    "    s->data = (char*)realloc(s->data, s->size + 1);\n"
-    "    s->capacity = s->size;\n"
-    "}\n\n"
-    "static z_string_t z_string_create(uint64_t cap) {\n"
-    "    z_string_t z = {0};\n"
-    "    z.capacity = cap;\n"
-    "    if (cap > 0) {\n"
-    "        z.data = (char*)malloc(cap + 1);\n"
-    "        z.data[0] = '\\0';\n"
-    "    }\n"
-    "    return z;\n"
-    "}\n\n"
-)
+_RUNTIME_DIR = os.path.join(os.path.dirname(__file__), "runtime")
+_FRAGMENT_CACHE: "dict[str, str]" = {}
 
 
-_Z_STRINGVIEW_RUNTIME = (
-    "typedef struct {\n"
-    "    const char* data;    /* pointer into string buffer or .rodata */\n"
-    "    uint64_t length;     /* byte count of the viewed region */\n"
-    "} z_stringview_t;\n\n"
-    "static void z_stringview_print(z_stringview_t sv) {\n"
-    '    printf("%.*s\\n", (int)sv.length, sv.data);\n'
-    "}\n\n"
-    "static bool z_stringview_eq(z_stringview_t a, z_stringview_t b) {\n"
-    "    return a.length == b.length && memcmp(a.data, b.data, a.length) == 0;\n"
-    "}\n\n"
-    "/* byte-wise lexicographic compare: returns -1 / 0 / 1. Shorter\n"
-    "   view is less than longer when they share a prefix. */\n"
-    "static int32_t z_stringview_cmp(z_stringview_t a, z_stringview_t b) {\n"
-    "    uint64_t n = a.length < b.length ? a.length : b.length;\n"
-    "    int c = n > 0 ? memcmp(a.data, b.data, n) : 0;\n"
-    "    if (c != 0) return c < 0 ? -1 : 1;\n"
-    "    if (a.length < b.length) return -1;\n"
-    "    if (a.length > b.length) return 1;\n"
-    "    return 0;\n"
-    "}\n\n"
-    "static z_string_t z_string_from_view(z_stringview_t sv) {\n"
-    "    z_string_t z = {0};\n"
-    "    z.size = sv.length;\n"
-    "    z.capacity = sv.length + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
-    "    memcpy(z.data, sv.data, sv.length);\n"
-    "    z.data[sv.length] = '\\0';\n"
-    "    return z;\n"
-    "}\n\n"
-)
+def _load_runtime_fragment(name: str) -> str:
+    """Read a verbatim C fragment from src/runtime/ and cache it.
+
+    Fragments are `.inc` files — valid C once the preceding runtime
+    header block is in scope, but not standalone (no #include lines,
+    since those live in emit_runtime_includes).
+    """
+    cached = _FRAGMENT_CACHE.get(name)
+    if cached is not None:
+        return cached
+    path = os.path.join(_RUNTIME_DIR, name)
+    with open(path, encoding="utf-8") as fh:
+        content = fh.read()
+    # Runtime fragments are plain C; normalise trailing whitespace and
+    # ensure exactly one blank line between file-level definitions so
+    # the concatenated output matches the pre-extraction formatting.
+    if not content.endswith("\n"):
+        content += "\n"
+    _FRAGMENT_CACHE[name] = content
+    return content
+
+
+def _z_string_runtime() -> str:
+    return _load_runtime_fragment("z_string.inc")
+
+
+def _z_stringview_runtime() -> str:
+    return _load_runtime_fragment("z_stringview.inc")
 
 
 def emit_runtime_z_string(*, needs_string: bool, needs_stdio: bool) -> str:
-    """Emit z_string_t struct, macros, and helper functions.
+    """Emit z_string_t struct and helper functions.
 
-    Future: extract to runtime/zrt_string.c / zrt_string.h.
+    Source lives in src/runtime/z_string.inc and is loaded verbatim.
     """
     if needs_string or needs_stdio:
-        return _Z_STRING_RUNTIME
+        return _z_string_runtime()
     return ""
 
 
 def emit_runtime_z_stringview(*, needs_stringview: bool) -> str:
-    """Emit z_stringview_t struct and helper functions."""
+    """Emit z_stringview_t struct and helper functions.
+
+    Source lives in src/runtime/z_stringview.inc and is loaded verbatim.
+    """
     if needs_stringview:
-        return _Z_STRINGVIEW_RUNTIME
+        return _z_stringview_runtime()
     return ""
 
 
