@@ -156,15 +156,14 @@ identical to a direct source read.
 
 Typical shape:
 
-#++:
-#`code:
+#code language=zerolang: """
 w: io.open path: p mode: openmode.write
 match (w) case ok then {
   bw: io.bufwriter.create to: w.lock capacity: 4096.u64
   wr: bw.write from: bv
   fr: bw.flush        # REQUIRED before bw scope ends
 } case err then { ... }
-#``
+"""
 
 #--: Text wrappers (Phase 1c)
 
@@ -188,8 +187,7 @@ Holds a path-scoped borrow on its #~"bufwriter.lock" source, so the
 buffered wrapper cannot be flushed, mutated, or re-borrowed while
 the textwriter is alive. Typical three-layer shape:
 
-#++:
-#`code:
+#code language=zerolang: """
 w: io.open path: p mode: openmode.write
 match (w) case ok then {
   bw: io.bufwriter.create to: w.lock capacity: 4096.u64
@@ -197,7 +195,7 @@ match (w) case ok then {
   wr: tw.write_line from: "hello"
   fr: tw.flush
 } case err then { ... }
-#``
+"""
 
 Encoding: #~"textwriter" assumes the input is already valid UTF-8
 and emits the bytes verbatim. Zerolang's #~"string" and
@@ -214,15 +212,14 @@ become #~"ioerror.badencoding"; draining the stream yields
 #~"ioerror.eof" (after one final ok for any unterminated tail).
 Typical shape:
 
-#++:
-#`code:
+#code language=zerolang: """
 r: io.open path: p mode: openmode.read
 match (r) case ok then {
   br: io.bufreader.create from: r.lock capacity: 4096.u64
   tr: io.textreader.create from: br.lock
   for line: tr.read_line loop { ... }   # manual loop for now
 } case err then { ... }
-#``
+"""
 
 #--: Design Principles
 
@@ -249,28 +246,30 @@ match (r) case ok then {
 
 Every fallible I/O operation returns a two-armed generic union:
 
-#code:
-  : result: union {
-        ok: t
-        err: e
-    } as {
-        t: any.generic
-        e: any.generic
-    }
+#code language=zerolang: """
+  result: union {
+      ok: t
+      err: e
+  } as {
+      t: any.generic
+      e: any.generic
+  }
+"""
 
 Callers pattern-match:
 
-#code:
-  : r: io.read_text "notes.md".string
-    match (
-        r
-    ) case ok then {
-        \# s is narrowed to the ok payload inside this arm
-        print "ok"
-    } case err then {
-        \# handle the ioerror
-        io.eprintln "read failed"
-    }
+#code language=zerolang: """
+  r: io.read_text "notes.md".string
+  match (
+      r
+  ) case ok then {
+      \# s is narrowed to the ok payload inside this arm
+      print "ok"
+  } case err then {
+      \# handle the ioerror
+      io.eprintln "read failed"
+  }
+"""
 
 The generic is used directly (#~"result.ok 42 e: i64") with explicit
 type arguments for whichever arm the value does not pin. In signature
@@ -312,9 +311,10 @@ the C level). Stringviews (#~"stringview") are borrowed views into that
 storage. For binary I/O, the same byte-buffer primitive is wrapped
 under a distinct type:
 
-#code:
-  : bytes:     class { val: (list of: u8).typedef }
-    byteview:  class { val: (listview of: u8).typedef }
+#code language=zerolang: """
+  bytes:     class { val: (list of: u8).typedef }
+  byteview:  class { val: (listview of: u8).typedef }
+"""
 
 Signatures that say #~"bytes" announce "binary data, no UTF-8
 guarantees"; signatures that say #~"string" announce text. The wrappers
@@ -333,28 +333,29 @@ The stream contracts are declared in #~"lib/system/io.z". Each one
 returns its payload in a #~"result" wrapper so failures propagate
 uniformly.
 
-#code:
-  : reader: protocol {
-        read: function {:this into: bytes max: u64}
-            out (result t: u64 e: ioerror)
-    }
+#code language=zerolang: """
+  reader: protocol {
+      read: function {:this into: bytes max: u64}
+          out (result t: u64 e: ioerror)
+  }
 
-    writer: protocol {
-        write: function {:this from: byteview}
-            out (result t: u64 e: ioerror)
-        flush: function {:this}
-            out (result t: null e: ioerror)
-    }
+  writer: protocol {
+      write: function {:this from: byteview}
+          out (result t: u64 e: ioerror)
+      flush: function {:this}
+          out (result t: null e: ioerror)
+  }
 
-    closer: protocol {
-        close: function {:this}
-            out (result t: null e: ioerror)
-    }
+  closer: protocol {
+      close: function {:this}
+          out (result t: null e: ioerror)
+  }
 
-    seeker: protocol {
-        seek: function {:this to: i64 from: seekorigin}
-            out (result t: u64 e: ioerror)
-    }
+  seeker: protocol {
+      seek: function {:this to: i64 from: seekorigin}
+          out (result t: u64 e: ioerror)
+  }
+"""
 
 A file implements all four via separate conformance labels. Buffered
 and text wrappers (future phase) hold a #~".lock" borrow of their
@@ -367,22 +368,24 @@ operations target disjoint paths and do not conflict.
 
 #~"seekorigin" is a variant for the offset basis:
 
-#code:
-  : seekorigin: variant {
-        start: null
-        current: null
-        end: null
-    }
+#code language=zerolang: """
+  seekorigin: variant {
+      start: null
+      current: null
+      end: null
+  }
+"""
 
 #--: File Handles
 
 The #~"file" class wraps a POSIX file descriptor:
 
-#code:
-  : file: class {
-        fd: i32
-        closed: bool
-    }
+#code language=zerolang: """
+  file: class {
+      fd: i32
+      closed: bool
+  }
+"""
 
 Lifetime model: #_*"RAII + with sugar, both supported".
 
@@ -413,8 +416,9 @@ All three take ownership of their #~"string" arguments (zerolang's
 string-arg convention -- the callee frees). Callers typically pass
 literals projected through #~".string":
 
-#code:
-  : io.write_text path: "notes.md".string content: body.string
+#code language=zerolang: """
+  io.write_text path: "notes.md".string content: body.string
+"""
 
 #--: Filesystem Operations
 
@@ -473,17 +477,18 @@ deliberate attacker.
 
 #---: Read a file with error fallback
 
-#code:
-  : main: function is {
-        r: io.read_text "config.txt".string
-        match (
-            r
-        ) case ok then {
-            print "loaded config"
-        } case err then {
-            io.eprintln "config missing; using defaults"
-        }
-    }
+#code language=zerolang: """
+  main: function is {
+      r: io.read_text "config.txt".string
+      match (
+          r
+      ) case ok then {
+          print "loaded config"
+      } case err then {
+          io.eprintln "config missing; using defaults"
+      }
+  }
+"""
 
 #---: Atomic write via temp + rename
 
@@ -491,28 +496,30 @@ Write to a temp file, then rename over the target. Rename is atomic
 within the same filesystem so a reader never sees a half-written
 file.
 
-#code:
-  : main: function is {
-        wr: io.write_text path: "out.tmp".string content: payload.string
-        match (
-            wr
-        ) case ok then {
-            io.rename from: "out.tmp".string to: "out.txt".string
-        } case err then {
-            io.eprintln "write failed"
-        }
-    }
+#code language=zerolang: """
+  main: function is {
+      wr: io.write_text path: "out.tmp".string content: payload.string
+      match (
+          wr
+      ) case ok then {
+          io.rename from: "out.tmp".string to: "out.txt".string
+      } case err then {
+          io.eprintln "write failed"
+      }
+  }
+"""
 
 #---: Create a directory if missing
 
-#code:
-  : main: function is {
-        if io.exists "cache".string then {
-            print "cache present"
-        } else {
-            io.mkdir "cache".string
-        }
-    }
+#code language=zerolang: """
+  main: function is {
+      if io.exists "cache".string then {
+          print "cache present"
+      } else {
+          io.mkdir "cache".string
+      }
+  }
+"""
 
 #--: Implementation Notes
 

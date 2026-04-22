@@ -83,6 +83,10 @@ Table of Contents</div>
 <ul>
 <li><a href="#status">Status</a>
 </li>
+<li><a href="#buffered-wrappers-phase-1b">Buffered wrappers (Phase 1b)</a>
+</li>
+<li><a href="#text-wrappers-phase-1c">Text wrappers (Phase 1c)</a>
+</li>
 <li><a href="#design-principles">Design Principles</a>
 </li>
 <li><a href="#the-result-type">The result Type</a>
@@ -135,26 +139,164 @@ make the easy case terse and make the wrong case hard to write.</p>
 variant, <code>bytes</code> / <code>byteview</code> / <code>path</code> / <code>pathview</code> typedefs</li>
 <li>Stream protocol declarations (<code>reader</code>, <code>writer</code>, <code>closer</code>,
     <code>seeker</code>) -- the type-level contract</li>
-<li>File class scaffold (fields only; methods to come)</li>
+<li>File class with RAII close on scope exit; <code>file.close</code>
+    surfaces delayed write errors explicitly</li>
+<li>File streaming methods: <code>file.read into: bytes max: u64</code>,
+    <code>file.write from: byteview</code>, <code>file.flush</code>, and
+    <code>file.seek to: i64 from: seekorigin</code>. Signatures match the
+    stream protocols exactly</li>
+<li>Protocol conformance: file declares and can be projected to
+    <code>:reader</code>, <code>:writer</code>, <code>:closer</code>, <code>:seeker</code> in its <code>as</code>
+    block. <code>fr.ok.reader</code> / <code>fr.ok.writer</code> / <code>fr.ok.closer</code> /
+    <code>fr.ok.seeker</code> emits a borrowed protocol handle that dispatches
+    through a static vtable to the matching <code>z_file_*</code> native.
+    Collection-typed parameters (<code>bytes</code> / <code>byteview</code>) travel by
+    pointer through the vtable so in-place mutation stays visible
+    across the protocol boundary</li>
+<li><code>bytes</code> / <code>byteview</code> typedefs emit correctly: their
+`.typedef` marker is resolved through parenthesised generic
+applications, and the emitter routes construction, method
+dispatch, and destruction through the base `list of: u8` /
+`listview of: u8`</li>
 <li>One-shot file helpers: <code>io.read_text</code>, <code>io.write_text</code>,
     <code>io.append_text</code></li>
-<li>Filesystem ops: <code>io.exists</code>, <code>io.mkdir</code>, <code>io.remove</code>,
-    <code>io.rename</code></li>
+<li>Filesystem ops: <code>io.exists</code>, <code>io.mkdir</code>, <code>io.mkdirp</code>,
+    <code>io.remove</code>, <code>io.rename</code>, <code>io.stat</code>. <code>filestat</code> reports
+    <code>kind: filekind</code> (file / dir / symlink / other) and <code>size: u64</code></li>
+<li>File open: <code>io.open path: string mode: openmode</code> returns
+    <code>result(file, ioerror)</code>; the returned file closes automatically
+    on scope exit via its destructor</li>
 <li>Stderr helper: <code>io.eprintln</code></li>
+<li>Standard streams: <code>io.stdin</code> returns a <code>reader</code>,
+    <code>io.stdout</code> and <code>io.stderr</code> return <code>writer</code>. Each yields
+    a borrowed protocol handle over the corresponding static POSIX
+    fd (0, 1, 2); no scope-exit close fires against them</li>
+<li><code>io.lstat</code> -- symlink-preserving variant of <code>stat</code>.
+Extended <code>filestat</code> with <code>mtime_seconds: u64</code> (Unix epoch;
+to be replaced by a typed <code>time</code> in a follow-up) and
+<code>mode: u32</code> (raw POSIX mode bits: file type + permissions)</li>
+<li>Directory iteration: <code>io.list_dir path: string</code> returns
+    <code>result(list of: string, ioerror)</code> with bare entry names,
+    excluding <code>.</code> and <code>..</code> in filesystem order. First native to
+    return an owned collection across the FFI -- the list is
+    value-typed with heap-owned <code>z_string_t</code> elements; its
+    destructor iterates and frees each string via the general
+    list-destructor pattern (driven off <code>needs_destructor</code>)</li>
+<li><code>ioerror.notdir</code> arm: ENOTDIR maps to a dedicated variant
+rather than the generic <code>other</code>, matching the precedent set
+by <code>notfound</code> / <code>permissiondenied</code></li>
+</ul>
+<p>Also shipped:</p>
+<ul>
+<li><code>textreader</code> with <code>read_line</code> and per-line UTF-8 validation.
+Invalid UTF-8 surfaces as <code>ioerror.badencoding</code>; end of stream
+surfaces as <code>ioerror.eof</code> once the internal line buffer drains.
+Unterminated trailing content is returned once as an ok line before
+eof. <code>textreader</code> is directly iterable via the for-loop iterator
+protocol -- <code>for line: tr loop { ... }</code> yields each line (LF
+stripped) and terminates on any non-ok result; users who need to
+distinguish eof / badencoding / I/O errors call <code>read_line</code>
+directly instead of iterating.</li>
+<li>Extended <code>filestat</code> fields: <code>device</code> / <code>inode</code> / <code>nlink</code>
+    and the <code>atime_seconds</code> / <code>ctime_seconds</code> timestamps alongside
+    the existing <code>mtime_seconds</code>. The <code>*_seconds</code> fields migrate
+    to a typed <code>time</code> when that lands.</li>
+<li>Symlinks: <code>io.symlink target: ... link: ...</code> creates a
+    symbolic link; <code>io.readlink path: ...</code> reads its target
+    without following (errors with <code>invalidpath</code> when the path
+    exists but isn't a symlink).</li>
 </ul>
 <p>Not yet shipped:</p>
 <ul>
-<li>File class methods (read / write / close / seek) and explicit
-    stream composition</li>
-<li>Standard streams (<code>io.stdin</code> / <code>io.stdout</code> / <code>io.stderr</code>)
-    beyond <code>print</code> and <code>eprintln</code></li>
-<li>Directory iteration (<code>io.list_dir</code>), <code>io.stat</code>, <code>io.mkdirp</code></li>
-<li>Buffered and text wrappers (<code>bufreader</code>, <code>bufwriter</code>,
-    <code>textreader</code>, <code>textwriter</code>), UTF-8 validation</li>
-<li>Process / argv / env (planned for a separate <code>os</code> unit)</li>
-<li>Async, sockets, symlinks, advisory locks</li>
+<li>Async, sockets, advisory locks</li>
 </ul>
-<h2 id="design-principles"><a href="#design-principles">2. Design Principles</a></h2>
+<p>Process-level primitives (argv, env, exit) have moved out of io
+and live in the <code>os</code> unit: <code>os.args</code> / <code>os.get_env</code> /
+<code>os.exit</code>. See the os.z source for signatures.</p>
+<h2 id="buffered-wrappers-phase-1b"><a href="#buffered-wrappers-phase-1b">2. Buffered wrappers (Phase 1b)</a></h2>
+<p><code>bufwriter</code> and <code>bufreader</code> are compiler-provided classes in
+<code>io</code> that adapt any <code>writer</code> / <code>reader</code> to a buffered form.
+The source is held via a <code>writer.lock</code> / <code>reader.lock</code> field,
+which installs a path-scoped borrow on the underlying stream for the
+wrapper's lifetime -- the source handle cannot be mutated, re-
+borrowed, or locked while the wrapper is alive (see also
+doc/ownership.pdoc <em><strong>Lock Keys Are Paths</strong></em>).</p>
+<p><code>bufwriter</code> accumulates writes in a <code>bytes</code> buffer up to the
+<code>capacity</code> the caller provided. When an incoming write would push
+past <code>capacity</code>, the wrapper drains the buffer to the sink first,
+then appends the new bytes; writes larger than <code>capacity</code> bypass
+the buffer entirely.  Flush is NOT automatic on scope exit --
+call <code>bw.flush</code> explicitly before <code>bw</code> is dropped, or the buffer
+contents are lost (the destructor frees the buffer without draining
+it). Auto-flush-on-drop is a v2 concern; it requires destructors to
+surface the sink's write error, which today's void-return destructor
+cannot do.</p>
+<p><code>bufreader</code> issues exactly one source <code>read</code> per <code>capacity</code>
+bytes of data: small caller reads drain the internal buffer, and
+only when it empties does the wrapper pull another <code>capacity</code>-
+sized chunk. A caller request whose <code>max</code> is at least
+<code>capacity</code> bypasses the buffer and forwards straight to the
+source -- we never double-copy a whole chunk. Each <code>bufreader.
+read</code> call returns what is immediately available in one shot;
+callers that want exactly N bytes loop externally, matching the
+reader protocol's short-read contract. <code>textreader</code> always asks
+for exactly <code>capacity</code> bytes per refill, so it hits the bypass
+path and the byte stream through the three-layer stack is
+identical to a direct source read.</p>
+<p>Typical shape:</p>
+<pre><code class="language-zerolang">w: io.open path: p mode: openmode.write
+match (w) case ok then {
+  bw: io.bufwriter.create to: w.lock capacity: 4096.u64
+  wr: bw.write from: bv
+  fr: bw.flush        # REQUIRED before bw scope ends
+} case err then { ... }</code></pre>
+<h2 id="text-wrappers-phase-1c"><a href="#text-wrappers-phase-1c">3. Text wrappers (Phase 1c)</a></h2>
+<p><code>textwriter</code> is a string-oriented adapter over a <code>bufwriter</code>,
+so callers can write <code>stringview</code> values and get buffered,
+line-terminated output. It exposes three methods:</p>
+<ul>
+<li><code>write from: sv</code> -- forwards the stringview's bytes to the
+underlying bufwriter. Returns <code>result(u64, ioerror)</code> with the
+byte count on success.</li>
+<li><code>write_line from: sv</code> -- emits the stringview followed by a
+single <code>
+</code>. Returns the total byte count (content + newline)
+on success. A partial-write error on the newline returns the
+newline's err arm and leaves the content count unobserved.</li>
+<li><code>flush</code> -- delegates to the underlying bufwriter's flush.
+Same semantics as <code>bufwriter.flush</code> -- REQUIRED before the
+textwriter scope ends; no auto-flush on drop.</li>
+</ul>
+<p>Holds a path-scoped borrow on its <code>bufwriter.lock</code> source, so the
+buffered wrapper cannot be flushed, mutated, or re-borrowed while
+the textwriter is alive. Typical three-layer shape:</p>
+<pre><code class="language-zerolang">w: io.open path: p mode: openmode.write
+match (w) case ok then {
+  bw: io.bufwriter.create to: w.lock capacity: 4096.u64
+  tw: io.textwriter.create to: bw.lock
+  wr: tw.write_line from: "hello"
+  fr: tw.flush
+} case err then { ... }</code></pre>
+<p>Encoding: <code>textwriter</code> assumes the input is already valid UTF-8
+and emits the bytes verbatim. Zerolang's <code>string</code> and
+<code>stringview</code> types are UTF-8 by construction (the compiler's
+string ingress validates at the boundary), so no re-validation is
+done on write.</p>
+<p><code>textreader</code> is the read-side counterpart. It holds a borrow on
+its source <code>bufreader</code> via <code>bufreader.lock</code> and surfaces one
+line at a time through <code>read_line</code>. Each call scans the internal
+accumulator for LF, validates the emitted line as UTF-8 (without the
+trailing LF), and boxes it into <code>result.ok</code>. Validation failures
+become <code>ioerror.badencoding</code>; draining the stream yields
+<code>ioerror.eof</code> (after one final ok for any unterminated tail).
+Typical shape:</p>
+<pre><code class="language-zerolang">r: io.open path: p mode: openmode.read
+match (r) case ok then {
+  br: io.bufreader.create from: r.lock capacity: 4096.u64
+  tr: io.textreader.create from: br.lock
+  for line: tr.read_line loop { ... }   # manual loop for now
+} case err then { ... }</code></pre>
+<h2 id="design-principles"><a href="#design-principles">4. Design Principles</a></h2>
 <ul>
 <li><em><strong>Make bad code unrepresentable</strong></em> where the type system can
 express it -- forgotten close becomes a destructor invocation
@@ -174,9 +316,9 @@ stdlib copy.</li>
 (open, read, write, close, ...). Windows is a follow-up with the
 same Z-level API.</li>
 </ul>
-<h2 id="the-result-type"><a href="#the-result-type">3. The result Type</a></h2>
+<h2 id="the-result-type"><a href="#the-result-type">5. The result Type</a></h2>
 <p>Every fallible I/O operation returns a two-armed generic union:</p>
-<pre><code>: result: union {
+<pre><code class="language-zerolang">  result: union {
       ok: t
       err: e
   } as {
@@ -184,14 +326,14 @@ same Z-level API.</li>
       e: any.generic
   }</code></pre>
 <p>Callers pattern-match:</p>
-<pre><code>: r: io.read_text "notes.md".string
+<pre><code class="language-zerolang">  r: io.read_text "notes.md".string
   match (
       r
   ) case ok then {
-      # use ok arm (when full narrowing is wired)
+      \# s is narrowed to the ok payload inside this arm
       print "ok"
   } case err then {
-      # handle the ioerror
+      \# handle the ioerror
       io.eprintln "read failed"
   }</code></pre>
 <p>The generic is used directly (<code>result.ok 42 e: i64</code>) with explicit
@@ -200,7 +342,7 @@ position, parenthesise the instantiation: <code>out (result t: string e: ioerror
 <p><code>result</code> lives in <code>lib/system/system.z</code> and is re-exported through
 <code>core.z</code>. It is not I/O-specific -- any stdlib API that wants
 pattern-matchable success / failure can reuse it.</p>
-<h2 id="the-ioerror-union"><a href="#the-ioerror-union">4. The ioerror Union</a></h2>
+<h2 id="the-ioerror-union"><a href="#the-ioerror-union">6. The ioerror Union</a></h2>
 <p>All I/O failures collapse into one of these arms:</p>
 <table>
 <colgroup>
@@ -229,12 +371,12 @@ arms carry a <code>string</code> payload; variants may only hold valtype arms.</
 <p>The compiler's C runtime builds <code>ioerror</code> values from POSIX <code>errno</code>
 via <code>z_io_errno_to_ioerror</code> (see <code>src/zemitterc_runtime.py</code>). Any
 errno not in the explicit table falls into <code>other</code>.</p>
-<h2 id="bytes-strings-and-paths"><a href="#bytes-strings-and-paths">5. Bytes, Strings, and Paths</a></h2>
+<h2 id="bytes-strings-and-paths"><a href="#bytes-strings-and-paths">7. Bytes, Strings, and Paths</a></h2>
 <p>Zerolang strings are heap-backed UTF-8 byte buffers (<code>z_string_t</code> at
 the C level). Stringviews (<code>stringview</code>) are borrowed views into that
 storage. For binary I/O, the same byte-buffer primitive is wrapped
 under a distinct type:</p>
-<pre><code>: bytes:     class { val: (list of: u8).typedef }
+<pre><code class="language-zerolang">  bytes:     class { val: (list of: u8).typedef }
   byteview:  class { val: (listview of: u8).typedef }</code></pre>
 <p>Signatures that say <code>bytes</code> announce "binary data, no UTF-8
 guarantees"; signatures that say <code>string</code> announce text. The wrappers
@@ -245,41 +387,48 @@ delegate to the list / listview machinery, so operations like
 path" rather than "this is an arbitrary string". Cross-platform
 normalisation (forward-slash / backslash, drive letters) is a future
 enhancement; v1 treats paths as opaque byte sequences.</p>
-<h2 id="stream-protocols"><a href="#stream-protocols">6. Stream Protocols</a></h2>
+<h2 id="stream-protocols"><a href="#stream-protocols">8. Stream Protocols</a></h2>
 <p>The stream contracts are declared in <code>lib/system/io.z</code>. Each one
 returns its payload in a <code>result</code> wrapper so failures propagate
 uniformly.</p>
-<pre><code>: reader: protocol {
+<pre><code class="language-zerolang">  reader: protocol {
       read: function {:this into: bytes max: u64}
           out (result t: u64 e: ioerror)
+  }
+
+  writer: protocol {
+      write: function {:this from: byteview}
+          out (result t: u64 e: ioerror)
+      flush: function {:this}
+          out (result t: null e: ioerror)
+  }
+
+  closer: protocol {
+      close: function {:this}
+          out (result t: null e: ioerror)
+  }
+
+  seeker: protocol {
+      seek: function {:this to: i64 from: seekorigin}
+          out (result t: u64 e: ioerror)
   }</code></pre>
-<p>    writer: protocol {
-        write: function {:this from: byteview}
-            out (result t: u64 e: ioerror)
-        flush: function {:this}
-            out (result t: null e: ioerror)
-    }</p>
-<p>    closer: protocol {
-        close: function {:this}
-            out (result t: null e: ioerror)
-    }</p>
-<p>    seeker: protocol {
-        seek: function {:this to: i64 from: seekorigin}
-            out (result t: u64 e: ioerror)
-    }</p>
 <p>A file implements all four via separate conformance labels. Buffered
 and text wrappers (future phase) hold a <code>.lock</code> borrow of their
 underlying stream so the parent cannot be touched directly while a
-wrapper is live -- the interleaved-write footgun is unrepresentable.</p>
+wrapper is live -- the interleaved-write footgun is unrepresentable.
+Path-scoped locking (see <code>doc/ownership.pdoc</code>, "Lock Keys Are Paths")
+is what lets a wrapper's <code>flush</code> method borrow one self field and
+call a method through a sibling self field in the same body: the two
+operations target disjoint paths and do not conflict.</p>
 <p><code>seekorigin</code> is a variant for the offset basis:</p>
-<pre><code>: seekorigin: variant {
+<pre><code class="language-zerolang">  seekorigin: variant {
       start: null
       current: null
       end: null
   }</code></pre>
-<h2 id="file-handles"><a href="#file-handles">7. File Handles</a></h2>
+<h2 id="file-handles"><a href="#file-handles">9. File Handles</a></h2>
 <p>The <code>file</code> class wraps a POSIX file descriptor:</p>
-<pre><code>: file: class {
+<pre><code class="language-zerolang">  file: class {
       fd: i32
       closed: bool
   }</code></pre>
@@ -295,7 +444,7 @@ wrapper is live -- the interleaved-write footgun is unrepresentable.</p>
 </ul>
 <p>(File methods land with the next phase; this section documents the
 contract the scaffold already establishes.)</p>
-<h2 id="one-shot-file-helpers"><a href="#one-shot-file-helpers">8. One-Shot File Helpers</a></h2>
+<h2 id="one-shot-file-helpers"><a href="#one-shot-file-helpers">10. One-Shot File Helpers</a></h2>
 <p>For programs that do not need streaming, three entry points cover the
 typical script work:</p>
 <table>
@@ -316,8 +465,8 @@ typical script work:</p>
 <p>All three take ownership of their <code>string</code> arguments (zerolang's
 string-arg convention -- the callee frees). Callers typically pass
 literals projected through <code>.string</code>:</p>
-<pre><code>: io.write_text path: "notes.md".string content: body.string</code></pre>
-<h2 id="filesystem-operations"><a href="#filesystem-operations">9. Filesystem Operations</a></h2>
+<pre><code class="language-zerolang">  io.write_text path: "notes.md".string content: body.string</code></pre>
+<h2 id="filesystem-operations"><a href="#filesystem-operations">11. Filesystem Operations</a></h2>
 <table>
 <colgroup>
 <col style="width: 30%">
@@ -334,12 +483,12 @@ literals projected through <code>.string</code>:</p>
 <tr><td><code>io.rename from: to:</code></td><td><code>result(null, ioerror)</code></td><td>POSIX <code>rename</code>. Atomic within the same filesystem. If <code>to</code> exists, POSIX replaces it (file over file, empty dir over empty dir).</td></tr>
 </tbody>
 </table>
-<h2 id="stderr-helper"><a href="#stderr-helper">10. Stderr Helper</a></h2>
+<h2 id="stderr-helper"><a href="#stderr-helper">12. Stderr Helper</a></h2>
 <p><code>io.eprintln msg: stringview</code> writes <code>msg</code> followed by a newline
 to stderr. Void return; errors are silently dropped by design.</p>
 <p>For per-write error reporting use a writer handle over stderr (future
 phase when the stdio constants land).</p>
-<h2 id="ownership-conventions-for-native-calls"><a href="#ownership-conventions-for-native-calls">11. Ownership Conventions for Native Calls</a></h2>
+<h2 id="ownership-conventions-for-native-calls"><a href="#ownership-conventions-for-native-calls">13. Ownership Conventions for Native Calls</a></h2>
 <p>The stdlib's native I/O entries follow a few rules that are useful to
 know when extending them:</p>
 <ul>
@@ -358,7 +507,7 @@ the boxed ioerror).</li>
 it (see <code>z_io_errno_to_ioerror</code> and <code>z_io_wrap_null_result</code>
 in the runtime).</li>
 </ul>
-<h2 id="sandboxing"><a href="#sandboxing">12. Sandboxing</a></h2>
+<h2 id="sandboxing"><a href="#sandboxing">14. Sandboxing</a></h2>
 <p>Because <code>io.*</code> lives in <code>lib/system/io.z</code> and all accesses route
 through that unit, a caller who needs to lock down I/O can bind a
 replacement <code>io.z</code> before the stdlib copy in the VFS. The
@@ -370,9 +519,9 @@ redirect everything to a test harness. This controls what
 directly. Treat unit-replacement sandboxing as protection against
 accidents and against well-behaved dependencies, not against a
 deliberate attacker.</p>
-<h2 id="recipes"><a href="#recipes">13. Recipes</a></h2>
-<h3 id="read-a-file-with-error-fallback"><a href="#read-a-file-with-error-fallback">13.1. Read a file with error fallback</a></h3>
-<pre><code>: main: function is {
+<h2 id="recipes"><a href="#recipes">15. Recipes</a></h2>
+<h3 id="read-a-file-with-error-fallback"><a href="#read-a-file-with-error-fallback">15.1. Read a file with error fallback</a></h3>
+<pre><code class="language-zerolang">  main: function is {
       r: io.read_text "config.txt".string
       match (
           r
@@ -382,11 +531,11 @@ deliberate attacker.</p>
           io.eprintln "config missing; using defaults"
       }
   }</code></pre>
-<h3 id="atomic-write-via-temp-rename"><a href="#atomic-write-via-temp-rename">13.2. Atomic write via temp + rename</a></h3>
+<h3 id="atomic-write-via-temp-rename"><a href="#atomic-write-via-temp-rename">15.2. Atomic write via temp + rename</a></h3>
 <p>Write to a temp file, then rename over the target. Rename is atomic
 within the same filesystem so a reader never sees a half-written
 file.</p>
-<pre><code>: main: function is {
+<pre><code class="language-zerolang">  main: function is {
       wr: io.write_text path: "out.tmp".string content: payload.string
       match (
           wr
@@ -396,15 +545,15 @@ file.</p>
           io.eprintln "write failed"
       }
   }</code></pre>
-<h3 id="create-a-directory-if-missing"><a href="#create-a-directory-if-missing">13.3. Create a directory if missing</a></h3>
-<pre><code>: main: function is {
+<h3 id="create-a-directory-if-missing"><a href="#create-a-directory-if-missing">15.3. Create a directory if missing</a></h3>
+<pre><code class="language-zerolang">  main: function is {
       if io.exists "cache".string then {
           print "cache present"
       } else {
           io.mkdir "cache".string
       }
   }</code></pre>
-<h2 id="implementation-notes"><a href="#implementation-notes">14. Implementation Notes</a></h2>
+<h2 id="implementation-notes"><a href="#implementation-notes">16. Implementation Notes</a></h2>
 <p>The I/O stack is three layers:</p>
 <ul>
 <li><em><strong>Native C primitives</strong></em> (in <code>src/zemitterc_runtime.py</code>) --
@@ -427,7 +576,7 @@ the runtime provides the body.</li>
 and emits the tag enum + struct + destructor. The io runtime block
 that references those names is appended <em><strong>after</strong></em> the struct
 definitions so the generated C compiles cleanly.</p>
-<h2 id="future-work"><a href="#future-work">15. Future Work</a></h2>
+<h2 id="future-work"><a href="#future-work">17. Future Work</a></h2>
 <p>Roughly in implementation order:</p>
 <ol>
 <li>File class methods -- <code>file.open</code>, <code>file.read</code>,
@@ -440,9 +589,9 @@ definitions so the generated C compiles cleanly.</p>
 size / mtime / type.</li>
 <li>Directory iteration -- <code>io.list_dir</code> returning a closable
     iterator of <code>direntry</code>.</li>
-<li>Buffered + text wrappers -- <code>bufreader</code>, <code>bufwriter</code>,
-    <code>textreader</code> (<code>.lines</code> iterator), <code>textwriter</code>
-    (<code>write_line</code>).</li>
+<li>Complete the text wrapper family -- <code>textreader</code>
+    (<code>.lines</code> iterator) with UTF-8 validation on reads.
+    <code>textwriter</code> (<code>write_line</code>) has shipped.</li>
 <li>UTF-8 validation on text reads; the <code>badencoding</code> ioerror
     arm becomes reachable.</li>
 <li>Recursive <code>mkdirp</code>, symlink handling, advisory file locks.</li>
