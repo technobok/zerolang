@@ -361,10 +361,41 @@ This is cleaner than using `error` as a sentinel because:
 
 ## Theme 4: Emitter Architecture
 
-### Finding 7: Monomorphized Collection Emitters Are Standalone C Libraries
+### Finding 7: Monomorphized Collection Emitters Are Standalone C Libraries \[PARTIAL\]
 
 **File**: zemitterc.py
 **Severity**: Medium — 800+ lines of hand-crafted C templates
+
+**Status (2026-04-22)**: Stage 1 of a two-stage migration shipped.
+The fully-boilerplate Python-string-concat pattern is gone for the
+four simpler monomorphized types; real C lives in
+`src/runtime/*.{inc,c.tmpl}`:
+
+- `src/runtime/z_string.inc` + `src/runtime/z_stringview.inc` —
+  verbatim runtime, loaded by `_load_runtime_fragment` in
+  `zemitterc_runtime.py`.
+- `src/runtime/z_listview.c.tmpl`, `z_array.c.tmpl`,
+  `z_str.c.tmpl`, `z_list.c.tmpl` — placeholder templates loaded
+  by `src/zemitterc_templates.py::apply`, which refuses any
+  leftover `@@...@@` as an unresolved-placeholder error.
+- `tests/test_runtime_templates.py` compiles each template
+  against representative placeholder dicts with `gcc -Werror`.
+- Parity verified byte-for-byte against pre-migration baseline;
+  all 69 `out/*.c` identical after rebuild.
+
+`_emit_mono_map` stays inline. Its emission has enough branching
+(3 hash variants by key type, 3 `get()` return shapes, variable
+free-key/free-value paths, existing-slot replacement) that a
+single template would need ~7 placeholders and most of the
+variable-body text would still be constructed in Python. Best
+tackled alongside Stage 2 where the map would become a thin
+wrapper over a type-erased `libzrt` core anyway.
+
+Stage 2 (type-erased `libzrt.a` with per-element callbacks for
+destroy / hash / equality) is deferred. It introduces a real
+build-dependency step and has no forcing function yet; Stage 1
+unblocks self-hosting by itself because the templates are
+trivial zerolang `str.replace` calls once the port starts.
 
 | Emitter method | Lines | What it generates |
 |----------------|-------|-------------------|
@@ -399,9 +430,9 @@ _COMPILER_IMPLS = {
 ```
 
 **Action items:**
-- [ ] **Near-term**: Extract ZStr runtime into a C header/source file (libzrt.h)
-- [ ] **Near-term**: Extract collection struct definitions into C templates
-- [ ] **Medium-term**: Create libzrt.a with list/map/str core implementations
+- [x] **Near-term**: Extract ZStr runtime into a C header/source file (libzrt.h)
+- [x] **Near-term**: Extract collection struct definitions into C templates (list, array, str, listview done; map deferred — see status note above)
+- [ ] **Medium-term (deferred)**: Create libzrt.a with list/map/str core implementations — Stage 2, scope-justified deferral; no forcing function yet
 - [ ] **Long-term**: Refactor collection emitters to dispatch from native-marked methods
 
 ---
