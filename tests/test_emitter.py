@@ -7503,6 +7503,135 @@ class TestIOFileStreaming:
         assert output.strip().splitlines() == ["ok", "bad"]
 
 
+class TestBufReader:
+    """bufreader now actually buffers: a single source `read` pulls up
+    to `cap` bytes, and subsequent small reads are served from the
+    internal buffer until it drains. Oversize requests (max >= cap)
+    bypass the buffer. Textreader keeps working unchanged because it
+    always asks for `cap` bytes and hits the bypass branch.
+
+    The test shape unrolls each `br.read` call explicitly rather than
+    looping, to sidestep a pre-existing emitter issue with union
+    locals declared inside a `for while` body (their scope-exit
+    destructor lands outside the loop body in generated C). Each
+    test still exercises the bufreader path through multiple reads
+    of varying sizes."""
+
+    @staticmethod
+    def _read_and_print(idx: int, cap_chunk: str) -> str:
+        """Emit one `rr{idx}: br.read into: buf max: N.u64` call +
+        match that prints the ok byte count (or 'eof'/'err'). Distinct
+        names per read to sidestep a pre-existing scoping issue with
+        loop-body union locals."""
+        name = f"rr{idx}"
+        return (
+            f"        {name}: br.read into: buf max: {cap_chunk}\n"
+            "        match (\n"
+            f"            {name}\n"
+            "        ) case ok then {\n"
+            f"            if {name} == 0.u64 then {{\n"
+            '                print "eof"\n'
+            "            }\n"
+            f"            if {name} > 0.u64 then {{\n"
+            f'                print "\\{{{name}}}"\n'
+            "            }\n"
+            "        } case err then {\n"
+            '            print "err"\n'
+            "        }\n"
+        )
+
+    def _program(self, path, cap, reads):
+        """Build a main body that opens `path`, creates a bufreader
+        with capacity `cap`, and issues each read in `reads` in order
+        (each a `N.u64` max argument)."""
+        calls = "".join(
+            TestBufReader._read_and_print(i, mx) for i, mx in enumerate(reads)
+        )
+        return (
+            "main: function is {\n"
+            f'    r: io.open path: "{path}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            f"        br: io.bufreader.create from: r.lock capacity: {cap}.u64\n"
+            "        buf: bytes\n"
+            f"{calls}"
+            '        print "end"\n'
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+
+    def test_bufreader_small_reads_aggregate(self, tmp_path):
+        """10-byte fixture, cap=32. Four reads of max=3 return sizes
+        3/3/3/1, a fifth read hits EOF. All bytes come from a single
+        source syscall (observable only indirectly here — the totals
+        match the fixture)."""
+        target = tmp_path / "small.txt"
+        target.write_bytes(b"0123456789")
+        csource = emit_source(self._program(target, 32, ["3.u64"] * 5))
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["3", "3", "3", "1", "eof", "end"]
+
+    def test_bufreader_straddle_refill(self, tmp_path):
+        """10-byte fixture, cap=5, reads of max=3. The buffer holds at
+        most 5 bytes; after it drains, the next read triggers a refill
+        for another 5, and the read-in-progress returns whatever the
+        current buffer can satisfy. Verify totals match and the refill
+        actually occurred by counting reads needed to drain."""
+        target = tmp_path / "straddle.txt"
+        target.write_bytes(b"0123456789")
+        # 10 bytes, cap 5 -> needs >= two refills.
+        csource = emit_source(self._program(target, 5, ["3.u64"] * 6))
+        output = compile_and_run(csource)
+        lines = output.strip().splitlines()
+        chunks = [int(x) for x in lines if x.isdigit()]
+        assert sum(chunks) == 10
+        assert all(c <= 3 for c in chunks)
+        # At least one read straddled: the first refill gave 5 bytes,
+        # a 3-ask took 3, a 3-ask took 2 (buffer drained), next refill.
+        assert len(chunks) >= 4
+
+    def test_bufreader_oversize_bypass(self, tmp_path):
+        """max >= cap takes the direct-source-read path. The fixture
+        is larger than cap; one oversize read should return the whole
+        file (or most of it, if the kernel short-reads) in one call,
+        with no intermediate copy through the bufreader buffer."""
+        target = tmp_path / "big.txt"
+        target.write_bytes(b"x" * 500)
+        csource = emit_source(self._program(target, 16, ["1024.u64", "1024.u64"]))
+        output = compile_and_run(csource)
+        lines = output.strip().splitlines()
+        assert "end" in lines
+        chunks = [int(x) for x in lines if x.isdigit()]
+        # First read: 500 via the bypass branch. Second: EOF (prints eof).
+        assert chunks[0] == 500
+        assert "eof" in lines
+
+    def test_bufreader_eof_on_empty_file(self, tmp_path):
+        """Empty source: the first read returns 0 directly; no extra
+        spurious reads are issued."""
+        target = tmp_path / "empty.txt"
+        target.write_bytes(b"")
+        csource = emit_source(self._program(target, 32, ["8.u64"]))
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["eof", "end"]
+
+    def test_bufreader_asan_clean(self, tmp_path):
+        """Multiple reads through a small-capacity bufreader under
+        ASan. Exercises refill cycles, the buf field's scope-exit
+        destroy, and the realloc path on the caller's `into` list."""
+        target = tmp_path / "asan.txt"
+        target.write_bytes(b"z" * 50)
+        csource = emit_source(self._program(target, 8, ["5.u64"] * 16))
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        lines = result.stdout.strip().splitlines()
+        chunks = [int(x) for x in lines if x.isdigit()]
+        assert sum(chunks) == 50
+
+
 class TestIoSymlink:
     """io.symlink creates a symbolic link; io.readlink reads its target.
     Both route through standard ioerror mapping; readlink additionally

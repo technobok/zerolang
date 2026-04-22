@@ -838,14 +838,17 @@ _Z_BUFWRITER_WRITE = (
 )
 
 _Z_BUFREADER_CREATE = (
-    "/* bufreader.create — wrap a reader. v1 is a pass-through (no\n"
-    "   internal buffer); `cap` is recorded for Phase 1c textreader\n"
-    "   chunk sizing. The source is held by borrow via the typechecker's\n"
-    "   path-scoped lock. */\n"
+    "/* bufreader.create — wrap a reader. Pre-allocates the internal\n"
+    "   `buf` to `cap` so the first refill never has to grow it. `head`\n"
+    "   starts at 0; the buffer is empty (buf.length == 0) so the first\n"
+    "   read triggers a refill. Source is held by borrow via the\n"
+    "   typechecker's path-scoped lock. */\n"
     "static z_bufreader_t z_bufreader_create(z_reader_t source, uint64_t cap);\n"
     "static z_bufreader_t z_bufreader_create(z_reader_t source, uint64_t cap) {\n"
     "    z_bufreader_t self = {0};\n"
     "    self.source = source;\n"
+    "    self.buf = z_list_u8_create(cap);\n"
+    "    self.head = 0;\n"
     "    self.cap = cap;\n"
     "    return self;\n"
     "}\n\n"
@@ -923,16 +926,53 @@ _Z_TEXTWRITER_FLUSH = (
 )
 
 _Z_BUFREADER_READ = (
-    "/* bufreader.read — pass-through to the underlying reader. Phase\n"
-    "   1c adds chunk buffering on top of this for UTF-8 boundary\n"
-    "   handling in textreader. */\n"
+    "/* bufreader.read — drain the internal buffer into `into`; when\n"
+    "   empty, refill from the source with a single `cap`-sized read\n"
+    "   (or forward straight to the source when the caller wants more\n"
+    "   than `cap` bytes). Returns what it has in one call; callers\n"
+    "   that need exactly N bytes loop externally, matching the\n"
+    "   reader-protocol contract ('short reads are fine'). */\n"
     "static z_result_u64_ioerror_t z_bufreader_read(\n"
     "    z_bufreader_t* self, z_list_u8_t* into, uint64_t max\n"
     ");\n"
     "static z_result_u64_ioerror_t z_bufreader_read(\n"
     "    z_bufreader_t* self, z_list_u8_t* into, uint64_t max\n"
     ") {\n"
-    "    return self->source.vtable->read(self->source.data, into, max);\n"
+    "    uint64_t available = self->buf.length - self->head;\n"
+    "    if (available == 0) {\n"
+    "        if (max >= self->cap) {\n"
+    "            /* bypass: caller wants more than our buffer holds --\n"
+    "               forward directly and skip the intermediate copy. */\n"
+    "            return self->source.vtable->read(\n"
+    "                self->source.data, into, max\n"
+    "            );\n"
+    "        }\n"
+    "        /* refill: pull up to cap bytes into our buffer in one\n"
+    "           source read, then fall through to the drain path. */\n"
+    "        self->buf.length = 0;\n"
+    "        self->head = 0;\n"
+    "        z_result_u64_ioerror_t rr = self->source.vtable->read(\n"
+    "            self->source.data, &self->buf, self->cap\n"
+    "        );\n"
+    "        if (rr.tag != Z_RESULT_U64_IOERROR_TAG_OK) return rr;\n"
+    "        free(rr.data);\n"
+    "        available = self->buf.length;\n"
+    "        if (available == 0) return z_io_u64_ok(0);\n"
+    "    }\n"
+    "    uint64_t take = max < available ? max : available;\n"
+    "    if (into->capacity < into->length + take) {\n"
+    "        uint64_t newcap = into->length + take;\n"
+    "        into->data = (uint8_t*)realloc(into->data, newcap);\n"
+    "        into->capacity = newcap;\n"
+    "    }\n"
+    "    memcpy(\n"
+    "        into->data + into->length,\n"
+    "        self->buf.data + self->head,\n"
+    "        take\n"
+    "    );\n"
+    "    into->length += take;\n"
+    "    self->head += take;\n"
+    "    return z_io_u64_ok(take);\n"
     "}\n\n"
 )
 
@@ -1271,6 +1311,7 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "file_seek",
         "bufwriter_write",
         "textwriter_write_line",
+        "bufreader_read",
     }
     if "eprintln" in natives:
         parts.append(_Z_IO_EPRINTLN)

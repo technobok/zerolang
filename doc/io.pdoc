@@ -114,8 +114,6 @@ Also shipped:
 Not yet shipped:
 
 #ul:
-  [#*: Internal-buffering #~"bufreader" (v1 stays pass-through;
-    textreader does its own line accumulation)]
   [#*: Async, sockets, advisory locks]
 
 Process-level primitives (argv, env, exit) have moved out of io
@@ -143,11 +141,18 @@ it). Auto-flush-on-drop is a v2 concern; it requires destructors to
 surface the sink's write error, which today's void-return destructor
 cannot do.
 
-#~"bufreader" is a pass-through in Phase 1b -- it records
-#~"capacity" for future chunk sizing but forwards every #~"read"
-straight to the source. Internal buffering arrives in Phase 1c
-together with #~"textreader", where chunk reads are needed for UTF-8
-boundary handling.
+#~"bufreader" issues exactly one source #~"read" per #~"capacity"
+bytes of data: small caller reads drain the internal buffer, and
+only when it empties does the wrapper pull another #~"capacity"-
+sized chunk. A caller request whose #~"max" is at least
+#~"capacity" bypasses the buffer and forwards straight to the
+source -- we never double-copy a whole chunk. Each #~"bufreader.
+read" call returns what is immediately available in one shot;
+callers that want exactly N bytes loop externally, matching the
+reader protocol's short-read contract. #~"textreader" always asks
+for exactly #~"capacity" bytes per refill, so it hits the bypass
+path and the byte stream through the three-layer stack is
+identical to a direct source read.
 
 Typical shape:
 

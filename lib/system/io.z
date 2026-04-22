@@ -279,15 +279,23 @@ bufwriter: class {
     flush:  function {:this} out (result t: null e: ioerror) is native
 }
 
-# `bufreader` -- buffered adapter over any `reader`. v1 is a
-# pass-through for Phase 1b (see doc/io.pdoc); internal buffering is
-# introduced alongside `textreader` in Phase 1c, which needs chunk
-# reads for UTF-8 boundary handling.
+# `bufreader` -- buffered adapter over any `reader`. Issues exactly
+# one source `read` per `capacity` bytes of data, regardless of how
+# many small `read` calls the caller makes. Requests larger than
+# `capacity` bypass the internal buffer and forward straight to the
+# source so we never double-copy a full chunk.
+#
+# `buf` holds the pending bytes; `head` is the cursor into `buf` --
+# bytes in `[head, buf.length)` are still to be handed out. When
+# `head == buf.length` the buffer is drained and the next `read` call
+# refills it from the source.
 #
 # Holds a borrow on `source` via `reader.lock` so the original reader
 # is locked for the wrapper's lifetime.
 bufreader: class {
     source: reader.lock
+    buf:    bytes
+    head:   u64
     cap:    u64
 } as {
     :reader
