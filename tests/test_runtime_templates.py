@@ -44,14 +44,21 @@ def _gcc_compile(body: str) -> tuple[int, str]:
     gcc = shutil.which("gcc")
     if gcc is None:
         pytest.skip("gcc not available")
-    with tempfile.NamedTemporaryFile(
-        suffix=".c", mode="w", delete=False
-    ) as fh:
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as fh:
         fh.write(HEADERS + "\n\n" + body + "\n")
         path = fh.name
     try:
         result = subprocess.run(
-            [gcc, "-c", "-Wall", "-Werror", "-Wno-unused-function", "-o", "/dev/null", path],
+            [
+                gcc,
+                "-c",
+                "-Wall",
+                "-Werror",
+                "-Wno-unused-function",
+                "-o",
+                "/dev/null",
+                path,
+            ],
             capture_output=True,
             text=True,
             timeout=10,
@@ -92,3 +99,102 @@ def test_loader_caches():
         assert load("__unit_test_cache__") == "/* cached */\n"
     finally:
         del _TEMPLATE_CACHE["__unit_test_cache__"]
+
+
+def test_listview_template_compiles():
+    body = apply("z_listview", {"NAME": "listview_i64", "ELEM_T": "int64_t"})
+    rc, err = _gcc_compile(body)
+    assert rc == 0, err
+
+
+def test_array_template_compiles_with_eq():
+    eq_body = (
+        "static bool z_array_i64_16_eq(z_array_i64_16_t a, z_array_i64_16_t b);\n"
+        "static bool z_array_i64_16_eq(z_array_i64_16_t a, z_array_i64_16_t b) {\n"
+        "    return memcmp(&a, &b, sizeof(z_array_i64_16_t)) == 0;\n"
+        "}\n"
+    )
+    body = apply(
+        "z_array",
+        {
+            "NAME": "array_i64_16",
+            "ELEM_T": "int64_t",
+            "LEN": "16",
+            "CREATE_BODY": "    z_array_i64_16_t _this = {0};",
+            "EQ_BODY": eq_body,
+        },
+    )
+    rc, err = _gcc_compile(body)
+    assert rc == 0, err
+
+
+def test_str_template_compiles():
+    body = apply(
+        "z_str",
+        {
+            "NAME": "str_16",
+            "CAP": "16",
+            "LEN_T": "uint8_t",
+            "EQ_BODY": "",
+        },
+    )
+    # z_str uses z_string_t in the .string method — stub it for this test
+    stub = (
+        "typedef struct { uint64_t size; char* data; uint64_t capacity; } z_string_t;\n\n"
+    )
+    rc, err = _gcc_compile(stub + body)
+    assert rc == 0, err
+
+
+def test_list_template_compiles_with_destroy_loop():
+    destroy_elems = (
+        "    for (uint64_t i = 0; i < p->length; i++) {\n"
+        "        z_str_16_destroy(&p->data[i]);\n"
+        "    }\n"
+    )
+    # minimal stubs for the referenced types
+    stub = (
+        "typedef struct { uint64_t _x; } z_str_16_t;\n"
+        "static void z_str_16_destroy(z_str_16_t* p) { (void)p; }\n\n"
+    )
+    body = apply(
+        "z_list",
+        {
+            "NAME": "list_str_16",
+            "ELEM_T": "z_str_16_t",
+            "DESTROY_ELEMS": destroy_elems,
+            "LISTVIEW_METHODS": "",
+        },
+    )
+    rc, err = _gcc_compile(stub + body)
+    assert rc == 0, err
+
+
+def test_list_template_compiles_with_listview_methods():
+    listview_methods = (
+        "static z_listview_i64_t z_list_i64_listview(z_list_i64_t* _this);\n"
+        "static z_listview_i64_t z_list_i64_listview(z_list_i64_t* _this) {\n"
+        "    return *(z_listview_i64_t*)_this;\n"
+        "}\n"
+        "\n"
+        "static void z_list_i64_extend_view(z_list_i64_t* _this, z_listview_i64_t _from);\n"
+        "static void z_list_i64_extend_view(z_list_i64_t* _this, z_listview_i64_t _from) {\n"
+        "    z_list_i64_grow(_this, _this->length + _from.length);\n"
+        "    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(int64_t));\n"
+        "    _this->length += _from.length;\n"
+        "}\n\n"
+    )
+    listview = apply(
+        "z_listview", {"NAME": "listview_i64", "ELEM_T": "int64_t"}
+    )
+    body = apply(
+        "z_list",
+        {
+            "NAME": "list_i64",
+            "ELEM_T": "int64_t",
+            "DESTROY_ELEMS": "",
+            "LISTVIEW_METHODS": listview_methods,
+        },
+    )
+    rc, err = _gcc_compile(listview + body)
+    assert rc == 0, err

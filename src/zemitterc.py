@@ -11,6 +11,7 @@ from typing import Optional, List, Dict, Tuple, Callable, cast
 import zast
 from zast import NodeType
 import zemitterc_runtime as zrt
+import zemitterc_templates as ztmpl
 from ztypes import (
     ZType,
     ZTypeType,
@@ -2854,7 +2855,14 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_array(self, mono_type: ZType) -> None:
-        """Emit a monomorphized array type (struct, create, get, set, length)."""
+        """Emit a monomorphized array type (struct, create, get, set, length).
+
+        Body comes from src/runtime/z_array.c.tmpl. The create body and
+        optional equality body vary per monomorphization (element type
+        may be a record needing its own constructor; equality may be
+        memcmp, elem-eq-call, or raw ==) so they're computed here and
+        spliced into the template as @@CREATE_BODY@@ / @@EQ_BODY@@.
+        """
         self.needs_stdint = True
         self.needs_stdio = True
         name = mono_type.name
@@ -2864,87 +2872,69 @@ class CEmitter:
         if not elem_type or arr_len is None:
             return
         elem_ctype = _ctype(elem_type)
-        lines: List[str] = []
 
-        # struct definition
-        lines.append("typedef struct {\n")
-        lines.append(f"    {elem_ctype} data[{arr_len}];\n")
-        lines.append(f"}} {ctype};\n\n")
-
-        # length define
-        lines.append(f"#define z_{name}_length {arr_len}\n\n")
-
-        # create constructor (zero-initialized)
-        create_name = f"z_{name}_create"
-        lines.append(f"static {ctype} {create_name}(void);\n")
-        lines.append(f"static {ctype} {create_name}(void) {{\n")
-        # check if element type is a record (needs constructor call)
+        # create body — record elements need their own constructor calls
+        # to populate each slot; everything else zero-initialises.
         if elem_type.typetype == ZTypeType.RECORD and elem_type.name not in TYPEMAP:
-            lines.append(f"    {ctype} _this;\n")
-            lines.append(
+            create_body = (
+                f"    {ctype} _this;\n"
                 f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
                 f"_this.data[_i] = z_{elem_type.name}_create("
                 f"{self._zero_args_for_ctypes(elem_type.name)}"
-                f"); }}\n"
+                f"); }}"
             )
         else:
-            lines.append(f"    {ctype} _this = {{0}};\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
+            create_body = f"    {ctype} _this = {{0}};"
 
-        # get method: returns element, runtime error on OOB
-        self.needs_stdio = True
-        get_name = f"z_{name}_get"
-        lines.append(f"static {elem_ctype} {get_name}({ctype} _this, int64_t _idx);\n")
-        lines.append(
-            f"static {elem_ctype} {get_name}({ctype} _this, int64_t _idx) {{\n"
-        )
-        zrt.emit_array_bounds_check(lines, "_idx", arr_len, "array get")
-        lines.append("    return _this.data[_idx];\n")
-        lines.append("}\n\n")
-
-        # set method: returns old element, runtime error on OOB
-        set_name = f"z_{name}_set"
-        lines.append(
-            f"static {elem_ctype} {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val);\n"
-        )
-        lines.append(
-            f"static {elem_ctype} {set_name}({ctype}* _this, int64_t _idx, {elem_ctype} _val) {{\n"
-        )
-        zrt.emit_array_bounds_check(lines, "_idx", arr_len, "array set")
-        lines.append(f"    {elem_ctype} _old = _this->data[_idx];\n")
-        lines.append("    _this->data[_idx] = _val;\n")
-        lines.append("    return _old;\n")
-        lines.append("}\n\n")
-
-        # emit equality function
+        # equality body — only emitted when the equality is auto-generated
+        # (user-defined == is emitted separately via the method path).
+        eq_body_parts: List[str] = []
         eq_method = mono_type.children.get("==")
         if eq_method and eq_method.is_autogen_eq:
             self.needs_stdbool = True
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
+            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);")
+            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
             if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
-                lines.append(f"    return memcmp(&a, &b, sizeof({ctype})) == 0;\n")
+                eq_body_parts.append(
+                    f"    return memcmp(&a, &b, sizeof({ctype})) == 0;"
+                )
             elif self._needs_eq_call(elem_type):
                 ename = elem_type.name.replace(".", "_")
-                lines.append(
+                eq_body_parts.append(
                     f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
-                    f"if (!z_{ename}_eq(a.data[_i], b.data[_i])) return false; }}\n"
+                    f"if (!z_{ename}_eq(a.data[_i], b.data[_i])) return false; }}"
                 )
-                lines.append("    return true;\n")
+                eq_body_parts.append("    return true;")
             else:
-                lines.append(
+                eq_body_parts.append(
                     f"    for (int _i = 0; _i < {arr_len}; _i++) {{ "
-                    f"if (a.data[_i] != b.data[_i]) return false; }}\n"
+                    f"if (a.data[_i] != b.data[_i]) return false; }}"
                 )
-                lines.append("    return true;\n")
-            lines.append("}\n\n")
+                eq_body_parts.append("    return true;")
+            eq_body_parts.append("}")
+            eq_body_parts.append("")  # trailing blank line to match old output
+        eq_body = "\n".join(eq_body_parts)
 
-        self.struct_defs.append("".join(lines))
+        self.struct_defs.append(
+            ztmpl.apply(
+                "z_array",
+                {
+                    "NAME": name,
+                    "ELEM_T": elem_ctype,
+                    "LEN": str(arr_len),
+                    "CREATE_BODY": create_body,
+                    "EQ_BODY": eq_body,
+                },
+            )
+        )
 
     def _emit_mono_str(self, mono_type: ZType) -> None:
-        """Emit a monomorphized str type (struct, capacity define, create, string)."""
+        """Emit a monomorphized str type (struct, create, string conversion,
+        optional equality). Body comes from src/runtime/z_str.c.tmpl.
+        `len` is a uint8/16/32 picked from the capacity so str_N stays
+        compact for small N.
+        """
         self.needs_stdint = True
         self.needs_string = True
         name = mono_type.name
@@ -2952,7 +2942,6 @@ class CEmitter:
         cap = _str_capacity(mono_type)
         if cap is None:
             return
-        lines: List[str] = []
 
         # compact length type based on capacity
         if cap <= 255:
@@ -2962,67 +2951,47 @@ class CEmitter:
         else:
             len_ctype = "uint32_t"
 
-        # struct definition (no NUL terminator — data is exactly cap bytes)
-        lines.append("typedef struct {\n")
-        lines.append(f"    {len_ctype} len;\n")
-        lines.append(f"    char data[{cap}];\n")
-        lines.append(f"}} {ctype};\n\n")
+        self.needs_stdlib = True  # the .string conversion path uses malloc
 
-        # size define
-        lines.append(f"#define z_{name}_size {cap}\n\n")
-
-        # create constructor (empty str)
-        create_name = f"z_{name}_create"
-        lines.append(f"static {ctype} {create_name}(void);\n")
-        lines.append(f"static {ctype} {create_name}(void) {{\n")
-        lines.append(f"    {ctype} _this = {{0}};\n")
-        lines.append("    return _this;\n")
-        lines.append("}\n\n")
-
-        # .string method (str -> z_string_t)
-        self.needs_stdlib = True
-        string_name = f"z_{name}_string"
-        lines.append(f"static z_string_t {string_name}({ctype} _this);\n")
-        lines.append(f"static z_string_t {string_name}({ctype} _this) {{\n")
-        lines.append("    z_string_t z = {0};\n")
-        lines.append("    z.size = _this.len;\n")
-        lines.append("    z.capacity = _this.len + 1;\n")
-        lines.append("    z.data = (char*)malloc(z.capacity);\n")
-        lines.append("    memcpy(z.data, _this.data, _this.len);\n")
-        lines.append("    z.data[_this.len] = '\\0';\n")
-        lines.append("    return z;\n")
-        lines.append("}\n\n")
-
-        # .str conversion: z_string_to_str_N(data, len) — shared by string.str and str.str
-        convert_name = f"z_string_to_{name}"
-        lines.append(
-            f"static {ctype} {convert_name}(const char* data, uint64_t len);\n"
-        )
-        lines.append(
-            f"static {ctype} {convert_name}(const char* data, uint64_t len) {{\n"
-        )
-        lines.append(f"    {ctype} r = {{0}};\n")
-        lines.append(f"    uint64_t n = len < {cap} ? len : {cap};\n")
-        lines.append(f"    r.len = ({len_ctype})n;\n")
-        lines.append("    memcpy(r.data, data, n);\n")
-        lines.append("    return r;\n")
-        lines.append("}\n\n")
-
-        # emit equality function (byte-wise comparison)
+        # equality is auto-generated (byte-wise) when enabled; keep the
+        # branch here so the template stays uniform across str monos.
         eq_method = mono_type.children.get("==")
+        eq_body_parts: List[str] = []
         if eq_method and eq_method.is_autogen_eq:
             self.needs_stdbool = True
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
-            lines.append(
-                "    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;\n"
+            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);")
+            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
+            eq_body_parts.append(
+                "    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;"
             )
-            lines.append("}\n\n")
+            eq_body_parts.append("}")
+            eq_body_parts.append("")  # trailing blank line to match the old output
+        eq_body = "\n".join(eq_body_parts)
 
-        self.struct_defs.append("".join(lines))
+        self.struct_defs.append(
+            ztmpl.apply(
+                "z_str",
+                {
+                    "NAME": name,
+                    "CAP": str(cap),
+                    "LEN_T": len_ctype,
+                    "EQ_BODY": eq_body,
+                },
+            )
+        )
 
     def _emit_mono_list(self, mono_type: ZType) -> None:
-        """Emit a monomorphized list type (struct, create, destroy, methods)."""
+        """Emit a monomorphized list type (struct, create, destroy, methods).
+
+        Body comes from src/runtime/z_list.c.tmpl. Two parts vary per
+        monomorphization:
+
+        * `@@DESTROY_ELEMS@@` — empty when the element type is trivial;
+          a per-element cleanup loop when the element has a destructor.
+        * `@@LISTVIEW_METHODS@@` — empty when the list has no companion
+          listview child; the `.listview` / `.extend_view` pair when it
+          does.
+        """
         self.needs_stdint = True
         self.needs_stdlib = True
         self.needs_stdio = True
@@ -3033,198 +3002,75 @@ class CEmitter:
         if elem_type is None:
             return
         elem_ctype = _ctype(elem_type)
-        lines: List[str] = []
 
-        # struct definition — field order: length, data*, capacity
-        # (length + data match listview layout for zero-cost casting)
-        lines.append("typedef struct {\n")
-        lines.append("    uint64_t length;\n")
-        lines.append(f"    {elem_ctype}* data;\n")
-        lines.append("    uint64_t capacity;\n")
-        lines.append(f"}} {ctype};\n\n")
-
-        # destroy — drive per-element cleanup off the element type's
-        # needs_destructor flag. The type-checker only sets that True
-        # when there's actual work (heap-internal cleanup or freeing a
-        # heap allocation), and clears it for self-contained valtypes,
-        # so no dead calls get generated for trivial element types.
-        # `&` prefix for value-layout elements (stack struct with heap
-        # internals, e.g. string); no prefix when the element is already
-        # heap-allocated (already a pointer).
-        lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
-        lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
-        lines.append("    if (!p) return;\n")
-        if elem_type and elem_type.needs_destructor and elem_type.destructor_name:
+        # destroy — per-element cleanup loop only when the element type
+        # actually needs it.
+        if elem_type.needs_destructor and elem_type.destructor_name:
             elem_destr = elem_type.destructor_name
             elem_addr = "" if elem_type.is_heap_allocated else "&"
-            lines.append("    for (uint64_t i = 0; i < p->length; i++) {\n")
-            lines.append(f"        {elem_destr}({elem_addr}p->data[i]);\n")
-            lines.append("    }\n")
-        lines.append("    free(p->data);\n")
-        lines.append("}\n\n")
+            destroy_elems = (
+                f"    for (uint64_t i = 0; i < p->length; i++) {{\n"
+                f"        {elem_destr}({elem_addr}p->data[i]);\n"
+                f"    }}\n"
+            )
+        else:
+            destroy_elems = ""
 
-        # create constructor — returns struct by value (stack-allocated)
-        self._emit_stack_container_create(lines, name, ctype, elem_ctype)
-
-        # growth helper (inline in append/insert/extend via macro-like pattern)
-        grow_fn = f"z_{name}_grow"
-        lines.append(f"static void {grow_fn}({ctype}* _this, uint64_t _needed);\n")
-        lines.append(f"static void {grow_fn}({ctype}* _this, uint64_t _needed) {{\n")
-        lines.append("    if (_needed <= _this->capacity) return;\n")
-        lines.append(
-            "    uint64_t newcap = _this->capacity + (_this->capacity >> 1) + 4;\n"
-        )
-        lines.append("    if (newcap < _needed) newcap = _needed;\n")
-        lines.append("    _this->capacity = newcap;\n")
-        lines.append(
-            f"    _this->data = ({elem_ctype}*)realloc(_this->data, newcap * sizeof({elem_ctype}));\n"
-        )
-        lines.append("}\n\n")
-
-        # append
-        lines.append(
-            f"static void z_{name}_append({ctype}* _this, {elem_ctype} _val);\n"
-        )
-        lines.append(
-            f"static void z_{name}_append({ctype}* _this, {elem_ctype} _val) {{\n"
-        )
-        lines.append(f"    {grow_fn}(_this, _this->length + 1);\n")
-        lines.append("    _this->data[_this->length] = _val;\n")
-        lines.append("    _this->length++;\n")
-        lines.append("}\n\n")
-
-        # insert
-        lines.append(
-            f"static void z_{name}_insert({ctype}* _this, {elem_ctype} _val, uint64_t _at);\n"
-        )
-        lines.append(
-            f"static void z_{name}_insert({ctype}* _this, {elem_ctype} _val, uint64_t _at) {{\n"
-        )
-        self._emit_bounds_check(lines, "_at", "_this->length + 1", "list insert")
-        lines.append(f"    {grow_fn}(_this, _this->length + 1);\n")
-        lines.append(
-            f"    memmove(&_this->data[_at + 1], &_this->data[_at], (_this->length - _at) * sizeof({elem_ctype}));\n"
-        )
-        lines.append("    _this->data[_at] = _val;\n")
-        lines.append("    _this->length++;\n")
-        lines.append("}\n\n")
-
-        # extend
-        lines.append(f"static void z_{name}_extend({ctype}* _this, {ctype}* _from);\n")
-        lines.append(
-            f"static void z_{name}_extend({ctype}* _this, {ctype}* _from) {{\n"
-        )
-        lines.append("    if (!_from) return;\n")
-        lines.append(f"    {grow_fn}(_this, _this->length + _from->length);\n")
-        lines.append(
-            f"    memcpy(&_this->data[_this->length], _from->data, _from->length * sizeof({elem_ctype}));\n"
-        )
-        lines.append("    _this->length += _from->length;\n")
-        lines.append("    free(_from->data);\n")
-        lines.append("    _from->data = NULL;\n")
-        lines.append("    _from->length = 0;\n")
-        lines.append("    _from->capacity = 0;\n")
-        lines.append("}\n\n")
-
-        # get
-        lines.append(
-            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx);\n"
-        )
-        lines.append(
-            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx) {{\n"
-        )
-        self._emit_bounds_check(lines, "_idx", "_this->length", "list get")
-        lines.append("    return _this->data[_idx];\n")
-        lines.append("}\n\n")
-
-        # set
-        lines.append(
-            f"static {elem_ctype} z_{name}_set({ctype}* _this, uint64_t _idx, {elem_ctype} _val);\n"
-        )
-        lines.append(
-            f"static {elem_ctype} z_{name}_set({ctype}* _this, uint64_t _idx, {elem_ctype} _val) {{\n"
-        )
-        self._emit_bounds_check(lines, "_idx", "_this->length", "list set")
-        lines.append(f"    {elem_ctype} _old = _this->data[_idx];\n")
-        lines.append("    _this->data[_idx] = _val;\n")
-        lines.append("    return _old;\n")
-        lines.append("}\n\n")
-
-        # pop
-        lines.append(f"static {elem_ctype} z_{name}_pop({ctype}* _this);\n")
-        lines.append(f"static {elem_ctype} z_{name}_pop({ctype}* _this) {{\n")
-        zrt.emit_empty_check(lines, "list pop: empty list")
-        lines.append("    _this->length--;\n")
-        lines.append("    return _this->data[_this->length];\n")
-        lines.append("}\n\n")
-
-        # listview — zero-cost cast from list to listview (same first two fields)
+        # listview companion methods — only when the list monomorphization
+        # carries a `.listview` child (same first-two-field layout as
+        # listview, so the cast is zero-cost).
         listview_child = mono_type.children.get("listview")
-        lv_ctype: Optional[str] = None
+        listview_methods = ""
         if listview_child and listview_child.return_type:
-            lv_type = listview_child.return_type
-            lv_name = lv_type.name
+            lv_name = listview_child.return_type.name
             lv_ctype = f"z_{lv_name}_t"
-            lines.append(f"static {lv_ctype} z_{name}_listview({ctype}* _this);\n")
-            lines.append(f"static {lv_ctype} z_{name}_listview({ctype}* _this) {{\n")
-            lines.append(f"    return *({lv_ctype}*)_this;\n")
-            lines.append("}\n\n")
-
-        # extend_view — copy from a listview; does NOT consume (views don't
-        # own their data). Grows capacity as needed and memcpy's the bytes
-        # into place. Safe to call with an empty view.
-        if lv_ctype is not None:
-            lines.append(
+            listview_methods = (
+                f"static {lv_ctype} z_{name}_listview({ctype}* _this);\n"
+                f"static {lv_ctype} z_{name}_listview({ctype}* _this) {{\n"
+                f"    return *({lv_ctype}*)_this;\n"
+                f"}}\n"
+                f"\n"
                 f"static void z_{name}_extend_view({ctype}* _this, {lv_ctype} _from);\n"
-            )
-            lines.append(
                 f"static void z_{name}_extend_view({ctype}* _this, {lv_ctype} _from) {{\n"
-            )
-            lines.append(f"    {grow_fn}(_this, _this->length + _from.length);\n")
-            lines.append(
+                f"    z_{name}_grow(_this, _this->length + _from.length);\n"
                 f"    memcpy(&_this->data[_this->length], _from.data, "
                 f"_from.length * sizeof({elem_ctype}));\n"
+                f"    _this->length += _from.length;\n"
+                f"}}\n"
+                f"\n"
             )
-            lines.append("    _this->length += _from.length;\n")
-            lines.append("}\n\n")
 
-        self.struct_defs.append("".join(lines))
+        self.struct_defs.append(
+            ztmpl.apply(
+                "z_list",
+                {
+                    "NAME": name,
+                    "ELEM_T": elem_ctype,
+                    "DESTROY_ELEMS": destroy_elems,
+                    "LISTVIEW_METHODS": listview_methods,
+                },
+            )
+        )
 
     def _emit_mono_listview(self, mono_type: ZType) -> None:
         """Emit a monomorphized listview type (view into a list).
 
         Listview has the same first two fields as list ({length, data*})
         for zero-cost casting. No destructor — listview doesn't own data.
+        Body comes from src/runtime/z_listview.c.tmpl.
         """
         self.needs_stdint = True
         self.needs_stdlib = True
         self.needs_stdio = True
-        name = mono_type.name
-        ctype = f"z_{name}_t"
         elem_type = _listview_element_type(mono_type)
         if elem_type is None:
             return
-        elem_ctype = _ctype(elem_type)
-        lines: List[str] = []
-
-        # struct definition — matches first two fields of z_list_T_t
-        lines.append("typedef struct {\n")
-        lines.append("    uint64_t length;\n")
-        lines.append(f"    {elem_ctype}* data;\n")
-        lines.append(f"}} {ctype};\n\n")
-
-        # get — bounds-checked element access
-        lines.append(
-            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx);\n"
+        self.struct_defs.append(
+            ztmpl.apply(
+                "z_listview",
+                {"NAME": mono_type.name, "ELEM_T": _ctype(elem_type)},
+            )
         )
-        lines.append(
-            f"static {elem_ctype} z_{name}_get({ctype}* _this, uint64_t _idx) {{\n"
-        )
-        self._emit_bounds_check(lines, "_idx", "_this->length", "listview get")
-        lines.append("    return _this->data[_idx];\n")
-        lines.append("}\n\n")
-
-        self.struct_defs.append("".join(lines))
 
     def _emit_mono_map(self, mono_type: ZType) -> None:
         """Emit a monomorphized map type (bucket struct, hash, create, destroy, methods)."""
