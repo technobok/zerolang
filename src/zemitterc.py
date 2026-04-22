@@ -7790,6 +7790,29 @@ class CEmitter:
 
         return tmp
 
+    def _iter_binding_destructor(
+        self, var_name: str, elem_type: Optional[ZType]
+    ) -> Optional[str]:
+        """Return a single-line C statement to destroy a for-loop iteration
+        binding at end-of-iteration, or None when no cleanup is needed.
+
+        Ownership was moved out of the option's box into the binding (see
+        the reftype-union path in `_emit_for`), so the binding now owns the
+        heap allocation and must free it before the loop head re-runs.
+        Mirrors the scope-exit cleanup dispatch used by `_emit_scope_exit`.
+        """
+        if elem_type is None:
+            return None
+        if elem_type.subtype == ZSubType.STRING:
+            self.needs_string = True
+            return f"z_string_free(&{var_name});"
+        if not elem_type.needs_destructor:
+            return None
+        destructor = getattr(elem_type, "destructor_name", None)
+        if destructor:
+            return f"{destructor}(&{var_name});"
+        return None
+
     def _emit_for(self, fornode: zast.For) -> str:
         indent = self._indent()
         parts: List[str] = []
@@ -7798,7 +7821,16 @@ class CEmitter:
         cond_exprs: List[str] = []
         # iterator bindings: (name, op, opt_ctype, elem_ctype, opt_name, callable_type, opt_type)
         iter_bindings: List[
-            Tuple[str, zast.Operation, str, str, str, Optional[str], Optional[ZType]]
+            Tuple[
+                str,
+                zast.Operation,
+                str,
+                str,
+                str,
+                Optional[str],
+                Optional[ZType],
+                Optional[ZType],
+            ]
         ] = []
         # each bindings: (name, limit_expr, from_expr, elem_ctype) — optimized C for loop
         each_bindings: List[Tuple[str, str, str, str]] = []
@@ -7879,6 +7911,7 @@ class CEmitter:
                                     opt_name,
                                     t.name,
                                     opt_type,
+                                    some_type,
                                 )
                             )
                         else:
@@ -7896,6 +7929,7 @@ class CEmitter:
                                     opt_name,
                                     None,
                                     opt_type,
+                                    some_type,
                                 )
                             )
             else:
@@ -7945,6 +7979,11 @@ class CEmitter:
             parts.append(f"{indent}while ({cond_str}) {{\n")
             self.indent_level += 1
             inner = self._indent()
+            # Per-iteration cleanup accumulated by the reftype-option
+            # branch below. Ownership was moved out of the option's box
+            # into the iteration binding, so the binding needs its own
+            # scope-exit destruction at the bottom of each iteration.
+            iter_cleanup: List[str] = []
             for (
                 iname,
                 iop,
@@ -7953,6 +7992,7 @@ class CEmitter:
                 opt_name,
                 callable_type,
                 opt_type,
+                elem_type,
             ) in iter_bindings:
                 if callable_type:
                     obj_val = self._emit_operation_value(iop)
@@ -7970,32 +8010,44 @@ class CEmitter:
                 else:
                     iter_val = self._emit_operation_value(iop)
                 tmp = f"__iter_{_mangle_var(iname)}"
+                iname_c = _mangle_var(iname)
                 if opt_type and opt_type.is_nullable_ptr:
                     # nullable-ptr option: NULL = none
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(f"{inner}if ({tmp} == NULL) break;\n")
-                    parts.append(f"{inner}{elem_ctype} {_mangle_var(iname)} = {tmp};\n")
+                    parts.append(f"{inner}{elem_ctype} {iname_c} = {tmp};\n")
                 elif opt_type and opt_type.typetype == ZTypeType.VARIANT:
                     # optionval variant: check tag, extract data.some
                     none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(f"{inner}if ({tmp}.tag == {none_tag}) break;\n")
-                    parts.append(
-                        f"{inner}{elem_ctype} {_mangle_var(iname)} = {tmp}.data.some;\n"
-                    )
+                    parts.append(f"{inner}{elem_ctype} {iname_c} = {tmp}.data.some;\n")
                 else:
-                    # regular tagged union (legacy path)
+                    # Tagged-union `option t: ref`: the payload is a heap-
+                    # boxed value whose destructor would free the inner
+                    # allocation. A shallow copy into the binding followed
+                    # by the union destructor double-frees — instead, move
+                    # the payload out, free just the box, and register the
+                    # per-iteration cleanup so the binding owns the value
+                    # for the loop body.
                     none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(
-                        f"{inner}if ({tmp}.tag == {none_tag}) {{ z_{opt_name}_destroy(&{tmp}); break; }}\n"
+                        f"{inner}if ({tmp}.tag == {none_tag}) "
+                        f"{{ z_{opt_name}_destroy(&{tmp}); break; }}\n"
                     )
                     parts.append(
-                        f"{inner}{elem_ctype} {_mangle_var(iname)} = *({elem_ctype}*){tmp}.data;\n"
+                        f"{inner}{elem_ctype} {iname_c} = *({elem_ctype}*){tmp}.data;\n"
                     )
-                    parts.append(f"{inner}z_{opt_name}_destroy(&{tmp});\n")
+                    parts.append(f"{inner}free({tmp}.data);\n")
+                    # queue a matching destructor for end-of-iteration
+                    cleanup = self._iter_binding_destructor(iname_c, elem_type)
+                    if cleanup is not None:
+                        iter_cleanup.append(f"{inner}{cleanup}\n")
             if fornode.loop:
                 parts.append(self._emit_for_body(fornode))
+            for c in iter_cleanup:
+                parts.append(c)
             if has_post:
                 post_str = " && ".join(post_exprs)
                 parts.append(f"{inner}if (!({post_str})) break;\n")

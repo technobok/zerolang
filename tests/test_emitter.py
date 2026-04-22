@@ -5736,6 +5736,39 @@ class TestIteratorPattern:
         lines = output.strip().split("\n")
         assert lines == ["10", "20", "30", "done"]
 
+    def test_callable_iterator_yields_string_no_double_free(self):
+        """Reftype-payload iterator: `option t: string` consumed by a
+        for-loop. Previously the emitter shallow-copied the payload and
+        then called the union destructor, which z_string_free'd the
+        same heap buffer out from under the iteration binding. The fix
+        moves ownership out of the option's box into the binding and
+        registers the per-iteration z_string_free at end of iteration.
+        Runs under ASan so the double-free / use-after-free surfaces."""
+        csource = emit_source(
+            "stringiter: class { n: i64 } as {\n"
+            "  call: function {it: this} out (option t: string) is {\n"
+            "    if it.n > 0 then {\n"
+            "      it.n = it.n - 1\n"
+            '      return (option.some "hello".string)\n'
+            "    }\n"
+            "    return (option.none string)\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  si: stringiter n: 3\n"
+            "  for line: si loop { print line }\n"
+            '  print "done"\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip().split("\n") == [
+            "hello",
+            "hello",
+            "hello",
+            "done",
+        ]
+
     def test_private_field_blocked(self):
         """External access to private field produces type error."""
         errors = []
