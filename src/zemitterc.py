@@ -5493,6 +5493,11 @@ class CEmitter:
                 if method_name == "length":
                     self.needs_stringview = True
                     return f"{parent_val}.length"
+                if method_name == "compare" and call.arguments:
+                    rhs_val = self._emit_operation_value(call.arguments[0].valtype)
+                    self.needs_stringview = True
+                    self.needs_stdint = True
+                    return f"z_stringview_cmp({parent_val}, {rhs_val})"
 
         # string and str method calls: .stringview (both), .length / .capacity (string)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -5527,6 +5532,11 @@ class CEmitter:
                     return f"{parent_val}->size"
                 if is_string and method_name == "capacity":
                     return f"{parent_val}->capacity"
+                if is_string and method_name == "compare" and call.arguments:
+                    rhs_val = self._emit_operation_value(call.arguments[0].valtype)
+                    self.needs_stdint = True
+                    self.needs_string = True
+                    return f"z_string_cmp(&{parent_val}, &{rhs_val})"
 
         # string construction: string or string capacity: N
         if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
@@ -6071,6 +6081,21 @@ class CEmitter:
                 if op == "!=":
                     return f"(!{call})"
                 return call
+        # Ordering comparisons on string / stringview: route through the
+        # shared cmp primitive. `z_{type}_cmp` returns -1 / 0 / 1 so the
+        # four operators map to plain C comparisons against zero.
+        if op in ("<", "<=", ">", ">=") and binop.lhs.type:
+            if binop.lhs.type.subtype == ZSubType.STRING:
+                self.needs_stdbool = True
+                self.needs_stdint = True
+                cop = C_OPS.get(op, op)
+                return f"(z_string_cmp(&{lhs}, &{rhs}) {cop} 0)"
+            if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
+                self.needs_stdbool = True
+                self.needs_stdint = True
+                self.needs_stringview = True
+                cop = C_OPS.get(op, op)
+                return f"(z_stringview_cmp({lhs}, {rhs}) {cop} 0)"
         cop = C_OPS.get(op, op)
         return f"({lhs} {cop} {rhs})"
 

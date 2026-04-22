@@ -9424,6 +9424,34 @@ class TestStringEquality:
             "}"
         )
 
+    def test_string_ordering_resolves(self):
+        """<, <=, >, >= on strings type-check; `compare` returns i32."""
+        check_ok(
+            "main: function is {\n"
+            '  a: "hello".string\n'
+            '  b: "world".string\n'
+            "  if a < b then return 0\n"
+            "  if a <= b then return 0\n"
+            "  if a > b then return 0\n"
+            "  if a >= b then return 0\n"
+            "  c: a.compare rhs: b\n"
+            '  print "\\{c}"\n'
+            "}"
+        )
+
+    def test_stringview_ordering_resolves(self):
+        """<, <=, >, >= on stringview type-check; `compare` returns i32."""
+        check_ok(
+            "main: function is {\n"
+            '  a: "hello"\n'
+            '  b: "world"\n'
+            "  if a < b then return 0\n"
+            "  if a <= b then return 0\n"
+            "  c: a.compare rhs: b\n"
+            '  print "\\{c}"\n'
+            "}"
+        )
+
     def test_class_no_default_eq(self):
         """== on a user class without defined == is a compile error."""
         errors = check_errors(

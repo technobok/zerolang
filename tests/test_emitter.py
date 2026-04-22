@@ -6124,6 +6124,132 @@ class TestStringEquality:
         assert output.strip() == "different"
 
 
+class TestStringOrdering:
+    """Byte-wise lexicographic <, <=, >, >= and the `compare` method on
+    string and stringview. Same algorithm as C's memcmp with the
+    length tie-break: shorter prefix is less than the longer extension."""
+
+    def test_string_lt_shorter_prefix(self):
+        """'app' < 'apple': shared prefix, shorter wins."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "app".string\n'
+            '  b: "apple".string\n'
+            '  if a < b then { print "yes" }\n'
+            "}"
+        )
+        assert "z_string_cmp" in csource
+        assert compile_and_run(csource).strip() == "yes"
+
+    def test_string_lt_distinct(self):
+        """'apple' < 'banana': first differing byte decides."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "apple".string\n'
+            '  b: "banana".string\n'
+            '  if a < b then { print "lt" }\n'
+            '  if b > a then { print "gt" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["lt", "gt"]
+
+    def test_string_le_equal_and_less(self):
+        """<= is true for both equal and less-than."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "abc".string\n'
+            '  b: "abc".string\n'
+            '  c: "abd".string\n'
+            '  if a <= b then { print "eq" }\n'
+            '  if a <= c then { print "lt" }\n'
+            '  if c <= a then { print "unexpected" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["eq", "lt"]
+
+    def test_string_ge_equal_and_greater(self):
+        """>= is true for both equal and greater-than."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "z".string\n'
+            '  b: "z".string\n'
+            '  c: "a".string\n'
+            '  if a >= b then { print "eq" }\n'
+            '  if a >= c then { print "gt" }\n'
+            '  if c >= a then { print "unexpected" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["eq", "gt"]
+
+    def test_string_compare_returns_sign(self):
+        """compare returns -1 / 0 / 1 for lt / eq / gt."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "abc".string\n'
+            '  b: "abd".string\n'
+            '  c: "abc".string\n'
+            "  x: a.compare rhs: b\n"
+            "  y: a.compare rhs: c\n"
+            "  z: b.compare rhs: a\n"
+            '  print "\\{x}"\n'
+            '  print "\\{y}"\n'
+            '  print "\\{z}"\n'
+            "}"
+        )
+        assert "z_string_cmp" in csource
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["-1", "0", "1"]
+
+    def test_stringview_ordering_and_compare(self):
+        """The same four ordering ops plus compare work on stringview."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "apple"\n'
+            '  b: "banana"\n'
+            '  if a < b then { print "lt" }\n'
+            "  x: a.compare rhs: b\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        assert "z_stringview_cmp" in csource
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["lt", "-1"]
+
+    def test_empty_string_is_less_than_any_nonempty(self):
+        """Empty string is lexicographically less than any non-empty."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "".string\n'
+            '  b: "x".string\n'
+            '  if a < b then { print "yes" }\n'
+            "  x: a.compare rhs: b\n"
+            '  print "\\{x}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["yes", "-1"]
+
+    def test_equal_strings_all_orderings(self):
+        """For equal strings: ==, <=, >= true; <, >, != false."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "same".string\n'
+            '  b: "same".string\n'
+            '  if a == b then { print "eq" }\n'
+            '  if a <= b then { print "le" }\n'
+            '  if a >= b then { print "ge" }\n'
+            '  if a < b then { print "unexpected-lt" }\n'
+            '  if a > b then { print "unexpected-gt" }\n'
+            '  if a != b then { print "unexpected-neq" }\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["eq", "le", "ge"]
+
+
 class TestBoxRefinements:
     """Phase 10: box(class) and box(string) heap-allocate a copy; no leaks.
 
