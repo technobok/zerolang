@@ -122,7 +122,13 @@ are hardcoded in the emitter.
 
 ## Theme 2: isinstance Reduction for Self-Hosting
 
-### Finding 1: isinstance Cascades Still Dominate Control Flow
+### Finding 1: isinstance Cascades Still Dominate Control Flow \[RESOLVED\]
+
+**Status (2026-04-22)**: 370 → 1 remaining. The final instance
+(`zparser.py:1606`, field-type ownership stripping on a `zast.Path`) is the
+tolerated baseline. `make check` runs `bootstrap-lint`, which fails if
+`grep -rn 'isinstance(' src/*.py` returns more than 1 match -- any new
+introduction fails the check and blocks the commit.
 
 **Files**: ztypecheck.py (153), zemitterc.py (147), zparser.py (70)
 **Severity**: Medium — porting blocker for self-hosting
@@ -306,7 +312,7 @@ Similarly for `map`, `array`, `str`, and `string`.
 **Action items:**
 - [x] Implement the `native` directive (see Theme 1)
 - [x] Expand collections.z with full method signatures for list, map, array, str
-- [ ] Expand system.z string class with method signatures (length, ==, +, etc.)
+- [x] Expand system.z string class with method signatures (length, ==, +, etc.)
 - [ ] The emitter's C generators would key off the qualified name + `native` flag
   rather than checking generic_origin.name
 
@@ -452,9 +458,9 @@ language.
 
 ---
 
-### Finding 10: No CLAUDE.md in Zerolang Project
+### Finding 10: No CLAUDE.md in Zerolang Project \[RESOLVED\]
 
-**File**: /home/pawe/dev/zerolang/ (missing)
+**File**: /home/pawe/dev/zerolang/CLAUDE.md (present)
 **Severity**: Low — tooling convenience
 
 The parent dev/ directory has a CLAUDE.md but the zerolang project itself does not. Adding one
@@ -462,7 +468,7 @@ would help AI-assisted development (including future self-hosting work) by docum
 commands, architecture, and conventions specific to zerolang.
 
 **Action items:**
-- [ ] Create /home/pawe/dev/zerolang/CLAUDE.md with:
+- [x] Create /home/pawe/dev/zerolang/CLAUDE.md with:
   - Build/test commands (make check, make test, make build)
   - Architecture overview (lexer → parser → typecheck → emitter)
   - Key conventions (no single underscore prefix, no Co-Authored-By)
@@ -477,7 +483,7 @@ uses method calls or pattern matching.
 
 ---
 
-### Finding 12: String Comparison Missing from system.z
+### Finding 12: String Comparison Missing from system.z \[RESOLVED\]
 
 **File**: lib/system/system.z
 **Severity**: Low — string has no declared comparison operators
@@ -487,8 +493,14 @@ comparison functions (`zstr_eq`) internally but these are not discoverable from 
 Same issue for concatenation (`+`), length, and string interpolation support.
 
 **Action items:**
-- [ ] Add method declarations to string in system.z (requires native or similar)
-- [ ] At minimum, document which string operations are supported in the spec
+- [x] Add method declarations to string in system.z (requires native or similar)
+- [x] At minimum, document which string operations are supported in the spec
+
+**Status (2026-04-22)**: `string` and `stringview` now declare the full
+surface as `native` methods in system.z: `==`, `!=`, `<`, `<=`, `>`, `>=`,
+`compare`, `length`, `capacity`, `stringview` / `string`, `append`,
+`reserve`, `shrink`. `doc/spec.pdoc` §"String Equality and Ordering"
+documents the byte-wise semantics.
 
 ---
 
