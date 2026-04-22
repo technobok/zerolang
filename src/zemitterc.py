@@ -1053,11 +1053,15 @@ class CEmitter:
                 )
             elif name == "textreader":
                 # textreader forwards to bufreader; same ordering
-                # constraint as textwriter -> bufwriter.
+                # constraint as textwriter -> bufwriter. `textreader_call`
+                # is the iterator hook used by `for line: tr loop`;
+                # emitted unconditionally here so the class's protocol
+                # vtable always has it, in line with the other methods.
                 self.needs_io_natives.update(
                     {
                         "textreader_create",
                         "textreader_read_line",
+                        "textreader_call",
                         "bufreader_create",
                         "bufreader_read",
                     }

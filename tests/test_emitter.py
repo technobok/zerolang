@@ -7361,6 +7361,114 @@ class TestIOFileStreaming:
         output = compile_and_run(csource)
         assert output.strip().splitlines() == ["one", "two", "eof"]
 
+    def test_textreader_for_loop_iterates_lines(self, tmp_path):
+        """`for line: tr loop { ... }` yields each line (LF stripped)
+        until the stream drains."""
+        target = tmp_path / "forloop.txt"
+        target.write_bytes(b"alpha\nbeta\ngamma\n")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            "        for line: tr loop { print line }\n"
+            '        print "done"\n'
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        assert "z_textreader_call" in csource
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == [
+            "alpha",
+            "beta",
+            "gamma",
+            "done",
+        ]
+
+    def test_textreader_for_loop_empty_file(self, tmp_path):
+        """Empty file: the iterator terminates on the first call."""
+        target = tmp_path / "empty.txt"
+        target.write_bytes(b"")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            '        for line: tr loop { print "got" }\n'
+            '        print "done"\n'
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "done"
+
+    def test_textreader_for_loop_unterminated_tail(self, tmp_path):
+        """File ending without an LF: the unterminated tail is yielded
+        once before the iterator reports none."""
+        target = tmp_path / "tail.txt"
+        target.write_bytes(b"head\ntail")  # no trailing LF
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 16.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            "        for line: tr loop { print line }\n"
+            '        print "done"\n'
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip().splitlines() == ["head", "tail", "done"]
+
+    def test_textreader_for_loop_asan_clean(self, tmp_path):
+        """Iterating over every line must not leak or double-free. The
+        per-iteration string binding owns its heap buffer only until
+        the loop head re-runs; ASan catches either leak."""
+        target = tmp_path / "asan.txt"
+        # Vary line length so the allocator sees different sizes and a
+        # silent leak is easier to catch.
+        target.write_bytes(b"a\nbb\nccc\ndddd\neeeee\n")
+        csource = emit_source(
+            "main: function is {\n"
+            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            "    match (\n"
+            "        r\n"
+            "    ) case ok then {\n"
+            "        br: io.bufreader.create from: r.lock capacity: 16.u64\n"
+            "        tr: io.textreader.create from: br.lock\n"
+            "        for line: tr loop { print line }\n"
+            '        print "done"\n'
+            "    } case err then {\n"
+            '        print "open err"\n'
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+        assert result.stdout.strip().splitlines() == [
+            "a",
+            "bb",
+            "ccc",
+            "dddd",
+            "eeeee",
+            "done",
+        ]
+
     def test_textreader_badencoding_on_invalid_utf8(self, tmp_path):
         """Invalid UTF-8 inside a line yields the `badencoding` arm.
         Fixture: the byte 0xFF is never valid as a UTF-8 lead byte."""

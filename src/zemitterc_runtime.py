@@ -1084,6 +1084,40 @@ _Z_TEXTREADER_READ_LINE = (
     "}\n\n"
 )
 
+_Z_TEXTREADER_CALL = (
+    "/* textreader.call -- iterator hook. Delegates to read_line and\n"
+    "   collapses the result(string, ioerror) into option(string):\n"
+    "   ok(s) -> some(s), any err -> none. The eof / badencoding / I/O\n"
+    "   arms all terminate iteration silently; callers who need to\n"
+    "   distinguish them must use read_line directly. */\n"
+    "static z_option_string_t z_textreader_call(z_textreader_t* self);\n"
+    "static z_option_string_t z_textreader_call(z_textreader_t* self) {\n"
+    "    z_option_string_t out = {0};\n"
+    "    z_result_string_ioerror_t rr = z_textreader_read_line(self);\n"
+    "    if (rr.tag == Z_RESULT_STRING_IOERROR_TAG_OK) {\n"
+    "        /* Move the heap-owned string out of rr's ok box into a\n"
+    "           fresh some box; free the source box without calling\n"
+    "           the string destructor (ownership moved). */\n"
+    "        z_string_t* src = (z_string_t*)rr.data;\n"
+    "        z_string_t* dst = "
+    "(z_string_t*)malloc(sizeof(z_string_t));\n"
+    "        *dst = *src;\n"
+    "        free(src);\n"
+    "        out.tag = Z_OPTION_STRING_TAG_SOME;\n"
+    "        out.data = dst;\n"
+    "        return out;\n"
+    "    }\n"
+    "    /* err arm: run the ioerror's destructor + free the box so\n"
+    "       string payloads (invalidpath / other) don't leak. */\n"
+    "    if (rr.data) {\n"
+    "        z_ioerror_destroy((z_ioerror_t*)rr.data);\n"
+    "        free(rr.data);\n"
+    "    }\n"
+    "    out.tag = Z_OPTION_STRING_TAG_NONE;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
 _Z_FILE_SEEK = (
     "/* file.seek — reposition the fd head. Maps seekorigin to the\n"
     "   matching POSIX whence constant. Returns the new absolute\n"
@@ -1319,6 +1353,10 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_TEXTREADER_CREATE)
     if "textreader_read_line" in natives:
         parts.append(_Z_TEXTREADER_READ_LINE)
+    # textreader.call wraps read_line -- must land after the body it
+    # delegates to.
+    if "textreader_call" in natives:
+        parts.append(_Z_TEXTREADER_CALL)
     return "".join(parts)
 
 

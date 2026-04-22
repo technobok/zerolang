@@ -2532,6 +2532,19 @@ class TestIoWrappers:
             "}\n"
         )
 
+    def test_textreader_is_iterable(self):
+        """textreader exposes `call: function {:this} out (option t: string)`,
+        so it plugs into the for-loop iterator protocol directly:
+        `for line: tr loop { ... }` binds `line` to a string."""
+        check_ok(
+            "main: function is {\n"
+            "  r: io.stdin\n"
+            "  br: io.bufreader.create from: r.lock capacity: 64.u64\n"
+            "  tr: io.textreader.create from: br.lock\n"
+            "  for line: tr loop { print line }\n"
+            "}\n"
+        )
+
     def test_textreader_locks_bufreader_source(self):
         """While tr holds a borrow on br via bufreader.lock, calling
         br.read is rejected -- the source bufreader cannot be consumed
@@ -2593,12 +2606,7 @@ class TestOsUnit:
         """os.args is a zero-arg native whose return type coerces to
         `list of: string`, so `argv: os.args` binds argv to the list
         directly (not to a function pointer)."""
-        check_ok(
-            "main: function is {\n"
-            "  argv: os.args\n"
-            '  print "\\{argv.length}"\n'
-            "}\n"
-        )
+        check_ok('main: function is {\n  argv: os.args\n  print "\\{argv.length}"\n}\n')
 
     def test_get_env_returns_option_string(self):
         """os.get_env returns option(string); the typechecker accepts
@@ -2617,11 +2625,7 @@ class TestOsUnit:
     def test_exit_is_no_return(self):
         """os.exit has no return; calling it with a numeric i32 is
         legal and the scope does not need to dispatch a result."""
-        check_ok(
-            "main: function is {\n"
-            "  os.exit code: 0.i32\n"
-            "}\n"
-        )
+        check_ok("main: function is {\n  os.exit code: 0.i32\n}\n")
 
 
 class TestPureZerolangBufferedShapes:
