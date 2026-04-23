@@ -854,6 +854,68 @@ class TestUserMethodStringTake:
         assert result.stdout.strip() == "hello"
 
 
+class TestPrintStackClassDispatch:
+    """Regression test for the print-through-projection emission path:
+    when a stack-allocated class conforms to `text`, the `.stringview`
+    method takes `this` as a pointer, so the call site must pass
+    `&receiver`. Pre-fix emission generated `z_T_stringview(m)` against
+    a `z_T_stringview(z_T_t*)` signature, failing gcc at -Werror."""
+
+    def test_print_stack_class_passes_address(self):
+        src = (
+            "mylabel: class { s: string } as {\n"
+            "    :text\n"
+            "    stringview: function {m: this} out stringview is {\n"
+            "        return m.s.stringview\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            '    m: mylabel s: "hello".string\n'
+            "    print m\n"
+            "}\n"
+        )
+        csource = emit_source(src)
+        assert "z_mylabel_stringview(&m)" in csource
+        # end-to-end: compile + run
+        stdout = compile_and_run(csource)
+        assert stdout.strip() == "hello"
+
+    def test_print_record_receiver_stays_pass_by_value(self):
+        """Control: records (valtypes) continue to receive `this` by
+        value. The `&` prefix guard must only trigger for classes."""
+        src = (
+            "tag: class { val: string } as {}\n"
+            "mypair: record { name: tag } as {\n"
+            "    :text\n"
+            "    stringview: function {p: this} out stringview is {\n"
+            "        return p.name.val.stringview\n"
+            "    }\n"
+            "}\n"
+        )
+        # `mypair` holds a class field, which is a reftype in a record
+        # — intentionally rejected by R3, so this test only checks the
+        # emission convention of a legal record-with-text-protocol by
+        # using a record that conforms via a field-free path. Re-shape
+        # accordingly:
+        src = (
+            "mypair: record { n: i64 } as {\n"
+            "    :text\n"
+            "    stringview: function {p: this} out stringview is {\n"
+            '        s: "rec".string\n'
+            "        return s.stringview\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: mypair n: 1\n"
+            "    print p\n"
+            "}\n"
+        )
+        csource = emit_source(src)
+        # No `&p` because mypair is a record, not a class.
+        assert "z_mypair_stringview(p)" in csource
+        assert "z_mypair_stringview(&p)" not in csource
+
+
 class TestCliUnitEmission:
     """cli unit: compile cli_basic.z once, run with assorted argv."""
 

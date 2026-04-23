@@ -4905,10 +4905,21 @@ class CEmitter:
                 # User type conforming to `text`: call the type's
                 # declared `.stringview` method. The method's C name
                 # follows the `z_<typename>_stringview` convention the
-                # rest of the emitter uses.
+                # rest of the emitter uses. Stack-allocated classes
+                # pass this by pointer, so prefix `&` for the receiver;
+                # records / heap classes / valtypes pass by value.
                 if arg_type:
                     tname = arg_type.name.replace(".", "_")
-                    return f"{indent}z_stringview_print(z_{tname}_stringview({arg}));\n"
+                    recv = arg
+                    if (
+                        arg_type.typetype == ZTypeType.CLASS
+                        and not arg_type.is_heap_allocated
+                        and not recv.startswith("&")
+                    ):
+                        recv = f"&{arg}"
+                    return (
+                        f"{indent}z_stringview_print(z_{tname}_stringview({recv}));\n"
+                    )
                 # Unknown type — shouldn't happen post-typecheck, but keep
                 # a safe fallback.
                 return f"{indent}z_stringview_print({arg});\n"
