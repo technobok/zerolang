@@ -5383,6 +5383,44 @@ class TypeChecker:
         if target_path:
             self._check_not_locked(target_path, "Cannot reassign", reassign.start)
 
+        # G1 lock-escape: assigning to a field of an aggregate is a storage
+        # transfer. If the RHS is a path that currently carries a lock (or
+        # originates from a borrow), the lock would escape into the
+        # aggregate's slot — reject.
+        if target_path and len(target_path) >= 2 and reassign.value is not None:
+            rhs_path = self._get_dotted_path_tuple(reassign.value)
+            if rhs_path:
+                rhs_root_var = self.symtab.lookup_var(rhs_path[0])
+                if rhs_root_var is not None and rhs_root_var.borrow_origin is not None:
+                    self._error(
+                        f"cannot store lock-carrying value in field "
+                        f"'{'.'.join(target_path)}': '{rhs_path[0]}' borrows "
+                        f"from '{rhs_root_var.borrow_origin}'",
+                        loc=reassign.start,
+                        err=ERR.OWNERERROR,
+                        hint=(
+                            "copy the borrowed value (e.g. `.string` / "
+                            "`.list` / `.bytes`) before storing, or release "
+                            "the lock first"
+                        ),
+                    )
+                else:
+                    rhs_lock = self.symtab.is_path_locked(rhs_path)
+                    if rhs_lock is not None:
+                        self._error(
+                            f"cannot store lock-carrying value in field "
+                            f"'{'.'.join(target_path)}': '{rhs_path[0]}' holds "
+                            f"a lock on '{'.'.join(rhs_lock.path)}' (held by "
+                            f"'{rhs_lock.holder}')",
+                            loc=reassign.start,
+                            err=ERR.OWNERERROR,
+                            hint=(
+                                "copy the borrowed value (e.g. `.string` / "
+                                "`.list` / `.bytes`) before storing, or "
+                                "release the lock first"
+                            ),
+                        )
+
         # reassignment narrowing: reset and optionally re-narrow
         if reassign.topath.nodetype == NodeType.ATOMID:
             var_name = cast(zast.AtomId, reassign.topath).name
@@ -6310,6 +6348,7 @@ class TypeChecker:
                     ) or any(not arg.name for arg in call.arguments)
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
+                    self._check_aggregate_lock_escape(call, mono_type)
                     return mono_type
                 return None
             for arg in call.arguments:
@@ -6317,6 +6356,7 @@ class TypeChecker:
             call.type = callee_type
             call.call_kind = zast.CallKind.CLASS_CREATE
             self._check_missing_create_args(callee_type, call)
+            self._check_aggregate_lock_escape(call, callee_type)
             return callee_type
 
         # handle union construction: union.subtype expr
@@ -6963,6 +7003,60 @@ class TypeChecker:
                     loc=arg.start,
                     err=ERR.OWNERERROR,
                 )
+
+    def _check_aggregate_lock_escape(self, call: zast.Call, callee_type: ZType) -> None:
+        """Reject arguments carrying outstanding locks from escaping into an
+        aggregate constructor call. Generalises the V2 view-field rule:
+        any value whose path is currently lock-held (or which originated
+        from a borrow that still binds to a live source) cannot be stored
+        into a field unless the matching parameter is `.lock`-annotated
+        (in which case the lock transfers with the value).
+
+        Static check — queries `SymbolTable.is_path_locked` on each arg's
+        source path AND checks `ZVariable.borrow_origin` for borrow-holder
+        vars whose lock lives on the source (e.g. `b: i.borrow` installs
+        the EXCLUSIVE lock on `(i,)`, not on `(b,)`, so a path lookup on
+        `b` alone would miss it).
+        """
+        lock_param_names = {
+            k
+            for k, v in callee_type.param_ownership.items()
+            if v == ZParamOwnership.LOCK
+        }
+        for arg in call.arguments:
+            if arg.name and arg.name in lock_param_names:
+                continue
+            arg_path = self._get_dotted_path_tuple(arg.valtype)
+            if not arg_path:
+                continue
+            arg_root_var = self.symtab.lookup_var(arg_path[0])
+            if arg_root_var is not None and arg_root_var.borrow_origin is not None:
+                self._error(
+                    f"cannot store lock-carrying value in aggregate field: "
+                    f"'{arg_path[0]}' borrows from "
+                    f"'{arg_root_var.borrow_origin}'",
+                    loc=arg.start,
+                    err=ERR.OWNERERROR,
+                    hint=(
+                        "copy the borrowed value (e.g. `.string` / `.list` "
+                        "/ `.bytes`) before storing, or release the lock first"
+                    ),
+                )
+                continue
+            info = self.symtab.is_path_locked(arg_path)
+            if info is None:
+                continue
+            self._error(
+                f"cannot store lock-carrying value in aggregate field: "
+                f"'{arg_path[0]}' holds a lock on "
+                f"'{'.'.join(info.path)}' (held by '{info.holder}')",
+                loc=arg.start,
+                err=ERR.OWNERERROR,
+                hint=(
+                    "copy the borrowed value (e.g. `.string` / `.list` / "
+                    "`.bytes`) before storing, or release the lock first"
+                ),
+            )
 
     def _apply_take_to_arg(self, arg: zast.NamedOperation, pname: str) -> None:
         """Apply TAKE semantics to a call argument: reject a borrowed source,

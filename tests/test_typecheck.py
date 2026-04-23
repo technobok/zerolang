@@ -2299,6 +2299,71 @@ class TestLockEnforcement:
             "}"
         )
 
+    # --- G1: value-level lock-escape at aggregate storage sites ---
+
+    def test_store_borrowed_class_in_class_field_rejected(self):
+        """A borrowed reftype cannot be passed to a class constructor field:
+        the borrow carries an EXCLUSIVE lock on its source, and the
+        constructed aggregate may outlive the lock's source."""
+        errors = check_errors(
+            "inner: class { value: 0 }\n"
+            "outer: class { a: inner }\n"
+            "main: function is {\n"
+            "  i: inner\n"
+            "  b: i.borrow\n"
+            "  o: outer a: b\n"
+            "}"
+        )
+        assert any(
+            "lock-carrying" in e.msg.lower() and "aggregate" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_store_unlocked_value_in_class_field_allowed(self):
+        """Positive control: an unlocked owned value flows into a class
+        field without error."""
+        check_ok(
+            "inner: class { value: 0 }\n"
+            "outer: class { a: inner }\n"
+            "main: function is {\n"
+            "  i: inner\n"
+            "  o: outer a: i\n"
+            "}"
+        )
+
+    def test_field_reassign_with_locked_rhs_rejected(self):
+        """Reassigning an aggregate field with a locked RHS path is a storage
+        transfer and must reject: the lock would escape into the field slot."""
+        errors = check_errors(
+            "inner: class { value: 0 }\n"
+            "outer: class { a: inner }\n"
+            "main: function is {\n"
+            "  i1: inner\n"
+            "  i2: inner\n"
+            "  o: outer a: i1\n"
+            "  b: i2.borrow\n"
+            "  o.a = b\n"
+            "}"
+        )
+        assert any(
+            "lock-carrying" in e.msg.lower() and "field" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_field_reassign_with_unlocked_rhs_allowed(self):
+        """Positive control: field reassignment with an unlocked owned RHS
+        is permitted."""
+        check_ok(
+            "inner: class { value: 0 }\n"
+            "outer: class { a: inner }\n"
+            "main: function is {\n"
+            "  i1: inner\n"
+            "  i2: inner\n"
+            "  o: outer a: i1\n"
+            "  o.a = i2\n"
+            "}"
+        )
+
 
 class TestWithOwnership:
     """`with name: expr do body` ownership.

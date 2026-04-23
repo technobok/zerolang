@@ -426,6 +426,35 @@ class SymbolTable:
             i -= 1
         return None
 
+    def is_path_locked(self, path: Tuple[str, ...]) -> Optional[LockInfo]:
+        """Read-only query: return the innermost LockInfo whose path
+        prefix-overlaps `path`, regardless of lock type (SHARED or
+        EXCLUSIVE). Returns None if no lock is held.
+
+        Used by lock-escape checks at storage and return sites — a value
+        backed by any outstanding lock cannot be transferred into an
+        aggregate field or returned to a caller unless the lock source
+        transfers with it (e.g. via a `.lock`-annotated parameter).
+        """
+        if not path:
+            return None
+        target_name = path[0]
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if (
+                    entry.name == target_name
+                    and entry.lock is not None
+                    and _paths_overlap(entry.lock.path, path)
+                ):
+                    return entry.lock
+                j -= 1
+            i -= 1
+        return None
+
     def release_held_locks(self, holder_name: str) -> None:
         """Release all locks whose holder matches holder_name.
 
