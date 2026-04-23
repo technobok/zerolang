@@ -68,7 +68,7 @@ operation can fail for reasons the caller needs to handle
 #p: #b:"Primitive types"
 
 #ul:
-  [#*: #> to=bool: #b:"bool" -- #~"bool: record is native"]
+  [#*: #> to=bool: #b:"bool" -- #~"variant { false: null  true: null }"]
   [#*: #> to=null: #b:"null" -- #~"null: record is native"]
   [#*: #> to=never: #b:"never" -- #~"never: record is native"]
   [#*: #> to=any: #b:"any" -- #~"any: union is native"]
@@ -189,17 +189,43 @@ native 128-bit support is determined at C compile time.
 #--: bool
 
 #code language=zerolang: """
-  bool: record is native
+  bool: variant { false: null  true: null } as { tag: u8.tag }
+  false: bool.false
+  true:  bool.true
 """
 
-Boolean valtype. Two values: #~"true" and #~"false" (keywords, not
-names in scope). Comparison operators that return #~"bool" are the
-canonical producers. #~"if" / #~"while" / #~"match" arm guards
-expect a #~"bool".
+Two-state valtype declared as a variant with null-payload arms
+and a u8 tag. #~"false" and #~"true" are unit-level names
+(re-exported by #~"core") resolving to #~"bool.false" /
+#~"bool.true" respectively -- the same pattern numeric
+"literals" follow.
 
-No bitwise #~"and" / #~"or" / #~"not" on #~"bool" yet -- short
-circuit #~"&&" / #~"||" lives at the expression level; see
-#> to=./grammar.html: grammar.
+#b:"Values." Produced by comparison operators (#~"==", #~"<",
+etc.), by the literals #~"true" / #~"false", or by any
+expression whose type is #~"bool". Consumed by #~"if" /
+#~"while" / #~"match" arm guards.
+
+#b:"Match." Because #~"bool" is a variant with arm names
+#~"false" and #~"true", pattern-matching works directly:
+
+#code language=zerolang: """
+  match (cond)
+  case true  then print "yes".stringview
+  case false then print "no".stringview
+"""
+
+#b:"C emission." Despite the variant declaration, #~"bool" is
+emitted as C99 #~"_Bool" (from #~"<stdbool.h>") -- TYPEMAP
+maps it to the primitive short-circuit. Struct-wrapped variant
+storage is never materialised for bool. Comparisons emit as
+raw C boolean expressions (#~"(a < b)"), #~"if" conditionals
+work with the primitive directly (no #~".tag" access), and
+#~"match" on a bool subject lowers to an #~"if" / #~"else if"
+on the primitive.
+
+No bitwise #~"and" / #~"or" / #~"not" methods on #~"bool" yet
+-- short-circuit #~"&&" / #~"||" lives at the expression
+level; see #> to=./grammar.html: grammar.
 
 
 #--: null

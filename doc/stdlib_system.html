@@ -164,7 +164,7 @@ operation can fail for reasons the caller needs to handle
 </ul>
 <p><strong>Primitive types</strong></p>
 <ul>
-<li><a href="#bool"><strong>bool</strong> -- <code>bool: record is native</code></a></li>
+<li><a href="#bool"><strong>bool</strong> -- <code>variant { false: null  true: null }</code></a></li>
 <li><a href="#null"><strong>null</strong> -- <code>null: record is native</code></a></li>
 <li><a href="#never"><strong>never</strong> -- <code>never: record is native</code></a></li>
 <li><a href="#any"><strong>any</strong> -- <code>any: union is native</code></a></li>
@@ -261,14 +261,34 @@ modulo 2^N. No trapping or saturating variants yet.</p>
 support for <code>__int128</code> (gcc / clang). Width on platforms without
 native 128-bit support is determined at C compile time.</p>
 <h2 id="bool"><a href="#bool">4. bool</a></h2>
-<pre><code class="language-zerolang">  bool: record is native</code></pre>
-<p>Boolean valtype. Two values: <code>true</code> and <code>false</code> (keywords, not
-names in scope). Comparison operators that return <code>bool</code> are the
-canonical producers. <code>if</code> / <code>while</code> / <code>match</code> arm guards
-expect a <code>bool</code>.</p>
-<p>No bitwise <code>and</code> / <code>or</code> / <code>not</code> on <code>bool</code> yet -- short
-circuit <code>&amp;&amp;</code> / <code>||</code> lives at the expression level; see
-<a href="./grammar.html">grammar.</a></p>
+<pre><code class="language-zerolang">  bool: variant { false: null  true: null } as { tag: u8.tag }
+  false: bool.false
+  true:  bool.true</code></pre>
+<p>Two-state valtype declared as a variant with null-payload arms
+and a u8 tag. <code>false</code> and <code>true</code> are unit-level names
+(re-exported by <code>core</code>) resolving to <code>bool.false</code> /
+<code>bool.true</code> respectively -- the same pattern numeric
+"literals" follow.</p>
+<p><strong>Values.</strong> Produced by comparison operators (<code>==</code>, <code>&lt;</code>,
+etc.), by the literals <code>true</code> / <code>false</code>, or by any
+expression whose type is <code>bool</code>. Consumed by <code>if</code> /
+<code>while</code> / <code>match</code> arm guards.</p>
+<p><strong>Match.</strong> Because <code>bool</code> is a variant with arm names
+<code>false</code> and <code>true</code>, pattern-matching works directly:</p>
+<pre><code class="language-zerolang">  match (cond)
+  case true  then print "yes".stringview
+  case false then print "no".stringview</code></pre>
+<p><strong>C emission.</strong> Despite the variant declaration, <code>bool</code> is
+emitted as C99 <code>_Bool</code> (from <code>&lt;stdbool.h&gt;</code>) -- TYPEMAP
+maps it to the primitive short-circuit. Struct-wrapped variant
+storage is never materialised for bool. Comparisons emit as
+raw C boolean expressions (<code>(a &lt; b)</code>), <code>if</code> conditionals
+work with the primitive directly (no <code>.tag</code> access), and
+<code>match</code> on a bool subject lowers to an <code>if</code> / <code>else if</code>
+on the primitive.</p>
+<p>No bitwise <code>and</code> / <code>or</code> / <code>not</code> methods on <code>bool</code> yet
+-- short-circuit <code>&amp;&amp;</code> / <code>||</code> lives at the expression
+level; see <a href="./grammar.html">grammar.</a></p>
 <h2 id="null"><a href="#null">5. null</a></h2>
 <pre><code class="language-zerolang">  null: record is native</code></pre>
 <p>The unit type. Exactly one value, also spelled <code>null</code>. Used as
