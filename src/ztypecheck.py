@@ -1364,7 +1364,6 @@ class TypeChecker:
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
         _set_field_cleanup_metadata(ctype)
-        self._reject_view_fields_in_class(name, ctype, set(cls.items.keys()), cls.start)
         self._resolving.pop()
         return ctype
 
@@ -2233,42 +2232,6 @@ class TypeChecker:
                         "'(array of: T to: N)' for a bounded-length valtype buffer"
                     ),
                 )
-
-    def _reject_view_fields_in_class(
-        self,
-        name: str,
-        ztype: ZType,
-        is_field_names: "set[str]",
-        start: Token,
-    ) -> None:
-        """Reject view fields (stringview / byteview / listview) in
-        class aggregates. Classes are reftypes and may hold other
-        reftypes (string / list / map / ...), but views lock their
-        source and v2 does not propagate lock state through aggregate
-        storage (doc/strings.pdoc).
-        """
-        for fname in is_field_names:
-            ftype = ztype.children.get(fname)
-            if ftype is None or ftype.typetype == ZTypeType.FUNCTION:
-                continue
-            is_view = ftype.subtype == ZSubType.STRINGVIEW or (
-                ftype.typetype == ZTypeType.CLASS
-                and (ftype.name in ("byteview", "listview") or _is_listview_type(ftype))
-            )
-            if not is_view:
-                continue
-            view_name = ftype.name
-            self._error(
-                f"class '{name}' cannot hold view field '{fname}': "
-                f"'{view_name}' locks its source and cannot escape to "
-                "aggregate storage",
-                loc=start,
-                err=ERR.TYPEERROR,
-                hint=(
-                    "copy to an owned `string` / `bytes` / `list` before "
-                    "storing, and expose a view via an accessor method"
-                ),
-            )
 
     _FLOAT_TYPES = frozenset({"f32", "f64", "f128"})
 
@@ -7004,20 +6967,35 @@ class TypeChecker:
                     err=ERR.OWNERERROR,
                 )
 
+    _INLINE_LOCK_PROJECTIONS = frozenset(
+        {"stringview", "listview", "byteview", "borrow", "lock"}
+    )
+
     def _check_aggregate_lock_escape(self, call: zast.Call, callee_type: ZType) -> None:
         """Reject arguments carrying outstanding locks from escaping into an
         aggregate constructor call. Generalises the V2 view-field rule:
-        any value whose path is currently lock-held (or which originated
-        from a borrow that still binds to a live source) cannot be stored
-        into a field unless the matching parameter is `.lock`-annotated
-        (in which case the lock transfers with the value).
+        any value that carries (or would install) a lock cannot be stored
+        into a class field unless the matching parameter is
+        `.lock`-annotated (in which case the lock transfers with the value).
 
-        Static check — queries `SymbolTable.is_path_locked` on each arg's
-        source path AND checks `ZVariable.borrow_origin` for borrow-holder
-        vars whose lock lives on the source (e.g. `b: i.borrow` installs
-        the EXCLUSIVE lock on `(i,)`, not on `(b,)`, so a path lookup on
-        `b` alone would miss it).
+        Scoped to bare-name class construction. Invocations of the form
+        `Class.borrow from: ...` / `Class.take from: ...` / `Class.lock
+        from: ...` share the CLASS_CREATE callkind but are ownership-
+        transfer operations, not storage into a fresh aggregate; skip them.
+
+        Three cases caught:
+          1. Inline projection in arg position (`b.byteview`, `s.stringview`,
+             `x.borrow`, `x.lock`): syntactically detected via the child name.
+          2. Borrow-holder arg — `var.borrow_origin` is set, meaning `var`
+             binds a borrow whose EXCLUSIVE lock lives on the source path
+             (not on the holder's name).
+          3. Pre-locked source path — `is_path_locked` finds a prefix-
+             overlapping lock held under some prior holder.
         """
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_call = cast(zast.DottedPath, call.callable)
+            if dp_call.child.name in ("borrow", "take", "lock"):
+                return
         lock_param_names = {
             k
             for k, v in callee_type.param_ownership.items()
@@ -7026,9 +7004,29 @@ class TypeChecker:
         for arg in call.arguments:
             if arg.name and arg.name in lock_param_names:
                 continue
+            # Case 1: syntactic inline projection
+            if arg.valtype.nodetype == NodeType.DOTTEDPATH:
+                dp = cast(zast.DottedPath, arg.valtype)
+                if dp.child.name in self._INLINE_LOCK_PROJECTIONS:
+                    src_path = self._get_dotted_path_tuple(dp.parent)
+                    src_name = ".".join(src_path) if src_path else "<expr>"
+                    self._error(
+                        f"cannot store lock-carrying value in aggregate "
+                        f"field: '.{dp.child.name}' on '{src_name}' "
+                        f"produces a value locked to its source",
+                        loc=arg.start,
+                        err=ERR.OWNERERROR,
+                        hint=(
+                            "copy the borrowed value (e.g. `.string` / "
+                            "`.list` / `.bytes`) before storing, or release "
+                            "the lock first"
+                        ),
+                    )
+                    continue
             arg_path = self._get_dotted_path_tuple(arg.valtype)
             if not arg_path:
                 continue
+            # Case 2: borrow-holder variable (lock lives on source path)
             arg_root_var = self.symtab.lookup_var(arg_path[0])
             if arg_root_var is not None and arg_root_var.borrow_origin is not None:
                 self._error(
@@ -7043,6 +7041,7 @@ class TypeChecker:
                     ),
                 )
                 continue
+            # Case 3: pre-locked source path
             info = self.symtab.is_path_locked(arg_path)
             if info is None:
                 continue

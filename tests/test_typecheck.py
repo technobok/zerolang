@@ -3355,6 +3355,8 @@ class TestValtypeReftypeEnforcement:
         assert any("stringview" in e.msg and "view" in e.msg for e in errors)
 
     def test_class_cannot_hold_stringview(self):
+        """After G3 the class declaration itself is permitted; construction
+        with a locked RHS is rejected by the value-level G1 check."""
         errors = check_errors(
             "c: class { sv: stringview }\n"
             "main: function is {\n"
@@ -3363,10 +3365,7 @@ class TestValtypeReftypeEnforcement:
             "  p: c sv: v\n"
             "}"
         )
-        assert any(
-            "class 'c'" in e.msg and "stringview" in e.msg and "view" in e.msg
-            for e in errors
-        )
+        assert any("lock-carrying" in e.msg.lower() for e in errors)
 
     def test_class_cannot_hold_byteview(self):
         errors = check_errors(
