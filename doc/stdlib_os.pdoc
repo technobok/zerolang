@@ -33,24 +33,311 @@
 
 #--: Overview
 
-The #~"os" unit exposes process-level primitives: argv, environment
-variables, working directory, process identity, and platform /
-architecture descriptors. Paired with #~"io": where #~"io"
-surfaces failures as #~"result t: T e: ioerror", #~"os"
-primitives are either infallible or use #~"option" when absence is
-expected.
+The #~"os" unit exposes process-level primitives: argv,
+environment variables, working directory, process identity, and
+platform / architecture descriptors. Paired with #~"io" -- where
+#~"io" surfaces failures as #~"result t: T e: ioerror", #~"os"
+primitives are either infallible or use #~"option" when absence
+is expected.
 
 Accessed via qualified names only -- #~"os.args", #~"os.get_env
 ...", #~"os.exit ..."; there is no unqualified re-export.
 
-TODO: fill in.
+#b:"Design principles."
+
+#ul:
+  [#*: #b:"option vs. result by semantic." If absence is normal,
+    return #~"option(T)" (#~"get_env"). If a syscall can fail,
+    return #~"result t: T e: ioerror" (#~"set_env", #~"cwd"). No
+    separate #~"os.error" -- errno domain is shared with #~"io",
+    and callers often interleave env mutation with file I/O]
+  [#*: #b:"Ambient process state is implicit." #~"os.args",
+    #~"os.cwd", #~"os.pid" take no handle. Mirrors #~"io.stdin"
+    / #~"io.stdout" / #~"io.stderr"]
+  [#*: #b:"Caller owns returned heap." Every function returning
+    a #~"string" or #~"list" yields freshly-allocated storage.
+    Scope-exit runs the destructor]
+  [#*: #b:"POSIX first." Natives use libc: #~"setenv",
+    #~"unsetenv", #~"environ", #~"getcwd", #~"chdir",
+    #~"getpid", #~"getppid", #~"getpwuid_r", #~"gethostname".
+    Windows stubs are a v2 concern]
 
 
 #--: Index
 
-TODO: one-line signature per symbol.
+#p: #b:"Argv"
+
+#ul:
+  [#*: #> to=args: #b:"os.args" -- #~"function out (list of: string)"]
+
+#p: #b:"Environment"
+
+#ul:
+  [#*: #> to=get-env: #b:"os.get_env" -- #~"function {key: string} out (option t: string)"]
+  [#*: #> to=set-env: #b:"os.set_env" -- #~"function {key: string value: string} out (result t: null e: ioerror)"]
+  [#*: #> to=unset-env: #b:"os.unset_env" -- #~"function {key: string} out (result t: null e: ioerror)"]
+  [#*: #> to=env-names: #b:"os.env_names" -- #~"function out (list of: string)"]
+
+#p: #b:"Working directory"
+
+#ul:
+  [#*: #> to=cwd: #b:"os.cwd" -- #~"function out (result t: string e: ioerror)"]
+  [#*: #> to=set-cwd: #b:"os.set_cwd" -- #~"function {path: string} out (result t: null e: ioerror)"]
+
+#p: #b:"Process identity"
+
+#ul:
+  [#*: #> to=pid: #b:"os.pid" -- #~"function out i32"]
+  [#*: #> to=ppid: #b:"os.ppid" -- #~"function out i32"]
+  [#*: #> to=user-name: #b:"os.user_name" -- #~"function out (result t: string e: ioerror)"]
+  [#*: #> to=home-dir: #b:"os.home_dir" -- #~"function out (result t: string e: ioerror)"]
+  [#*: #> to=hostname: #b:"os.hostname" -- #~"function out (result t: string e: ioerror)"]
+
+#p: #b:"Platform descriptors"
+
+#ul:
+  [#*: #> to=platformkind: #b:"platformkind" -- #~"variant { linux: null  darwin: null  windows: null  other: null }"]
+  [#*: #> to=archkind: #b:"archkind" -- #~"variant { x86_64: null  aarch64: null  other: null }"]
+  [#*: #> to=platform: #b:"os.platform" -- #~"function out platformkind"]
+  [#*: #> to=arch: #b:"os.arch" -- #~"function out archkind"]
+
+#p: #b:"Process control"
+
+#ul:
+  [#*: #> to=exit: #b:"os.exit" -- #~"function {code: i32}"]
 
 
-#--: Detail
+#--: args
 
-TODO: per-symbol detail sections.
+#code language=zerolang: """
+  args: function out (list of: string) is native
+"""
+
+Program argument vector as passed to #~"main". Position 0 is the
+program name (as the kernel / shell provided it); subsequent
+elements are the explicit arguments.
+
+The returned list and every string inside are freshly-allocated
+and owned by the caller; scope exit frees both. Repeated calls
+each re-allocate -- cache the result if you iterate multiple
+times.
+
+#code language=zerolang: """
+  a: os.args
+  for arg: a.listview loop { print arg }
+"""
+
+
+#--: get_env
+
+#code language=zerolang: """
+  get_env: function {key: string} out (option t: string) is native
+"""
+
+Look up environment variable #~"key". Returns #~"option.some
+value" when the variable is set (even to the empty string);
+#~"option.none" when the variable is not present.
+
+Missing-env is #~"option" (not #~"ioerror") because it is an
+expected everyday condition.
+
+#code language=zerolang: """
+  match (os.get_env key: "HOME".string)
+  case some then use some
+  case none then use "/tmp".string
+"""
+
+
+#--: set_env
+
+#code language=zerolang: """
+  set_env: function {key: string value: string} out (result t: null e: ioerror) is native
+"""
+
+Insert or overwrite an environment variable in the current
+process. #~"setenv(key, value, 1)" under the hood -- always
+overwrites.
+
+Errors surface as #~"ioerror"; the most common is #~"other"
+(EINVAL on a malformed key). The errno domain is shared with
+#~"io" since env mutation often interleaves with file I/O.
+
+
+#--: unset_env
+
+#code language=zerolang: """
+  unset_env: function {key: string} out (result t: null e: ioerror) is native
+"""
+
+Remove #~"key" from the environment. Succeeds whether or not
+#~"key" was previously set; errors only on an invalid key name
+(EINVAL surfaces as #~"ioerror.other").
+
+
+#--: env_names
+
+#code language=zerolang: """
+  env_names: function out (list of: string) is native
+"""
+
+Snapshot of every environment variable name in the current
+process, in #~"environ" order. The returned list and each of
+its entries are freshly-allocated; scope exit frees both.
+
+Values are omitted from the snapshot to avoid an O(n) string
+copy for callers that filter first; use #~"os.get_env" to fetch
+each value.
+
+#code language=zerolang: """
+  names: os.env_names
+  for n: names.listview loop {
+      match (os.get_env key: n)
+      case some then { print n; print some }
+      case none then {}    # raced; skip
+  }
+"""
+
+
+#--: cwd
+
+#code language=zerolang: """
+  cwd: function out (result t: string e: ioerror) is native
+"""
+
+Current working directory as an absolute path. Typically
+succeeds; errors only when the cwd inode has been unlinked or
+permission to resolve it has been revoked.
+
+
+#--: set_cwd
+
+#code language=zerolang: """
+  set_cwd: function {path: string} out (result t: null e: ioerror) is native
+"""
+
+#~"chdir" to #~"path". Affects subsequent relative-path I/O
+calls. Fails with the usual #~"ioerror" variants (#~"notfound",
+#~"notdir", #~"permissiondenied").
+
+
+#--: pid
+
+#code language=zerolang: """
+  pid: function out i32 is native
+"""
+
+Current process id. POSIX #~"pid_t" is #~"int" on Linux;
+narrowed to #~"i32". Infallible.
+
+
+#--: ppid
+
+#code language=zerolang: """
+  ppid: function out i32 is native
+"""
+
+Parent process id. Infallible.
+
+
+#--: user_name
+
+#code language=zerolang: """
+  user_name: function out (result t: string e: ioerror) is native
+"""
+
+Login name of the effective user, resolved via the passwd
+database (#~"getpwuid_r(geteuid())"). Errors when the uid has
+no passwd entry or the database is unreadable.
+
+
+#--: home_dir
+
+#code language=zerolang: """
+  home_dir: function out (result t: string e: ioerror) is native
+"""
+
+The effective user's home directory. Reads #~"$HOME" from the
+environment; errors with #~"ioerror.other" when unset. Does not
+fall back to the passwd database -- set #~"$HOME" explicitly
+for portable behaviour across stripped environments.
+
+
+#--: hostname
+
+#code language=zerolang: """
+  hostname: function out (result t: string e: ioerror) is native
+"""
+
+Result of #~"gethostname(2)", truncated at #~"HOST_NAME_MAX".
+Result-wrapped because the syscall can fail in rare cases.
+
+
+#--: platformkind
+
+#code language=zerolang: """
+  platformkind: variant {
+      linux:   null
+      darwin:  null
+      windows: null
+      other:   null
+  }
+"""
+
+Host OS family. Exposed as a runtime variant for forward-compat
+with cross-compilation; the initial backend resolves it at
+compile time via the C preprocessor.
+
+
+#--: archkind
+
+#code language=zerolang: """
+  archkind: variant {
+      x86_64:  null
+      aarch64: null
+      other:   null
+  }
+"""
+
+Host CPU architecture family.
+
+
+#--: platform
+
+#code language=zerolang: """
+  platform: function out platformkind is native
+"""
+
+Value of the current host's #~"platformkind".
+
+#code language=zerolang: """
+  match (os.platform)
+  case linux   then ...
+  case darwin  then ...
+  case windows then ...
+  case other   then ...
+"""
+
+
+#--: arch
+
+#code language=zerolang: """
+  arch: function out archkind is native
+"""
+
+Value of the current host's #~"archkind".
+
+
+#--: exit
+
+#code language=zerolang: """
+  exit: function {code: i32} is native
+"""
+
+Terminate the process immediately with #~"code" as the status.
+Does not return; all open file descriptors are flushed by libc's
+#~"atexit" chain, but zerolang-level destructors for in-scope
+values #b:"do not" run.
+
+Reserve for fatal-error exits and CLI tools that want an
+explicit status. Prefer a normal return path for everyday
+success / failure so RAII cleanup fires.
