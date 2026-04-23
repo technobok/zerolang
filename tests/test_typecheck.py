@@ -3224,10 +3224,9 @@ class TestCliUnit:
         check_ok(
             "main: function is {\n"
             '  sp: cli.spec.create program_name: "p".string summary: "s".string\n'
-            "  yes: 0 < 1\n"
             '  cli.add_flag spec: sp name: "--v".string short_name: "-v".string help: "".string\n'
-            '  cli.add_option spec: sp name: "--o".string short_name: "-o".string help: "".string required: yes\n'
-            '  cli.add_positional spec: sp name: "x".string help: "".string required: yes\n'
+            '  cli.add_option spec: sp name: "--o".string short_name: "-o".string help: "".string required: true\n'
+            '  cli.add_positional spec: sp name: "x".string help: "".string required: true\n'
             "}\n"
         )
 
