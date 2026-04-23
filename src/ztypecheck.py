@@ -7395,8 +7395,14 @@ class TypeChecker:
 
         # type-check the return expression (first argument)
         ret_type = None
+        inline_borrow_src: Optional[Tuple[str, ...]] = None
         if call.arguments:
             ret_type = self._check_operation(call.arguments[0].valtype)
+            # G2: capture any lock source installed by an inline projection
+            # (.stringview / .listview / .borrow) in the return expression,
+            # then clear the flag so it does not leak past this statement.
+            inline_borrow_src = self._pending_borrow_lock
+            self._pending_borrow_lock = None
 
         if self._current_return_type and ret_type:
             if not self._types_compatible(ret_type, self._current_return_type):
@@ -7405,6 +7411,34 @@ class TypeChecker:
                     f"{self._current_return_type.name}, got {ret_type.name}",
                     loc=call.start,
                     err=ERR.TYPEERROR,
+                )
+
+        # G2 lock-escape: returning a value backed by an outstanding lock is
+        # only legal when the lock source is supplied by the caller (a
+        # `.lock` / `.borrow`-annotated parameter, or a default-borrowed
+        # reftype parameter such as a method `this`). A view over a
+        # function-local source would outlive its source at function exit.
+        # Catches `return local.stringview` and similar inline projections.
+        if inline_borrow_src:
+            src_root = inline_borrow_src[0]
+            src_var = self.symtab.lookup_var(src_root)
+            src_is_owned_local = (
+                src_var is not None and src_var.ownership == ZOwnership.OWNED
+            )
+            if src_is_owned_local:
+                self._error(
+                    f"cannot return lock-carrying value: source '{src_root}' "
+                    f"is a function-local, not a parameter supplied by the "
+                    f"caller. The borrow would outlive its source at function "
+                    f"exit.",
+                    loc=call.start,
+                    err=ERR.OWNERERROR,
+                    hint=(
+                        "copy to an owned value (e.g. `.string` / `.list` / "
+                        "`.bytes`) before returning, or accept the source as "
+                        "a `.lock` / `.borrow` parameter so the lock "
+                        "transfers to the caller"
+                    ),
                 )
 
         # ownership check: cannot return a local variable as borrowed

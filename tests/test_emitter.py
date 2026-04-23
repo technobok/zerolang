@@ -895,18 +895,18 @@ class TestPrintStackClassDispatch:
         # `mypair` holds a class field, which is a reftype in a record
         # — intentionally rejected by R3, so this test only checks the
         # emission convention of a legal record-with-text-protocol by
-        # using a record that conforms via a field-free path. Re-shape
-        # accordingly:
+        # using a record with a `(str to: N)` valtype field: views over
+        # the receiver's own field outlive the method call (p is borrowed
+        # from the caller), so returning the view is legal.
         src = (
-            "mypair: record { n: i64 } as {\n"
+            "mypair: record { s: (str to: 16) } as {\n"
             "    :text\n"
             "    stringview: function {p: this} out stringview is {\n"
-            '        s: "rec".string\n'
-            "        return s.stringview\n"
+            "        return p.s.stringview\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    p: mypair n: 1\n"
+            "    p: mypair s: (str to: 16)\n"
             "    print p\n"
             "}\n"
         )

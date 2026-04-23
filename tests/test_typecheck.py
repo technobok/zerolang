@@ -2364,6 +2364,61 @@ class TestLockEnforcement:
             "}"
         )
 
+    # --- G2: value-level lock-escape at return sites ---
+
+    def test_return_view_of_local_rejected(self):
+        """Returning a stringview over a function-local source is rejected:
+        the local dies at function exit, leaving the view dangling."""
+        errors = check_errors(
+            "g: function out stringview is {\n"
+            '  local: "hi".string\n'
+            "  return local.stringview\n"
+            "}\n"
+            "main: function is { v: g }"
+        )
+        assert any(
+            "lock-carrying" in e.msg.lower() and "local" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_return_view_of_borrow_param_allowed(self):
+        """Returning a view over a borrow-typed parameter is legal: the
+        caller owns the source, so the view outlives the method call."""
+        check_ok(
+            "f: function {s: string} out stringview is {\n"
+            "  return s.stringview\n"
+            "}\n"
+            "main: function is {\n"
+            '  x: "hi".string\n'
+            "  v: f s: x\n"
+            "}"
+        )
+
+    def test_return_view_of_this_receiver_allowed(self):
+        """A method returning a view of its receiver's field is legal —
+        `this` is borrowed from the caller and outlives the call."""
+        check_ok(
+            "mylabel: class { s: string } as {\n"
+            "    :text\n"
+            "    stringview: function {m: this} out stringview is {\n"
+            "        return m.s.stringview\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            '    m: mylabel s: "hi".string\n'
+            "    print m\n"
+            "}"
+        )
+
+    def test_return_unlocked_value_allowed(self):
+        """Positive control: returning an owned unlocked value is fine."""
+        check_ok(
+            "f: function out string is {\n"
+            '  return "hi".string\n'
+            "}\n"
+            "main: function is { v: f }"
+        )
+
 
 class TestWithOwnership:
     """`with name: expr do body` ownership.
