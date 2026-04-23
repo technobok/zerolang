@@ -308,8 +308,6 @@ class CEmitter:
         self.needs_stdio = False
         self.needs_stdint = False
         self.needs_stdlib = False
-        # stdbool.h is always needed now that TYPEMAP["bool"] maps to C99 bool.
-        self.needs_stdbool = True
         self.needs_string = False
         self.needs_stringview = False
         self.needs_io = False
@@ -1238,7 +1236,6 @@ class CEmitter:
         explicitly before scope exit).
         """
         self.needs_stdint = True
-        self.needs_stdbool = True
         self.needs_io = True
         self.needs_stdio = True
         lines = [
@@ -1790,7 +1787,6 @@ class CEmitter:
                 needs_stdio=self.needs_stdio,
                 needs_stdint=self.needs_stdint,
                 needs_stdlib=self.needs_stdlib,
-                needs_stdbool=self.needs_stdbool,
                 needs_string=self.needs_string,
                 needs_stringview=self.needs_stringview,
                 needs_io=self.needs_io,
@@ -2368,7 +2364,6 @@ class CEmitter:
         if not eq_method or not eq_method.is_autogen_eq:
             return
 
-        self.needs_stdbool = True
         ctype = f"z_{name}_t"
         lines: List[str] = []
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
@@ -2524,7 +2519,6 @@ class CEmitter:
         if not eq_method or not eq_method.is_autogen_eq:
             return
 
-        self.needs_stdbool = True
         ctype = f"z_{name}_t"
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
@@ -3098,7 +3092,6 @@ class CEmitter:
     ) -> None:
         """Emit a monomorphized variant type."""
         self.needs_stdint = True
-        self.needs_stdbool = True
         name = mono_type.name
         lines: List[str] = []
 
@@ -3281,7 +3274,6 @@ class CEmitter:
         eq_body_parts: List[str] = []
         eq_method = mono_type.children.get("==")
         if eq_method and eq_method.is_autogen_eq:
-            self.needs_stdbool = True
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);")
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
             if self._use_memcmp_eq(name, eq_method):
@@ -3348,7 +3340,6 @@ class CEmitter:
         eq_method = mono_type.children.get("==")
         eq_body_parts: List[str] = []
         if eq_method and eq_method.is_autogen_eq:
-            self.needs_stdbool = True
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);")
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
             eq_body_parts.append(
@@ -4006,7 +3997,6 @@ class CEmitter:
 
     def _emit_variant(self, name: str, variant_defn: zast.Variant) -> None:
         self.needs_stdint = True
-        self.needs_stdbool = True
         lines: List[str] = []
 
         # resolve custom tag values from as_items
@@ -6343,14 +6333,12 @@ class CEmitter:
                 return call
             # string content comparison (native == on string class)
             if binop.lhs.type.subtype == ZSubType.STRING:
-                self.needs_stdbool = True
                 call = f"z_string_eq(&{lhs}, &{rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
             # stringview content comparison
             if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
-                self.needs_stdbool = True
                 self.needs_stringview = True
                 call = f"z_stringview_eq({lhs}, {rhs})"
                 if op == "!=":
@@ -6361,12 +6349,10 @@ class CEmitter:
         # four operators map to plain C comparisons against zero.
         if op in ("<", "<=", ">", ">=") and binop.lhs.type:
             if binop.lhs.type.subtype == ZSubType.STRING:
-                self.needs_stdbool = True
                 self.needs_stdint = True
                 cop = C_OPS.get(op, op)
                 return f"(z_string_cmp(&{lhs}, &{rhs}) {cop} 0)"
             if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
-                self.needs_stdbool = True
                 self.needs_stdint = True
                 self.needs_stringview = True
                 cop = C_OPS.get(op, op)

@@ -16,12 +16,15 @@ def emit_runtime_includes(
     needs_stdio: bool,
     needs_stdint: bool,
     needs_stdlib: bool,
-    needs_stdbool: bool,
     needs_string: bool,
     needs_io: bool = False,
     needs_pwd: bool = False,
 ) -> str:
-    """Emit #include directives for required C standard headers."""
+    """Emit #include directives for required C standard headers.
+
+    `<stdbool.h>` is always included: zerolang's `bool` type lowers
+    to C99 `_Bool` via TYPEMAP, so every emitted program uses it.
+    """
     parts: list[str] = []
     if needs_stdio:
         parts.append("#include <stdio.h>\n")
@@ -29,8 +32,7 @@ def emit_runtime_includes(
         parts.append("#include <stdint.h>\n")
     if needs_stdlib:
         parts.append("#include <stdlib.h>\n")
-    if needs_stdbool:
-        parts.append("#include <stdbool.h>\n")
+    parts.append("#include <stdbool.h>\n")
     if needs_string:
         parts.append("#include <string.h>\n")
     if needs_io:
@@ -3033,22 +3035,20 @@ def emit_runtime(
     needs_stdio: bool,
     needs_stdint: bool,
     needs_stdlib: bool,
-    needs_stdbool: bool,
     needs_string: bool,
     needs_stringview: bool = False,
     needs_io: bool = False,
     needs_pwd: bool = False,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
-    # z_string_t runtime uses malloc/free (stdlib.h), strlen/memcpy (string.h),
-    # and bool (stdbool.h) for z_string_eq
+    # z_string_t runtime uses malloc/free (stdlib.h) and strlen/memcpy
+    # (string.h). <stdbool.h> is always included (see emit_runtime_includes).
     has_z_string = needs_string or needs_stdio
     return (
         emit_runtime_includes(
             needs_stdio=needs_stdio or needs_io,
             needs_stdint=needs_stdint,
             needs_stdlib=needs_stdlib or has_z_string or needs_stringview,
-            needs_stdbool=needs_stdbool or has_z_string or needs_stringview,
             needs_string=needs_string or has_z_string or needs_stringview,
             needs_io=needs_io,
             needs_pwd=needs_pwd,
