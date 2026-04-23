@@ -36,17 +36,383 @@
 The #~"collections" unit provides the generic containers:
 #~"array" (fixed-length valtype), #~"str" (bounded stack string
 valtype), #~"list" / #~"listview" (growable heap collections),
-#~"map" (hash map). All names are re-exported unqualified by
-#~"core"; use #~"list", not #~"collections.list".
+#~"map" (hash map), plus the free #~"string_join" helper. All
+names are re-exported unqualified by #~"core"; use #~"list", not
+#~"collections.list".
 
-TODO: fill in.
+#b:"Valtypes vs reftypes."
+
+#ul:
+  [#*: #b:"Valtypes" (#~"array", #~"str") are copied on
+    assignment, have no destructor, and are stack-allocated. Their
+    size is part of their type (#~"array of: i64 to: 8" is
+    distinct from #~"array of: i64 to: 16"). Usable as fields of
+    other valtypes (records, variants)]
+  [#*: #b:"Reftypes" (#~"list", #~"listview", #~"map") are
+    heap-allocated, moved on assignment, and run destructors on
+    scope exit. Their size is a runtime parameter, not part of
+    the type]
+
+#b:"Views lock their source." #~"listview" (and the #~"byteview"
+typedef over it; see
+#> to=./stdlib_system.html#bytes-and-byteview: bytes / byteview)
+installs an EXCLUSIVE lock on the source list for the view's
+lifetime. You cannot store a view into a class field or return
+it across a function boundary unless the source is a
+#~".lock"-annotated parameter; see
+#> to=./ownership.html: ownership.
 
 
 #--: Index
 
-TODO: one-line signature per symbol.
+#p: #b:"Value types"
+
+#ul:
+  [#*: #> to=array: #b:"array" -- #~"record as { of: any.generic  to: u64.generic }"]
+  [#*: #> to=str: #b:"str" -- #~"record is native as { :text  to: u64.generic ... }"]
+
+#p: #b:"Reference types"
+
+#ul:
+  [#*: #> to=list: #b:"list" -- #~"class as { of: any.generic }"]
+  [#*: #> to=listview: #b:"listview" -- #~"class as { of: any.generic }"]
+  [#*: #> to=map: #b:"map" -- #~"class as { key: any.generic  value: any.generic }"]
+
+#p: #b:"Free functions"
+
+#ul:
+  [#*: #> to=string-join: #b:"string_join" -- #~"function {parts: (list of: string) sep: stringview} out string"]
 
 
-#--: Detail
+#--: array
 
-TODO: per-symbol detail sections.
+#code language=zerolang: """
+  array: record {
+      get:    function {:this i: i64} out of      is native
+      set:    function {:this i: i64 item: of} out of is native
+      length: function {:this} out i64            is native
+      create: function {} out type                is native
+  } as {
+      of: any.generic
+      to: u64.generic
+  }
+"""
+
+Fixed-length, mutable, homogeneous valtype block. Generic over
+element type (#~"of") and length (#~"to"). Different
+combinations produce different monomorphised types (#~"array_i64_4"
+/ #~"array_i64_8") so the length is part of the type and cannot
+change.
+
+#b:"Constraints."
+
+#ul:
+  [#*: #~"of" -- any valtype. Reftype elements are rejected by
+    R3 (valtype aggregates cannot hold reftypes)]
+  [#*: #~"to" -- compile-time #~"u64" constant]
+
+#b:"Construction."
+
+#code language=zerolang: """
+  # Zero-initialised array of 8 i64s
+  a: (array of: i64 to: 8)
+
+  # Initialise from a data block (one entry per element)
+  data block_of_ten:
+      0 1 2 3 4 5 6 7 8 9
+  b: block_of_ten.array  # array of: i64 to: 10
+"""
+
+#b:"Indexing."
+
+#ul:
+  [#*: #b:"Compile-time" -- dotted numeric syntax:
+    #~"a.0", #~"a.1", #~"a.7". Out-of-bounds indices are
+    compile-time errors]
+  [#*: #b:"Runtime" -- #~"a.get i: index" returns the element;
+    #~"a.set i: index item: new" replaces the element and
+    returns the old value. Out-of-bounds triggers a runtime error]
+
+#b:"#~\".length\"" is a compile-time constant equal to the
+#~"to:" argument, typed as #~"i64".
+
+Since arrays are valtypes they are copied on assignment and when
+passed by default (TAKE) to functions.
+
+
+#--: str
+
+#code language=zerolang: """
+  str: record is native as {
+      :text
+      to: u64.generic
+      length:     function {:this} out u64     is native
+      size:       function {:this} out u64     is native
+      string:     function {:this} out string  is native
+      stringview: function {:this} out stringview is native
+      create:     function out type            is native
+  }
+"""
+
+Fixed-capacity, owned, valtype string buffer. Stack-allocated
+with compile-time capacity #~"to:". Uses the smallest fixed-width
+integer that fits #~"to:" for the length field, so #~"str to: 64"
+costs 65 bytes of storage (64 data + 1 length byte).
+
+#b:"When to use #~\"str\" over #~\"string\"."
+
+#ul:
+  [#*: String field of a record / variant (valtypes can't hold
+    heap reftypes; #~"string" is a class)]
+  [#*: Bounded buffer sizes where you want stack allocation and
+    no destructor]
+  [#*: Small, short-lived scratch strings where #~"malloc" cost
+    would dominate]
+
+#b:":text conformance." #~"str" declares #~":text", so any API
+expecting #~"stringlike.generic" accepts a #~"str" value. The
+#~"stringview" method projects a readonly view over the buffer
+and installs the usual view lock.
+
+#b:"Construction and conversion."
+
+#code language=zerolang: """
+  s: (str to: 32)              # empty, 32-byte capacity
+  t: "hi".str to: 16           # from a literal, capacity 16
+
+  # Promote to a heap string
+  heap: s.string
+
+  # View without promotion
+  v: s.stringview
+"""
+
+#b:"Methods."
+
+#ul:
+  [#*: #~"length" -- #~"u64", current content byte count]
+  [#*: #~"size" -- #~"u64", the compile-time capacity
+    (equal to the #~"to:" parameter). Named #~"size" rather
+    than #~"capacity" because capacity is fixed, not a property
+    that grows]
+  [#*: #~"string" -- heap-copies the content into a fresh
+    #~"string"]
+  [#*: #~"stringview" -- readonly view; locks this #~"str" for
+    the view's lifetime]
+
+No #~".append" / #~".set" methods yet -- #~"str" is built once
+(via literal projection or data block) and read thereafter.
+
+
+#--: list
+
+#code language=zerolang: """
+  list: class {
+      append:      function {:this item: of}             is native
+      insert:      function {:this item: of at: u64}     is native
+      extend:      function {:this other: type}          is native
+      extend_view: function {:this other: (listview of: of)} is native
+      get:         function {:this i: u64} out of        is native
+      set:         function {:this i: u64 item: of} out of is native
+      pop:         function {:this} out of               is native
+      length:      function {:this} out u64              is native
+      listview:    function {:this} out (listview of: of) is native
+      create:      function {capacity: 0u64} out type    is native
+  } as {
+      of: any.generic
+  }
+"""
+
+Growable, heap-allocated, homogeneous reftype. Generic over
+element type only; length is a runtime property. Different
+element types produce different monomorphised types
+(#~"list_i64", #~"list_string").
+
+In memory a #~"list" is a pointer to a struct with #~"capacity",
+#~"length", and a #~"data" pointer. Growth formula:
+#~"newcap = oldcap + (oldcap >> 1) + 4" (roughly 1.5x plus a
+small base).
+
+#b:"Construction."
+
+#code language=zerolang: """
+  xs: (list of: i64)                       # empty
+  ys: (list of: i64) capacity: 10.u64      # pre-allocate
+  zs: (list of: string)                    # list of heap strings
+"""
+
+#b:"Methods (zero-indexed)."
+
+#ul:
+  [#*: #~"append item: elem" -- takes ownership of #~"elem",
+    adds to end, grows if needed]
+  [#*: #~"insert item: elem at: u64" -- takes ownership, shifts
+    later elements right, grows if needed]
+  [#*: #~"extend other: list of: of" -- takes ownership of the
+    source list, bulk-copies its elements, frees the source
+    container]
+  [#*: #~"extend_view other: listview of: of" -- bulk-copies
+    elements from a view without consuming the source]
+  [#*: #~"get i: u64" -- returns the element at #~"i" by value.
+    Runtime error if out of range]
+  [#*: #~"set i: u64 item: elem" -- replaces, returns the old
+    element. Runtime error if out of range]
+  [#*: #~"pop" -- removes and returns the last element. Runtime
+    error if empty]
+  [#*: #~"length" -- current element count]
+  [#*: #~"listview" -- read-only view over the whole list;
+    installs a lock on the source for the view's lifetime]
+
+#b:"Destruction." Scope exit runs the list destructor: each
+element (if a reftype) has its own destructor run, then the data
+buffer and the struct are freed.
+
+
+#--: listview
+
+#code language=zerolang: """
+  listview: class {
+      get:    function {:this i: u64} out of        is native
+      length: function {:this} out u64              is native
+      list:   function {:this} out (list of: of)    is native
+  } as {
+      of: any.generic
+  }
+"""
+
+Read-only borrowed view over a #~"list". Generic over the
+element type; the view's element type must match the source
+list's element type. Same 16-byte #~"(pointer, length)" shape as
+#~"stringview".
+
+#b:"Lifetime." Creating a view installs an EXCLUSIVE lock on
+the source list. The source cannot be mutated (#~".append",
+#~".insert", reassignment) while the view is live. Scope exit
+releases the lock; so does explicit #~".release" on the view.
+
+#b:"Cannot escape into storage." Views cannot be returned from
+a function unless the source is a #~".lock" parameter; views
+cannot be stored in a class / record field. See
+#> to=./ownership.html: ownership.
+
+#b:"Construction."
+
+#code language=zerolang: """
+  xs: (list of: i64)
+  xs.append item: 1
+  xs.append item: 2
+
+  v: xs.listview                        # lock on xs held for v's scope
+
+  for x: v loop { print x }
+"""
+
+#b:"Methods."
+
+#ul:
+  [#*: #~"get i: u64" -- returns the element at #~"i" by value.
+    Runtime error if out of range]
+  [#*: #~"length" -- element count of the view]
+  [#*: #~"list" -- heap-copies the view's elements into a fresh
+    #~"list of: of". Breaks the lock link; the new list is
+    independently owned]
+
+
+#--: map
+
+#code language=zerolang: """
+  map: class {
+      get:    function {:this key: key} out (option of: value) is native
+      set:    function {:this key: key value: value}           is native
+      has:    function {:this key: key} out bool               is native
+      delete: function {:this key: key} out bool               is native
+      length: function {:this} out u64                         is native
+      create: function {} out type                             is native
+  } as {
+      key:   any.generic
+      value: any.generic
+  }
+"""
+
+Hash map (dictionary) from #~"key" to #~"value". Heap-allocated
+and growable, with open-addressing + linear probing. Different
+key / value type combinations produce different monomorphised
+types (#~"map_i64_i64", #~"map_string_u64").
+
+#b:"Constraints."
+
+#ul:
+  [#*: #~"key" -- numeric types or #~"string" (hashability is
+    enforced at monomorphisation)]
+  [#*: #~"value" -- any type. Stored inline for valtypes; the
+    map owns all values]
+
+#b:"Construction."
+
+#code language=zerolang: """
+  m: (map key: string value: i64)
+  n: (map key: i64 value: string) capacity: 32.u64  # pre-size
+"""
+
+#b:"Methods."
+
+#ul:
+  [#*: #~"set key: k value: v" -- insert or replace. On
+    replacement, the old value is destroyed. Takes ownership of
+    both #~"k" and #~"v"]
+  [#*: #~"get key: k" -- returns #~"option of: value". #~"some"
+    carries a borrowed reference into the map's storage (lock
+    held while the result is live); #~"none" if the key is
+    absent]
+  [#*: #~"has key: k" -- #~"bool", true if the key is present.
+    Cheaper than #~"get" when you don't need the value]
+  [#*: #~"delete key: k" -- #~"bool", true if a key was removed.
+    Destroys the key and value on deletion]
+  [#*: #~"length" -- current entry count]
+
+#b:"Load factor and resize." The table uses a 2/3 load factor.
+Capacity starts at 8 on first insert and doubles on resize.
+Deleted entries leave tombstones; tombstones are reclaimed on
+resize. When the map falls out of scope, all owned keys and
+values are destroyed.
+
+
+#--: string_join
+
+#code language=zerolang: """
+  string_join: function {parts: (list of: string) sep: stringview} out string is native
+"""
+
+Concatenate every string in #~"parts" with #~"sep" between each.
+Returns a fresh owned #~"string". One allocation, bulk memcpy
+in sequence.
+
+#b:"Ownership."
+
+#ul:
+  [#*: #~"parts" is borrowed (the default convention for reftype
+    parameters); the caller retains ownership and the list
+    outlives the call]
+  [#*: #~"sep" is a #~"stringview"; locked for the call]
+  [#*: Return value is a newly-allocated owned #~"string"]
+
+#b:"Why not a method on #~\"list\"?" Generic types don't yet
+support monomorphisation-specific methods -- #~"list.join"
+couldn't be restricted to #~"list of: string" while still
+monomorphising cleanly. Keeping the helper as a free function
+sidesteps that.
+
+#b:"Why #~\"list of: string\" rather than #~\"list of: stringview\"?"
+#~"stringview" cannot live in a reftype field (an outstanding
+lock would escape through the list's storage), so views cannot
+populate a join input list directly. Callers holding views
+materialise owned strings first.
+
+#code language=zerolang: """
+  parts: (list of: string)
+  parts.append item: "alpha".string
+  parts.append item: "beta".string
+  parts.append item: "gamma".string
+  s: string_join parts: parts sep: ", ".stringview
+  # s == "alpha, beta, gamma"
+"""
