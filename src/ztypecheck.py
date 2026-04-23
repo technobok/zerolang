@@ -5984,6 +5984,22 @@ class TypeChecker:
                 )
                 if not parent_is_variable:
                     path.type = path.parent_tagged_type
+                    # Stamp const_value only for bool: the arm's index in the
+                    # parent's children (false -> 0, true -> 1). Enables
+                    # downstream const-fold: `if bool.true` collapses to
+                    # `if 1`, and a unit-level `true: bool.true` propagates
+                    # the value to every use site. Restricted to bool
+                    # because non-bool variant arms (e.g. `openmode.read`)
+                    # still lower to struct construction at emit time;
+                    # stamping const_value would cause the emitter's
+                    # constant-consult path to short-circuit the struct
+                    # emission and pass a bare integer instead.
+                    if path.parent_tagged_type.name == "bool":
+                        arm_name = path.child.name
+                        if arm_name in path.parent_tagged_type.children:
+                            path.const_value = list(
+                                path.parent_tagged_type.children.keys()
+                            ).index(arm_name)
                     return path.parent_tagged_type
         return t
 
