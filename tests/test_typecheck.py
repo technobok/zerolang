@@ -3209,6 +3209,81 @@ class TestValtypeReftypeEnforcement:
         reftypes, so the self-containment rule doesn't apply."""
         check_ok("c: class { s: string xs: (list of: i64) }\nmain: function is { }")
 
+    # --- Views: rejected in all aggregates (record / variant / class)
+    # per doc/strings.pdoc. Views lock their source and v2 does not
+    # propagate lock state through aggregate fields.
+
+    def test_record_cannot_hold_stringview(self):
+        errors = check_errors(
+            "r: record { sv: stringview }\n"
+            "main: function is {\n"
+            '  s: "hi".string\n'
+            "  v: s.stringview\n"
+            "  p: r sv: v\n"
+            "}"
+        )
+        assert any("stringview" in e.msg and "view" in e.msg for e in errors)
+
+    def test_variant_cannot_hold_stringview(self):
+        errors = check_errors(
+            "v: variant { a: stringview b: null }\n"
+            "main: function is {\n"
+            '  s: "hi".string\n'
+            "  x: v.a s.stringview\n"
+            "}"
+        )
+        assert any("stringview" in e.msg and "view" in e.msg for e in errors)
+
+    def test_class_cannot_hold_stringview(self):
+        errors = check_errors(
+            "c: class { sv: stringview }\n"
+            "main: function is {\n"
+            '  s: "hi".string\n'
+            "  v: s.stringview\n"
+            "  p: c sv: v\n"
+            "}"
+        )
+        assert any(
+            "class 'c'" in e.msg and "stringview" in e.msg and "view" in e.msg
+            for e in errors
+        )
+
+    def test_class_cannot_hold_byteview(self):
+        errors = check_errors(
+            "c: class { bv: byteview }\n"
+            "main: function is {\n"
+            "  b: bytes\n"
+            "  p: c bv: b.byteview\n"
+            "}"
+        )
+        assert any("view" in e.msg for e in errors)
+
+    def test_class_cannot_hold_listview(self):
+        errors = check_errors(
+            "c: class { lv: (listview of: i64) }\n"
+            "main: function is {\n"
+            "  xs: (list of: i64)\n"
+            "  p: c lv: xs.listview\n"
+            "}"
+        )
+        assert any("view" in e.msg for e in errors)
+
+    # --- Positive controls: views remain legal outside aggregate storage.
+
+    def test_stringview_as_local_allowed(self):
+        check_ok(
+            'main: function is {\n  s: "hi".string\n  v: s.stringview\n  print v\n}'
+        )
+
+    def test_stringview_as_function_parameter_allowed(self):
+        check_ok(
+            "f: function {v: stringview} is { print v }\n"
+            "main: function is {\n"
+            '  t: "hi".string\n'
+            "  f v: t.stringview\n"
+            "}"
+        )
+
 
 class TestPureZerolangBufferedShapes:
     """Ownership-path coverage for the shapes a pure-Zerolang
@@ -6565,15 +6640,19 @@ class TestGenerics:
         )
 
     def test_generic_function_stringlike_accepts_user_text_conformer(self):
-        """Any user type declaring :text and the spec method satisfies stringlike."""
+        """Any user type declaring :text and the spec method satisfies stringlike.
+        `mytext` is a class holding an owned string because views cannot be
+        aggregate fields (doc/strings.pdoc); the stringview is produced on
+        demand by the protocol method."""
         check_ok(
-            "mytext: record { data_: stringview } as {\n"
+            "mytext: class { data_: string } as {\n"
             "    :text\n"
-            "    stringview: function {t: this} out stringview is { return t.data_ }\n"
+            "    stringview: function {t: this} out stringview is "
+            "{ return t.data_.stringview }\n"
             "}\n"
             "show: function as { t: stringlike.generic } in { v: t } is "
             "{ print v }\n"
-            'main: function is { m: mytext data_: "hi"\n show m }'
+            'main: function is { m: mytext data_: "hi".string\n show m }'
         )
 
     def test_generic_function_stringlike_rejects_missing_text_conformance(self):

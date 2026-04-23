@@ -1364,6 +1364,7 @@ class TypeChecker:
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
         _set_field_cleanup_metadata(ctype)
+        self._reject_view_fields_in_class(name, ctype, set(cls.items.keys()), cls.start)
         self._resolving.pop()
         return ctype
 
@@ -2160,28 +2161,27 @@ class TypeChecker:
         self-contained and cannot hold reftypes either directly or
         indirectly. Reftypes include string, owning classes, unions,
         protocols, and generic collection templates (list / map / box /
-        option / result / ...). Views (stringview / byteview /
-        listview) are v2-deferred — doc/strings.pdoc restricts their
-        storage but enforcement requires companion emitter work; not
-        checked here.
+        option / result / ...), plus views (stringview / byteview /
+        listview) which cannot escape to aggregate storage because they
+        lock their source and v2 does not propagate lock state through
+        aggregate fields (doc/strings.pdoc).
         """
         if ftype.subtype == ZSubType.STRING:
             return "`string` is a reftype"
-        # stringview / listview / byteview are views — non-owning, but
-        # doc/strings.pdoc restricts their storage in v2. Enforcement of
-        # view storage is deferred (the existing compiler relies on
-        # callsites passing view values directly); this check focuses
-        # on owning reftypes.
         if ftype.subtype == ZSubType.STRINGVIEW:
-            return None
+            return (
+                "`stringview` is a view — locks its source; cannot escape "
+                "to aggregate storage"
+            )
         if ftype.typetype == ZTypeType.CLASS:
             # View-class typedefs (byteview / listview) have non-STRING
-            # subtype — allow them as fields for the same v2-deferral
-            # reason as stringview above. Generic-collection monos
-            # (list / map / box / ...) also land in CLASS typetype —
-            # they are reftypes and correctly rejected here.
+            # subtype — reject them the same way as stringview. Generic
+            # listview monomorphizations also land here.
             if ftype.name in ("byteview", "listview") or _is_listview_type(ftype):
-                return None
+                return (
+                    f"`{ftype.name}` is a view — locks its source; cannot "
+                    "escape to aggregate storage"
+                )
             return f"`{ftype.name}` is a class (reftype)"
         if ftype.typetype == ZTypeType.UNION:
             return f"`{ftype.name}` is a union (reftype)"
@@ -2233,6 +2233,42 @@ class TypeChecker:
                         "'(array of: T to: N)' for a bounded-length valtype buffer"
                     ),
                 )
+
+    def _reject_view_fields_in_class(
+        self,
+        name: str,
+        ztype: ZType,
+        is_field_names: "set[str]",
+        start: Token,
+    ) -> None:
+        """Reject view fields (stringview / byteview / listview) in
+        class aggregates. Classes are reftypes and may hold other
+        reftypes (string / list / map / ...), but views lock their
+        source and v2 does not propagate lock state through aggregate
+        storage (doc/strings.pdoc).
+        """
+        for fname in is_field_names:
+            ftype = ztype.children.get(fname)
+            if ftype is None or ftype.typetype == ZTypeType.FUNCTION:
+                continue
+            is_view = ftype.subtype == ZSubType.STRINGVIEW or (
+                ftype.typetype == ZTypeType.CLASS
+                and (ftype.name in ("byteview", "listview") or _is_listview_type(ftype))
+            )
+            if not is_view:
+                continue
+            view_name = ftype.name
+            self._error(
+                f"class '{name}' cannot hold view field '{fname}': "
+                f"'{view_name}' locks its source and cannot escape to "
+                "aggregate storage",
+                loc=start,
+                err=ERR.TYPEERROR,
+                hint=(
+                    "copy to an owned `string` / `bytes` / `list` before "
+                    "storing, and expose a view via an accessor method"
+                ),
+            )
 
     _FLOAT_TYPES = frozenset({"f32", "f64", "f128"})
 
