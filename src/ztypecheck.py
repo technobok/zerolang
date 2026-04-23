@@ -1778,6 +1778,13 @@ class TypeChecker:
             vtype.create_disabled = True
 
             _set_field_cleanup_metadata(vtype)
+            self._reject_valtype_reftype_fields(
+                name,
+                vtype,
+                set(variant_defn.items.keys()),
+                "variant",
+                variant_defn.start,
+            )
             self._resolving.pop()
             return vtype
 
@@ -1827,6 +1834,13 @@ class TypeChecker:
         vtype.create_disabled = True
 
         _set_field_cleanup_metadata(vtype)
+        self._reject_valtype_reftype_fields(
+            name,
+            vtype,
+            set(variant_defn.items.keys()),
+            "variant",
+            variant_defn.start,
+        )
         self._resolving.pop()
         return vtype
 
@@ -2075,6 +2089,9 @@ class TypeChecker:
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
         _set_field_cleanup_metadata(rtype)
+        self._reject_valtype_reftype_fields(
+            name, rtype, set(rec.items.keys()), "record", rec.start
+        )
         self._resolving.pop()
         return rtype
 
@@ -2133,6 +2150,89 @@ class TypeChecker:
                     "provide the same locked-reference semantics"
                 ),
             )
+
+    def _reftype_reason(self, ftype: ZType) -> Optional[str]:
+        """If `ftype` would cause a valtype aggregate to transitively
+        hold a reftype, return a short human-readable phrase explaining
+        why. Otherwise return None.
+
+        The language invariant: valtypes (record / variant / facet) are
+        self-contained and cannot hold reftypes either directly or
+        indirectly. Reftypes include string, owning classes, unions,
+        protocols, and generic collection templates (list / map / box /
+        option / result / ...). Views (stringview / byteview /
+        listview) are v2-deferred — doc/strings.pdoc restricts their
+        storage but enforcement requires companion emitter work; not
+        checked here.
+        """
+        if ftype.subtype == ZSubType.STRING:
+            return "`string` is a reftype"
+        # stringview / listview / byteview are views — non-owning, but
+        # doc/strings.pdoc restricts their storage in v2. Enforcement of
+        # view storage is deferred (the existing compiler relies on
+        # callsites passing view values directly); this check focuses
+        # on owning reftypes.
+        if ftype.subtype == ZSubType.STRINGVIEW:
+            return None
+        if ftype.typetype == ZTypeType.CLASS:
+            # View-class typedefs (byteview / listview) have non-STRING
+            # subtype — allow them as fields for the same v2-deferral
+            # reason as stringview above. Generic-collection monos
+            # (list / map / box / ...) also land in CLASS typetype —
+            # they are reftypes and correctly rejected here.
+            if ftype.name in ("byteview", "listview") or _is_listview_type(ftype):
+                return None
+            return f"`{ftype.name}` is a class (reftype)"
+        if ftype.typetype == ZTypeType.UNION:
+            return f"`{ftype.name}` is a union (reftype)"
+        if ftype.typetype == ZTypeType.PROTOCOL:
+            return f"`{ftype.name}` is a protocol (reftype)"
+        # RECORD / VARIANT / FACET are valtypes (enforced transitively
+        # by this same check running on each type). Numerics / bool /
+        # null / enum / array / str monos are native valtypes. Generic
+        # applications retain the template's typetype (so `myrec t: u`
+        # has typetype RECORD — allowed; `list of: u` has typetype
+        # CLASS — handled above).
+        return None
+
+    def _reject_valtype_reftype_fields(
+        self,
+        name: str,
+        ztype: ZType,
+        is_field_names: "set[str]",
+        kind: str,
+        start: Token,
+    ) -> None:
+        """Reject reftype IS-section fields on valtype aggregates
+        (record / variant / facet). AS-section slots (protocol
+        conformance projections, constants) are not part of the
+        struct's owned storage and are excluded.
+
+        `is_field_names` is the set of child keys that correspond to
+        data fields (not function methods, not as-items). For records
+        this is `rec.items.keys()`; for variants,
+        `variant_defn.items.keys()`.
+        """
+        if ztype.is_native:
+            return  # native system records (bool, i64, ...) opt out
+        for fname in is_field_names:
+            ftype = ztype.children.get(fname)
+            if ftype is None:
+                continue
+            if ftype.typetype == ZTypeType.FUNCTION:
+                continue
+            reason = self._reftype_reason(ftype)
+            if reason:
+                self._error(
+                    f"valtype {kind} '{name}' cannot hold a reftype field "
+                    f"'{fname}': {reason}",
+                    loc=start,
+                    err=ERR.TYPEERROR,
+                    hint=(
+                        f"change '{name}' to a class, or use '(str to: N)' / "
+                        "'(array of: T to: N)' for a bounded-length valtype buffer"
+                    ),
+                )
 
     _FLOAT_TYPES = frozenset({"f32", "f64", "f128"})
 
@@ -2624,6 +2724,9 @@ class TypeChecker:
             ftype.children["borrow"] = borrow_type
 
         _set_field_cleanup_metadata(ftype)
+        # Facets have specs (functions), not data fields — the reftype
+        # check is a no-op but run it for parity.
+        self._reject_valtype_reftype_fields(name, ftype, set(), "facet", facet.start)
         self._resolving.pop()
         return ftype
 

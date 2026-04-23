@@ -1808,7 +1808,7 @@ class TestLockEnforcement:
         """Path-scoped locks: reassigning a sibling field is permitted while
         another field is borrowed."""
         check_ok(
-            "namepair: record { name: string other: i64 }\n"
+            "namepair: class { name: string other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
@@ -1850,7 +1850,7 @@ class TestLockEnforcement:
     def test_swap_sibling_field_permitted(self):
         """Sibling-field swap is permitted while another field is borrowed."""
         check_ok(
-            "namepair: record { name: string other: string }\n"
+            "namepair: class { name: string other: string }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
             '  a: "c".string\n'
@@ -1914,7 +1914,7 @@ class TestLockEnforcement:
         """.borrow on `p.a` does not block reassignment of sibling `p.b`."""
         check_ok(
             "inner: class { value: 0 }\n"
-            "point: record { a: inner b: inner }\n"
+            "point: class { a: inner b: inner }\n"
             "main: function is {\n"
             "  p: point a: inner b: inner\n"
             "  y: p.a.borrow\n"
@@ -1940,7 +1940,7 @@ class TestLockEnforcement:
         goes out of scope. (Needs Fix A + Fix B.)"""
         check_ok(
             "inner: class { value: 0 }\n"
-            "point: record { a: inner b: i64 }\n"
+            "point: class { a: inner b: i64 }\n"
             "main: function is {\n"
             "  p: point a: inner b: 0\n"
             "  { y: p.a.borrow }\n"
@@ -2255,10 +2255,10 @@ class TestLockEnforcement:
         assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
 
     def test_read_sibling_field_permitted(self):
-        """Reading a sibling field of a locked-leaf record is permitted under
+        """Reading a sibling field of a locked-leaf class is permitted under
         the path-scoped lock model."""
         check_ok(
-            "namepair: record { name: string other: i64 }\n"
+            "namepair: class { name: string other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
@@ -2389,7 +2389,7 @@ class TestWithOwnership:
     def test_dotted_path_permits_sibling_in_with(self):
         """`with a: r.f do ...` permits mutation of sibling fields in the body."""
         check_ok(
-            "pair: record { first: string other: string }\n"
+            "pair: class { first: string other: string }\n"
             "main: function is {\n"
             '  p: pair first: "a".string other: "b".string\n'
             "  with v: p.first do {\n"
@@ -3133,6 +3133,81 @@ class TestCliUnit:
             "  print h\n"
             "}\n"
         )
+
+
+class TestValtypeReftypeEnforcement:
+    """Valtypes (record / variant / facet) cannot hold reftype fields
+    directly or transitively. This is the language invariant described
+    in CLAUDE.md; reftypes are string / class / union / protocol and
+    generic collection templates (list / map / box / option / result).
+    """
+
+    def test_record_cannot_hold_string(self):
+        errors = check_errors(
+            'r: record { s: string }\nmain: function is { p: r s: "hello".string }'
+        )
+        assert any("reftype" in e.msg and "string" in e.msg for e in errors)
+
+    def test_record_cannot_hold_list(self):
+        errors = check_errors(
+            "r: record { xs: (list of: i32) }\n"
+            "main: function is { p: r xs: (list of: i32) }"
+        )
+        assert any("reftype" in e.msg for e in errors)
+
+    def test_record_cannot_hold_map(self):
+        errors = check_errors(
+            "r: record { m: (map key: string value: i32) }\n"
+            "main: function is { p: r m: (map key: string value: i32) }"
+        )
+        assert any("reftype" in e.msg for e in errors)
+
+    def test_record_cannot_hold_class(self):
+        errors = check_errors(
+            "c: class { v: i64 }\nr: record { x: c }\nmain: function is { p: r x: c }"
+        )
+        assert any("reftype" in e.msg and "class" in e.msg for e in errors)
+
+    def test_record_cannot_hold_union(self):
+        errors = check_errors(
+            "u: union { a: i64 b: null }\n"
+            "r: record { x: u }\n"
+            "main: function is { p: r x: u.a 1 }"
+        )
+        assert any("reftype" in e.msg and "union" in e.msg for e in errors)
+
+    def test_variant_cannot_hold_list(self):
+        errors = check_errors(
+            "v: variant { a: (list of: i64) b: null }\n"
+            "main: function is { x: v.a (list of: i64) }"
+        )
+        assert any("reftype" in e.msg for e in errors)
+
+    def test_record_allows_primitive_fields(self):
+        check_ok(
+            "r: record { x: i64 y: f64 b: bool }\n"
+            "main: function is { p: r x: 1 y: 2.0 b: 0 < 1 }"
+        )
+
+    def test_record_allows_nested_valtype_record(self):
+        check_ok(
+            "inner: record { x: i64 y: i64 }\n"
+            "outer: record { a: inner b: i64 }\n"
+            "main: function is { "
+            "  i: inner x: 1 y: 2\n"
+            "  o: outer a: i b: 3\n"
+            "}"
+        )
+
+    def test_record_allows_str_to_N(self):
+        check_ok(
+            "r: record { s: (str to: 16) }\nmain: function is { p: r s: (str to: 16) }"
+        )
+
+    def test_class_allows_reftype_fields(self):
+        """Reftype fields in classes are fine — classes are themselves
+        reftypes, so the self-containment rule doesn't apply."""
+        check_ok("c: class { s: string xs: (list of: i64) }\nmain: function is { }")
 
 
 class TestPureZerolangBufferedShapes:
