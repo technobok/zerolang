@@ -794,8 +794,27 @@ class TypeChecker:
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
             self._resolving.append((key, shell))
-            t = self._resolve_dotted_path(cast(zast.DottedPath, defn))
+            dp = cast(zast.DottedPath, defn)
+            t = self._resolve_dotted_path(dp)
             self._resolving.pop()
+            # Null-subtype construction at unit level: `true: bool.true`
+            # resolves `bool.true` to the null arm type, but the actual
+            # value is a construction of the outer variant. Promote the
+            # definition's type and stamp const_value (bool only) so
+            # downstream uses see the variant type and the arm index.
+            # Mirrors the logic in _check_path for value-context uses.
+            if (
+                t is not None
+                and t.typetype == ZTypeType.NULL
+                and dp.parent_tagged_type is not None
+            ):
+                outer = dp.parent_tagged_type
+                dp.type = outer
+                if outer.name == "bool":
+                    arm_name = dp.child.name
+                    if arm_name in outer.children:
+                        dp.const_value = list(outer.children.keys()).index(arm_name)
+                return outer
             return t
         if defn.nodetype == NodeType.LABELVALUE:
             key = f"{unitname}.{name}"

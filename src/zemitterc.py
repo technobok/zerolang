@@ -123,7 +123,7 @@ TYPEMAP: Dict[str, str] = {
     "c8": "uint8_t",
     "c32": "uint32_t",
     "null": "void",
-    "bool": "int",
+    "bool": "bool",
     "never": "void",
 }
 
@@ -144,7 +144,7 @@ CTYPE_SIZES: Dict[str, int] = {
     "__int128": 16,
     "unsigned __int128": 16,
     "long double": 16,
-    "int": 4,  # bool maps to C int
+    "bool": 1,  # C99 _Bool, 1 byte
 }
 
 # Types larger than this threshold (bytes) use memcmp for simple equality.
@@ -308,7 +308,8 @@ class CEmitter:
         self.needs_stdio = False
         self.needs_stdint = False
         self.needs_stdlib = False
-        self.needs_stdbool = False
+        # stdbool.h is always needed now that TYPEMAP["bool"] maps to C99 bool.
+        self.needs_stdbool = True
         self.needs_string = False
         self.needs_stringview = False
         self.needs_io = False
@@ -8819,6 +8820,34 @@ class CEmitter:
         variant_name = variant_type.name
 
         subject = self._emit_operation_value(casenode.subject)
+
+        # Bool special case: the subject is a primitive C `bool`, not a
+        # variant struct with a `.tag` field. Emit each arm as a plain
+        # `if (subject)` / `if (!subject)` dispatch. Binary choice, no
+        # narrowing needed (null-payload arms carry no payload).
+        if variant_name == "bool":
+            for i, clause in enumerate(casenode.clauses):
+                arm = clause.match.name  # "true" or "false"
+                cond = subject if arm == "true" else f"!{subject}"
+                keyword = "if" if i == 0 else "else if"
+                parts.append(f"{indent}{keyword} ({cond}) {{\n")
+                self.indent_level += 1
+                saved_len = len(self._scope.cleanup_vars)
+                parts.append(self._emit_statement(clause.statement))
+                parts.append(self._emit_arm_local_cleanup(saved_len))
+                self.indent_level -= 1
+                parts.append(f"{indent}}}\n")
+            if casenode.elseclause:
+                parts.append(f"{indent}else {{\n")
+                self.indent_level += 1
+                saved_len = len(self._scope.cleanup_vars)
+                parts.append(self._emit_statement(casenode.elseclause))
+                parts.append(self._emit_arm_local_cleanup(saved_len))
+                self.indent_level -= 1
+                parts.append(f"{indent}}}\n")
+            parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+            return "".join(parts)
+
         alias_name = self._narrow_alias_name(casenode.subject)
 
         parts.append(f"{indent}switch ({subject}.tag) {{\n")
@@ -9066,6 +9095,31 @@ class CEmitter:
         parts: List[str] = []
         variant_name = variant_type.name
         subject = self._emit_operation_value(casenode.subject)
+
+        # Bool special case: subject is a primitive C bool, not a struct.
+        # Emit as if / else if on truthiness rather than switch-on-tag.
+        if variant_name == "bool":
+            for i, clause in enumerate(casenode.clauses):
+                arm = clause.match.name
+                cond = subject if arm == "true" else f"!{subject}"
+                keyword = "if" if i == 0 else "else if"
+                parts.append(f"{indent}{keyword} ({cond}) {{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(clause.statement, result_var)
+                )
+                self.indent_level -= 1
+                parts.append(f"{indent}}}\n")
+            if casenode.elseclause:
+                parts.append(f"{indent}else {{\n")
+                self.indent_level += 1
+                parts.append(
+                    self._emit_branch_with_result(casenode.elseclause, result_var)
+                )
+                self.indent_level -= 1
+                parts.append(f"{indent}}}\n")
+            return "".join(parts)
+
         alias_name = self._narrow_alias_name(casenode.subject)
 
         parts.append(f"{indent}switch ({subject}.tag) {{\n")
