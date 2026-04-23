@@ -17,6 +17,81 @@ args: function out (list of: string) is native
 # because it's an expected everyday condition, not a failure.
 get_env: function {key: string} out (option t: string) is native
 
+# set_env -- insert or overwrite an environment variable in the
+# current process. Returns `ok null` on success; `err ioerror` when
+# libc refuses the call (invalid name, out of memory). Reuses the
+# `io.ioerror` surface because the underlying errno domain is the
+# same and callers often interleave env mutation with file I/O.
+set_env: function {key: string value: string} out (result t: null e: ioerror) is native
+
+# unset_env -- remove `key` from the environment. Succeeds (`ok null`)
+# whether or not `key` was previously set; errors only on an invalid
+# key name (EINVAL surfaces as `ioerror.other`).
+unset_env: function {key: string} out (result t: null e: ioerror) is native
+
+# env_names -- snapshot of every environment variable name in the
+# current process, in `environ` order. The returned list and each of
+# its entries are freshly-allocated; scope exit frees both. Callers
+# typically iterate and use `get_env` to fetch each value; omitting
+# values from the snapshot avoids an O(n) string copy for callers
+# that filter first.
+env_names: function out (list of: string) is native
+
+# cwd -- current working directory as an absolute path. Typically
+# succeeds; errors only when the cwd inode has been unlinked or
+# permission to resolve it has been revoked.
+cwd: function out (result t: string e: ioerror) is native
+
+# set_cwd -- chdir to `path`. Affects subsequent relative-path io
+# calls. Fails with the usual ioerror variants (notfound, notdir,
+# permissiondenied).
+set_cwd: function {path: string} out (result t: null e: ioerror) is native
+
+# pid -- current process id. pid_t is `int` on Linux; we narrow to
+# i32. Infallible.
+pid: function out i32 is native
+
+# ppid -- parent process id. Infallible.
+ppid: function out i32 is native
+
+# user_name -- login name of the effective user, resolved via the
+# passwd database (getpwuid_r(geteuid())). Errors when the uid has
+# no passwd entry or the database is unreadable.
+user_name: function out (result t: string e: ioerror) is native
+
+# home_dir -- the effective user's home directory. Reads $HOME from
+# the environment; errors with `ioerror.other` when it is unset.
+# Does not fall back to the passwd database — set $HOME explicitly
+# if you need portable behavior across stripped environments.
+home_dir: function out (result t: string e: ioerror) is native
+
+# platformkind -- compile-time host OS family. Exposed as a runtime
+# variant for forward-compat with cross-compilation; the initial
+# backend resolves this at compile time via the C preprocessor.
+platformkind: variant {
+    linux: null
+    darwin: null
+    windows: null
+    other: null
+}
+
+# archkind -- compile-time CPU architecture family.
+archkind: variant {
+    x86_64: null
+    aarch64: null
+    other: null
+}
+
+# platform -- value of the current host's `platformkind`.
+platform: function out platformkind is native
+
+# arch -- value of the current host's `archkind`.
+arch: function out archkind is native
+
+# hostname -- result of `gethostname(2)`, truncated at HOST_NAME_MAX.
+# Result-wrapped because the syscall can fail in rare cases.
+hostname: function out (result t: string e: ioerror) is native
+
 # exit -- terminate the process immediately with `code` as the
 # status. Does not return; all open file descriptors are flushed by
 # libc's atexit chain, but any zerolang-level destructors for

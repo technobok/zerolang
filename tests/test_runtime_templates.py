@@ -139,9 +139,7 @@ def test_str_template_compiles():
         },
     )
     # z_str uses z_string_t in the .string method — stub it for this test
-    stub = (
-        "typedef struct { uint64_t size; char* data; uint64_t capacity; } z_string_t;\n\n"
-    )
+    stub = "typedef struct { uint64_t size; char* data; uint64_t capacity; } z_string_t;\n\n"
     rc, err = _gcc_compile(stub + body)
     assert rc == 0, err
 
@@ -184,9 +182,7 @@ def test_list_template_compiles_with_listview_methods():
         "    _this->length += _from.length;\n"
         "}\n\n"
     )
-    listview = apply(
-        "z_listview", {"NAME": "listview_i64", "ELEM_T": "int64_t"}
-    )
+    listview = apply("z_listview", {"NAME": "listview_i64", "ELEM_T": "int64_t"})
     body = apply(
         "z_list",
         {

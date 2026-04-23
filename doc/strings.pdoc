@@ -880,6 +880,115 @@ Requires pointer type for return value; depends on FFI design.
   #*: #~"stringview.cstring" -- stack-allocated copy with NUL.
 
 
+#---: Phase 7: Stringview Query API \[COMPLETE\]
+
+Non-allocating predicates. Live on #~"stringview"; callers can
+invoke them on a #~"string" receiver because the compiler
+projects through #~"string.stringview" (same mechanism that makes
+#~"s == v" work when #~"v: stringview"). Every method below is
+zero-copy; no heap work.
+
+#ul:
+  [#*: #~"is_empty" -- #~"length == 0".]
+  [#*: #~"is_ascii" -- every byte #~"< 0x80". O(n) byte walk.]
+  [#*: #~"starts_with prefix: stringview" -- zero-copy memcmp; empty prefix always matches.]
+  [#*: #~"ends_with suffix: stringview" -- symmetric.]
+  [#*: #~"contains needle: stringview" -- byte-search. Naive O(n*m) in v1; two-way / Boyer-Moore are drop-in upgrades.]
+  [#*: #~"index_of needle: stringview" -- byte index of the first occurrence as #~"optionval(u64)". Empty needle returns #~"some 0".]
+  [#*: #~"last_index_of needle: stringview" -- symmetric; reverse scan.]
+  [#*: #~"byte_at i: u64" -- bounds-checked byte access, #~"optionval(u8)". NOT codepoint-at (phase 11 handles that).]
+
+
+#---: Phase 8: Stringview Slicing Helpers \[COMPLETE\]
+
+All return a #~"stringview" locked to the same source as the
+receiver (pointer-arithmetic slicing, no allocation).
+
+#ul:
+  [#*: #~"trim" / #~"trim_start" / #~"trim_end" -- strip ASCII whitespace (space, tab, LF, VT, FF, CR). Named without #~"_ascii" because ASCII whitespace is the near-universal expectation; revisit when Unicode lands.]
+  [#*: #~"strip_prefix p: stringview" -- returns #~"some rest" on match, #~"none" otherwise. Composes cleanly for parsers stripping #~"--", #~"=", etc.]
+  [#*: #~"strip_suffix s: stringview" -- symmetric.]
+
+The #~"option(stringview)" return boxes the stringview payload
+(one 16-byte heap allocation for the union payload). The
+compiler-generated destructor frees it on scope exit.
+
+
+#---: Phase 9: Splitting \[COMPLETE\]
+
+Splitting yields #~"stringview" fragments via an iterator rather
+than a collection. Two v2 constraints forbid
+#~"list of: stringview":
+
+#ul:
+  [#*: #~"stringview" cannot be stored in record/class fields. List elements live in a class field; the list is therefore not constructible.]
+  [#*: #~".stringview" takes an EXCLUSIVE lock. Two sibling views on the same source conflict even if the element type worked.]
+
+The iterator holds the lock for its whole lifetime. Each
+#~".call" yields the next view, borrowed from that lock; the
+yielded view lives only inside the loop body.
+
+#ul:
+  [#*: #~"split sep: stringview" -- returns a #~"splitter". Iterates with #~"with it: (sv.split sep: \", \") do for piece: it loop { ... }".]
+  [#*: #~"split_once sep: stringview" -- returns the byte index of the first separator as #~"optionval(u64)"; callers slice the view themselves (sequentially, because views on the same source are mutually exclusive).]
+  [#*: #~"lines" -- returns a #~"linesiter". Splits on LF, stripping a paired CRLF.]
+
+Callers that genuinely need every fragment for random access
+write the loop themselves and pay for owned copies
+(#~"pieces.append from: piece.string" inside the body). The
+stdlib deliberately does NOT provide a #~"split_to_list" /
+#~"collect" helper — explicit allocation at the call site keeps
+the cost visible.
+
+
+#---: Phase 10: Allocating Transforms \[COMPLETE\]
+
+Return owned #~"string" values; each allocates once.
+
+#ul:
+  [#*: #~"to_lower_ascii" / #~"to_upper_ascii" -- byte-wise ASCII case conversion. Non-ASCII bytes pass through unchanged. The #~"_ascii" suffix is deliberate: a future Unicode variant needs case-fold tables (~40 KiB) and belongs in the segmentation-tables phase.]
+  [#*: #~"replace needle: stringview replacement: stringview" -- replace every occurrence. Empty needle returns a copy.]
+  [#*: #~"replace_first ..." -- as above, one replacement.]
+  [#*: #~"repeated n: u64" -- this view repeated #~"n" times. Named #~"repeated" (past participle) because #~"repeat" is a reserved control-flow keyword.]
+  [#*: #~"concat other: stringview" -- two-operand concatenation when interpolation syntax is too noisy.]
+
+
+#---: Phase 11: Codepoint Iteration + Count \[COMPLETE\]
+
+Distinct from #~".length" (bytes).
+
+#ul:
+  [#*: #~"count" -- codepoint count. O(n) UTF-8 state walk. Doc must emphasise the byte-vs-codepoint difference.]
+  [#*: #~"codepoints" -- returns a #~"cpiter" yielding #~"u32" codepoints via the #~"call" / #~"optionval" iterator protocol. Ill-formed bytes are replaced with U+FFFD and the iterator advances one byte (byte-level recovery, matches Rust / Go precedent).]
+
+
+#---: Phase 12: Numeric Parsing \[COMPLETE\]
+
+Each #~"parse_*" consumes the whole view. Optional leading sign
+(i64 / f64); decimal digits only; no whitespace, no underscore
+separators, no radix prefix.
+
+#ul:
+  [#*: #~"parse_i64" -- out #~"result(i64, parseerror)".]
+  [#*: #~"parse_u64" -- out #~"result(u64, parseerror)".]
+  [#*: #~"parse_f64" -- out #~"result(f64, parseerror)". Delegates to #~"strtod"; rejects #~"inf" / #~"nan" string forms in v1.]
+
+The #~"parseerror" variant has three null arms:
+#~"empty", #~"invalid_digit", #~"overflow" -- value-typed so the
+error fits inline.
+
+
+#---: Phase 13: #~"string_join" Free Function \[COMPLETE\]
+
+Concatenate a #~"list of: string" with a separator. One
+allocation for the output string; memcpy in sequence.
+
+#ul:
+  [#*: #~"string_join parts: (list of: string) sep: stringview out string"]
+  [#*: Free function rather than a method on list because lists are generic and zerolang does not yet support monomorphization-specific methods.]
+  [#*: Takes #~"list of: string", not #~"list of: stringview" -- the latter is not constructible in v2. Callers holding fragments materialise owned strings inside their loop first.]
+
+
 #--: Open Questions
 
 #ul:

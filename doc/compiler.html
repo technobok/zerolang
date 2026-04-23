@@ -256,24 +256,39 @@ merged into the parent.</p>
 <p>Each scope carries a monotonically increasing <code>scope_id</code> for tracing and
 SQL output.</p>
 <h3 id="lock-checking"><a href="#lock-checking">6.5. Lock Checking</a></h3>
-<p>Lock enforcement is fully active. Two lock scopes exist:</p>
+<p>Lock keys are paths -- tuples <code>(root, f1, f2, ..., fn)</code>. Scope
+chain entries (<code>Entry.name</code>) are keyed by the root so the linear scan
+stays cheap; the full path lives on <code>Entry.lock.path</code> and is consulted
+to apply the prefix-overlap conflict rule. Two lock scopes exist:</p>
 <ul>
 <li>Call-scoped locks -- taken on function arguments during a call.
-A call scope is pushed before argument processing. After the call returns,
-the scope is popped and all call-scoped locks are released. For <code>.lock</code>
-parameters, the lock transfers to the return value (installed as a
-borrow-scoped lock in the parent scope).</li>
-<li>Borrow-scoped locks -- taken when <code>.borrow</code> or <code>.lock</code>
-creates a borrowed binding. An exclusive lock entry is placed in the
-scope where the borrow variable is defined. The lock persists for the
-lifetime of that scope. When the scope exits, the lock vanishes and
-the locked variable becomes available again.</li>
+A call scope is pushed before argument processing. For each reftype
+argument, SHARED locks are taken on every intermediate prefix of the
+source path and EXCLUSIVE on the leaf. The receiver path locks
+identically. After the call returns, the scope is popped and all
+call-scoped locks are released. For <code>.lock</code> parameters, the leaf
+lock transfers to the return value (installed as a borrow-scoped lock
+in the parent scope).</li>
+<li>Borrow-scoped locks -- taken when <code>.borrow</code>, <code>.lock</code>,
+<code>.stringview</code>, <code>.listview</code>, a <code>with</code>-binding, or a
+<code>.lock</code>-param transfer creates a borrowed binding. SHARED entries
+are placed on each intermediate prefix and EXCLUSIVE on the leaf in
+the scope where the borrow variable is defined. The locks persist
+for the lifetime of that scope (released on scope exit or explicit
+<code>.release</code>).</li>
 </ul>
-<p>Lock state is queried by searching the scope chain from innermost to
-outermost. An exclusive lock on a variable blocks all access (reads and
-writes) for the duration of the lock. Shared locks (used during calls for
-dotted-path arguments) do not block other shared locks but do block
-exclusive locks.</p>
+<p>Conflict check (multi-granularity): same-path locks dedupe when both
+SHARED and conflict when either is EXCLUSIVE; a strict ancestor
+SHARED is intent-shared and permits any lock on descendants; a strict
+ancestor EXCLUSIVE conflicts with any descendant. Sibling paths (no
+prefix relation) never conflict. Enforcement for access / mutation
+sites uses the same prefix-overlap test: any EXCLUSIVE whose path
+prefix-overlaps the target path is a conflict.</p>
+<p>Key code: <code>try_lock</code> / <code>find_exclusive_lock</code> /
+<code>_lock_acquire_conflict</code> in <code>src/zenv.py</code>; <code>_lock_arg</code> /
+<code>_lock_receiver</code> / <code>_install_borrow_locks</code> /
+<code>_get_dotted_path_tuple</code> / <code>_check_not_locked</code> in
+<code>src/ztypecheck.py</code>.</p>
 <p>All parameters default to <code>.borrow</code> regardless of type family.
 For valtypes, <code>.borrow</code> means a copy (no lock, source not invalidated).
 For reftypes, <code>.borrow</code> means a reference (source not invalidated).

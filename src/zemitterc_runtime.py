@@ -19,6 +19,7 @@ def emit_runtime_includes(
     needs_stdbool: bool,
     needs_string: bool,
     needs_io: bool = False,
+    needs_pwd: bool = False,
 ) -> str:
     """Emit #include directives for required C standard headers."""
     parts: list[str] = []
@@ -39,6 +40,8 @@ def emit_runtime_includes(
         parts.append("#include <sys/stat.h>\n")
         parts.append("#include <sys/types.h>\n")
         parts.append("#include <dirent.h>\n")
+    if needs_pwd:
+        parts.append("#include <pwd.h>\n")
     if parts:
         parts.append("\n")
     return "".join(parts)
@@ -1153,19 +1156,281 @@ _Z_OS_GET_ENV = (
     "/* os.get_env -- look up the POSIX environment by name. Returns\n"
     "   option.some(string) on hit (copying the value so the caller\n"
     "   owns the heap buffer and libc's environ isn't aliased); returns\n"
-    "   option.none on miss. The caller retains ownership of `key` and\n"
-    "   frees it after the call returns. */\n"
-    "static z_option_string_t z_os_get_env(z_string_t* key);\n"
-    "static z_option_string_t z_os_get_env(z_string_t* key) {\n"
+    "   option.none on miss. Consumes `key` per the os-unit string-arg\n"
+    "   convention. */\n"
+    "static z_option_string_t z_os_get_env(z_string_t key);\n"
+    "static z_option_string_t z_os_get_env(z_string_t key) {\n"
     "    z_option_string_t out = {0};\n"
-    "    const char* v = getenv(key->data);\n"
+    "    const char* v = getenv(key.data);\n"
     "    if (v == NULL) {\n"
+    "        z_string_free(&key);\n"
     "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
     "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(v);\n"
+    "    z_string_free(&key);\n"
     "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_SET_ENV = (
+    "/* os.set_env -- setenv(key, value, 1): always overwrites. Consumes\n"
+    "   both strings per the os-unit string-arg convention. */\n"
+    "static z_result_null_ioerror_t z_os_set_env(z_string_t key, z_string_t value);\n"
+    "static z_result_null_ioerror_t z_os_set_env(z_string_t key, z_string_t value) {\n"
+    "    z_result_null_ioerror_t out = {0};\n"
+    "    int rc = setenv(key.data, value.data, 1);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&key);\n"
+    "    z_string_free(&value);\n"
+    "    if (rc != 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    out.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "    out.data = NULL;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_UNSET_ENV = (
+    "/* os.unset_env -- unsetenv(key). Idempotent: removing a variable\n"
+    "   that was never set returns ok null. */\n"
+    "static z_result_null_ioerror_t z_os_unset_env(z_string_t key);\n"
+    "static z_result_null_ioerror_t z_os_unset_env(z_string_t key) {\n"
+    "    z_result_null_ioerror_t out = {0};\n"
+    "    int rc = unsetenv(key.data);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&key);\n"
+    "    if (rc != 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    out.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "    out.data = NULL;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_ENV_NAMES = (
+    "/* os.env_names -- snapshot of environ keys. Each entry in\n"
+    "   environ is `key=value`; we copy the portion before the first\n"
+    "   `=` into a freshly-allocated z_string_t and push onto an\n"
+    "   owned list. The list's destructor frees each string. */\n"
+    "extern char** environ;\n"
+    "static z_list_string_t z_os_env_names(void);\n"
+    "static z_list_string_t z_os_env_names(void) {\n"
+    "    z_list_string_t out = z_list_string_create((uint64_t)0);\n"
+    "    if (environ == NULL) return out;\n"
+    "    for (char** ep = environ; *ep != NULL; ep++) {\n"
+    "        const char* entry = *ep;\n"
+    "        const char* eq = strchr(entry, '=');\n"
+    "        size_t n = (eq != NULL) ? (size_t)(eq - entry) : strlen(entry);\n"
+    "        z_string_t s = z_string_create((uint64_t)n);\n"
+    "        z_string_append(&s, entry, (uint64_t)n);\n"
+    "        z_list_string_append(&out, s);\n"
+    "    }\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_CWD = (
+    "/* os.cwd -- getcwd(NULL, 0) allocates a buffer sized to the\n"
+    "   current path. We copy into a z_string_t and free the libc\n"
+    "   buffer so ownership stays uniform. */\n"
+    "static z_result_string_ioerror_t z_os_cwd(void);\n"
+    "static z_result_string_ioerror_t z_os_cwd(void) {\n"
+    "    z_result_string_ioerror_t out = {0};\n"
+    "    char* buf = getcwd(NULL, 0);\n"
+    "    if (buf == NULL) {\n"
+    "        int e = errno;\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = z_string_new(buf);\n"
+    "    free(buf);\n"
+    "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_SET_CWD = (
+    "/* os.set_cwd -- chdir(path). Consumes `path` per the os-unit\n"
+    "   string-arg convention. */\n"
+    "static z_result_null_ioerror_t z_os_set_cwd(z_string_t path);\n"
+    "static z_result_null_ioerror_t z_os_set_cwd(z_string_t path) {\n"
+    "    z_result_null_ioerror_t out = {0};\n"
+    "    int rc = chdir(path.data);\n"
+    "    int e = errno;\n"
+    "    z_string_free(&path);\n"
+    "    if (rc != 0) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    out.tag = Z_RESULT_NULL_IOERROR_TAG_OK;\n"
+    "    out.data = NULL;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_PID = (
+    "/* os.pid -- getpid. pid_t fits in int32_t on every supported\n"
+    "   platform (Linux caps at 4_194_304 by default). */\n"
+    "static int32_t z_os_pid(void);\n"
+    "static int32_t z_os_pid(void) {\n"
+    "    return (int32_t)getpid();\n"
+    "}\n\n"
+)
+
+_Z_OS_PPID = (
+    "/* os.ppid -- getppid. */\n"
+    "static int32_t z_os_ppid(void);\n"
+    "static int32_t z_os_ppid(void) {\n"
+    "    return (int32_t)getppid();\n"
+    "}\n\n"
+)
+
+_Z_OS_USER_NAME = (
+    "/* os.user_name -- resolve the effective uid via getpwuid_r.\n"
+    "   Starts with a 1 KiB buffer and retries once with 16 KiB if\n"
+    "   ERANGE; beyond that, surface as ioerror.other. */\n"
+    "static z_result_string_ioerror_t z_os_user_name(void);\n"
+    "static z_result_string_ioerror_t z_os_user_name(void) {\n"
+    "    z_result_string_ioerror_t out = {0};\n"
+    "    uid_t uid = geteuid();\n"
+    "    size_t bufsize = 1024;\n"
+    "    for (int attempt = 0; attempt < 2; attempt++) {\n"
+    "        char* buf = (char*)malloc(bufsize);\n"
+    "        struct passwd pwd;\n"
+    "        struct passwd* result = NULL;\n"
+    "        int rc = getpwuid_r(uid, &pwd, buf, bufsize, &result);\n"
+    "        if (rc == 0 && result != NULL) {\n"
+    "            z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "            *boxed = z_string_new(pwd.pw_name);\n"
+    "            free(buf);\n"
+    "            out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
+    "            out.data = boxed;\n"
+    "            return out;\n"
+    "        }\n"
+    "        free(buf);\n"
+    "        if (rc == ERANGE && attempt == 0) {\n"
+    "            bufsize = 16 * 1024;\n"
+    "            continue;\n"
+    "        }\n"
+    "        int e = (rc == 0) ? ENOENT : rc;\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    /* unreachable */\n"
+    "    out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "    out.data = NULL;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_HOME_DIR = (
+    "/* os.home_dir -- read $HOME from the environment. No passwd\n"
+    "   fallback: callers who care about stripped environments must\n"
+    "   set HOME explicitly. */\n"
+    "static z_result_string_ioerror_t z_os_home_dir(void);\n"
+    "static z_result_string_ioerror_t z_os_home_dir(void) {\n"
+    "    z_result_string_ioerror_t out = {0};\n"
+    '    const char* h = getenv("HOME");\n'
+    "    if (h == NULL) {\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t v = {0};\n"
+    "        v.tag = Z_IOERROR_TAG_OTHER;\n"
+    "        z_string_t* sp = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    '        *sp = z_string_new("$HOME is not set");\n'
+    "        v.data = sp;\n"
+    "        *boxed = v;\n"
+    "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = z_string_new(h);\n"
+    "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_PLATFORM = (
+    "/* os.platform -- compile-time selection via C preprocessor.\n"
+    "   Falls through to `other` on unrecognised hosts. */\n"
+    "static z_platformkind_t z_os_platform(void);\n"
+    "static z_platformkind_t z_os_platform(void) {\n"
+    "    z_platformkind_t out = {0};\n"
+    "#if defined(__linux__)\n"
+    "    out.tag = Z_PLATFORMKIND_TAG_LINUX;\n"
+    "#elif defined(__APPLE__)\n"
+    "    out.tag = Z_PLATFORMKIND_TAG_DARWIN;\n"
+    "#elif defined(_WIN32)\n"
+    "    out.tag = Z_PLATFORMKIND_TAG_WINDOWS;\n"
+    "#else\n"
+    "    out.tag = Z_PLATFORMKIND_TAG_OTHER;\n"
+    "#endif\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_ARCH = (
+    "/* os.arch -- compile-time CPU family. */\n"
+    "static z_archkind_t z_os_arch(void);\n"
+    "static z_archkind_t z_os_arch(void) {\n"
+    "    z_archkind_t out = {0};\n"
+    "#if defined(__x86_64__) || defined(_M_X64)\n"
+    "    out.tag = Z_ARCHKIND_TAG_X86_64;\n"
+    "#elif defined(__aarch64__) || defined(_M_ARM64)\n"
+    "    out.tag = Z_ARCHKIND_TAG_AARCH64;\n"
+    "#else\n"
+    "    out.tag = Z_ARCHKIND_TAG_OTHER;\n"
+    "#endif\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_OS_HOSTNAME = (
+    "/* os.hostname -- gethostname(3). HOST_NAME_MAX is typically 64\n"
+    "   on Linux; we use 256 to be defensive on unusual POSIX hosts\n"
+    "   and truncate on overflow. */\n"
+    "static z_result_string_ioerror_t z_os_hostname(void);\n"
+    "static z_result_string_ioerror_t z_os_hostname(void) {\n"
+    "    z_result_string_ioerror_t out = {0};\n"
+    "    char buf[256];\n"
+    "    if (gethostname(buf, sizeof(buf)) != 0) {\n"
+    "        int e = errno;\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        *boxed = z_io_errno_to_ioerror(e);\n"
+    "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    buf[sizeof(buf) - 1] = '\\0';\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = z_string_new(buf);\n"
+    "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "    out.data = boxed;\n"
     "    return out;\n"
     "}\n\n"
@@ -1179,6 +1444,1377 @@ _Z_OS_EXIT = (
     "    exit((int)code);\n"
     "}\n\n"
 )
+
+
+# -- Phase S1: non-allocating query natives on stringview ---------
+# Emitted AFTER mono types so the option/optionval wrappers they
+# return (e.g. z_optionval_u64_t) are already declared. Per-name
+# gated like io/os.
+
+_Z_SV_IS_EMPTY = (
+    "static bool z_stringview_is_empty(const z_stringview_t* self);\n"
+    "static bool z_stringview_is_empty(const z_stringview_t* self) {\n"
+    "    return self->length == 0;\n"
+    "}\n\n"
+)
+
+_Z_SV_IS_ASCII = (
+    "static bool z_stringview_is_ascii(const z_stringview_t* self);\n"
+    "static bool z_stringview_is_ascii(const z_stringview_t* self) {\n"
+    "    for (uint64_t i = 0; i < self->length; i++) {\n"
+    "        if ((unsigned char)self->data[i] >= 0x80) return false;\n"
+    "    }\n"
+    "    return true;\n"
+    "}\n\n"
+)
+
+_Z_SV_STARTS_WITH = (
+    "static bool z_stringview_starts_with(const z_stringview_t* self, const z_stringview_t* prefix);\n"
+    "static bool z_stringview_starts_with(const z_stringview_t* self, const z_stringview_t* prefix) {\n"
+    "    if (prefix->length > self->length) return false;\n"
+    "    if (prefix->length == 0) return true;\n"
+    "    return memcmp(self->data, prefix->data, prefix->length) == 0;\n"
+    "}\n\n"
+)
+
+_Z_SV_ENDS_WITH = (
+    "static bool z_stringview_ends_with(const z_stringview_t* self, const z_stringview_t* suffix);\n"
+    "static bool z_stringview_ends_with(const z_stringview_t* self, const z_stringview_t* suffix) {\n"
+    "    if (suffix->length > self->length) return false;\n"
+    "    if (suffix->length == 0) return true;\n"
+    "    return memcmp(self->data + (self->length - suffix->length),\n"
+    "                  suffix->data, suffix->length) == 0;\n"
+    "}\n\n"
+)
+
+# Raw byte-search helper used by contains / index_of. Returns\n
+# UINT64_MAX on miss. Empty needle returns 0.
+_Z_SV_INDEX_OF_RAW = (
+    "static uint64_t z_stringview_index_of_raw(const z_stringview_t* self, const z_stringview_t* needle);\n"
+    "static uint64_t z_stringview_index_of_raw(const z_stringview_t* self, const z_stringview_t* needle) {\n"
+    "    if (needle->length == 0) return 0;\n"
+    "    if (needle->length > self->length) return UINT64_MAX;\n"
+    "    uint64_t last = self->length - needle->length;\n"
+    "    for (uint64_t i = 0; i <= last; i++) {\n"
+    "        if (memcmp(self->data + i, needle->data, needle->length) == 0) {\n"
+    "            return i;\n"
+    "        }\n"
+    "    }\n"
+    "    return UINT64_MAX;\n"
+    "}\n\n"
+)
+
+_Z_SV_CONTAINS = (
+    "static bool z_stringview_contains(const z_stringview_t* self, const z_stringview_t* needle);\n"
+    "static bool z_stringview_contains(const z_stringview_t* self, const z_stringview_t* needle) {\n"
+    "    return z_stringview_index_of_raw(self, needle) != UINT64_MAX;\n"
+    "}\n\n"
+)
+
+_Z_SV_INDEX_OF = (
+    "static z_optionval_u64_t z_stringview_index_of(const z_stringview_t* self, const z_stringview_t* needle);\n"
+    "static z_optionval_u64_t z_stringview_index_of(const z_stringview_t* self, const z_stringview_t* needle) {\n"
+    "    z_optionval_u64_t out = {0};\n"
+    "    uint64_t r = z_stringview_index_of_raw(self, needle);\n"
+    "    if (r == UINT64_MAX) {\n"
+    "        out.tag = Z_OPTIONVAL_U64_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    out.tag = Z_OPTIONVAL_U64_TAG_SOME;\n"
+    "    out.data.some = r;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_LAST_INDEX_OF = (
+    "static z_optionval_u64_t z_stringview_last_index_of(const z_stringview_t* self, const z_stringview_t* needle);\n"
+    "static z_optionval_u64_t z_stringview_last_index_of(const z_stringview_t* self, const z_stringview_t* needle) {\n"
+    "    z_optionval_u64_t out = {0};\n"
+    "    if (needle->length == 0) {\n"
+    "        out.tag = Z_OPTIONVAL_U64_TAG_SOME;\n"
+    "        out.data.some = self->length;\n"
+    "        return out;\n"
+    "    }\n"
+    "    if (needle->length > self->length) {\n"
+    "        out.tag = Z_OPTIONVAL_U64_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    for (uint64_t i = self->length - needle->length + 1; i > 0; i--) {\n"
+    "        uint64_t idx = i - 1;\n"
+    "        if (memcmp(self->data + idx, needle->data, needle->length) == 0) {\n"
+    "            out.tag = Z_OPTIONVAL_U64_TAG_SOME;\n"
+    "            out.data.some = idx;\n"
+    "            return out;\n"
+    "        }\n"
+    "    }\n"
+    "    out.tag = Z_OPTIONVAL_U64_TAG_NONE;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_BYTE_AT = (
+    "static z_optionval_u8_t z_stringview_byte_at(const z_stringview_t* self, uint64_t i);\n"
+    "static z_optionval_u8_t z_stringview_byte_at(const z_stringview_t* self, uint64_t i) {\n"
+    "    z_optionval_u8_t out = {0};\n"
+    "    if (i >= self->length) {\n"
+    "        out.tag = Z_OPTIONVAL_U8_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    out.tag = Z_OPTIONVAL_U8_TAG_SOME;\n"
+    "    out.data.some = (uint8_t)self->data[i];\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+# -- Phase S2: view-returning slicing helpers ---------------------
+
+# ASCII whitespace: space, tab, LF, VT, FF, CR. Matches Rust's
+# `is_ascii_whitespace`. Small inline helper shared by trim.
+_Z_SV_IS_ASCII_WS = (
+    "static bool z_ascii_is_ws(unsigned char c);\n"
+    "static bool z_ascii_is_ws(unsigned char c) {\n"
+    "    return c == ' ' || c == '\\t' || c == '\\n'\n"
+    "        || c == '\\v' || c == '\\f' || c == '\\r';\n"
+    "}\n\n"
+)
+
+_Z_SV_TRIM = (
+    "static z_stringview_t z_stringview_trim(const z_stringview_t* self);\n"
+    "static z_stringview_t z_stringview_trim(const z_stringview_t* self) {\n"
+    "    const char* p = self->data;\n"
+    "    const char* end = self->data + self->length;\n"
+    "    while (p < end && z_ascii_is_ws((unsigned char)*p)) p++;\n"
+    "    while (end > p && z_ascii_is_ws((unsigned char)end[-1])) end--;\n"
+    "    z_stringview_t out = { p, (uint64_t)(end - p) };\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_TRIM_START = (
+    "static z_stringview_t z_stringview_trim_start(const z_stringview_t* self);\n"
+    "static z_stringview_t z_stringview_trim_start(const z_stringview_t* self) {\n"
+    "    const char* p = self->data;\n"
+    "    const char* end = self->data + self->length;\n"
+    "    while (p < end && z_ascii_is_ws((unsigned char)*p)) p++;\n"
+    "    z_stringview_t out = { p, (uint64_t)(end - p) };\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_TRIM_END = (
+    "static z_stringview_t z_stringview_trim_end(const z_stringview_t* self);\n"
+    "static z_stringview_t z_stringview_trim_end(const z_stringview_t* self) {\n"
+    "    const char* p = self->data;\n"
+    "    const char* end = self->data + self->length;\n"
+    "    while (end > p && z_ascii_is_ws((unsigned char)end[-1])) end--;\n"
+    "    z_stringview_t out = { p, (uint64_t)(end - p) };\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+# strip_prefix / strip_suffix return option(stringview). The some
+# arm is a heap-boxed stringview (union payloads are void*); the
+# compiler-generated destructor frees it on scope exit. One tiny
+# (16 byte) allocation per call.
+_Z_SV_STRIP_PREFIX = (
+    "static z_option_stringview_t z_stringview_strip_prefix(\n"
+    "    const z_stringview_t* self, const z_stringview_t* p);\n"
+    "static z_option_stringview_t z_stringview_strip_prefix(\n"
+    "    const z_stringview_t* self, const z_stringview_t* p) {\n"
+    "    z_option_stringview_t out = {0};\n"
+    "    if (p->length > self->length\n"
+    "        || (p->length > 0 && memcmp(self->data, p->data, p->length) != 0)) {\n"
+    "        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    boxed->data = self->data + p->length;\n"
+    "    boxed->length = self->length - p->length;\n"
+    "    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+# -- Phase S3: splitter / linesiter ------------------------------
+
+# Shared struct layout for both splitter and linesiter. Fields are
+# not exposed to zerolang; the classes are declared `is native`.
+# The emitter emits a typedef for each class based on the declared
+# fields — since there are none, the runtime must provide the full
+# struct here. We shadow the compiler-emitted empty typedef by
+# defining the struct first and using a different name with a
+# forward `typedef`.
+_Z_SV_SPLITTER_STRUCT = (
+    "/* Splitter / linesiter state. Classes are declared `is native`\n"
+    "   with no user fields; the runtime supplies the real layout,\n"
+    "   stack-allocated value type (48 bytes). Both iterators share\n"
+    "   the same struct — linesiter leaves sep NULL. */\n"
+    "typedef struct {\n"
+    "    const char* src;\n"
+    "    uint64_t    src_len;\n"
+    "    const char* sep;\n"
+    "    uint64_t    sep_len;\n"
+    "    uint64_t    cursor;\n"
+    "    bool        done;\n"
+    "} z_splitter_t;\n\n"
+    "typedef z_splitter_t z_linesiter_t;\n\n"
+)
+
+_Z_SV_SPLIT = (
+    "static z_splitter_t z_stringview_split(\n"
+    "    const z_stringview_t* self, const z_stringview_t* sep);\n"
+    "static z_splitter_t z_stringview_split(\n"
+    "    const z_stringview_t* self, const z_stringview_t* sep) {\n"
+    "    z_splitter_t s;\n"
+    "    s.src = self->data;\n"
+    "    s.src_len = self->length;\n"
+    "    s.sep = sep->data;\n"
+    "    s.sep_len = sep->length;\n"
+    "    s.cursor = 0;\n"
+    "    s.done = (sep->length == 0);\n"
+    "    return s;\n"
+    "}\n\n"
+)
+
+_Z_SV_SPLITTER_CALL = (
+    "static z_option_stringview_t z_splitter_call(z_splitter_t* s);\n"
+    "static z_option_stringview_t z_splitter_call(z_splitter_t* s) {\n"
+    "    z_option_stringview_t out = {0};\n"
+    "    if (s->done) {\n"
+    "        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    const char* start = s->src + s->cursor;\n"
+    "    uint64_t remaining = s->src_len - s->cursor;\n"
+    "    if (s->sep_len > remaining) {\n"
+    "        /* no more separators possible — return the tail */\n"
+    "        z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "        boxed->data = start;\n"
+    "        boxed->length = remaining;\n"
+    "        s->cursor = s->src_len;\n"
+    "        s->done = true;\n"
+    "        out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
+    "        out.data = boxed;\n"
+    "        return out;\n"
+    "    }\n"
+    "    uint64_t scan_end = remaining - s->sep_len;\n"
+    "    for (uint64_t i = 0; i <= scan_end; i++) {\n"
+    "        if (memcmp(start + i, s->sep, s->sep_len) == 0) {\n"
+    "            z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "            boxed->data = start;\n"
+    "            boxed->length = i;\n"
+    "            s->cursor += i + s->sep_len;\n"
+    "            out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
+    "            out.data = boxed;\n"
+    "            return out;\n"
+    "        }\n"
+    "    }\n"
+    "    /* no separator in remaining — final fragment */\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    boxed->data = start;\n"
+    "    boxed->length = remaining;\n"
+    "    s->cursor = s->src_len;\n"
+    "    s->done = true;\n"
+    "    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_SPLIT_ONCE = (
+    "static z_optionval_u64_t z_stringview_split_once(\n"
+    "    const z_stringview_t* self, const z_stringview_t* sep);\n"
+    "static z_optionval_u64_t z_stringview_split_once(\n"
+    "    const z_stringview_t* self, const z_stringview_t* sep) {\n"
+    "    z_optionval_u64_t out = {0};\n"
+    "    if (sep->length == 0) {\n"
+    "        out.tag = Z_OPTIONVAL_U64_TAG_SOME;\n"
+    "        out.data.some = 0;\n"
+    "        return out;\n"
+    "    }\n"
+    "    if (sep->length > self->length) {\n"
+    "        out.tag = Z_OPTIONVAL_U64_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    uint64_t last = self->length - sep->length;\n"
+    "    for (uint64_t i = 0; i <= last; i++) {\n"
+    "        if (memcmp(self->data + i, sep->data, sep->length) == 0) {\n"
+    "            out.tag = Z_OPTIONVAL_U64_TAG_SOME;\n"
+    "            out.data.some = i;\n"
+    "            return out;\n"
+    "        }\n"
+    "    }\n"
+    "    out.tag = Z_OPTIONVAL_U64_TAG_NONE;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_LINES = (
+    "static z_linesiter_t z_stringview_lines(const z_stringview_t* self);\n"
+    "static z_linesiter_t z_stringview_lines(const z_stringview_t* self) {\n"
+    "    z_linesiter_t s;\n"
+    "    s.src = self->data;\n"
+    "    s.src_len = self->length;\n"
+    "    s.sep = NULL;\n"
+    "    s.sep_len = 0;\n"
+    "    s.cursor = 0;\n"
+    "    s.done = (self->length == 0);\n"
+    "    return s;\n"
+    "}\n\n"
+)
+
+# -- Phase S4: allocating transforms -------------------------------
+# All return a freshly-allocated z_string_t; caller's scope cleanup
+# frees the heap buffer.
+
+_Z_SV_TO_LOWER_ASCII = (
+    "static z_string_t z_stringview_to_lower_ascii(const z_stringview_t* self);\n"
+    "static z_string_t z_stringview_to_lower_ascii(const z_stringview_t* self) {\n"
+    "    z_string_t z = {0};\n"
+    "    z.size = self->length;\n"
+    "    z.capacity = self->length + 1;\n"
+    "    z.data = (char*)malloc(z.capacity);\n"
+    "    for (uint64_t i = 0; i < self->length; i++) {\n"
+    "        unsigned char c = (unsigned char)self->data[i];\n"
+    "        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + ('a' - 'A'));\n"
+    "        z.data[i] = (char)c;\n"
+    "    }\n"
+    "    z.data[self->length] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
+)
+
+_Z_SV_TO_UPPER_ASCII = (
+    "static z_string_t z_stringview_to_upper_ascii(const z_stringview_t* self);\n"
+    "static z_string_t z_stringview_to_upper_ascii(const z_stringview_t* self) {\n"
+    "    z_string_t z = {0};\n"
+    "    z.size = self->length;\n"
+    "    z.capacity = self->length + 1;\n"
+    "    z.data = (char*)malloc(z.capacity);\n"
+    "    for (uint64_t i = 0; i < self->length; i++) {\n"
+    "        unsigned char c = (unsigned char)self->data[i];\n"
+    "        if (c >= 'a' && c <= 'z') c = (unsigned char)(c - ('a' - 'A'));\n"
+    "        z.data[i] = (char)c;\n"
+    "    }\n"
+    "    z.data[self->length] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
+)
+
+# Shared replace implementation. `once=true` replaces only the
+# first occurrence.
+_Z_SV_REPLACE_IMPL = (
+    "static z_string_t z_stringview_replace_impl(\n"
+    "    const z_stringview_t* self, const z_stringview_t* needle,\n"
+    "    const z_stringview_t* repl, bool once);\n"
+    "static z_string_t z_stringview_replace_impl(\n"
+    "    const z_stringview_t* self, const z_stringview_t* needle,\n"
+    "    const z_stringview_t* repl, bool once) {\n"
+    "    /* empty needle: just copy self */\n"
+    "    if (needle->length == 0) {\n"
+    "        z_string_t z = {0};\n"
+    "        z.size = self->length;\n"
+    "        z.capacity = self->length + 1;\n"
+    "        z.data = (char*)malloc(z.capacity);\n"
+    "        memcpy(z.data, self->data, self->length);\n"
+    "        z.data[self->length] = '\\0';\n"
+    "        return z;\n"
+    "    }\n"
+    "    /* pass 1: count matches so we can size the output once */\n"
+    "    uint64_t matches = 0;\n"
+    "    if (needle->length <= self->length) {\n"
+    "        uint64_t last = self->length - needle->length;\n"
+    "        uint64_t i = 0;\n"
+    "        while (i <= last) {\n"
+    "            if (memcmp(self->data + i, needle->data, needle->length) == 0) {\n"
+    "                matches++;\n"
+    "                i += needle->length;\n"
+    "                if (once) break;\n"
+    "            } else {\n"
+    "                i++;\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    uint64_t delta_per =\n"
+    "        (repl->length > needle->length)\n"
+    "            ? (repl->length - needle->length)\n"
+    "            : 0;\n"
+    "    uint64_t shrink_per =\n"
+    "        (needle->length > repl->length)\n"
+    "            ? (needle->length - repl->length)\n"
+    "            : 0;\n"
+    "    uint64_t out_len = self->length + matches * delta_per - matches * shrink_per;\n"
+    "    z_string_t z = {0};\n"
+    "    z.size = out_len;\n"
+    "    z.capacity = out_len + 1;\n"
+    "    z.data = (char*)malloc(z.capacity);\n"
+    "    /* pass 2: copy with replacement */\n"
+    "    uint64_t src_i = 0, dst_i = 0, done_matches = 0;\n"
+    "    while (src_i < self->length) {\n"
+    "        bool can_match = (done_matches < matches)\n"
+    "                      && (src_i + needle->length <= self->length)\n"
+    "                      && (memcmp(self->data + src_i, needle->data, needle->length) == 0);\n"
+    "        if (can_match) {\n"
+    "            memcpy(z.data + dst_i, repl->data, repl->length);\n"
+    "            dst_i += repl->length;\n"
+    "            src_i += needle->length;\n"
+    "            done_matches++;\n"
+    "        } else {\n"
+    "            z.data[dst_i++] = self->data[src_i++];\n"
+    "        }\n"
+    "    }\n"
+    "    z.data[dst_i] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
+)
+
+_Z_SV_REPLACE = (
+    "static z_string_t z_stringview_replace(\n"
+    "    const z_stringview_t* self, const z_stringview_t* needle,\n"
+    "    const z_stringview_t* replacement);\n"
+    "static z_string_t z_stringview_replace(\n"
+    "    const z_stringview_t* self, const z_stringview_t* needle,\n"
+    "    const z_stringview_t* replacement) {\n"
+    "    return z_stringview_replace_impl(self, needle, replacement, false);\n"
+    "}\n\n"
+)
+
+_Z_SV_REPLACE_FIRST = (
+    "static z_string_t z_stringview_replace_first(\n"
+    "    const z_stringview_t* self, const z_stringview_t* needle,\n"
+    "    const z_stringview_t* replacement);\n"
+    "static z_string_t z_stringview_replace_first(\n"
+    "    const z_stringview_t* self, const z_stringview_t* needle,\n"
+    "    const z_stringview_t* replacement) {\n"
+    "    return z_stringview_replace_impl(self, needle, replacement, true);\n"
+    "}\n\n"
+)
+
+_Z_SV_REPEAT = (
+    "static z_string_t z_stringview_repeated(const z_stringview_t* self, uint64_t n);\n"
+    "static z_string_t z_stringview_repeated(const z_stringview_t* self, uint64_t n) {\n"
+    "    z_string_t z = {0};\n"
+    "    uint64_t total = self->length * n;\n"
+    "    z.size = total;\n"
+    "    z.capacity = total + 1;\n"
+    "    z.data = (char*)malloc(z.capacity);\n"
+    "    for (uint64_t i = 0; i < n; i++) {\n"
+    "        memcpy(z.data + i * self->length, self->data, self->length);\n"
+    "    }\n"
+    "    z.data[total] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
+)
+
+# -- Phase S5: codepoint iteration + count -------------------------
+
+_Z_SV_CPITER_STRUCT = (
+    "/* Codepoint iterator state. Opaque to zerolang. */\n"
+    "typedef struct {\n"
+    "    const char* data;\n"
+    "    uint64_t    length;\n"
+    "    uint64_t    cursor;\n"
+    "} z_cpiter_t;\n\n"
+)
+
+# Decode one UTF-8 codepoint starting at data[i]. Advances i past
+# the consumed bytes. Ill-formed sequences return U+FFFD and
+# advance one byte. Assumes i < length on entry.
+_Z_SV_UTF8_DECODE = (
+    "static uint32_t z_utf8_decode_one(\n"
+    "    const char* data, uint64_t length, uint64_t* i);\n"
+    "static uint32_t z_utf8_decode_one(\n"
+    "    const char* data, uint64_t length, uint64_t* i) {\n"
+    "    uint64_t idx = *i;\n"
+    "    unsigned char b0 = (unsigned char)data[idx];\n"
+    "    if (b0 < 0x80) { *i = idx + 1; return (uint32_t)b0; }\n"
+    "    uint32_t cp;\n"
+    "    uint64_t need;\n"
+    "    if ((b0 & 0xE0) == 0xC0) { cp = b0 & 0x1Fu; need = 1; }\n"
+    "    else if ((b0 & 0xF0) == 0xE0) { cp = b0 & 0x0Fu; need = 2; }\n"
+    "    else if ((b0 & 0xF8) == 0xF0) { cp = b0 & 0x07u; need = 3; }\n"
+    "    else { *i = idx + 1; return 0xFFFDu; }\n"
+    "    if (idx + 1 + need > length) { *i = idx + 1; return 0xFFFDu; }\n"
+    "    for (uint64_t k = 1; k <= need; k++) {\n"
+    "        unsigned char b = (unsigned char)data[idx + k];\n"
+    "        if ((b & 0xC0) != 0x80) { *i = idx + 1; return 0xFFFDu; }\n"
+    "        cp = (cp << 6) | (b & 0x3Fu);\n"
+    "    }\n"
+    "    *i = idx + 1 + need;\n"
+    "    return cp;\n"
+    "}\n\n"
+)
+
+_Z_SV_COUNT = (
+    "static uint64_t z_stringview_count(const z_stringview_t* self);\n"
+    "static uint64_t z_stringview_count(const z_stringview_t* self) {\n"
+    "    uint64_t i = 0, n = 0;\n"
+    "    while (i < self->length) {\n"
+    "        (void)z_utf8_decode_one(self->data, self->length, &i);\n"
+    "        n++;\n"
+    "    }\n"
+    "    return n;\n"
+    "}\n\n"
+)
+
+_Z_SV_CODEPOINTS = (
+    "static z_cpiter_t z_stringview_codepoints(const z_stringview_t* self);\n"
+    "static z_cpiter_t z_stringview_codepoints(const z_stringview_t* self) {\n"
+    "    z_cpiter_t it;\n"
+    "    it.data = self->data;\n"
+    "    it.length = self->length;\n"
+    "    it.cursor = 0;\n"
+    "    return it;\n"
+    "}\n\n"
+)
+
+_Z_SV_CPITER_CALL = (
+    "static z_optionval_u32_t z_cpiter_call(z_cpiter_t* it);\n"
+    "static z_optionval_u32_t z_cpiter_call(z_cpiter_t* it) {\n"
+    "    z_optionval_u32_t out = {0};\n"
+    "    if (it->cursor >= it->length) {\n"
+    "        out.tag = Z_OPTIONVAL_U32_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    uint32_t cp = z_utf8_decode_one(it->data, it->length, &it->cursor);\n"
+    "    out.tag = Z_OPTIONVAL_U32_TAG_SOME;\n"
+    "    out.data.some = cp;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+# -- Phase S6: numeric parsing -----------------------------------
+
+_Z_SV_PARSE_I64 = (
+    "static z_result_i64_parseerror_t z_stringview_parse_i64(const z_stringview_t* self);\n"
+    "static z_result_i64_parseerror_t z_stringview_parse_i64(const z_stringview_t* self) {\n"
+    "    z_result_i64_parseerror_t out = {0};\n"
+    "    uint64_t i = 0;\n"
+    "    int neg = 0;\n"
+    "    if (self->length == 0) goto empty;\n"
+    "    if (self->data[i] == '+' || self->data[i] == '-') {\n"
+    "        if (self->data[i] == '-') neg = 1;\n"
+    "        i++;\n"
+    "    }\n"
+    "    if (i >= self->length) goto empty;\n"
+    "    uint64_t acc = 0;\n"
+    "    for (; i < self->length; i++) {\n"
+    "        unsigned char c = (unsigned char)self->data[i];\n"
+    "        if (c < '0' || c > '9') goto invalid;\n"
+    "        uint64_t d = (uint64_t)(c - '0');\n"
+    "        if (acc > (UINT64_MAX - d) / 10) goto overflow;\n"
+    "        acc = acc * 10 + d;\n"
+    "    }\n"
+    "    /* range check: fits in i64 */\n"
+    "    uint64_t bound = neg ? (uint64_t)1 << 63 : ((uint64_t)1 << 63) - 1;\n"
+    "    if (acc > bound) goto overflow;\n"
+    "    int64_t v = neg ? -(int64_t)acc : (int64_t)acc;\n"
+    "    if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;\n"
+    "    int64_t* box = (int64_t*)malloc(sizeof(int64_t));\n"
+    "    *box = v;\n"
+    "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_OK;\n"
+    "    out.data = box;\n"
+    "    return out;\n"
+    "empty: {\n"
+    "    z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "    e->tag = Z_PARSEERROR_TAG_EMPTY;\n"
+    "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_ERR;\n"
+    "    out.data = e;\n"
+    "    return out;\n"
+    "}\n"
+    "invalid: {\n"
+    "    z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "    e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
+    "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_ERR;\n"
+    "    out.data = e;\n"
+    "    return out;\n"
+    "}\n"
+    "overflow: {\n"
+    "    z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "    e->tag = Z_PARSEERROR_TAG_OVERFLOW;\n"
+    "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_ERR;\n"
+    "    out.data = e;\n"
+    "    return out;\n"
+    "}\n"
+    "}\n\n"
+)
+
+_Z_SV_PARSE_U64 = (
+    "static z_result_u64_parseerror_t z_stringview_parse_u64(const z_stringview_t* self);\n"
+    "static z_result_u64_parseerror_t z_stringview_parse_u64(const z_stringview_t* self) {\n"
+    "    z_result_u64_parseerror_t out = {0};\n"
+    "    if (self->length == 0) {\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        e->tag = Z_PARSEERROR_TAG_EMPTY;\n"
+    "        out.tag = Z_RESULT_U64_PARSEERROR_TAG_ERR;\n"
+    "        out.data = e;\n"
+    "        return out;\n"
+    "    }\n"
+    "    uint64_t acc = 0;\n"
+    "    for (uint64_t i = 0; i < self->length; i++) {\n"
+    "        unsigned char c = (unsigned char)self->data[i];\n"
+    "        if (c < '0' || c > '9') {\n"
+    "            z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "            e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
+    "            out.tag = Z_RESULT_U64_PARSEERROR_TAG_ERR;\n"
+    "            out.data = e;\n"
+    "            return out;\n"
+    "        }\n"
+    "        uint64_t d = (uint64_t)(c - '0');\n"
+    "        if (acc > (UINT64_MAX - d) / 10) {\n"
+    "            z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "            e->tag = Z_PARSEERROR_TAG_OVERFLOW;\n"
+    "            out.tag = Z_RESULT_U64_PARSEERROR_TAG_ERR;\n"
+    "            out.data = e;\n"
+    "            return out;\n"
+    "        }\n"
+    "        acc = acc * 10 + d;\n"
+    "    }\n"
+    "    uint64_t* box = (uint64_t*)malloc(sizeof(uint64_t));\n"
+    "    *box = acc;\n"
+    "    out.tag = Z_RESULT_U64_PARSEERROR_TAG_OK;\n"
+    "    out.data = box;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_PARSE_F64 = (
+    "static z_result_f64_parseerror_t z_stringview_parse_f64(const z_stringview_t* self);\n"
+    "static z_result_f64_parseerror_t z_stringview_parse_f64(const z_stringview_t* self) {\n"
+    "    z_result_f64_parseerror_t out = {0};\n"
+    "    if (self->length == 0) {\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        e->tag = Z_PARSEERROR_TAG_EMPTY;\n"
+    "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
+    "        out.data = e;\n"
+    "        return out;\n"
+    "    }\n"
+    "    /* copy into a NUL-terminated local buffer for strtod */\n"
+    "    char buf[64];\n"
+    "    char* p = (self->length < sizeof(buf)) ? buf\n"
+    "            : (char*)malloc(self->length + 1);\n"
+    "    memcpy(p, self->data, self->length);\n"
+    "    p[self->length] = '\\0';\n"
+    "    char* end = NULL;\n"
+    "    errno = 0;\n"
+    "    double v = strtod(p, &end);\n"
+    "    int err = errno;\n"
+    "    uint64_t consumed = (uint64_t)(end - p);\n"
+    "    if (p != buf) free(p);\n"
+    "    if (consumed == 0) {\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
+    "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
+    "        out.data = e;\n"
+    "        return out;\n"
+    "    }\n"
+    "    if (consumed != self->length) {\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
+    "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
+    "        out.data = e;\n"
+    "        return out;\n"
+    "    }\n"
+    "    if (err == ERANGE) {\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        e->tag = Z_PARSEERROR_TAG_OVERFLOW;\n"
+    "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
+    "        out.data = e;\n"
+    "        return out;\n"
+    "    }\n"
+    "    double* box = (double*)malloc(sizeof(double));\n"
+    "    *box = v;\n"
+    "    out.tag = Z_RESULT_F64_PARSEERROR_TAG_OK;\n"
+    "    out.data = box;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_CONCAT = (
+    "static z_string_t z_stringview_concat(\n"
+    "    const z_stringview_t* self, const z_stringview_t* other);\n"
+    "static z_string_t z_stringview_concat(\n"
+    "    const z_stringview_t* self, const z_stringview_t* other) {\n"
+    "    z_string_t z = {0};\n"
+    "    uint64_t total = self->length + other->length;\n"
+    "    z.size = total;\n"
+    "    z.capacity = total + 1;\n"
+    "    z.data = (char*)malloc(z.capacity);\n"
+    "    memcpy(z.data, self->data, self->length);\n"
+    "    memcpy(z.data + self->length, other->data, other->length);\n"
+    "    z.data[total] = '\\0';\n"
+    "    return z;\n"
+    "}\n\n"
+)
+
+_Z_SV_LINES_CALL = (
+    "static z_option_stringview_t z_linesiter_call(z_linesiter_t* s);\n"
+    "static z_option_stringview_t z_linesiter_call(z_linesiter_t* s) {\n"
+    "    z_option_stringview_t out = {0};\n"
+    "    if (s->done) {\n"
+    "        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    const char* start = s->src + s->cursor;\n"
+    "    uint64_t remaining = s->src_len - s->cursor;\n"
+    "    uint64_t i = 0;\n"
+    "    while (i < remaining && start[i] != '\\n') i++;\n"
+    "    uint64_t line_len = i;\n"
+    "    if (line_len > 0 && start[line_len - 1] == '\\r') line_len--;\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    boxed->data = start;\n"
+    "    boxed->length = line_len;\n"
+    "    if (i == remaining) {\n"
+    "        s->cursor = s->src_len;\n"
+    "        s->done = true;\n"
+    "    } else {\n"
+    "        s->cursor += i + 1;\n"
+    "        if (s->cursor >= s->src_len) s->done = true;\n"
+    "    }\n"
+    "    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_SV_STRIP_SUFFIX = (
+    "static z_option_stringview_t z_stringview_strip_suffix(\n"
+    "    const z_stringview_t* self, const z_stringview_t* s);\n"
+    "static z_option_stringview_t z_stringview_strip_suffix(\n"
+    "    const z_stringview_t* self, const z_stringview_t* s) {\n"
+    "    z_option_stringview_t out = {0};\n"
+    "    if (s->length > self->length\n"
+    "        || (s->length > 0\n"
+    "            && memcmp(self->data + (self->length - s->length),\n"
+    "                      s->data, s->length) != 0)) {\n"
+    "        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    boxed->data = self->data;\n"
+    "    boxed->length = self->length - s->length;\n"
+    "    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+
+# Phase S7: string.join free function. Lives alongside the
+# stringview natives because it shares the same late emission slot
+# (it references z_list_string_t which is a mono type).
+_Z_COLL_STRING_JOIN = (
+    "/* string_join -- borrow `parts` (read-only) and return a new\n"
+    "   owned string. The list is passed by value (compiler default\n"
+    "   for class-typed params) but we do NOT destroy it here — the\n"
+    "   caller retains ownership of the backing array and its string\n"
+    "   elements. The parameter copy aliases the same data pointer\n"
+    "   and dies with the stack frame on return. */\n"
+    "static z_string_t z_string_join(\n"
+    "    z_list_string_t parts, z_stringview_t sep);\n"
+    "static z_string_t z_string_join(\n"
+    "    z_list_string_t parts, z_stringview_t sep) {\n"
+    "    z_string_t out = {0};\n"
+    "    uint64_t n = parts.length;\n"
+    "    if (n == 0) {\n"
+    "        out.capacity = 1;\n"
+    "        out.data = (char*)malloc(1);\n"
+    "        out.data[0] = '\\0';\n"
+    "        return out;\n"
+    "    }\n"
+    "    uint64_t total = sep.length * (n - 1);\n"
+    "    for (uint64_t i = 0; i < n; i++) {\n"
+    "        total += parts.data[i].size;\n"
+    "    }\n"
+    "    out.size = total;\n"
+    "    out.capacity = total + 1;\n"
+    "    out.data = (char*)malloc(out.capacity);\n"
+    "    uint64_t pos = 0;\n"
+    "    for (uint64_t i = 0; i < n; i++) {\n"
+    "        if (i > 0 && sep.length > 0) {\n"
+    "            memcpy(out.data + pos, sep.data, sep.length);\n"
+    "            pos += sep.length;\n"
+    "        }\n"
+    "        memcpy(out.data + pos, parts.data[i].data, parts.data[i].size);\n"
+    "        pos += parts.data[i].size;\n"
+    "    }\n"
+    "    out.data[total] = '\\0';\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+
+def emit_runtime_stringview_natives(
+    *,
+    needs_stringview: bool,
+    natives: "set[str] | None" = None,
+) -> str:
+    """Emit stringview native function bodies, per-name gated.
+
+    Runs AFTER struct_defs and monomorphization emission so the
+    return-wrapper types (`z_optionval_u64_t`, `z_optionval_u8_t`)
+    are already declared. Mirrors `emit_runtime_io` /
+    `emit_runtime_os` gating.
+    """
+    if not needs_stringview or not natives:
+        return ""
+    parts: list[str] = []
+    if "is_empty" in natives:
+        parts.append(_Z_SV_IS_EMPTY)
+    if "is_ascii" in natives:
+        parts.append(_Z_SV_IS_ASCII)
+    if "starts_with" in natives:
+        parts.append(_Z_SV_STARTS_WITH)
+    if "ends_with" in natives:
+        parts.append(_Z_SV_ENDS_WITH)
+    # contains and index_of share the raw helper; emit once.
+    if natives & {"contains", "index_of"}:
+        parts.append(_Z_SV_INDEX_OF_RAW)
+    if "contains" in natives:
+        parts.append(_Z_SV_CONTAINS)
+    if "index_of" in natives:
+        parts.append(_Z_SV_INDEX_OF)
+    if "last_index_of" in natives:
+        parts.append(_Z_SV_LAST_INDEX_OF)
+    if "byte_at" in natives:
+        parts.append(_Z_SV_BYTE_AT)
+    # Phase S2: shared ascii-ws helper when any trim variant is used.
+    if natives & {"trim", "trim_start", "trim_end"}:
+        parts.append(_Z_SV_IS_ASCII_WS)
+    if "trim" in natives:
+        parts.append(_Z_SV_TRIM)
+    if "trim_start" in natives:
+        parts.append(_Z_SV_TRIM_START)
+    if "trim_end" in natives:
+        parts.append(_Z_SV_TRIM_END)
+    if "strip_prefix" in natives:
+        parts.append(_Z_SV_STRIP_PREFIX)
+    if "strip_suffix" in natives:
+        parts.append(_Z_SV_STRIP_SUFFIX)
+    # Phase S3: iterators. splitter / linesiter share one impl struct.
+    if natives & {"split", "lines"}:
+        parts.append(_Z_SV_SPLITTER_STRUCT)
+    if "split" in natives:
+        parts.append(_Z_SV_SPLIT)
+        parts.append(_Z_SV_SPLITTER_CALL)
+    if "split_once" in natives:
+        parts.append(_Z_SV_SPLIT_ONCE)
+    if "lines" in natives:
+        parts.append(_Z_SV_LINES)
+        parts.append(_Z_SV_LINES_CALL)
+    # Phase S4: allocating transforms.
+    if "to_lower_ascii" in natives:
+        parts.append(_Z_SV_TO_LOWER_ASCII)
+    if "to_upper_ascii" in natives:
+        parts.append(_Z_SV_TO_UPPER_ASCII)
+    if natives & {"replace", "replace_first"}:
+        parts.append(_Z_SV_REPLACE_IMPL)
+    if "replace" in natives:
+        parts.append(_Z_SV_REPLACE)
+    if "replace_first" in natives:
+        parts.append(_Z_SV_REPLACE_FIRST)
+    if "repeated" in natives:
+        parts.append(_Z_SV_REPEAT)
+    if "concat" in natives:
+        parts.append(_Z_SV_CONCAT)
+    # Phase S5: codepoint iteration + count.
+    if natives & {"count", "codepoints"}:
+        parts.append(_Z_SV_UTF8_DECODE)
+    if "codepoints" in natives:
+        parts.append(_Z_SV_CPITER_STRUCT)
+    if "count" in natives:
+        parts.append(_Z_SV_COUNT)
+    if "codepoints" in natives:
+        parts.append(_Z_SV_CODEPOINTS)
+        parts.append(_Z_SV_CPITER_CALL)
+    # Phase S6: numeric parsing.
+    if "parse_i64" in natives:
+        parts.append(_Z_SV_PARSE_I64)
+    if "parse_u64" in natives:
+        parts.append(_Z_SV_PARSE_U64)
+    if "parse_f64" in natives:
+        parts.append(_Z_SV_PARSE_F64)
+    # Phase S7: string.join free function.
+    if "join" in natives:
+        parts.append(_Z_COLL_STRING_JOIN)
+    return "".join(parts)
+
+
+# -- cli unit natives ---------------------------------------------
+# Emitted in the same late slot as stringview natives so the types
+# they reference (z_spec_t, z_parsed_t, z_list_<def>_t,
+# z_result_parsed_clierror_t) are already declared.
+
+_Z_CLI_SPEC_CREATE = (
+    "static z_spec_t z_spec_create(z_string_t* program_name, z_string_t* summary);\n"
+    "static z_spec_t z_spec_create(z_string_t* program_name, z_string_t* summary) {\n"
+    "    z_spec_t s = {0};\n"
+    "    s.program_name = z_string_new(program_name->data);\n"
+    "    s.summary = z_string_new(summary->data);\n"
+    "    s.flags = z_list_flagdef_create(0);\n"
+    "    s.options = z_list_optiondef_create(0);\n"
+    "    s.positionals = z_list_positionaldef_create(0);\n"
+    "    return s;\n"
+    "}\n\n"
+)
+
+_Z_CLI_ADD_FLAG = (
+    "static void z_cli_add_flag(z_spec_t* spec,\n"
+    "    z_string_t name, z_string_t short_name, z_string_t help);\n"
+    "static void z_cli_add_flag(z_spec_t* spec,\n"
+    "    z_string_t name, z_string_t short_name, z_string_t help) {\n"
+    "    z_flagdef_t f = {0};\n"
+    "    f.name = z_string_new(name.data);\n"
+    "    f.short_name = z_string_new(short_name.data);\n"
+    "    f.help = z_string_new(help.data);\n"
+    "    z_list_flagdef_append(&spec->flags, f);\n"
+    "}\n\n"
+)
+
+_Z_CLI_ADD_OPTION = (
+    "static void z_cli_add_option(z_spec_t* spec,\n"
+    "    z_string_t name, z_string_t short_name, z_string_t help, bool required);\n"
+    "static void z_cli_add_option(z_spec_t* spec,\n"
+    "    z_string_t name, z_string_t short_name, z_string_t help, bool required) {\n"
+    "    z_optiondef_t o = {0};\n"
+    "    o.name = z_string_new(name.data);\n"
+    "    o.short_name = z_string_new(short_name.data);\n"
+    "    o.help = z_string_new(help.data);\n"
+    "    o.required = required;\n"
+    "    z_list_optiondef_append(&spec->options, o);\n"
+    "}\n\n"
+)
+
+_Z_CLI_ADD_POSITIONAL = (
+    "static void z_cli_add_positional(z_spec_t* spec,\n"
+    "    z_string_t name, z_string_t help, bool required);\n"
+    "static void z_cli_add_positional(z_spec_t* spec,\n"
+    "    z_string_t name, z_string_t help, bool required) {\n"
+    "    z_positionaldef_t p = {0};\n"
+    "    p.name = z_string_new(name.data);\n"
+    "    p.help = z_string_new(help.data);\n"
+    "    p.required = required;\n"
+    "    z_list_positionaldef_append(&spec->positionals, p);\n"
+    "}\n\n"
+)
+
+# Helpers: byte-compare a z_string_t to a C string, and locate a
+# registered flag/option by its long or short name.
+_Z_CLI_HELPERS = (
+    "/* byte-compare z_string_t vs C string + length */\n"
+    "static bool z_cli_str_eq(const z_string_t* a, const char* b, uint64_t blen);\n"
+    "static bool z_cli_str_eq(const z_string_t* a, const char* b, uint64_t blen) {\n"
+    "    if (a->size != blen) return false;\n"
+    "    return memcmp(a->data, b, blen) == 0;\n"
+    "}\n\n"
+    "/* find flag index by long name */\n"
+    "static int64_t z_cli_find_flag_long(const z_list_flagdef_t* flags, const char* name, uint64_t nlen);\n"
+    "static int64_t z_cli_find_flag_long(const z_list_flagdef_t* flags, const char* name, uint64_t nlen) {\n"
+    "    for (uint64_t i = 0; i < flags->length; i++) {\n"
+    "        if (z_cli_str_eq(&flags->data[i].name, name, nlen)) return (int64_t)i;\n"
+    "    }\n"
+    "    return -1;\n"
+    "}\n\n"
+    "/* find flag index by short name (full short incl. `-`) */\n"
+    "static int64_t z_cli_find_flag_short(const z_list_flagdef_t* flags, const char* name, uint64_t nlen);\n"
+    "static int64_t z_cli_find_flag_short(const z_list_flagdef_t* flags, const char* name, uint64_t nlen) {\n"
+    "    for (uint64_t i = 0; i < flags->length; i++) {\n"
+    "        if (z_cli_str_eq(&flags->data[i].short_name, name, nlen)) return (int64_t)i;\n"
+    "    }\n"
+    "    return -1;\n"
+    "}\n\n"
+    "static int64_t z_cli_find_option_long(const z_list_optiondef_t* options, const char* name, uint64_t nlen);\n"
+    "static int64_t z_cli_find_option_long(const z_list_optiondef_t* options, const char* name, uint64_t nlen) {\n"
+    "    for (uint64_t i = 0; i < options->length; i++) {\n"
+    "        if (z_cli_str_eq(&options->data[i].name, name, nlen)) return (int64_t)i;\n"
+    "    }\n"
+    "    return -1;\n"
+    "}\n\n"
+    "static int64_t z_cli_find_option_short(const z_list_optiondef_t* options, const char* name, uint64_t nlen);\n"
+    "static int64_t z_cli_find_option_short(const z_list_optiondef_t* options, const char* name, uint64_t nlen) {\n"
+    "    for (uint64_t i = 0; i < options->length; i++) {\n"
+    "        if (z_cli_str_eq(&options->data[i].short_name, name, nlen)) return (int64_t)i;\n"
+    "    }\n"
+    "    return -1;\n"
+    "}\n\n"
+    "/* build a clierror union with a string payload */\n"
+    "static z_clierror_t z_cli_err(z_clierror_tag_t tag, const char* msg, uint64_t mlen);\n"
+    "static z_clierror_t z_cli_err(z_clierror_tag_t tag, const char* msg, uint64_t mlen) {\n"
+    "    z_clierror_t e = {0};\n"
+    "    e.tag = tag;\n"
+    "    z_string_t* s = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *s = z_string_create(mlen);\n"
+    "    z_string_append(s, msg, mlen);\n"
+    "    e.data = s;\n"
+    "    return e;\n"
+    "}\n\n"
+    "/* wrap clierror in result.err */\n"
+    "static z_result_parsed_clierror_t z_cli_wrap_err(z_clierror_t e);\n"
+    "static z_result_parsed_clierror_t z_cli_wrap_err(z_clierror_t e) {\n"
+    "    z_result_parsed_clierror_t r = {0};\n"
+    "    z_clierror_t* boxed = (z_clierror_t*)malloc(sizeof(z_clierror_t));\n"
+    "    *boxed = e;\n"
+    "    r.tag = Z_RESULT_PARSED_CLIERROR_TAG_ERR;\n"
+    "    r.data = boxed;\n"
+    "    return r;\n"
+    "}\n\n"
+)
+
+_Z_CLI_PARSE = (
+    "static z_result_parsed_clierror_t z_cli_parse(z_spec_t* spec, z_list_string_t args);\n"
+    "static z_result_parsed_clierror_t z_cli_parse(z_spec_t* spec, z_list_string_t args) {\n"
+    "    z_parsed_t* parsed = (z_parsed_t*)malloc(sizeof(z_parsed_t));\n"
+    "    parsed->flag_set = z_list_string_create(0);\n"
+    "    parsed->option_values = z_map_string_string_create(0);\n"
+    "    parsed->positional_values = z_map_string_string_create(0);\n"
+    "    parsed->extra_args = z_list_string_create(0);\n"
+    "    uint64_t next_pos = 0;\n"
+    "    uint64_t i = 1;  /* skip argv[0] */\n"
+    "    while (i < args.length) {\n"
+    "        z_string_t* a = &args.data[i];\n"
+    "        /* `--` alone terminates option parsing */\n"
+    "        if (a->size == 2 && a->data[0] == '-' && a->data[1] == '-') {\n"
+    "            for (uint64_t j = i + 1; j < args.length; j++) {\n"
+    "                z_list_string_append(\n"
+    "                    &parsed->extra_args,\n"
+    "                    z_string_new(args.data[j].data)\n"
+    "                );\n"
+    "            }\n"
+    "            break;\n"
+    "        }\n"
+    "        /* long form `--name[=value]` */\n"
+    "        if (a->size >= 3 && a->data[0] == '-' && a->data[1] == '-') {\n"
+    "            /* find `=` within the arg */\n"
+    "            const char* eq = (const char*)memchr(a->data, '=', a->size);\n"
+    "            uint64_t name_len = eq ? (uint64_t)(eq - a->data) : a->size;\n"
+    "            int64_t fi = z_cli_find_flag_long(&spec->flags, a->data, name_len);\n"
+    "            if (fi >= 0) {\n"
+    "                if (eq) {\n"
+    "                    z_parsed_destroy(parsed); free(parsed); z_list_string_destroy(&args);\n"
+    "                    return z_cli_wrap_err(\n"
+    "                        z_cli_err(Z_CLIERROR_TAG_UNEXPECTED_ARG,\n"
+    "                                  a->data, a->size));\n"
+    "                }\n"
+    "                z_list_string_append(\n"
+    "                    &parsed->flag_set,\n"
+    "                    z_string_new(spec->flags.data[fi].name.data)\n"
+    "                );\n"
+    "                i++;\n"
+    "                continue;\n"
+    "            }\n"
+    "            int64_t oi = z_cli_find_option_long(\n"
+    "                &spec->options, a->data, name_len);\n"
+    "            if (oi >= 0) {\n"
+    "                z_string_t key = z_string_new(spec->options.data[oi].name.data);\n"
+    "                z_string_t val = {0};\n"
+    "                if (eq) {\n"
+    "                    uint64_t vlen = a->size - (name_len + 1);\n"
+    "                    val = z_string_create(vlen);\n"
+    "                    z_string_append(&val, eq + 1, vlen);\n"
+    "                } else {\n"
+    "                    if (i + 1 >= args.length) {\n"
+    "                        z_string_free(&key);\n"
+    "                        z_parsed_destroy(parsed); free(parsed); z_list_string_destroy(&args);\n"
+    "                        return z_cli_wrap_err(\n"
+    "                            z_cli_err(Z_CLIERROR_TAG_MISSING_VALUE,\n"
+    "                                      a->data, a->size));\n"
+    "                    }\n"
+    "                    val = z_string_new(args.data[i + 1].data);\n"
+    "                    i++;\n"
+    "                }\n"
+    "                z_map_string_string_set(\n"
+    "                    parsed->option_values, key, val);\n"
+    "                i++;\n"
+    "                continue;\n"
+    "            }\n"
+    "            z_parsed_destroy(parsed); free(parsed); z_list_string_destroy(&args);\n"
+    "            return z_cli_wrap_err(\n"
+    "                z_cli_err(Z_CLIERROR_TAG_UNKNOWN_FLAG,\n"
+    "                          a->data, a->size));\n"
+    "        }\n"
+    "        /* short form `-x[yz...]` */\n"
+    "        if (a->size >= 2 && a->data[0] == '-') {\n"
+    "            /* full-token match first (e.g. -v, -o with separate value) */\n"
+    "            int64_t fi = z_cli_find_flag_short(&spec->flags, a->data, a->size);\n"
+    "            if (fi >= 0) {\n"
+    "                z_list_string_append(\n"
+    "                    &parsed->flag_set,\n"
+    "                    z_string_new(spec->flags.data[fi].name.data)\n"
+    "                );\n"
+    "                i++;\n"
+    "                continue;\n"
+    "            }\n"
+    "            int64_t oi = z_cli_find_option_short(\n"
+    "                &spec->options, a->data, a->size);\n"
+    "            if (oi >= 0) {\n"
+    "                if (i + 1 >= args.length) {\n"
+    "                    z_parsed_destroy(parsed); free(parsed); z_list_string_destroy(&args);\n"
+    "                    return z_cli_wrap_err(\n"
+    "                        z_cli_err(Z_CLIERROR_TAG_MISSING_VALUE,\n"
+    "                                  a->data, a->size));\n"
+    "                }\n"
+    "                z_string_t key = z_string_new(spec->options.data[oi].name.data);\n"
+    "                z_string_t val = z_string_new(args.data[i + 1].data);\n"
+    "                z_map_string_string_set(\n"
+    "                    parsed->option_values, key, val);\n"
+    "                i += 2;\n"
+    "                continue;\n"
+    "            }\n"
+    "            /* bundled short flags: every char after `-` must be\n"
+    "               a short flag. A short option terminates and takes\n"
+    "               the rest as its value. */\n"
+    "            if (a->size > 2) {\n"
+    "                bool ok = true;\n"
+    "                for (uint64_t k = 1; k < a->size && ok; k++) {\n"
+    "                    char buf[2] = { '-', a->data[k] };\n"
+    "                    int64_t bfi = z_cli_find_flag_short(&spec->flags, buf, 2);\n"
+    "                    if (bfi >= 0) {\n"
+    "                        z_list_string_append(\n"
+    "                            &parsed->flag_set,\n"
+    "                            z_string_new(spec->flags.data[bfi].name.data)\n"
+    "                        );\n"
+    "                        continue;\n"
+    "                    }\n"
+    "                    int64_t boi = z_cli_find_option_short(\n"
+    "                        &spec->options, buf, 2);\n"
+    "                    if (boi >= 0) {\n"
+    "                        uint64_t vlen = a->size - (k + 1);\n"
+    "                        z_string_t key = z_string_new(\n"
+    "                            spec->options.data[boi].name.data);\n"
+    "                        z_string_t val = z_string_create(vlen);\n"
+    "                        if (vlen > 0) z_string_append(&val, a->data + k + 1, vlen);\n"
+    "                        z_map_string_string_set(\n"
+    "                            parsed->option_values, key, val);\n"
+    "                        /* consume rest of arg as value */\n"
+    "                        break;\n"
+    "                    }\n"
+    "                    ok = false;\n"
+    "                }\n"
+    "                if (!ok) {\n"
+    "                    z_parsed_destroy(parsed); free(parsed); z_list_string_destroy(&args);\n"
+    "                    return z_cli_wrap_err(\n"
+    "                        z_cli_err(Z_CLIERROR_TAG_UNKNOWN_FLAG,\n"
+    "                                  a->data, a->size));\n"
+    "                }\n"
+    "                i++;\n"
+    "                continue;\n"
+    "            }\n"
+    "            /* `-` alone or unrecognised short: fall through to positional */\n"
+    "        }\n"
+    "        /* positional */\n"
+    "        if (next_pos < spec->positionals.length) {\n"
+    "            z_string_t key = z_string_new(\n"
+    "                spec->positionals.data[next_pos].name.data);\n"
+    "            z_string_t val = z_string_new(a->data);\n"
+    "            z_map_string_string_set(\n"
+    "                parsed->positional_values, key, val);\n"
+    "            next_pos++;\n"
+    "        } else {\n"
+    "            z_list_string_append(\n"
+    "                &parsed->extra_args, z_string_new(a->data));\n"
+    "        }\n"
+    "        i++;\n"
+    "    }\n"
+    "    /* parse loop finished reading — args copies have been\n"
+    "       materialised via z_string_new wherever needed. Free the\n"
+    "       incoming list now so every exit path (ok or err) is\n"
+    "       leak-free. */\n"
+    "    z_list_string_destroy(&args);\n"
+    "    /* required checks (v.data is a shallow-copied box; free\n"
+    "       the outer pointer without touching the aliased string). */\n"
+    "    for (uint64_t k = 0; k < spec->options.length; k++) {\n"
+    "        if (!spec->options.data[k].required) continue;\n"
+    "        z_option_string_t v = z_map_string_string_get(\n"
+    "            parsed->option_values, spec->options.data[k].name);\n"
+    "        bool missing = (v.tag == Z_OPTION_STRING_TAG_NONE);\n"
+    "        if (v.data) free(v.data);\n"
+    "        if (missing) {\n"
+    "            z_parsed_destroy(parsed); free(parsed);\n"
+    "            return z_cli_wrap_err(\n"
+    "                z_cli_err(Z_CLIERROR_TAG_MISSING_REQUIRED,\n"
+    "                          spec->options.data[k].name.data,\n"
+    "                          spec->options.data[k].name.size));\n"
+    "        }\n"
+    "    }\n"
+    "    for (uint64_t k = 0; k < spec->positionals.length; k++) {\n"
+    "        if (!spec->positionals.data[k].required) continue;\n"
+    "        z_option_string_t v = z_map_string_string_get(\n"
+    "            parsed->positional_values, spec->positionals.data[k].name);\n"
+    "        bool missing = (v.tag == Z_OPTION_STRING_TAG_NONE);\n"
+    "        if (v.data) free(v.data);\n"
+    "        if (missing) {\n"
+    "            z_parsed_destroy(parsed); free(parsed);\n"
+    "            return z_cli_wrap_err(\n"
+    "                z_cli_err(Z_CLIERROR_TAG_MISSING_REQUIRED,\n"
+    "                          spec->positionals.data[k].name.data,\n"
+    "                          spec->positionals.data[k].name.size));\n"
+    "        }\n"
+    "    }\n"
+    "    z_result_parsed_clierror_t r = {0};\n"
+    "    r.tag = Z_RESULT_PARSED_CLIERROR_TAG_OK;\n"
+    "    r.data = parsed;\n"
+    "    return r;\n"
+    "}\n\n"
+)
+
+_Z_CLI_HELP_TEXT = (
+    "static z_string_t z_cli_help_text(z_spec_t* spec);\n"
+    "static z_string_t z_cli_help_text(z_spec_t* spec) {\n"
+    "    z_string_t out = z_string_create(128);\n"
+    '    z_string_append(&out, "usage: ", 7);\n'
+    "    z_string_append(&out, spec->program_name.data, spec->program_name.size);\n"
+    '    z_string_append(&out, " [options]", 10);\n'
+    "    for (uint64_t i = 0; i < spec->positionals.length; i++) {\n"
+    '        z_string_append(&out, " <", 2);\n'
+    "        z_string_append(&out, spec->positionals.data[i].name.data,\n"
+    "                        spec->positionals.data[i].name.size);\n"
+    '        z_string_append(&out, ">", 1);\n'
+    "    }\n"
+    "    if (spec->summary.size > 0) {\n"
+    '        z_string_append(&out, "\\n\\n", 2);\n'
+    "        z_string_append(&out, spec->summary.data, spec->summary.size);\n"
+    "    }\n"
+    "    if (spec->flags.length > 0) {\n"
+    '        z_string_append(&out, "\\n\\nFlags:", 9);\n'
+    "        for (uint64_t i = 0; i < spec->flags.length; i++) {\n"
+    "            z_flagdef_t* f = &spec->flags.data[i];\n"
+    '            z_string_append(&out, "\\n  ", 3);\n'
+    "            if (f->short_name.size > 0) {\n"
+    "                z_string_append(&out, f->short_name.data, f->short_name.size);\n"
+    '                z_string_append(&out, ", ", 2);\n'
+    "            }\n"
+    "            z_string_append(&out, f->name.data, f->name.size);\n"
+    "            if (f->help.size > 0) {\n"
+    '                z_string_append(&out, "    ", 4);\n'
+    "                z_string_append(&out, f->help.data, f->help.size);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    if (spec->options.length > 0) {\n"
+    '        z_string_append(&out, "\\n\\nOptions:", 11);\n'
+    "        for (uint64_t i = 0; i < spec->options.length; i++) {\n"
+    "            z_optiondef_t* o = &spec->options.data[i];\n"
+    '            z_string_append(&out, "\\n  ", 3);\n'
+    "            if (o->short_name.size > 0) {\n"
+    "                z_string_append(&out, o->short_name.data, o->short_name.size);\n"
+    '                z_string_append(&out, ", ", 2);\n'
+    "            }\n"
+    "            z_string_append(&out, o->name.data, o->name.size);\n"
+    "            if (o->help.size > 0) {\n"
+    '                z_string_append(&out, "    ", 4);\n'
+    "                z_string_append(&out, o->help.data, o->help.size);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    if (spec->positionals.length > 0) {\n"
+    '        z_string_append(&out, "\\n\\nPositionals:", 15);\n'
+    "        for (uint64_t i = 0; i < spec->positionals.length; i++) {\n"
+    "            z_positionaldef_t* p = &spec->positionals.data[i];\n"
+    '            z_string_append(&out, "\\n  ", 3);\n'
+    "            z_string_append(&out, p->name.data, p->name.size);\n"
+    "            if (p->help.size > 0) {\n"
+    '                z_string_append(&out, "    ", 4);\n'
+    "                z_string_append(&out, p->help.data, p->help.size);\n"
+    "            }\n"
+    "        }\n"
+    "    }\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_PARSED_HAS_FLAG = (
+    "static bool z_parsed_has_flag(z_parsed_t* self, const z_stringview_t* name);\n"
+    "static bool z_parsed_has_flag(z_parsed_t* self, const z_stringview_t* name) {\n"
+    "    for (uint64_t i = 0; i < self->flag_set.length; i++) {\n"
+    "        z_string_t* s = &self->flag_set.data[i];\n"
+    "        if (s->size == name->length\n"
+    "            && memcmp(s->data, name->data, name->length) == 0) {\n"
+    "            return true;\n"
+    "        }\n"
+    "    }\n"
+    "    return false;\n"
+    "}\n\n"
+)
+
+_Z_PARSED_GET_OPTION = (
+    "static z_option_string_t z_parsed_get_option(z_parsed_t* self, const z_stringview_t* name);\n"
+    "static z_option_string_t z_parsed_get_option(z_parsed_t* self, const z_stringview_t* name) {\n"
+    "    z_option_string_t out = {0};\n"
+    "    z_string_t key = z_string_create(name->length);\n"
+    "    z_string_append(&key, name->data, name->length);\n"
+    "    /* map.get returns a shallow-copied box whose inner\n"
+    "       z_string_t aliases the map's own heap buffer. Free just\n"
+    "       the outer box; the map retains ownership of the bytes. */\n"
+    "    z_option_string_t v = z_map_string_string_get(\n"
+    "        self->option_values, key);\n"
+    "    z_string_free(&key);\n"
+    "    if (v.tag == Z_OPTION_STRING_TAG_NONE) {\n"
+    "        if (v.data) free(v.data);\n"
+    "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = z_string_new(((z_string_t*)v.data)->data);\n"
+    "    free(v.data);\n"
+    "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+_Z_PARSED_GET_POSITIONAL = (
+    "static z_option_string_t z_parsed_get_positional(z_parsed_t* self, const z_stringview_t* name);\n"
+    "static z_option_string_t z_parsed_get_positional(z_parsed_t* self, const z_stringview_t* name) {\n"
+    "    z_option_string_t out = {0};\n"
+    "    z_string_t key = z_string_create(name->length);\n"
+    "    z_string_append(&key, name->data, name->length);\n"
+    "    z_option_string_t v = z_map_string_string_get(\n"
+    "        self->positional_values, key);\n"
+    "    z_string_free(&key);\n"
+    "    if (v.tag == Z_OPTION_STRING_TAG_NONE) {\n"
+    "        if (v.data) free(v.data);\n"
+    "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
+    "        return out;\n"
+    "    }\n"
+    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    *boxed = z_string_new(((z_string_t*)v.data)->data);\n"
+    "    free(v.data);\n"
+    "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
+    "    out.data = boxed;\n"
+    "    return out;\n"
+    "}\n\n"
+)
+
+
+def emit_runtime_cli_natives(
+    *, needs_cli: bool, natives: "set[str] | None" = None
+) -> str:
+    """Emit cli-unit native function bodies, per-name gated."""
+    if not needs_cli or not natives:
+        return ""
+    parts: list[str] = []
+    if "spec_create" in natives:
+        parts.append(_Z_CLI_SPEC_CREATE)
+    if "add_flag" in natives:
+        parts.append(_Z_CLI_ADD_FLAG)
+    if "add_option" in natives:
+        parts.append(_Z_CLI_ADD_OPTION)
+    if "add_positional" in natives:
+        parts.append(_Z_CLI_ADD_POSITIONAL)
+    if "parse" in natives or "help_text" in natives:
+        parts.append(_Z_CLI_HELPERS)
+    if "parse" in natives:
+        parts.append(_Z_CLI_PARSE)
+    if "help_text" in natives:
+        parts.append(_Z_CLI_HELP_TEXT)
+    if "has_flag" in natives:
+        parts.append(_Z_PARSED_HAS_FLAG)
+    if "get_option" in natives:
+        parts.append(_Z_PARSED_GET_OPTION)
+    if "get_positional" in natives:
+        parts.append(_Z_PARSED_GET_POSITIONAL)
+    return "".join(parts)
 
 
 def emit_runtime_os(*, needs_os: bool, natives: "set[str] | None" = None) -> str:
@@ -1196,21 +2832,71 @@ def emit_runtime_os(*, needs_os: bool, natives: "set[str] | None" = None) -> str
         parts.append(_Z_OS_ARGS)
     if "get_env" in natives:
         parts.append(_Z_OS_GET_ENV)
+    if "set_env" in natives:
+        parts.append(_Z_OS_SET_ENV)
+    if "unset_env" in natives:
+        parts.append(_Z_OS_UNSET_ENV)
+    if "env_names" in natives:
+        parts.append(_Z_OS_ENV_NAMES)
+    if "cwd" in natives:
+        parts.append(_Z_OS_CWD)
+    if "set_cwd" in natives:
+        parts.append(_Z_OS_SET_CWD)
+    if "pid" in natives:
+        parts.append(_Z_OS_PID)
+    if "ppid" in natives:
+        parts.append(_Z_OS_PPID)
+    if "user_name" in natives:
+        parts.append(_Z_OS_USER_NAME)
+    if "home_dir" in natives:
+        parts.append(_Z_OS_HOME_DIR)
+    if "platform" in natives:
+        parts.append(_Z_OS_PLATFORM)
+    if "arch" in natives:
+        parts.append(_Z_OS_ARCH)
+    if "hostname" in natives:
+        parts.append(_Z_OS_HOSTNAME)
     if "exit" in natives:
         parts.append(_Z_OS_EXIT)
     return "".join(parts)
 
 
-def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str:
+def emit_runtime_io(
+    *,
+    needs_io: bool,
+    natives: "set[str] | None" = None,
+    os_natives: "set[str] | None" = None,
+) -> str:
     """Emit io-unit native function implementations per requested name.
 
     `natives` is the set of io-native function names the program
     actually calls (e.g. `{"eprintln", "read_text"}`). Per-name
     granularity so unused natives never pull in the
     compiler-generated types they would reference.
+
+    `os_natives` is consulted only for the shared errno-mapping
+    helper: os.set_env / os.unset_env surface the same `io.ioerror`
+    domain and need `z_io_errno_to_ioerror` even when no io native
+    is used directly.
     """
-    if not needs_io or not natives:
+    os_natives = os_natives or set()
+    os_needs_errno = bool(
+        os_natives
+        & {
+            "set_env",
+            "unset_env",
+            "cwd",
+            "set_cwd",
+            "user_name",
+            "home_dir",
+            "hostname",
+        }
+    )
+    if not needs_io:
         return ""
+    if not natives and not os_needs_errno:
+        return ""
+    natives = natives or set()
     parts: list[str] = []
     # errno mapping is shared; include if any fallible native is used
     fallible = natives & {
@@ -1232,6 +2918,8 @@ def emit_runtime_io(*, needs_io: bool, natives: "set[str] | None" = None) -> str
         "readlink",
         "symlink",
     }
+    if os_needs_errno:
+        fallible = fallible | {"_os_set_env"}  # non-empty sentinel
     # result(null, ioerror) wrapper used by mkdir / mkdirp / remove /
     # rename / file_close / symlink
     null_wrap = natives & {
@@ -1349,6 +3037,7 @@ def emit_runtime(
     needs_string: bool,
     needs_stringview: bool = False,
     needs_io: bool = False,
+    needs_pwd: bool = False,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
     # z_string_t runtime uses malloc/free (stdlib.h), strlen/memcpy (string.h),
@@ -1362,6 +3051,7 @@ def emit_runtime(
             needs_stdbool=needs_stdbool or has_z_string or needs_stringview,
             needs_string=needs_string or has_z_string or needs_stringview,
             needs_io=needs_io,
+            needs_pwd=needs_pwd,
         )
         + emit_runtime_z_string(needs_string=needs_string, needs_stdio=needs_stdio)
         + emit_runtime_z_stringview(needs_stringview=needs_stringview)

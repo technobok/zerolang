@@ -2627,6 +2627,513 @@ class TestOsUnit:
         legal and the scope does not need to dispatch a result."""
         check_ok("main: function is {\n  os.exit code: 0.i32\n}\n")
 
+    def test_set_env_returns_result_null_ioerror(self):
+        """os.set_env takes two strings and returns result(null, ioerror),
+        matching io's fallible write shape."""
+        check_ok(
+            "main: function is {\n"
+            '  r: os.set_env key: "X".string value: "y".string\n'
+            "  match (r) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_unset_env_returns_result_null_ioerror(self):
+        """os.unset_env consumes just `key` and returns result(null, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            '  r: os.unset_env key: "X".string\n'
+            "  match (r) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_env_names_returns_list_of_string(self):
+        """os.env_names is a zero-arg native returning an owned list of
+        strings — same coercion rule as os.args."""
+        check_ok(
+            "main: function is {\n"
+            "  names: os.env_names\n"
+            '  print "\\{names.length}"\n'
+            "}\n"
+        )
+
+    def test_cwd_returns_result_string_ioerror(self):
+        """os.cwd is zero-arg and returns result(string, ioerror)."""
+        check_ok(
+            "main: function is {\n"
+            "  r: os.cwd\n"
+            "  match (r) case ok then {\n"
+            "    print r\n"
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_set_cwd_takes_path_returns_result_null_ioerror(self):
+        check_ok(
+            "main: function is {\n"
+            '  r: os.set_cwd path: "/tmp".string\n'
+            "  match (r) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_pid_and_ppid_return_i32(self):
+        """pid/ppid are zero-arg natives coercing to i32 literals."""
+        check_ok(
+            "main: function is {\n"
+            "  p: os.pid\n"
+            "  pp: os.ppid\n"
+            '  print "\\{p} \\{pp}"\n'
+            "}\n"
+        )
+
+    def test_user_name_and_home_dir_return_result_string_ioerror(self):
+        check_ok(
+            "main: function is {\n"
+            "  un: os.user_name\n"
+            "  hd: os.home_dir\n"
+            "  match (un) case ok then {\n"
+            "    print un\n"
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "  match (hd) case ok then {\n"
+            "    print hd\n"
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_platform_returns_platformkind_variant(self):
+        """os.platform returns a platformkind variant; all four arms
+        must typecheck exhaustively."""
+        check_ok(
+            "main: function is {\n"
+            "  p: os.platform\n"
+            "  match (p) case linux then {\n"
+            '    print "linux"\n'
+            "  } case darwin then {\n"
+            '    print "darwin"\n'
+            "  } case windows then {\n"
+            '    print "windows"\n'
+            "  } case other then {\n"
+            '    print "other"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_arch_returns_archkind_variant(self):
+        check_ok(
+            "main: function is {\n"
+            "  a: os.arch\n"
+            "  match (a) case x86_64 then {\n"
+            '    print "x86_64"\n'
+            "  } case aarch64 then {\n"
+            '    print "aarch64"\n'
+            "  } case other then {\n"
+            '    print "other"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_hostname_returns_result_string_ioerror(self):
+        check_ok(
+            "main: function is {\n"
+            "  hn: os.hostname\n"
+            "  match (hn) case ok then {\n"
+            "    print hn\n"
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestStringviewQueries:
+    """Phase S1 non-allocating query methods on stringview."""
+
+    def test_is_empty_and_is_ascii_are_zero_arg_methods(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hi".string\n'
+            "  sv: s.stringview\n"
+            "  e: sv.is_empty\n"
+            "  a: sv.is_ascii\n"
+            '  print "\\{e} \\{a}"\n'
+            "}\n"
+        )
+
+    def test_starts_with_ends_with_take_stringview_param(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  sv: s.stringview\n"
+            '  sw: sv.starts_with prefix: "he"\n'
+            '  ew: sv.ends_with suffix: "lo"\n'
+            '  print "\\{sw} \\{ew}"\n'
+            "}\n"
+        )
+
+    def test_contains_returns_bool(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  sv: s.stringview\n"
+            '  c: sv.contains needle: "ll"\n'
+            '  print "\\{c}"\n'
+            "}\n"
+        )
+
+    def test_index_of_returns_optionval_u64(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  sv: s.stringview\n"
+            '  r: sv.index_of needle: "l"\n'
+            "  match (r) case some then {\n"
+            '    print "\\{r}"\n'
+            "  } case none then {\n"
+            '    print "miss"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_last_index_of_returns_optionval_u64(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hello".string\n'
+            "  sv: s.stringview\n"
+            '  r: sv.last_index_of needle: "l"\n'
+            "  match (r) case some then {\n"
+            '    print "\\{r}"\n'
+            "  } case none then {\n"
+            '    print "miss"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_byte_at_returns_optionval_u8(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "hi".string\n'
+            "  sv: s.stringview\n"
+            "  b: sv.byte_at i: 0.u64\n"
+            "  match (b) case some then {\n"
+            '    print "\\{b}"\n'
+            "  } case none then {\n"
+            '    print "oob"\n'
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestStringviewSlicing:
+    """Phase S2 view-returning slicing helpers on stringview."""
+
+    def test_trim_returns_stringview(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "  hi  ".string\n'
+            "  sv: s.stringview\n"
+            "  t: sv.trim\n"
+            "  l: t.length\n"
+            '  print "\\{l}"\n'
+            "}\n"
+        )
+
+    def test_trim_start_and_trim_end(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "  hi  ".string\n'
+            "  sv: s.stringview\n"
+            "  a: sv.trim_start\n"
+            "  b: sv.trim_end\n"
+            "  la: a.length\n"
+            "  lb: b.length\n"
+            '  print "\\{la} \\{lb}"\n'
+            "}\n"
+        )
+
+    def test_strip_prefix_returns_option_stringview(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "--x".string\n'
+            "  sv: s.stringview\n"
+            '  r: sv.strip_prefix p: "--"\n'
+            "  match (r) case some then {\n"
+            "    l: r.length\n"
+            '    print "\\{l}"\n'
+            "  } case none then {\n"
+            '    print "no"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_strip_suffix_returns_option_stringview(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "a.txt".string\n'
+            "  sv: s.stringview\n"
+            '  r: sv.strip_suffix s: ".txt"\n'
+            "  match (r) case some then {\n"
+            "    l: r.length\n"
+            '    print "\\{l}"\n'
+            "  } case none then {\n"
+            '    print "no"\n'
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestStringviewSplitting:
+    """Phase S3 iterator-based splitting."""
+
+    def test_split_iteration(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "a,b,c".string\n'
+            "  sv: s.stringview\n"
+            '  with it: (sv.split sep: ",") do for piece: it loop {\n'
+            "    print piece\n"
+            "  }\n"
+            "}\n"
+        )
+
+    def test_split_once_returns_optionval_u64(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "k=v".string\n'
+            "  sv: s.stringview\n"
+            '  r: sv.split_once sep: "="\n'
+            "  match (r) case some then {\n"
+            '    print "\\{r}"\n'
+            "  } case none then {\n"
+            '    print "none"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_lines_iteration(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "a\nb".string\n'
+            "  sv: s.stringview\n"
+            "  with li: sv.lines do for line: li loop {\n"
+            "    print line\n"
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestStringviewTransforms:
+    """Phase S4 allocating string transforms on stringview."""
+
+    def test_to_lower_and_to_upper(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "Hi".string\n'
+            "  sv: s.stringview\n"
+            "  lo: sv.to_lower_ascii\n"
+            "  up: sv.to_upper_ascii\n"
+            "  print lo\n"
+            "  print up\n"
+            "}\n"
+        )
+
+    def test_replace_and_replace_first(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "aaa".string\n'
+            "  sv: s.stringview\n"
+            '  r: sv.replace needle: "a" replacement: "b"\n'
+            '  rf: sv.replace_first needle: "a" replacement: "b"\n'
+            "  print r\n"
+            "  print rf\n"
+            "}\n"
+        )
+
+    def test_repeated_and_concat(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "ab".string\n'
+            "  sv: s.stringview\n"
+            "  rep: sv.repeated n: 2.u64\n"
+            '  o: "cd".string\n'
+            "  ov: o.stringview\n"
+            "  cat: sv.concat other: ov\n"
+            "  print rep\n"
+            "  print cat\n"
+            "}\n"
+        )
+
+
+class TestStringviewCodepoints:
+    """Phase S5 codepoint iteration + count."""
+
+    def test_count_returns_u64(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "abc".string\n'
+            "  sv: s.stringview\n"
+            "  n: sv.count\n"
+            '  print "\\{n}"\n'
+            "}\n"
+        )
+
+    def test_codepoints_iteration(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "abc".string\n'
+            "  sv: s.stringview\n"
+            "  with it: sv.codepoints do for cp: it loop {\n"
+            '    print "\\{cp}"\n'
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestStringviewParsing:
+    """Phase S6 numeric parsing on stringview."""
+
+    def test_parse_i64_returns_result_i64_parseerror(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "-42".string\n'
+            "  sv: s.stringview\n"
+            "  r: sv.parse_i64\n"
+            "  match (r) case ok then {\n"
+            '    print "\\{r}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_parse_u64(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "42".string\n'
+            "  sv: s.stringview\n"
+            "  r: sv.parse_u64\n"
+            "  match (r) case ok then {\n"
+            '    print "\\{r}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_parse_f64(self):
+        check_ok(
+            "main: function is {\n"
+            '  s: "3.14".string\n'
+            "  sv: s.stringview\n"
+            "  r: sv.parse_f64\n"
+            "  match (r) case ok then {\n"
+            '    print "\\{r}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_parseerror_arm_matching(self):
+        """parseerror variant can be matched into its specific arms."""
+        check_ok(
+            "main: function is {\n"
+            '  s: "x".string\n'
+            "  sv: s.stringview\n"
+            "  r: sv.parse_i64\n"
+            "  match (r) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            "    match (r) case empty then {\n"
+            '      print "empty"\n'
+            "    } case invalid_digit then {\n"
+            '      print "inv"\n'
+            "    } case overflow then {\n"
+            '      print "ovf"\n'
+            "    }\n"
+            "  }\n"
+            "}\n"
+        )
+
+
+class TestStringJoin:
+    """Phase S7 string_join free function."""
+
+    def test_join_parts_and_sep(self):
+        check_ok(
+            "main: function is {\n"
+            "  parts: (list of: string)\n"
+            '  parts.append from: "a".string\n'
+            '  parts.append from: "b".string\n'
+            '  j: string_join parts: parts sep: ","\n'
+            "  print j\n"
+            "}\n"
+        )
+
+    def test_join_empty_list(self):
+        check_ok(
+            "main: function is {\n"
+            "  parts: (list of: string)\n"
+            '  j: string_join parts: parts sep: ","\n'
+            "  l: j.length\n"
+            '  print "\\{l}"\n'
+            "}\n"
+        )
+
+
+class TestCliUnit:
+    """cli unit: spec / parsed / registration + parse + help_text."""
+
+    def test_spec_create_and_register(self):
+        check_ok(
+            "main: function is {\n"
+            '  sp: cli.spec.create program_name: "p".string summary: "s".string\n'
+            "  yes: 0 < 1\n"
+            '  cli.add_flag spec: sp name: "--v".string short_name: "-v".string help: "".string\n'
+            '  cli.add_option spec: sp name: "--o".string short_name: "-o".string help: "".string required: yes\n'
+            '  cli.add_positional spec: sp name: "x".string help: "".string required: yes\n'
+            "}\n"
+        )
+
+    def test_parse_returns_result(self):
+        check_ok(
+            "main: function is {\n"
+            '  sp: cli.spec.create program_name: "p".string summary: "".string\n'
+            "  r: cli.parse spec: sp args: os.args\n"
+            "  match (r) case ok then {\n"
+            '    v: r.has_flag name: "--v"\n'
+            '    print "\\{v}"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}\n"
+        )
+
+    def test_help_text_returns_string(self):
+        check_ok(
+            "main: function is {\n"
+            '  sp: cli.spec.create program_name: "p".string summary: "".string\n'
+            "  h: cli.help_text spec: sp\n"
+            "  print h\n"
+            "}\n"
+        )
+
 
 class TestPureZerolangBufferedShapes:
     """Ownership-path coverage for the shapes a pure-Zerolang
@@ -6416,8 +6923,10 @@ class TestGenerics:
             "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
             'main: function is { p: mypair x: 42 y: "hi".string }'
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        # Find the user mypair mono; stdlib method signatures may
+        # contribute additional monomorphizations (e.g. optionval(u64)
+        # from stringview.index_of) that land ahead of it.
+        mono = next(m for m, _ in program.mono_types if m.name.startswith("mypair_"))
         assert mono.children["x"].name == "i64"
         assert mono.children["y"].name == "string"
 
@@ -7286,7 +7795,7 @@ class TestStr:
     def test_str_creation(self):
         """str to: 32 creates a monomorphized str type."""
         program = check_ok("main: function is { s: (str to: 32) }")
-        monos = [m for m, _ in program.mono_types if "str" in m.name]
+        monos = [m for m, _ in program.mono_types if m.name.startswith("str_")]
         assert len(monos) >= 1
         mono = monos[0]
         assert mono.name == "str_32"

@@ -1,0 +1,271 @@
+#doc.lang: en
+
+#//: Zerolang CLI
+
+#doc.title: Zerolang CLI
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-04-23
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zerolang CLI
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+The #~"cli" unit parses command-line arguments. Users build a
+#~"spec" with registered flags, options, and positionals, then call
+#~"cli.parse" against #~"os.args"; the result is a typed #~"parsed"
+handle with accessor methods. Help text is auto-generated from
+the spec.
+
+Grammar supported (GNU-getopt conventions):
+
+#code language=text: """
+--name              long flag
+--name value        long option (value is the next argv token)
+--name=value        long option (embedded value)
+-x                  short flag
+-o value            short option
+-xvf                bundled short flags
+-ofile              short option with embedded value
+--                  end-of-options; rest go to extras
+-                   positional (stdin convention)
+"""
+
+#--: Status
+
+Shipped:
+
+#ul:
+  [#*: #~"cli.spec.create program_name: summary:" — build an empty
+    spec.]
+  [#*: Registration: #~"cli.add_flag", #~"cli.add_option",
+    #~"cli.add_positional". Each takes #~"spec.borrow" so mutations
+    propagate to the caller's spec.]
+  [#*: #~"cli.parse spec: args:" — consumes #~"os.args", returns
+    #~"result(parsed, clierror)". Handles every grammar form in
+    the table above, including short-flag bundling and embedded
+    short-option values.]
+  [#*: #~"cli.help_text spec:" — auto-formatted usage + per-
+    category block (flags, options, positionals).]
+  [#*: Accessors on #~"parsed": #~"has_flag", #~"get_option",
+    #~"get_positional". Look up by the registered long name
+    (e.g. #~"--verbose") or positional name.]
+  [#*: Required-check: options / positionals flagged
+    #~"required: yes" that are missing after the parse loop
+    fail with #~"clierror.missing_required" carrying the name.]
+  [#*: #~"--" terminator: remaining argv tokens go to
+    #~"extra_args" rather than filling further positionals.]
+
+Not yet shipped (see "Open Questions"):
+
+#ul:
+  [#*: Multi-value options (repeat #~"--include"): repeats
+    overwrite the map entry today.]
+  [#*: Long-option prefix abbreviation (#~"--ver" for
+    #~"--verbose"): v1 is exact-match only.]
+
+#--: Design Principles
+
+#ul:
+  [#*: #_* "Register-then-parse." Setup is a sequence of
+    declarative calls against a mutable spec; the whole parse is
+    one function call. No stateful builder objects for the caller
+    to juggle.]
+  [#*: #_* "One argv shape." #~"os.args" is the only argv source.
+    Callers who want to parse a different token vector
+    synthesise a #~"list of: string" and pass it in place.]
+  [#*: #_* "Fail fast, fail whole." Parse either returns a fully
+    validated #~"parsed" or an early #~"err" with a descriptive
+    payload. No partial results; no mutable error list.]
+  [#*: #_* "Help is a property of the spec." #~"cli.help_text"
+    takes the same spec that parsed the args, so the rendered
+    usage never drifts from the registered behavior.]
+  [#*: #_* "Reuse the string API." Parse leans on
+    #~"stringview.starts_with" / #~"memchr" under the hood;
+    Phases S1–S3 made this possible without one-off C helpers.]
+
+#--: Types
+
+#code language=zerolang: """
+flagdef: class {
+    name:       string      # "--verbose"
+    short_name: string      # "-v"
+    help:       string
+}
+
+optiondef: class {
+    name:       string
+    short_name: string
+    help:       string
+    required:   bool
+}
+
+positionaldef: class {
+    name:     string
+    help:     string
+    required: bool
+}
+
+clierror: union {
+    unknown_flag:          string
+    missing_value:         string
+    missing_required:      string
+    unexpected_positional: string
+    unexpected_arg:        string
+}
+
+spec: class {
+    program_name: string
+    summary:      string
+    flags:        (list of: flagdef)
+    options:      (list of: optiondef)
+    positionals:  (list of: positionaldef)
+}
+
+parsed: class {
+    flag_set:          (list of: string)
+    option_values:     (map key: string value: string)
+    positional_values: (map key: string value: string)
+    extra_args:        (list of: string)
+}
+"""
+
+#--: Building a Spec
+
+#~"cli.spec.create" initializes the three list fields to empty:
+
+#code language=zerolang: """
+sp: cli.spec.create program_name: "zgrep".string summary: "...".string
+"""
+
+Register items with the #~"add_*" functions. Each takes the spec
+as a #~".borrow" receiver; the registered def is appended to the
+corresponding list.
+
+#code language=zerolang: """
+yes: 0 < 1
+no:  0 > 1
+
+cli.add_flag       spec: sp name: "--verbose".string short_name: "-v".string help: "verbose output".string
+cli.add_option     spec: sp name: "--output".string  short_name: "-o".string help: "out file".string required: no
+cli.add_positional spec: sp name: "pattern".string   help: "regex".string    required: yes
+cli.add_positional spec: sp name: "file".string      help: "input".string    required: yes
+"""
+
+zerolang has no #~"true" / #~"false" literal; bind local names
+from comparisons as shown.
+
+#--: Parsing
+
+#code language=zerolang: """
+r: cli.parse spec: sp args: os.args
+match (
+    r
+) case ok then {
+    v: r.has_flag name: "--verbose"
+    out: r.get_option name: "--output"
+    pat: r.get_positional name: "pattern"
+    ...
+} case err then {
+    print cli.help_text spec: sp
+}
+"""
+
+The #~"ok" arm narrows #~"r" to the #~"parsed" handle. Accessors
+#~"has_flag" / #~"get_option" / #~"get_positional" look up by
+the registered long name (not by short alias — use the long
+name throughout, for both registration and lookup).
+
+#~"extras": all argv tokens following a bare #~"--" go to
+#~"parsed.extra_args" rather than filling positionals. v1 does
+not expose an accessor method; read the field directly.
+
+#--: Help Text
+
+#~"cli.help_text spec:" returns a freshly-allocated #~"string":
+
+#code language=text: """
+usage: zgrep [options] <pattern> <file>
+
+zgrep-style pattern matcher.
+
+Flags:
+  -v, --verbose    verbose output
+
+Options:
+  -o, --output    out file
+
+Positionals:
+  pattern    regex
+  file       input
+"""
+
+The layout is deterministic: registration order is preserved.
+
+#--: Error Shape
+
+A #~"clierror" carries a #~"string" describing the offending
+token (or the missing item's name). Typical handling prints the
+payload plus the usage block:
+
+#code language=zerolang: """
+match (
+    r
+) case ok then { ... } case err then {
+    print cli.help_text spec: sp
+}
+"""
+
+Per-arm inspection (e.g. distinguish #~"missing_value" from
+#~"unknown_flag") follows the same match-into-match pattern as
+any union.
+
+#--: Ownership Notes
+
+#ul:
+  [#*: #~"spec" strings are owned by the spec: registration
+    functions copy each incoming #~"string" into a fresh heap
+    buffer. Caller's temporary strings are freed by the caller's
+    scope-exit, as usual.]
+  [#*: #~"parsed" owns every value it returns. #~"get_option" /
+    #~"get_positional" return a fresh #~"option(string)" —
+    scope-exit frees the boxed string.]
+  [#*: #~"parse" consumes #~"args" (expects a #~"list of: string"
+    it may free). Callers who want to retain the argv pass a
+    copy instead.]
+  [#*: Per-parse work allocates roughly one #~"string" per
+    registered name and one map entry per seen option /
+    positional. No hidden arenas.]
+
+#--: Open Questions
+
+#ul:
+  [#*: Multi-value options (#~"--include a --include b"): repeats
+    overwrite today. Add #~"cli.option_multi" if real use cases
+    appear.]
+  [#*: Long-option prefix abbreviation: not in v1. Exact match
+    only. Easy to add against #~"cli.find_option_long" when the
+    ergonomics become a priority.]
+  [#*: Boolean literals: zerolang does not yet have #~"true" /
+    #~"false" keywords. Callers supply booleans via comparison
+    (e.g. #~"yes: 0 < 1"). A future language feature resolves
+    this.]

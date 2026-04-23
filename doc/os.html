@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Zerolang OS</title>
+<link rel="stylesheet" href="style/zerolang.css">
+<link rel="icon" href="style/favicon-192x192.png" type="image/png" sizes="192x192">
+<link rel="icon" href="style/favicon-48x48.ico" type="image/x-icon">
+<link rel="icon" href="style/favicon-32x32.png" type="image/png" sizes="32x32">
+<link rel="icon" href="style/favicon-16x16.png" type="image/png" sizes="16x16">
+<script src="style/tocbot.min.js"></script>
+<script src="style/init.js"></script>
+<script src="style/prism.min.js"></script>
+<script src="style/prism-zerolang.js"></script>
+<meta name="author" content="pw &lt;p@zerolang.org&gt;">
+<meta name="datecreated" content="2026-04-22">
+<meta name="version" content="v0.1">
+</head>
+<body class="toc-sidebar">
+<nav id="nav">
+  <div class="doc-wrapper">
+    <a title="Zerolang" href="./index.html">Zerolang</a>
+  </div>
+
+  <label>
+    <input id="mode-checkbox" class="mode-checkbox" type="checkbox" />
+    <div class="mode-slot">
+      <div class="sun-icon-wrapper">
+        <svg
+          class="sun-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <circle cx="12" cy="12" r="5"></circle>
+          <line x1="12" y1="1" x2="12" y2="3"></line>
+          <line x1="12" y1="21" x2="12" y2="23"></line>
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+          <line x1="1" y1="12" x2="3" y2="12"></line>
+          <line x1="21" y1="12" x2="23" y2="12"></line>
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+        </svg>
+      </div>
+      <div class="mode-button"></div>
+      <div class="moon-icon-wrapper">
+        <svg
+          class="moon-icon"
+          xmlns="http://www.w3.org/2000/svg"
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+        >
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+        </svg>
+      </div>
+    </div>
+  </label>
+
+
+</nav>
+<header>
+<h1 id="zerolang-os"><a href="#zerolang-os">Zerolang OS</a></h1>
+</header>
+<nav class="toc-sidebar" id="toc">
+<div id="tocfile">
+Table of Contents</div>
+
+<ul>
+<li><a href="#zerolang-os">Zerolang OS</a>
+<ul>
+<li><a href="#status">Status</a>
+</li>
+<li><a href="#design-principles">Design Principles</a>
+</li>
+<li><a href="#argv">Argv</a>
+</li>
+<li><a href="#environment">Environment</a>
+</li>
+<li><a href="#working-directory">Working Directory</a>
+</li>
+<li><a href="#process-user-identity">Process &amp; User Identity</a>
+</li>
+<li><a href="#host-descriptor">Host Descriptor</a>
+</li>
+<li><a href="#exit">Exit</a>
+</li>
+<li><a href="#ownership-conventions">Ownership Conventions</a>
+</li>
+<li><a href="#argv-parsing-unit">Argv Parsing --  Unit</a>
+</li>
+</ul>
+</li>
+</ul>
+
+</nav>
+<main id="content">
+<p>This document describes the <code>os</code> unit: process-level primitives
+for argv, environment, working directory, identity, and host
+descriptors. The unit is paired with <code>io</code>: where <code>io</code> surfaces
+failures as <code>result(T, ioerror)</code>, <code>os</code> primitives are either
+infallible or use <code>option</code> when the value may simply be absent.</p>
+<h2 id="status"><a href="#status">1. Status</a></h2>
+<p>Currently shipped:</p>
+<ul>
+<li>Argv: <code>os.args</code> returns an owned <code>list of: string</code> with
+    <code>argv[0]</code> at position 0</li>
+<li>Env read: <code>os.get_env</code> returns <code>option(string)</code> --
+    missing-env is an expected condition, not a failure</li>
+<li>Env mutation: <code>os.set_env</code>, <code>os.unset_env</code> return
+    <code>result(null, ioerror)</code>; errno maps through the shared
+    <code>z_io_errno_to_ioerror</code> helper</li>
+<li>Env enumeration: <code>os.env_names</code> returns an owned
+    <code>list of: string</code> with every key in <code>environ</code> order</li>
+<li>Working directory: <code>os.cwd</code> / <code>os.set_cwd</code> via
+    <code>getcwd(3)</code> / <code>chdir(2)</code></li>
+<li>Identity: <code>os.pid</code> / <code>os.ppid</code> (infallible i32),
+    <code>os.user_name</code> (via <code>getpwuid_r</code>), <code>os.home_dir</code> (reads
+    <code>$HOME</code>; no passwd fallback)</li>
+<li>Host descriptor: <code>os.platform</code> / <code>os.arch</code>
+    (compile-time C preprocessor selection), <code>os.hostname</code> (via
+    <code>gethostname</code>)</li>
+<li>Exit: <code>os.exit</code> terminates immediately; zerolang
+    destructors are skipped, libc's atexit chain still fires</li>
+</ul>
+<p>Argv parsing has moved to its own unit: see <code>doc/cli.pdoc</code>
+(<code>cli.spec</code> / <code>cli.add_flag</code> / <code>cli.parse</code> etc.). The
+earlier deferral is resolved.</p>
+<p>Not yet shipped:</p>
+<ul>
+<li>Subprocess (<code>spawn</code> / <code>exec</code> / <code>wait</code>): out of scope
+    for this unit; lives in a separate future unit</li>
+<li>Signals, resource limits, advisory locks</li>
+</ul>
+<h2 id="design-principles"><a href="#design-principles">2. Design Principles</a></h2>
+<p>Six principles shape every function in the unit. They are the same
+philosophy as <code>io</code>, adapted to process-state:</p>
+<ul>
+<li><em><strong>Option vs. result by semantic.</strong></em> If absence is normal,
+return <code>option(T)</code> (e.g. <code>get_env</code>). If a syscall can fail,
+return <code>result(T, ioerror)</code> (e.g. <code>set_env</code>, <code>cwd</code>). Do
+not invent an <code>os.error</code> -- the underlying errno surface is
+the same as <code>io</code>, and callers often interleave env mutation
+with file I/O</li>
+<li><em><strong>One way to say it.</strong></em> Raw <code>os.args</code> / <code>os.env_names</code>
+are the primitives. Higher-level argv parsing lives in the
+shipped <code>cli</code> unit (see <code>doc/cli.pdoc</code>); there is no
+second, "lightweight" accessor</li>
+<li><em><strong>Ambient process state is implicit.</strong></em> <code>os.args</code> /
+<code>os.cwd</code> / <code>os.pid</code> take no handle. This mirrors
+<code>io.stdin</code> / <code>io.stdout</code> / <code>io.stderr</code></li>
+<li><em><strong>Caller owns returned heap.</strong></em> Every function returning a
+<code>string</code> or <code>list</code> yields freshly-allocated storage.
+Scope-exit runs the destructor</li>
+<li><em><strong>Per-name runtime gating.</strong></em> Unused natives pay zero
+code/size cost. <code>emit_runtime_os</code> emits only the helpers a
+program actually calls, mirroring <code>emit_runtime_io</code></li>
+<li><em><strong>POSIX first.</strong></em> Natives use libc: <code>setenv</code>,
+<code>unsetenv</code>, <code>environ</code>, <code>getcwd</code>, <code>chdir</code>, <code>getpid</code>,
+<code>getppid</code>, <code>getpwuid_r</code>, <code>gethostname</code>. Windows stubs
+are a v2 concern</li>
+</ul>
+<h2 id="argv"><a href="#argv">3. Argv</a></h2>
+<pre><code class="language-zerolang">  args: function out (list of: string) is native</code></pre>
+<p>The returned list mirrors the process argv as passed to <code>main</code>:
+position 0 is the program name, subsequent positions are the
+explicit arguments. The outer list and every string inside are
+owned by the caller; scope-exit runs the list destructor.</p>
+<p>Under the hood the C runtime captures <code>argc</code> / <code>argv</code> into two
+file-scope globals before <code>z_main</code> runs (<code>src/zemitterc.py</code>
+around the emitted <code>main()</code> wrapper). <code>os.args</code> then copies
+each entry into a heap-owned <code>z_string_t</code>. Repeated calls each
+re-allocate; cache the result if you iterate multiple times.</p>
+<h2 id="environment"><a href="#environment">4. Environment</a></h2>
+<pre><code class="language-zerolang">  get_env:    function {key: string} out (option t: string)                is native
+  set_env:    function {key: string value: string} out (result t: null e: ioerror) is native
+  unset_env:  function {key: string} out (result t: null e: ioerror)       is native
+  env_names:  function out (list of: string)                               is native</code></pre>
+<p><code>get_env</code> returns <code>some value</code> when the variable is set (even
+to the empty string); <code>none</code> when absent. Missing-env is modeled
+as <code>option</code>, not <code>ioerror</code>, because it is an expected everyday
+condition.</p>
+<p><code>set_env</code> always overwrites (<code>setenv(key, value, 1)</code>). Errors
+surface as the usual <code>ioerror</code> variants; the most common is
+<code>other</code> (EINVAL on a malformed key).</p>
+<p><code>unset_env</code> is idempotent: removing a variable that was never
+set still returns <code>ok null</code>.</p>
+<p><code>env_names</code> snapshots every key in <code>environ</code> order, returning
+a freshly-allocated list. Values are fetched separately via
+<code>get_env</code> -- callers that filter before reading values avoid
+copying the full environ once.</p>
+<pre><code class="language-zerolang">  ev: os.get_env key: "PATH".string
+  match (ev) case some then {
+      # `ev` is now the string inside the some arm
+      print ev
+  } case none then {
+      print "PATH missing"
+  }</code></pre>
+<h2 id="working-directory"><a href="#working-directory">5. Working Directory</a></h2>
+<pre><code class="language-zerolang">  cwd:     function out (result t: string e: ioerror)              is native
+  set_cwd: function {path: string} out (result t: null e: ioerror) is native</code></pre>
+<p><code>cwd</code> calls <code>getcwd(NULL, 0)</code> and wraps the libc buffer into a
+heap-owned string. Errors (<code>notfound</code> when the cwd inode has
+been deleted, <code>permissiondenied</code> when the process can no longer
+resolve it) are rare but surfaced rather than papered over.</p>
+<p><code>set_cwd</code> calls <code>chdir</code>; the full <code>ioerror</code> surface applies
+(<code>notfound</code>, <code>notdir</code>, <code>permissiondenied</code>, ...). All
+subsequent relative-path I/O sees the new cwd.</p>
+<h2 id="process-user-identity"><a href="#process-user-identity">6. Process &amp; User Identity</a></h2>
+<pre><code class="language-zerolang">  pid:        function out i32                             is native
+  ppid:       function out i32                             is native
+  user_name:  function out (result t: string e: ioerror)   is native
+  home_dir:   function out (result t: string e: ioerror)   is native</code></pre>
+<p><code>pid</code> and <code>ppid</code> narrow <code>pid_t</code> to <code>i32</code> (Linux caps at
+4,194,304 so this is safe). Both are infallible.</p>
+<p><code>user_name</code> resolves the effective user via <code>getpwuid_r</code>,
+starting with a 1 KiB buffer and retrying once with 16 KiB on
+<code>ERANGE</code>. Failures (<code>ENOENT</code> when the uid has no passwd entry,
+<code>permissiondenied</code> when <code>/etc/passwd</code> is unreadable) land in
+the matching <code>ioerror</code> arm.</p>
+<p><code>home_dir</code> reads <code>$HOME</code> from the environment and returns
+it; if <code>$HOME</code> is unset, an <code>ioerror.other</code> with message
+<code>$HOME is not set</code> is returned. The passwd fallback is
+intentionally omitted: callers that must work in stripped
+environments should set <code>$HOME</code> explicitly before invoking.</p>
+<h2 id="host-descriptor"><a href="#host-descriptor">7. Host Descriptor</a></h2>
+<pre><code class="language-zerolang">  platformkind: variant {
+      linux: null
+      darwin: null
+      windows: null
+      other: null
+  }
+
+  archkind: variant {
+      x86_64: null
+      aarch64: null
+      other: null
+  }
+
+  platform: function out platformkind                    is native
+  arch:     function out archkind                        is native
+  hostname: function out (result t: string e: ioerror)   is native</code></pre>
+<p><code>platform</code> and <code>arch</code> are exposed as runtime values so the
+same source can compile for different hosts later. Today they
+resolve at compile time via the C preprocessor
+(<code>__linux__</code> / <code>__APPLE__</code> / <code>_WIN32</code> and
+<code>__x86_64__</code> / <code>__aarch64__</code>) -- the generated C body is a
+single-line switch, one branch selected per build.</p>
+<p>Unknown platforms / architectures fall through to <code>other</code>
+rather than erroring, so downstream code can treat them as a
+degraded-but-working case.</p>
+<p><code>hostname</code> wraps <code>gethostname(3)</code> with a 256-byte buffer
+(larger than <code>HOST_NAME_MAX</code> on every mainstream POSIX host)
+and truncates on overflow.</p>
+<h2 id="exit"><a href="#exit">8. Exit</a></h2>
+<pre><code class="language-zerolang">  exit: function {code: i32} is native</code></pre>
+<p><code>os.exit</code> forwards to libc <code>exit(2)</code>. Open file descriptors
+are flushed by the standard atexit chain; zerolang-level
+destructors for in-scope values DO NOT run. Reserve it for fatal
+exits and CLI tools that want an explicit status; prefer a
+normal return path for everyday success / failure so scope
+cleanup fires.</p>
+<h2 id="ownership-conventions"><a href="#ownership-conventions">9. Ownership Conventions</a></h2>
+<p>Every <code>os</code> native that accepts a <code>string</code> argument takes
+ownership: the runtime receives the string by value and calls
+<code>z_string_free</code> after reading. Temporaries at call sites (like
+<code>"PATH".string</code>) are zero-invalidated so the caller's scope
+exit does not double-free. This matches the wider "string
+ownership transfers at call boundaries" convention used in
+<code>io</code>.</p>
+<p>Every native returning a <code>string</code> / <code>list</code> returns a
+freshly-allocated value; caller-scope destructors free the heap
+storage. The <code>option</code> / <code>result</code> wrappers box their payloads
+and the compiler-generated destructors handle the boxed cleanup
+automatically.</p>
+<h2 id="argv-parsing-unit"><a href="#argv-parsing-unit">10. Argv Parsing -- <code>cli</code> Unit</a></h2>
+<p>Argv parsing is a distinct concern and lives in its own unit.
+Both blockers flagged in the earlier deferral note are resolved:
+the string API gained <code>starts_with</code> / <code>strip_prefix</code> /
+<code>split_once</code> / <code>index_of</code> in Phases S1--S3, and the emitter
+monomorphization ordering now supports user records / classes
+with <code>list of: T</code> fields via a three-pass topological split
+(system types with no mono deps first, user structs second,
+mono types depending on user structs last).</p>
+<p>See <code>doc/cli.pdoc</code> for the full spec. Typical use:</p>
+<pre><code class="language-zerolang">sp: cli.spec.create program_name: "tool".string summary: "...".string
+cli.add_flag spec: sp name: "--verbose".string short_name: "-v".string help: "verbose".string
+cli.add_positional spec: sp name: "input".string help: "input file".string required: yes
+r: cli.parse spec: sp args: os.args
+match (r) case ok then {
+    v: r.has_flag name: "--verbose"
+    ...
+} case err then {
+    print cli.help_text spec: sp
+}</code></pre>
+<p>Scripts that want to read argv directly without the parser
+continue to work against the raw <code>os.args</code> list:</p>
+<pre><code class="language-zerolang">argv: os.args
+# argv.length, argv.get i: n.u64, exact equality via s == "--flag".string</code></pre>
+</main>
+</body>
+</html>

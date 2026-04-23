@@ -1,0 +1,94 @@
+# cli -- CLI argument parsing. Register flags / options /
+# positionals on a `spec`, then call `parse` with argv to get a
+# `parsed` result. Auto-generated help text.
+#
+# Grammar supported:
+#   --name              long flag
+#   --name value        long option (value is the next argv token)
+#   --name=value        long option (embedded value)
+#   -x                  short flag
+#   -o value            short option
+#   -xvf                bundled short flags
+#   -ofile              short option with embedded value (getopt)
+#   --                  end-of-options; rest go to `extras`
+#   -                   positional (stdin convention)
+
+# flagdef -- one registered long flag (plus optional short alias).
+# Class because the `string` fields are reftypes; valtypes cannot hold
+# reftypes.
+flagdef: class {
+    name:  string
+    short_name: string
+    help:  string
+}
+
+# optiondef -- one registered option (long + optional short alias).
+optiondef: class {
+    name:     string
+    short_name: string
+    help:     string
+    required: bool
+}
+
+# positionaldef -- one registered positional slot, named for lookup.
+positionaldef: class {
+    name:     string
+    help:     string
+    required: bool
+}
+
+# clierror -- parse-time failures. Reftype arms carry a descriptive
+# message so callers can compose diagnostics or print the offending
+# token directly.
+clierror: union {
+    unknown_flag:          string
+    missing_value:         string
+    missing_required:      string
+    unexpected_positional: string
+    unexpected_arg:        string
+}
+
+# spec -- parser registration state. Built incrementally by
+# `cli.flag` / `cli.option` / `cli.positional`. All string fields
+# are owned; list fields hold the registered defs in insertion
+# order.
+spec: class {
+    program_name: string
+    summary:      string
+    flags:        (list of: flagdef)
+    options:      (list of: optiondef)
+    positionals:  (list of: positionaldef)
+} as {
+    create: function {program_name: string summary: string} out this is native
+}
+
+# parsed -- successful parse result. Opaque; inspect via the
+# accessor methods below.
+parsed: class {
+    flag_set:          (list of: string)
+    option_values:     (map key: string value: string)
+    positional_values: (map key: string value: string)
+    extra_args:        (list of: string)
+} as {
+    # Was the flag with this name present?
+    has_flag:   function {:this name: stringview} out bool is native
+
+    # Value of an option, or none.
+    get_option: function {:this name: stringview} out (option t: string) is native
+
+    # Value of a positional, or none.
+    get_positional: function {:this name: stringview} out (option t: string) is native
+}
+
+# Registration. Each pushes a fresh def into the spec's list.
+# Named `add_*` so the verb is obvious and to sidestep the `flag`
+# reserved keyword.
+add_flag:       function {spec: spec.borrow name: string short_name: string help: string} is native
+add_option:     function {spec: spec.borrow name: string short_name: string help: string required: bool} is native
+add_positional: function {spec: spec.borrow name: string help: string required: bool} is native
+
+# Parse argv against the registered spec. Consumes argv.
+parse: function {spec: spec.borrow args: (list of: string)} out (result t: parsed e: clierror) is native
+
+# Render the usage + help block from the spec.
+help_text: function {spec: spec.borrow} out string is native

@@ -571,6 +571,20 @@ class TypeChecker:
             base = f"z_{ztype.name}_t"
             self._assign_cname(ztype, base)
 
+    def _release_template_cname(self, ztype: ZType) -> None:
+        """Release a generic template's cname slot after generic
+        detection. Templates never emit directly — only their
+        monomorphizations do — so clinging to a `z_{name}_t` slot
+        blocks user-declared non-generic types from using the same
+        name (e.g. a user `result: variant { ... }` shadowing
+        system's generic `result` union).
+        """
+        if not ztype.isgeneric:
+            return
+        if ztype.cname:
+            self._assigned_cnames.discard(ztype.cname)
+            ztype.cname = ""
+
     def check(self, full: bool = False) -> List[zast.Error]:
         """Run the type checker starting from main.
 
@@ -1524,6 +1538,7 @@ class TypeChecker:
                     utype.numeric_generic_params.add(sname)
                 if default_type:
                     utype.generic_defaults[sname] = default_type
+        self._release_template_cname(utype)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -7526,7 +7541,7 @@ class TypeChecker:
         return result_type
 
     # system/library units that should not be resolved as generic file units
-    _SYSTEM_UNITS = {"core", "system", "io", "collections"}
+    _SYSTEM_UNITS = {"core", "system", "io", "collections", "os", "cli"}
 
     def _ensure_file_unit_resolved(self, unitname: str) -> Optional[ZType]:
         """Ensure a file unit has been fully resolved (generic params detected).

@@ -199,6 +199,20 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-6-method-deferred">Phase 6:  Method [DEFERRED]</a>
 </li>
+<li><a href="#phase-7-stringview-query-api-complete">Phase 7: Stringview Query API [COMPLETE]</a>
+</li>
+<li><a href="#phase-8-stringview-slicing-helpers-complete">Phase 8: Stringview Slicing Helpers [COMPLETE]</a>
+</li>
+<li><a href="#phase-9-splitting-complete">Phase 9: Splitting [COMPLETE]</a>
+</li>
+<li><a href="#phase-10-allocating-transforms-complete">Phase 10: Allocating Transforms [COMPLETE]</a>
+</li>
+<li><a href="#phase-11-codepoint-iteration-count-complete">Phase 11: Codepoint Iteration + Count [COMPLETE]</a>
+</li>
+<li><a href="#phase-12-numeric-parsing-complete">Phase 12: Numeric Parsing [COMPLETE]</a>
+</li>
+<li><a href="#phase-13-free-function-complete">Phase 13:  Free Function [COMPLETE]</a>
+</li>
 </ul>
 </li>
 <li><a href="#open-questions">Open Questions</a>
@@ -813,6 +827,90 @@ design. Items marked with <code>+</code> are complete.</p>
 <li><code>string.cstring</code> -- returns <code>data</code> directly (internal NUL maintained).</li>
 <li><code>str.cstring</code> -- stack-allocated <code>char buf[N+1]</code> copy with NUL.</li>
 <li><code>stringview.cstring</code> -- stack-allocated copy with NUL.</li>
+</ul>
+<h3 id="phase-7-stringview-query-api-complete"><a href="#phase-7-stringview-query-api-complete">13.7. Phase 7: Stringview Query API [COMPLETE]</a></h3>
+<p>Non-allocating predicates. Live on <code>stringview</code>; callers can
+invoke them on a <code>string</code> receiver because the compiler
+projects through <code>string.stringview</code> (same mechanism that makes
+<code>s == v</code> work when <code>v: stringview</code>). Every method below is
+zero-copy; no heap work.</p>
+<ul>
+<li><code>is_empty</code> -- <code>length == 0</code>.</li>
+<li><code>is_ascii</code> -- every byte <code>&lt; 0x80</code>. O(n) byte walk.</li>
+<li><code>starts_with prefix: stringview</code> -- zero-copy memcmp; empty prefix always matches.</li>
+<li><code>ends_with suffix: stringview</code> -- symmetric.</li>
+<li><code>contains needle: stringview</code> -- byte-search. Naive O(n*m) in v1; two-way / Boyer-Moore are drop-in upgrades.</li>
+<li><code>index_of needle: stringview</code> -- byte index of the first occurrence as <code>optionval(u64)</code>. Empty needle returns <code>some 0</code>.</li>
+<li><code>last_index_of needle: stringview</code> -- symmetric; reverse scan.</li>
+<li><code>byte_at i: u64</code> -- bounds-checked byte access, <code>optionval(u8)</code>. NOT codepoint-at (phase 11 handles that).</li>
+</ul>
+<h3 id="phase-8-stringview-slicing-helpers-complete"><a href="#phase-8-stringview-slicing-helpers-complete">13.8. Phase 8: Stringview Slicing Helpers [COMPLETE]</a></h3>
+<p>All return a <code>stringview</code> locked to the same source as the
+receiver (pointer-arithmetic slicing, no allocation).</p>
+<ul>
+<li><code>trim</code> / <code>trim_start</code> / <code>trim_end</code> -- strip ASCII whitespace (space, tab, LF, VT, FF, CR). Named without <code>_ascii</code> because ASCII whitespace is the near-universal expectation; revisit when Unicode lands.</li>
+<li><code>strip_prefix p: stringview</code> -- returns <code>some rest</code> on match, <code>none</code> otherwise. Composes cleanly for parsers stripping <code>--</code>, <code>=</code>, etc.</li>
+<li><code>strip_suffix s: stringview</code> -- symmetric.</li>
+</ul>
+<p>The <code>option(stringview)</code> return boxes the stringview payload
+(one 16-byte heap allocation for the union payload). The
+compiler-generated destructor frees it on scope exit.</p>
+<h3 id="phase-9-splitting-complete"><a href="#phase-9-splitting-complete">13.9. Phase 9: Splitting [COMPLETE]</a></h3>
+<p>Splitting yields <code>stringview</code> fragments via an iterator rather
+than a collection. Two v2 constraints forbid
+<code>list of: stringview</code>:</p>
+<ul>
+<li><code>stringview</code> cannot be stored in record/class fields. List elements live in a class field; the list is therefore not constructible.</li>
+<li><code>.stringview</code> takes an EXCLUSIVE lock. Two sibling views on the same source conflict even if the element type worked.</li>
+</ul>
+<p>The iterator holds the lock for its whole lifetime. Each
+<code>.call</code> yields the next view, borrowed from that lock; the
+yielded view lives only inside the loop body.</p>
+<ul>
+<li><code>split sep: stringview</code> -- returns a <code>splitter</code>. Iterates with <code>with it: (sv.split sep: ", ") do for piece: it loop { ... }</code>.</li>
+<li><code>split_once sep: stringview</code> -- returns the byte index of the first separator as <code>optionval(u64)</code>; callers slice the view themselves (sequentially, because views on the same source are mutually exclusive).</li>
+<li><code>lines</code> -- returns a <code>linesiter</code>. Splits on LF, stripping a paired CRLF.</li>
+</ul>
+<p>Callers that genuinely need every fragment for random access
+write the loop themselves and pay for owned copies
+(<code>pieces.append from: piece.string</code> inside the body). The
+stdlib deliberately does NOT provide a <code>split_to_list</code> /
+<code>collect</code> helper &#x2014; explicit allocation at the call site keeps
+the cost visible.</p>
+<h3 id="phase-10-allocating-transforms-complete"><a href="#phase-10-allocating-transforms-complete">13.10. Phase 10: Allocating Transforms [COMPLETE]</a></h3>
+<p>Return owned <code>string</code> values; each allocates once.</p>
+<ul>
+<li><code>to_lower_ascii</code> / <code>to_upper_ascii</code> -- byte-wise ASCII case conversion. Non-ASCII bytes pass through unchanged. The <code>_ascii</code> suffix is deliberate: a future Unicode variant needs case-fold tables (~40 KiB) and belongs in the segmentation-tables phase.</li>
+<li><code>replace needle: stringview replacement: stringview</code> -- replace every occurrence. Empty needle returns a copy.</li>
+<li><code>replace_first ...</code> -- as above, one replacement.</li>
+<li><code>repeated n: u64</code> -- this view repeated <code>n</code> times. Named <code>repeated</code> (past participle) because <code>repeat</code> is a reserved control-flow keyword.</li>
+<li><code>concat other: stringview</code> -- two-operand concatenation when interpolation syntax is too noisy.</li>
+</ul>
+<h3 id="phase-11-codepoint-iteration-count-complete"><a href="#phase-11-codepoint-iteration-count-complete">13.11. Phase 11: Codepoint Iteration + Count [COMPLETE]</a></h3>
+<p>Distinct from <code>.length</code> (bytes).</p>
+<ul>
+<li><code>count</code> -- codepoint count. O(n) UTF-8 state walk. Doc must emphasise the byte-vs-codepoint difference.</li>
+<li><code>codepoints</code> -- returns a <code>cpiter</code> yielding <code>u32</code> codepoints via the <code>call</code> / <code>optionval</code> iterator protocol. Ill-formed bytes are replaced with U+FFFD and the iterator advances one byte (byte-level recovery, matches Rust / Go precedent).</li>
+</ul>
+<h3 id="phase-12-numeric-parsing-complete"><a href="#phase-12-numeric-parsing-complete">13.12. Phase 12: Numeric Parsing [COMPLETE]</a></h3>
+<p>Each <code>parse_*</code> consumes the whole view. Optional leading sign
+(i64 / f64); decimal digits only; no whitespace, no underscore
+separators, no radix prefix.</p>
+<ul>
+<li><code>parse_i64</code> -- out <code>result(i64, parseerror)</code>.</li>
+<li><code>parse_u64</code> -- out <code>result(u64, parseerror)</code>.</li>
+<li><code>parse_f64</code> -- out <code>result(f64, parseerror)</code>. Delegates to <code>strtod</code>; rejects <code>inf</code> / <code>nan</code> string forms in v1.</li>
+</ul>
+<p>The <code>parseerror</code> variant has three null arms:
+<code>empty</code>, <code>invalid_digit</code>, <code>overflow</code> -- value-typed so the
+error fits inline.</p>
+<h3 id="phase-13-free-function-complete"><a href="#phase-13-free-function-complete">13.13. Phase 13: <code>string_join</code> Free Function [COMPLETE]</a></h3>
+<p>Concatenate a <code>list of: string</code> with a separator. One
+allocation for the output string; memcpy in sequence.</p>
+<ul>
+<li><code>string_join parts: (list of: string) sep: stringview out string</code></li>
+<li>Free function rather than a method on list because lists are generic and zerolang does not yet support monomorphization-specific methods.</li>
+<li>Takes <code>list of: string</code>, not <code>list of: stringview</code> -- the latter is not constructible in v2. Callers holding fragments materialise owned strings inside their loop first.</li>
 </ul>
 <h2 id="open-questions"><a href="#open-questions">14. Open Questions</a></h2>
 <ul>

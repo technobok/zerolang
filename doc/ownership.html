@@ -129,6 +129,8 @@ Table of Contents</div>
 </li>
 <li><a href="#locking">Locking</a>
 <ul>
+<li><a href="#lock-keys-are-paths">Lock Keys Are Paths</a>
+</li>
 <li><a href="#lock-states">Lock States</a>
 </li>
 <li><a href="#call-scoped-locking-algorithm">Call-scoped Locking Algorithm</a>
@@ -496,52 +498,86 @@ scope or is explicitly <code>.release</code>d.</li>
 </ul>
 <p>Both use the same EXCLUSIVE/SHARED states and the same storage; they
 differ only in lifetime and acquisition policy.</p>
-<h3 id="lock-states"><a href="#lock-states">7.1. Lock States</a></h3>
-<p>Each variable can have locks placed on it by other variables:</p>
+<h3 id="lock-keys-are-paths"><a href="#lock-keys-are-paths">7.1. Lock Keys Are Paths</a></h3>
+<p>Lock targets are paths, not bare variable names. A lock path is a
+tuple <code>(root, f1, f2, ..., fn)</code> where <code>root</code> is a bound variable
+(including <code>this</code>) and <code>f1..fn</code> are addressable descents: field
+names, labels, or numeric indices. Array indexing extends the path
+exactly like a field access -- <code>arr.0</code> and <code>arr.1</code> are distinct
+leaves, not a special case. Method calls terminate the path: a method's
+return value starts a fresh path rooted at the call's result binding.
+Valtype leaves skip locking (the read is a copy; there is no identity
+to protect).</p>
+<h3 id="lock-states"><a href="#lock-states">7.2. Lock States</a></h3>
+<p>Each path can have locks placed on it:</p>
 <ul>
-<li>unlocked -- no locks held (default)</li>
-<li>exclusive -- an exclusive lock is held. No other locks may be taken.</li>
-<li>shared -- a shared lock is held. Other shared locks are permitted but
-  exclusive locks are not.</li>
+<li>unlocked -- no locks held on this path (default)</li>
+<li>exclusive -- full control over the path and its entire subtree</li>
+<li>shared -- intent access along the path; other shared locks on
+  overlapping paths are permitted but exclusive acquisition on any
+  overlapping path is not</li>
 </ul>
+<p>Conflict rule. Two locks conflict exactly when their paths overlap
+(one is a non-strict prefix of the other) AND the combination is not
+permitted by multi-granularity semantics:</p>
+<ul>
+<li>Same path: conflict iff at least one is exclusive. Two shared
+  locks on the same path dedupe.</li>
+<li>Strict ancestor/descendant: the ancestor shared is intent
+  shared -- it permits any lock (shared or exclusive) on a descendant.
+  An ancestor exclusive, by contrast, owns the whole subtree and
+  conflicts with any descendant lock.</li>
+<li>Sibling paths (no prefix relation): never conflict.</li>
+</ul>
+<p>Intent-shared on ancestors is the rule that makes the standard
+acquisition pattern (shared on every intermediate prefix plus exclusive
+on the leaf) self-consistent.</p>
 <p>A reftype can only appear once as an argument or as a receiver in a single
 function call (enforced by the Call-scoped Locking algorithm below). This
 prevents aliasing and is the property <code>doc/spec.pdoc</code> calls 'no aliasing
 for reftypes'. Top-level <code>data</code> items are exempt -- they are immutable
 and never locked.</p>
-<h3 id="call-scoped-locking-algorithm"><a href="#call-scoped-locking-algorithm">7.2. Call-scoped Locking Algorithm</a></h3>
-<p>When a function is called, locks are taken on arguments and the receiver
-and released when the call returns:</p>
+<h3 id="call-scoped-locking-algorithm"><a href="#call-scoped-locking-algorithm">7.3. Call-scoped Locking Algorithm</a></h3>
+<p>When a function is called, locks are taken on argument paths and the
+receiver path, then released when the call returns:</p>
 <ol>
 <li>Each argument is processed left to right.</li>
 <li>If the argument is a top-level <code>data</code> item, no lock is taken
   (immutable, freely shared).</li>
-<li>If the argument is a bare variable, an exclusive lock is taken on it.</li>
-<li>If the argument is a dotted chain, a shared lock is taken on every
-  variable name in the chain (root and intermediate parents). No
-  additional lock is taken on the leaf because field names do not have
-  independent lock identity -- aliasing is prevented by the shared locks
-  on the shared ancestors.</li>
-<li>Additional shared locks on already-shared-locked parents are
-  permitted.</li>
-<li>If there is already an exclusive or shared lock on the argument
-  being passed, it is an error (prevents aliasing).</li>
+<li>For an argument whose source is a path <code>(root, f1, ..., fn)</code>
+  resolving to a reftype leaf, a shared lock is taken on every
+  intermediate prefix (<code>(root,)</code>, <code>(root, f1)</code>, ...,
+  <code>(root, f1, ..., fn-1)</code>) and an exclusive lock is taken on
+  the leaf <code>(root, f1, ..., fn)</code>. The intent-shared ancestors permit
+  sibling paths to be locked independently by later arguments.</li>
+<li>For an argument written as <code>x.lock</code> / <code>x.borrow</code> (and
+  similarly for stringview/listview), the call-scoped lock targets the
+  source path -- the parent of the lifting suffix -- not the
+  syntactic path with the suffix appended. <code>m.lock</code> passed as an
+  argument locks path <code>(m,)</code>, not <code>(m, lock)</code>.</li>
+<li>If the requested lock conflicts with an outstanding lock on an
+  overlapping path (see Conflict rule above), it is an error.</li>
 <li>If the argument is a sub-call, locking is applied recursively.
   After the sub-call, its argument locks are cleared or assigned to the
   sub-call result.</li>
-<li>After all arguments are processed, an exclusive lock is taken on
-  the root of the receiver chain for the duration of the call.</li>
+<li>After all arguments are processed, locks are taken on the receiver
+  path -- shared on each intermediate prefix, exclusive on the leaf.
+  For a bare-receiver call <code>x.method</code>, this is exclusive on <code>(x,)</code>.
+  For a method call via a field path <code>this.sub.method</code>, it is shared
+  on <code>(this,)</code> and exclusive on <code>(this, sub)</code>, leaving other fields
+  of <code>this</code> freely accessible inside the call.</li>
 <li>The call is made.</li>
-<li>After the call, for any <code>.lock</code> parameters, their locks transfer
-  to the returned value and become Borrow-scoped Locks held by that
-  returned value. All other argument locks are released.</li>
+<li>After the call, for any <code>.lock</code> parameters, their leaf locks
+  transfer to the returned value and become Borrow-scoped Locks held
+  by that returned value. All other argument and receiver locks are
+  released when the call scope pops.</li>
 </ol>
 <p><code>for</code> loops over a reftype iteration target take an exclusive lock on
 the target for the duration of the body, preventing mutation of the
 container or iterator from outside the loop. Per-iteration method
 dispatch takes and releases an exclusive lock on the receiver for each
 call. See the lock lifecycle walkthrough below for a worked example.</p>
-<h3 id="borrow-scoped-locking"><a href="#borrow-scoped-locking">7.3. Borrow-scoped Locking</a></h3>
+<h3 id="borrow-scoped-locking"><a href="#borrow-scoped-locking">7.4. Borrow-scoped Locking</a></h3>
 <p>A Borrow-scoped Lock is acquired whenever a variable is bound to a
 borrow or view construct: <code>.borrow</code>, <code>string.stringview</code> or
 <code>str.stringview</code> (both produce a <code>stringview</code> class borrowing the
@@ -549,40 +585,47 @@ source), the analogous <code>list.listview</code>, a <code>with name: path do
 body</code> whose right-hand side is a bare name or dotted path (borrow by
 default, same rule as function parameters), the transfer from
 <code>.lock</code> parameters to a return value, and <code>.lock</code> fields on
-classes. The lock is:</p>
+classes. The lock targets the source path:</p>
 <ul>
-<li>exclusive</li>
-<li>placed on the root variable of the path the borrow was
-  taken from. For <code>v: rec.field.stringview</code> the lock is on
-  <code>rec</code>, not on <code>field</code>.</li>
+<li>shared on every intermediate prefix of the source path.
+For <code>v: rec.field.stringview</code> the intermediate is <code>(rec,)</code>.</li>
+<li>exclusive on the leaf of the source path. For
+<code>v: rec.field.stringview</code> the leaf is <code>(rec, field)</code>; for
+<code>v: s.stringview</code> the leaf is <code>(s,)</code>.</li>
 <li>held for the full scope of the borrowing variable; released
   automatically on scope exit or via <code>.release</code>.</li>
 </ul>
-<p>Root-only placement is sufficient: any mutation attempt -- regardless
-of how deep into the locked variable's structure it reaches -- is
-checked against the root's lock (see <code>Mutation-Site Enforcement</code>
-below).</p>
-<h3 id="lock-enforcement"><a href="#lock-enforcement">7.4. Lock Enforcement</a></h3>
-<p>While a variable has an outstanding exclusive Borrow-scoped Lock,
-the variable is completely unavailable. The compiler rejects
-<em><strong>any</strong></em> access whose path is rooted at the locked variable -- both
-reads and writes:</p>
+<p>Path-scoped placement preserves all the safety properties of the
+previous root-only model (any access that overlaps the locked path is
+caught -- see <code>Mutation-Site Enforcement</code> below) while allowing
+sibling paths to be borrowed or mutated independently. A method that
+takes a view over <code>this.a</code> can, in the same block, mutate
+<code>this.b</code> -- the two operations target disjoint paths.</p>
+<h3 id="lock-enforcement"><a href="#lock-enforcement">7.5. Lock Enforcement</a></h3>
+<p>While an exclusive Borrow-scoped Lock is outstanding on some path <code>P</code>,
+every operation whose target path overlaps <code>P</code> is rejected -- both
+reads and writes. Overlap means <code>P</code> is a prefix of the target path
+or vice versa; sibling paths do <em><strong>not</strong></em> overlap.</p>
 <ul>
-<li>reading the variable or any field through it
-  (<code>x</code>, <code>x.field</code>, <code>x.a.b</code>)</li>
-<li>reassignment (<code>x = v</code>) or field reassignment (<code>x.f = v</code>)</li>
-<li>swap with either side rooted at the locked variable</li>
-<li>method calls on the locked variable</li>
+<li>reading the locked path or any descendant of it (<code>p.f</code>,
+  <code>p.f.sub</code>) -- a whole-record read of an ancestor (<code>p</code>) also
+  overlaps and is rejected.</li>
+<li>reassignment or field reassignment on an overlapping path
+  (<code>p.f = v</code>, or <code>p = ...</code> for any ancestor).</li>
+<li>swap with either side on an overlapping path.</li>
+<li>method calls whose receiver path overlaps the locked path.</li>
 <li>further <code>.borrow</code>, <code>.stringview</code>, <code>.listview</code>, <code>.take</code>,
-  or <code>.release</code> on it</li>
-<li>passing the locked variable as an argument</li>
+  or <code>.release</code> on an overlapping path.</li>
+<li>passing a value with an overlapping path as an argument.</li>
 </ul>
-<p>The only code that can access the locked data is the lock holder
-(the borrow or view variable) through its own interface.</p>
-<p>This strict approach prevents aliasing through field reads (which
-would create references that bypass the lock) and makes the
-programmer's intent clear: a locked variable is off-limits until
-the borrow ends.</p>
+<p>Sibling-path accesses remain permitted: while <code>(p, f)</code> is exclusively
+locked, reading or writing <code>(p, g)</code> is fine. The only code that can
+access the locked sub-tree is the lock holder (the borrow or view
+variable) through its own interface.</p>
+<p>This path-scoped approach prevents aliasing through field reads (which
+would create references that bypass the lock) while supporting
+field-granular independence -- essential for classes whose methods need
+to read one of their fields and mutate another in the same body.</p>
 <p><code>match</code> does <em><strong>not</strong></em> lock its subject. Match arms are mutually exclusive
 and the subject is evaluated once, so there is no aliasing or re-evaluation
 concern. <code>.take</code> is allowed on the match subject inside arm bodies for
@@ -599,11 +642,11 @@ assignment semantics of <code>name: value</code> and to operations inside <code>
 take their own locks via the function-call algorithm. When <code>name</code> falls out
 of scope at the end of <code>with</code>, any locks it holds -- including those
 transferred from <code>.lock</code> fields of the bound value -- are released.</p>
-<h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.5. Lock Release on Scope Exit</a></h3>
+<h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.6. Lock Release on Scope Exit</a></h3>
 <p>When a variable falls out of scope, all locks it holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).</p>
-<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">7.6. Temporary Expressions in Lock Context</a></h3>
+<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">7.7. Temporary Expressions in Lock Context</a></h3>
 <p>The compiler rejects <code>.borrow</code>, <code>.stringview</code>, <code>.listview</code>, and
 <code>.lock</code> on temporary expressions (i.e. expressions whose result has
 no named variable). The programmer must assign the value to a variable
@@ -617,7 +660,7 @@ v: s.stringview</code></pre>
 <p>A future version of the compiler may support automatic temporary
 variable creation to keep lock-context expressions alive, but for
 now explicit naming is required.</p>
-<h3 id="binding-aliases"><a href="#binding-aliases">7.7. Binding Aliases</a></h3>
+<h3 id="binding-aliases"><a href="#binding-aliases">7.8. Binding Aliases</a></h3>
 <p>Certain bindings do not produce a new storage location at all &#x2014; the
 compiler emits the new name as an alias for the source expression. The
 existing Borrow-scoped Lock guarantees the source slot stays valid and

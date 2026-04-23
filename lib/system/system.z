@@ -351,6 +351,134 @@ stringview: class is native as {
     >:  function {:this rhs: stringview} out bool is native
     >=: function {:this rhs: stringview} out bool is native
     compare: function {:this rhs: stringview} out i32 is native
+
+    # -- Phase S1: non-allocating queries ---------------------------
+
+    # Empty view (length == 0).
+    is_empty: function {:this} out bool is native
+
+    # Every byte is < 0x80. O(n) byte walk.
+    is_ascii: function {:this} out bool is native
+
+    # Does this view begin with `prefix`? Empty prefix always matches.
+    starts_with: function {:this prefix: stringview} out bool is native
+
+    # Does this view end with `suffix`? Empty suffix always matches.
+    ends_with: function {:this suffix: stringview} out bool is native
+
+    # Does this view contain `needle` as a byte substring?
+    contains: function {:this needle: stringview} out bool is native
+
+    # Byte index of the first occurrence of `needle`, or `none`.
+    # Empty needle matches at index 0.
+    index_of: function {:this needle: stringview} out (optionval t: u64) is native
+
+    # Byte index of the last occurrence of `needle`, or `none`.
+    # Empty needle matches at index length.
+    last_index_of: function {:this needle: stringview} out (optionval t: u64) is native
+
+    # Byte at `i`, or `none` if out of range. Returns raw bytes,
+    # NOT codepoints; use `codepoints` (phase S5) for decoded text.
+    byte_at: function {:this i: u64} out (optionval t: u8) is native
+
+    # -- Phase S2: view-returning slicing helpers -------------------
+    # All return a stringview borrowed from the same source as this.
+
+    # Strip ASCII whitespace from both ends (space, tab, CR, LF, VT, FF).
+    trim: function {:this} out stringview is native
+
+    # Strip leading ASCII whitespace.
+    trim_start: function {:this} out stringview is native
+
+    # Strip trailing ASCII whitespace.
+    trim_end: function {:this} out stringview is native
+
+    # Remove `p` from the start; return `some rest` on match,
+    # `none` otherwise.
+    strip_prefix: function {:this p: stringview} out (option t: stringview) is native
+
+    # Remove `s` from the end; return `some rest` on match,
+    # `none` otherwise.
+    strip_suffix: function {:this s: stringview} out (option t: stringview) is native
+
+    # -- Phase S3: splitting (iterator-based) -----------------------
+    # See `splitter`, `linesiter` below for the iterator classes.
+
+    # Split this view at every occurrence of `sep`. Returns an
+    # iterator; use with `for piece: ... loop { }`. Empty `sep`
+    # yields no iterations (documented).
+    split: function {:this sep: stringview} out splitter is native
+
+    # Byte index of the first `sep`, or `none`. Lets callers slice
+    # the view themselves (see doc/os.pdoc split_once pattern).
+    # Empty sep returns some(0).
+    split_once: function {:this sep: stringview} out (optionval t: u64) is native
+
+    # Iterate lines (split on '\n', strip a paired '\r\n'). Empty
+    # trailing line dropped.
+    lines: function {:this} out linesiter is native
+
+    # -- Phase S4: allocating transforms ---------------------------
+    # Every method here allocates a new owned string.
+
+    # ASCII-only lowercasing. Bytes [A-Z] are lowercased; non-ASCII
+    # bytes (codepoints >= 0x80) pass through unchanged.
+    to_lower_ascii: function {:this} out string is native
+
+    # ASCII-only uppercasing.
+    to_upper_ascii: function {:this} out string is native
+
+    # Replace every occurrence of `needle` with `replacement`.
+    # Empty `needle` returns a copy of this unchanged.
+    replace: function {:this needle: stringview replacement: stringview} out string is native
+
+    # Replace only the first occurrence of `needle`.
+    replace_first: function {:this needle: stringview replacement: stringview} out string is native
+
+    # Concatenation of this repeated `n` times. `n = 0` returns
+    # the empty string. Named `repeated` because `repeat` is a
+    # reserved control-flow keyword.
+    repeated: function {:this n: u64} out string is native
+
+    # Concatenate this and `other` into one new owned string.
+    concat: function {:this other: stringview} out string is native
+
+    # -- Phase S5: codepoint iteration + count ---------------------
+
+    # Codepoint count (O(n) UTF-8 walk). Distinct from `.length`
+    # which returns byte count.
+    count: function {:this} out u64 is native
+
+    # Codepoint iterator. Each `.call` yields the next decoded
+    # codepoint as a u32. Ill-formed bytes are replaced with
+    # U+FFFD and the iterator advances one byte.
+    codepoints: function {:this} out cpiter is native
+
+    # -- Phase S6: numeric parsing --------------------------------
+    # Each parse_* consumes the whole view. Optional leading sign
+    # (parse_i64 / parse_f64) and decimal digits; no whitespace,
+    # no underscore separators, no radix prefix.
+
+    parse_i64: function {:this} out (result t: i64 e: parseerror) is native
+    parse_u64: function {:this} out (result t: u64 e: parseerror) is native
+    parse_f64: function {:this} out (result t: f64 e: parseerror) is native
+}
+
+# Codepoint iterator. Built by `stringview.codepoints`.
+cpiter: class is native as {
+    call: function {:this} out (optionval t: u32) is native
+}
+
+# Splitter iterator. Built by `stringview.split`. Opaque: fields are
+# managed by the runtime. The call method yields one substring view
+# per iteration and returns `option.none` when exhausted.
+splitter: class is native as {
+    call: function {:this} out (option t: stringview) is native
+}
+
+# Line iterator. Built by `stringview.lines`.
+linesiter: class is native as {
+    call: function {:this} out (option t: stringview) is native
 }
 
 # Protocol: any type that can be viewed as a stringview. The returned
@@ -395,6 +523,15 @@ result: union {
 } as {
     t: any.generic
     e: any.generic
+}
+
+# parseerror -- error variants for stringview numeric-parse methods
+# (parse_i64 / parse_u64 / parse_f64). Valtype variant: all arms are
+# `null` so the error fits inline with no heap allocation.
+parseerror: variant {
+    empty: null
+    invalid_digit: null
+    overflow: null
 }
 
 # bytes - heap-mutable byte buffer. Class typedef over `list of: u8`

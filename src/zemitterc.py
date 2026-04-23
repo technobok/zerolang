@@ -318,6 +318,13 @@ class CEmitter:
         # never monomorphized.
         self.needs_io_natives: set[str] = set()
         self.needs_os_natives: set[str] = set()
+        # stringview-method natives (Phase S1+). Tracked separately
+        # because these share the z_stringview_t substrate and the
+        # late emission slot (after mono types are declared).
+        self.needs_stringview_natives: set[str] = set()
+        # cli-unit natives (spec_create, add_flag, parse, ...).
+        self.needs_cli: bool = False
+        self.needs_cli_natives: set[str] = set()
         self.forward_decls: List[str] = []
         self.struct_defs: "TrackedList" = TrackedList(self)
         self.func_defs: "TrackedList" = TrackedList(self)
@@ -587,6 +594,102 @@ class CEmitter:
         path that turns a callable AST node into a C name, not just
         `_emit_callable_expr` — definition-name dotted paths are
         short-circuited earlier and would otherwise miss tracking."""
+        # Splitter / linesiter iterator methods (Phase S3). Track
+        # under the stringview natives set so the shared impl struct
+        # + call function emit in the correct late slot.
+        if mangled == "z_splitter_call":
+            self.needs_stringview = True
+            self.needs_string = True
+            self.needs_stringview_natives.add("split")
+            return
+        if mangled == "z_linesiter_call":
+            self.needs_stringview = True
+            self.needs_string = True
+            self.needs_stringview_natives.add("lines")
+            return
+        if mangled == "z_cpiter_call":
+            self.needs_stringview = True
+            self.needs_string = True
+            self.needs_stringview_natives.add("codepoints")
+            return
+        if mangled == "z_string_join":
+            # Phase S7 free function. Lives in the stringview late
+            # slot so it can reference z_list_string_t.
+            self.needs_stringview = True
+            self.needs_string = True
+            self.needs_stringview_natives.add("join")
+            return
+        # cli unit natives. Registration, parse, help_text, and
+        # parsed class accessors. All routed through the cli late
+        # emission slot so they can reference spec / parsed /
+        # list_<def>_t / result_parsed_clierror_t.
+        if mangled == "z_spec_create":
+            self.needs_cli = True
+            self.needs_string = True
+            self.needs_cli_natives.add("spec_create")
+            return
+        if mangled in (
+            "z_cli_add_flag",
+            "z_cli_add_option",
+            "z_cli_add_positional",
+            "z_cli_parse",
+            "z_cli_help_text",
+        ):
+            self.needs_cli = True
+            self.needs_string = True
+            self.needs_cli_natives.add(mangled[len("z_cli_") :])
+            return
+        if mangled in (
+            "z_parsed_has_flag",
+            "z_parsed_get_option",
+            "z_parsed_get_positional",
+        ):
+            self.needs_cli = True
+            self.needs_string = True
+            self.needs_cli_natives.add(mangled[len("z_parsed_") :])
+            return
+        if mangled.startswith("z_stringview_"):
+            # stringview method natives (Phase S1+). Tracked separately
+            # so emit_runtime_stringview_natives can per-name gate.
+            # Skip the pre-existing comparison / conversion primitives
+            # baked into z_stringview.inc — they always emit.
+            name = mangled[len("z_stringview_") :]
+            if name in {
+                "is_empty",
+                "is_ascii",
+                "starts_with",
+                "ends_with",
+                "contains",
+                "index_of",
+                "last_index_of",
+                "byte_at",
+                "trim",
+                "trim_start",
+                "trim_end",
+                "strip_prefix",
+                "strip_suffix",
+                "split",
+                "split_once",
+                "lines",
+                "to_lower_ascii",
+                "to_upper_ascii",
+                "replace",
+                "replace_first",
+                "repeated",
+                "concat",
+                "count",
+                "codepoints",
+                "parse_i64",
+                "parse_u64",
+                "parse_f64",
+            }:
+                self.needs_stringview = True
+                self.needs_string = True  # memcmp / strchr live in string.h
+                self.needs_stringview_natives.add(name)
+                # parse_f64 uses strtod + errno (ERANGE).
+                if name == "parse_f64":
+                    self.needs_io = True
+            return
         if mangled.startswith("z_io_"):
             self.needs_io = True
             self.needs_stdio = True
@@ -594,7 +697,25 @@ class CEmitter:
         elif mangled.startswith("z_os_"):
             self.needs_os = True
             self.needs_stdlib = True
-            self.needs_os_natives.add(mangled[len("z_os_") :])
+            name = mangled[len("z_os_") :]
+            self.needs_os_natives.add(name)
+            # os natives that surface ioerror share io's errno helper
+            # and header set. env_names pulls strchr/strlen from string.h.
+            # pid/ppid need unistd.h which needs_io also provides.
+            if name in (
+                "set_env",
+                "unset_env",
+                "cwd",
+                "set_cwd",
+                "pid",
+                "ppid",
+                "user_name",
+                "home_dir",
+                "hostname",
+            ):
+                self.needs_io = True
+            if name == "env_names":
+                self.needs_string = True
 
     def _emit_callable_expr(self, call: zast.Call) -> str:
         """Emit the callable expression for a function call.
@@ -1134,7 +1255,13 @@ class CEmitter:
         ]
         self.struct_defs.append("".join(lines))
 
-    def _emit_system_unit_definitions(self) -> None:
+    def _emit_system_unit_definitions(
+        self,
+        include_cli: bool = True,
+        only_cli: bool = False,
+        cli_records_only: bool = False,
+        cli_classes_only: bool = False,
+    ) -> None:
         """Emit non-generic non-native union and variant types from
         system units (io today) so user code can reference them.
 
@@ -1155,7 +1282,14 @@ class CEmitter:
         Native types (bool, str, ...) are in the runtime emitter.
         """
         io_file_used = self._io_file_referenced()
-        for unitname in ("io",):
+        # system.parseerror is emitted here too (see end of method).
+        if only_cli:
+            unit_order = ("cli",)
+        elif include_cli:
+            unit_order = ("io", "os", "cli")
+        else:
+            unit_order = ("io", "os")
+        for unitname in unit_order:
             unit = self.program.units.get(unitname)
             if unit is None:
                 continue
@@ -1166,12 +1300,39 @@ class CEmitter:
                     continue
                 self._current_node_id = getattr(defn, "nodeid", None)
                 defn_type = type(defn)
-                if defn_type == zast.Union:
+                if defn_type == zast.Union and not cli_classes_only:
                     self._emit_union(name, cast(zast.Union, defn))
-                elif defn_type == zast.Variant:
+                elif defn_type == zast.Variant and not cli_classes_only:
                     self._emit_variant(name, cast(zast.Variant, defn))
-                elif defn_type == zast.Record and self._io_record_referenced(name):
+                elif defn_type == zast.Record and (
+                    (
+                        unitname == "cli"
+                        and not cli_classes_only
+                        and self._system_type_resolved(unitname, name)
+                    )
+                    or self._io_record_referenced(name)
+                ):
                     self._emit_record(name, cast(zast.Record, defn))
+                elif (
+                    defn_type == zast.Class
+                    and unitname == "cli"
+                    and self._system_type_resolved(unitname, name)
+                ):
+                    # cli unit classes split across two emission waves:
+                    # leaf classes (flagdef / optiondef / positionaldef —
+                    # fields only primitives + strings) emit alongside
+                    # cli records in the early pass so monos like
+                    # `list of: flagdef` can reference a complete
+                    # struct. Aggregator classes (spec / parsed — have
+                    # list / map fields) emit in the cli_classes_only
+                    # pass after the monos exist.
+                    is_leaf = self._is_cli_leaf_class(cast(zast.Class, defn))
+                    if cli_records_only and is_leaf:
+                        self._emit_class(name, cast(zast.Class, defn))
+                    elif cli_classes_only and not is_leaf:
+                        self._emit_class(name, cast(zast.Class, defn))
+                    elif not cli_records_only and not cli_classes_only:
+                        self._emit_class(name, cast(zast.Class, defn))
                 elif defn_type == zast.Class and name == "file" and io_file_used:
                     # io.file: compiler-provided class. struct +
                     # destructor + close method come from the runtime.
@@ -1181,6 +1342,160 @@ class CEmitter:
                     # referenced — otherwise every program would drag
                     # in <unistd.h> for close() via the destructor.
                     self._emit_io_file_class()
+
+        # system.parseerror — concrete variant used by the stringview
+        # parse_* natives (Phase S6). Emitted as an inline constant
+        # rather than routing through `_emit_variant` so the type
+        # registration side-effects of that path don't trigger cname
+        # collisions with user-declared `result` variants. Emitted
+        # once, on the non-cli-only pass.
+        if not only_cli:
+            parseerror_c = (
+                "typedef enum {\n"
+                "    Z_PARSEERROR_TAG_EMPTY,\n"
+                "    Z_PARSEERROR_TAG_INVALID_DIGIT,\n"
+                "    Z_PARSEERROR_TAG_OVERFLOW,\n"
+                "} z_parseerror_tag_t;\n\n"
+                "typedef struct {\n"
+                "    z_parseerror_tag_t tag;\n"
+                "} z_parseerror_t;\n\n"
+                "static bool z_parseerror_eq(z_parseerror_t a, z_parseerror_t b);\n"
+                "static bool z_parseerror_eq(z_parseerror_t a, z_parseerror_t b) {\n"
+                "    return a.tag == b.tag;\n"
+                "}\n\n"
+                "static void z_parseerror_destroy(z_parseerror_t* p) { (void)p; }\n\n"
+            )
+            self.struct_defs.append(parseerror_c)
+
+    def _is_cli_leaf_class(self, defn: "zast.Class") -> bool:
+        """A cli-unit class is "leaf" if its fields are only primitives,
+        bools, or strings — i.e. the struct can be laid out without
+        any user-defined or monomorphized collection types declared
+        first. Leaf cli classes (flagdef / optiondef / positionaldef)
+        emit in the same early pass as cli records so that monos like
+        `list of: flagdef` can resolve in the early-mono phase and the
+        cli aggregator classes (spec / parsed) that use those lists
+        emit after the monos.
+        """
+        for _fname, fpath in defn.items.items():
+            ftype = fpath.type
+            if ftype is None:
+                return False
+            if ftype.generic_origin is not None and not is_tag_origin(
+                ftype.generic_origin
+            ):
+                return False  # list / map / option / result etc.
+            # Numeric / bool / null — native records in TYPEMAP are OK.
+            if ftype.name in TYPEMAP:
+                continue
+            # string / stringview classes are self-contained by layout.
+            if ftype.typetype == ZTypeType.CLASS and ftype.subtype in (
+                ZSubType.STRING,
+                ZSubType.STRINGVIEW,
+            ):
+                continue
+            # Anything else references a user or cli aggregate → not leaf.
+            return False
+        return True
+
+    def _system_type_resolved(self, unitname: str, name: str) -> bool:
+        """True if a type declared in a system unit has been resolved
+        by demand-driven lookup (i.e., referenced somewhere in user
+        code). Emitting an unresolved system type produces `void`
+        fields because its children haven't been type-checked.
+        """
+        key = f"{unitname}.{name}"
+        resolved = getattr(self.program, "resolved", None)
+        if resolved is None:
+            return False
+        t = resolved.get(key)
+        if t is None:
+            return False
+        # A resolved record/class has its fields registered as
+        # children with non-None types.
+        if not t.children:
+            return False
+        return True
+
+    def _collect_user_type_names(self, body: dict) -> "set[str]":
+        """Collect the set of type names declared in the main-unit
+        body (and nested inline units) plus late-emitted cli-unit
+        classes. Used by the struct-emission ordering pass to split
+        monos that depend on these types from monos that only need
+        system types.
+
+        cli.spec and cli.parsed are classified as "user-like" here
+        because their struct emission is deferred to the
+        cli_classes_only pass (after monos). Monos that reference
+        them — e.g. `result(parsed, clierror)` — must therefore
+        land in the late-mono group too.
+        """
+        names: set[str] = set()
+
+        def visit(scope_body: dict) -> None:
+            for name, defn in scope_body.items():
+                if getattr(defn, "is_node", False) and defn.nodetype in (
+                    NodeType.RECORD,
+                    NodeType.CLASS,
+                    NodeType.UNION,
+                    NodeType.VARIANT,
+                    NodeType.PROTOCOL,
+                    NodeType.FACET,
+                ):
+                    names.add(name)
+                if getattr(defn, "is_node", False) and defn.nodetype == NodeType.UNIT:
+                    visit(cast(zast.Unit, defn).body)
+
+        visit(body)
+        cli_unit = self.program.units.get("cli")
+        if cli_unit is not None:
+            for name, defn in cli_unit.body.items():
+                if getattr(defn, "is_node", False) and defn.nodetype == NodeType.CLASS:
+                    # Leaf cli classes (flagdef / optiondef / positionaldef)
+                    # are emitted in the early pass alongside cli records;
+                    # monos over them are early, not late.
+                    if self._is_cli_leaf_class(cast(zast.Class, defn)):
+                        continue
+                    names.add(name)
+        return names
+
+    def _mono_depends_on_user(self, mono_type: "ZType", user_names: "set[str]") -> bool:
+        """Does `mono_type`'s layout reference any user-declared type?
+        Used to defer emission of such monos until after user
+        struct_defs are produced.
+
+        Walks both `children` (struct fields on user records/classes
+        and monomorphized records/unions) AND `generic_args` (element
+        types on list / map / array monos, whose element type lives
+        under the `of` / `key` / `value` keys rather than as a child
+        field).
+        """
+        seen: set[int] = set()
+
+        def check(t: "ZType") -> bool:
+            if id(t) in seen:
+                return False
+            seen.add(id(t))
+            if t.typetype == ZTypeType.FUNCTION:
+                return False
+            if t.name in user_names:
+                return True
+            for ga in t.generic_args.values():
+                if ga is None:
+                    continue
+                if check(ga):
+                    return True
+            return False
+
+        for child in mono_type.children.values():
+            if check(child):
+                return True
+        for ga in mono_type.generic_args.values():
+            if ga is None:
+                continue
+            if check(ga):
+                return True
+        return False
 
     def _io_record_referenced(self, name: str) -> bool:
         """True when a system io record is used by the program (e.g.
@@ -1393,10 +1708,52 @@ class CEmitter:
         # so that construction calls work regardless of definition order
         self._pre_register_fields("", mainunit.body)
 
-        # emit non-generic union/variant types from system units (io
-        # today) so user code can reference cross-unit types like
-        # ioerror and seekorigin.
-        self._emit_system_unit_definitions()
+        # Emit non-generic union/variant types from system units
+        # (io / os) that don't reference monomorphized collection
+        # types — these must come before monos that use them
+        # (e.g. `result(T, ioerror)` mono destructors call
+        # `z_ioerror_destroy`). cli *records* (flagdef / optiondef /
+        # positionaldef) also go here so monos like list_flagdef
+        # that reference them have a complete type to work with.
+        self._emit_system_unit_definitions(include_cli=True, cli_records_only=True)
+
+        # Three-pass emission order resolves the bidirectional type
+        # dependency between user struct_defs and monomorphized
+        # collection types:
+        #
+        #   (a) A user class holding a `list of: string` field needs
+        #       `z_list_string_t` declared first.
+        #   (b) A monomorphized generic class like `holder<mycls>`
+        #       needs the user `mycls` struct declared first.
+        #
+        # We split mono emission into "depends only on system types"
+        # (pass 1) vs "depends on user types" (pass 3), with user
+        # defs between.
+        mono_types_all = list(getattr(self.program, "mono_types", []))
+        user_type_names = self._collect_user_type_names(mainunit.body)
+        early_monos: list = []
+        late_monos: list = []
+        for mono_type, template_defn in mono_types_all:
+            if _is_str_type(mono_type):
+                continue  # str handled earlier
+            if self._mono_depends_on_user(mono_type, user_type_names):
+                late_monos.append((mono_type, template_defn))
+            else:
+                early_monos.append((mono_type, template_defn))
+
+        # Source-map attribution uses the template AST node's id so
+        # that emitted_lines cross-reference the program's ast_nodes
+        # table (ZType.nodeid lives in a separate id space and would
+        # produce orphan foreign-key references).
+        for mono_type, template_defn in early_monos:
+            self._current_node_id = getattr(template_defn, "nodeid", None)
+            self._emit_mono_type(mono_type, template_defn)
+
+        # cli classes (spec / parsed) — emitted AFTER early monos
+        # because their fields reference `list of: flagdef` etc.
+        self._emit_system_unit_definitions(
+            include_cli=True, only_cli=True, cli_classes_only=True
+        )
 
         # second pass: emit definitions (recursing into inline units)
         self._emit_unit_definitions("", mainunit.body)
@@ -1404,11 +1761,9 @@ class CEmitter:
         # third pass: emit facets (must come after all conforming types are defined)
         self._emit_deferred_facets("", mainunit.body)
 
-        # emit monomorphized types (str already emitted above)
-        for mono_type, template_defn in getattr(self.program, "mono_types", []):
-            if _is_str_type(mono_type):
-                continue
-            self._current_node_id = mono_type.nodeid
+        # late mono types (depend on user structs emitted above)
+        for mono_type, template_defn in late_monos:
+            self._current_node_id = getattr(template_defn, "nodeid", None)
             self._emit_mono_type(mono_type, template_defn)
 
         # emit monomorphized generic functions
@@ -1438,6 +1793,7 @@ class CEmitter:
                 needs_string=self.needs_string,
                 needs_stringview=self.needs_stringview,
                 needs_io=self.needs_io,
+                needs_pwd="user_name" in self.needs_os_natives,
             )
         )
         parts.append(zrt.emit_static_stringviews(self._string_literals))
@@ -1482,11 +1838,33 @@ class CEmitter:
             zrt.emit_runtime_io(
                 needs_io=self.needs_io,
                 natives=self.needs_io_natives,
+                os_natives=self.needs_os_natives,
             )
         )
 
         parts.append(file_impls)
         parts.append(wrapper_impls)
+
+        # Stringview query natives (Phase S1+). Emitted here so any
+        # z_optionval_T_t wrappers they return are already declared
+        # by the mono-types pass above.
+        parts.append(
+            zrt.emit_runtime_stringview_natives(
+                needs_stringview=self.needs_stringview,
+                natives=self.needs_stringview_natives,
+            )
+        )
+
+        # cli unit natives. Lands after stringview because
+        # `cli.parse` may call z_stringview_* helpers (and the cli
+        # runtime uses z_string_t / z_string_new from the base
+        # runtime plus mono list / map types from the struct_defs).
+        parts.append(
+            zrt.emit_runtime_cli_natives(
+                needs_cli=self.needs_cli,
+                natives=self.needs_cli_natives,
+            )
+        )
 
         # io.stdin / io.stdout / io.stderr — emit after file_impls so
         # z_file_reader_create / z_file_writer_create are declared.
@@ -1945,6 +2323,7 @@ class CEmitter:
             decl = self._func_pointer_field_decl(name, mname, mfunc)
             lines.append(f"    {decl};\n")
         lines.append(f"}} z_{name}_t;\n\n")
+
         self.struct_defs.append("".join(lines))
 
         # emit meta.create constructor
@@ -2004,7 +2383,14 @@ class CEmitter:
                 ft = getattr(fpath, "type", None)
                 if ft and self._needs_eq_call(ft):
                     tname = ft.name.replace(".", "_")
-                    comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+                    # string/stringview eq functions take pointers
+                    # (their C signature is `(z_X_t* a, z_X_t* b)`).
+                    # Other auto-generated / native eq functions take
+                    # their operands by value.
+                    if ft.subtype == ZSubType.STRING:
+                        comparisons.append(f"z_{tname}_eq(&a.{fname}, &b.{fname})")
+                    else:
+                        comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
                 else:
                     comparisons.append(f"(a.{fname} == b.{fname})")
             # function pointer fields
@@ -2151,7 +2537,10 @@ class CEmitter:
                 ftype = mono_type.children.get(fname)
                 if ftype and self._needs_eq_call(ftype):
                     tname = ftype.name.replace(".", "_")
-                    comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
+                    if ftype.subtype == ZSubType.STRING:
+                        comparisons.append(f"z_{tname}_eq(&a.{fname}, &b.{fname})")
+                    else:
+                        comparisons.append(f"z_{tname}_eq(a.{fname}, b.{fname})")
                 else:
                     comparisons.append(f"(a.{fname} == b.{fname})")
             if comparisons:
@@ -4635,9 +5024,13 @@ class CEmitter:
         emitted_vals = getattr(self, "_last_emitted_arg_vals", [])
         if ftype and ftype.param_ownership:
             params = list(ftype.children.items())
+            # Method calls: `this` is the receiver, prepended at the
+            # call site — call.arguments[0] aligns with params[1].
+            offset = 1 if params and params[0][0] == "this" else 0
             for i, arg in enumerate(call.arguments):
-                if i < len(params):
-                    pname, _ = params[i]
+                pi = i + offset
+                if pi < len(params):
+                    pname, _ = params[pi]
                     if ftype.param_ownership.get(pname) == ZParamOwnership.TAKE:
                         # skip if already invalidated by explicit .take
                         take_var = self._get_take_var(arg.valtype)
@@ -4958,6 +5351,15 @@ class CEmitter:
         # track emitted C values per argument index for implicit-take
         self._last_emitted_arg_vals: List[str] = []
         ctype_idx = 0
+        # Method calls: `this` is prepended by `_prepend_method_receiver`
+        # at the call site, so call.arguments starts at the first
+        # non-this param. Align the ctype lookup by skipping the
+        # `this` slot in the callable's param list.
+        method_offset = 0
+        if ftype and ftype.typetype == ZTypeType.FUNCTION:
+            children_keys = list(ftype.children.keys())
+            if children_keys and children_keys[0] == "this":
+                method_offset = 1
         for i, arg in enumerate(call.arguments):
             # skip generic type args (they are compile-time only)
             if arg.name and arg.name in generic_param_names:
@@ -4973,10 +5375,11 @@ class CEmitter:
                 ctype_idx += 1
                 continue
             val = self._emit_operation_value(arg.valtype)
+            param_idx = ctype_idx + method_offset
             if self._has_call(arg.valtype):
                 ctype = (
-                    param_ctypes[ctype_idx]
-                    if ctype_idx < len(param_ctypes)
+                    param_ctypes[param_idx]
+                    if param_idx < len(param_ctypes)
                     else "int64_t"
                 )
                 # string-returning calls are already temped by _alloc_temp
@@ -4994,21 +5397,28 @@ class CEmitter:
                 and arg_type.typetype == ZTypeType.CLASS
                 and not val.startswith("&")
                 and ftype
-                and ctype_idx < len(list(ftype.children.items()))
+                and param_idx < len(list(ftype.children.items()))
             ):
-                param_name = list(ftype.children.keys())[ctype_idx]
+                param_name = list(ftype.children.keys())[param_idx]
                 param_type = ftype.children[param_name]
                 # 'this' receiver: param type matches enclosing class
                 # and the function is a method (dotted name origin)
                 is_this_param = param_name == "this" or (
                     param_type is arg_type and ftype.name and "." in ftype.name
                 )
-                # borrow/lock class params also need &
-                is_borrow_lock = ftype.param_ownership.get(param_name) in (
+                # borrow/lock class params also need &. .take on a
+                # string param means the callee owns by value — no
+                # `&` should be added (that would pass a pointer to
+                # a by-value parameter).
+                own = ftype.param_ownership.get(param_name)
+                is_borrow_lock = own in (
                     ZParamOwnership.BORROW,
                     ZParamOwnership.LOCK,
                 )
-                if is_this_param or is_borrow_lock:
+                is_take_string = (
+                    own == ZParamOwnership.TAKE and arg_type.subtype == ZSubType.STRING
+                )
+                if (is_this_param or is_borrow_lock) and not is_take_string:
                     val = f"&{val}"
             parts.append(val)
             self._last_emitted_arg_vals.append(val)
@@ -5609,6 +6019,13 @@ class CEmitter:
                 if method_name == "append" and call.arguments:
                     from_arg = call.arguments[0]
                     val = self._emit_operation_value(from_arg.valtype)
+                    # The appended element is consumed by the list
+                    # (struct copy aliases its heap buffer). Zero-init
+                    # the source so its scope-exit destructor does not
+                    # double-free the element's buffer. Safe no-op for
+                    # pure valtype elements (i64 etc.).
+                    indent = self._indent()
+                    self._transfer_implicit_take(val, from_arg.valtype, indent)
                     return f"z_{list_type_name}_append({parent_val}, {val})"
                 if method_name == "insert" and len(call.arguments) >= 2:
                     from_val = None
@@ -6377,6 +6794,39 @@ class CEmitter:
                 parent = f"&{parent}"
             return f"z_file_{child}_create({parent})"
 
+        # stringview: zero-arg query methods (Phase S1 / S2). These
+        # need a call emission — the field-access path below would
+        # produce `sv.is_empty` which is not a struct field.
+        if (
+            parent_type_dp
+            and _is_stringview_type(parent_type_dp)
+            and child
+            in (
+                "is_empty",
+                "is_ascii",
+                "trim",
+                "trim_start",
+                "trim_end",
+                "lines",
+                "to_lower_ascii",
+                "to_upper_ascii",
+                "count",
+                "codepoints",
+                "parse_i64",
+                "parse_u64",
+                "parse_f64",
+            )
+        ):
+            self.needs_stringview = True
+            self.needs_string = True
+            self.needs_stringview_natives.add(child)
+            if child == "parse_f64":
+                # strtod + errno (ERANGE) — pull in errno.h / stdlib.h.
+                self.needs_io = True
+            parent = self._emit_path_value(path.parent)
+            if not parent.startswith("&"):
+                parent = f"&{parent}"
+            return f"z_stringview_{child}({parent})"
         # list: .pop as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
             parent = self._emit_path_value(path.parent)
@@ -7185,6 +7635,11 @@ class CEmitter:
 
     def _is_variant_construction(self, call: zast.Call) -> bool:
         """Check if a call is a variant construction (variant.subtype expr)."""
+        # A regular function call whose return type happens to be a
+        # variant is NOT a construction — defer to the standard call
+        # emission path (same guard as _is_union_construction).
+        if call.call_kind == zast.CallKind.REGULAR:
+            return False
         # check type annotation for monomorphized variant types
         call_type = call.type
         if (

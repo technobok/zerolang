@@ -28,6 +28,31 @@ def emit_source(source: str, unitname: str = "test") -> str:
     return zemitterc.emit(program)
 
 
+def compile_and_run_with_args(csource: str, argv: list[str]) -> str:
+    """Compile C source and run the binary with the supplied argv.
+    Returns stdout."""
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+        f.write(csource)
+        cpath = f.name
+    outpath = cpath.replace(".c", "")
+    try:
+        cmd = ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath]
+        comp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if comp.returncode != 0:
+            raise RuntimeError(f"gcc failed:\n{comp.stderr}")
+        result = subprocess.run(
+            [outpath] + argv,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.stdout
+    finally:
+        for p in (cpath, outpath):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
 def compile_and_run(csource: str, extra_cflags: list[str] | None = None) -> str:
     """Compile C source with gcc and run, returning stdout."""
     with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
@@ -671,6 +696,257 @@ class TestEmitterExamples:
         assert "10" in lines[0]
         assert "12" in lines[1]
         assert "yes" in lines[2]
+
+    def test_os_env(self):
+        csource = self._emit_example("os_env")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "set ok"
+        assert lines[1] == "read ok"
+        assert lines[2] == "names nonempty=1"
+        assert lines[3] == "unset ok"
+        assert lines[4] == "gone"
+
+    def test_os_process(self):
+        csource = self._emit_example("os_process")
+        output = compile_and_run(csource)
+        assert "pid positive=1" in output
+        assert "ppid positive=1" in output
+        assert "cwd ok" in output
+        assert "set_cwd ok" in output
+        assert "user_name nonempty=1" in output
+        assert "home_dir nonempty=1" in output
+
+    def test_os_platform(self):
+        csource = self._emit_example("os_platform")
+        output = compile_and_run(csource)
+        # Test is platform-aware: we assert exactly one platform line
+        # and one arch line appear, and hostname is non-empty. The
+        # specific values depend on the build host.
+        plines = [ln for ln in output.split("\n") if ln.startswith("platform=")]
+        alines = [ln for ln in output.split("\n") if ln.startswith("arch=")]
+        assert len(plines) == 1
+        assert len(alines) == 1
+        assert "hostname nonempty=1" in output
+
+    def test_string_join(self):
+        csource = self._emit_example("string_join")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "alpha, beta, gamma"
+        assert lines[1] == "empty.length=0"
+
+    def test_string_parse(self):
+        csource = self._emit_example("string_parse")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "i64=-42"
+        assert lines[1] == "u64=1234567890"
+        assert lines[2] == "f64=3.14"
+        assert lines[3] == "invalid_digit"
+
+    def test_string_codepoints(self):
+        csource = self._emit_example("string_codepoints")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "bytes=5"
+        assert lines[1] == "codepoints=5"
+        # 5 codepoints from "hello"
+        assert lines[2] == "104"
+        assert lines[3] == "101"
+        assert lines[4] == "108"
+        assert lines[5] == "108"
+        assert lines[6] == "111"
+
+    def test_string_transform(self):
+        csource = self._emit_example("string_transform")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "hello, world!"
+        assert lines[1] == "HELLO, WORLD!"
+        assert lines[2] == "Hello World!"
+        assert lines[3] == "HeLlo, World!"
+        assert lines[4] == "ababab"
+        assert lines[5] == "keyvalue"
+
+    def test_string_split(self):
+        csource = self._emit_example("string_split")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "alpha"
+        assert lines[1] == "beta"
+        assert lines[2] == "gamma"
+        assert lines[3] == "split at 3"
+        assert lines[4] == "line1"
+        assert lines[5] == "line2"
+        assert lines[6] == "line3"
+
+    def test_string_slice(self):
+        csource = self._emit_example("string_slice")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "trim.length=12"
+        assert lines[1] == "trim_start.length=14"
+        assert lines[2] == "trim_end.length=14"
+        assert lines[3] == "stripped=7"
+        assert lines[4] == "no match ok"
+        assert lines[5] == "stem.length=5"
+
+    def test_string_query(self):
+        csource = self._emit_example("string_query")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines[0] == "empty=0"
+        assert lines[1] == "ascii=1"
+        assert lines[2] == "starts=1"
+        assert lines[3] == "ends=1"
+        assert lines[4] == "has=1"
+        assert lines[5] == "first world at 7"
+        assert lines[6] == "last l at 10"
+        assert lines[7] == "byte0=104"
+        assert lines[8] == "999 oob ok"
+        assert lines[9] == "e.empty=1"
+        assert lines[10] == "e.ascii=1"
+
+
+class TestUserMethodStringTake:
+    """Regression test for C4: user class methods with `string.take`
+    parameters must emit the call site pass-by-value (no `&`) and
+    zero-init the caller's source to avoid double-free at scope
+    exit. The earlier emission produced `&_t` against a by-value
+    signature, which gcc rejected."""
+
+    def test_string_take_on_user_method(self):
+        from zvfs import ZVfs, FSProvider, StringProvider, BindType
+
+        src = (
+            "holder: class {\n"
+            "    n: i64\n"
+            "} as {\n"
+            "    greet: function {:this s: string.take} is {\n"
+            "        print s\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    h: holder n: 0\n"
+            '    h.greet s: "hello".string\n'
+            "}\n"
+        )
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        vfs = ZVfs()
+        systemdir = os.path.join(lib_dir, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(StringProvider(files={"takeprobe.z": src}))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "takeprobe")
+        program = p.parse()
+        errors = typecheck(program)
+        assert errors == []
+        csource = zemitterc.emit(program)
+        # Under ASan the double-free caused by the pre-fix emission
+        # would be caught here.
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout.strip() == "hello"
+
+
+class TestCliUnitEmission:
+    """cli unit: compile cli_basic.z once, run with assorted argv."""
+
+    def _csource(self) -> str:
+        from zvfs import ZVfs, FSProvider, BindType
+
+        lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
+        examples_dir = os.path.join(os.path.dirname(__file__), "..", "examples")
+        vfs = ZVfs()
+        systemdir = os.path.join(lib_dir, "system")
+        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
+        pmainid = vfs.register(FSProvider(rootpath=examples_dir, parentpath=""))
+        rootid = vfs.walk()
+        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
+        rootid = vfs.bind(
+            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
+        )
+        p = Parser(vfs, "cli_basic")
+        program = p.parse()
+        assert isinstance(program, zast.Program)
+        errors = typecheck(program)
+        assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+        return zemitterc.emit(program)
+
+    def test_flag_and_positionals(self):
+        out = (
+            compile_and_run_with_args(self._csource(), ["-v", "foo", "bar"])
+            .strip()
+            .split("\n")
+        )
+        assert out[0] == "verbose=1"
+        assert out[1] == "ignore-case=0"
+        assert out[2] == "(no output)"
+        assert out[3] == "foo"
+        assert out[4] == "bar"
+
+    def test_long_option_equals_form(self):
+        out = (
+            compile_and_run_with_args(
+                self._csource(), ["--output=out.txt", "pat", "f.txt"]
+            )
+            .strip()
+            .split("\n")
+        )
+        assert out[0] == "verbose=0"
+        assert out[2] == "out.txt"
+        assert out[3] == "pat"
+
+    def test_long_option_separate_form(self):
+        out = (
+            compile_and_run_with_args(
+                self._csource(), ["--output", "out.txt", "pat", "f.txt"]
+            )
+            .strip()
+            .split("\n")
+        )
+        assert out[2] == "out.txt"
+        assert out[3] == "pat"
+
+    def test_short_option_separate_form(self):
+        out = (
+            compile_and_run_with_args(
+                self._csource(), ["-o", "out.txt", "pat", "f.txt"]
+            )
+            .strip()
+            .split("\n")
+        )
+        assert out[2] == "out.txt"
+
+    def test_bundled_short_flags(self):
+        out = (
+            compile_and_run_with_args(self._csource(), ["-vi", "foo", "bar"])
+            .strip()
+            .split("\n")
+        )
+        assert out[0] == "verbose=1"
+        assert out[1] == "ignore-case=1"
+
+    def test_missing_required_positional(self):
+        # Omits `file` positional; `-v` registers the verbose flag
+        # and then the single positional "foo" fills `pattern`, but
+        # `file` is unfilled — required-check fails and we fall
+        # through to the err arm which prints help_text.
+        out = compile_and_run_with_args(self._csource(), ["-v", "foo"])
+        assert "usage: cli_basic" in out
+
+    def test_double_dash_terminator(self):
+        # `-v` sets verbose; `--` ends option parsing; remaining
+        # `foo` / `bar` go to `extra_args` (NOT positionals), so
+        # both required positionals are missing and parsing errors
+        # with the help text.
+        out = compile_and_run_with_args(self._csource(), ["-v", "--", "foo", "bar"])
+        assert "usage: cli_basic" in out
 
 
 def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
