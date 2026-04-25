@@ -1112,6 +1112,64 @@ class TestOwnershipReturnChecking:
         )
         assert s_copy.parent.type.subtype == ZSubType.STRING
 
+    def test_store_borrowed_param_in_aggregate_field_rejected(self):
+        """Storing a default-borrowed param into an owned aggregate
+        field aliases the caller's storage. Reject; user must `.copy`,
+        `.take` the param, or annotate the field as `.lock`."""
+        errors = check_errors(
+            "mybox: class { label: string }\n"
+            "mk: function {s: string} out mybox is {\n"
+            "  return mybox label: s\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "borrowed value 's'" in e.msg and "aggregate field" in e.msg for e in errors
+        ), [e.msg for e in errors]
+
+    def test_store_copy_of_borrowed_param_allowed(self):
+        """`.copy` produces a fresh owned value — break the borrow
+        chain, allow the store."""
+        check_ok(
+            "mybox: class { label: string }\n"
+            "mk: function {s: string} out mybox is {\n"
+            "  return mybox label: s.copy\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_store_taken_param_in_aggregate_field_allowed(self):
+        """`.take` on the param transfers ownership in — the body owns
+        `s` and may move it into the box."""
+        check_ok(
+            "mybox: class { label: string }\n"
+            "mk: function {s: string.take} out mybox is {\n"
+            "  return mybox label: s\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_store_lock_param_in_lock_field_allowed(self):
+        """`.lock`-annotated params are user-explicit borrow holders;
+        they may legitimately be projected into matching `.lock` fields
+        (the borrowed_record / listiter examples). The store-borrow
+        check exempts `.lock`-annotated params."""
+        check_ok(
+            "container: class { x: i64 } as { public: unit { :slice }\n"
+            "  slice: function {c: this.lock} out cview is {\n"
+            "    return cview source: c.private\n"
+            "  }\n"
+            "}\n"
+            "cview: class {\n"
+            "  source: container.private.lock\n"
+            "} as {\n"
+            "  create: function {source: container.private.lock} out this is {\n"
+            "    return meta.create source: source\n"
+            "  }\n"
+            "}\n"
+            "main: function is {}"
+        )
+
 
 class TestTakeBorrowCompilerMethods:
     """.take and .borrow compiler methods."""

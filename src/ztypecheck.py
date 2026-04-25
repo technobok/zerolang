@@ -7415,6 +7415,52 @@ class TypeChecker:
                     ),
                 )
                 continue
+            # Case 2b: default-borrowed parameter (Phase A) being stored
+            # into an owned aggregate field. The param is pointer-passed
+            # so the field would alias the caller's storage; the caller
+            # still owns it. Reject; user picks `.copy` (clone), `.take`
+            # on the param (transfer ownership in), or `.lock` on the
+            # field (intentional borrow holder). Exemptions:
+            #   - `.copy` projection in arg position: produces a fresh
+            #     owned value, breaks the borrow chain.
+            #   - `.lock`-annotated params: user explicitly opted into
+            #     a lock-carrying value and may legitimately store
+            #     `.private` projections of it into matching `.lock`
+            #     fields (the borrowed_record / listiter pattern).
+            arg_breaks_borrow = (
+                arg.valtype.nodetype == NodeType.DOTTEDPATH
+                and cast(zast.DottedPath, arg.valtype).child.name == "copy"
+            )
+            param_own = self._current_func_ownership.get(arg_path[0])
+            # Only fire when the source actually has heap-backed data that
+            # would be aliased: string itself, or a struct holding string /
+            # other heap-backed fields. A class with only valtype fields
+            # is safe to memcpy — no aliasing concern.
+            if (
+                arg_root_var is not None
+                and not arg_breaks_borrow
+                and param_own != ZParamOwnership.LOCK
+                and arg_root_var.ownership == ZOwnership.BORROWED
+                and arg_root_var.borrow_origin is None
+                and (
+                    arg_root_var.ztype.subtype == ZSubType.STRING
+                    or getattr(arg_root_var.ztype, "needs_field_cleanup", False)
+                )
+            ):
+                self._error(
+                    f"cannot store borrowed value '{arg_path[0]}' in "
+                    f"aggregate field: the caller still owns it and "
+                    f"the field would alias the same heap data.",
+                    loc=arg.start,
+                    err=ERR.OWNERERROR,
+                    hint=(
+                        f"use `{arg_path[0]}.copy` to clone, declare the "
+                        f"parameter as `{arg_path[0]}: <T>.take` to "
+                        "transfer ownership in, or declare the field's "
+                        "constructor parameter as `.lock` to hold a borrow"
+                    ),
+                )
+                continue
             # Case 3: pre-locked source path
             info = self.symtab.is_path_locked(arg_path)
             if info is None:
@@ -7782,6 +7828,9 @@ class TypeChecker:
             # _build_create_args. Without visiting them here, nested paths
             # (e.g. `n.copy`) never get their `.type` stamped, so per-method
             # emit dispatches gated on `parent.type` silently fall through.
+            # Also runs the aggregate lock-escape check so storing a
+            # borrowed param into an owned field is rejected here, not
+            # later as a gcc signature mismatch.
             if (
                 len(call.arguments) >= 2
                 and call.arguments[0].name is None
@@ -7790,6 +7839,16 @@ class TypeChecker:
             ):
                 for a in call.arguments[1:]:
                     self._check_operation(a.valtype)
+                # Run the aggregate lock-escape check so storing a
+                # borrowed param into an owned field is rejected here,
+                # not later as a gcc signature mismatch. The check
+                # iterates `call.arguments`; args[0] is the bare type
+                # name (no name, no symtab var) so all cases skip it.
+                if ret_type is not None and ret_type.typetype in (
+                    ZTypeType.CLASS,
+                    ZTypeType.RECORD,
+                ):
+                    self._check_aggregate_lock_escape(call, ret_type)
 
         if self._current_return_type and ret_type:
             if not self._types_compatible(ret_type, self._current_return_type):
