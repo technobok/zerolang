@@ -495,6 +495,9 @@ class ZVariable:
     # protocol/facet wrappers). None for parameters (whose ownership is
     # BORROWED by default but whose borrow origin is outside this function).
     borrow_origin: Optional[str] = None
+    # provenance: None for variables declared in user source; pass-name string
+    # for variables synthesised by a compiler pass. Surfaces in SQL dumps.
+    synth_origin: Optional[str] = None
 
 
 class TypeTable:

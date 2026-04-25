@@ -329,6 +329,9 @@ class Node:
     const_value: Optional[typing.Union[int, float, bool, str]] = field(
         default=None, init=False
     )
+    # provenance: None for nodes parsed from user source; pass-name string
+    # for nodes synthesised by a compiler pass. Surfaces in SQL dumps.
+    synth_origin: Optional[str] = field(default=None, init=False)
 
     start: Token  # start location in the source for this Node
 

@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS ast_nodes (
     start_col       INTEGER,
     cname           TEXT,
     is_const        BOOLEAN,
-    const_value     TEXT
+    const_value     TEXT,
+    synth_origin    TEXT
 );
 
 CREATE TABLE IF NOT EXISTS types (
@@ -119,7 +120,8 @@ CREATE TABLE IF NOT EXISTS variable (
     ownership         TEXT NOT NULL,
     named             TEXT NOT NULL,
     is_private_access BOOLEAN NOT NULL,
-    borrow_origin     TEXT
+    borrow_origin     TEXT,
+    synth_origin      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS entry (
@@ -262,11 +264,12 @@ def dump_sql(
         const_val = (
             _sql_str(str(node.const_value)) if node.const_value is not None else "NULL"
         )
+        synth_origin = _sql_str(node.synth_origin)
         lines.append(
             f"INSERT INTO ast_nodes VALUES ("
             f"{node.nodeid}, {_sql_str(kind)}, {token_id}, "
             f"{_sql_str(name)}, {file_id}, {start_line}, {start_col}, {cname}, "
-            f"{is_const}, {const_val});"
+            f"{is_const}, {const_val}, {synth_origin});"
         )
 
     # Stage 4: types — collect all reachable types
@@ -411,7 +414,8 @@ def dump_sql(
                 f"{_sql_str(var.ownership.name)}, "  # type: ignore[attr-defined]
                 f"{_sql_str(var.named.name)}, "  # type: ignore[attr-defined]
                 f"{_sql_bool(var.is_private_access)}, "  # type: ignore[attr-defined]
-                f"{_sql_str(var.borrow_origin)});"  # type: ignore[attr-defined]
+                f"{_sql_str(var.borrow_origin)}, "  # type: ignore[attr-defined]
+                f"{_sql_str(var.synth_origin)});"  # type: ignore[attr-defined]
             )
 
     # Stage 6: emitted lines (if emitter provided)
