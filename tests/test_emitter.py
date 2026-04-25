@@ -2779,10 +2779,15 @@ class TestReturnPathTake:
     """Tests for .take in return-path class construction."""
 
     def test_return_class_construction_take(self):
-        """Return with class construction using .take → source nullified."""
+        """Return with class construction using .take → source nullified.
+
+        The param is `.take` (caller transfers ownership in) so the body
+        can `s.take` again to move it into the constructed class. Phase A
+        defaults reftype params to BORROW; the explicit `.take` opts out
+        and gives the body owned access."""
         csource = emit_source(
             "myclass: class { name: string }\n"
-            "wrap: function {s: string} out myclass is {\n"
+            "wrap: function {s: string.take} out myclass is {\n"
             "  return myclass name: s.take\n"
             "}\n"
             "main: function is {\n"

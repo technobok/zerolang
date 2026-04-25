@@ -1140,6 +1140,30 @@ class TypeChecker:
         if func.return_ownership is not None:
             ftype.return_ownership = func.return_ownership
 
+        # Phase A default: unannotated stack-reftype params (string, file,
+        # bufreader, user classes — needs_destructor and not heap-allocated)
+        # default to BORROW. The C ABI then passes them by pointer so
+        # mutation through the param lands in the caller's storage, and the
+        # implicit-take logic at call sites naturally skips them (caller
+        # retains ownership). Heap-allocated reftypes (`box`, nullable
+        # pointers) are already pointer-typed at the C level. Skip native
+        # functions: their C bodies in src/runtime/ are hand-written
+        # against the by-value ABI and changing the convention there is
+        # outside this change.
+        if not func.is_native:
+            for pname in func.parameters:
+                if pname in ftype.param_ownership:
+                    continue
+                pt = ftype.children.get(pname)
+                if (
+                    pt is not None
+                    and pt.typetype == ZTypeType.CLASS
+                    and not pt.is_heap_allocated
+                    and pt.needs_destructor
+                ):
+                    ftype.param_ownership[pname] = ZParamOwnership.BORROW
+                    func.param_ownership[pname] = ZParamOwnership.BORROW
+
         # validate function signature ownership rules
         self._validate_function_ownership(ftype, func)
 
