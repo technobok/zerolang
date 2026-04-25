@@ -10477,3 +10477,66 @@ class TestOptionview:
         assert tc._is_iterator_wrapper(a_t)
         assert tc._is_iterator_wrapper(b_t)
         assert tc._is_iterator_wrapper(c_t)
+
+
+class TestOptionviewBorrowEscape:
+    """Loop variables bound from optionview iteration carry borrow_origin
+    and trigger the existing lock-escape checks. option / optionval
+    bindings stay owned (regression guard)."""
+
+    def test_optionview_loop_var_rejects_move_into_aggregate(self):
+        """Cannot move a borrowed loop var into another collection."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  xs: (list of: string)\n"
+            '  xs.append from: "hello".string\n'
+            "  sink: (list of: string)\n"
+            "  with it: xs.iterate do for s: it loop {\n"
+            "    sink.append from: s\n"
+            "  }\n"
+            "}"
+        )
+        assert any("borrowed" in e.msg.lower() for e in errors)
+
+    def test_optionview_loop_var_rejects_return(self):
+        """Cannot return a borrowed loop var from the enclosing function."""
+        errors = check_errors(
+            "get_first: function {xs: (list of: string)} out string is {\n"
+            "  with it: xs.iterate do for s: it loop {\n"
+            "    return s\n"
+            "  }\n"
+            '  return "empty".string\n'
+            "}\n"
+            "main: function is {\n"
+            "  xs: (list of: string)\n"
+            '  xs.append from: "hi".string\n'
+            "  print get_first xs: xs\n"
+            "}"
+        )
+        assert any("borrowed" in e.msg.lower() for e in errors)
+
+    def test_optionview_inloop_read_still_works(self):
+        """In-loop read access of a borrowed string view is allowed."""
+        check_ok(
+            "main: function is {\n"
+            "  xs: (list of: string)\n"
+            '  xs.append from: "hello".string\n'
+            "  with it: xs.iterate do for s: it loop {\n"
+            '    print "s=\\{s}"\n'
+            "  }\n"
+            "}"
+        )
+
+    def test_option_loop_var_still_owned_regression(self):
+        """option / optionval iterators yield owned values that may be
+        moved (regression guard for the borrow-only scoping in W-D)."""
+        # textreader yields option(string); the loop body may consume
+        # each line by moving it into a collection.
+        check_ok(
+            "main: function is {\n"
+            "  saved: (list of: string)\n"
+            '  with f: (io.open path: "/tmp/__nope".string mode: io.read_only) do {\n'
+            "  }\n"
+            '  print "ok"\n'
+            "}"
+        )

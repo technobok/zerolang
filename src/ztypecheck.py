@@ -8324,10 +8324,32 @@ class TypeChecker:
                     if some_type:
                         fornode.iterator_bindings.add(name)
                         t = some_type
-                self.symtab.define(name, t)
-                # lock the iteration target to prevent mutation in body
-                # lock goes in the for scope; released when scope pops
-                if not _is_valtype(t):
+                # optionview yields borrowed views: mark the loop var with
+                # borrow_origin so the existing escape checks (storage,
+                # return, aggregate-store sites) reject moves out of the
+                # loop body. option / optionval bindings stay owned.
+                is_borrowed_view = (
+                    iter_option_type is not None
+                    and self._is_optionview_type(iter_option_type)
+                )
+                if is_borrowed_view:
+                    src_name = self._iterator_source_name(cond_op) or "<iterator>"
+                    var = ZVariable(
+                        ztype=t,
+                        ownership=ZOwnership.BORROWED,
+                        named=ZNaming.NAMED,
+                    )
+                    var.borrow_origin = src_name
+                    self.symtab.define_var(name, var)
+                else:
+                    self.symtab.define(name, t)
+                # lock the iteration target to prevent mutation in body.
+                # Skip for borrowed-view bindings: borrow_origin already
+                # blocks transfers / aggregate-stores via the escape checks,
+                # and an EXCLUSIVE lock here would also forbid plain reads
+                # of the binding (lookup_var triggers the lock check on
+                # var-ful definitions).
+                if not _is_valtype(t) and not is_borrowed_view:
                     self.symtab.try_lock((name,), ZLockState.EXCLUSIVE, "__for")
         for postcond in fornode.postconditions:
             self._check_operation(postcond)
@@ -8360,6 +8382,21 @@ class TypeChecker:
                     fornode.type = list_mono
                     return list_mono
         return self.t_null
+
+    def _iterator_source_name(self, op: zast.Operation) -> Optional[str]:
+        """Return the human-readable source name for an iterator binding's
+        RHS operation, used as the `borrow_origin` of the loop variable.
+
+        Bare-variable iterators (`for s: it loop`) borrow from `it`.
+        Other shapes (calls / construction expressions) return None;
+        callers fall back to a synthetic name.
+        """
+        actual = op
+        while actual.nodetype == NodeType.EXPRESSION:
+            actual = cast(zast.Expression, actual).expression
+        if actual.nodetype == NodeType.ATOMID:
+            return cast(zast.AtomId, actual).name
+        return None
 
     def _check_with(self, withnode: zast.With) -> Optional[ZType]:
         """Type-check `with name: value do doexpr`.
