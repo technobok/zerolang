@@ -138,6 +138,30 @@ def listiter_element_type(ztype: ZType) -> Optional[ZType]:
     return base.generic_args.get("of") if base else None
 
 
+def is_mapkeyiter_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized mapkeyiter type."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "mapkeyiter"
+    )
+
+
+def mapkeyiter_key_type(ztype: ZType) -> Optional[ZType]:
+    """Get the key type of a mapkeyiter type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("key") if base else None
+
+
+def mapkeyiter_value_type(ztype: ZType) -> Optional[ZType]:
+    """Get the value type of a mapkeyiter type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("value") if base else None
+
+
 def is_map_type(ztype: Optional[ZType]) -> bool:
     """Check if a type is a monomorphized map type."""
     ztype = _unwrap_typedef(ztype)

@@ -41,6 +41,8 @@ from ztypeutil import (
     listview_element_type as _listview_element_type,
     is_listiter_type as _is_listiter_type,
     listiter_element_type as _listiter_element_type,
+    is_mapkeyiter_type as _is_mapkeyiter_type,
+    mapkeyiter_key_type as _mapkeyiter_key_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -4215,6 +4217,25 @@ class TypeChecker:
             mono.needs_destructor = False
             mono.destructor_name = None
 
+        # for mapkeyiter types: synthesize the .call method returning
+        # (optionview of: key). Same shape as listiter — the iterator
+        # walks bucket slots and skips empty / deleted ones at runtime.
+        if _is_mapkeyiter_type(mono) and not is_partial:
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            key_t = _mapkeyiter_key_type(mono)
+            if key_t is not None:
+                ov_template = self._resolve_name("optionview")
+                if ov_template:
+                    ov_defn = self._find_generic_defn(ov_template)
+                    if ov_defn:
+                        ov_mono = self._monomorphize(ov_template, {"t": key_t}, ov_defn)
+                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
+                        call_type.return_type = ov_mono
+                        mono.children["call"] = call_type
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
         # for list types: set reftype, synthesize methods
         # List struct is stack-allocated; only the data buffer is on the heap.
         if _is_list_type(mono) and not is_partial:
@@ -4356,6 +4377,24 @@ class TypeChecker:
                 has_type.children["key"] = key_type
                 has_type.return_type = t_bool
                 mono.children["has"] = has_type
+                # synthesize .iterate method: function {:this} out
+                # (mapkeyiter key: K value: V) — borrowed-key iterator.
+                # Triggers monomorphization of mapkeyiter<K,V> so the
+                # emitter can generate the iterator struct + .call.
+                mki_template = self._resolve_name("mapkeyiter")
+                if mki_template:
+                    mki_defn = self._find_generic_defn(mki_template)
+                    if mki_defn:
+                        mki_mono = self._monomorphize(
+                            mki_template,
+                            {"key": key_type, "value": value_type},
+                            mki_defn,
+                        )
+                        iterate_type = _make_type(
+                            f"{mangled}.iterate", ZTypeType.FUNCTION
+                        )
+                        iterate_type.return_type = mki_mono
+                        mono.children["iterate"] = iterate_type
 
         # for classes: rebuild meta_create for the monomorphized class
         if (

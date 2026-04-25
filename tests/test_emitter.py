@@ -462,6 +462,38 @@ class TestEmitterBasic:
         assert "z_list_i64_iterate" in csource
         assert "z_listiter_i64_call" in csource
 
+    def test_map_iterate_keys(self):
+        """map.iterate yields borrowed views of each USED bucket's key."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  m: (map key: i64 value: i64)\n"
+            "  m.set key: 1 value: 100\n"
+            "  m.set key: 2 value: 200\n"
+            "  m.set key: 3 value: 300\n"
+            "  with it: m.iterate do for k: it loop {\n"
+            '    print "k=\\{k}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        # map iteration order is bucket-layout, not insertion; verify
+        # the multiset of keys, not the order
+        seen = sorted(line for line in output.strip().split("\n") if line)
+        assert seen == ["k=1", "k=2", "k=3"]
+
+    def test_map_iterate_emits_mapkeyiter(self):
+        """The map mono pass emits the mapkeyiter runtime + factory."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  m: (map key: i64 value: i64)\n"
+            "  m.set key: 1 value: 100\n"
+            "  with it: m.iterate do for k: it loop {}\n"
+            "}"
+        )
+        assert "z_mapkeyiter_i64_i64_t" in csource
+        assert "z_map_i64_i64_iterate" in csource
+        assert "z_mapkeyiter_i64_i64_call" in csource
+
     def test_generic_unit(self):
         """Generic unit instantiation with function."""
         csource = emit_source(

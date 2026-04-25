@@ -35,6 +35,7 @@ from ztypeutil import (
     is_listview_type as _is_listview_type,
     listview_element_type as _listview_element_type,
     is_listiter_type as _is_listiter_type,
+    is_mapkeyiter_type as _is_mapkeyiter_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -3061,6 +3062,10 @@ class CEmitter:
             # Skip the default class-mono emission to avoid an empty
             # struct definition that conflicts with the runtime layout.
             return
+        if _is_mapkeyiter_type(mono_type):
+            # mapkeyiter: same story — its struct/call/iterate factory
+            # are emitted as part of `_emit_mono_map` for the source map.
+            return
         if _is_map_type(mono_type):
             self._emit_mono_map(mono_type)
             return
@@ -4054,6 +4059,74 @@ class CEmitter:
         lines.append(f"    return {find_fn}(_this, _key, h) >= 0;\n")
         lines.append("}\n\n")
 
+        self.struct_defs.append("".join(lines))
+
+        # mapkeyiter companion: borrowed-key iterator + .iterate factory.
+        # Emitted only when the map mono carries an `.iterate` child.
+        iterate_child = mono_type.children.get("iterate")
+        if iterate_child and iterate_child.return_type:
+            self._emit_mapkeyiter_runtime(
+                ctype, name, key_ctype, iterate_child.return_type
+            )
+
+    def _emit_mapkeyiter_runtime(
+        self,
+        map_ctype: str,
+        map_name: str,
+        key_ctype: str,
+        mki_mono: ZType,
+    ) -> None:
+        """Emit the runtime implementation of a mapkeyiter monomorphization.
+
+        Layout: { source map pointer, current bucket index }. Each .call
+        scans forward through buckets, returning the next USED bucket's
+        key wrapped in optionview.some, or optionview.none when no more
+        USED buckets remain.
+        """
+        mki_name = mki_mono.name
+        mki_ctype = f"z_{mki_name}_t"
+        call_method = mki_mono.children.get("call")
+        if not call_method or not call_method.return_type:
+            return
+        ov_mono = call_method.return_type
+        ov_name = ov_mono.name
+        ov_ctype = f"z_{ov_name}_t"
+        ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
+        ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
+        used_macro = f"Z_{map_name.upper()}_USED"
+
+        lines: List[str] = []
+        lines.append(f"/* mapkeyiter<{key_ctype}> runtime layout */\n")
+        lines.append("typedef struct {\n")
+        lines.append(f"    {map_ctype}* m;\n")
+        lines.append("    uint64_t idx;\n")
+        lines.append(f"}} {mki_ctype};\n\n")
+        lines.append(f"static {ov_ctype} z_{mki_name}_call({mki_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} z_{mki_name}_call({mki_ctype}* _it) {{\n")
+        lines.append(f"    {ov_ctype} _out = {{0}};\n")
+        lines.append("    while (_it->idx < _it->m->capacity) {\n")
+        lines.append(
+            f"        if (_it->m->buckets[_it->idx].state == {used_macro}) {{\n"
+        )
+        lines.append(f"            _out.tag = {ov_some_tag};\n")
+        lines.append("            _out.data = &_it->m->buckets[_it->idx].key;\n")
+        lines.append("            _it->idx++;\n")
+        lines.append("            return _out;\n")
+        lines.append("        }\n")
+        lines.append("        _it->idx++;\n")
+        lines.append("    }\n")
+        lines.append(f"    _out.tag = {ov_none_tag};\n")
+        lines.append("    return _out;\n")
+        lines.append("}\n\n")
+        lines.append(f"static {mki_ctype} z_{map_name}_iterate({map_ctype}* _this);\n")
+        lines.append(
+            f"static {mki_ctype} z_{map_name}_iterate({map_ctype}* _this) {{\n"
+        )
+        lines.append(f"    {mki_ctype} _it = {{0}};\n")
+        lines.append("    _it.m = _this;\n")
+        lines.append("    _it.idx = 0;\n")
+        lines.append("    return _it;\n")
+        lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_class(
