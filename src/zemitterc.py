@@ -4933,7 +4933,12 @@ class CEmitter:
                 and dp.child.name == "shrink"
             ):
                 parent_val = self._emit_path_value(dp.parent)
-                return f"{indent}z_string_shrink(&{parent_val});\n"
+                recv = (
+                    parent_val
+                    if self._is_class_pointer_path(dp.parent)
+                    else f"&{parent_val}"
+                )
+                return f"{indent}z_string_shrink({recv});\n"
         if (
             inner.nodetype == zast.NodeType.DOTTEDPATH
             and cast(zast.DottedPath, inner).child.name == "take"
@@ -5408,11 +5413,17 @@ class CEmitter:
 
         # string class mutating methods: .append, .reserve, .shrink
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent = cast(zast.DottedPath, call.callable).parent
+            dp_parent_type = dp_parent.type
             if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
                 method_name = cast(zast.DottedPath, call.callable).child.name
-                parent_val = self._emit_path_value(
-                    cast(zast.DottedPath, call.callable).parent
+                parent_val = self._emit_path_value(dp_parent)
+                # If the receiver is already a pointer (e.g. a borrow-passed
+                # param), pass it directly; otherwise take its address.
+                recv = (
+                    parent_val
+                    if self._is_class_pointer_path(dp_parent)
+                    else f"&{parent_val}"
                 )
                 if method_name == "append" and call.arguments:
                     # append's parameter is declared as stringview; the
@@ -5421,16 +5432,13 @@ class CEmitter:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
                     self.needs_stringview = True
                     return (
-                        f"{indent}z_string_append(&{parent_val}, "
-                        f"{arg}.data, {arg}.length);\n"
+                        f"{indent}z_string_append({recv}, {arg}.data, {arg}.length);\n"
                     )
                 if method_name == "reserve" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
-                    return (
-                        f"{indent}z_string_reserve(&{parent_val}, (uint64_t){arg});\n"
-                    )
+                    return f"{indent}z_string_reserve({recv}, (uint64_t){arg});\n"
                 if method_name == "shrink":
-                    return f"{indent}z_string_shrink(&{parent_val});\n"
+                    return f"{indent}z_string_shrink({recv});\n"
 
         args = self._emit_call_args(call)
         args = self._prepend_method_receiver(call, args)
