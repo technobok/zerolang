@@ -382,6 +382,40 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "3\n0\n2\n4"
 
+    def test_for_iterate_integer(self):
+        """`.iterate` is the canonical name; same behavior as `.each`."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  n: 5\n"
+            "  for x: n.iterate loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "0\n1\n2\n3\n4"
+
+    def test_for_iterate_from(self):
+        """for x: (n.iterate from: k) — iterates from k to n-1."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  n: 5\n"
+            "  for x: (n.iterate from: 2) loop {\n"
+            '    print "\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2\n3\n4"
+
+    def test_for_iterate_emits_tight_c_loop(self):
+        """The `.iterate` peephole produces the same tight C `for` as `.each`."""
+        csource = emit_source(
+            'main: function is {\n  for x: 3.iterate loop {\n    print "\\{x}"\n  }\n}'
+        )
+        # tight C for-loop, no intermediate option/optionval materialisation
+        assert "for (int64_t x = 0; x < 3" in csource
+
     def test_generic_unit(self):
         """Generic unit instantiation with function."""
         csource = emit_source(

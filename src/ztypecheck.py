@@ -5989,11 +5989,15 @@ class TypeChecker:
             "u64",
             "u128",
         }
-        if child_name == "each":
+        # .each / .iterate on integer types: both synthesize the same
+        # iteration method shape. `.iterate` is the canonical name; `.each`
+        # is retained as a deprecated alias and will be removed in a future
+        # commit.
+        if child_name in ("each", "iterate"):
             parent_type = self._check_path(path.parent)
             if parent_type and parent_type.name in _INTEGER_TYPES:
-                each_fn = _make_type(f"{parent_type.name}.each", ZTypeType.FUNCTION)
-                each_fn.children["from"] = parent_type
+                fn = _make_type(f"{parent_type.name}.{child_name}", ZTypeType.FUNCTION)
+                fn.children["from"] = parent_type
                 optionval_template = self._resolve_name("optionval")
                 if optionval_template and optionval_template.isgeneric:
                     optionval_defn = self._find_generic_defn(optionval_template)
@@ -6001,9 +6005,9 @@ class TypeChecker:
                         optionval_mono = self._monomorphize(
                             optionval_template, {"t": parent_type}, optionval_defn
                         )
-                        each_fn.return_type = optionval_mono
-                path.type = each_fn
-                return each_fn
+                        fn.return_type = optionval_mono
+                path.type = fn
+                return fn
 
         # numeric dotted path: 0.u32, 42.i8, 0xff.u16
         if path.parent.nodetype == NodeType.ATOMID and _is_numeric_id(

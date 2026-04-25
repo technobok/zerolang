@@ -10442,9 +10442,7 @@ class TestOptionview:
         mono = None
         for k, v in tc._resolved.items():
             if "optionview" in k and v.typetype == ZTypeType.UNION:
-                if v.generic_origin is not None and not is_tag_origin(
-                    v.generic_origin
-                ):
+                if v.generic_origin is not None and not is_tag_origin(v.generic_origin):
                     mono = v
                     break
         assert mono is not None, "optionview mono not resolved"
@@ -10458,7 +10456,7 @@ class TestOptionview:
         program = check_ok(
             "src: class { v: i64 }\n"
             "main: function is {\n"
-            "  a: option.some \"x\".string\n"
+            '  a: option.some "x".string\n'
             "  b: optionval.some 1\n"
             "  s: src v: 7\n"
             "  c: optionview.some from: s\n"
@@ -10473,9 +10471,7 @@ class TestOptionview:
             elif "optionval_i64" in k and v.typetype == ZTypeType.VARIANT:
                 b_t = v
             elif "optionview" in k and v.typetype == ZTypeType.UNION:
-                if v.generic_origin is not None and not is_tag_origin(
-                    v.generic_origin
-                ):
+                if v.generic_origin is not None and not is_tag_origin(v.generic_origin):
                     c_t = v
         assert a_t and b_t and c_t
         assert tc._is_iterator_wrapper(a_t)

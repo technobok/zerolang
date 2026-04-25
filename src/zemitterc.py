@@ -8359,7 +8359,9 @@ class CEmitter:
             if name.startswith(" "):
                 cond_exprs.append(self._emit_operation_value(cond_op))
             elif name in fornode.iterator_bindings:
-                # check for .each on integer types (C for-loop optimization)
+                # check for .each / .iterate on integer types (C for-loop
+                # optimization). Both names are recognised; `.iterate` is the
+                # canonical name with `.each` retained as a deprecated alias.
                 is_each = False
                 actual_op = cond_op
                 while actual_op.nodetype == NodeType.EXPRESSION:
@@ -8367,10 +8369,9 @@ class CEmitter:
                 if actual_op.nodetype in (NodeType.DOTTEDPATH, NodeType.CALL):
                     each_path = None
                     from_val = "0"
-                    if (
-                        actual_op.nodetype == NodeType.DOTTEDPATH
-                        and cast(zast.DottedPath, actual_op).child.name == "each"
-                    ):
+                    if actual_op.nodetype == NodeType.DOTTEDPATH and cast(
+                        zast.DottedPath, actual_op
+                    ).child.name in ("each", "iterate"):
                         each_path = cast(zast.DottedPath, actual_op)
                     elif (
                         actual_op.nodetype == NodeType.CALL
@@ -8379,7 +8380,7 @@ class CEmitter:
                         and cast(
                             zast.DottedPath, cast(zast.Call, actual_op).callable
                         ).child.name
-                        == "each"
+                        in ("each", "iterate")
                     ):
                         each_path = cast(
                             zast.DottedPath, cast(zast.Call, actual_op).callable
