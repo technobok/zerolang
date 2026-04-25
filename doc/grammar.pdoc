@@ -512,17 +512,30 @@ post- conditions.
 #~"while" is the default argument, the argument name can be omitted if it is the
 first argument.
 
-#~"label" operations are called before each iteration. The operation must
-return an #~"option(t)" or #~"optionval(t)". If the result is #~"none" the
-for expression is ended; otherwise the loop variable is bound to the
-some-payload (narrowed to type 't').
+#~"label" binding RHS is classified by AST shape and result type. The compiler
+picks one of five dispatch modes (first match wins). The per-iteration value
+is one of #~"option(t)", #~"optionval(t)", or #~"optionview(t)"; if the value
+is #~"none" the for expression ends, otherwise the loop variable is bound to
+the some-payload (narrowed to #~"t").
 
-For #~"label" operations, the operations must (checked in order):
+The dispatch rules (R is the type produced by evaluating the RHS;
+"iterator-shaped" means R has a #~".call" method whose only required parameter
+is #~":this" and whose return type is option/optionval/optionview):
 
-- be a function or method to be called each iteration that returns
-  #~"option(t)" or #~"optionval(t)"
-- be an object with a #~"call" method that returns #~"option(t)" or
-  #~"optionval(t)"
+- #b:"call → iterator instance:" RHS is a call AND R is iterator-shaped.
+  The call is invoked once eagerly; #~"R.call" runs per iteration.
+- #b:"non-call → iterable:" RHS is not a call AND its type T has an
+  #~".iterate" method whose only required parameter is #~":this" and whose
+  return is iterator-shaped. The compiler synthesises the
+  #~".iterate" call once before the loop. Only the exact name
+  #~".iterate" triggers this rule.
+- #b:"call → option-wrapper:" RHS is a call AND its return type is
+  #~"option(t)" / #~"optionval(t)" / #~"optionview(t)" directly. The
+  call is deferred and re-invoked once per iteration.
+- #b:"non-call → instance with .call:" RHS is not a call AND its type
+  T is itself iterator-shaped. T is the iterator;
+  #~"T.call" runs per iteration.
+- #b:"none of the above:" compile error.
 
 #~"loop" is optional and can be omitted if all work is done in the conditions
 (operations).
