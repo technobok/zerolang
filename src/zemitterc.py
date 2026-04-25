@@ -8775,6 +8775,13 @@ class CEmitter:
             # into the iteration binding, so the binding needs its own
             # scope-exit destruction at the bottom of each iteration.
             iter_cleanup: List[str] = []
+            # Optionview-with-reftype-payload bindings emit a borrow
+            # pointer rather than a value-copy. Aliases set into
+            # `_alias_map` so AtomId references in the body resolve to
+            # `(*__borrow_<name>)`; entries are restored after body emit
+            # below. Collect (name, prev_alias) so multi-binding loops
+            # restore each correctly.
+            optionview_aliases: List[Tuple[str, Optional[str]]] = []
             for (
                 iname,
                 iop,
@@ -8819,14 +8826,35 @@ class CEmitter:
                     and "some" in opt_type.lock_arm_names
                 ):
                     # optionview: borrowed-view union. data is a pointer to
-                    # the source's storage; bind the loop var by deref. No
-                    # cleanup — the iterator owns the lock, not the view.
+                    # the source's storage. For valtype payloads (e.g.
+                    # i64) bind by value-copy — copies are safe and don't
+                    # need aliasing. For reftype payloads (string, classes)
+                    # bind by pointer and seed the alias map so the body's
+                    # `s.field` / `s.method ...` accesses go through the
+                    # source storage, not a stack copy. The Phase 1a
+                    # borrow_origin marking on the loop var blocks
+                    # reassign / take / move-out; the iterator's lock on
+                    # the source list excludes concurrent writers.
                     none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(f"{inner}if ({tmp}.tag == {none_tag}) break;\n")
-                    parts.append(
-                        f"{inner}{elem_ctype} {iname_c} = *({elem_ctype}*){tmp}.data;\n"
+                    elem_is_valtype = bool(
+                        elem_type is not None and elem_type.is_valtype
                     )
+                    if elem_is_valtype:
+                        parts.append(
+                            f"{inner}{elem_ctype} {iname_c} = "
+                            f"*({elem_ctype}*){tmp}.data;\n"
+                        )
+                    else:
+                        ptr_name = f"__borrow_{iname_c}"
+                        parts.append(
+                            f"{inner}{elem_ctype}* {ptr_name} = "
+                            f"({elem_ctype}*){tmp}.data;\n"
+                        )
+                        prev_alias = self._alias_map.get(iname)
+                        self._alias_map[iname] = f"(*{ptr_name})"
+                        optionview_aliases.append((iname, prev_alias))
                 else:
                     # Tagged-union `option t: ref`: the payload is a heap-
                     # boxed value whose destructor would free the inner
@@ -8858,6 +8886,14 @@ class CEmitter:
                 parts.append(f"{inner}if (!({post_str})) break;\n")
             self.indent_level -= 1
             parts.append(f"{indent}}}\n")
+            # Restore optionview aliases now that the body has been emitted
+            # (innermost-set first so an outer for-loop's alias for the same
+            # name is restored last).
+            for alias_name, prev_alias in reversed(optionview_aliases):
+                if prev_alias is None:
+                    self._alias_map.pop(alias_name, None)
+                else:
+                    self._alias_map[alias_name] = prev_alias
         elif has_post and not has_pre:
             # pure post-condition: do { body } while (postcond);
             parts.append(f"{indent}do {{\n")

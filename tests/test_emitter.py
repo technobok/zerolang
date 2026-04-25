@@ -529,6 +529,55 @@ class TestEmitterBasic:
         # mapentry is a typedef alias for the bucket type
         assert "typedef z_map_i64_i64_bucket_t z_mapentry_i64_i64_t" in csource
 
+    def test_optionview_reftype_binds_by_pointer(self):
+        """Reftype optionview payload (string) emits a borrow pointer,
+        not a struct copy. The body's `s.method` calls go through the
+        source storage so mutations land there."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (list of: string)\n"
+            '  xs.append from: "hello".string\n'
+            "  with it: xs.iterate do for s: it loop {}\n"
+            "}"
+        )
+        # pointer binding, not struct copy
+        assert "z_string_t* __borrow_s = (z_string_t*)" in csource
+        assert "z_string_t s = *(z_string_t*)" not in csource
+
+    def test_optionview_valtype_still_value_copy(self):
+        """Valtype optionview payload (i64) keeps the value-copy emit;
+        copies are safe for valtypes and the loop var is the natural
+        local."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (list of: i64)\n"
+            "  xs.append from: 1\n"
+            "  with it: xs.iterate do for x: it loop {}\n"
+            "}"
+        )
+        assert "int64_t x = *(int64_t*)" in csource
+        assert "__borrow_x" not in csource
+
+    def test_optionview_reftype_mutation_lands_in_source(self):
+        """Mutating-method calls through a borrowed string-list iterator
+        binding modify the source list element. Read-back outside the
+        loop sees the new value."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (list of: string)\n"
+            '  xs.append from: "hello".string\n'
+            '  suffix_str: " world".string\n'
+            "  suffix: suffix_str.stringview\n"
+            "  with it: xs.iterate do for s: it loop {\n"
+            "    s.append s: suffix\n"
+            "  }\n"
+            "  final: xs.get i: 0.u64\n"
+            '  print "final: \\{final}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "final: hello world"
+
     def test_generic_unit(self):
         """Generic unit instantiation with function."""
         csource = emit_source(
