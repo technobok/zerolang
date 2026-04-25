@@ -278,6 +278,11 @@ The code generator (C emitter) walks the fully typed AST and emits C source
 code. The output is compiled by a C compiler (gcc/clang) to produce a native
 executable.
 
+The emitter targets the #b:"C17" language standard
+(#~"-std=c17 -Wall -Wextra"). Emitted code relies only on designated
+initializers, fixed-width #~"<stdint.h>" types, and #~"<stdbool.h>"; no C23
+features (#~"typeof", #~"constexpr", #~"#embed") are used.
+
 The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a #~"main()"
 entry point. Each section is collected separately and assembled at the end.
@@ -317,6 +322,38 @@ from the free list.
 
 The #~".take" operation transfers ownership from one variable to another,
 nullifying the source to prevent double-free.
+
+#---: Unrecoverable Errors
+
+All runtime-terminal exits route through a single helper emitted in
+the stdlib preamble of every program:
+
+#code language=c: """
+  static _Noreturn void z_panic(const char* msg) {
+      fprintf(stderr, "zpanic: %s\\n", msg);
+      exit(1);
+  }
+"""
+
+User-level #~"panic msg: ..." lowers to a direct call to this
+helper. Internal unrecoverable exit sites -- allocation failure in
+#~"z_xmalloc" / #~"z_xcalloc" / #~"z_xrealloc", bounds checks on
+arrays, lists, listviews and stringviews, numeric cast overflow,
+empty-list pop -- all funnel through #~"z_panic" too, so every
+termination produces a #~"zpanic: <msg>" line on stderr and an
+exit code of #~"1".
+
+Formatted messages (bounds with indices, numeric cast overflow)
+use a small stack buffer and #~"snprintf" at the call site to
+build the full message before invoking #~"z_panic". The helper
+itself takes a plain #~"const char*" -- no variadic #~"<stdarg.h>"
+is pulled in. #~"_Noreturn" is C17 and lets GCC's control-flow
+analysis eliminate any "control may reach end of non-void
+function" diagnostics in callers that panic on every path.
+
+Source location (#~".z" file + line) is intentionally not included
+in the #~"zpanic:" output; the SQL #~"ast_nodes ↔ emitted_lines"
+source map is the authoritative post-mortem debugging link.
 
 #---: Code Deduplication
 

@@ -111,6 +111,8 @@ Table of Contents</div>
 </li>
 <li><a href="#memory-management">Memory Management</a>
 </li>
+<li><a href="#unrecoverable-errors">Unrecoverable Errors</a>
+</li>
 <li><a href="#code-deduplication">Code Deduplication</a>
 </li>
 </ul>
@@ -312,6 +314,10 @@ marked unreachable and subsequent statements are reported as dead code.</p>
 <p>The code generator (C emitter) walks the fully typed AST and emits C source
 code. The output is compiled by a C compiler (gcc/clang) to produce a native
 executable.</p>
+<p>The emitter targets the <strong>C17</strong> language standard
+(<code>-std=c17 -Wall -Wextra</code>). Emitted code relies only on designated
+initializers, fixed-width <code>&lt;stdint.h&gt;</code> types, and <code>&lt;stdbool.h&gt;</code>; no C23
+features (<code>typeof</code>, <code>constexpr</code>, <code>#embed</code>) are used.</p>
 <p>The emitter produces several output sections in order: struct/type definitions,
 forward declarations, function typedefs, function bodies, and a <code>main()</code>
 entry point. Each section is collected separately and assembled at the end.</p>
@@ -343,7 +349,31 @@ assigned to a named variable, ownership transfers and the temporary is removed
 from the free list.</p>
 <p>The <code>.take</code> operation transfers ownership from one variable to another,
 nullifying the source to prevent double-free.</p>
-<h3 id="code-deduplication"><a href="#code-deduplication">7.3. Code Deduplication</a></h3>
+<h3 id="unrecoverable-errors"><a href="#unrecoverable-errors">7.3. Unrecoverable Errors</a></h3>
+<p>All runtime-terminal exits route through a single helper emitted in
+the stdlib preamble of every program:</p>
+<pre><code class="language-c">  static _Noreturn void z_panic(const char* msg) {
+      fprintf(stderr, "zpanic: %s\\n", msg);
+      exit(1);
+  }</code></pre>
+<p>User-level <code>panic msg: ...</code> lowers to a direct call to this
+helper. Internal unrecoverable exit sites -- allocation failure in
+<code>z_xmalloc</code> / <code>z_xcalloc</code> / <code>z_xrealloc</code>, bounds checks on
+arrays, lists, listviews and stringviews, numeric cast overflow,
+empty-list pop -- all funnel through <code>z_panic</code> too, so every
+termination produces a <code>zpanic: &lt;msg&gt;</code> line on stderr and an
+exit code of <code>1</code>.</p>
+<p>Formatted messages (bounds with indices, numeric cast overflow)
+use a small stack buffer and <code>snprintf</code> at the call site to
+build the full message before invoking <code>z_panic</code>. The helper
+itself takes a plain <code>const char*</code> -- no variadic <code>&lt;stdarg.h&gt;</code>
+is pulled in. <code>_Noreturn</code> is C17 and lets GCC's control-flow
+analysis eliminate any "control may reach end of non-void
+function" diagnostics in callers that panic on every path.</p>
+<p>Source location (<code>.z</code> file + line) is intentionally not included
+in the <code>zpanic:</code> output; the SQL <code>ast_nodes &#x2194; emitted_lines</code>
+source map is the authoritative post-mortem debugging link.</p>
+<h3 id="code-deduplication"><a href="#code-deduplication">7.4. Code Deduplication</a></h3>
 <p>Monomorphized methods are deduplicated using AST content hashing. During
 monomorphization, each cloned method body is hashed (SHA-256 over the typed
 AST structure). If two methods produce the same hash, the second becomes an

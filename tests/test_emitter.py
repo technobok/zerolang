@@ -2545,7 +2545,8 @@ class TestEmitterConstructors:
         assert "z_counter_meta_create" in csource
         assert "z_counter_create" in csource
         assert "z_counter_t _this" in csource
-        assert "malloc" not in csource
+        # counter is stack-allocated; no z_counter_t* heap allocation
+        assert "(z_counter_t*)z_xmalloc" not in csource
         assert "_this.value = value;" in csource
 
     def test_record_meta_create_emitted(self):
@@ -6620,7 +6621,7 @@ class TestBoxRefinements:
             'main: function is {\n    b: box from: "hello".string\n    print "done"\n}'
         )
         # box allocates z_string_t* on the heap
-        assert "(z_string_t*)malloc(sizeof(z_string_t))" in csource
+        assert "(z_string_t*)z_xmalloc(sizeof(z_string_t))" in csource
         output = compile_and_run(csource)
         assert "done" in output
 

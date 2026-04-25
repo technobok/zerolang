@@ -280,6 +280,28 @@ def _mangle_var(name: str) -> str:
     return name
 
 
+def _unwrap_outer_parens(s: str) -> str:
+    """Strip one outer layer of parens if it wraps the whole expression.
+
+    Used at statement sites (if/while/return/assignment RHS) where the
+    surrounding syntax already supplies grouping, so binop expressions
+    that defensively wrap themselves in parens produce noisy double-
+    parenthesization. Safe on any C expression string: returns input
+    unchanged when the outer parens do not match a full-width pair.
+    """
+    if len(s) < 2 or s[0] != "(" or s[-1] != ")":
+        return s
+    depth = 0
+    for i, c in enumerate(s):
+        if c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0 and i != len(s) - 1:
+                return s
+    return s[1:-1]
+
+
 class TrackedList(list):
     """A list that records the emitter's _current_node_id alongside each appended item."""
 
@@ -477,12 +499,12 @@ class CEmitter:
         create_name = f"z_{name}_create"
         lines.append(f"static {ctype}* {create_name}(uint64_t _capacity);\n")
         lines.append(f"static {ctype}* {create_name}(uint64_t _capacity) {{\n")
-        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+        lines.append(f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n")
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         lines.append("    _this->capacity = _capacity;\n")
         lines.append("    if (_capacity > 0) {\n")
         lines.append(
-            f"        _this->data = ({data_ctype}*)calloc(_capacity, sizeof({data_ctype}));\n"
+            f"        _this->data = ({data_ctype}*)z_xcalloc(_capacity, sizeof({data_ctype}));\n"
         )
         lines.append("    }\n")
         lines.append("    return _this;\n")
@@ -506,7 +528,7 @@ class CEmitter:
         lines.append("    _this.capacity = _capacity;\n")
         lines.append("    if (_capacity > 0) {\n")
         lines.append(
-            f"        _this.data = ({data_ctype}*)calloc(_capacity, sizeof({data_ctype}));\n"
+            f"        _this.data = ({data_ctype}*)z_xcalloc(_capacity, sizeof({data_ctype}));\n"
         )
         lines.append("    }\n")
         lines.append("    return _this;\n")
@@ -1243,7 +1265,6 @@ class CEmitter:
             "    int32_t fd;\n",
             "    bool closed;\n",
             "} z_file_t;\n\n",
-            "static void z_file_destroy(z_file_t* p);\n",
             "static void z_file_destroy(z_file_t* p) {\n",
             "    if (!p) return;\n",
             "    if (p->closed) return;\n",
@@ -1357,7 +1378,6 @@ class CEmitter:
                 "typedef struct {\n"
                 "    z_parseerror_tag_t tag;\n"
                 "} z_parseerror_t;\n\n"
-                "static bool z_parseerror_eq(z_parseerror_t a, z_parseerror_t b);\n"
                 "static bool z_parseerror_eq(z_parseerror_t a, z_parseerror_t b) {\n"
                 "    return a.tag == b.tag;\n"
                 "}\n\n"
@@ -1906,12 +1926,49 @@ class CEmitter:
         parts.append("}\n")
 
         output = "".join(parts)
+        output = self._strip_unused_ft_typedefs(output)
 
         # build source map: for each output line, find the node ID
         # by walking the tracked output sections
         self._build_source_map(output)
 
         return output
+
+    def _strip_unused_ft_typedefs(self, output: str) -> str:
+        """Remove unreferenced auto-generated function typedefs.
+
+        The emitter produces a `typedef ... (*z_X_ft)(...);` for every
+        user function via `_emit_func_typedef`; most programs never
+        store a function as a value, so these are dead decls.
+        Spec typedefs (from `_emit_spec_typedef`) are a user-facing
+        contract and always kept.
+        """
+        # gather the ft-names emitted as auto function typedefs
+        strippable: set = set()
+        for line in self.func_typedefs:
+            lp = line.find("(*")
+            rp = line.find(")", lp)
+            if lp >= 0 and rp > lp:
+                strippable.add(line[lp + 2 : rp])
+        if not strippable:
+            return output
+
+        result: List[str] = []
+        for line in output.splitlines(keepends=True):
+            stripped = line.lstrip()
+            if (
+                stripped.startswith("typedef ")
+                and "(*z_" in stripped
+                and "_ft)" in stripped
+            ):
+                lp = stripped.find("(*")
+                rp = stripped.find(")", lp)
+                if lp >= 0 and rp > lp:
+                    ft_name = stripped[lp + 2 : rp]
+                    if ft_name in strippable and output.count(ft_name) <= 1:
+                        continue
+            result.append(line)
+        return "".join(result)
 
     def _emit_func_typedef(self, name: str, func: zast.Function) -> None:
         """Emit a C typedef for a function (placed after struct defs)."""
@@ -1991,7 +2048,6 @@ class CEmitter:
         lines.append(f"}} z_{name}_t;\n\n")
 
         # destroy function
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto);\n")
         lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
         lines.append("    if (!proto) return;\n")
         lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
@@ -2124,7 +2180,7 @@ class CEmitter:
             )
             lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
             lines.append(
-                f"    {impl_ctype}* boxed = ({impl_ctype}*)malloc(sizeof({impl_ctype}));\n"
+                f"    {impl_ctype}* boxed = ({impl_ctype}*)z_xmalloc(sizeof({impl_ctype}));\n"
             )
             lines.append("    *boxed = *val;\n")
             lines.append("    proto.data = boxed;\n")
@@ -2151,7 +2207,7 @@ class CEmitter:
             )
             lines.append(f"    z_{proto_name}_t proto = {{0}};\n")
             lines.append(
-                f"    {impl_ctype}* boxed = ({impl_ctype}*)malloc(sizeof({impl_ctype}));\n"
+                f"    {impl_ctype}* boxed = ({impl_ctype}*)z_xmalloc(sizeof({impl_ctype}));\n"
             )
             lines.append("    *boxed = val;\n")
             lines.append("    proto.data = boxed;\n")
@@ -2366,7 +2422,6 @@ class CEmitter:
 
         ctype = f"z_{name}_t"
         lines: List[str] = []
-        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
         if self._use_memcmp_eq(name, eq_method):
@@ -2520,7 +2575,6 @@ class CEmitter:
             return
 
         ctype = f"z_{name}_t"
-        lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
         lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
 
         if self._use_memcmp_eq(name, eq_method):
@@ -2654,13 +2708,13 @@ class CEmitter:
     ) -> None:
         """Emit meta.create and optional create forwarding functions."""
         param_str = ", ".join(params) if params else "void"
-        arg_str = ", ".join(field_names) if field_names else ""
         func_name = f"z_{name}_meta_create"
         ret_type = f"{ctype}*" if is_heap else ctype
-        lines.append(f"static {ret_type} {func_name}({param_str});\n")
         lines.append(f"static {ret_type} {func_name}({param_str}) {{\n")
         if is_heap:
-            lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+            lines.append(
+                f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n"
+            )
             lines.append(f"    *_this = ({ctype}){{0}};\n")
             accessor = "->"
         else:
@@ -2671,11 +2725,13 @@ class CEmitter:
         lines.append("    return _this;\n")
         lines.append("}\n\n")
         if not has_user_create:
+            # Trivial delegate: `z_X_create` just forwards to meta_create
+            # with the same signature and arguments. A preprocessor alias
+            # has the same effect and skips a function body per type.
+            # Emit inline next to meta_create so callers within struct_defs
+            # (e.g. array default-init) see the alias before use.
             create_name = f"z_{name}_create"
-            lines.append(f"static {ret_type} {create_name}({param_str});\n")
-            lines.append(f"static {ret_type} {create_name}({param_str}) {{\n")
-            lines.append(f"    return {func_name}({arg_str});\n")
-            lines.append("}\n\n")
+            lines.append(f"#define {create_name} {func_name}\n\n")
 
     def _emit_meta_create(
         self,
@@ -2768,7 +2824,6 @@ class CEmitter:
 
         # emit destructor (only if class has fields needing cleanup)
         if ztype and ztype.needs_field_cleanup:
-            lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
             lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
             lines.append("    if (!p) return;\n")
             for fname, fpath in cls.items.items():
@@ -2882,39 +2937,67 @@ class CEmitter:
         lines.append("    void* data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # emit destructor
+        # destructor: collapse to a no-op when every subtype is `null`
+        # (tag-only union — nothing ever to free).
+        all_null_items = all(
+            spath.nodetype == NodeType.ATOMID
+            and cast(zast.AtomId, spath).name == "null"
+            for _, spath in union_defn.items.items()
+        )
+        if all_null_items:
+            lines.append(
+                f"static void z_{name}_destroy(z_{name}_t* u) {{ (void)u; }}\n\n"
+            )
+            self.struct_defs.append("".join(lines))
+            return
+
+        # Non-null subtypes (ones whose payload needs freeing). Null tags
+        # fall through the switch's implicit default with no work.
+        non_null_items = [
+            (sname, spath)
+            for sname, spath in union_defn.items.items()
+            if not (
+                spath.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, spath).name == "null"
+            )
+        ]
+
+        def _arm_body(spath: zast.Path) -> tuple[str, ...]:
+            stype = spath.type
+            if stype and stype.needs_destructor and stype.destructor_name:
+                if stype.is_heap_allocated:
+                    cast_expr = f"({_ctype(stype)})u->data"
+                    return (f"            {stype.destructor_name}({cast_expr});\n",)
+                ptr_ctype = f"{_ctype(stype)}*"
+                return (
+                    f"            {stype.destructor_name}(({ptr_ctype})u->data);\n",
+                    "            free(u->data);\n",
+                )
+            return ("            free(u->data);\n",)
+
         lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
         lines.append("    if (!u) return;\n")
         lines.append("    if (!u->data) return;\n")
         lines.append("    switch (u->tag) {\n")
-        for sname, spath in union_defn.items.items():
+        pending_cases: list[str] = []
+        pending_body: tuple[str, ...] | None = None
+        for sname, spath in non_null_items:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = (
-                spath.nodetype == NodeType.ATOMID
-                and cast(zast.AtomId, spath).name == "null"
-            )
-            lines.append(f"        case {tag}:\n")
-            if is_null:
+            body = _arm_body(spath)
+            if pending_body is not None and body != pending_body:
+                for t in pending_cases:
+                    lines.append(f"        case {t}:\n")
+                lines.extend(pending_body)
                 lines.append("            break;\n")
-            else:
-                stype = spath.type
-                if stype and stype.needs_destructor and stype.destructor_name:
-                    if stype.is_heap_allocated:
-                        # heap-allocated: destructor frees the allocation
-                        cast_expr = f"({_ctype(stype)})u->data"
-                        lines.append(
-                            f"            {stype.destructor_name}({cast_expr});\n"
-                        )
-                    else:
-                        # stack-allocated (boxed): call destructor on boxed copy, then free box
-                        ptr_ctype = f"{_ctype(stype)}*"
-                        lines.append(
-                            f"            {stype.destructor_name}(({ptr_ctype})u->data);\n"
-                        )
-                        lines.append("            free(u->data);\n")
-                else:
-                    lines.append("            free(u->data);\n")
-                lines.append("            break;\n")
+                pending_cases = []
+            pending_cases.append(tag)
+            pending_body = body
+        if pending_body is not None:
+            for t in pending_cases:
+                lines.append(f"        case {t}:\n")
+            lines.extend(pending_body)
+            lines.append("            break;\n")
+        lines.append("        default: break;\n")
         lines.append("    }\n")
         lines.append("}\n\n")
 
@@ -3036,33 +3119,59 @@ class CEmitter:
         lines.append("    void* data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # emit destructor
+        # destructor: collapse to a no-op when every subtype is `null`.
+        all_null_subtypes = all(
+            stype.typetype == ZTypeType.NULL for _, stype in subtype_items
+        )
+        if all_null_subtypes:
+            lines.append(
+                f"static void z_{name}_destroy(z_{name}_t* u) {{ (void)u; }}\n\n"
+            )
+            self.struct_defs.append("".join(lines))
+            return
+
+        # Non-null subtypes only — null tags go through the implicit default.
+        non_null_subtypes = [
+            (sname, stype)
+            for sname, stype in subtype_items
+            if stype.typetype != ZTypeType.NULL
+        ]
+
+        def _arm_body_mono(stype: ZType) -> tuple[str, ...]:
+            if stype.needs_destructor and stype.destructor_name:
+                if stype.is_heap_allocated:
+                    cast_expr = f"({_ctype(stype)})u->data"
+                    return (f"            {stype.destructor_name}({cast_expr});\n",)
+                ptr_ctype = f"{_ctype(stype)}*"
+                return (
+                    f"            {stype.destructor_name}(({ptr_ctype})u->data);\n",
+                    "            free(u->data);\n",
+                )
+            return ("            free(u->data);\n",)
+
         lines.append(f"static void z_{name}_destroy(z_{name}_t* u) {{\n")
         lines.append("    if (!u) return;\n")
         lines.append("    if (!u->data) return;\n")
         lines.append("    switch (u->tag) {\n")
-        for sname, stype in subtype_items:
+        pending_cases_m: list[str] = []
+        pending_body_m: tuple[str, ...] | None = None
+        for sname, stype in non_null_subtypes:
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
-            is_null = stype.typetype == ZTypeType.NULL
-            lines.append(f"        case {tag}:\n")
-            if is_null:
+            body = _arm_body_mono(stype)
+            if pending_body_m is not None and body != pending_body_m:
+                for t in pending_cases_m:
+                    lines.append(f"        case {t}:\n")
+                lines.extend(pending_body_m)
                 lines.append("            break;\n")
-            else:
-                if stype.needs_destructor and stype.destructor_name:
-                    if stype.is_heap_allocated:
-                        cast_expr = f"({_ctype(stype)})u->data"
-                        lines.append(
-                            f"            {stype.destructor_name}({cast_expr});\n"
-                        )
-                    else:
-                        ptr_ctype = f"{_ctype(stype)}*"
-                        lines.append(
-                            f"            {stype.destructor_name}(({ptr_ctype})u->data);\n"
-                        )
-                        lines.append("            free(u->data);\n")
-                else:
-                    lines.append("            free(u->data);\n")
-                lines.append("            break;\n")
+                pending_cases_m = []
+            pending_cases_m.append(tag)
+            pending_body_m = body
+        if pending_body_m is not None:
+            for t in pending_cases_m:
+                lines.append(f"        case {t}:\n")
+            lines.extend(pending_body_m)
+            lines.append("            break;\n")
+        lines.append("        default: break;\n")
         lines.append("    }\n")
         lines.append("}\n\n")
 
@@ -3139,7 +3248,6 @@ class CEmitter:
         eq_method = mono_type.children.get("==")
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
             if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
@@ -3274,7 +3382,6 @@ class CEmitter:
         eq_body_parts: List[str] = []
         eq_method = mono_type.children.get("==")
         if eq_method and eq_method.is_autogen_eq:
-            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);")
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
             if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
@@ -3340,7 +3447,6 @@ class CEmitter:
         eq_method = mono_type.children.get("==")
         eq_body_parts: List[str] = []
         if eq_method and eq_method.is_autogen_eq:
-            eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);")
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
             eq_body_parts.append(
                 "    return a.len == b.len && memcmp(a.data, b.data, a.len) == 0;"
@@ -3590,13 +3696,13 @@ class CEmitter:
         # create
         lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity);\n")
         lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity) {{\n")
-        lines.append(f"    {ctype}* _this = ({ctype}*)malloc(sizeof({ctype}));\n")
+        lines.append(f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n")
         lines.append(f"    *_this = ({ctype}){{0}};\n")
         lines.append("    if (_capacity < 8) _capacity = 0;\n")
         lines.append("    _this->capacity = _capacity;\n")
         lines.append("    if (_capacity > 0) {\n")
         lines.append(
-            f"        _this->buckets = ({bucket_type}*)calloc(_capacity, sizeof({bucket_type}));\n"
+            f"        _this->buckets = ({bucket_type}*)z_xcalloc(_capacity, sizeof({bucket_type}));\n"
         )
         lines.append("    }\n")
         lines.append("    return _this;\n")
@@ -3610,7 +3716,7 @@ class CEmitter:
         lines.append("    uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;\n")
         lines.append(f"    {bucket_type}* old_buckets = _this->buckets;\n")
         lines.append(
-            f"    {bucket_type}* new_buckets = ({bucket_type}*)calloc(new_cap, sizeof({bucket_type}));\n"
+            f"    {bucket_type}* new_buckets = ({bucket_type}*)z_xcalloc(new_cap, sizeof({bucket_type}));\n"
         )
         lines.append("    for (uint64_t i = 0; i < old_cap; i++) {\n")
         lines.append(f"        if (old_buckets[i].state == Z_{name.upper()}_USED) {{\n")
@@ -3736,7 +3842,7 @@ class CEmitter:
                     )
                     lines.append("        _copy.capacity = _copy.size + 1;\n")
                     lines.append(
-                        "        _copy.data = (char*)malloc(_copy.capacity);\n"
+                        "        _copy.data = (char*)z_xmalloc(_copy.capacity);\n"
                     )
                     lines.append(
                         "        memcpy(_copy.data, _this->buckets[idx].value.data, _copy.size);\n"
@@ -3789,14 +3895,14 @@ class CEmitter:
                 if val_is_reftype:
                     if val_is_string:
                         lines.append(
-                            "        z_string_t* _copy = (z_string_t*)malloc(sizeof(z_string_t));\n"
+                            "        z_string_t* _copy = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
                         )
                         lines.append(
                             "        _copy->size = _this->buckets[idx].value.size;\n"
                         )
                         lines.append("        _copy->capacity = _copy->size + 1;\n")
                         lines.append(
-                            "        _copy->data = (char*)malloc(_copy->capacity);\n"
+                            "        _copy->data = (char*)z_xmalloc(_copy->capacity);\n"
                         )
                         lines.append(
                             "        memcpy(_copy->data, _this->buckets[idx].value.data, _copy->size);\n"
@@ -3807,7 +3913,7 @@ class CEmitter:
                         lines.append("        _r.data = _this->buckets[idx].value;\n")
                 else:
                     lines.append(
-                        f"        {val_ctype}* _d = ({val_ctype}*)malloc(sizeof({val_ctype}));\n"
+                        f"        {val_ctype}* _d = ({val_ctype}*)z_xmalloc(sizeof({val_ctype}));\n"
                     )
                     lines.append("        *_d = _this->buckets[idx].value;\n")
                     lines.append("        _r.data = _d;\n")
@@ -3876,7 +3982,6 @@ class CEmitter:
 
         # destructor (only if class has fields needing cleanup)
         if mono_type.needs_field_cleanup:
-            lines.append(f"static void z_{name}_destroy(z_{name}_t* p);\n")
             lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
             lines.append("    if (!p) return;\n")
             for fname, ftype in field_items:
@@ -3986,7 +4091,6 @@ class CEmitter:
         lines.append(f"}} z_{name}_t;\n\n")
 
         # destroy function
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto);\n")
         lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
         lines.append("    if (!proto) return;\n")
         lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
@@ -4041,7 +4145,6 @@ class CEmitter:
         eq_method = vtype.children.get("==") if vtype else None
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"
-            lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b);\n")
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
             if self._use_memcmp_eq(name, eq_method):
                 self.needs_string = True
@@ -4315,7 +4418,7 @@ class CEmitter:
 
         # scope cleanup (excluding return value)
         result += self._emit_scope_cleanup(indent, exclude_var=val)
-        result += f"{indent}return {val};\n"
+        result += f"{indent}return {_unwrap_outer_parens(val)};\n"
 
         self._temp_stack.pop()
         return result
@@ -5166,7 +5269,7 @@ class CEmitter:
             # free func vars (except the return value)
             result += self._emit_scope_cleanup(indent, exclude_var=val)
 
-            result += f"{indent}return {val};\n"
+            result += f"{indent}return {_unwrap_outer_parens(val)};\n"
             return result
 
         # void return — free all func vars
@@ -6536,7 +6639,8 @@ class CEmitter:
             lo, hi = NUMERIC_RANGES[dst_type]
             return (
                 f"({{ {src_ctype} _v = {val}; "
-                f'if (_v < {lo} || _v > {hi}) {{ fprintf(stderr, "numeric cast overflow: {src_type} to {dst_type}\\n"); exit(1); }} '
+                f"if (_v < {lo} || _v > {hi})"
+                f' z_panic("numeric cast overflow: {src_type} to {dst_type}"); '
                 f"({dst_ctype})_v; }})"
             )
         return f"(({dst_ctype}){val})"
@@ -7186,8 +7290,7 @@ class CEmitter:
             f"{indent}if ((uint64_t){from_val} > {len_access}"
             f" || (uint64_t){to_val} > {len_access}"
             f" || (uint64_t){from_val} > (uint64_t){to_val})"
-            f' {{ fprintf(stderr, "stringview: bounds error\\n");'
-            f" exit(1); }}\n"
+            f' z_panic("stringview: bounds error");\n'
         )
         return (
             f"(z_stringview_t){{ {data_access}"
@@ -7498,7 +7601,7 @@ class CEmitter:
                     box_ctype = subtype_ctype or "int64_t"
                     box_tmp = self._temp_name("box")
                     self._temp.decls.append(
-                        f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)malloc(sizeof({box_ctype}));\n"
+                        f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)z_xmalloc(sizeof({box_ctype}));\n"
                     )
                     self._temp.decls.append(f"{indent}*{box_tmp} = {val};\n")
                     self._temp.decls.append(f"{indent}{tmp}.data = {box_tmp};\n")
@@ -7571,7 +7674,7 @@ class CEmitter:
 
         val = self._emit_operation_value(value_arg.valtype)
         self._temp.decls.append(
-            f"{indent}{ptr_ctype} {tmp} = ({ptr_ctype})malloc(sizeof({inner_ctype}));\n"
+            f"{indent}{ptr_ctype} {tmp} = ({ptr_ctype})z_xmalloc(sizeof({inner_ctype}));\n"
         )
         self._temp.decls.append(f"{indent}*{tmp} = {val};\n")
         # ownership transferred to boxed copy — remove source from frees
@@ -7940,7 +8043,12 @@ class CEmitter:
                 conds: List[str] = []
                 for _, cond_op in clause.conditions.items():
                     conds.append(self._emit_operation_value(cond_op))
-                cond_str = " && ".join(conds) if conds else "1"
+                if not conds:
+                    cond_str = "1"
+                elif len(conds) == 1:
+                    cond_str = _unwrap_outer_parens(conds[0])
+                else:
+                    cond_str = " && ".join(conds)
                 parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
                 self.indent_level += 1
                 saved_len = len(self._scope.cleanup_vars)
@@ -8086,7 +8194,12 @@ class CEmitter:
                 conds: List[str] = []
                 for _, cond_op in clause.conditions.items():
                     conds.append(self._emit_operation_value(cond_op))
-                cond_str = " && ".join(conds) if conds else "1"
+                if not conds:
+                    cond_str = "1"
+                elif len(conds) == 1:
+                    cond_str = _unwrap_outer_parens(conds[0])
+                else:
+                    cond_str = " && ".join(conds)
                 parts.append(f"{indent}{keyword} ({cond_str}) {{\n")
                 self.indent_level += 1
                 parts.append(self._emit_branch_with_result(clause.statement, tmp))
@@ -8303,7 +8416,12 @@ class CEmitter:
                 parts.append(f"{indent}}}\n")
         elif has_iter:
             # iterator-based loop: while(1) with per-iteration call + option unwrap
-            cond_str = " && ".join(cond_exprs) if cond_exprs else "1"
+            if not cond_exprs:
+                cond_str = "1"
+            elif len(cond_exprs) == 1:
+                cond_str = _unwrap_outer_parens(cond_exprs[0])
+            else:
+                cond_str = " && ".join(cond_exprs)
             parts.append(f"{indent}while ({cond_str}) {{\n")
             self.indent_level += 1
             inner = self._indent()
@@ -8392,7 +8510,12 @@ class CEmitter:
             parts.append(f"{indent}}} while ({post_str});\n")
         else:
             # pre-condition (with optional post-condition break)
-            cond_str = " && ".join(cond_exprs) if cond_exprs else "1"
+            if not cond_exprs:
+                cond_str = "1"
+            elif len(cond_exprs) == 1:
+                cond_str = _unwrap_outer_parens(cond_exprs[0])
+            else:
+                cond_str = " && ".join(cond_exprs)
             parts.append(f"{indent}while ({cond_str}) {{\n")
             if fornode.loop:
                 self.indent_level += 1

@@ -11,6 +11,30 @@ import os
 from typing import List
 
 
+_XALLOC_HELPERS = """\
+static _Noreturn void z_panic(const char* msg) {
+    fprintf(stderr, "zpanic: %s\\n", msg);
+    exit(1);
+}
+static void* z_xmalloc(size_t n) {
+    void* p = malloc(n);
+    if (!p) z_panic("out of memory");
+    return p;
+}
+static void* z_xcalloc(size_t count, size_t size) {
+    void* p = calloc(count, size);
+    if (!p) z_panic("out of memory");
+    return p;
+}
+static void* z_xrealloc(void* p, size_t n) {
+    void* q = realloc(p, n);
+    if (!q) z_panic("out of memory");
+    return q;
+}
+
+"""
+
+
 def emit_runtime_includes(
     *,
     needs_stdio: bool,
@@ -24,7 +48,17 @@ def emit_runtime_includes(
 
     `<stdbool.h>` is always included: zerolang's `bool` type lowers
     to C99 `_Bool` via TYPEMAP, so every emitted program uses it.
+
+    When stdlib is included, also emit the unified panic helper
+    (`z_panic`) and OOM-safe allocation helpers (`z_xmalloc` /
+    `z_xcalloc` / `z_xrealloc`) that route through `z_panic` instead
+    of returning NULL. All emitter-generated unrecoverable exit sites
+    (OOM, bounds, cast overflow, user `panic()`) funnel through
+    `z_panic`, which prints `zpanic: <msg>\\n` to stderr and exits(1).
     """
+    # The panic/x-alloc helpers below need fprintf/stderr, so stdlib implies stdio.
+    if needs_stdlib:
+        needs_stdio = True
     parts: list[str] = []
     if needs_stdio:
         parts.append("#include <stdio.h>\n")
@@ -46,6 +80,8 @@ def emit_runtime_includes(
         parts.append("#include <pwd.h>\n")
     if parts:
         parts.append("\n")
+    if needs_stdlib:
+        parts.append(_XALLOC_HELPERS)
     return "".join(parts)
 
 
@@ -136,7 +172,7 @@ _Z_IO_READ_TEXT = (
     "    if (fd < 0) {\n"
     "        int e = errno;\n"
     "        z_string_free(&path);\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
@@ -153,7 +189,7 @@ _Z_IO_READ_TEXT = (
     "            int e = errno;\n"
     "            close(fd);\n"
     "            z_string_free(&content);\n"
-    "            z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "            z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "            *boxed = z_io_errno_to_ioerror(e);\n"
     "            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "            result.data = boxed;\n"
@@ -162,7 +198,7 @@ _Z_IO_READ_TEXT = (
     "        z_string_append(&content, buf, (uint64_t)n);\n"
     "    }\n"
     "    close(fd);\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = content;\n"
     "    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "    result.data = boxed;\n"
@@ -195,7 +231,7 @@ _Z_IO_WRITE_COMMON = (
     "        int e = errno;\n"
     "        z_string_free(&path);\n"
     "        z_string_free(&content);\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
@@ -206,7 +242,7 @@ _Z_IO_WRITE_COMMON = (
     "    z_string_free(&content);\n"
     "    close(fd);\n"
     "    if (werr != 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(werr);\n"
     "        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
@@ -245,19 +281,19 @@ _Z_IO_READLINK = (
     "static z_result_string_ioerror_t z_io_readlink(z_string_t path) {\n"
     "    z_result_string_ioerror_t result = {0};\n"
     "    uint64_t cap = (uint64_t)256;\n"
-    "    char* buf = (char*)malloc(cap);\n"
+    "    char* buf = (char*)z_xmalloc(cap);\n"
     "    for (;;) {\n"
     "        ssize_t n = readlink(path.data, buf, cap);\n"
     "        if (n < 0) {\n"
     "            int e = errno;\n"
     "            free(buf);\n"
     "            z_ioerror_t* boxed = "
-    "(z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "(z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "            if (e == EINVAL) {\n"
     "                z_ioerror_t v = {0};\n"
     "                v.tag = Z_IOERROR_TAG_INVALIDPATH;\n"
     "                z_string_t* sp = "
-    "(z_string_t*)malloc(sizeof(z_string_t));\n"
+    "(z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     '                *sp = z_string_new("not a symbolic link");\n'
     "                v.data = sp;\n"
     "                *boxed = v;\n"
@@ -273,20 +309,20 @@ _Z_IO_READLINK = (
     "            z_string_t target = {0};\n"
     "            target.size = (uint64_t)n;\n"
     "            target.capacity = target.size + 1;\n"
-    "            target.data = (char*)malloc(target.capacity);\n"
+    "            target.data = (char*)z_xmalloc(target.capacity);\n"
     "            memcpy(target.data, buf, target.size);\n"
     "            target.data[target.size] = '\\0';\n"
     "            free(buf);\n"
     "            z_string_free(&path);\n"
     "            z_string_t* boxed = "
-    "(z_string_t*)malloc(sizeof(z_string_t));\n"
+    "(z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "            *boxed = target;\n"
     "            result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "            result.data = boxed;\n"
     "            return result;\n"
     "        }\n"
     "        cap *= 2;\n"
-    "        buf = (char*)realloc(buf, cap);\n"
+    "        buf = (char*)z_xrealloc(buf, cap);\n"
     "    }\n"
     "}\n\n"
 )
@@ -329,7 +365,7 @@ _Z_IO_WRAP_NULL_RESULT = (
     "        result.data = NULL;\n"
     "        return result;\n"
     "    }\n"
-    "    z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "    z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "    *boxed = z_io_errno_to_ioerror(saved_errno);\n"
     "    result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "    result.data = boxed;\n"
@@ -404,7 +440,7 @@ _Z_IO_STAT = (
     "    int e = errno;\n"
     "    z_string_free(&path);\n"
     "    if (rc != 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
@@ -412,7 +448,7 @@ _Z_IO_STAT = (
     "    }\n"
     "    z_filestat_t fs = {0};\n"
     "    z_io_fill_filestat(&fs, &sb);\n"
-    "    z_filestat_t* boxed = (z_filestat_t*)malloc(sizeof(z_filestat_t));\n"
+    "    z_filestat_t* boxed = (z_filestat_t*)z_xmalloc(sizeof(z_filestat_t));\n"
     "    *boxed = fs;\n"
     "    result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;\n"
     "    result.data = boxed;\n"
@@ -431,7 +467,7 @@ _Z_IO_LSTAT = (
     "    int e = errno;\n"
     "    z_string_free(&path);\n"
     "    if (rc != 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
@@ -439,7 +475,7 @@ _Z_IO_LSTAT = (
     "    }\n"
     "    z_filestat_t fs = {0};\n"
     "    z_io_fill_filestat(&fs, &sb);\n"
-    "    z_filestat_t* boxed = (z_filestat_t*)malloc(sizeof(z_filestat_t));\n"
+    "    z_filestat_t* boxed = (z_filestat_t*)z_xmalloc(sizeof(z_filestat_t));\n"
     "    *boxed = fs;\n"
     "    result.tag = Z_RESULT_FILESTAT_IOERROR_TAG_OK;\n"
     "    result.data = boxed;\n"
@@ -456,7 +492,7 @@ _Z_IO_MKDIRP = (
     "static z_result_null_ioerror_t z_io_mkdirp(z_string_t path);\n"
     "static z_result_null_ioerror_t z_io_mkdirp(z_string_t path) {\n"
     "    uint64_t n = path.size;\n"
-    "    char* buf = (char*)malloc(n + 1);\n"
+    "    char* buf = (char*)z_xmalloc(n + 1);\n"
     "    if (!buf) { int e = errno; z_string_free(&path); return z_io_wrap_null_result(-1, e); }\n"
     "    memcpy(buf, path.data, n);\n"
     "    buf[n] = '\\0';\n"
@@ -497,7 +533,7 @@ _Z_IO_LIST_DIR = (
     "    int e = errno;\n"
     "    z_string_free(&path);\n"
     "    if (!d) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_LIST_STRING_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
@@ -513,7 +549,7 @@ _Z_IO_LIST_DIR = (
     "        z_list_string_append(&list, z_string_new(name));\n"
     "    }\n"
     "    closedir(d);\n"
-    "    z_list_string_t* boxed = (z_list_string_t*)malloc(sizeof(z_list_string_t));\n"
+    "    z_list_string_t* boxed = (z_list_string_t*)z_xmalloc(sizeof(z_list_string_t));\n"
     "    *boxed = list;\n"
     "    result.tag = Z_RESULT_LIST_STRING_IOERROR_TAG_OK;\n"
     "    result.data = boxed;\n"
@@ -537,13 +573,13 @@ _Z_IO_OPEN = (
     "    int e = errno;\n"
     "    z_string_free(&path);\n"
     "    if (fd < 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_FILE_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
     "        return result;\n"
     "    }\n"
-    "    z_file_t* boxed = (z_file_t*)malloc(sizeof(z_file_t));\n"
+    "    z_file_t* boxed = (z_file_t*)z_xmalloc(sizeof(z_file_t));\n"
     "    boxed->fd = (int32_t)fd;\n"
     "    boxed->closed = false;\n"
     "    result.tag = Z_RESULT_FILE_IOERROR_TAG_OK;\n"
@@ -575,7 +611,7 @@ _Z_IO_WRAP_U64_RESULT = (
     "static z_result_u64_ioerror_t z_io_u64_ok(uint64_t v);\n"
     "static z_result_u64_ioerror_t z_io_u64_ok(uint64_t v) {\n"
     "    z_result_u64_ioerror_t result = {0};\n"
-    "    uint64_t* boxed = (uint64_t*)malloc(sizeof(uint64_t));\n"
+    "    uint64_t* boxed = (uint64_t*)z_xmalloc(sizeof(uint64_t));\n"
     "    *boxed = v;\n"
     "    result.tag = Z_RESULT_U64_IOERROR_TAG_OK;\n"
     "    result.data = boxed;\n"
@@ -584,7 +620,7 @@ _Z_IO_WRAP_U64_RESULT = (
     "static z_result_u64_ioerror_t z_io_u64_err(int saved_errno);\n"
     "static z_result_u64_ioerror_t z_io_u64_err(int saved_errno) {\n"
     "    z_result_u64_ioerror_t result = {0};\n"
-    "    z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "    z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "    *boxed = z_io_errno_to_ioerror(saved_errno);\n"
     "    result.tag = Z_RESULT_U64_IOERROR_TAG_ERR;\n"
     "    result.data = boxed;\n"
@@ -604,7 +640,7 @@ _Z_FILE_READ = (
     ") {\n"
     "    if (buf->capacity < buf->length + max) {\n"
     "        uint64_t newcap = buf->length + max;\n"
-    "        buf->data = (uint8_t*)realloc(buf->data, newcap);\n"
+    "        buf->data = (uint8_t*)z_xrealloc(buf->data, newcap);\n"
     "        buf->capacity = newcap;\n"
     "    }\n"
     "    for (;;) {\n"
@@ -906,7 +942,7 @@ _Z_BUFREADER_READ = (
     "    uint64_t take = max < available ? max : available;\n"
     "    if (into->capacity < into->length + take) {\n"
     "        uint64_t newcap = into->length + take;\n"
-    "        into->data = (uint8_t*)realloc(into->data, newcap);\n"
+    "        into->data = (uint8_t*)z_xrealloc(into->data, newcap);\n"
     "        into->capacity = newcap;\n"
     "    }\n"
     "    memcpy(\n"
@@ -963,7 +999,7 @@ _Z_IO_UTF8_VALIDATE = (
     "static z_result_string_ioerror_t z_io_string_err_arm("
     "z_ioerror_tag_t tag) {\n"
     "    z_result_string_ioerror_t result = {0};\n"
-    "    z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "    z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "    z_ioerror_t e = {0};\n"
     "    e.tag = tag;\n"
     "    *boxed = e;\n"
@@ -976,7 +1012,7 @@ _Z_IO_UTF8_VALIDATE = (
     "static z_result_string_ioerror_t z_io_string_ok(z_string_t s);\n"
     "static z_result_string_ioerror_t z_io_string_ok(z_string_t s) {\n"
     "    z_result_string_ioerror_t result = {0};\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = s;\n"
     "    result.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "    result.data = boxed;\n"
@@ -1021,7 +1057,7 @@ _Z_TEXTREADER_READ_LINE = (
     "                z_string_t line = {0};\n"
     "                line.size = i;\n"
     "                line.capacity = i + 1;\n"
-    "                line.data = (char*)malloc(line.capacity);\n"
+    "                line.data = (char*)z_xmalloc(line.capacity);\n"
     "                if (i > 0) memcpy(line.data, self->buf.data, i);\n"
     "                line.data[i] = '\\0';\n"
     "                uint64_t tail = self->buf.length - (i + 1);\n"
@@ -1058,7 +1094,7 @@ _Z_TEXTREADER_READ_LINE = (
     "            z_string_t line = {0};\n"
     "            line.size = size;\n"
     "            line.capacity = size + 1;\n"
-    "            line.data = (char*)malloc(line.capacity);\n"
+    "            line.data = (char*)z_xmalloc(line.capacity);\n"
     "            if (size > 0) memcpy(line.data, self->buf.data, size);\n"
     "            line.data[size] = '\\0';\n"
     "            self->buf.length = 0;\n"
@@ -1084,7 +1120,7 @@ _Z_TEXTREADER_CALL = (
     "           the string destructor (ownership moved). */\n"
     "        z_string_t* src = (z_string_t*)rr.data;\n"
     "        z_string_t* dst = "
-    "(z_string_t*)malloc(sizeof(z_string_t));\n"
+    "(z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "        *dst = *src;\n"
     "        free(src);\n"
     "        out.tag = Z_OPTION_STRING_TAG_SOME;\n"
@@ -1145,7 +1181,7 @@ _Z_OS_ARGS = (
     "    out.length = n;\n"
     "    out.capacity = n;\n"
     "    if (n > 0) {\n"
-    "        out.data = (z_string_t*)malloc(n * sizeof(z_string_t));\n"
+    "        out.data = (z_string_t*)z_xmalloc(n * sizeof(z_string_t));\n"
     "        for (uint64_t i = 0; i < n; i++) {\n"
     "            out.data[i] = z_string_new(z_os_argv_g[i]);\n"
     "        }\n"
@@ -1169,7 +1205,7 @@ _Z_OS_GET_ENV = (
     "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(v);\n"
     "    z_string_free(&key);\n"
     "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
@@ -1189,7 +1225,7 @@ _Z_OS_SET_ENV = (
     "    z_string_free(&key);\n"
     "    z_string_free(&value);\n"
     "    if (rc != 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "        out.data = boxed;\n"
@@ -1211,7 +1247,7 @@ _Z_OS_UNSET_ENV = (
     "    int e = errno;\n"
     "    z_string_free(&key);\n"
     "    if (rc != 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "        out.data = boxed;\n"
@@ -1255,13 +1291,13 @@ _Z_OS_CWD = (
     "    char* buf = getcwd(NULL, 0);\n"
     "    if (buf == NULL) {\n"
     "        int e = errno;\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "        out.data = boxed;\n"
     "        return out;\n"
     "    }\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(buf);\n"
     "    free(buf);\n"
     "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
@@ -1280,7 +1316,7 @@ _Z_OS_SET_CWD = (
     "    int e = errno;\n"
     "    z_string_free(&path);\n"
     "    if (rc != 0) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        out.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "        out.data = boxed;\n"
@@ -1319,12 +1355,12 @@ _Z_OS_USER_NAME = (
     "    uid_t uid = geteuid();\n"
     "    size_t bufsize = 1024;\n"
     "    for (int attempt = 0; attempt < 2; attempt++) {\n"
-    "        char* buf = (char*)malloc(bufsize);\n"
+    "        char* buf = (char*)z_xmalloc(bufsize);\n"
     "        struct passwd pwd;\n"
     "        struct passwd* result = NULL;\n"
     "        int rc = getpwuid_r(uid, &pwd, buf, bufsize, &result);\n"
     "        if (rc == 0 && result != NULL) {\n"
-    "            z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "            z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "            *boxed = z_string_new(pwd.pw_name);\n"
     "            free(buf);\n"
     "            out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
@@ -1337,7 +1373,7 @@ _Z_OS_USER_NAME = (
     "            continue;\n"
     "        }\n"
     "        int e = (rc == 0) ? ENOENT : rc;\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "        out.data = boxed;\n"
@@ -1359,10 +1395,10 @@ _Z_OS_HOME_DIR = (
     "    z_result_string_ioerror_t out = {0};\n"
     '    const char* h = getenv("HOME");\n'
     "    if (h == NULL) {\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        z_ioerror_t v = {0};\n"
     "        v.tag = Z_IOERROR_TAG_OTHER;\n"
-    "        z_string_t* sp = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "        z_string_t* sp = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     '        *sp = z_string_new("$HOME is not set");\n'
     "        v.data = sp;\n"
     "        *boxed = v;\n"
@@ -1370,7 +1406,7 @@ _Z_OS_HOME_DIR = (
     "        out.data = boxed;\n"
     "        return out;\n"
     "    }\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(h);\n"
     "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "    out.data = boxed;\n"
@@ -1423,14 +1459,14 @@ _Z_OS_HOSTNAME = (
     "    char buf[256];\n"
     "    if (gethostname(buf, sizeof(buf)) != 0) {\n"
     "        int e = errno;\n"
-    "        z_ioerror_t* boxed = (z_ioerror_t*)malloc(sizeof(z_ioerror_t));\n"
+    "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        out.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "        out.data = boxed;\n"
     "        return out;\n"
     "    }\n"
     "    buf[sizeof(buf) - 1] = '\\0';\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(buf);\n"
     "    out.tag = Z_RESULT_STRING_IOERROR_TAG_OK;\n"
     "    out.data = boxed;\n"
@@ -1629,7 +1665,7 @@ _Z_SV_STRIP_PREFIX = (
     "        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
-    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)z_xmalloc(sizeof(z_stringview_t));\n"
     "    boxed->data = self->data + p->length;\n"
     "    boxed->length = self->length - p->length;\n"
     "    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
@@ -1691,7 +1727,7 @@ _Z_SV_SPLITTER_CALL = (
     "    uint64_t remaining = s->src_len - s->cursor;\n"
     "    if (s->sep_len > remaining) {\n"
     "        /* no more separators possible — return the tail */\n"
-    "        z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "        z_stringview_t* boxed = (z_stringview_t*)z_xmalloc(sizeof(z_stringview_t));\n"
     "        boxed->data = start;\n"
     "        boxed->length = remaining;\n"
     "        s->cursor = s->src_len;\n"
@@ -1703,7 +1739,7 @@ _Z_SV_SPLITTER_CALL = (
     "    uint64_t scan_end = remaining - s->sep_len;\n"
     "    for (uint64_t i = 0; i <= scan_end; i++) {\n"
     "        if (memcmp(start + i, s->sep, s->sep_len) == 0) {\n"
-    "            z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "            z_stringview_t* boxed = (z_stringview_t*)z_xmalloc(sizeof(z_stringview_t));\n"
     "            boxed->data = start;\n"
     "            boxed->length = i;\n"
     "            s->cursor += i + s->sep_len;\n"
@@ -1713,7 +1749,7 @@ _Z_SV_SPLITTER_CALL = (
     "        }\n"
     "    }\n"
     "    /* no separator in remaining — final fragment */\n"
-    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)z_xmalloc(sizeof(z_stringview_t));\n"
     "    boxed->data = start;\n"
     "    boxed->length = remaining;\n"
     "    s->cursor = s->src_len;\n"
@@ -1776,7 +1812,7 @@ _Z_SV_TO_LOWER_ASCII = (
     "    z_string_t z = {0};\n"
     "    z.size = self->length;\n"
     "    z.capacity = self->length + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
+    "    z.data = (char*)z_xmalloc(z.capacity);\n"
     "    for (uint64_t i = 0; i < self->length; i++) {\n"
     "        unsigned char c = (unsigned char)self->data[i];\n"
     "        if (c >= 'A' && c <= 'Z') c = (unsigned char)(c + ('a' - 'A'));\n"
@@ -1793,7 +1829,7 @@ _Z_SV_TO_UPPER_ASCII = (
     "    z_string_t z = {0};\n"
     "    z.size = self->length;\n"
     "    z.capacity = self->length + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
+    "    z.data = (char*)z_xmalloc(z.capacity);\n"
     "    for (uint64_t i = 0; i < self->length; i++) {\n"
     "        unsigned char c = (unsigned char)self->data[i];\n"
     "        if (c >= 'a' && c <= 'z') c = (unsigned char)(c - ('a' - 'A'));\n"
@@ -1818,7 +1854,7 @@ _Z_SV_REPLACE_IMPL = (
     "        z_string_t z = {0};\n"
     "        z.size = self->length;\n"
     "        z.capacity = self->length + 1;\n"
-    "        z.data = (char*)malloc(z.capacity);\n"
+    "        z.data = (char*)z_xmalloc(z.capacity);\n"
     "        memcpy(z.data, self->data, self->length);\n"
     "        z.data[self->length] = '\\0';\n"
     "        return z;\n"
@@ -1850,7 +1886,7 @@ _Z_SV_REPLACE_IMPL = (
     "    z_string_t z = {0};\n"
     "    z.size = out_len;\n"
     "    z.capacity = out_len + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
+    "    z.data = (char*)z_xmalloc(z.capacity);\n"
     "    /* pass 2: copy with replacement */\n"
     "    uint64_t src_i = 0, dst_i = 0, done_matches = 0;\n"
     "    while (src_i < self->length) {\n"
@@ -1900,7 +1936,7 @@ _Z_SV_REPEAT = (
     "    uint64_t total = self->length * n;\n"
     "    z.size = total;\n"
     "    z.capacity = total + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
+    "    z.data = (char*)z_xmalloc(z.capacity);\n"
     "    for (uint64_t i = 0; i < n; i++) {\n"
     "        memcpy(z.data + i * self->length, self->data, self->length);\n"
     "    }\n"
@@ -2013,27 +2049,27 @@ _Z_SV_PARSE_I64 = (
     "    if (acc > bound) goto overflow;\n"
     "    int64_t v = neg ? -(int64_t)acc : (int64_t)acc;\n"
     "    if (neg && acc == ((uint64_t)1 << 63)) v = INT64_MIN;\n"
-    "    int64_t* box = (int64_t*)malloc(sizeof(int64_t));\n"
+    "    int64_t* box = (int64_t*)z_xmalloc(sizeof(int64_t));\n"
     "    *box = v;\n"
     "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_OK;\n"
     "    out.data = box;\n"
     "    return out;\n"
     "empty: {\n"
-    "    z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "    z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "    e->tag = Z_PARSEERROR_TAG_EMPTY;\n"
     "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_ERR;\n"
     "    out.data = e;\n"
     "    return out;\n"
     "}\n"
     "invalid: {\n"
-    "    z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "    z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "    e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
     "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_ERR;\n"
     "    out.data = e;\n"
     "    return out;\n"
     "}\n"
     "overflow: {\n"
-    "    z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "    z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "    e->tag = Z_PARSEERROR_TAG_OVERFLOW;\n"
     "    out.tag = Z_RESULT_I64_PARSEERROR_TAG_ERR;\n"
     "    out.data = e;\n"
@@ -2047,7 +2083,7 @@ _Z_SV_PARSE_U64 = (
     "static z_result_u64_parseerror_t z_stringview_parse_u64(const z_stringview_t* self) {\n"
     "    z_result_u64_parseerror_t out = {0};\n"
     "    if (self->length == 0) {\n"
-    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "        e->tag = Z_PARSEERROR_TAG_EMPTY;\n"
     "        out.tag = Z_RESULT_U64_PARSEERROR_TAG_ERR;\n"
     "        out.data = e;\n"
@@ -2057,7 +2093,7 @@ _Z_SV_PARSE_U64 = (
     "    for (uint64_t i = 0; i < self->length; i++) {\n"
     "        unsigned char c = (unsigned char)self->data[i];\n"
     "        if (c < '0' || c > '9') {\n"
-    "            z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "            z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "            e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
     "            out.tag = Z_RESULT_U64_PARSEERROR_TAG_ERR;\n"
     "            out.data = e;\n"
@@ -2065,7 +2101,7 @@ _Z_SV_PARSE_U64 = (
     "        }\n"
     "        uint64_t d = (uint64_t)(c - '0');\n"
     "        if (acc > (UINT64_MAX - d) / 10) {\n"
-    "            z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "            z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "            e->tag = Z_PARSEERROR_TAG_OVERFLOW;\n"
     "            out.tag = Z_RESULT_U64_PARSEERROR_TAG_ERR;\n"
     "            out.data = e;\n"
@@ -2073,7 +2109,7 @@ _Z_SV_PARSE_U64 = (
     "        }\n"
     "        acc = acc * 10 + d;\n"
     "    }\n"
-    "    uint64_t* box = (uint64_t*)malloc(sizeof(uint64_t));\n"
+    "    uint64_t* box = (uint64_t*)z_xmalloc(sizeof(uint64_t));\n"
     "    *box = acc;\n"
     "    out.tag = Z_RESULT_U64_PARSEERROR_TAG_OK;\n"
     "    out.data = box;\n"
@@ -2086,7 +2122,7 @@ _Z_SV_PARSE_F64 = (
     "static z_result_f64_parseerror_t z_stringview_parse_f64(const z_stringview_t* self) {\n"
     "    z_result_f64_parseerror_t out = {0};\n"
     "    if (self->length == 0) {\n"
-    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "        e->tag = Z_PARSEERROR_TAG_EMPTY;\n"
     "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
     "        out.data = e;\n"
@@ -2095,7 +2131,7 @@ _Z_SV_PARSE_F64 = (
     "    /* copy into a NUL-terminated local buffer for strtod */\n"
     "    char buf[64];\n"
     "    char* p = (self->length < sizeof(buf)) ? buf\n"
-    "            : (char*)malloc(self->length + 1);\n"
+    "            : (char*)z_xmalloc(self->length + 1);\n"
     "    memcpy(p, self->data, self->length);\n"
     "    p[self->length] = '\\0';\n"
     "    char* end = NULL;\n"
@@ -2105,27 +2141,27 @@ _Z_SV_PARSE_F64 = (
     "    uint64_t consumed = (uint64_t)(end - p);\n"
     "    if (p != buf) free(p);\n"
     "    if (consumed == 0) {\n"
-    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "        e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
     "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
     "        out.data = e;\n"
     "        return out;\n"
     "    }\n"
     "    if (consumed != self->length) {\n"
-    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "        e->tag = Z_PARSEERROR_TAG_INVALID_DIGIT;\n"
     "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
     "        out.data = e;\n"
     "        return out;\n"
     "    }\n"
     "    if (err == ERANGE) {\n"
-    "        z_parseerror_t* e = (z_parseerror_t*)malloc(sizeof(z_parseerror_t));\n"
+    "        z_parseerror_t* e = (z_parseerror_t*)z_xmalloc(sizeof(z_parseerror_t));\n"
     "        e->tag = Z_PARSEERROR_TAG_OVERFLOW;\n"
     "        out.tag = Z_RESULT_F64_PARSEERROR_TAG_ERR;\n"
     "        out.data = e;\n"
     "        return out;\n"
     "    }\n"
-    "    double* box = (double*)malloc(sizeof(double));\n"
+    "    double* box = (double*)z_xmalloc(sizeof(double));\n"
     "    *box = v;\n"
     "    out.tag = Z_RESULT_F64_PARSEERROR_TAG_OK;\n"
     "    out.data = box;\n"
@@ -2142,7 +2178,7 @@ _Z_SV_CONCAT = (
     "    uint64_t total = self->length + other->length;\n"
     "    z.size = total;\n"
     "    z.capacity = total + 1;\n"
-    "    z.data = (char*)malloc(z.capacity);\n"
+    "    z.data = (char*)z_xmalloc(z.capacity);\n"
     "    memcpy(z.data, self->data, self->length);\n"
     "    memcpy(z.data + self->length, other->data, other->length);\n"
     "    z.data[total] = '\\0';\n"
@@ -2164,7 +2200,7 @@ _Z_SV_LINES_CALL = (
     "    while (i < remaining && start[i] != '\\n') i++;\n"
     "    uint64_t line_len = i;\n"
     "    if (line_len > 0 && start[line_len - 1] == '\\r') line_len--;\n"
-    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)z_xmalloc(sizeof(z_stringview_t));\n"
     "    boxed->data = start;\n"
     "    boxed->length = line_len;\n"
     "    if (i == remaining) {\n"
@@ -2193,7 +2229,7 @@ _Z_SV_STRIP_SUFFIX = (
     "        out.tag = Z_OPTION_STRINGVIEW_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
-    "    z_stringview_t* boxed = (z_stringview_t*)malloc(sizeof(z_stringview_t));\n"
+    "    z_stringview_t* boxed = (z_stringview_t*)z_xmalloc(sizeof(z_stringview_t));\n"
     "    boxed->data = self->data;\n"
     "    boxed->length = self->length - s->length;\n"
     "    out.tag = Z_OPTION_STRINGVIEW_TAG_SOME;\n"
@@ -2221,7 +2257,7 @@ _Z_COLL_STRING_JOIN = (
     "    uint64_t n = parts.length;\n"
     "    if (n == 0) {\n"
     "        out.capacity = 1;\n"
-    "        out.data = (char*)malloc(1);\n"
+    "        out.data = (char*)z_xmalloc(1);\n"
     "        out.data[0] = '\\0';\n"
     "        return out;\n"
     "    }\n"
@@ -2231,7 +2267,7 @@ _Z_COLL_STRING_JOIN = (
     "    }\n"
     "    out.size = total;\n"
     "    out.capacity = total + 1;\n"
-    "    out.data = (char*)malloc(out.capacity);\n"
+    "    out.data = (char*)z_xmalloc(out.capacity);\n"
     "    uint64_t pos = 0;\n"
     "    for (uint64_t i = 0; i < n; i++) {\n"
     "        if (i > 0 && sep.length > 0) {\n"
@@ -2445,7 +2481,7 @@ _Z_CLI_HELPERS = (
     "static z_clierror_t z_cli_err(z_clierror_tag_t tag, const char* msg, uint64_t mlen) {\n"
     "    z_clierror_t e = {0};\n"
     "    e.tag = tag;\n"
-    "    z_string_t* s = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* s = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *s = z_string_create(mlen);\n"
     "    z_string_append(s, msg, mlen);\n"
     "    e.data = s;\n"
@@ -2455,7 +2491,7 @@ _Z_CLI_HELPERS = (
     "static z_result_parsed_clierror_t z_cli_wrap_err(z_clierror_t e);\n"
     "static z_result_parsed_clierror_t z_cli_wrap_err(z_clierror_t e) {\n"
     "    z_result_parsed_clierror_t r = {0};\n"
-    "    z_clierror_t* boxed = (z_clierror_t*)malloc(sizeof(z_clierror_t));\n"
+    "    z_clierror_t* boxed = (z_clierror_t*)z_xmalloc(sizeof(z_clierror_t));\n"
     "    *boxed = e;\n"
     "    r.tag = Z_RESULT_PARSED_CLIERROR_TAG_ERR;\n"
     "    r.data = boxed;\n"
@@ -2466,7 +2502,7 @@ _Z_CLI_HELPERS = (
 _Z_CLI_PARSE = (
     "static z_result_parsed_clierror_t z_cli_parse(z_spec_t* spec, z_list_string_t args);\n"
     "static z_result_parsed_clierror_t z_cli_parse(z_spec_t* spec, z_list_string_t args) {\n"
-    "    z_parsed_t* parsed = (z_parsed_t*)malloc(sizeof(z_parsed_t));\n"
+    "    z_parsed_t* parsed = (z_parsed_t*)z_xmalloc(sizeof(z_parsed_t));\n"
     "    parsed->flag_set = z_list_string_create(0);\n"
     "    parsed->option_values = z_map_string_string_create(0);\n"
     "    parsed->positional_values = z_map_string_string_create(0);\n"
@@ -2756,7 +2792,7 @@ _Z_PARSED_GET_OPTION = (
     "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(((z_string_t*)v.data)->data);\n"
     "    free(v.data);\n"
     "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
@@ -2779,7 +2815,7 @@ _Z_PARSED_GET_POSITIONAL = (
     "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
-    "    z_string_t* boxed = (z_string_t*)malloc(sizeof(z_string_t));\n"
+    "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(((z_string_t*)v.data)->data);\n"
     "    free(v.data);\n"
     "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
@@ -3093,13 +3129,15 @@ def emit_bounds_check(
     idx_fmt: str = "%lu",
     idx_cast: str = "(unsigned long)",
 ) -> None:
-    """Emit a bounds-check with error exit for container get/set."""
+    """Emit a bounds-check that routes through z_panic on failure."""
     lines.append(f"    if ({idx_expr} >= {len_expr}) {{\n")
+    lines.append("        char _zp_buf[96];\n")
     lines.append(
-        f'        fprintf(stderr, "{label}: index {idx_fmt} out of bounds'
-        f' (length {idx_fmt})\\n", {idx_cast}{idx_expr}, {idx_cast}{len_expr});\n'
+        f'        snprintf(_zp_buf, sizeof(_zp_buf), "{label}: index {idx_fmt}'
+        f' out of bounds (length {idx_fmt})",'
+        f" {idx_cast}{idx_expr}, {idx_cast}{len_expr});\n"
     )
-    lines.append("        exit(1);\n")
+    lines.append("        z_panic(_zp_buf);\n")
     lines.append("    }\n")
 
 
@@ -3109,13 +3147,14 @@ def emit_array_bounds_check(
     arr_len: int,
     label: str,
 ) -> None:
-    """Emit a signed-index bounds-check for fixed-length arrays."""
+    """Emit a signed-index bounds-check for fixed-length arrays via z_panic."""
     lines.append(f"    if ({idx_expr} < 0 || {idx_expr} >= {arr_len}) {{\n")
+    lines.append("        char _zp_buf[96];\n")
     lines.append(
-        f'        fprintf(stderr, "{label}: index %ld out of bounds'
-        f' (length {arr_len})\\n", (long){idx_expr});\n'
+        f'        snprintf(_zp_buf, sizeof(_zp_buf), "{label}: index %ld'
+        f' out of bounds (length {arr_len})", (long){idx_expr});\n'
     )
-    lines.append("        exit(1);\n")
+    lines.append("        z_panic(_zp_buf);\n")
     lines.append("    }\n")
 
 
@@ -3123,8 +3162,7 @@ def emit_empty_check(
     lines: List[str],
     label: str,
 ) -> None:
-    """Emit an empty-container check with error exit (e.g. list pop)."""
+    """Emit an empty-container check that panics on failure (e.g. list pop)."""
     lines.append("    if (_this->length == 0) {\n")
-    lines.append(f'        fprintf(stderr, "{label}\\n");\n')
-    lines.append("        exit(1);\n")
+    lines.append(f'        z_panic("{label}");\n')
     lines.append("    }\n")

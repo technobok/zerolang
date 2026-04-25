@@ -26,7 +26,7 @@ static z_string_t z_string_from_view(z_stringview_t sv) {
     z_string_t z = {0};
     z.size = sv.length;
     z.capacity = sv.length + 1;
-    z.data = (char*)malloc(z.capacity);
+    z.data = (char*)z_xmalloc(z.capacity);
     memcpy(z.data, sv.data, sv.length);
     z.data[sv.length] = '\0';
     return z;

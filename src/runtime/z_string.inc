@@ -8,7 +8,7 @@ static z_string_t z_string_new(const char* s) {
     z_string_t z = {0};
     z.size = (uint64_t)strlen(s);
     z.capacity = z.size + 1;
-    z.data = (char*)malloc(z.capacity);
+    z.data = (char*)z_xmalloc(z.capacity);
     memcpy(z.data, s, z.size);
     z.data[z.size] = '\0';
     return z;
@@ -18,7 +18,7 @@ static z_string_t z_string_cat(z_string_t* a, z_string_t* b) {
     z_string_t z = {0};
     z.size = a->size + b->size;
     z.capacity = z.size + 1;
-    z.data = (char*)malloc(z.capacity);
+    z.data = (char*)z_xmalloc(z.capacity);
     memcpy(z.data, a->data, a->size);
     memcpy(z.data + a->size, b->data, b->size);
     z.data[z.size] = '\0';
@@ -67,7 +67,7 @@ static void z_string_reserve(z_string_t* s, uint64_t additional) {
     if (needed <= s->capacity) return;
     uint64_t new_cap = s->capacity + (s->capacity >> 1) + 16;
     if (new_cap < needed) new_cap = needed;
-    s->data = (char*)realloc(s->data, new_cap + 1);
+    s->data = (char*)z_xrealloc(s->data, new_cap + 1);
     s->capacity = new_cap;
 }
 
@@ -80,7 +80,7 @@ static void z_string_append(z_string_t* s, const char* data, uint64_t len) {
 
 static void z_string_shrink(z_string_t* s) {
     if (s->size == s->capacity) return;
-    s->data = (char*)realloc(s->data, s->size + 1);
+    s->data = (char*)z_xrealloc(s->data, s->size + 1);
     s->capacity = s->size;
 }
 
@@ -88,7 +88,7 @@ static z_string_t z_string_create(uint64_t cap) {
     z_string_t z = {0};
     z.capacity = cap;
     if (cap > 0) {
-        z.data = (char*)malloc(cap + 1);
+        z.data = (char*)z_xmalloc(cap + 1);
         z.data[0] = '\0';
     }
     return z;

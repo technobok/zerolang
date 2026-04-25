@@ -35,6 +35,26 @@ HEADERS = textwrap.dedent(
     #include <stdlib.h>
     #include <stdbool.h>
     #include <string.h>
+
+    static _Noreturn void z_panic(const char* msg) {
+        fprintf(stderr, "zpanic: %s\\n", msg);
+        exit(1);
+    }
+    static void* z_xmalloc(size_t n) {
+        void* p = malloc(n);
+        if (!p) z_panic("out of memory");
+        return p;
+    }
+    static void* z_xcalloc(size_t count, size_t size) {
+        void* p = calloc(count, size);
+        if (!p) z_panic("out of memory");
+        return p;
+    }
+    static void* z_xrealloc(void* p, size_t n) {
+        void* q = realloc(p, n);
+        if (!q) z_panic("out of memory");
+        return q;
+    }
     """
 ).strip()
 
@@ -52,9 +72,12 @@ def _gcc_compile(body: str) -> tuple[int, str]:
             [
                 gcc,
                 "-c",
+                "-std=c17",
                 "-Wall",
+                "-Wextra",
                 "-Werror",
                 "-Wno-unused-function",
+                "-Wno-unused-parameter",
                 "-o",
                 "/dev/null",
                 path,
