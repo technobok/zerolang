@@ -1412,6 +1412,45 @@ class TestEmitterStringOwnership:
         output = compile_and_run(csource).strip()
         assert output == "x=hello world"
 
+    def test_release_on_borrowed_string_skips_free(self):
+        """`.release` on a borrowed string (e.g. one bound from an
+        `out T.borrow` return) must NOT free the underlying buffer —
+        the source still owns it. Previously this emitted an
+        unconditional `z_string_free(&s)` and corrupted the source's
+        heap data."""
+        csource = emit_source(
+            "mybox: class { label: string }\n"
+            "peek: function {b: mybox.lock} out string.borrow is {\n"
+            "  return b.label\n"
+            "}\n"
+            "main: function is {\n"
+            '  e: mybox label: "echo".string\n'
+            "  s: peek e\n"
+            '  print "peeked: \\{s}"\n'
+            "  s.release\n"
+            '  print "e still alive: \\{e.label}"\n'
+            "}"
+        )
+        # The borrow `s` must NOT be freed by `.release` — only zeroed.
+        # Extract the section between `s = _t...` and the next non-`s`
+        # line to inspect the .release emit specifically.
+        assert "z_string_free(&s);" not in csource
+        # `e` is still alive after `s.release`, so the second print
+        # must see a valid box.label — runtime check.
+        lines = compile_and_run(csource).strip().split("\n")
+        assert lines == ["peeked: echo", "e still alive: echo"]
+
+    def test_release_on_owned_string_frees(self):
+        """Regression: `.release` on an owned string still frees and
+        zeros, so scope-exit cleanup is a no-op afterwards."""
+        csource = emit_source(
+            'main: function is {\n  s: "hello".string\n  s.release\n  print "ok"\n}'
+        )
+        # owned string: free + zero
+        assert "z_string_free(&s);" in csource
+        assert "s = (z_string_t){0};" in csource
+        assert compile_and_run(csource).strip() == "ok"
+
     def test_multiple_string_vars(self):
         """Several strings in one function, all freed correctly."""
         csource = emit_source(

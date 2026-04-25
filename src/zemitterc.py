@@ -97,6 +97,10 @@ class ScopeState:
     record_name: str = ""
     class_params: set = field(default_factory=set)
     func_nodeid: int = 0  # NodeID of enclosing function (for unique temp names)
+    # Mangled names of locals bound to a borrow (assigned from `out T.borrow`
+    # call result, or from a `.borrow`/`.lock` projection). Used by `.release`
+    # emit to skip the destructor — freeing a borrow corrupts the source.
+    borrowed_vars: set = field(default_factory=set)
 
 
 @dataclass
@@ -4812,7 +4816,9 @@ class CEmitter:
             # If the RHS is a call to a function declared `out T.borrow`, the
             # caller does NOT own the return value. Skip cleanup registration
             # so scope exit doesn't double-free the borrowed heap buffer.
-            if not self._is_borrow_return_call(assign.value):
+            if self._is_borrow_return_call(assign.value):
+                self._scope.borrowed_vars.add(cname)
+            else:
                 self._scope.cleanup_vars.append((cname, assign.type))
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
@@ -4967,16 +4973,30 @@ class CEmitter:
             var = self._emit_path_value(dp.parent)
             var_type = dp.type
             result = ""
+            # Borrowed locals (assigned from an `out T.borrow` call) hold
+            # a borrow into someone else's heap data; freeing or zeroing
+            # here would corrupt the source. `.release` for a borrow is a
+            # type-checker-side lock release with no C-level effect.
+            is_borrowed = var in self._scope.borrowed_vars
             # owned reftypes: call destructor
-            if var_type and var_type.needs_destructor and var_type.destructor_name:
+            if (
+                var_type
+                and var_type.needs_destructor
+                and var_type.destructor_name
+                and not is_borrowed
+            ):
                 if var_type.is_heap_allocated:
                     result += f"{indent}{var_type.destructor_name}({var});\n"
                 else:
                     result += f"{indent}{var_type.destructor_name}(&{var});\n"
             # invalidate so scope-exit destroy is a no-op
-            if var_type and (
-                var_type.subtype == ZSubType.STRING
-                or var_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
+            if (
+                var_type
+                and not is_borrowed
+                and (
+                    var_type.subtype == ZSubType.STRING
+                    or var_type.typetype in (ZTypeType.CLASS, ZTypeType.UNION)
+                )
             ):
                 result += self._emit_take_invalidation(var, var_type, indent)
             # borrowed variables and valtypes: no C code needed
