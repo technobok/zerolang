@@ -2699,7 +2699,7 @@ class TestIoWrappers:
         on w is rejected (path-scoped lock conflict)."""
         errors = check_errors(
             "main: function is {\n"
-            '  w: io.open path: "/tmp/x".string mode: openmode.write\n'
+            '  w: io.open path: "/tmp/x" mode: openmode.write\n'
             "  match (w) case ok then {\n"
             "    bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
             "    cr: w.close\n"
@@ -2715,7 +2715,7 @@ class TestIoWrappers:
         .read returns result(u64, ioerror) with bytes appended to `into`."""
         check_ok(
             "main: function is {\n"
-            '  r: io.open path: "/tmp/x".string mode: openmode.read\n'
+            '  r: io.open path: "/tmp/x" mode: openmode.read\n'
             "  match (r) case ok then {\n"
             "    br: io.bufreader.create from: r.lock capacity: 16.u64\n"
             "    buf: bytes\n"
@@ -2854,7 +2854,7 @@ class TestOsUnit:
         matching on some/none arms in the usual way."""
         check_ok(
             "main: function is {\n"
-            '  ev: os.get_env key: "PATH".string\n'
+            '  ev: os.get_env key: "PATH"\n'
             "  match (ev) case some then {\n"
             "    print ev\n"
             "  } case none then {\n"
@@ -2873,7 +2873,7 @@ class TestOsUnit:
         matching io's fallible write shape."""
         check_ok(
             "main: function is {\n"
-            '  r: os.set_env key: "X".string value: "y".string\n'
+            '  r: os.set_env key: "X" value: "y"\n'
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
@@ -2886,7 +2886,7 @@ class TestOsUnit:
         """os.unset_env consumes just `key` and returns result(null, ioerror)."""
         check_ok(
             "main: function is {\n"
-            '  r: os.unset_env key: "X".string\n'
+            '  r: os.unset_env key: "X"\n'
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
@@ -2921,7 +2921,7 @@ class TestOsUnit:
     def test_set_cwd_takes_path_returns_result_null_ioerror(self):
         check_ok(
             "main: function is {\n"
-            '  r: os.set_cwd path: "/tmp".string\n'
+            '  r: os.set_cwd path: "/tmp"\n'
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
@@ -6184,29 +6184,25 @@ class TestIoNativeDispatch:
         """io.read_text path: string returns result(string, ioerror).
         The native dispatch plus result union monomorphization must both
         resolve."""
-        check_ok('main: function is {\n    r: io.read_text "/tmp/x".string\n}')
+        check_ok('main: function is {\n    r: io.read_text "/tmp/x"\n}')
 
     def test_write_text_typechecks(self):
         """io.write_text returns result(null, ioerror)."""
         check_ok(
-            "main: function is {\n"
-            '    r: io.write_text path: "/tmp/x".string content: "hi".string\n'
-            "}"
+            'main: function is {\n    r: io.write_text path: "/tmp/x" content: "hi"\n}'
         )
 
     def test_append_text_typechecks(self):
         """io.append_text has the same shape as write_text."""
         check_ok(
-            "main: function is {\n"
-            '    r: io.append_text path: "/tmp/x".string content: "hi".string\n'
-            "}"
+            'main: function is {\n    r: io.append_text path: "/tmp/x" content: "hi"\n}'
         )
 
     def test_exists_returns_bool(self):
         """io.exists returns plain bool — no result wrapper."""
         check_ok(
             "main: function is {\n"
-            '    b: io.exists "/tmp/x".string\n'
+            '    b: io.exists "/tmp/x"\n'
             '    if b then print "y" else print "n"\n'
             "}"
         )
@@ -6215,9 +6211,9 @@ class TestIoNativeDispatch:
         """mkdir / remove / rename all return result(null, ioerror)."""
         check_ok(
             "main: function is {\n"
-            '    r1: io.mkdir "/tmp/d".string\n'
-            '    r2: io.remove "/tmp/d".string\n'
-            '    r3: io.rename from: "/tmp/a".string to: "/tmp/b".string\n'
+            '    r1: io.mkdir "/tmp/d"\n'
+            '    r2: io.remove "/tmp/d"\n'
+            '    r3: io.rename from: "/tmp/a" to: "/tmp/b"\n'
             "}"
         )
 
@@ -6225,7 +6221,7 @@ class TestIoNativeDispatch:
         """Result of io.read_text can be matched on ok/err arms."""
         check_ok(
             "main: function is {\n"
-            '    r: io.read_text "/tmp/x".string\n'
+            '    r: io.read_text "/tmp/x"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6243,9 +6239,7 @@ class TestIoNativeDispatch:
         core) and the result-monomorphization path over the file class.
         """
         check_ok(
-            "main: function is {\n"
-            '    r: io.open path: "/tmp/x".string mode: openmode.read\n'
-            "}"
+            'main: function is {\n    r: io.open path: "/tmp/x" mode: openmode.read\n}'
         )
 
     def test_open_all_modes_typecheck(self):
@@ -6253,7 +6247,7 @@ class TestIoNativeDispatch:
         for mode in ("read", "write", "append"):
             check_ok(
                 "main: function is {\n"
-                f'    r: io.open path: "/tmp/x".string mode: openmode.{mode}\n'
+                f'    r: io.open path: "/tmp/x" mode: openmode.{mode}\n'
                 "}"
             )
 
@@ -6261,7 +6255,7 @@ class TestIoNativeDispatch:
         """Result of io.open can be pattern-matched on ok/err."""
         check_ok(
             "main: function is {\n"
-            '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
+            '    r: io.open path: "/tmp/x" mode: openmode.write\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6289,7 +6283,7 @@ class TestIoNativeDispatch:
         pattern that unwraps the file handle out of io.open's result."""
         check_ok(
             "main: function is {\n"
-            '    r: io.open path: "/tmp/x".string mode: openmode.read\n'
+            '    r: io.open path: "/tmp/x" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6307,7 +6301,7 @@ class TestIoNativeDispatch:
         result(u64, ioerror)."""
         check_ok(
             "main: function is {\n"
-            '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
+            '    r: io.open path: "/tmp/x" mode: openmode.write\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6327,7 +6321,7 @@ class TestIoNativeDispatch:
         result(u64, ioerror)."""
         check_ok(
             "main: function is {\n"
-            '    r: io.open path: "/tmp/x".string mode: openmode.read\n'
+            '    r: io.open path: "/tmp/x" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6365,7 +6359,7 @@ class TestIoNativeDispatch:
             '    print "got closer"\n'
             "}\n"
             "main: function is {\n"
-            '    fr: io.open path: "/tmp/x".string mode: openmode.write\n'
+            '    fr: io.open path: "/tmp/x" mode: openmode.write\n'
             "    match (\n"
             "        fr\n"
             "    ) case ok then {\n"
@@ -6401,7 +6395,7 @@ class TestIoNativeDispatch:
         `kind: filekind` and `size: u64`."""
         check_ok(
             "main: function is {\n"
-            '    s: io.stat "/tmp/x".string\n'
+            '    s: io.stat "/tmp/x"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -6416,7 +6410,7 @@ class TestIoNativeDispatch:
         """io.mkdirp returns result(null, ioerror), same shape as mkdir."""
         check_ok(
             "main: function is {\n"
-            '    r: io.mkdirp "/tmp/x/y/z".string\n'
+            '    r: io.mkdirp "/tmp/x/y/z"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6432,7 +6426,7 @@ class TestIoNativeDispatch:
         pattern-matchable through a stat result."""
         check_ok(
             "main: function is {\n"
-            '    s: io.stat "/tmp/x".string\n'
+            '    s: io.stat "/tmp/x"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -6457,7 +6451,7 @@ class TestIoNativeDispatch:
         """io.lstat shares stat's signature: result(filestat, ioerror)."""
         check_ok(
             "main: function is {\n"
-            '    s: io.lstat "/tmp/x".string\n'
+            '    s: io.lstat "/tmp/x"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -6473,7 +6467,7 @@ class TestIoNativeDispatch:
         callers that want freshness or permission bits."""
         check_ok(
             "main: function is {\n"
-            '    s: io.stat "/tmp/x".string\n'
+            '    s: io.stat "/tmp/x"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -6489,7 +6483,7 @@ class TestIoNativeDispatch:
         of strings, err-arm is ioerror."""
         check_ok(
             "main: function is {\n"
-            '    r: io.list_dir "/tmp".string\n'
+            '    r: io.list_dir "/tmp"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6505,7 +6499,7 @@ class TestIoNativeDispatch:
         filestat payload — no explicit `s.ok` required."""
         check_ok(
             "main: function is {\n"
-            '    s: io.stat "/tmp/x".string\n'
+            '    s: io.stat "/tmp/x"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -6521,7 +6515,7 @@ class TestIoNativeDispatch:
         is a clear error — not the old silent None."""
         errors = check_errors(
             "main: function is {\n"
-            '    s: io.stat "/tmp/x".string\n'
+            '    s: io.stat "/tmp/x"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -6564,7 +6558,7 @@ class TestIoNativeDispatch:
         fresh `cr` value uses the standard (non-narrowed) ok/err path."""
         check_ok(
             "main: function is {\n"
-            '    r: io.open path: "/tmp/x".string mode: openmode.write\n'
+            '    r: io.open path: "/tmp/x" mode: openmode.write\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -10655,7 +10649,7 @@ class TestOptionviewBorrowEscape:
         check_ok(
             "main: function is {\n"
             "  saved: (list of: string)\n"
-            '  with f: (io.open path: "/tmp/__nope".string mode: io.read_only) do {\n'
+            '  with f: (io.open path: "/tmp/__nope" mode: io.read_only) do {\n'
             "  }\n"
             '  print "ok"\n'
             "}"

@@ -1451,6 +1451,43 @@ class TestEmitterStringOwnership:
         assert "s = (z_string_t){0};" in csource
         assert compile_and_run(csource).strip() == "ok"
 
+    def test_native_stringview_caller_retains(self):
+        """Read-only natives take `stringview` (Phase A native ABI);
+        the caller's `string` variable used via `.stringview` is NOT
+        consumed and remains valid afterwards."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  p: "/does/not/exist".string\n'
+            "  e: io.exists path: p.stringview\n"
+            '  print "p=\\{p}"\n'
+            "}"
+        )
+        # caller's `p` not zeroed by an implicit-take
+        assert "p = (z_string_t){0}" not in csource
+        # runtime: print sees the original path
+        assert compile_and_run(csource).strip() == "p=/does/not/exist"
+
+    def test_native_take_consumes_caller(self):
+        """Store-into-receiver natives take `string.take`; the caller's
+        variable is invalidated after the call (the runtime now owns
+        the buffer directly without the deep-copy that pre-Phase-A
+        natives did)."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  sp: cli.spec.create program_name: "p".string summary: "s".string\n'
+            '  n: "--verbose".string\n'
+            '  s: "-v".string\n'
+            '  h: "be loud".string\n'
+            "  cli.add_flag spec: sp name: n short_name: s help: h\n"
+            "}"
+        )
+        # caller's name/short_name/help are zeroed after the take call
+        assert "n = (z_string_t){0}" in csource
+        assert "s = (z_string_t){0}" in csource
+        assert "h = (z_string_t){0}" in csource
+        # runtime: must run cleanly under MALLOC_CHECK_ (no leak/double-free)
+        compile_and_run(csource)
+
     def test_multiple_string_vars(self):
         """Several strings in one function, all freed correctly."""
         csource = emit_source(
@@ -7380,7 +7417,7 @@ class TestIOFileStreaming:
         target = tmp_path / "io_open_test.txt"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.write\n'
+            f'    r: io.open path: "{target}" mode: openmode.write\n'
             "    match (r) case ok then {\n"
             '        print "opened"\n'
             "    } case err then {\n"
@@ -7397,7 +7434,7 @@ class TestIOFileStreaming:
         missing = tmp_path / "does-not-exist"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{missing}".string mode: openmode.read\n'
+            f'    r: io.open path: "{missing}" mode: openmode.read\n'
             "    match (r) case ok then {\n"
             '        print "unexpected ok"\n'
             "    } case err then {\n"
@@ -7416,7 +7453,7 @@ class TestIOFileStreaming:
             "    buf: bytes\n"
             "    buf.append from: 72.u8\n"
             "    buf.append from: 73.u8\n"
-            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
@@ -7430,7 +7467,7 @@ class TestIOFileStreaming:
             "    } case err then {\n"
             '        print "open-w err"\n'
             "    }\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7470,7 +7507,7 @@ class TestIOFileStreaming:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            f'    fr: io.open path: "{target}".string mode: openmode.write\n'
+            f'    fr: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        fr\n"
             "    ) case ok then {\n"
@@ -7522,7 +7559,7 @@ class TestIOFileStreaming:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
@@ -7530,7 +7567,7 @@ class TestIOFileStreaming:
             "    } case err then {\n"
             '        print "open-w"\n'
             "    }\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7560,7 +7597,7 @@ class TestIOFileStreaming:
             "    buf.append from: 65.u8\n"
             "    buf.append from: 66.u8\n"
             "    buf.append from: 67.u8\n"
-            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
@@ -7576,7 +7613,7 @@ class TestIOFileStreaming:
             "    } case err then {\n"
             '        print "open-w err"\n'
             "    }\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7605,13 +7642,13 @@ class TestIOFileStreaming:
         target = tmp_path / "a" / "b" / "c"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.mkdirp "{target}".string\n'
+            f'    r: io.mkdirp "{target}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then { } case err then {\n"
             '        print "mkdirp err"\n'
             "    }\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -7647,7 +7684,7 @@ class TestIOFileStreaming:
         target.mkdir()
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -7672,7 +7709,7 @@ class TestIOFileStreaming:
         target.write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -7706,7 +7743,7 @@ class TestIOFileStreaming:
         link.symlink_to(real)
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.lstat "{link}".string\n'
+            f'    s: io.lstat "{link}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -7791,7 +7828,7 @@ class TestIOFileStreaming:
             "    buf.append from: 108.u8\n"
             "    buf.append from: 108.u8\n"
             "    buf.append from: 111.u8\n"
-            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
@@ -7805,7 +7842,7 @@ class TestIOFileStreaming:
             "    } case err then {\n"
             '        print "open-w err"\n'
             "    }\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7838,7 +7875,7 @@ class TestIOFileStreaming:
         target = tmp_path / "close.txt"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.write\n'
+            f'    r: io.open path: "{target}" mode: openmode.write\n'
             "    match (r) case ok then {\n"
             "        cr: r.close\n"
             "        match (cr) case ok then {\n"
@@ -7864,7 +7901,7 @@ class TestIOFileStreaming:
             (tmp_path / n).write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{tmp_path}".string\n'
+            f'    r: io.list_dir "{tmp_path}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7887,7 +7924,7 @@ class TestIOFileStreaming:
         missing = tmp_path / "does-not-exist"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{missing}".string\n'
+            f'    r: io.list_dir "{missing}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7909,7 +7946,7 @@ class TestIOFileStreaming:
         target.write_text("hello")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{target}".string\n'
+            f'    r: io.list_dir "{target}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7932,7 +7969,7 @@ class TestIOFileStreaming:
         target = tmp_path / "buf.bin"
         csource = emit_source(
             "main: function is {\n"
-            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
@@ -7960,7 +7997,7 @@ class TestIOFileStreaming:
             "    } case err then {\n"
             '        print "open-w err"\n'
             "    }\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8010,7 +8047,7 @@ class TestIOFileStreaming:
         target = tmp_path / "tw.txt"
         csource = emit_source(
             "main: function is {\n"
-            f'    w: io.open path: "{target}".string mode: openmode.write\n'
+            f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
@@ -8070,7 +8107,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"alpha\nbeta\ngamma\n")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8137,7 +8174,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"one\ntwo")  # note: no trailing LF
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8178,7 +8215,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"alpha\nbeta\ngamma\n")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8206,7 +8243,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8229,7 +8266,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"head\ntail")  # no trailing LF
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8255,7 +8292,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"a\nbb\nccc\ndddd\neeeee\n")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8286,7 +8323,7 @@ class TestIOFileStreaming:
         target.write_bytes(b"ok\n\xff\nafter\n")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8359,7 +8396,7 @@ class TestBufReader:
         )
         return (
             "main: function is {\n"
-            f'    r: io.open path: "{path}".string mode: openmode.read\n'
+            f'    r: io.open path: "{path}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8455,7 +8492,7 @@ class TestIoSymlink:
         link = tmp_path / "link.txt"
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.symlink target: "{real}".string link: "{link}".string\n'
+            f'    s: io.symlink target: "{real}" link: "{link}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8463,7 +8500,7 @@ class TestIoSymlink:
             "    } case err then {\n"
             '        print "sym err"\n'
             "    }\n"
-            f'    r: io.readlink "{link}".string\n'
+            f'    r: io.readlink "{link}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8489,7 +8526,7 @@ class TestIoSymlink:
         real.write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.readlink "{real}".string\n'
+            f'    r: io.readlink "{real}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8515,7 +8552,7 @@ class TestIoSymlink:
         occupied.write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.symlink target: "x".string link: "{occupied}".string\n'
+            f'    s: io.symlink target: "x" link: "{occupied}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8591,7 +8628,7 @@ class TestOsUnit:
         """option.some payload on hit, option.none on miss."""
         csource = emit_source(
             "main: function is {\n"
-            '    ev: os.get_env key: "Z_OS_TEST_VAR".string\n'
+            '    ev: os.get_env key: "Z_OS_TEST_VAR"\n'
             "    match (\n"
             "        ev\n"
             "    ) case some then {\n"
@@ -8641,7 +8678,7 @@ class TestListOfStringDestructor:
         (tmp_path / "b.txt").write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{tmp_path}".string\n'
+            f'    r: io.list_dir "{tmp_path}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8671,7 +8708,7 @@ class TestNarrowedFieldAccess:
         target.mkdir()
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8694,7 +8731,7 @@ class TestNarrowedFieldAccess:
         target.mkdir()
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8725,7 +8762,7 @@ class TestNarrowedFieldAccess:
         target.mkdir()
         vfs, name = make_parser_vfs(
             "main: function is {\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8784,7 +8821,7 @@ class TestNarrowedFullSemantics:
         (tmp_path / "only.txt").write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{tmp_path}".string\n'
+            f'    r: io.list_dir "{tmp_path}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8806,7 +8843,7 @@ class TestNarrowedFullSemantics:
         target.write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.open path: "{target}".string mode: openmode.read\n'
+            f'    r: io.open path: "{target}" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8835,7 +8872,7 @@ class TestNarrowedFullSemantics:
         missing = tmp_path / "nope"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{missing}".string\n'
+            f'    r: io.list_dir "{missing}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8860,7 +8897,7 @@ class TestNarrowedFullSemantics:
         into the shadowed parent and is a targeted error."""
         vfs, name = make_parser_vfs(
             "main: function is {\n"
-            '    s: io.stat "/tmp".string\n'
+            '    s: io.stat "/tmp"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8908,7 +8945,7 @@ class TestNarrowedFullSemantics:
         error (not a silent None)."""
         vfs, name = make_parser_vfs(
             "main: function is {\n"
-            '    s: io.stat "/tmp".string\n'
+            '    s: io.stat "/tmp"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
@@ -8935,7 +8972,7 @@ class TestNarrowedFullSemantics:
         target.mkdir()
         csource = emit_source(
             "main: function is {\n"
-            f'    s: io.stat "{target}".string\n'
+            f'    s: io.stat "{target}"\n'
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"

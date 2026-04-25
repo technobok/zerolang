@@ -731,7 +731,11 @@ class CEmitter:
             # os natives that surface ioerror share io's errno helper
             # and header set. env_names pulls strchr/strlen from string.h.
             # pid/ppid need unistd.h which needs_io also provides.
+            # get_env, set_env, unset_env, set_cwd take stringview path/
+            # key/value and need the shared `z_sv_to_cstr` helper that
+            # emit_runtime_io owns.
             if name in (
+                "get_env",
                 "set_env",
                 "unset_env",
                 "cwd",

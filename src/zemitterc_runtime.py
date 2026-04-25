@@ -164,21 +164,35 @@ _Z_IO_ERRNO_MAP = (
     "}\n\n"
 )
 
+# Helper used by every native taking a `stringview` it must hand
+# off to a C API expecting a NUL-terminated string. Allocates a
+# heap copy because views may be substrings (no NUL guarantee at
+# v.data[v.length]). Caller is responsible for free().
+_Z_SV_TO_CSTR = (
+    "/* Heap-allocate a NUL-terminated copy of the view. Free with free(). */\n"
+    "static char* z_sv_to_cstr(z_stringview_t v) {\n"
+    "    char* buf = (char*)z_xmalloc(v.length + 1);\n"
+    "    if (v.length > 0) memcpy(buf, v.data, v.length);\n"
+    "    buf[v.length] = '\\0';\n"
+    "    return buf;\n"
+    "}\n\n"
+)
+
 _Z_IO_READ_TEXT = (
-    "static z_result_string_ioerror_t z_io_read_text(z_string_t path) {\n"
-    "    /* path arg owned by this callee per zerolang string-arg convention */\n"
+    "static z_result_string_ioerror_t z_io_read_text(z_stringview_t path) {\n"
+    "    /* path is a borrowed view; caller retains ownership */\n"
     "    z_result_string_ioerror_t result = {0};\n"
-    "    int fd = open(path.data, O_RDONLY);\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    int fd = open(path_cstr, O_RDONLY);\n"
+    "    free(path_cstr);\n"
     "    if (fd < 0) {\n"
     "        int e = errno;\n"
-    "        z_string_free(&path);\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
     "        return result;\n"
     "    }\n"
-    "    z_string_free(&path);\n"
     "    z_string_t content = z_string_create((uint64_t)4096);\n"
     "    char buf[4096];\n"
     "    for (;;) {\n"
@@ -221,25 +235,23 @@ _Z_IO_WRITE_COMMON = (
     "    return 0;\n"
     "}\n\n"
     "/* shared helper: path + open flags -> write content -> close.\n"
-    "   Frees path and content (callee owns per string-arg convention). */\n"
+    "   path and content are borrowed views; caller retains. */\n"
     "static z_result_null_ioerror_t z_io_write_common(\n"
-    "    z_string_t path, z_string_t content, int flags\n"
+    "    z_stringview_t path, z_stringview_t content, int flags\n"
     ") {\n"
     "    z_result_null_ioerror_t result = {0};\n"
-    "    int fd = open(path.data, flags, 0644);\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    int fd = open(path_cstr, flags, 0644);\n"
+    "    free(path_cstr);\n"
     "    if (fd < 0) {\n"
     "        int e = errno;\n"
-    "        z_string_free(&path);\n"
-    "        z_string_free(&content);\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
     "        result.tag = Z_RESULT_NULL_IOERROR_TAG_ERR;\n"
     "        result.data = boxed;\n"
     "        return result;\n"
     "    }\n"
-    "    z_string_free(&path);\n"
-    "    int werr = z_io_write_all(fd, content.data, content.size);\n"
-    "    z_string_free(&content);\n"
+    "    int werr = z_io_write_all(fd, content.data, content.length);\n"
     "    close(fd);\n"
     "    if (werr != 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
@@ -256,7 +268,7 @@ _Z_IO_WRITE_COMMON = (
 
 _Z_IO_WRITE_TEXT = (
     "static z_result_null_ioerror_t z_io_write_text(\n"
-    "    z_string_t path, z_string_t content\n"
+    "    z_stringview_t path, z_stringview_t content\n"
     ") {\n"
     "    return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_TRUNC);\n"
     "}\n\n"
@@ -264,7 +276,7 @@ _Z_IO_WRITE_TEXT = (
 
 _Z_IO_APPEND_TEXT = (
     "static z_result_null_ioerror_t z_io_append_text(\n"
-    "    z_string_t path, z_string_t content\n"
+    "    z_stringview_t path, z_stringview_t content\n"
     ") {\n"
     "    return z_io_write_common(path, content, O_WRONLY | O_CREAT | O_APPEND);\n"
     "}\n\n"
@@ -277,16 +289,18 @@ _Z_IO_READLINK = (
     "   full target fit. EINVAL from readlink means the path exists but\n"
     "   isn't a symbolic link -- surfaced as invalidpath with a\n"
     "   caller-readable message. */\n"
-    "static z_result_string_ioerror_t z_io_readlink(z_string_t path);\n"
-    "static z_result_string_ioerror_t z_io_readlink(z_string_t path) {\n"
+    "static z_result_string_ioerror_t z_io_readlink(z_stringview_t path);\n"
+    "static z_result_string_ioerror_t z_io_readlink(z_stringview_t path) {\n"
     "    z_result_string_ioerror_t result = {0};\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
     "    uint64_t cap = (uint64_t)256;\n"
     "    char* buf = (char*)z_xmalloc(cap);\n"
     "    for (;;) {\n"
-    "        ssize_t n = readlink(path.data, buf, cap);\n"
+    "        ssize_t n = readlink(path_cstr, buf, cap);\n"
     "        if (n < 0) {\n"
     "            int e = errno;\n"
     "            free(buf);\n"
+    "            free(path_cstr);\n"
     "            z_ioerror_t* boxed = "
     "(z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "            if (e == EINVAL) {\n"
@@ -300,7 +314,6 @@ _Z_IO_READLINK = (
     "            } else {\n"
     "                *boxed = z_io_errno_to_ioerror(e);\n"
     "            }\n"
-    "            z_string_free(&path);\n"
     "            result.tag = Z_RESULT_STRING_IOERROR_TAG_ERR;\n"
     "            result.data = boxed;\n"
     "            return result;\n"
@@ -313,7 +326,7 @@ _Z_IO_READLINK = (
     "            memcpy(target.data, buf, target.size);\n"
     "            target.data[target.size] = '\\0';\n"
     "            free(buf);\n"
-    "            z_string_free(&path);\n"
+    "            free(path_cstr);\n"
     "            z_string_t* boxed = "
     "(z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "            *boxed = target;\n"
@@ -329,28 +342,30 @@ _Z_IO_READLINK = (
 
 _Z_IO_SYMLINK = (
     "/* symlink — create a symbolic link at `link` with `target` as the\n"
-    "   link content. Both strings are caller-freed inside via\n"
-    "   z_io_wrap_null_result's sibling pattern. EEXIST maps to\n"
-    "   ioerror.exists so callers can distinguish 'already there' from\n"
-    "   other failures. */\n"
+    "   link content. Both args are borrowed views; caller retains.\n"
+    "   EEXIST maps to ioerror.exists so callers can distinguish\n"
+    "   'already there' from other failures. */\n"
     "static z_result_null_ioerror_t z_io_symlink(\n"
-    "    z_string_t target, z_string_t link\n"
+    "    z_stringview_t target, z_stringview_t link\n"
     ");\n"
     "static z_result_null_ioerror_t z_io_symlink(\n"
-    "    z_string_t target, z_string_t link\n"
+    "    z_stringview_t target, z_stringview_t link\n"
     ") {\n"
-    "    int rc = symlink(target.data, link.data);\n"
+    "    char* target_cstr = z_sv_to_cstr(target);\n"
+    "    char* link_cstr = z_sv_to_cstr(link);\n"
+    "    int rc = symlink(target_cstr, link_cstr);\n"
     "    int e = errno;\n"
-    "    z_string_free(&target);\n"
-    "    z_string_free(&link);\n"
+    "    free(target_cstr);\n"
+    "    free(link_cstr);\n"
     "    return z_io_wrap_null_result(rc, e);\n"
     "}\n\n"
 )
 
 _Z_IO_EXISTS = (
-    "static bool z_io_exists(z_string_t path) {\n"
-    "    int r = access(path.data, F_OK);\n"
-    "    z_string_free(&path);\n"
+    "static bool z_io_exists(z_stringview_t path) {\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    int r = access(path_cstr, F_OK);\n"
+    "    free(path_cstr);\n"
     "    return r == 0;\n"
     "}\n\n"
 )
@@ -374,34 +389,40 @@ _Z_IO_WRAP_NULL_RESULT = (
 )
 
 _Z_IO_MKDIR = (
-    "static z_result_null_ioerror_t z_io_mkdir(z_string_t path) {\n"
-    "    int rc = mkdir(path.data, 0755);\n"
+    "static z_result_null_ioerror_t z_io_mkdir(z_stringview_t path) {\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    int rc = mkdir(path_cstr, 0755);\n"
     "    int e = errno;\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    return z_io_wrap_null_result(rc, e);\n"
     "}\n\n"
 )
 
 _Z_IO_REMOVE = (
-    "static z_result_null_ioerror_t z_io_remove(z_string_t path) {\n"
+    "static z_result_null_ioerror_t z_io_remove(z_stringview_t path) {\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
     "    /* try unlink first; if EISDIR, fall back to rmdir */\n"
-    "    int rc = unlink(path.data);\n"
+    "    int rc = unlink(path_cstr);\n"
     "    int e = errno;\n"
     "    if (rc != 0 && e == EISDIR) {\n"
-    "        rc = rmdir(path.data);\n"
+    "        rc = rmdir(path_cstr);\n"
     "        e = errno;\n"
     "    }\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    return z_io_wrap_null_result(rc, e);\n"
     "}\n\n"
 )
 
 _Z_IO_RENAME = (
-    "static z_result_null_ioerror_t z_io_rename(z_string_t from, z_string_t to) {\n"
-    "    int rc = rename(from.data, to.data);\n"
+    "static z_result_null_ioerror_t z_io_rename(\n"
+    "    z_stringview_t from, z_stringview_t to\n"
+    ") {\n"
+    "    char* from_cstr = z_sv_to_cstr(from);\n"
+    "    char* to_cstr = z_sv_to_cstr(to);\n"
+    "    int rc = rename(from_cstr, to_cstr);\n"
     "    int e = errno;\n"
-    "    z_string_free(&from);\n"
-    "    z_string_free(&to);\n"
+    "    free(from_cstr);\n"
+    "    free(to_cstr);\n"
     "    return z_io_wrap_null_result(rc, e);\n"
     "}\n\n"
 )
@@ -432,13 +453,14 @@ _Z_IO_STAT = (
     "   that arm is reached through z_io_lstat. Returns the filestat\n"
     "   value by value (not boxed); the compiler-generated result\n"
     "   destructor frees the ok payload's heap copy. */\n"
-    "static z_result_filestat_ioerror_t z_io_stat(z_string_t path);\n"
-    "static z_result_filestat_ioerror_t z_io_stat(z_string_t path) {\n"
+    "static z_result_filestat_ioerror_t z_io_stat(z_stringview_t path);\n"
+    "static z_result_filestat_ioerror_t z_io_stat(z_stringview_t path) {\n"
     "    z_result_filestat_ioerror_t result = {0};\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
     "    struct stat sb;\n"
-    "    int rc = stat(path.data, &sb);\n"
+    "    int rc = stat(path_cstr, &sb);\n"
     "    int e = errno;\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    if (rc != 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -459,13 +481,14 @@ _Z_IO_STAT = (
 _Z_IO_LSTAT = (
     "/* lstat(2) — like stat but does not follow symlinks. The SYMLINK\n"
     "   arm of filekind fires here when the target path is a symlink. */\n"
-    "static z_result_filestat_ioerror_t z_io_lstat(z_string_t path);\n"
-    "static z_result_filestat_ioerror_t z_io_lstat(z_string_t path) {\n"
+    "static z_result_filestat_ioerror_t z_io_lstat(z_stringview_t path);\n"
+    "static z_result_filestat_ioerror_t z_io_lstat(z_stringview_t path) {\n"
     "    z_result_filestat_ioerror_t result = {0};\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
     "    struct stat sb;\n"
-    "    int rc = lstat(path.data, &sb);\n"
+    "    int rc = lstat(path_cstr, &sb);\n"
     "    int e = errno;\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    if (rc != 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -489,14 +512,12 @@ _Z_IO_MKDIRP = (
     "   exists as a directory; fails with ioerror if any component\n"
     "   exists as a non-directory. Allocates a mutable copy of path\n"
     "   so it can null-terminate prefixes in place. */\n"
-    "static z_result_null_ioerror_t z_io_mkdirp(z_string_t path);\n"
-    "static z_result_null_ioerror_t z_io_mkdirp(z_string_t path) {\n"
-    "    uint64_t n = path.size;\n"
+    "static z_result_null_ioerror_t z_io_mkdirp(z_stringview_t path);\n"
+    "static z_result_null_ioerror_t z_io_mkdirp(z_stringview_t path) {\n"
+    "    uint64_t n = path.length;\n"
     "    char* buf = (char*)z_xmalloc(n + 1);\n"
-    "    if (!buf) { int e = errno; z_string_free(&path); return z_io_wrap_null_result(-1, e); }\n"
-    "    memcpy(buf, path.data, n);\n"
+    "    if (n > 0) memcpy(buf, path.data, n);\n"
     "    buf[n] = '\\0';\n"
-    "    z_string_free(&path);\n"
     "    /* walk, splitting at '/' boundaries */\n"
     "    for (uint64_t i = 1; i <= n; i++) {\n"
     "        if (i == n || buf[i] == '/') {\n"
@@ -526,12 +547,13 @@ _Z_IO_LIST_DIR = (
     "   carry it; the compiler-generated result destructor calls\n"
     "   z_list_string_destroy on the ok payload, which in turn frees\n"
     "   each entry's z_string_t. */\n"
-    "static z_result_list_string_ioerror_t z_io_list_dir(z_string_t path);\n"
-    "static z_result_list_string_ioerror_t z_io_list_dir(z_string_t path) {\n"
+    "static z_result_list_string_ioerror_t z_io_list_dir(z_stringview_t path);\n"
+    "static z_result_list_string_ioerror_t z_io_list_dir(z_stringview_t path) {\n"
     "    z_result_list_string_ioerror_t result = {0};\n"
-    "    DIR* d = opendir(path.data);\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    DIR* d = opendir(path_cstr);\n"
     "    int e = errno;\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    if (!d) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -559,7 +581,9 @@ _Z_IO_LIST_DIR = (
 
 _Z_IO_OPEN = (
     "/* translate openmode variant tag to open(2) flags + default mode */\n"
-    "static z_result_file_ioerror_t z_io_open(z_string_t path, z_openmode_t mode) {\n"
+    "static z_result_file_ioerror_t z_io_open(\n"
+    "    z_stringview_t path, z_openmode_t mode\n"
+    ") {\n"
     "    z_result_file_ioerror_t result = {0};\n"
     "    int flags;\n"
     "    mode_t perm = 0644;\n"
@@ -569,9 +593,10 @@ _Z_IO_OPEN = (
     "        case Z_OPENMODE_TAG_APPEND: flags = O_WRONLY | O_CREAT | O_APPEND; break;\n"
     "        default:                    flags = O_RDONLY; break;\n"
     "    }\n"
-    "    int fd = open(path.data, flags, perm);\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    int fd = open(path_cstr, flags, perm);\n"
     "    int e = errno;\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    if (fd < 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -1194,20 +1219,19 @@ _Z_OS_GET_ENV = (
     "/* os.get_env -- look up the POSIX environment by name. Returns\n"
     "   option.some(string) on hit (copying the value so the caller\n"
     "   owns the heap buffer and libc's environ isn't aliased); returns\n"
-    "   option.none on miss. Consumes `key` per the os-unit string-arg\n"
-    "   convention. */\n"
-    "static z_option_string_t z_os_get_env(z_string_t key);\n"
-    "static z_option_string_t z_os_get_env(z_string_t key) {\n"
+    "   option.none on miss. `key` is a borrowed view; caller retains. */\n"
+    "static z_option_string_t z_os_get_env(z_stringview_t key);\n"
+    "static z_option_string_t z_os_get_env(z_stringview_t key) {\n"
     "    z_option_string_t out = {0};\n"
-    "    const char* v = getenv(key.data);\n"
+    "    char* key_cstr = z_sv_to_cstr(key);\n"
+    "    const char* v = getenv(key_cstr);\n"
+    "    free(key_cstr);\n"
     "    if (v == NULL) {\n"
-    "        z_string_free(&key);\n"
     "        out.tag = Z_OPTION_STRING_TAG_NONE;\n"
     "        return out;\n"
     "    }\n"
     "    z_string_t* boxed = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
     "    *boxed = z_string_new(v);\n"
-    "    z_string_free(&key);\n"
     "    out.tag = Z_OPTION_STRING_TAG_SOME;\n"
     "    out.data = boxed;\n"
     "    return out;\n"
@@ -1215,15 +1239,22 @@ _Z_OS_GET_ENV = (
 )
 
 _Z_OS_SET_ENV = (
-    "/* os.set_env -- setenv(key, value, 1): always overwrites. Consumes\n"
-    "   both strings per the os-unit string-arg convention. */\n"
-    "static z_result_null_ioerror_t z_os_set_env(z_string_t key, z_string_t value);\n"
-    "static z_result_null_ioerror_t z_os_set_env(z_string_t key, z_string_t value) {\n"
+    "/* os.set_env -- setenv(key, value, 1): always overwrites. libc\n"
+    "   copies key/value into its own storage. Both args are borrowed\n"
+    "   views; caller retains. */\n"
+    "static z_result_null_ioerror_t z_os_set_env(\n"
+    "    z_stringview_t key, z_stringview_t value\n"
+    ");\n"
+    "static z_result_null_ioerror_t z_os_set_env(\n"
+    "    z_stringview_t key, z_stringview_t value\n"
+    ") {\n"
     "    z_result_null_ioerror_t out = {0};\n"
-    "    int rc = setenv(key.data, value.data, 1);\n"
+    "    char* key_cstr = z_sv_to_cstr(key);\n"
+    "    char* value_cstr = z_sv_to_cstr(value);\n"
+    "    int rc = setenv(key_cstr, value_cstr, 1);\n"
     "    int e = errno;\n"
-    "    z_string_free(&key);\n"
-    "    z_string_free(&value);\n"
+    "    free(key_cstr);\n"
+    "    free(value_cstr);\n"
     "    if (rc != 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -1240,12 +1271,13 @@ _Z_OS_SET_ENV = (
 _Z_OS_UNSET_ENV = (
     "/* os.unset_env -- unsetenv(key). Idempotent: removing a variable\n"
     "   that was never set returns ok null. */\n"
-    "static z_result_null_ioerror_t z_os_unset_env(z_string_t key);\n"
-    "static z_result_null_ioerror_t z_os_unset_env(z_string_t key) {\n"
+    "static z_result_null_ioerror_t z_os_unset_env(z_stringview_t key);\n"
+    "static z_result_null_ioerror_t z_os_unset_env(z_stringview_t key) {\n"
     "    z_result_null_ioerror_t out = {0};\n"
-    "    int rc = unsetenv(key.data);\n"
+    "    char* key_cstr = z_sv_to_cstr(key);\n"
+    "    int rc = unsetenv(key_cstr);\n"
     "    int e = errno;\n"
-    "    z_string_free(&key);\n"
+    "    free(key_cstr);\n"
     "    if (rc != 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -1307,14 +1339,15 @@ _Z_OS_CWD = (
 )
 
 _Z_OS_SET_CWD = (
-    "/* os.set_cwd -- chdir(path). Consumes `path` per the os-unit\n"
-    "   string-arg convention. */\n"
-    "static z_result_null_ioerror_t z_os_set_cwd(z_string_t path);\n"
-    "static z_result_null_ioerror_t z_os_set_cwd(z_string_t path) {\n"
+    "/* os.set_cwd -- chdir(path). `path` is a borrowed view; caller\n"
+    "   retains. */\n"
+    "static z_result_null_ioerror_t z_os_set_cwd(z_stringview_t path);\n"
+    "static z_result_null_ioerror_t z_os_set_cwd(z_stringview_t path) {\n"
     "    z_result_null_ioerror_t out = {0};\n"
-    "    int rc = chdir(path.data);\n"
+    "    char* path_cstr = z_sv_to_cstr(path);\n"
+    "    int rc = chdir(path_cstr);\n"
     "    int e = errno;\n"
-    "    z_string_free(&path);\n"
+    "    free(path_cstr);\n"
     "    if (rc != 0) {\n"
     "        z_ioerror_t* boxed = (z_ioerror_t*)z_xmalloc(sizeof(z_ioerror_t));\n"
     "        *boxed = z_io_errno_to_ioerror(e);\n"
@@ -2215,17 +2248,14 @@ _Z_SV_STRIP_SUFFIX = (
 # (it references z_list_string_t which is a mono type).
 _Z_COLL_STRING_JOIN = (
     "/* string_join -- borrow `parts` (read-only) and return a new\n"
-    "   owned string. The list is passed by value (compiler default\n"
-    "   for class-typed params) but we do NOT destroy it here — the\n"
-    "   caller retains ownership of the backing array and its string\n"
-    "   elements. The parameter copy aliases the same data pointer\n"
-    "   and dies with the stack frame on return. */\n"
+    "   owned string. `parts` is pointer-passed (Phase A default for\n"
+    "   stack-reftype params); caller retains ownership. */\n"
     "static z_string_t z_string_join(\n"
-    "    z_list_string_t parts, z_stringview_t sep);\n"
+    "    z_list_string_t* parts, z_stringview_t sep);\n"
     "static z_string_t z_string_join(\n"
-    "    z_list_string_t parts, z_stringview_t sep) {\n"
+    "    z_list_string_t* parts, z_stringview_t sep) {\n"
     "    z_string_t out = {0};\n"
-    "    uint64_t n = parts.length;\n"
+    "    uint64_t n = parts->length;\n"
     "    if (n == 0) {\n"
     "        out.capacity = 1;\n"
     "        out.data = (char*)z_xmalloc(1);\n"
@@ -2234,7 +2264,7 @@ _Z_COLL_STRING_JOIN = (
     "    }\n"
     "    uint64_t total = sep.length * (n - 1);\n"
     "    for (uint64_t i = 0; i < n; i++) {\n"
-    "        total += parts.data[i].size;\n"
+    "        total += parts->data[i].size;\n"
     "    }\n"
     "    out.size = total;\n"
     "    out.capacity = total + 1;\n"
@@ -2245,8 +2275,8 @@ _Z_COLL_STRING_JOIN = (
     "            memcpy(out.data + pos, sep.data, sep.length);\n"
     "            pos += sep.length;\n"
     "        }\n"
-    "        memcpy(out.data + pos, parts.data[i].data, parts.data[i].size);\n"
-    "        pos += parts.data[i].size;\n"
+    "        memcpy(out.data + pos, parts->data[i].data, parts->data[i].size);\n"
+    "        pos += parts->data[i].size;\n"
     "    }\n"
     "    out.data[total] = '\\0';\n"
     "    return out;\n"
@@ -2356,11 +2386,14 @@ def emit_runtime_stringview_natives(
 # z_result_parsed_clierror_t) are already declared.
 
 _Z_CLI_SPEC_CREATE = (
-    "static z_spec_t z_spec_create(z_string_t* program_name, z_string_t* summary);\n"
-    "static z_spec_t z_spec_create(z_string_t* program_name, z_string_t* summary) {\n"
+    "/* `program_name` and `summary` are .take params: caller transfers\n"
+    "   ownership of the string buffers; the spec stores them directly\n"
+    "   (no copy). Caller-side implicit-take zeros the source vars. */\n"
+    "static z_spec_t z_spec_create(z_string_t program_name, z_string_t summary);\n"
+    "static z_spec_t z_spec_create(z_string_t program_name, z_string_t summary) {\n"
     "    z_spec_t s = {0};\n"
-    "    s.program_name = z_string_new(program_name->data);\n"
-    "    s.summary = z_string_new(summary->data);\n"
+    "    s.program_name = program_name;\n"
+    "    s.summary = summary;\n"
     "    s.flags = z_list_flagdef_create(0);\n"
     "    s.options = z_list_optiondef_create(0);\n"
     "    s.positionals = z_list_positionaldef_create(0);\n"
@@ -2369,40 +2402,43 @@ _Z_CLI_SPEC_CREATE = (
 )
 
 _Z_CLI_ADD_FLAG = (
+    "/* name/short_name/help are .take: stored directly in the flagdef. */\n"
     "static void z_cli_add_flag(z_spec_t* spec,\n"
     "    z_string_t name, z_string_t short_name, z_string_t help);\n"
     "static void z_cli_add_flag(z_spec_t* spec,\n"
     "    z_string_t name, z_string_t short_name, z_string_t help) {\n"
     "    z_flagdef_t f = {0};\n"
-    "    f.name = z_string_new(name.data);\n"
-    "    f.short_name = z_string_new(short_name.data);\n"
-    "    f.help = z_string_new(help.data);\n"
+    "    f.name = name;\n"
+    "    f.short_name = short_name;\n"
+    "    f.help = help;\n"
     "    z_list_flagdef_append(&spec->flags, f);\n"
     "}\n\n"
 )
 
 _Z_CLI_ADD_OPTION = (
+    "/* name/short_name/help are .take: stored directly in the optiondef. */\n"
     "static void z_cli_add_option(z_spec_t* spec,\n"
     "    z_string_t name, z_string_t short_name, z_string_t help, bool required);\n"
     "static void z_cli_add_option(z_spec_t* spec,\n"
     "    z_string_t name, z_string_t short_name, z_string_t help, bool required) {\n"
     "    z_optiondef_t o = {0};\n"
-    "    o.name = z_string_new(name.data);\n"
-    "    o.short_name = z_string_new(short_name.data);\n"
-    "    o.help = z_string_new(help.data);\n"
+    "    o.name = name;\n"
+    "    o.short_name = short_name;\n"
+    "    o.help = help;\n"
     "    o.required = required;\n"
     "    z_list_optiondef_append(&spec->options, o);\n"
     "}\n\n"
 )
 
 _Z_CLI_ADD_POSITIONAL = (
+    "/* name/help are .take: stored directly in the positionaldef. */\n"
     "static void z_cli_add_positional(z_spec_t* spec,\n"
     "    z_string_t name, z_string_t help, bool required);\n"
     "static void z_cli_add_positional(z_spec_t* spec,\n"
     "    z_string_t name, z_string_t help, bool required) {\n"
     "    z_positionaldef_t p = {0};\n"
-    "    p.name = z_string_new(name.data);\n"
-    "    p.help = z_string_new(help.data);\n"
+    "    p.name = name;\n"
+    "    p.help = help;\n"
     "    p.required = required;\n"
     "    z_list_positionaldef_append(&spec->positionals, p);\n"
     "}\n\n"
@@ -2901,9 +2937,13 @@ def emit_runtime_io(
             "hostname",
         }
     )
+    # os natives whose stringview args need the shared `z_sv_to_cstr`
+    # helper. Independent of errno_map so a get_env-only program still
+    # gets the helper without pulling in the errno table.
+    os_needs_sv_cstr = bool(os_natives & {"get_env", "set_env", "unset_env", "set_cwd"})
     if not needs_io:
         return ""
-    if not natives and not os_needs_errno:
+    if not natives and not os_needs_errno and not os_needs_sv_cstr:
         return ""
     natives = natives or set()
     parts: list[str] = []
@@ -2953,6 +2993,32 @@ def emit_runtime_io(
         parts.append(_Z_IO_EPRINTLN)
     if fallible:
         parts.append(_Z_IO_ERRNO_MAP)
+    # z_sv_to_cstr is shared by every native that takes a `stringview`
+    # path/key/value and hands it to a C API expecting a NUL-terminated
+    # C string. Emit if any such native is in scope.
+    sv_cstr_users = natives & {
+        "read_text",
+        "write_text",
+        "append_text",
+        "exists",
+        "mkdir",
+        "mkdirp",
+        "remove",
+        "rename",
+        "stat",
+        "lstat",
+        "readlink",
+        "symlink",
+        "list_dir",
+        "open",
+    }
+    # os.set_env / unset_env / set_cwd / get_env also use it, signalled via os_natives.
+    if not sv_cstr_users and (
+        os_natives & {"get_env", "set_env", "unset_env", "set_cwd"}
+    ):
+        sv_cstr_users = {"_os_sv_cstr"}  # non-empty sentinel
+    if sv_cstr_users:
+        parts.append(_Z_SV_TO_CSTR)
     if null_wrap:
         parts.append(_Z_IO_WRAP_NULL_RESULT)
     if "read_text" in natives:

@@ -1146,23 +1146,23 @@ class TypeChecker:
         # mutation through the param lands in the caller's storage, and the
         # implicit-take logic at call sites naturally skips them (caller
         # retains ownership). Heap-allocated reftypes (`box`, nullable
-        # pointers) are already pointer-typed at the C level. Skip native
-        # functions: their C bodies in src/runtime/ are hand-written
-        # against the by-value ABI and changing the convention there is
-        # outside this change.
-        if not func.is_native:
-            for pname in func.parameters:
-                if pname in ftype.param_ownership:
-                    continue
-                pt = ftype.children.get(pname)
-                if (
-                    pt is not None
-                    and pt.typetype == ZTypeType.CLASS
-                    and not pt.is_heap_allocated
-                    and pt.needs_destructor
-                ):
-                    ftype.param_ownership[pname] = ZParamOwnership.BORROW
-                    func.param_ownership[pname] = ZParamOwnership.BORROW
+        # pointers) are already pointer-typed at the C level. Applies
+        # uniformly to user code AND natives — native runtime bodies in
+        # src/zemitterc_runtime.py have been migrated to match (read-only
+        # natives use stringview directly; store-into-receiver natives
+        # carry `.take` annotations).
+        for pname in func.parameters:
+            if pname in ftype.param_ownership:
+                continue
+            pt = ftype.children.get(pname)
+            if (
+                pt is not None
+                and pt.typetype == ZTypeType.CLASS
+                and not pt.is_heap_allocated
+                and pt.needs_destructor
+            ):
+                ftype.param_ownership[pname] = ZParamOwnership.BORROW
+                func.param_ownership[pname] = ZParamOwnership.BORROW
 
         # validate function signature ownership rules
         self._validate_function_ownership(ftype, func)
