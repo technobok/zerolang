@@ -416,6 +416,52 @@ class TestEmitterBasic:
         # tight C for-loop, no intermediate option/optionval materialisation
         assert "for (int64_t x = 0; x < 3" in csource
 
+    def test_list_iterate_i64(self):
+        """list.iterate yields borrowed views to each i64 element."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (list of: i64)\n"
+            "  xs.append from: 10\n"
+            "  xs.append from: 20\n"
+            "  xs.append from: 30\n"
+            "  with it: xs.iterate do for x: it loop {\n"
+            '    print "x=\\{x}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "x=10\nx=20\nx=30"
+
+    def test_list_iterate_string(self):
+        """list.iterate also works for reftype element types (string)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (list of: string)\n"
+            '  xs.append from: "a".string\n'
+            '  xs.append from: "b".string\n'
+            '  xs.append from: "c".string\n'
+            "  with it: xs.iterate do for s: it loop {\n"
+            '    print "s=\\{s}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "s=a\ns=b\ns=c"
+
+    def test_list_iterate_emits_listiter_struct(self):
+        """The list mono pass emits the listiter runtime layout + .call."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  xs: (list of: i64)\n"
+            "  xs.append from: 1\n"
+            "  with it: xs.iterate do for x: it loop {}\n"
+            "}"
+        )
+        # listiter struct: pointer to source list + index
+        assert "z_listiter_i64_t" in csource
+        assert "z_list_i64_iterate" in csource
+        assert "z_listiter_i64_call" in csource
+
     def test_generic_unit(self):
         """Generic unit instantiation with function."""
         csource = emit_source(

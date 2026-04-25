@@ -120,6 +120,24 @@ def listview_element_type(ztype: ZType) -> Optional[ZType]:
     return base.generic_args.get("of") if base else None
 
 
+def is_listiter_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized listiter type."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "listiter"
+    )
+
+
+def listiter_element_type(ztype: ZType) -> Optional[ZType]:
+    """Get the element type of a listiter type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("of") if base else None
+
+
 def is_map_type(ztype: Optional[ZType]) -> bool:
     """Check if a type is a monomorphized map type."""
     ztype = _unwrap_typedef(ztype)

@@ -34,6 +34,7 @@ from ztypeutil import (
     list_element_type as _list_element_type,
     is_listview_type as _is_listview_type,
     listview_element_type as _listview_element_type,
+    is_listiter_type as _is_listiter_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -3052,6 +3053,14 @@ class CEmitter:
         if _is_listview_type(mono_type):
             self._emit_mono_listview(mono_type)
             return
+        if _is_listiter_type(mono_type):
+            # listiter is a native generic class. Its struct + .call +
+            # the source list's .iterate factory are emitted as a single
+            # unit when the source list mono is emitted (see
+            # `_emit_listiter_runtime` called from `_emit_mono_list`).
+            # Skip the default class-mono emission to avoid an empty
+            # struct definition that conflicts with the runtime layout.
+            return
         if _is_map_type(mono_type):
             self._emit_mono_map(mono_type)
             return
@@ -3571,6 +3580,72 @@ class CEmitter:
                 },
             )
         )
+
+        # listiter companion: iterator + .iterate factory. Emitted only
+        # when the list mono carries an `.iterate` child returning a
+        # listiter mono (set up in the type checker for any list with
+        # `.iterate` synthesised — currently every concrete list mono).
+        iterate_child = mono_type.children.get("iterate")
+        if iterate_child and iterate_child.return_type:
+            self._emit_listiter_runtime(
+                ctype, name, elem_ctype, iterate_child.return_type
+            )
+
+    def _emit_listiter_runtime(
+        self,
+        list_ctype: str,
+        list_name: str,
+        elem_ctype: str,
+        listiter_mono: ZType,
+    ) -> None:
+        """Emit the runtime implementation of a listiter monomorphization.
+
+        Layout: { source list pointer, current index }. Each .call peeks
+        at list->data[idx], wraps the address in optionview.some, and
+        increments idx; returns optionview.none when idx >= length.
+        """
+        li_name = listiter_mono.name
+        li_ctype = f"z_{li_name}_t"
+        call_method = listiter_mono.children.get("call")
+        if not call_method or not call_method.return_type:
+            return
+        ov_mono = call_method.return_type
+        ov_name = ov_mono.name
+        ov_ctype = f"z_{ov_name}_t"
+        ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
+        ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
+
+        # listiter is declared `is native` in stdlib so the default
+        # mono-class emission is skipped; emit the real layout here as
+        # part of the source list's mono pass.
+        lines: List[str] = []
+        lines.append(f"/* listiter<{elem_ctype}> runtime layout */\n")
+        lines.append("typedef struct {\n")
+        lines.append(f"    {list_ctype}* list;\n")
+        lines.append("    uint64_t idx;\n")
+        lines.append(f"}} {li_ctype};\n\n")
+        lines.append(f"static {ov_ctype} z_{li_name}_call({li_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} z_{li_name}_call({li_ctype}* _it) {{\n")
+        lines.append(f"    {ov_ctype} _out = {{0}};\n")
+        lines.append("    if (_it->idx >= _it->list->length) {\n")
+        lines.append(f"        _out.tag = {ov_none_tag};\n")
+        lines.append("        return _out;\n")
+        lines.append("    }\n")
+        lines.append(f"    _out.tag = {ov_some_tag};\n")
+        lines.append("    _out.data = &_it->list->data[_it->idx];\n")
+        lines.append("    _it->idx++;\n")
+        lines.append("    return _out;\n")
+        lines.append("}\n\n")
+        lines.append(f"static {li_ctype} z_{list_name}_iterate({list_ctype}* _this);\n")
+        lines.append(
+            f"static {li_ctype} z_{list_name}_iterate({list_ctype}* _this) {{\n"
+        )
+        lines.append(f"    {li_ctype} _it = {{0}};\n")
+        lines.append("    _it.list = _this;\n")
+        lines.append("    _it.idx = 0;\n")
+        lines.append("    return _it;\n")
+        lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
 
     def _emit_mono_listview(self, mono_type: ZType) -> None:
         """Emit a monomorphized listview type (view into a list).
@@ -8548,6 +8623,20 @@ class CEmitter:
                     parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
                     parts.append(f"{inner}if ({tmp}.tag == {none_tag}) break;\n")
                     parts.append(f"{inner}{elem_ctype} {iname_c} = {tmp}.data.some;\n")
+                elif (
+                    opt_type
+                    and opt_type.typetype == ZTypeType.UNION
+                    and "some" in opt_type.lock_arm_names
+                ):
+                    # optionview: borrowed-view union. data is a pointer to
+                    # the source's storage; bind the loop var by deref. No
+                    # cleanup — the iterator owns the lock, not the view.
+                    none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
+                    parts.append(f"{inner}{opt_ctype} {tmp} = {iter_val};\n")
+                    parts.append(f"{inner}if ({tmp}.tag == {none_tag}) break;\n")
+                    parts.append(
+                        f"{inner}{elem_ctype} {iname_c} = *({elem_ctype}*){tmp}.data;\n"
+                    )
                 else:
                     # Tagged-union `option t: ref`: the payload is a heap-
                     # boxed value whose destructor would free the inner

@@ -39,6 +39,8 @@ from ztypeutil import (
     list_element_type as _list_element_type,
     is_listview_type as _is_listview_type,
     listview_element_type as _listview_element_type,
+    is_listiter_type as _is_listiter_type,
+    listiter_element_type as _listiter_element_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -4189,6 +4191,30 @@ class TypeChecker:
                 get_type.return_ownership = ZParamOwnership.BORROW
                 mono.children["get"] = get_type
 
+        # for listiter types: synthesize the .call method returning
+        # (optionview of: elem). listiter holds a borrowed pointer to
+        # the source list and an index; .call yields a borrowed view
+        # to the element at the current index, or .none when exhausted.
+        if _is_listiter_type(mono) and not is_partial:
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            elem_type = _listiter_element_type(mono)
+            if elem_type is not None:
+                ov_template = self._resolve_name("optionview")
+                if ov_template:
+                    ov_defn = self._find_generic_defn(ov_template)
+                    if ov_defn:
+                        ov_mono = self._monomorphize(
+                            ov_template, {"t": elem_type}, ov_defn
+                        )
+                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
+                        call_type.return_type = ov_mono
+                        mono.children["call"] = call_type
+            # listiter holds a borrowed pointer to its source list; no
+            # owned data, so no runtime destructor is needed.
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
         # for list types: set reftype, synthesize methods
         # List struct is stack-allocated; only the data buffer is on the heap.
         if _is_list_type(mono) and not is_partial:
@@ -4261,6 +4287,22 @@ class TypeChecker:
                     extend_view_type.children["other"] = listview_mono
                     extend_view_type.param_ownership["other"] = ZParamOwnership.BORROW
                     mono.children["extend_view"] = extend_view_type
+                # synthesize .iterate method: function {:this} out (listiter of: elem)
+                # — borrowed-view iterator over the list. Triggers
+                # monomorphization of listiter<elem> so the emitter can
+                # generate the iterator struct + .call function.
+                listiter_template = self._resolve_name("listiter")
+                if listiter_template:
+                    li_defn = self._find_generic_defn(listiter_template)
+                    if li_defn:
+                        listiter_mono = self._monomorphize(
+                            listiter_template, {"of": elem_type}, li_defn
+                        )
+                        iterate_type = _make_type(
+                            f"{mangled}.iterate", ZTypeType.FUNCTION
+                        )
+                        iterate_type.return_type = listiter_mono
+                        mono.children["iterate"] = iterate_type
 
         # for map types: set reftype, synthesize methods
         # Maps remain heap-allocated for now.
@@ -8211,26 +8253,30 @@ class TypeChecker:
         for name, cond_op in fornode.conditions.items():
             t = self._check_operation(cond_op)
             if t and not name.startswith(" "):
-                # iterator binding: check if operation type is or returns option/optionval
+                # iterator binding: check if operation type is or returns
+                # one of the iterator wrappers (option/optionval/optionview).
                 iter_option_type = None
-                if self._is_option_or_optionval_type(t):
-                    # operation directly returns option/optionval (e.g., function call)
+                if self._is_iterator_wrapper(t):
+                    # operation directly returns an iterator wrapper
+                    # (e.g., function call returning option(t))
                     iter_option_type = t
                 elif (
                     t.typetype == ZTypeType.FUNCTION
                     and t.return_type
-                    and self._is_option_or_optionval_type(t.return_type)
+                    and self._is_iterator_wrapper(t.return_type)
                 ):
-                    # function that returns option/optionval (e.g., .each on integers)
+                    # function reference whose return is an iterator wrapper
+                    # (e.g., .each / .iterate on integers — function called
+                    # per iteration)
                     iter_option_type = t.return_type
                 elif t.typetype != ZTypeType.FUNCTION:
-                    # check if it's a callable object whose call returns option/optionval
+                    # callable object: T has a .call returning a wrapper
                     call_method = t.children.get("call")
                     if (
                         call_method
                         and call_method.typetype == ZTypeType.FUNCTION
                         and call_method.return_type
-                        and self._is_option_or_optionval_type(call_method.return_type)
+                        and self._is_iterator_wrapper(call_method.return_type)
                     ):
                         iter_option_type = call_method.return_type
 
