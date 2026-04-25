@@ -94,3 +94,13 @@ static z_string_t z_string_create(uint64_t cap) {
     return z;
 }
 
+static z_string_t z_string_copy(z_string_t* s) {
+    z_string_t z = {0};
+    z.size = s->size;
+    z.capacity = s->size + 1;
+    z.data = (char*)z_xmalloc(z.capacity);
+    if (s->size > 0) memcpy(z.data, s->data, s->size);
+    z.data[z.size] = '\0';
+    return z;
+}
+

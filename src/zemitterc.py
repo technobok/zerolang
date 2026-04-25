@@ -6218,6 +6218,12 @@ class CEmitter:
                     self.needs_stdint = True
                     self.needs_string = True
                     return f"z_string_cmp(&{parent_val}, &{rhs_val})"
+                if is_string and method_name == "copy":
+                    self.needs_string = True
+                    self.needs_stdlib = True
+                    is_pointer_path = self._is_class_pointer_path(dp.parent)
+                    arg = parent_val if is_pointer_path else f"&{parent_val}"
+                    return self._alloc_temp(f"z_string_copy({arg})")
 
         # string construction: string or string capacity: N
         if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
@@ -7146,6 +7152,17 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             acc = "->" if self._is_class_pointer_path(path.parent) else "."
             return f"{parent}{acc}size"
+        # string: .copy — deep copy producing a fresh owned string
+        if (
+            parent_type_dp
+            and parent_type_dp.subtype == ZSubType.STRING
+            and child == "copy"
+        ):
+            self.needs_string = True
+            self.needs_stdlib = True
+            parent = self._emit_path_value(path.parent)
+            arg = parent if self._is_class_pointer_path(path.parent) else f"&{parent}"
+            return self._alloc_temp(f"z_string_copy({arg})")
         # .stringview conversion at path-access position, for both `string`
         # (reftype) and `str_N` (valtype). Only str differs in the length
         # field name (`len` vs `size`); pointer-vs-value access depends on

@@ -1354,6 +1354,25 @@ class TestEmitterStringOwnership:
         output = compile_and_run(csource)
         assert output.strip() == "Hello, Zero!"
 
+    def test_string_copy_independent_owners(self):
+        """`.copy` produces an independently-owned string; mutating
+        the source does not change the copy and both are freed
+        separately at scope exit."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  x: "hello".string\n'
+            "  y: x.copy\n"
+            '  x.append s: " world"\n'
+            '  print "x=\\{x}"\n'
+            '  print "y=\\{y}"\n'
+            "}"
+        )
+        assert "z_string_copy(&x)" in csource
+        assert "z_string_free(&x);" in csource
+        assert "z_string_free(&y);" in csource
+        lines = compile_and_run(csource).strip().split("\n")
+        assert lines == ["x=hello world", "y=hello"]
+
     def test_multiple_string_vars(self):
         """Several strings in one function, all freed correctly."""
         csource = emit_source(
