@@ -7484,7 +7484,26 @@ class TypeChecker:
         Used by the standard call-ownership loop and by constructor-style
         dispatch paths (`Type.create`, `box from:`, typedef `.create`) that
         bypass that loop but still need to enforce a declared TAKE parameter.
+
+        A path whose leaf is a method-call returning an owned value
+        (`s.copy` and similar) yields a fresh temp. The TAKE consumes
+        that temp; the receiver is unaffected. Don't trace back through
+        `_get_arg_root_name` to the syntactic root in that case — that
+        would conflate the receiver with the source of the value being
+        moved and reject sound code (e.g. `lst.append from: s.copy`
+        where `s` is a borrowed param).
         """
+        if arg.valtype.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, arg.valtype)
+            parent_type = getattr(dp.parent, "type", None)
+            if parent_type is not None:
+                method = parent_type.children.get(dp.child.name)
+                if (
+                    method is not None
+                    and method.typetype == ZTypeType.FUNCTION
+                    and method.return_ownership != ZParamOwnership.BORROW
+                ):
+                    return
         arg_root = self._get_arg_root_name(arg.valtype)
         if not arg_root:
             return

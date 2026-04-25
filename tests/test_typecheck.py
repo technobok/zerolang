@@ -1171,6 +1171,118 @@ class TestOwnershipReturnChecking:
         )
 
 
+class TestStoreOfBorrowedRejection:
+    """Pin the rejection of storing a default-borrowed reftype param into
+    an aggregate slot via collection mutation methods or field
+    reassignment. Coverage exists via two separate mechanisms — TAKE
+    annotations on synthesized list/map params (rejected by
+    `_apply_take_to_arg`) and the borrowed-RHS check in
+    `_check_reassignment`. These tests lock that behaviour in so a
+    future refactor can't silently regress it."""
+
+    def test_list_append_borrowed_rejected(self):
+        """`lst.append from: s` with a borrowed-string param `s` aliases
+        the caller's storage into the list. Rejected via the `from`
+        param's TAKE annotation."""
+        errors = check_errors(
+            "f: function {lst: (list of: string) s: string} is {\n"
+            "  lst.append from: s\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "'s'" in e.msg and "'take' parameter" in e.msg and "'from'" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_list_append_copy_allowed(self):
+        """`.copy` produces a fresh owned string — append is sound."""
+        check_ok(
+            "f: function {lst: (list of: string) s: string} is {\n"
+            "  lst.append from: s.copy\n"
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_list_insert_borrowed_rejected(self):
+        """`lst.insert from: s at: 0u64` — same TAKE rejection on `from`."""
+        errors = check_errors(
+            "f: function {lst: (list of: string) s: string} is {\n"
+            "  lst.insert from: s at: 0u64\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "'s'" in e.msg and "'take' parameter" in e.msg and "'from'" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_list_set_borrowed_rejected(self):
+        """`lst.set i: 0u64 val: s` — TAKE annotation is on `val`."""
+        errors = check_errors(
+            "f: function {lst: (list of: string) s: string} is {\n"
+            "  lst.set i: 0u64 val: s\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "'s'" in e.msg and "'take' parameter" in e.msg and "'val'" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_list_extend_borrowed_rejected(self):
+        """`a.extend from: b` with both lists borrowed — `extend` consumes
+        its `from` argument so passing a borrowed list aliases."""
+        errors = check_errors(
+            "f: function {a: (list of: string) b: (list of: string)} is {\n"
+            "  a.extend from: b\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "'b'" in e.msg and "'take' parameter" in e.msg and "'from'" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_map_set_borrowed_value_rejected(self):
+        """`m.set key: k value: v` — both `key` and `value` are TAKE.
+        Pin the value-side rejection (the first TAKE failure stops
+        further checks, so we test value via a fresh-owned key)."""
+        errors = check_errors(
+            "f: function {m: (map key: string value: string) v: string} is {\n"
+            '  m.set key: "k".copy value: v\n'
+            "}\n"
+            "main: function is {}"
+        )
+        assert any(
+            "'v'" in e.msg and "'take' parameter" in e.msg and "'value'" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_map_set_copy_value_allowed(self):
+        """`.copy` on the borrowed value param breaks the alias."""
+        check_ok(
+            "f: function {m: (map key: string value: string) v: string} is {\n"
+            '  m.set key: "k".copy value: v.copy\n'
+            "}\n"
+            "main: function is {}"
+        )
+
+    def test_field_reassign_borrowed_rejected(self):
+        """`b.label = s` where `s` is a default-borrowed string param
+        and `b` is a locked class instance. Rejected by
+        `_check_reassignment`'s borrowed-RHS rule — storing the borrow
+        into the box's owned-string slot would alias caller storage."""
+        errors = check_errors(
+            "mybox: class { label: string }\n"
+            "f: function {b: mybox.lock s: string} is {\n"
+            "  b.label = s\n"
+            "}\n"
+            "main: function is {}"
+        )
+        assert any("'s'" in e.msg for e in errors), [e.msg for e in errors]
+
+
 class TestTakeBorrowCompilerMethods:
     """.take and .borrow compiler methods."""
 
