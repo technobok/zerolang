@@ -688,6 +688,25 @@ supplied reftype argument in the function body. The variable supplied to a
 is performed implicitly; the caller does not need to call #~".take" explicitly
 (though it may do so for clarity).
 
+Parameters with no ownership annotation are #_+"borrowed" by default
+(equivalent to writing #~".borrow" explicitly). For valtypes the borrow is a
+copy; for reftypes (string, file, bufreader, user classes) it is a
+pointer-pass at the C ABI — mutations through the parameter are visible to
+the caller, and the caller retains ownership at scope exit. The implicit-take
+logic at call sites correctly skips these. Native functions
+(#~"is native" body) keep the pre-existing by-value ABI; they are excluded
+from the default-borrow rule and still need explicit annotations in
+#~"lib/system/" if pointer-passing is required.
+
+Returning a borrowed parameter as owned (i.e. a function declared
+#~"out T" returning a #~".borrow"-bound or default-borrow parameter) aliases
+the caller's heap data and is rejected at type-check time. Storing such a
+borrowed parameter into an aggregate field (#~"box label: borrowed_s") is
+rejected for the same reason. Remediations are #~".copy" (clone),
+#~".take" on the parameter (transfer ownership in), or
+#~"out T.borrow" + #~".lock"-annotated parameter (return a borrow tied to a
+locked source). See [#> to=ownership: ownership.html] for details.
+
 In a call, the 'primary' parameter is the first parameter listed in the #~"in"
 parameter list of the [#> to=function: function definition]. In a type specifier, the
 'primary' is the first generic argument. If that is also the first argument

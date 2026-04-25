@@ -330,6 +330,32 @@ pass-by-value so identity-based locking is meaningless. If locking is
 needed, use a class. Generic type parameters are exempt because they may
 monomorphize to a reftype.
 
+#---: .copy
+
+An inline method only (not a parameter or return attribute). #~"x.copy"
+produces a fresh, independently-owned duplicate of #~"x". The new value
+shares no heap data with #~"x"; mutating one does not affect the other,
+and both are freed separately at scope exit.
+
+#~".copy" is the canonical way to break a borrow chain when you need to
+hand an owned value to a destination that requires ownership (a
+constructor field, a list/map insert) but only have a borrowed source:
+
+#code language=zerolang: """
+  store: function {s: string} out box.bag is {
+      # `s` is borrowed from the caller; the box wants to own its label,
+      # so clone the data into a fresh allocation.
+      return box label: s.copy
+  }
+  """
+
+Compare with #~".take" (transfer the source's ownership to the
+destination, invalidating the source) and inline #~".borrow" (alias the
+source via a lock, no allocation).
+
+Currently provided as a native method on #~"string"; the same shape is
+available for any type that defines its own deep-copy logic.
+
 #---: .release
 
 An inline method only (not a parameter or return attribute). #~"x.release" ends
@@ -620,6 +646,57 @@ Aliasing does NOT apply to:
 The generated C contains #~"/* alias: name => source */" comments at
 the substitution site for readability; references to the alias name in
 the body emit as the source expression directly.
+
+
+#--: Borrow Escape Rules
+
+Borrowed values cannot escape into positions that require ownership.
+The type-checker rejects these statically with a hint pointing at the
+remediation (#~".copy", #~".take", or #~".lock"-annotated destination).
+
+#---: Returning a borrowed parameter as owned
+
+A function declared #~"out T" returns an owned value. Returning a
+borrowed parameter directly would alias the caller's heap data:
+
+#code language=zerolang: """
+  identity: function {s: string} out string is {
+      return s          # error: 's' is borrowed; the caller still owns it
+  }
+  """
+
+Remediations:
+
+#ul:
+  [#*: #~"return s.copy" -- clone into a fresh owned string.]
+  [#*: Annotate the parameter as #~"s: string.take" -- the caller
+  transfers ownership in, and the function may pass it through.]
+  [#*: Declare the function as #~"out string.borrow" with a
+  #~".lock"-annotated parameter -- the caller receives a borrow tied
+  to the locked source.]
+
+The check fires only for stack-reftypes (string, file, bufreader, user
+classes) returned as a bare AtomId. Projections (#~"s.copy",
+#~"s.field") and explicit annotations (#~"s.take", #~"s.borrow") opt
+out as documented above.
+
+#---: Storing a borrowed parameter into an owned aggregate field
+
+A constructor field declared with no #~".lock" annotation expects an
+owned value. Storing a borrowed parameter into it would alias the
+caller's heap data the same way:
+
+#code language=zerolang: """
+  make_box: function {name: string} out box is {
+      return box label: name      # error: 'name' is borrowed
+  }
+  """
+
+Same remediations as above. The exemption mirrors the
+#_+"borrowed_record" / #_+"listiter" pattern: a #~".lock"-annotated
+parameter projected into a matching #~".lock" field is the canonical
+borrow-holder pattern (see #_*"Classes with .lock Fields" below) and is
+allowed.
 
 
 #--: Classes with #~".lock" Fields
