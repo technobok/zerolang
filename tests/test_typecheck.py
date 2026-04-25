@@ -16,6 +16,7 @@ from ztypes import (
     ZVariable,
     ZNaming,
     TAG_ORIGIN,
+    is_tag_origin,
 )
 import zast
 
@@ -10360,8 +10361,7 @@ class TestUnionLockedArm:
             "main: function is { x: myvar.a 1 }"
         )
         assert any(
-            "variant" in e.msg.lower() and ".lock" in e.msg.lower()
-            for e in errors
+            "variant" in e.msg.lower() and ".lock" in e.msg.lower() for e in errors
         )
 
     def test_union_arm_borrow_rejected(self):
@@ -10375,9 +10375,7 @@ class TestUnionLockedArm:
             "  x: u.only src\n"
             "}"
         )
-        assert any(
-            "only '.lock' is permitted" in e.msg.lower() for e in errors
-        )
+        assert any("only '.lock' is permitted" in e.msg.lower() for e in errors)
 
     def test_union_with_only_locked_arm(self):
         """Single-locked-arm union resolves and has no destructor."""
@@ -10394,3 +10392,92 @@ class TestUnionLockedArm:
         ut = tc._resolved.get("test.wrap")
         assert ut.lock_arm_names == {"val"}
         assert ut.needs_destructor is False
+
+
+class TestOptionview:
+    """The stdlib `optionview` type — built on locked union arms.
+    Container iterators use it to yield non-owning views into their
+    source. Layout: standard {tag, void*}; the .some arm holds a
+    pointer to the source's storage."""
+
+    def test_optionview_template_resolves(self):
+        """The optionview template exists in stdlib and is a generic union."""
+        program = check_ok("main: function is { x: optionview.none i64 }")
+        tc = TypeChecker(program)
+        tc.check()
+        ovt = tc._resolve_name("optionview")
+        assert ovt is not None
+        assert ovt.typetype == ZTypeType.UNION
+        assert ovt.isgeneric
+        assert "some" in ovt.lock_arm_names
+        assert "none" not in ovt.lock_arm_names
+        # destructor elision is deferred to monomorphization for generic
+        # unions; see test_optionview_mono_no_destructor for the mono case.
+
+    def test_optionview_none_compiles(self):
+        """optionview.none with explicit type arg compiles cleanly."""
+        check_ok("main: function is { x: optionview.none i64 }")
+
+    def test_optionview_some_from_class(self):
+        """optionview.some from: lvalue compiles for a reftype source."""
+        check_ok(
+            "src: class { v: i64 }\n"
+            "main: function is {\n"
+            "  s: src v: 42\n"
+            "  ov: optionview.some from: s\n"
+            "}"
+        )
+
+    def test_optionview_mono_no_destructor(self):
+        """A monomorphized optionview<T> needs no runtime cleanup."""
+        program = check_ok(
+            "src: class { v: i64 }\n"
+            "main: function is {\n"
+            "  s: src v: 7\n"
+            "  ov: optionview.some from: s\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        mono = None
+        for k, v in tc._resolved.items():
+            if "optionview" in k and v.typetype == ZTypeType.UNION:
+                if v.generic_origin is not None and not is_tag_origin(
+                    v.generic_origin
+                ):
+                    mono = v
+                    break
+        assert mono is not None, "optionview mono not resolved"
+        assert mono.needs_destructor is False
+        assert mono.destructor_name is None
+        assert "some" in mono.lock_arm_names
+
+    def test_is_iterator_wrapper_recognises_all_three(self):
+        """The for-loop dispatch helper accepts option, optionval, AND
+        optionview."""
+        program = check_ok(
+            "src: class { v: i64 }\n"
+            "main: function is {\n"
+            "  a: option.some \"x\".string\n"
+            "  b: optionval.some 1\n"
+            "  s: src v: 7\n"
+            "  c: optionview.some from: s\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        a_t = b_t = c_t = None
+        for k, v in tc._resolved.items():
+            if "option_string" in k and v.typetype == ZTypeType.UNION:
+                a_t = v
+            elif "optionval_i64" in k and v.typetype == ZTypeType.VARIANT:
+                b_t = v
+            elif "optionview" in k and v.typetype == ZTypeType.UNION:
+                if v.generic_origin is not None and not is_tag_origin(
+                    v.generic_origin
+                ):
+                    c_t = v
+        assert a_t and b_t and c_t
+        assert tc._is_iterator_wrapper(a_t)
+        assert tc._is_iterator_wrapper(b_t)
+        assert tc._is_iterator_wrapper(c_t)

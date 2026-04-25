@@ -3142,22 +3142,32 @@ class CEmitter:
         lines.append("    void* data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # destructor: collapse to a no-op when every subtype is `null`.
-        all_null_subtypes = all(
-            stype.typetype == ZTypeType.NULL for _, stype in subtype_items
+        # destructor: collapse to a no-op when every subtype is `null` or
+        # a locked arm (locked arms hold a borrowed pointer the union does
+        # not own — no cleanup needed).
+        lock_arms_mono = mono_type.lock_arm_names
+
+        def _is_no_cleanup_mono(sname: str, stype: ZType) -> bool:
+            if stype.typetype == ZTypeType.NULL:
+                return True
+            return sname in lock_arms_mono
+
+        all_no_cleanup_mono = all(
+            _is_no_cleanup_mono(sname, stype) for sname, stype in subtype_items
         )
-        if all_null_subtypes:
+        if all_no_cleanup_mono:
             lines.append(
                 f"static void z_{name}_destroy(z_{name}_t* u) {{ (void)u; }}\n\n"
             )
             self.struct_defs.append("".join(lines))
             return
 
-        # Non-null subtypes only — null tags go through the implicit default.
+        # Owned subtypes only — null and locked tags go through the
+        # implicit default with no work.
         non_null_subtypes = [
             (sname, stype)
             for sname, stype in subtype_items
-            if stype.typetype != ZTypeType.NULL
+            if not _is_no_cleanup_mono(sname, stype)
         ]
 
         def _arm_body_mono(stype: ZType) -> tuple[str, ...]:
@@ -7624,6 +7634,10 @@ class CEmitter:
                     value_arg = arg
                     break
 
+        # determine whether this arm is a locked arm — locked arms hold a
+        # borrowed pointer into the source (no ownership, no boxing).
+        is_locked_arm = bool(call_type and subtype_name in call_type.lock_arm_names)
+
         if is_null or value_arg is None:
             self._temp.decls.append(f"{indent}{tmp}.data = NULL;\n")
         else:
@@ -7631,6 +7645,24 @@ class CEmitter:
             # (it's a type name, not a value)
             if call_type and call_type.generic_origin and is_null:
                 self._temp.decls.append(f"{indent}{tmp}.data = NULL;\n")
+            elif is_locked_arm:
+                # locked arm: take the address of the source's storage. The
+                # source must be a local variable / addressable lvalue; the
+                # type-checker's borrow-lock machinery enforces that the
+                # union cannot outlive the source.
+                val = self._emit_operation_value(value_arg.valtype)
+                # ownership stays with the source; don't add to frees.
+                if val in self._temp.frees:
+                    self._temp.frees.remove(val)
+                # for reftype sources, val is already a pointer; for valtype,
+                # val is the lvalue and we take its address.
+                subtype_ctype = subtype_ctype_resolved
+                if subtype_ctype and (
+                    subtype_ctype.startswith("z_") and subtype_ctype.endswith("_t*")
+                ):
+                    self._temp.decls.append(f"{indent}{tmp}.data = {val};\n")
+                else:
+                    self._temp.decls.append(f"{indent}{tmp}.data = &{val};\n")
             else:
                 val = self._emit_operation_value(value_arg.valtype)
                 subtype_ctype = subtype_ctype_resolved

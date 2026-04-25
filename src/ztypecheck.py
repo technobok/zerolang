@@ -434,6 +434,7 @@ class TypeChecker:
         # be loaded at __init__ time. -1 means "not yet resolved".
         self._option_template_id: int = -1
         self._optionval_template_id: int = -1
+        self._optionview_template_id: int = -1
 
     # Keywords used to auto-categorise errors when no explicit code is given
     _OWNERSHIP_KEYWORDS = (
@@ -1703,6 +1704,44 @@ class TypeChecker:
             self._maybe_elide_union_destructor(utype, union_defn)
         self._resolving.pop()
         return utype
+
+    def _lift_locked_arm_borrow(
+        self,
+        union_type: ZType,
+        callable_dp: zast.DottedPath,
+        call: zast.Call,
+    ) -> None:
+        """When constructing a locked union arm, mark the construction as
+        borrowing from the `from:` source so the borrow-lock machinery
+        propagates the source path to the assignment target.
+
+        Mirrors `_check_protocol_borrow`'s borrow-lift pattern, except the
+        check is keyed on the union arm's `lock_arm_names` membership
+        rather than a `.borrow` constructor name.
+        """
+        if union_type.typetype != ZTypeType.UNION:
+            return
+        if not union_type.lock_arm_names:
+            return
+        arm_name = callable_dp.child.name
+        if arm_name not in union_type.lock_arm_names:
+            return
+        # locate the from: arg (or the first positional arg if no from:)
+        from_arg = None
+        for arg in call.arguments:
+            if arg.name == "from":
+                from_arg = arg
+                break
+        if from_arg is None:
+            for arg in call.arguments:
+                if not arg.name:
+                    from_arg = arg
+                    break
+        if from_arg is None:
+            return
+        src_path = self._get_dotted_path_tuple(from_arg.valtype)
+        if src_path:
+            self._pending_borrow_lock = src_path
 
     def _maybe_elide_union_destructor(
         self, utype: ZType, union_defn: zast.Union
@@ -4017,6 +4056,19 @@ class TypeChecker:
             if some_child and some_child.is_heap_allocated:
                 mono.is_nullable_ptr = True
 
+        # optionview: standard {tag, void*} layout. The .some arm is a
+        # `.lock` reference (always a pointer; the union doesn't own its
+        # payload), .none is NULL. Carry the template's lock_arm_names +
+        # destructor elision through to the monomorphization so the
+        # emitter knows no destructor is needed at all.
+        if (
+            template_type.typetype == ZTypeType.UNION
+            and template_type.nodeid == self._optionview_template_nodeid()
+        ):
+            mono.lock_arm_names = set(template_type.lock_arm_names)
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
         # for unions: rebuild tag enum with the monomorphized name
         if template_type.typetype == ZTypeType.UNION:
             subtype_names = [
@@ -6261,6 +6313,7 @@ class TypeChecker:
                     call.call_kind = zast.CallKind.UNION_CREATE
                     # update the parent_tagged_type to point to the monomorphized type
                     callable_dp.parent_tagged_type = mono_type
+                    self._lift_locked_arm_borrow(mono_type, callable_dp, call)
                     return mono_type
                 return None  # error already emitted in inference method
 
@@ -6268,6 +6321,7 @@ class TypeChecker:
                 self._check_operation(arg.valtype)
             call.type = parent_tagged
             call.call_kind = zast.CallKind.UNION_CREATE
+            self._lift_locked_arm_borrow(parent_tagged, callable_dp, call)
             return parent_tagged
 
         # callable object dispatch: variable with a 'call' method
@@ -8086,6 +8140,14 @@ class TypeChecker:
                 self._optionval_template_id = t.nodeid
         return self._optionval_template_id
 
+    def _optionview_template_nodeid(self) -> int:
+        """Resolve and cache the stdlib `optionview` generic-template nodeid."""
+        if self._optionview_template_id == -1:
+            t = self._resolve_name("optionview")
+            if t is not None:
+                self._optionview_template_id = t.nodeid
+        return self._optionview_template_id
+
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""
         return (
@@ -8104,9 +8166,28 @@ class TypeChecker:
             and t.generic_origin.nodeid == self._optionval_template_nodeid()
         )
 
+    def _is_optionview_type(self, t: ZType) -> bool:
+        """Check if a type is a monomorphized optionview type."""
+        return (
+            t.typetype == ZTypeType.UNION
+            and t.generic_origin is not None
+            and not is_tag_origin(t.generic_origin)
+            and t.generic_origin.nodeid == self._optionview_template_nodeid()
+        )
+
     def _is_option_or_optionval_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option or optionval type."""
         return self._is_option_type(t) or self._is_optionval_type(t)
+
+    def _is_iterator_wrapper(self, t: ZType) -> bool:
+        """Check if a type is one of the iterator-wrapper types: option,
+        optionval, or optionview. The for-loop dispatch uses this to
+        recognize per-iteration values regardless of ownership shape."""
+        return (
+            self._is_option_type(t)
+            or self._is_optionval_type(t)
+            or self._is_optionview_type(t)
+        )
 
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")
