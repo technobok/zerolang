@@ -36,6 +36,8 @@ from ztypeutil import (
     listview_element_type as _listview_element_type,
     is_listiter_type as _is_listiter_type,
     is_mapkeyiter_type as _is_mapkeyiter_type,
+    is_mapitemiter_type as _is_mapitemiter_type,
+    is_mapentry_type as _is_mapentry_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -3066,6 +3068,14 @@ class CEmitter:
             # mapkeyiter: same story — its struct/call/iterate factory
             # are emitted as part of `_emit_mono_map` for the source map.
             return
+        if _is_mapitemiter_type(mono_type):
+            # mapitemiter: emitted as part of `_emit_mono_map`.
+            return
+        if _is_mapentry_type(mono_type):
+            # mapentry: borrow-only view; the C representation is a
+            # bucket pointer typedef emitted with the source map's
+            # mono pass. No struct of its own.
+            return
         if _is_map_type(mono_type):
             self._emit_mono_map(mono_type)
             return
@@ -4069,6 +4079,17 @@ class CEmitter:
                 ctype, name, key_ctype, iterate_child.return_type
             )
 
+        # mapitemiter + mapentry companion: borrowed-entry iterator +
+        # .iterate_items factory. Emitted only when the map mono carries
+        # an `.iterate_items` child. mapentry's C representation is a
+        # typedef alias for the bucket type; .key / .value emit through
+        # the bucket pointer.
+        iterate_items_child = mono_type.children.get("iterate_items")
+        if iterate_items_child and iterate_items_child.return_type:
+            self._emit_mapitemiter_runtime(
+                ctype, name, bucket_type, iterate_items_child.return_type
+            )
+
     def _emit_mapkeyiter_runtime(
         self,
         map_ctype: str,
@@ -4127,6 +4148,102 @@ class CEmitter:
         lines.append("    _it.idx = 0;\n")
         lines.append("    return _it;\n")
         lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mapitemiter_runtime(
+        self,
+        map_ctype: str,
+        map_name: str,
+        bucket_type: str,
+        mii_mono: ZType,
+    ) -> None:
+        """Emit the runtime implementation of a mapitemiter
+        monomorphization plus the mapentry typedef.
+
+        mapitemiter layout: { source map pointer, current bucket index }.
+        Each .call scans forward through buckets, returning the next
+        USED bucket address wrapped in optionview.some, or
+        optionview.none when no more USED buckets remain.
+
+        mapentry is a borrow-only view: at the C level it is a typedef
+        alias for the bucket struct. .key / .value access compile to
+        field projections through the bucket pointer.
+        """
+        mii_name = mii_mono.name
+        mii_ctype = f"z_{mii_name}_t"
+        call_method = mii_mono.children.get("call")
+        if not call_method or not call_method.return_type:
+            return
+        ov_mono = call_method.return_type
+        ov_name = ov_mono.name
+        ov_ctype = f"z_{ov_name}_t"
+        ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
+        ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
+        used_macro = f"Z_{map_name.upper()}_USED"
+
+        # mapentry mono: pulled from the optionview's some payload type
+        me_mono = ov_mono.children.get("some")
+        if me_mono is None:
+            return
+        me_name = me_mono.name
+        me_ctype = f"z_{me_name}_t"
+
+        lines: List[str] = []
+        lines.append(f"/* mapentry<{me_name}> = view of {bucket_type} */\n")
+        lines.append(f"typedef {bucket_type} {me_ctype};\n\n")
+        lines.append(f"/* mapitemiter<{me_name}> runtime layout */\n")
+        lines.append("typedef struct {\n")
+        lines.append(f"    {map_ctype}* m;\n")
+        lines.append("    uint64_t idx;\n")
+        lines.append(f"}} {mii_ctype};\n\n")
+        lines.append(f"static {ov_ctype} z_{mii_name}_call({mii_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} z_{mii_name}_call({mii_ctype}* _it) {{\n")
+        lines.append(f"    {ov_ctype} _out = {{0}};\n")
+        lines.append("    while (_it->idx < _it->m->capacity) {\n")
+        lines.append(
+            f"        if (_it->m->buckets[_it->idx].state == {used_macro}) {{\n"
+        )
+        lines.append(f"            _out.tag = {ov_some_tag};\n")
+        lines.append("            _out.data = &_it->m->buckets[_it->idx];\n")
+        lines.append("            _it->idx++;\n")
+        lines.append("            return _out;\n")
+        lines.append("        }\n")
+        lines.append("        _it->idx++;\n")
+        lines.append("    }\n")
+        lines.append(f"    _out.tag = {ov_none_tag};\n")
+        lines.append("    return _out;\n")
+        lines.append("}\n\n")
+        lines.append(
+            f"static {mii_ctype} z_{map_name}_iterate_items({map_ctype}* _this);\n"
+        )
+        lines.append(
+            f"static {mii_ctype} z_{map_name}_iterate_items({map_ctype}* _this) {{\n"
+        )
+        lines.append(f"    {mii_ctype} _it = {{0}};\n")
+        lines.append("    _it.m = _this;\n")
+        lines.append("    _it.idx = 0;\n")
+        lines.append("    return _it;\n")
+        lines.append("}\n\n")
+        # mapentry .key and .value — field projections through the
+        # bucket pointer. The C functions take the bucket pointer
+        # (mapentry is a typedef of the bucket type) and return a
+        # by-value copy of the field. For reftype field types, the
+        # copy aliases the source's heap data — same caveat as
+        # optionview iteration today (see Phase 1b deferral).
+        key_method = me_mono.children.get("key")
+        value_method = me_mono.children.get("value")
+        if key_method is not None and key_method.return_type is not None:
+            key_ctype = _ctype(key_method.return_type)
+            lines.append(f"static {key_ctype} z_{me_name}_key({me_ctype}* _e);\n")
+            lines.append(f"static {key_ctype} z_{me_name}_key({me_ctype}* _e) {{\n")
+            lines.append("    return _e->key;\n")
+            lines.append("}\n\n")
+        if value_method is not None and value_method.return_type is not None:
+            val_ctype = _ctype(value_method.return_type)
+            lines.append(f"static {val_ctype} z_{me_name}_value({me_ctype}* _e);\n")
+            lines.append(f"static {val_ctype} z_{me_name}_value({me_ctype}* _e) {{\n")
+            lines.append("    return _e->value;\n")
+            lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_class(

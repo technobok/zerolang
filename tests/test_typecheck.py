@@ -10540,3 +10540,20 @@ class TestOptionviewBorrowEscape:
             '  print "ok"\n'
             "}"
         )
+
+    def test_map_iterate_items_borrow_escape_rejected(self):
+        """mapentry from map.iterate_items is borrowed; transferring
+        a key into another collection fails the escape check."""
+        errors = check_errors(
+            "main: function is {\n"
+            "  m: (map key: string value: i64)\n"
+            '  m.set key: "k".string value: 1\n'
+            "  sink: (list of: string)\n"
+            "  with it: m.iterate_items do for e: it loop {\n"
+            "    sink.append from: e.key\n"
+            "  }\n"
+            "}"
+        )
+        # accept any error that blocks the transfer; the exact
+        # diagnostic path may evolve as borrow tracking matures.
+        assert errors

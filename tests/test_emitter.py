@@ -494,6 +494,41 @@ class TestEmitterBasic:
         assert "z_map_i64_i64_iterate" in csource
         assert "z_mapkeyiter_i64_i64_call" in csource
 
+    def test_map_iterate_items_basic(self):
+        """map.iterate_items yields borrowed mapentry views over USED
+        buckets; .key and .value project through the bucket pointer."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  m: (map key: i64 value: i64)\n"
+            "  m.set key: 1 value: 100\n"
+            "  m.set key: 2 value: 200\n"
+            "  m.set key: 3 value: 300\n"
+            "  with it: m.iterate_items do for e: it loop {\n"
+            '    print "k=\\{e.key} v=\\{e.value}"\n'
+            "  }\n"
+            "}"
+        )
+        output = compile_and_run(csource)
+        # bucket-layout iteration order, not insertion — assert sorted
+        seen = sorted(line for line in output.strip().split("\n") if line)
+        assert seen == ["k=1 v=100", "k=2 v=200", "k=3 v=300"]
+
+    def test_map_iterate_items_emits_runtime(self):
+        """The map mono pass emits the mapitemiter runtime + mapentry
+        typedef + .iterate_items factory."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  m: (map key: i64 value: i64)\n"
+            "  m.set key: 1 value: 100\n"
+            "  with it: m.iterate_items do for e: it loop {}\n"
+            "}"
+        )
+        assert "z_mapitemiter_i64_i64_t" in csource
+        assert "z_map_i64_i64_iterate_items" in csource
+        assert "z_mapitemiter_i64_i64_call" in csource
+        # mapentry is a typedef alias for the bucket type
+        assert "typedef z_map_i64_i64_bucket_t z_mapentry_i64_i64_t" in csource
+
     def test_generic_unit(self):
         """Generic unit instantiation with function."""
         csource = emit_source(

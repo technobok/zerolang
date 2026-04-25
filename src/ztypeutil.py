@@ -162,6 +162,54 @@ def mapkeyiter_value_type(ztype: ZType) -> Optional[ZType]:
     return base.generic_args.get("value") if base else None
 
 
+def is_mapitemiter_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized mapitemiter type."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "mapitemiter"
+    )
+
+
+def mapitemiter_key_type(ztype: ZType) -> Optional[ZType]:
+    """Get the key type of a mapitemiter type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("key") if base else None
+
+
+def mapitemiter_value_type(ztype: ZType) -> Optional[ZType]:
+    """Get the value type of a mapitemiter type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("value") if base else None
+
+
+def is_mapentry_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized mapentry type."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin is not TAG_ORIGIN
+        and ztype.generic_origin.name == "mapentry"
+    )
+
+
+def mapentry_key_type(ztype: ZType) -> Optional[ZType]:
+    """Get the key type of a mapentry type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("key") if base else None
+
+
+def mapentry_value_type(ztype: ZType) -> Optional[ZType]:
+    """Get the value type of a mapentry type."""
+    base = _unwrap_typedef(ztype)
+    return base.generic_args.get("value") if base else None
+
+
 def is_map_type(ztype: Optional[ZType]) -> bool:
     """Check if a type is a monomorphized map type."""
     ztype = _unwrap_typedef(ztype)

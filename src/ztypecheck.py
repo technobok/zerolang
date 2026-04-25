@@ -43,6 +43,12 @@ from ztypeutil import (
     listiter_element_type as _listiter_element_type,
     is_mapkeyiter_type as _is_mapkeyiter_type,
     mapkeyiter_key_type as _mapkeyiter_key_type,
+    is_mapitemiter_type as _is_mapitemiter_type,
+    mapitemiter_key_type as _mapitemiter_key_type,
+    mapitemiter_value_type as _mapitemiter_value_type,
+    is_mapentry_type as _is_mapentry_type,
+    mapentry_key_type as _mapentry_key_type,
+    mapentry_value_type as _mapentry_value_type,
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
@@ -4236,6 +4242,67 @@ class TypeChecker:
             mono.needs_destructor = False
             mono.destructor_name = None
 
+        # for mapentry types: synthesize .key / .value accessors. mapentry
+        # is a borrow-only view — its C representation is a pointer to a
+        # source bucket; .key / .value emit as field projections through
+        # that pointer. There is no constructor (only iteration yields
+        # mapentry values) and no destructor (no owned data).
+        if _is_mapentry_type(mono) and not is_partial:
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            mono.needs_destructor = False
+            mono.destructor_name = None
+            mono.create_disabled = True
+            key_t = _mapentry_key_type(mono)
+            value_t = _mapentry_value_type(mono)
+            if key_t is not None:
+                key_method = _make_type(f"{mangled}.key", ZTypeType.FUNCTION)
+                key_method.return_type = key_t
+                key_method.return_ownership = ZParamOwnership.BORROW
+                mono.children["key"] = key_method
+            if value_t is not None:
+                val_method = _make_type(f"{mangled}.value", ZTypeType.FUNCTION)
+                val_method.return_type = value_t
+                val_method.return_ownership = ZParamOwnership.BORROW
+                mono.children["value"] = val_method
+
+        # for mapitemiter types: synthesize the .call method returning
+        # (optionview of: mapentry). Walks bucket slots and yields a
+        # bucket-pointer view per USED slot.
+        if _is_mapitemiter_type(mono) and not is_partial:
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            key_t = _mapitemiter_key_type(mono)
+            value_t = _mapitemiter_value_type(mono)
+            if key_t is not None and value_t is not None:
+                # monomorphise mapentry<K,V> first (the call's payload)
+                me_template = self._resolve_name("mapentry")
+                me_mono = None
+                if me_template:
+                    me_defn = self._find_generic_defn(me_template)
+                    if me_defn:
+                        me_mono = self._monomorphize(
+                            me_template,
+                            {"key": key_t, "value": value_t},
+                            me_defn,
+                        )
+                # then optionview<mapentry<K,V>>
+                if me_mono is not None:
+                    ov_template = self._resolve_name("optionview")
+                    if ov_template:
+                        ov_defn = self._find_generic_defn(ov_template)
+                        if ov_defn:
+                            ov_mono = self._monomorphize(
+                                ov_template, {"t": me_mono}, ov_defn
+                            )
+                            call_type = _make_type(
+                                f"{mangled}.call", ZTypeType.FUNCTION
+                            )
+                            call_type.return_type = ov_mono
+                            mono.children["call"] = call_type
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
         # for list types: set reftype, synthesize methods
         # List struct is stack-allocated; only the data buffer is on the heap.
         if _is_list_type(mono) and not is_partial:
@@ -4395,6 +4462,23 @@ class TypeChecker:
                         )
                         iterate_type.return_type = mki_mono
                         mono.children["iterate"] = iterate_type
+                # synthesize .iterate_items: borrowed-entry iterator
+                # yielding mapentry views. Triggers mapitemiter<K,V> +
+                # mapentry<K,V> monos.
+                mii_template = self._resolve_name("mapitemiter")
+                if mii_template:
+                    mii_defn = self._find_generic_defn(mii_template)
+                    if mii_defn:
+                        mii_mono = self._monomorphize(
+                            mii_template,
+                            {"key": key_type, "value": value_type},
+                            mii_defn,
+                        )
+                        iterate_items_type = _make_type(
+                            f"{mangled}.iterate_items", ZTypeType.FUNCTION
+                        )
+                        iterate_items_type.return_type = mii_mono
+                        mono.children["iterate_items"] = iterate_items_type
 
         # for classes: rebuild meta_create for the monomorphized class
         if (
