@@ -8,7 +8,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test fmt build clean bootstrap-lint
+.PHONY: check test test-fast test-verbose fmt build clean bootstrap-lint
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -73,7 +73,19 @@ bootstrap-lint:
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail
 
+# Full suite, parallelized via pytest-xdist (uses all cores).
+# Run before every commit.
 test:
+	uv run python -m pytest tests/ -n auto
+
+# Inner-loop dev: skip emitter tests (gcc per-test is the bulk of the time).
+# Use during development; `make test` covers the full suite before commit.
+test-fast:
+	uv run python -m pytest tests/ --ignore=tests/test_emitter.py -n auto
+
+# Sequential full suite, with verbose output. For debugging test failures
+# where xdist makes output hard to read.
+test-verbose:
 	uv run python -m pytest tests/ -v
 
 fmt:
