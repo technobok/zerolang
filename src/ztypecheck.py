@@ -7123,6 +7123,25 @@ class TypeChecker:
                 return atom.name
         return None
 
+    def _get_bare_atom_name(self, op: zast.Operation) -> Optional[str]:
+        """Return the variable name when ``op`` is a bare AtomId reference
+        (optionally wrapped in an Expression). Returns ``None`` for dotted
+        paths, calls, projections, or any other compound expression — used
+        when the caller cares about an exact identity match (e.g. "is the
+        return value the parameter itself, untransformed?")."""
+        if op.nodetype == NodeType.ATOMID:
+            atom = cast(zast.AtomId, op)
+            if not _is_numeric_id(atom.name):
+                return atom.name
+            return None
+        if op.nodetype == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, op).expression
+            if inner.nodetype == NodeType.ATOMID:
+                return self._get_bare_atom_name(cast(zast.Operation, inner))
+            if inner.nodetype == NodeType.EXPRESSION:
+                return self._get_bare_atom_name(cast(zast.Operation, inner))
+        return None
+
     def _get_arg_root_name(self, op: zast.Operation) -> Optional[str]:
         """Get the root variable name from an operation (for aliasing checks)."""
         if op.nodetype == NodeType.ATOMID:
@@ -7792,9 +7811,7 @@ class TypeChecker:
 
         # escape check: a borrowed local cannot be returned. `borrow_origin`
         # marks variables that borrow from a function-local source; returning
-        # such a variable would outlive its source. (Parameters with
-        # ownership=BORROWED have no borrow_origin — they are borrowed from
-        # the caller, not from a local, so returning them is fine.)
+        # such a variable would outlive its source.
         if call.arguments:
             arg_op = call.arguments[0].valtype
             arg_name = self._get_arg_root_name(arg_op)
@@ -7808,6 +7825,46 @@ class TypeChecker:
                         f"value that can escape.",
                         loc=call.start,
                         err=ERR.OWNERERROR,
+                    )
+
+        # Phase B: returning a borrowed parameter as owned aliases the
+        # caller's data — the caller still owns it and the returned value
+        # would carry a duplicate reference to the same heap buffer (silent
+        # double-free / use-after-free). Reject for stack-reftypes; users
+        # must opt into ownership transfer (`.take` on the param), an owned
+        # duplicate (`.copy` on the value), or a borrow return (`out
+        # T.borrow` paired with a `.lock` parameter).
+        if (
+            self._current_func_return_ownership != ZParamOwnership.BORROW
+            and call.arguments
+            and ret_type is not None
+            and ret_type.needs_destructor
+            and not ret_type.is_heap_allocated
+        ):
+            arg_op = call.arguments[0].valtype
+            bare_name = self._get_bare_atom_name(arg_op)
+            if bare_name is not None:
+                var = self.symtab.lookup_var(bare_name)
+                param_own = self._current_func_ownership.get(bare_name)
+                if (
+                    var is not None
+                    and var.ownership == ZOwnership.BORROWED
+                    and var.borrow_origin is None
+                    and param_own in (None, ZParamOwnership.BORROW)
+                ):
+                    self._error(
+                        f"Cannot return borrowed parameter '{bare_name}': "
+                        "the caller still owns it and would receive a "
+                        "duplicate reference to the same heap data.",
+                        loc=call.start,
+                        err=ERR.OWNERERROR,
+                        hint=(
+                            f"use `{bare_name}.copy` to return an owned "
+                            f"duplicate, declare the parameter as "
+                            f"`{bare_name}: <T>.take` to transfer ownership "
+                            "in, or declare the function as `out <T>.borrow` "
+                            "with a `.lock` parameter to return a borrow"
+                        ),
                     )
 
         # return has type 'never' (control flow doesn't continue)

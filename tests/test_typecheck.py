@@ -1050,6 +1050,36 @@ class TestOwnershipReturnChecking:
             "main: function is {}"
         )
 
+    def test_return_borrowed_string_param_rejected(self):
+        """Returning an unannotated string param as owned aliases caller data."""
+        errors = check_errors(
+            "f: function {s: string} out string is { return s }\nmain: function is {}"
+        )
+        assert any(
+            "borrowed parameter" in e.msg.lower() and "'s'" in e.msg for e in errors
+        ), [e.msg for e in errors]
+
+    def test_return_taken_string_param_allowed(self):
+        """`.take` on the param transfers ownership in — return is then sound."""
+        check_ok(
+            "f: function {s: string.take} out string is { return s }\n"
+            "main: function is {}"
+        )
+
+    def test_return_copy_of_borrowed_string_param_allowed(self):
+        """`.copy` on the value returns a fresh independent owner."""
+        check_ok(
+            "f: function {s: string} out string is { return s.copy }\n"
+            "main: function is {}"
+        )
+
+    def test_return_borrow_of_lock_param_still_works(self):
+        """Existing `out T.borrow` + `.lock` parameter pattern unaffected."""
+        check_ok(
+            "f: function {s: string.lock} out string.borrow is { return s }\n"
+            "main: function is {}"
+        )
+
 
 class TestTakeBorrowCompilerMethods:
     """.take and .borrow compiler methods."""
@@ -3649,7 +3679,7 @@ class TestClassTypeResolution:
         """The `type` keyword in a class resolves to the class type."""
         program = check_ok(
             "myclass: class { x: 0 } as {\n"
-            "  clone: function {c: this} out type is { return c }\n"
+            "  clone: function {c: this.take} out type is { return c }\n"
             "}\n"
             "main: function is { c: myclass }"
         )
