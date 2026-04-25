@@ -10,6 +10,7 @@ from zparser import Parser
 from ztypecheck import typecheck, TypeChecker
 from ztypes import (
     ZTypeType,
+    ZSubType,
     ZParamOwnership,
     ZOwnership,
     ZLockState,
@@ -1079,6 +1080,37 @@ class TestOwnershipReturnChecking:
             "f: function {s: string.lock} out string.borrow is { return s }\n"
             "main: function is {}"
         )
+
+    def test_return_construction_field_args_typechecked(self):
+        """Regression: return-construction shorthand `return Type field: val`
+        must type-check the field args, otherwise nested paths never get
+        their `.type` stamped and the emitter silently falls through to
+        field access. The smoking gun is a path like `s.copy` in a field
+        slot — verify type resolution propagates to the path's parent."""
+        program = check_ok(
+            "mybox: class { label: string }\n"
+            "mk: function {s: string.take} out mybox is {\n"
+            "  return mybox label: s.copy\n"
+            "}\n"
+            "main: function is {}"
+        )
+        # locate the `s.copy` DOTTEDPATH inside mk's body and confirm the
+        # parent (`s`) has its `.type` stamped.
+        mk = program.units["test"].body["mk"]
+        statement_line = mk.body.statements[0].statementline
+        # statementline is an Expression wrapping the return Call
+        inner = statement_line.expression
+        if hasattr(inner, "expression"):
+            inner = inner.expression
+        return_call = inner
+        # return is a Call whose arguments[1].valtype is `s.copy`
+        s_copy = return_call.arguments[1].valtype
+        assert s_copy.nodetype == zast.NodeType.DOTTEDPATH, s_copy.nodetype
+        assert s_copy.parent.type is not None, (
+            "s.copy parent.type unstamped — _check_return_call's "
+            "field-arg visit is missing"
+        )
+        assert s_copy.parent.type.subtype == ZSubType.STRING
 
 
 class TestTakeBorrowCompilerMethods:

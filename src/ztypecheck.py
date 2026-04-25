@@ -7752,6 +7752,20 @@ class TypeChecker:
             # then clear the flag so it does not leak past this statement.
             inline_borrow_src = self._pending_borrow_lock
             self._pending_borrow_lock = None
+            # Return-construction shorthand: `return Type field: val ...`
+            # parses as a Call with the type as args[0] (no name) and the
+            # fields as named args[1:]. The emitter folds these via
+            # _build_create_args. Without visiting them here, nested paths
+            # (e.g. `n.copy`) never get their `.type` stamped, so per-method
+            # emit dispatches gated on `parent.type` silently fall through.
+            if (
+                len(call.arguments) >= 2
+                and call.arguments[0].name is None
+                and call.arguments[0].valtype.nodetype == NodeType.ATOMID
+                and any(a.name is not None for a in call.arguments[1:])
+            ):
+                for a in call.arguments[1:]:
+                    self._check_operation(a.valtype)
 
         if self._current_return_type and ret_type:
             if not self._types_compatible(ret_type, self._current_return_type):
