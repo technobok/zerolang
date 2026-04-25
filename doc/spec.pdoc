@@ -193,7 +193,7 @@ Other predefined identifiers:
   this
   meta
 
-  error
+  error panic
 
   return break continue yield
 
@@ -1146,32 +1146,30 @@ handle all looping variations:
   #*: for/while/loop - boolean pre-condition
   #*: for/loop/while - boolean post-condition
   #*: for loop - loop forever
-  #*: 'for'/'in' style loop against iterators and function calls
+  #*: 'foreach' style loop against an iterator object or callable
 
 Arguments:
 
 #table cols="2 2 4":
   Argument  |Default |Value/Description
   while     |Yes     |Boolean expression. Pre or post loop condition
-  \[var\]:  |No      |'var' is bound to a value of an operation, or result of an iterator
+  \[var\]:  |No      |'var' is bound to the some-payload of an operation that returns option/optionval
   loop      |No      |Block of code that may be executed 0 or more times
 
 Pre-conditions can be boolean expressions specified by the #~"while" keyword.
 This is the default argument and the argument name can be omitted if it is the
 first argument.
 
-A single binding (\[var\]: call) can be specified before the loop. The 'call'
-is to an iterator (specified with #~"in") or a standard function.  
+A single binding (\[var\]: operation) can be specified before the loop. The
+operation must be a function, method, or callable object whose result type is
+#~"option(t)" or #~"optionval(t)". On each iteration the operation is invoked
+(or its #~"call" method invoked, for callable objects); the loop terminates
+when the result is #~"none", and binds 'var' to the unwrapped some-payload
+otherwise.
 
-A binding to an iterator (#~"in" operation) is set up once on first loop, then
-each yielded value will be assigned (a borrow) to 'var'. The binding will fail
-(loop terminates) when the iterator calls #~"return" or comes to the end of the
-iterator function.
-
-A binding to a standard function will call that function before each loop and
-assign it to 'var'. If the result is an optional and is null, the #~"for" will
-terminate. 'var' will be owned in the loop body as with a normal function call
-(TODO: unless function returns a #~"borrow").
+Inside the loop body, 'var' is the some-payload value (narrowed from the
+option/optionval). It is not the wrapper — no #~"match" arm is needed to
+unwrap it.
 
 A single #~"loop" clause may then follow. The body of this clause will be
 executed if all conditions succeed. The #~"loop" may contain a #~"continue" (early
@@ -1188,7 +1186,7 @@ processing subsequent tests.
 
 #~"for" requires at least one argument (condition or #~"loop"). #~"for <condition>"
 will loop until condition is false; #~"for x: operation" will loop until
-operation is or returns null (discarding x each loop); #~"for loop { ... }" will
+operation returns #~"none" (discarding x each loop); #~"for loop { ... }" will
 loop unconditionally and indefinitely.
 
 #~"for" can be used as an expression. The result will be a list of the final
@@ -1196,39 +1194,53 @@ values of the #~"loop" statement.
 
 
 #code language=zerolang: """
-  # normal while 
+  # normal while
   # (precondition)
   for x == y loop {
       # ...
   }
 
-  # normal for..while 
+  # normal for..while
   # (post condition; at least one iteration guaranteed)
   for loop {
       # ...
   } while x == y
 
-  # 'foreach' style, myiterable is an iterator function
-  for x: in myiterable loop {    
-      # x is available as a borrowed reference here
-      # the myiterable object is unavailable (locked until 'for' completes)
+  # 'foreach' style — myiter is a callable object whose .call returns
+  # option(t) or optionval(t)
+  for x: myiter loop {
+      # x is the some-payload (narrowed)
+      # the myiter object is locked until 'for' completes
   }
 
-  # 'foreach' style combined with boolean condition
-  # only loops for x = 0, 1, 2, 3, 4
-  # TODO: skip 'range'? Make integers iterable?
-  for x: each 10 while x < 5 loop {
+  # integer range — N.each is compiler sugar for an integer for-loop.
+  # Lowered directly to a native C `for (T x = from; x < N; x++)`.
+  # Loops for x = 0, 1, 2, 3, 4
+  for x: 5.each loop {
       # ...
   }
 
+  # range with explicit start
+  for x: (10.each from: 7) loop {
+      # x = 7, 8, 9
+  }
+
+  # `N.each` may only appear directly as a for-loop binding RHS. It
+  # is not a first-class iterator value — assigning it to a variable
+  # (e.g. via #~"with") is a compile error. Use a callable class for
+  # iterators that need to be passed around or composed.
+
+  # 'foreach' combined with a precondition
   cont: true
-  for x: in iterator while cont loop {
-      # can specify multiple conditions
-      # they all must be true
-      # will short-circuit at first false condition
+  for x: iterator while cont loop {
+      # multiple conditions all must hold; short-circuit at first false
       cont = false
   }
   """
+
+The grammar form #~"for x: in iter" (with the #~"in" keyword) is reserved
+and not currently accepted by the parser. The plain binding form
+#~"for x: iter" is canonical.
 
 #---: .take on Function Names
 
@@ -1314,6 +1326,25 @@ Sum types hold a single value that can be one of a fixed list of types.
 Sum types are available at run time but can also be used to specify
 [#> to=generic-types: generic parameter] constraints.
 
+#-----: Falsy-first convention
+
+For 2-arm sum types where one arm represents absence, failure, or
+falsity, list that arm first in the declaration so it receives
+discriminator tag 0. Stdlib types #~"option", #~"optionval",
+#~"result", #~"resultval", and #~"bool" all follow this convention.
+
+The convention has three benefits:
+
+#ul:
+  #*: Zero-initialised memory naturally reads as the falsy variant.
+  #*: Compiler comparisons (#~"if", #~"for" termination) can use
+      tag 0 directly without per-type lookup.
+  #*: Visual reading is consistent: the early-exit / no-value case
+      is at the top of the declaration.
+
+User-defined sum types are encouraged but not required to follow this
+convention; the compiler does not enforce it on user code.
+
 #-----: Type Narrowing
 
 The compiler keeps track of the type of every expression at every point in the
@@ -1361,6 +1392,12 @@ An #~"else" clause of a #~"match" sees the union/variant type with all explicit
 If all branches of an #~"if" or #~"match" exit the current scope (return, break,
 continue), any statements following that expression are unreachable and are
 flagged as a compile error.
+
+For-loop binding narrowing: in #~"for x: operation loop {...}" where
+#~"operation" returns #~"option(t)" or #~"optionval(t)", the loop variable
+'x' is narrowed to the some-payload type 't' inside the body. The
+wrapper is never visible — terminating on #~"none" is handled by the
+loop machinery, and #~"x" is the unwrapped value.
 
 Narrowing is purely a compile-time concept. The runtime representation of a
 variable is not changed by narrowing -- a union/variant variable retains its
@@ -1508,16 +1545,16 @@ Examples:
 #code language=zerolang: """
   # option type for reference types (nullable pointer)
   option: union {
-      some: t
       none: null
+      some: t
   } as {
       t: any.reftype
   }
 
   # optionval type for value types (stack-allocated tagged variant)
   optionval: variant {
-      some: t
       none: null
+      some: t
   } as {
       t: any.valtype
   }

@@ -429,6 +429,12 @@ class TypeChecker:
         # emit compile-time errors (used inside constant-false if branches)
         self._suppress_compile_error: int = 0
 
+        # cached stdlib generic-template ids for hot-path identity checks.
+        # Lazily populated on first use because the system unit may not yet
+        # be loaded at __init__ time. -1 means "not yet resolved".
+        self._option_template_id: int = -1
+        self._optionval_template_id: int = -1
+
     # Keywords used to auto-categorise errors when no explicit code is given
     _OWNERSHIP_KEYWORDS = (
         "take",
@@ -3949,7 +3955,10 @@ class TypeChecker:
         # for nullable-ptr option (monomorphized option union): mark as nullable ptr
         # only when the some type is heap-allocated (pointer-based), e.g. unions, protocols
         # Stack-allocated types like string cannot use the nullable-ptr optimization
-        if template_type.typetype == ZTypeType.UNION and template_type.name == "option":
+        if (
+            template_type.typetype == ZTypeType.UNION
+            and template_type.nodeid == self._option_template_nodeid()
+        ):
             some_child = mono.children.get("some")
             if some_child and some_child.is_heap_allocated:
                 mono.is_nullable_ptr = True
@@ -8007,13 +8016,29 @@ class TypeChecker:
             call.call_kind = zast.CallKind.BOX_CREATE
         return mono
 
+    def _option_template_nodeid(self) -> int:
+        """Resolve and cache the stdlib `option` generic-template nodeid."""
+        if self._option_template_id == -1:
+            t = self._resolve_name("option")
+            if t is not None:
+                self._option_template_id = t.nodeid
+        return self._option_template_id
+
+    def _optionval_template_nodeid(self) -> int:
+        """Resolve and cache the stdlib `optionval` generic-template nodeid."""
+        if self._optionval_template_id == -1:
+            t = self._resolve_name("optionval")
+            if t is not None:
+                self._optionval_template_id = t.nodeid
+        return self._optionval_template_id
+
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""
         return (
             t.typetype == ZTypeType.UNION
             and t.generic_origin is not None
             and not is_tag_origin(t.generic_origin)
-            and t.generic_origin.name == "option"
+            and t.generic_origin.nodeid == self._option_template_nodeid()
         )
 
     def _is_optionval_type(self, t: ZType) -> bool:
@@ -8022,7 +8047,7 @@ class TypeChecker:
             t.typetype == ZTypeType.VARIANT
             and t.generic_origin is not None
             and not is_tag_origin(t.generic_origin)
-            and t.generic_origin.name == "optionval"
+            and t.generic_origin.nodeid == self._optionval_template_nodeid()
         )
 
     def _is_option_or_optionval_type(self, t: ZType) -> bool:
