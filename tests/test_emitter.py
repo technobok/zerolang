@@ -1373,6 +1373,45 @@ class TestEmitterStringOwnership:
         lines = compile_and_run(csource).strip().split("\n")
         assert lines == ["x=hello world", "y=hello"]
 
+    def test_string_param_borrow_passes_pointer(self):
+        """Phase A: unannotated string param is pointer-passed; the
+        emitted C signature uses `z_string_t*`, callers wrap with `&`,
+        and the caller's variable is NOT zeroed after the call."""
+        csource = emit_source(
+            "f: function {s: string} is {\n"
+            '  print "got=\\{s}"\n'
+            "}\n"
+            "main: function is {\n"
+            '  x: "hi".string\n'
+            "  f s: x\n"
+            "}"
+        )
+        # signature is pointer-typed
+        assert "void z_f(z_string_t* s)" in csource
+        # call site wraps with &
+        assert "z_f(&x)" in csource
+        # caller's x is not zeroed by an implicit-take
+        assert "x = (z_string_t){0}" not in csource
+
+    def test_string_param_mutation_lands_in_caller(self):
+        """Phase A: a borrowed string param mutated inside the callee
+        shows the mutation in the caller's storage afterwards."""
+        csource = emit_source(
+            "mutate: function {s: string} is {\n"
+            '  s.append s: " world"\n'
+            "}\n"
+            "main: function is {\n"
+            '  x: "hello".string\n'
+            "  mutate s: x\n"
+            '  print "x=\\{x}"\n'
+            "}"
+        )
+        # s.append on a pointer-receiver should not double-address
+        assert "z_string_append(s," in csource
+        assert "z_string_append(&s," not in csource
+        output = compile_and_run(csource).strip()
+        assert output == "x=hello world"
+
     def test_multiple_string_vars(self):
         """Several strings in one function, all freed correctly."""
         csource = emit_source(
