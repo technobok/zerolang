@@ -296,6 +296,13 @@ class ZType:
     # True iff this type has at least one .lock field (classes only).
     has_lock_fields: bool = field(default=False, init=False)
 
+    # set of arm names declared with the .lock type modifier on a union —
+    # the arm holds a locked reference into a parent rather than owning its
+    # payload. The destructor releases the lock without freeing the payload;
+    # the union's lifetime cannot exceed the locked source's lifetime.
+    # Unions only — variant arms must be inline-stored valtypes.
+    lock_arm_names: "set[str]" = field(default_factory=set, init=False)
+
     # True iff the type's 'create' method is disabled — either by the user
     # writing 'create: null' in the 'as' block, or by the compiler for types
     # where bare-name construction is not meaningful (unions and variants

@@ -2911,6 +2911,19 @@ class CEmitter:
                         return values
         return None
 
+    def _union_lock_arm_names(self, union_defn: zast.Union) -> set:
+        """Return the set of arm names declared as `name: t.lock` on a union.
+
+        Mirrors the type-checker's `lock_arm_names` on the resolved ZType,
+        but read straight off the AST so it's available at emit time without
+        needing a back-reference to the resolved type.
+        """
+        out: set = set()
+        for sname, own in union_defn.field_ownership.items():
+            if own == ZParamOwnership.LOCK:
+                out.add(sname)
+        return out
+
     def _emit_union(self, name: str, union_defn: zast.Union) -> None:
         self.needs_stdint = True
         self.needs_stdlib = True
@@ -2937,29 +2950,39 @@ class CEmitter:
         lines.append("    void* data;\n")
         lines.append(f"}} z_{name}_t;\n\n")
 
-        # destructor: collapse to a no-op when every subtype is `null`
-        # (tag-only union — nothing ever to free).
-        all_null_items = all(
-            spath.nodetype == NodeType.ATOMID
-            and cast(zast.AtomId, spath).name == "null"
-            for _, spath in union_defn.items.items()
+        # No-cleanup arms: `null` (no payload) and `.lock` (borrowed
+        # reference — the union doesn't own its payload). When every arm
+        # is no-cleanup, the destructor is a no-op (and is unreachable
+        # via the type-checker's needs_destructor=False on the resolved
+        # ZType, but emit it anyway so a stale call site links cleanly).
+        lock_arms = self._union_lock_arm_names(union_defn)
+
+        def _is_no_cleanup(sname: str, spath: zast.Path) -> bool:
+            if (
+                spath.nodetype == NodeType.ATOMID
+                and cast(zast.AtomId, spath).name == "null"
+            ):
+                return True
+            return sname in lock_arms
+
+        all_no_cleanup = all(
+            _is_no_cleanup(sname, spath) for sname, spath in union_defn.items.items()
         )
-        if all_null_items:
+        if all_no_cleanup:
             lines.append(
                 f"static void z_{name}_destroy(z_{name}_t* u) {{ (void)u; }}\n\n"
             )
             self.struct_defs.append("".join(lines))
             return
 
-        # Non-null subtypes (ones whose payload needs freeing). Null tags
-        # fall through the switch's implicit default with no work.
+        # Owned subtypes (ones whose payload needs freeing). Null and
+        # locked tags fall through the switch's implicit default with
+        # no work — locked arms hold a borrowed pointer the union does
+        # not own.
         non_null_items = [
             (sname, spath)
             for sname, spath in union_defn.items.items()
-            if not (
-                spath.nodetype == NodeType.ATOMID
-                and cast(zast.AtomId, spath).name == "null"
-            )
+            if not _is_no_cleanup(sname, spath)
         ]
 
         def _arm_body(spath: zast.Path) -> tuple[str, ...]:

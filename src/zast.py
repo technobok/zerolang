@@ -468,6 +468,10 @@ class Union(Node):
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
     is_native: bool = False  # native type: instance state is compiler-provided
+    # arm name -> ZParamOwnership (only LOCK currently allowed on union arms;
+    # marks the arm as holding a locked reference into a parent rather than
+    # owning its payload)
+    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
 
 @dataclass
@@ -486,6 +490,9 @@ class Variant(Node):
     as_items: Dict[str, "Path"]
     as_functions: Dict[str, "Function"]
     is_native: bool = False  # native type: instance state is compiler-provided
+    # arm name -> ZParamOwnership (variant arms are valtype-only; .lock is
+    # rejected by the type checker but the field is carried for diagnostics)
+    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
 
 @dataclass

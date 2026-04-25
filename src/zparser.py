@@ -1279,6 +1279,7 @@ class Parser:
                 as_functions=as_functions,
                 start=start,
                 is_native=native,
+                field_ownership=is_body.field_ownership if is_body else {},
             )
         else:
             node = ast_cls(

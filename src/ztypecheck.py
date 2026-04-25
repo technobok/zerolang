@@ -1615,6 +1615,18 @@ class TypeChecker:
                 st = self._resolve_typeref(spath)
             if st:
                 utype.children[sname] = st
+            # detect locked arms: arm declared as `name: t.lock`. Only LOCK is
+            # permitted; .take/.borrow on an arm are rejected.
+            arm_own = union_defn.field_ownership.get(sname)
+            if arm_own == ZParamOwnership.LOCK:
+                utype.lock_arm_names.add(sname)
+            elif arm_own is not None:
+                self._error(
+                    f"Only '.lock' is permitted as a union arm modifier; "
+                    f"got '.{arm_own.name.lower()}' on arm '{sname}'",
+                    loc=union_defn.start,
+                    err=ERR.TYPEERROR,
+                )
         if generic_ctx:
             self._generic_context.pop()
 
@@ -1682,8 +1694,31 @@ class TypeChecker:
         utype.create_disabled = True
 
         _set_field_cleanup_metadata(utype)
+        # Destructor elision: when every arm is either `null` or a `.lock`
+        # reference, no runtime cleanup is needed. Locked arms hold a
+        # borrowed pointer (no payload to free); null arms have no payload.
+        # Mixed unions (some owned, some locked) keep the destructor; the
+        # emitter handles per-arm switch elision separately.
+        if not utype.isgeneric:
+            self._maybe_elide_union_destructor(utype, union_defn)
         self._resolving.pop()
         return utype
+
+    def _maybe_elide_union_destructor(
+        self, utype: ZType, union_defn: zast.Union
+    ) -> None:
+        """Mark a union's destructor as not-needed when no arm requires
+        runtime cleanup (every arm is `null` or a `.lock` reference)."""
+        for sname, spath in union_defn.items.items():
+            is_null = (
+                spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                and cast(zast.AtomId, spath).name == "null"
+            )
+            is_locked = sname in utype.lock_arm_names
+            if not (is_null or is_locked):
+                return
+        utype.needs_destructor = False
+        utype.destructor_name = None
 
     def _resolve_variant_type(
         self, unitname: str, name: str, variant_defn: zast.Variant
@@ -1775,6 +1810,25 @@ class TypeChecker:
                         )
             if st:
                 vtype.children[sname] = st
+            # variants are valtype-only; locked arms hold an external pointer
+            # (reftype-flavored ownership) which conflicts with the inline
+            # storage model. Reject .lock arms here for a clear diagnostic.
+            arm_own = variant_defn.field_ownership.get(sname)
+            if arm_own == ZParamOwnership.LOCK:
+                self._error(
+                    f"Variant '{name}' arm '{sname}' cannot use '.lock'; "
+                    f"locked arms are only permitted on unions",
+                    loc=variant_defn.start,
+                    err=ERR.TYPEERROR,
+                )
+            elif arm_own is not None:
+                self._error(
+                    f"Only '.lock' is permitted as an arm modifier (and "
+                    f"only on unions); got '.{arm_own.name.lower()}' on "
+                    f"arm '{sname}'",
+                    loc=variant_defn.start,
+                    err=ERR.TYPEERROR,
+                )
         if generic_ctx:
             self._generic_context.pop()
 

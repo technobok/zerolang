@@ -10296,3 +10296,101 @@ class TestTakeInArm:
             "}"
         )
         assert any("ownership transfer" in e.msg.lower() for e in errors)
+
+
+class TestUnionLockedArm:
+    """Locked union arms (W-C) — arms declared `name: t.lock` hold a
+    borrowed reference into a parent rather than owning their payload."""
+
+    def test_union_with_locked_arm_resolves(self):
+        """A union may declare an arm as `name: type.lock`."""
+        program = check_ok(
+            "src: class { v: i64 }\n"
+            "myview: union { none: null\n some: src.lock }\n"
+            "main: function is {\n"
+            "  s: src v: 7\n"
+            "  x: myview.none src\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myview")
+        assert ut is not None
+        assert "some" in ut.lock_arm_names
+        assert "none" not in ut.lock_arm_names
+
+    def test_union_all_null_or_locked_no_destructor(self):
+        """A union whose every arm is `null` or `.lock` needs no destructor."""
+        program = check_ok(
+            "src: class { v: i64 }\n"
+            "myview: union { none: null\n some: src.lock }\n"
+            "main: function is {\n"
+            "  s: src v: 7\n"
+            "  x: myview.none src\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.myview")
+        assert ut.needs_destructor is False
+        assert ut.destructor_name is None
+
+    def test_union_mixed_arms_keeps_destructor(self):
+        """An owned arm anywhere in the union keeps the destructor live."""
+        program = check_ok(
+            "src: class { v: i64 }\n"
+            "errkind: variant { e1: null\n e2: null }\n"
+            "mixed: union { err: errkind\n cached: src.lock\n fresh: src }\n"
+            "main: function is {\n"
+            "  s: src v: 7\n"
+            "  x: mixed.err (errkind.e1)\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.mixed")
+        assert ut.needs_destructor is True
+        assert ut.destructor_name == "z_mixed_destroy"
+        assert ut.lock_arm_names == {"cached"}
+
+    def test_variant_locked_arm_rejected(self):
+        """A variant arm cannot use `.lock` — variants are valtype-only."""
+        errors = check_errors(
+            "myvar: variant { a: i64\n b: i64.lock }\n"
+            "main: function is { x: myvar.a 1 }"
+        )
+        assert any(
+            "variant" in e.msg.lower() and ".lock" in e.msg.lower()
+            for e in errors
+        )
+
+    def test_union_arm_borrow_rejected(self):
+        """`.borrow` modifier on union arms is rejected; only `.lock`
+        is permitted."""
+        errors = check_errors(
+            "src: class { v: i64 }\n"
+            "u: union { only: src.borrow }\n"
+            "main: function is {\n"
+            "  s: src v: 7\n"
+            "  x: u.only src\n"
+            "}"
+        )
+        assert any(
+            "only '.lock' is permitted" in e.msg.lower() for e in errors
+        )
+
+    def test_union_with_only_locked_arm(self):
+        """Single-locked-arm union resolves and has no destructor."""
+        program = check_ok(
+            "src: class { v: i64 }\n"
+            "wrap: union { val: src.lock }\n"
+            "main: function is {\n"
+            "  s: src v: 7\n"
+            "  x: wrap.val src\n"
+            "}"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        ut = tc._resolved.get("test.wrap")
+        assert ut.lock_arm_names == {"val"}
+        assert ut.needs_destructor is False
