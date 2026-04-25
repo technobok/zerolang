@@ -4381,6 +4381,7 @@ class CEmitter:
             zast.CallKind.BREAK,
             zast.CallKind.CONTINUE,
             zast.CallKind.ERROR,
+            zast.CallKind.PANIC,
         ):
             return False
         # never type means all paths already return explicitly
@@ -4587,6 +4588,27 @@ class CEmitter:
             return f"{indent}break;\n"
         if expr.call_kind == zast.CallKind.CONTINUE:
             return f"{indent}continue;\n"
+        # panic(msg): route through the shared z_panic helper in the runtime
+        # preamble. msg is declared as `string`, but after type coercion
+        # we may have a z_string_t or a z_stringview_t; both expose `.data`
+        # as a `const char*`-compatible pointer. Materialising msg may pull
+        # in the string runtime, so set the corresponding needs_* flags.
+        if expr.call_kind == zast.CallKind.PANIC:
+            self.needs_stdlib = True
+            self.needs_string = True
+            self.needs_stringview = True
+            if inner.nodetype == zast.NodeType.CALL:
+                call = cast(zast.Call, inner)
+                if call.arguments:
+                    arg_op = call.arguments[0].valtype
+                    arg_type = self._get_operation_type(arg_op)
+                    arg = self._emit_operation_value(arg_op)
+                    if arg_type and arg_type.subtype in (
+                        ZSubType.STRING,
+                        ZSubType.STRINGVIEW,
+                    ):
+                        return f"{indent}z_panic((const char*){arg}.data);\n"
+            return f'{indent}z_panic("(panic)");\n'
         if inner.nodetype == zast.NodeType.CALL:
             return self._emit_call_stmt(cast(zast.Call, inner), indent)
         if inner.nodetype == zast.NodeType.IF:
@@ -8096,6 +8118,7 @@ class CEmitter:
                     zast.CallKind.BREAK,
                     zast.CallKind.CONTINUE,
                     zast.CallKind.ERROR,
+                    zast.CallKind.PANIC,
                 ):
                     parts.append(self._emit_statement_line(sline))
                 else:
@@ -8129,6 +8152,7 @@ class CEmitter:
                     zast.CallKind.BREAK,
                     zast.CallKind.CONTINUE,
                     zast.CallKind.ERROR,
+                    zast.CallKind.PANIC,
                 ):
                     parts.append(self._emit_statement_line(sline))
                 else:

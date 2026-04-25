@@ -36,7 +36,17 @@ def compile_and_run_with_args(csource: str, argv: list[str]) -> str:
         cpath = f.name
     outpath = cpath.replace(".c", "")
     try:
-        cmd = ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath]
+        cmd = [
+            "gcc",
+            "-std=c17",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-function",
+            "-Wno-unused-parameter",
+            "-o",
+            outpath,
+            cpath,
+        ]
         comp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if comp.returncode != 0:
             raise RuntimeError(f"gcc failed:\n{comp.stderr}")
@@ -60,7 +70,14 @@ def compile_and_run(csource: str, extra_cflags: list[str] | None = None) -> str:
         cpath = f.name
     outpath = cpath.replace(".c", "")
     try:
-        cmd = ["gcc", "-Wall", "-Wno-unused-function"]
+        cmd = [
+            "gcc",
+            "-std=c17",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-function",
+            "-Wno-unused-parameter",
+        ]
         if extra_cflags:
             cmd.extend(extra_cflags)
         cmd.extend(["-o", outpath, cpath])
@@ -79,6 +96,36 @@ def compile_and_run(csource: str, extra_cflags: list[str] | None = None) -> str:
             timeout=10,
         )
         return result.stdout
+    finally:
+        for p in (cpath, outpath):
+            if os.path.exists(p):
+                os.unlink(p)
+
+
+def compile_and_capture(csource: str) -> tuple[int, str, str]:
+    """Compile C source, run the binary, return (exit_code, stdout, stderr).
+    Useful for programs that exit non-zero (e.g. panics)."""
+    with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
+        f.write(csource)
+        cpath = f.name
+    outpath = cpath.replace(".c", "")
+    try:
+        cmd = [
+            "gcc",
+            "-std=c17",
+            "-Wall",
+            "-Wextra",
+            "-Wno-unused-function",
+            "-Wno-unused-parameter",
+            "-o",
+            outpath,
+            cpath,
+        ]
+        comp = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if comp.returncode != 0:
+            raise RuntimeError(f"gcc failed:\n{comp.stderr}")
+        result = subprocess.run([outpath], capture_output=True, text=True, timeout=10)
+        return result.returncode, result.stdout, result.stderr
     finally:
         for p in (cpath, outpath):
             if os.path.exists(p):
@@ -1989,7 +2036,7 @@ class TestEmitterUnions:
         csource = emit_source(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 42 }"
         )
-        assert "malloc(sizeof(z_myunion_t))" not in csource
+        assert "z_xmalloc(sizeof(z_myunion_t))" not in csource
         assert "z_myunion_t" in csource
         assert "= {0}" in csource
         assert "Z_MYUNION_TAG_A" in csource
@@ -2777,11 +2824,11 @@ class TestEmitterVariant:
         csource = emit_source(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 42 }"
         )
-        # there should be no malloc for the variant construction
-        # (malloc may exist for string infrastructure but not for variant)
+        # there should be no heap allocation for the variant construction
+        # (z_xmalloc may exist elsewhere but not on any variant line)
         lines = csource.split("\n")
         variant_lines = [ln for ln in lines if "myvar" in ln.lower() or "_c1" in ln]
-        assert not any("malloc" in ln for ln in variant_lines)
+        assert not any("z_xmalloc" in ln for ln in variant_lines)
 
     def test_variant_direct_assign(self):
         """Variant construction should use direct .data.subname assignment."""
@@ -3556,7 +3603,7 @@ class TestProtocols:
         # temp path should be stack-allocated (z_reader_t directly, not pointer)
         assert "z_reader_t _p" in csource
         # protocol struct itself is not malloc'd
-        assert "malloc(sizeof(z_reader_t))" not in csource
+        assert "z_xmalloc(sizeof(z_reader_t))" not in csource
         # the stack temp is destroyed by address
         assert "z_reader_destroy(&_p" in csource
 
@@ -8603,3 +8650,77 @@ class TestNarrowedFullSemantics:
         )
         output = compile_and_run(csource)
         assert output.strip().startswith("size=")
+
+
+class TestPanic:
+    def test_panic_emits_call(self):
+        """`panic msg: "..."` lowers to a `z_panic(...)` call with the
+        message wired through."""
+        csource = emit_source('main: function is {\n    panic msg: "boom"\n}')
+        assert "z_panic(" in csource
+        assert '"boom"' in csource
+
+    def test_panic_terminates_program(self):
+        """A program that panics exits with code 1 and the `zpanic:`
+        prefix plus the message on stderr."""
+        csource = emit_source('main: function is {\n    panic msg: "kaboom"\n}')
+        rc, stdout, stderr = compile_and_capture(csource)
+        assert rc == 1, f"expected exit 1, got {rc}"
+        assert "zpanic: kaboom" in stderr, stderr
+        assert stdout == ""
+
+    def test_panic_with_dynamic_message(self):
+        """Panic works with a composed string, not just a literal."""
+        csource = emit_source(
+            "main: function is {\n"
+            '    where: "phase-2"\n'
+            '    panic msg: "failed in \\{where}"\n'
+            "}"
+        )
+        rc, _stdout, stderr = compile_and_capture(csource)
+        assert rc == 1
+        assert "zpanic: failed in phase-2" in stderr, stderr
+
+    def test_panic_in_conditional(self):
+        """A conditional branch that panics does not execute the
+        remainder of the function; the branch that doesn't panic
+        prints normally."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    n: 7\n"
+            "    if n < 0 then {\n"
+            '        panic msg: "negative"\n'
+            "    }\n"
+            '    print "ok"\n'
+            "}"
+        )
+        rc, stdout, _stderr = compile_and_capture(csource)
+        assert rc == 0
+        assert stdout.strip() == "ok"
+
+    def test_bounds_check_uses_zpanic(self):
+        """A list bounds violation routes through the shared `z_panic`
+        helper and produces a `zpanic:` prefixed stderr line."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    xs: (list of: i64)\n"
+            "    xs.append from: 10\n"
+            "    _: xs.get i: 5.u64\n"
+            "}"
+        )
+        rc, _stdout, stderr = compile_and_capture(csource)
+        assert rc == 1
+        assert "zpanic: list get: index 5 out of bounds" in stderr, stderr
+
+    def test_xalloc_path_uses_zpanic(self):
+        """The OOM path in the x-alloc helpers calls `z_panic("out of
+        memory")`. Grep the emitted C to verify the wiring (running
+        it reliably requires `ulimit` which is brittle in CI)."""
+        csource = emit_source(
+            "counter: class { value: i64 }\n"
+            "main: function is {\n"
+            "    c: counter value: 1\n"
+            '    print "ok"\n'
+            "}"
+        )
+        assert 'z_panic("out of memory")' in csource

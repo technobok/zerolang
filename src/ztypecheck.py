@@ -998,6 +998,7 @@ class TypeChecker:
             "break": ControlKind.BREAK,
             "continue": ControlKind.CONTINUE,
             "error": ControlKind.ERROR,
+            "panic": ControlKind.PANIC,
         }
         if func.is_native and name in _CONTROL_KINDS:
             ftype.control_kind = _CONTROL_KINDS[name]
@@ -5607,6 +5608,7 @@ class TypeChecker:
                     ControlKind.BREAK: zast.CallKind.BREAK,
                     ControlKind.CONTINUE: zast.CallKind.CONTINUE,
                     ControlKind.ERROR: zast.CallKind.ERROR,
+                    ControlKind.PANIC: zast.CallKind.PANIC,
                 }
                 expr.call_kind = _CK_MAP.get(t.control_kind, zast.CallKind.UNKNOWN)
                 # flag enclosing do block if break targets it
@@ -6142,6 +6144,14 @@ class TypeChecker:
             if self._suppress_compile_error == 0:
                 msg = self._extract_error_message(call)
                 self._error(msg, loc=call.start)
+            call.type = callee_type
+            return callee_type
+        if callee_type.control_kind == ControlKind.PANIC:
+            call.call_kind = zast.CallKind.PANIC
+            # type-check the message argument; no compile-time diagnostic
+            # (unlike error, panic is a pure runtime terminator).
+            for arg in call.arguments:
+                self._check_operation(arg.valtype)
             call.type = callee_type
             return callee_type
 

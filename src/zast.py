@@ -757,6 +757,7 @@ class CallKind(IntEnum):
     BREAK = 16  # break statement
     CONTINUE = 17  # continue statement
     ERROR = 18  # error statement
+    PANIC = 19  # panic call (runtime terminal error)
 
 
 @dataclass

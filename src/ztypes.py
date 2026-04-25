@@ -60,6 +60,7 @@ class ControlKind(IntEnum):
     BREAK = 2
     CONTINUE = 3
     ERROR = 4
+    PANIC = 5
 
 
 @unique

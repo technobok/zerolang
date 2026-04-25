@@ -111,6 +111,7 @@ operation can fail for reasons the caller needs to handle
 
 #ul:
   [#*: #> to=error: #b:"error" -- #~"function {msg: string} out never is native"]
+  [#*: #> to=panic: #b:"panic" -- #~"function {msg: string} out never is native"]
   [#*: #> to=return: #b:"return" -- #~"function as { t: any.generic } in { result: t } out never is native"]
   [#*: #> to=break: #b:"break" -- compiler-intrinsic]
   [#*: #> to=continue: #b:"continue" -- compiler-intrinsic]
@@ -252,8 +253,9 @@ non-nullable at the language level; #~"option" handles the
 
 The bottom type: the empty type, with no values. Used as the
 return type of functions that never return normally (#~"error",
-#~"return"). #~"never" is a subtype of every type, so an
-#~"error ..." call is usable in any expression position.
+#~"panic", #~"return"). #~"never" is a subtype of every type, so
+an #~"error ..." or #~"panic ..." call is usable in any expression
+position.
 
 Control-flow analysis tracks #~"never"-returning expressions to
 determine unreachable-code errors and branch exhaustiveness. See
@@ -771,6 +773,42 @@ that must be statically dead; the #~"never" return type lets
       }
   }
 """
+
+
+#--: panic
+
+#code language=zerolang: """
+  panic: function {msg: string} out never is native
+"""
+
+Runtime terminal error. #~"panic msg: ..." prints
+#~"zpanic: <msg>" to stderr and exits the process with status
+#~"1". Use #~"panic" for programmer errors that should never occur
+at runtime (invariants, unreachable defaults, bounds preconditions
+the caller is responsible for maintaining); for recoverable errors
+prefer #~"result t: T e: E".
+
+The distinction from #~"error": #~"error" is a compile-time
+construct -- an #~"error msg: ..." call in a statically-reachable
+branch aborts compilation. #~"panic" is the runtime counterpart,
+emitted as a call to the shared #~"z_panic" helper in the emitted
+C runtime. All internal unrecoverable exits (OOM, bounds checks,
+numeric cast overflow, stringview bounds) also funnel through
+#~"z_panic", so every termination produces a consistent
+#~"zpanic:" prefixed diagnostic.
+
+#code language=zerolang: """
+  check_positive: function {n: i64} out i64 is {
+      if n <= 0 then {
+          panic msg: "expected a positive integer"
+      }
+      return n
+  }
+"""
+
+Panics are terminal: there is no #~"recover" mechanism. The
+#~"never" return type ensures any code after a #~"panic" is
+statically unreachable.
 
 
 #--: return
