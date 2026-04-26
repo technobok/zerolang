@@ -1190,12 +1190,14 @@ class TypeChecker:
             )
 
         # a function returning borrow must have at least one lock parameter
-        if ret_is_borrow and not has_lock_param:
+        # OR explicitly bind the return to a source via `out T.borrow from: <name>`.
+        if ret_is_borrow and not has_lock_param and ftype.return_lock_target is None:
             self._error(
                 "function returns 'borrow' but has no 'lock' parameter",
                 loc=func.start,
                 err=ERR.OWNERERROR,
-                hint="add .lock to a parameter to borrow from it",
+                hint="add .lock to a parameter to borrow from it, "
+                "or annotate the return with `from: <name>`",
             )
 
         # .lock on known valtype parameters is an error (locking requires
@@ -7396,10 +7398,23 @@ class TypeChecker:
         for arg in call.arguments:
             if arg.name and arg.name in lock_param_names:
                 continue
-            # Case 1: syntactic inline projection
+            # Case 1: inline projection — either via legacy syntactic name
+            # match (_INLINE_LOCK_PROJECTIONS) or via the method's
+            # return_lock_target metadata. Both paths fire so commit 6 can
+            # delete the syntactic constant without losing the rejection.
             if arg.valtype.nodetype == NodeType.DOTTEDPATH:
                 dp = cast(zast.DottedPath, arg.valtype)
-                if dp.child.name in self._INLINE_LOCK_PROJECTIONS:
+                parent_type = getattr(dp.parent, "type", None)
+                method_type = (
+                    parent_type.children.get(dp.child.name)
+                    if parent_type is not None
+                    else None
+                )
+                has_metadata_lock = (
+                    method_type is not None
+                    and method_type.return_lock_target is not None
+                )
+                if dp.child.name in self._INLINE_LOCK_PROJECTIONS or has_metadata_lock:
                     src_path = self._get_dotted_path_tuple(dp.parent)
                     src_name = ".".join(src_path) if src_path else "<expr>"
                     self._error(
