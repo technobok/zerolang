@@ -2135,6 +2135,27 @@ class TestLockEnforcement:
             "}"
         )
 
+    def test_method_call_with_arg_derived_from_receiver_allowed(self):
+        """Call-identity stack (Phase C step 1): a method call whose
+        argument borrows from the same receiver path should not
+        self-block. Receiver lock and the arg's prefix-overlapping lock
+        carry the same call identity now, so try_lock's same-holder
+        predicate skips the conflict.
+        """
+        check_ok(
+            "inner: class { val: 0u64 }\n"
+            "pair: class {\n"
+            "  a: inner\n"
+            "  b: inner\n"
+            "} as {\n"
+            "  poke: function {:this side: inner} is {}\n"
+            "}\n"
+            "main: function is {\n"
+            "  p: pair a: inner b: inner\n"
+            "  p.poke side: p.a.borrow\n"
+            "}"
+        )
+
     def test_call_shared_lock_allows_sibling_field_args(self):
         """Call-scoped SHARED locks on the parent permit passing sibling fields
         as separate arguments (regression guard for B4)."""
