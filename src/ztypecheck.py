@@ -7722,20 +7722,6 @@ class TypeChecker:
                     err=ERR.OWNERERROR,
                 )
 
-    # Syntactic name match for aggregate-escape Case 1. `.stringview` and
-    # `.listview` projections previously lived here but have been migrated
-    # to the metadata path: their natives carry `return_lock_target = "this"`
-    # (commits bde6411 / bfc40c3), and the syntactic branches in
-    # `_resolve_dotted_path` were deleted in favour of the unified zero-arg
-    # method coercion that reads the metadata. `.byteview` remains because
-    # `bytes.byteview` is not a working method (aspirational only); its
-    # entry pins `test_class_cannot_hold_byteview` until that test is
-    # rewritten when blocker 2 lands. `.borrow` / `.lock` remain because
-    # they are intrinsic ownership projections, not methods, and have no
-    # `return_lock_target` metadata to consult — blocker 2 lifts them to
-    # metadata-bearing intrinsic methods so they can be removed too.
-    _INLINE_LOCK_PROJECTIONS = frozenset({"byteview", "borrow", "lock"})
-
     def _check_aggregate_lock_escape(self, call: zast.Call, callee_type: ZType) -> None:
         """Reject arguments carrying outstanding locks from escaping into an
         aggregate constructor call. Generalises the V2 view-field rule:
@@ -7749,8 +7735,11 @@ class TypeChecker:
         transfer operations, not storage into a fresh aggregate; skip them.
 
         Three cases caught:
-          1. Inline projection in arg position (`b.byteview`, `s.stringview`,
-             `x.borrow`, `x.lock`): syntactically detected via the child name.
+          1. Lock-bearing method projection in arg position
+             (`b.byteview`, `s.stringview`, `xs.listview`, user methods
+             with `out T.borrow from: <name>`): the called method's
+             `return_lock_target` metadata identifies the source path
+             whose lock the return value carries.
           2. Borrow-holder arg — `var.borrow_origin` is set, meaning `var`
              binds a borrow whose EXCLUSIVE lock lives on the source path
              (not on the holder's name).
@@ -7769,10 +7758,11 @@ class TypeChecker:
         for arg in call.arguments:
             if arg.name and arg.name in lock_param_names:
                 continue
-            # Case 1: inline projection — either via legacy syntactic name
-            # match (_INLINE_LOCK_PROJECTIONS) or via the method's
-            # return_lock_target metadata. Both paths fire so commit 6 can
-            # delete the syntactic constant without losing the rejection.
+            # Case 1: lock-bearing method projection — the method's
+            # return_lock_target metadata identifies the source path
+            # whose lock the return value carries (set by `from: <name>`
+            # in the function signature; see ztypecheck of Function for
+            # the wiring at commit 48cb345).
             if arg.valtype.nodetype == NodeType.DOTTEDPATH:
                 dp = cast(zast.DottedPath, arg.valtype)
                 parent_type = getattr(dp.parent, "type", None)
@@ -7785,7 +7775,7 @@ class TypeChecker:
                     method_type is not None
                     and method_type.return_lock_target is not None
                 )
-                if dp.child.name in self._INLINE_LOCK_PROJECTIONS or has_metadata_lock:
+                if has_metadata_lock:
                     src_path = self._get_dotted_path_tuple(dp.parent)
                     src_name = ".".join(src_path) if src_path else "<expr>"
                     self._error(

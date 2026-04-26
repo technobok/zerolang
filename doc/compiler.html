@@ -103,6 +103,8 @@ Table of Contents</div>
 </li>
 <li><a href="#type-narrowing">Type Narrowing</a>
 </li>
+<li><a href="#synthesis-toolkit">Synthesis Toolkit</a>
+</li>
 </ul>
 </li>
 <li><a href="#code-generator">Code Generator</a>
@@ -220,6 +222,19 @@ unique C identifier.</p>
 <p>Generic method bodies are deep-copied during monomorphization and type-checked
 with the concrete type arguments in scope. This ensures that each instantiation
 is independently validated.</p>
+<p>Compiler-injected methods on collections (<code>.append</code>, <code>.set</code>,
+<code>.get</code>, <code>.byteview</code>, <code>.listview</code>, <code>.stringview</code>, <code>.iterate</code>,
+<code>.each</code>, <code>.length</code>, and friends) are <em><strong>not</strong></em> synthesised by the
+monomorphizer. They are declared with the <code>is native</code> form in
+<code>lib/system/system.z</code> and <code>lib/system/collections.z</code>; the
+monomorphizer clones those declarations alongside everything else.
+Resolution flows through the standard child-lookup path -- there is
+no syntactic special case in the type checker for these names, and a
+user-defined member of the same name on a non-collection type
+resolves normally. Methods that return a borrowed reference into a
+parameter or receiver are annotated with <code>out T.borrow from: &lt;name&gt;</code>;
+the resulting <code>return_lock_target</code> metadata drives the call-site
+locking instead of name-based pattern matching.</p>
 <h3 id="ownership-and-lifetime"><a href="#ownership-and-lifetime">6.3. Ownership and Lifetime</a></h3>
 <p>The ownership status of each expression is determined using a 2-state model:
 OWNED (the variable owns the instance and is responsible for its lifetime) or
@@ -310,6 +325,41 @@ excluded subtype produces a compile error.</p>
 narrowing entry in the current scope. Reassignment resets the narrowing.</p>
 <p>If all branches of an <code>if</code> or <code>match</code> diverge, the parent scope is
 marked unreachable and subsequent statements are reported as dead code.</p>
+<h3 id="synthesis-toolkit"><a href="#synthesis-toolkit">6.7. Synthesis Toolkit</a></h3>
+<p>The type checker may need to introduce nodes that did not appear in
+the parsed source -- temporaries introduced by per-call argument
+hoisting, equality functions auto-generated from a type definition,
+and any future ANF / SSA rewrites. Those nodes are created through a
+small toolkit in <code>src/zsynth.py</code>:</p>
+<ul>
+<li>FreshNamer -- monotonic per-typechecker temp namer.
+Returns names of the form <code>_t0</code>, <code>_t1</code>, ... in the order they
+are requested. The monotonicity matters: tests rely on the
+numeric suffix to assert source-order evaluation of call
+arguments.</li>
+<li>make_atom_id,  make_assignment -- helpers that build
+AST nodes with the right node-id allocation, source location
+defaulting, and <code>synth_origin</code> stamping. Direct construction
+of nodes outside the toolkit is discouraged because it bypasses
+these defaults.</li>
+<li>register_synth_var -- registers a synth temp's
+<code>ZVariable</code> in the current symbol-table scope so downstream
+resolution finds it. Used in tandem with <code>make_assignment</code> to
+install a hoisted temp.</li>
+</ul>
+<p>Every synthesised node carries a <code>synth_origin: str</code> field on the
+<code>Node</code> base class (and on <code>ZVariable</code> in the symbol table). The
+field names the rewrite that introduced the node (for example,
+<code>"anf"</code> for per-call argument hoisting). The field is persisted
+in the SQL dump (<code>src/zsqldump.py</code>) so rewrite provenance survives
+into post-mortem inspection.</p>
+<p>Current consumers:</p>
+<ul>
+<li><code>_hoist_arg</code> in <code>src/ztypecheck.py</code> -- per-call atomic
+processing rewrites every non-trivial call argument to a synth
+temp inside a per-call sub-scope. See
+<code>doc/ownership.pdoc:Per-Call Atomic Processing</code> for the model.</li>
+</ul>
 <h2 id="code-generator"><a href="#code-generator">7. Code Generator</a></h2>
 <p>The code generator (C emitter) walks the fully typed AST and emits C source
 code. The output is compiled by a C compiler (gcc/clang) to produce a native

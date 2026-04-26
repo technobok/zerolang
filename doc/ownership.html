@@ -123,6 +123,8 @@ Table of Contents</div>
 </li>
 <li><a href="#lock">.lock</a>
 </li>
+<li><a href="#copy">.copy</a>
+</li>
 <li><a href="#release">.release</a>
 </li>
 </ul>
@@ -135,6 +137,8 @@ Table of Contents</div>
 </li>
 <li><a href="#call-scoped-locking-algorithm">Call-scoped Locking Algorithm</a>
 </li>
+<li><a href="#per-call-atomic-processing">Per-Call Atomic Processing</a>
+</li>
 <li><a href="#borrow-scoped-locking">Borrow-scoped Locking</a>
 </li>
 <li><a href="#lock-enforcement">Lock Enforcement</a>
@@ -144,6 +148,14 @@ Table of Contents</div>
 <li><a href="#temporary-expressions-in-lock-context">Temporary Expressions in Lock Context</a>
 </li>
 <li><a href="#binding-aliases">Binding Aliases</a>
+</li>
+</ul>
+</li>
+<li><a href="#borrow-escape-rules">Borrow Escape Rules</a>
+<ul>
+<li><a href="#returning-a-borrowed-parameter-as-owned">Returning a borrowed parameter as owned</a>
+</li>
+<li><a href="#storing-a-borrowed-parameter-into-an-owned-aggregate-field">Storing a borrowed parameter into an owned aggregate field</a>
 </li>
 </ul>
 </li>
@@ -446,7 +458,25 @@ parameter declarations.</p>
 pass-by-value so identity-based locking is meaningless. If locking is
 needed, use a class. Generic type parameters are exempt because they may
 monomorphize to a reftype.</p>
-<h3 id="release"><a href="#release">6.4. .release</a></h3>
+<h3 id="copy"><a href="#copy">6.4. .copy</a></h3>
+<p>An inline method only (not a parameter or return attribute). <code>x.copy</code>
+produces a fresh, independently-owned duplicate of <code>x</code>. The new value
+shares no heap data with <code>x</code>; mutating one does not affect the other,
+and both are freed separately at scope exit.</p>
+<p><code>.copy</code> is the canonical way to break a borrow chain when you need to
+hand an owned value to a destination that requires ownership (a
+constructor field, a list/map insert) but only have a borrowed source:</p>
+<pre><code class="language-zerolang">store: function {s: string} out box.bag is {
+    # `s` is borrowed from the caller; the box wants to own its label,
+    # so clone the data into a fresh allocation.
+    return box label: s.copy
+}</code></pre>
+<p>Compare with <code>.take</code> (transfer the source's ownership to the
+destination, invalidating the source) and inline <code>.borrow</code> (alias the
+source via a lock, no allocation).</p>
+<p>Currently provided as a native method on <code>string</code>; the same shape is
+available for any type that defines its own deep-copy logic.</p>
+<h3 id="release"><a href="#release">6.5. .release</a></h3>
 <p>An inline method only (not a parameter or return attribute). <code>x.release</code> ends
 the lifetime of variable <code>x</code> immediately, as if it fell out of scope at that
 point. The name <code>x</code> is invalidated and any subsequent use is a compile error.</p>
@@ -577,7 +607,53 @@ the target for the duration of the body, preventing mutation of the
 container or iterator from outside the loop. Per-iteration method
 dispatch takes and releases an exclusive lock on the receiver for each
 call. See the lock lifecycle walkthrough below for a worked example.</p>
-<h3 id="borrow-scoped-locking"><a href="#borrow-scoped-locking">7.4. Borrow-scoped Locking</a></h3>
+<h3 id="per-call-atomic-processing"><a href="#per-call-atomic-processing">7.4. Per-Call Atomic Processing</a></h3>
+<p>The locking algorithm above is implemented through a per-call
+sub-scope model: every call -- not only those whose result is
+bound to a name -- opens its own scope while the typechecker
+processes it, and pops that scope when the call resolves. The
+sub-scope owns three things:</p>
+<ul>
+<li>A call identity string (<code>call:&lt;nodeid&gt;</code>). Locks taken
+  while processing this call -- on the receiver, on argument source
+  paths, or by recursion into nested calls -- carry this identity as
+  their holder. The conflict check treats locks with the current
+  call's identity as non-blocking self-locks, so a method call
+  whose argument also borrows the receiver (<code>f.poke side: f.a.borrow</code>)
+  composes correctly: the receiver lock and the arg's prefix-overlapping
+  shared lock are attributed to the same call and merge under the
+  existing SHARED+EXCLUSIVE rules. Two different calls get
+  different identities and live in their own sub-scopes.</li>
+<li>A list of synth temps (<code>_t0</code>, <code>_t1</code>, ...) for any
+  argument that is not a bare name or literal. Each non-trivial
+  argument is rewritten in place to a fresh <code>AtomId(_tN)</code> reference,
+  with the original expression hoisted into a synth <code>_tN: &lt;expr&gt;</code>
+  Assignment that lives in the sub-scope. Temps are ordinary variables
+  in their sub-scope, so the existing scope-exit machinery releases
+  their locks and runs destructors on un-taken reftype temps when the
+  sub-scope pops. No special per-temp lifetime metadata is required.</li>
+<li>A drained preamble of synth Assignment statements.
+  Source-order is preserved by the left-to-right argument walk: the
+  temp counter is monotonic, so the temp for the first argument always
+  sorts before the second.</li>
+</ul>
+<p>When an argument is itself a call, the typechecker recurses: the
+inner call opens its own sub-scope, hoists its own arguments, and
+pops on resolution. Lock effects propagate naturally through the
+parent-scope mechanism -- locks the inner call's return value
+carries become locks on the outer-scope binding (after rewriting
+the inner call's call-identity holder to the outer call's identity
+where applicable), exactly as they would for any nested expression.</p>
+<p>A method whose return is locked to its receiver or to a parameter
+is declared with <code>out T.borrow from: &lt;name&gt;</code>. The
+<code>return_lock_target</code> the typechecker reads from this annotation
+is what propagates the source lock into the outer scope when the
+inner call resolves. There is no syntactic special-case for
+<code>.byteview</code> / <code>.listview</code> / <code>.stringview</code> -- they are
+ordinary native methods declared in <code>lib/system/*.z</code> with the
+same <code>out T.borrow from: this</code> annotation, and the metadata
+drives the propagation uniformly.</p>
+<h3 id="borrow-scoped-locking"><a href="#borrow-scoped-locking">7.5. Borrow-scoped Locking</a></h3>
 <p>A Borrow-scoped Lock is acquired whenever a variable is bound to a
 borrow or view construct: <code>.borrow</code>, <code>string.stringview</code> or
 <code>str.stringview</code> (both produce a <code>stringview</code> class borrowing the
@@ -601,7 +677,7 @@ caught -- see <code>Mutation-Site Enforcement</code> below) while allowing
 sibling paths to be borrowed or mutated independently. A method that
 takes a view over <code>this.a</code> can, in the same block, mutate
 <code>this.b</code> -- the two operations target disjoint paths.</p>
-<h3 id="lock-enforcement"><a href="#lock-enforcement">7.5. Lock Enforcement</a></h3>
+<h3 id="lock-enforcement"><a href="#lock-enforcement">7.6. Lock Enforcement</a></h3>
 <p>While an exclusive Borrow-scoped Lock is outstanding on some path <code>P</code>,
 every operation whose target path overlaps <code>P</code> is rejected -- both
 reads and writes. Overlap means <code>P</code> is a prefix of the target path
@@ -642,11 +718,11 @@ assignment semantics of <code>name: value</code> and to operations inside <code>
 take their own locks via the function-call algorithm. When <code>name</code> falls out
 of scope at the end of <code>with</code>, any locks it holds -- including those
 transferred from <code>.lock</code> fields of the bound value -- are released.</p>
-<h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.6. Lock Release on Scope Exit</a></h3>
+<h3 id="lock-release-on-scope-exit"><a href="#lock-release-on-scope-exit">7.7. Lock Release on Scope Exit</a></h3>
 <p>When a variable falls out of scope, all locks it holds on other variables are
 released. If the variable is borrowed, the borrow ends. If the variable is
 owned, it is destroyed (reftypes) or forgotten (valtypes).</p>
-<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">7.7. Temporary Expressions in Lock Context</a></h3>
+<h3 id="temporary-expressions-in-lock-context"><a href="#temporary-expressions-in-lock-context">7.8. Temporary Expressions in Lock Context</a></h3>
 <p>The compiler rejects <code>.borrow</code>, <code>.stringview</code>, <code>.listview</code>, and
 <code>.lock</code> on temporary expressions (i.e. expressions whose result has
 no named variable). The programmer must assign the value to a variable
@@ -660,7 +736,7 @@ v: s.stringview</code></pre>
 <p>A future version of the compiler may support automatic temporary
 variable creation to keep lock-context expressions alive, but for
 now explicit naming is required.</p>
-<h3 id="binding-aliases"><a href="#binding-aliases">7.8. Binding Aliases</a></h3>
+<h3 id="binding-aliases"><a href="#binding-aliases">7.9. Binding Aliases</a></h3>
 <p>Certain bindings do not produce a new storage location at all &#x2014; the
 compiler emits the new name as an alias for the source expression. The
 existing Borrow-scoped Lock guarantees the source slot stays valid and
@@ -690,7 +766,42 @@ saves the copy.</p>
 <p>The generated C contains <code>/* alias: name =&gt; source */</code> comments at
 the substitution site for readability; references to the alias name in
 the body emit as the source expression directly.</p>
-<h2 id="classes-with-fields"><a href="#classes-with-fields">8. Classes with <code>.lock</code> Fields</a></h2>
+<h2 id="borrow-escape-rules"><a href="#borrow-escape-rules">8. Borrow Escape Rules</a></h2>
+<p>Borrowed values cannot escape into positions that require ownership.
+The type-checker rejects these statically with a hint pointing at the
+remediation (<code>.copy</code>, <code>.take</code>, or <code>.lock</code>-annotated destination).</p>
+<h3 id="returning-a-borrowed-parameter-as-owned"><a href="#returning-a-borrowed-parameter-as-owned">8.1. Returning a borrowed parameter as owned</a></h3>
+<p>A function declared <code>out T</code> returns an owned value. Returning a
+borrowed parameter directly would alias the caller's heap data:</p>
+<pre><code class="language-zerolang">identity: function {s: string} out string is {
+    return s          # error: 's' is borrowed; the caller still owns it
+}</code></pre>
+<p>Remediations:</p>
+<ul>
+<li><code>return s.copy</code> -- clone into a fresh owned string.</li>
+<li>Annotate the parameter as <code>s: string.take</code> -- the caller
+  transfers ownership in, and the function may pass it through.</li>
+<li>Declare the function as <code>out string.borrow</code> with a
+  <code>.lock</code>-annotated parameter -- the caller receives a borrow tied
+  to the locked source.</li>
+</ul>
+<p>The check fires only for stack-reftypes (string, file, bufreader, user
+classes) returned as a bare AtomId. Projections (<code>s.copy</code>,
+<code>s.field</code>) and explicit annotations (<code>s.take</code>, <code>s.borrow</code>) opt
+out as documented above.</p>
+<h3 id="storing-a-borrowed-parameter-into-an-owned-aggregate-field"><a href="#storing-a-borrowed-parameter-into-an-owned-aggregate-field">8.2. Storing a borrowed parameter into an owned aggregate field</a></h3>
+<p>A constructor field declared with no <code>.lock</code> annotation expects an
+owned value. Storing a borrowed parameter into it would alias the
+caller's heap data the same way:</p>
+<pre><code class="language-zerolang">make_box: function {name: string} out box is {
+    return box label: name      # error: 'name' is borrowed
+}</code></pre>
+<p>Same remediations as above. The exemption mirrors the
+borrowed_record / listiter pattern: a <code>.lock</code>-annotated
+parameter projected into a matching <code>.lock</code> field is the canonical
+borrow-holder pattern (see <em><strong>Classes with .lock Fields</strong></em> below) and is
+allowed.</p>
+<h2 id="classes-with-fields"><a href="#classes-with-fields">9. Classes with <code>.lock</code> Fields</a></h2>
 <p>Some classes need to hold a locked reference to another object -- most commonly
 iterators and views. A class field can be declared with a <code>.lock</code> type
 modifier to express this:</p>
@@ -711,7 +822,7 @@ This is what makes <code>.lock</code> fields safe on classes -- there is no way 
 duplicate the handle that holds the lock, so there is no way for two live
 instances to share (and race on) the same locked target. No separate
 separate mechanism is needed.</p>
-<h3 id="rules-for-fields"><a href="#rules-for-fields">8.1. Rules for <code>.lock</code> Fields</a></h3>
+<h3 id="rules-for-fields"><a href="#rules-for-fields">9.1. Rules for <code>.lock</code> Fields</a></h3>
 <ul>
 <li><code>.lock</code> fields are only allowed on  classes. A record with a
 <code>.lock</code> field is a compile error -- records are pure valtypes and are
@@ -733,13 +844,13 @@ and can be combined.</li>
 <p><code>.lock</code> fields are set at construction time and cannot be reassigned. The
 locked reference must remain valid for the entire lifetime of the instance.
 Non-lock fields such as iteration counters can be freely mutated.</p>
-<h3 id="moving-a-class-with-fields"><a href="#moving-a-class-with-fields">8.2. Moving a Class with <code>.lock</code> Fields</a></h3>
+<h3 id="moving-a-class-with-fields"><a href="#moving-a-class-with-fields">9.2. Moving a Class with <code>.lock</code> Fields</a></h3>
 <p>A class with <code>.lock</code> fields is a normal owned instance. It can be moved
 via <code>.take</code>: the instance (and the locks it holds) transfer to the new
 name; the old name is invalidated. What it cannot do is be <em><strong>copied</strong></em>,
 which for classes is true of every instance regardless of whether it has
 <code>.lock</code> fields.</p>
-<h3 id="c-representation"><a href="#c-representation">8.3. C Representation</a></h3>
+<h3 id="c-representation"><a href="#c-representation">9.3. C Representation</a></h3>
 <p>All user-defined types are stack-allocated at the C level. A class lives
 inline in the stack frame where it is constructed; the single owner variable
 names that slot. Passing a class to a function passes a pointer to that slot
@@ -769,7 +880,7 @@ parameters of the same type:</p>
   concrete type the generic parameter monomorphizes to (reftype: pointer;
   valtype: value). <code>.lock</code> on a known valtype is a compile error.</li>
 </ul>
-<h3 id="unions-protocol-instances-variants"><a href="#unions-protocol-instances-variants">8.4. Unions, Protocol Instances, Variants</a></h3>
+<h3 id="unions-protocol-instances-variants"><a href="#unions-protocol-instances-variants">9.4. Unions, Protocol Instances, Variants</a></h3>
 <p>Unions are represented as a <code>{tag, void*}</code> struct on the stack. The tag
 discriminates the active subtype; the <code>void*</code> points to the subtype data
 which is heap-allocated for the subtype's value. The struct itself lives
@@ -780,7 +891,7 @@ on the stack, with no heap storage.</p>
 user-defined type. A protocol instance wraps its source either by borrow
 (leaving the source locked for the wrapper's lifetime) or by take
 (consuming the source into the wrapper).</p>
-<h3 id="restrictions-with-generics"><a href="#restrictions-with-generics">8.5. Restrictions with Generics</a></h3>
+<h3 id="restrictions-with-generics"><a href="#restrictions-with-generics">9.5. Restrictions with Generics</a></h3>
 <p>A class cannot be stored as the element of a generic container that copies
 its elements, because classes cannot be copied. <code>list of: myiter</code> is a
 compile error if <code>myiter</code> is a class. This applies to every class, not
@@ -790,19 +901,19 @@ of another type either).</p>
 <p>Generic functions that only <code>.borrow</code> their generic parameter are fine.
 The restriction only applies when the generic type or function would need
 to copy the class.</p>
-<h3 id="protocol-and-facet-restrictions"><a href="#protocol-and-facet-restrictions">8.6. Protocol and Facet Restrictions</a></h3>
+<h3 id="protocol-and-facet-restrictions"><a href="#protocol-and-facet-restrictions">9.6. Protocol and Facet Restrictions</a></h3>
 <p>Classes can be used as sources for protocol and facet wrappers. A class with
 <code>.lock</code> fields can be borrowed into a protocol instance via the label or
 <code>.borrow</code> form -- the protocol wrapper holds a borrow on the source, and
 the lifetime rules propagate as usual. Taking a class with <code>.lock</code> fields
 into an owned protocol instance (consuming it with <code>.take</code>) is also
 permitted: the class -- and the locks it holds -- move into the wrapper.</p>
-<h2 id="escape-analysis-for-locks"><a href="#escape-analysis-for-locks">9. Escape Analysis for Locks</a></h2>
+<h2 id="escape-analysis-for-locks"><a href="#escape-analysis-for-locks">10. Escape Analysis for Locks</a></h2>
 <p>The compiler must verify that borrowed return values -- and owned returns
 that carry <code>.lock</code> fields -- trace back to <code>.lock</code> parameters of the
 current function. This ensures the locked data stays alive for the lifetime
 of the returned value.</p>
-<h3 id="reftype-borrow-returns"><a href="#reftype-borrow-returns">9.1. Reftype Borrow Returns</a></h3>
+<h3 id="reftype-borrow-returns"><a href="#reftype-borrow-returns">10.1. Reftype Borrow Returns</a></h3>
 <p>For a reftype borrow return, the returned reference must point to data living
 inside a <code>.lock</code> parameter. The compiler traces the return expression back
 through field accesses to verify it originates from a locked parameter.</p>
@@ -821,7 +932,7 @@ bad: function {t: myclass.lock} out child.borrow is {
 bad2: function {t: myclass} out child.borrow is {
   return t.child
 }</code></pre>
-<h3 id="classes-with-fields-2"><a href="#classes-with-fields-2">9.2. Classes with <code>.lock</code> Fields</a></h3>
+<h3 id="classes-with-fields-2"><a href="#classes-with-fields-2">10.2. Classes with <code>.lock</code> Fields</a></h3>
 <p>A factory that constructs a class with a <code>.lock</code> field and returns it as
 an owned value must initialise the <code>.lock</code> field from a <code>.lock</code>
 parameter. The compiler verifies the construction arguments of the returned
@@ -838,7 +949,7 @@ bad_iterate: function {b: this} out myiter is {
 <p>The locks on the <code>.lock</code> parameter transfer to the returned instance: the
 caller receives an owned class whose <code>.lock</code> field keeps the source
 locked for the returned instance's lifetime.</p>
-<h3 id="cross-function-lock-chains"><a href="#cross-function-lock-chains">9.3. Cross-Function Lock Chains</a></h3>
+<h3 id="cross-function-lock-chains"><a href="#cross-function-lock-chains">10.3. Cross-Function Lock Chains</a></h3>
 <p>When a function returns a borrowed value that holds locks, and the caller passes
 that value to another function, the lock chain must be maintained. The compiler
 verifies that each link in the chain connects to a <code>.lock</code> parameter.</p>
@@ -852,10 +963,10 @@ outer: function {t: myclass.lock} out grandchild.borrow is {
   y: x.grandchild    # y borrows from x
   return y            # OK: lock chain traces to t which is .lock
 }</code></pre>
-<h2 id="simple-ownership-examples"><a href="#simple-ownership-examples">10. Simple Ownership Examples</a></h2>
+<h2 id="simple-ownership-examples"><a href="#simple-ownership-examples">11. Simple Ownership Examples</a></h2>
 <p>Before the advanced iterator pattern, here are the common ownership scenarios
 that cover most code.</p>
-<h3 id="owned-valtypes-the-common-case"><a href="#owned-valtypes-the-common-case">10.1. Owned Valtypes (the common case)</a></h3>
+<h3 id="owned-valtypes-the-common-case"><a href="#owned-valtypes-the-common-case">11.1. Owned Valtypes (the common case)</a></h3>
 <pre><code class="language-zerolang">point: record { x: i64 y: i64 }
 
 # Valtype default: borrow (copy). Both p and q are independent owned values.
@@ -868,7 +979,7 @@ print_point: function {pt: point} is {
   print "\{pt.x}, \{pt.y}"
 }
 print_point p        # p is copied into the function, p still valid</code></pre>
-<h3 id="owned-and-borrowed-reftypes"><a href="#owned-and-borrowed-reftypes">10.2. Owned and Borrowed Reftypes</a></h3>
+<h3 id="owned-and-borrowed-reftypes"><a href="#owned-and-borrowed-reftypes">11.2. Owned and Borrowed Reftypes</a></h3>
 <pre><code class="language-zerolang">box: class { label: string value: i64 }
 
 a: box label: "alpha" value: 1   # a is OWNED
@@ -899,7 +1010,7 @@ s: peek_label c                  # s borrows from c, c is locked
 print s                          # OK
 # c cannot be used here (locked by s)
 # when s falls out of scope, c is unlocked</code></pre>
-<h3 id="compiler-error-messages"><a href="#compiler-error-messages">10.3. Compiler Error Messages</a></h3>
+<h3 id="compiler-error-messages"><a href="#compiler-error-messages">11.3. Compiler Error Messages</a></h3>
 <p>The compiler provides specific error messages for ownership violations,
 including the location of the conflicting operation and a hint suggesting how to
 fix it. For example:</p>
@@ -913,7 +1024,7 @@ fix it. For example:</p>
 <li>Declaring a <code>.lock</code> field on a record reports the specific field and
   suggests making the enclosing type a class.</li>
 </ul>
-<h2 id="iterator-pattern"><a href="#iterator-pattern">11. Iterator Pattern</a></h2>
+<h2 id="iterator-pattern"><a href="#iterator-pattern">12. Iterator Pattern</a></h2>
 <p>The iterator pattern is the most common complex use of the ownership system.
 It demonstrates <code>.lock</code> fields on classes, locking, private access, and
 scope-based lock lifecycle.</p>
@@ -923,7 +1034,7 @@ the only legal form of construction inside the constructor body --
 writing <code>return bagiter pos: 0 target: target</code> would recurse into the
 user-defined <code>create</code> and is a compile-time error. See the spec's
 "Implicit Construction" section for the full dispatch rule.</p>
-<h3 id="components"><a href="#components">11.1. Components</a></h3>
+<h3 id="components"><a href="#components">12.1. Components</a></h3>
 <p>An iterator system has three components:</p>
 <ol>
 <li>Container -- the iterable object (typically a class). It has an
@@ -938,7 +1049,7 @@ iterator and race on the container.</li>
 (a copy) or borrowed (a reference into the container that locks the
 iterator).</li>
 </ol>
-<h3 id="full-example"><a href="#full-example">11.2. Full Example</a></h3>
+<h3 id="full-example"><a href="#full-example">12.2. Full Example</a></h3>
 <p>The canonical class-based iterator (also in
 <code>examples/listiter.z</code>):</p>
 <pre><code class="language-zerolang"># --- Container ---
@@ -1005,7 +1116,7 @@ main: function is {
   # - b is available again
   print "bag count: \{b.count}"
 }</code></pre>
-<h3 id="lock-lifecycle-in-the-for-loop"><a href="#lock-lifecycle-in-the-for-loop">11.3. Lock Lifecycle in the For-Loop</a></h3>
+<h3 id="lock-lifecycle-in-the-for-loop"><a href="#lock-lifecycle-in-the-for-loop">12.3. Lock Lifecycle in the For-Loop</a></h3>
 <p>The iterator must be created explicitly using <code>with</code> before the <code>for</code> loop.
 The <code>for</code> loop only accepts a callable after a label -- it does not have
 special handling for iterables. A future version may add syntactic sugar for
@@ -1040,14 +1151,14 @@ this, but for now the pattern is:</p>
 reference to a container element), the lifecycle would differ: the returned
 value would hold a lock on the iterator, preventing the next call until the
 value falls out of scope at the end of each loop iteration.</p>
-<h3 id="views"><a href="#views">11.4. Views</a></h3>
+<h3 id="views"><a href="#views">12.4. Views</a></h3>
 <p>The same pattern underlies read-only views. A view is a small class holding a
 <code>.private.lock</code> field into its source -- for example the <code>stringview</code>
 and <code>listview</code> types in the standard library. Because the view is a
 single-owner class, the source stays safely locked for the view's
 lifetime and no copy of the view can outlive it. See <code>examples/listview.z</code>
 and <code>examples/borrowed_record.z</code> for worked examples.</p>
-<h2 id="protocol-objects"><a href="#protocol-objects">12. Protocol Objects</a></h2>
+<h2 id="protocol-objects"><a href="#protocol-objects">13. Protocol Objects</a></h2>
 <p>Protocol instances can be created in three ways, each with different ownership
 semantics:</p>
 <ul>
@@ -1103,7 +1214,7 @@ supported: <code>.create</code> already heap-allocates the owned copy
 internally, so composition is unnecessary. The conformance check rejects
 <code>proto.create from: (box from: x)</code> with a hint steering the user to
 the direct form.</p>
-<h2 id="common-errors"><a href="#common-errors">13. Common Errors</a></h2>
+<h2 id="common-errors"><a href="#common-errors">14. Common Errors</a></h2>
 <table>
 <colgroup>
 <col style="width: 33%">

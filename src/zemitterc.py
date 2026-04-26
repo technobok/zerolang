@@ -7265,6 +7265,12 @@ class CEmitter:
             ):
                 parent = f"&{parent}"
             self._record_io_native_for_class_method(cls_name, child)
+            # bytes/byteview are transparent typedefs over list/listview of u8
+            # (lib/system/system.z:586-590). bytes.byteview is the same C-level
+            # operation as list_u8.listview, so route through the existing
+            # z_list_u8_listview helper auto-emitted by _emit_mono_listview.
+            if cls_name == "bytes" and child == "byteview":
+                return f"z_list_u8_listview({parent})"
             return f"z_{cls_name}_{child}({parent})"
 
         # io.file: protocol projection. `f.closer` / `f.seeker` emit

@@ -359,6 +359,18 @@ constant or an intermediate value (definition) to a constant.</p>
 - can <code>borrow</code>. The caller will not have ownership but can call methods. One or
   more parameters must use <code>lock</code> - including the object that houses the
   borrowed return object.
+- a borrow return may carry an explicit <code>from: &lt;name&gt;</code> clause naming the
+  parameter (or <code>this</code>) whose source path the returned reference is tied
+  to: e.g. <code>out string.borrow from: this</code> on a method, or <code>out
+  string.borrow from: s</code> on a function with parameter <code>s</code>. The compiler
+  records this as <code>return_lock_target</code> metadata on the function's type and
+  uses it at every call site to lock the named source for the lifetime of
+  the binding the caller assigns the result to. The native projections
+  declared in <code>lib/system/system.z</code> and <code>lib/system/collections.z</code>
+  (<code>.byteview</code>, <code>.listview</code>, <code>.stringview</code>) use this form, and
+  user-defined methods that return a borrow into a receiver field should
+  declare it the same way. See <code>doc/ownership.pdoc</code> for the
+  per-call sub-scope model that drives the propagation.
 - can NOT be <code>generic</code> (but can take generic fields as part of its type
   definition)
 - technically can be a constant (numeric constant, function constant, or a
@@ -501,12 +513,28 @@ may otherwise be a call with a binop argument)</p>
 post- conditions.</p>
 <p><code>while</code> is the default argument, the argument name can be omitted if it is the
 first argument.</p>
-<p><code>label</code> operations are called before each iteration. The operation must result
-in an optional item. If the optional item is <code>null</code> the for expression is
-ended.</p>
-<p>For <code>label</code> operations, the operations must (checked in order):</p>
-<p>- be a function or method to be called each iteration
-- be an object with a <code>call</code> method to be called each iteration</p>
+<p><code>label</code> binding RHS is classified by AST shape and result type. The compiler
+picks one of five dispatch modes (first match wins). The per-iteration value
+is one of <code>option(t)</code>, <code>optionval(t)</code>, or <code>optionview(t)</code>; if the value
+is <code>none</code> the for expression ends, otherwise the loop variable is bound to
+the some-payload (narrowed to <code>t</code>).</p>
+<p>The dispatch rules (R is the type produced by evaluating the RHS;
+"iterator-shaped" means R has a <code>.call</code> method whose only required parameter
+is <code>:this</code> and whose return type is option/optionval/optionview):</p>
+<p>- <strong>call &#x2192; iterator instance:</strong> RHS is a call AND R is iterator-shaped.
+  The call is invoked once eagerly; <code>R.call</code> runs per iteration.
+- <strong>non-call &#x2192; iterable:</strong> RHS is not a call AND its type T has an
+  <code>.iterate</code> method whose only required parameter is <code>:this</code> and whose
+  return is iterator-shaped. The compiler synthesises the
+  <code>.iterate</code> call once before the loop. Only the exact name
+  <code>.iterate</code> triggers this rule.
+- <strong>call &#x2192; option-wrapper:</strong> RHS is a call AND its return type is
+  <code>option(t)</code> / <code>optionval(t)</code> / <code>optionview(t)</code> directly. The
+  call is deferred and re-invoked once per iteration.
+- <strong>non-call &#x2192; instance with .call:</strong> RHS is not a call AND its type
+  T is itself iterator-shaped. T is the iterator;
+  <code>T.call</code> runs per iteration.
+- <strong>none of the above:</strong> compile error.</p>
 <p><code>loop</code> is optional and can be omitted if all work is done in the conditions
 (operations).</p>
 <p><code>for</code> returns a list when used as an expression. The type of each element is

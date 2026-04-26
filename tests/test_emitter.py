@@ -5095,6 +5095,27 @@ class TestArrayEmission:
         assert output.strip() == "2 3 11"
 
 
+class TestBytesByteview:
+    """`bytes.byteview` is the bytes analog of `string.stringview` /
+    `list.listview`. Declared natively in lib/system/system.z; the
+    emitter routes the call through z_list_u8_listview because bytes
+    is a transparent typedef over `list of: u8`."""
+
+    def test_byteview_empty_length_zero(self):
+        csource = emit_source(
+            "use_view: function {bv: byteview} out u64 is { return bv.length }\n"
+            "main: function is {\n"
+            "    b: bytes\n"
+            "    n: use_view bv: b.byteview\n"
+            '    print "\\{n}"\n'
+            "}"
+        )
+        # Routes through the existing list-of-u8 listview helper.
+        assert "z_list_u8_listview" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "0"
+
+
 class TestStr:
     """Tests for str type emission and runtime behavior."""
 

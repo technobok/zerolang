@@ -26,6 +26,9 @@ from zast import NodeType
 pytestmark = pytest.mark.typecheck
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
+SRC_TYPECHECK_PATH = os.path.join(
+    os.path.dirname(__file__), "..", "src", "ztypecheck.py"
+)
 
 
 def parse_and_check(source: str, unitname: str = "test"):
@@ -1519,6 +1522,48 @@ class TestPhaseC3Pins:
         assert temp_assn.type.needs_destructor is True, (
             f"temp type {temp_assn.type.name} should need a destructor"
         )
+
+
+class TestSyntacticHooksDeletion:
+    """Pin: the typecheck-side syntactic hooks that previously injected
+    method semantics (`_INLINE_LOCK_PROJECTIONS`, the
+    `child_name == \"byteview\"|\"listview\"|\"stringview\"` branches in
+    `_resolve_dotted_path`, the integer `.iterate`/`.each` synth) are
+    gone. Aggregate-escape rejection now flows through
+    `return_lock_target` metadata exclusively. Reintroducing any of
+    these hooks should fail this test class first.
+    """
+
+    def test_no_inline_lock_projections_constant(self):
+        """The constant must not be reintroduced. Aggregate-escape
+        Case 1 reads return_lock_target metadata exclusively."""
+        with open(SRC_TYPECHECK_PATH) as f:
+            src = f.read()
+        assert "_INLINE_LOCK_PROJECTIONS" not in src
+
+    def test_no_view_method_syntactic_branches(self):
+        """No `child_name == \"byteview\"` / `\"listview\"` /
+        `\"stringview\"` syntactic branches survive in the typechecker.
+        These projections all resolve through their native declarations
+        in `lib/system/*.z` and propagate locks via
+        `return_lock_target` metadata."""
+        with open(SRC_TYPECHECK_PATH) as f:
+            src = f.read()
+        for name in ("byteview", "listview", "stringview"):
+            assert f'child_name == "{name}"' not in src, (
+                f'syntactic branch on child_name == "{name}" found in '
+                f"src/ztypecheck.py — this projection must route through "
+                f"the native declaration's metadata path"
+            )
+
+    def test_no_integer_iterate_each_synth(self):
+        """Integer `.iterate` / `.each` are declared natively per
+        integer record in lib/system/system.z (commit 090f45a). The
+        synthetic dispatch branch must not be reintroduced."""
+        with open(SRC_TYPECHECK_PATH) as f:
+            src = f.read()
+        assert 'child_name in ("each", "iterate")' not in src
+        assert 'child_name in ("iterate", "each")' not in src
 
 
 class TestTakeBorrowCompilerMethods:
@@ -3923,6 +3968,27 @@ class TestValtypeReftypeEnforcement:
         assert any("lock-carrying" in e.msg.lower() for e in errors)
 
     def test_class_cannot_hold_byteview(self):
+        errors = check_errors(
+            "c: class { bv: byteview }\n"
+            "main: function is {\n"
+            "  b: bytes\n"
+            "  p: c bv: b.byteview\n"
+            "}"
+        )
+        assert any("view" in e.msg for e in errors)
+
+    def test_class_cannot_hold_byteview_via_metadata(self):
+        """Pin the metadata-driven rejection.
+
+        Now that bytes.byteview is declared natively in
+        lib/system/system.z with `out byteview.borrow from: this`,
+        the resolved method type carries
+        return_lock_target == "this". After the legacy syntactic
+        constant `_INLINE_LOCK_PROJECTIONS` is deleted, this test
+        is the only thing pinning the byteview rejection — it must
+        keep passing solely via _check_aggregate_lock_escape Case 1's
+        has_metadata_lock branch.
+        """
         errors = check_errors(
             "c: class { bv: byteview }\n"
             "main: function is {\n"
