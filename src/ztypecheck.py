@@ -2886,6 +2886,40 @@ class TypeChecker:
         self._resolving.pop()
         return ftype
 
+    def _carry_native_method_metadata(
+        self, template_type: ZType, defn: object, meth_name: str, synth: ZType
+    ) -> None:
+        """Copy return-side metadata (return_lock_target, return_ownership)
+        from a natively-declared method's AST to a synthesised mono method.
+        Lets the lib's `out T.borrow from: this` annotation reach use
+        sites after monomorphisation. Reads from the AST because generic
+        templates don't have their methods resolved into ZType.children
+        until monomorphisation (see comment near
+        `for mname, mfunc in cls.functions.items()` in class resolution).
+
+        `defn` may be a re-export DottedPath (e.g. core.z's
+        `list: collections.list` shadows the real class in some lookup
+        orders); fall back to scanning unit bodies for a real
+        TypeDefinition node carrying `functions`.
+        """
+        ast_func = None
+        functions = getattr(defn, "functions", None)
+        if functions and meth_name in functions:
+            ast_func = functions[meth_name]
+        else:
+            for _unitname, unit in self.program.units.items():
+                candidate = unit.body.get(template_type.name)
+                cand_funcs = getattr(candidate, "functions", None)
+                if cand_funcs and meth_name in cand_funcs:
+                    ast_func = cand_funcs[meth_name]
+                    break
+        if ast_func is None:
+            return
+        if ast_func.return_lock_target is not None:
+            synth.return_lock_target = ast_func.return_lock_target
+        if ast_func.return_ownership is not None:
+            synth.return_ownership = ast_func.return_ownership
+
     def _make_meta_create_type(
         self,
         name: str,
@@ -4393,6 +4427,9 @@ class TypeChecker:
                             f"{mangled}.listview", ZTypeType.FUNCTION
                         )
                         listview_type.return_type = listview_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "listview", listview_type
+                        )
                         mono.children["listview"] = listview_type
                 # synthesize .extend_view method: function {other: listview<elem>}
                 # — copies bytes from a borrowed view (does NOT consume).
@@ -4418,6 +4455,9 @@ class TypeChecker:
                             f"{mangled}.iterate", ZTypeType.FUNCTION
                         )
                         iterate_type.return_type = listiter_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterate", iterate_type
+                        )
                         mono.children["iterate"] = iterate_type
 
         # for map types: set reftype, synthesize methods
@@ -4489,6 +4529,9 @@ class TypeChecker:
                             f"{mangled}.iterate", ZTypeType.FUNCTION
                         )
                         iterate_type.return_type = mki_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterate", iterate_type
+                        )
                         mono.children["iterate"] = iterate_type
                 # synthesize .iterate_items: borrowed-entry iterator
                 # yielding mapentry views. Triggers mapitemiter<K,V> +
@@ -4506,6 +4549,9 @@ class TypeChecker:
                             f"{mangled}.iterate_items", ZTypeType.FUNCTION
                         )
                         iterate_items_type.return_type = mii_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterate_items", iterate_items_type
+                        )
                         mono.children["iterate_items"] = iterate_items_type
 
         # for classes: rebuild meta_create for the monomorphized class

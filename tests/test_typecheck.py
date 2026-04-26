@@ -8689,6 +8689,27 @@ class TestList:
         assert "list_i64" in names
         assert "list_u64" in names
 
+    def test_list_listview_carries_lock_target(self):
+        """The synthesised .listview on a mono list carries the lock-target
+        metadata declared on collections.z's native list.listview
+        (`out (listview of: of).borrow from: this`).
+        """
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        listview_method = mono.children["listview"]
+        assert listview_method.return_lock_target == "this"
+        assert listview_method.return_ownership == ZParamOwnership.BORROW
+
+    def test_list_iterate_carries_lock_target(self):
+        """Same propagation for the .iterate iterator method."""
+        program = check_ok("main: function is { l: (list of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        mono = monos[0]
+        iterate_method = mono.children["iterate"]
+        assert iterate_method.return_lock_target == "this"
+        assert iterate_method.return_ownership == ZParamOwnership.BORROW
+
 
 class TestMap:
     """Tests for map type resolution and monomorphization."""
