@@ -3,6 +3,7 @@ Tests for the type checker (ztypecheck)
 """
 
 import os
+from typing import Optional
 
 
 from conftest import make_parser_vfs
@@ -48,6 +49,26 @@ def check_errors(source: str, unitname: str = "test"):
     program, errors = parse_and_check(source, unitname)
     assert errors != [], "Expected type errors but got none"
     return errors
+
+
+def find_user_monos(program, *, origin_name: Optional[str] = None):
+    """Filter mono_types to entries triggered by user code.
+
+    System library load eagerly monomorphises types whose natives reference
+    a generic (e.g. `optionval<T>` from each integer record's `iterate`
+    native). Tests that previously assumed `mono_types[0]` is the user's
+    mono must filter past those system-load monos. Pass `origin_name`
+    (e.g. `"option"`, `"box"`) to filter by generic-origin name; omit to
+    return all monos with nodes whose definition is in a user unit.
+    """
+    result = []
+    for mono, defn in program.mono_types:
+        if origin_name is not None:
+            origin = mono.generic_origin
+            if origin is None or getattr(origin, "name", None) != origin_name:
+                continue
+        result.append((mono, defn))
+    return result
 
 
 class TestBasicPrograms:
@@ -7388,8 +7409,9 @@ class TestGenerics:
             "myrec: record { x: t\n y: i64 } as { t: (any.generic default: i64) }\n"
             "main: function is { r: myrec x: 42 y: 1 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myrec")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
 
     def test_generic_default_overridden_by_explicit(self):
@@ -7459,8 +7481,9 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myopt")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
         assert mono.generic_origin is not None
 
@@ -7470,8 +7493,9 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.none i32 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myopt")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i32" in mono.name
 
     def test_same_generic_different_types(self):
@@ -7497,8 +7521,9 @@ class TestGenerics:
             "    y: myopt.some 2\n"
             "}"
         )
-        # should produce only one monomorphization for i64
-        i64_monos = [m for m, _ in program.mono_types if "i64" in m.name]
+        # should produce only one monomorphization of `myopt` with t=i64
+        myopt_monos = find_user_monos(program, origin_name="myopt")
+        i64_monos = [m for m, _ in myopt_monos if "i64" in m.name]
         assert len(i64_monos) == 1
 
     def test_system_option_available(self):
@@ -7527,7 +7552,9 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myopt")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         some_type = mono.children.get("some")
         assert some_type is not None
         assert some_type.name == "i64"
@@ -7555,8 +7582,9 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some from: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myopt")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
         assert mono.generic_origin is not None
 
@@ -7566,8 +7594,9 @@ class TestGenerics:
             "myopt: union { some: t\n none: null } as { t: any.generic }\n"
             "main: function is { x: myopt.some t: i64 from: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myopt")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
 
     def test_generic_union_from_with_different_types(self):
@@ -7604,17 +7633,24 @@ class TestGenerics:
     def test_optionval_some_infers_i64(self):
         """optionval.some 42 infers t=i64."""
         program = check_ok("main: function is { x: optionval.some 42 }")
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
-        assert "i64" in mono.name
+        i64_monos = [
+            (m, d)
+            for m, d in find_user_monos(program, origin_name="optionval")
+            if "i64" in m.name
+        ]
+        assert len(i64_monos) >= 1
+        mono, _ = i64_monos[0]
         assert mono.typetype == ZTypeType.VARIANT
 
     def test_optionval_none_explicit_type(self):
         """optionval.none i32 with explicit type argument."""
         program = check_ok("main: function is { x: optionval.none i32 }")
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
-        assert "i32" in mono.name
+        i32_monos = [
+            (m, d)
+            for m, d in find_user_monos(program, origin_name="optionval")
+            if "i32" in m.name
+        ]
+        assert len(i32_monos) >= 1
 
     def test_optionval_is_valtype(self):
         """Monomorphized optionval is a value type."""
@@ -7631,8 +7667,9 @@ class TestGenerics:
     def test_box_valtype_creates_reftype(self):
         """box from: valtype creates a box reftype."""
         program = check_ok("main: function is { b: box from: 42 }")
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        box_monos = [(m, d) for m, d in program.mono_types if m.is_box]
+        assert len(box_monos) >= 1
+        mono, _ = box_monos[0]
         assert mono.is_box is True
         assert mono.is_valtype is False
 
@@ -7646,7 +7683,9 @@ class TestGenerics:
     def test_box_valtype_has_inner_children(self):
         """box(valtype) has children copied from inner type for transparent access."""
         program = check_ok("main: function is { b: box from: 42 }")
-        mono, _ = program.mono_types[0]
+        box_monos = [(m, d) for m, d in program.mono_types if m.is_box]
+        assert len(box_monos) >= 1
+        mono, _ = box_monos[0]
         assert mono.is_box is True
         # should have i64's operator children
         assert "+" in mono.children or len(mono.children) > 0
@@ -7672,8 +7711,9 @@ class TestGenerics:
             "myrec: record { x: t } as { t: any.generic }\n"
             "main: function is { r: myrec x: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myrec")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
         assert mono.children["x"].name == "i64"
 
@@ -7683,8 +7723,9 @@ class TestGenerics:
             "myrec: record { x: t } as { t: any.generic }\n"
             "main: function is { r: myrec t: i64 x: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myrec")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
 
     def test_generic_record_conflict_error(self):
@@ -7821,8 +7862,9 @@ class TestGenerics:
             "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="mycls")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
         assert mono.typetype == ZTypeType.CLASS
         assert mono.isgeneric is False
@@ -7835,8 +7877,9 @@ class TestGenerics:
             "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls t: i64 val: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="mycls")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert "i64" in mono.name
         assert mono.typetype == ZTypeType.CLASS
 
@@ -7846,8 +7889,9 @@ class TestGenerics:
             "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="mycls")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert mono.is_valtype is False
 
     def test_generic_class_has_create(self):
@@ -7856,8 +7900,9 @@ class TestGenerics:
             "mycls: class { val: t } as { t: any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="mycls")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert mono.meta_create is not None
         assert mono.meta_create.typetype == ZTypeType.FUNCTION
 
@@ -8376,7 +8421,9 @@ class TestNumericGenerics:
             "myrec: record { x: i64 } as { size: u64.generic }\n"
             "main: function is { a: (myrec size: 10) x: 5 }"
         )
-        mono, _ = program.mono_types[0]
+        monos = find_user_monos(program, origin_name="myrec")
+        assert len(monos) >= 1
+        mono, _ = monos[0]
         assert mono.name == "myrec_10"
         assert mono.generic_origin is not None
         # auto-synthesized field

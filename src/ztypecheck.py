@@ -3351,17 +3351,28 @@ class TypeChecker:
                     loc=path.start,
                 )
                 return None
-            # numeric dotted path: 0.u32, 42.i8, 0xff.u16
+            # numeric dotted path: 0.u32, 42.i8, 0xff.u16. Only treat as
+            # a numeric cast when child names a known numeric type. Other
+            # suffixes (e.g. `.iterate`, `.each` declared natively on
+            # the integer record) fall through to standard child lookup
+            # against the inferred numeric type.
             if _is_numeric_id(pname):
                 child_name = path.child.name
-                _, _, err = parse_number(pname + child_name)
-                if err:
-                    self._error(
-                        f"Invalid numeric cast {pname}.{child_name}: {err}",
-                        loc=path.start,
-                    )
-                    return None
-                return self._resolve_name(child_name)
+                resolved_child = self._resolve_name(child_name)
+                if (
+                    resolved_child is not None
+                    and resolved_child.typetype != ZTypeType.FUNCTION
+                ):
+                    _, _, err = parse_number(pname + child_name)
+                    if err:
+                        # range error / overflow — same behaviour as the
+                        # original blanket numeric-cast handler.
+                        self._error(
+                            f"Invalid numeric cast {pname}.{child_name}: {err}",
+                            loc=path.start,
+                        )
+                        return None
+                    return resolved_child
             # check if it's a unit name first (file-level units)
             if pname in self.program.units:
                 # ensure file unit is fully resolved (generic params detected)
@@ -3439,8 +3450,14 @@ class TypeChecker:
                 if child:
                     return child
                 return None
-            # otherwise resolve parent as a name
-            parent_type = self._resolve_name(pname)
+            # otherwise resolve parent as a name; for numeric literals
+            # (`5.iterate`, `42.each`) resolve via the numeric inference
+            # so the standard child lookup finds natives declared on
+            # the integer record (e.g. `iterate`, `each`).
+            if _is_numeric_id(pname):
+                parent_type = self._resolve_numeric(pname, loc=path.parent.start)
+            else:
+                parent_type = self._resolve_name(pname)
         elif path.parent.nodetype == NodeType.DOTTEDPATH:
             parent_type = self._resolve_dotted_path(cast(zast.DottedPath, path.parent))
         elif path.parent.nodetype == NodeType.EXPRESSION:
@@ -6268,68 +6285,46 @@ class TypeChecker:
                 path.type = parent_type
                 return parent_type
 
-        # .each on integer types: synthesize iteration method
-        _INTEGER_TYPES = {
-            "i8",
-            "i16",
-            "i32",
-            "i64",
-            "i128",
-            "u8",
-            "u16",
-            "u32",
-            "u64",
-            "u128",
-        }
-        # .each / .iterate on integer types: both synthesize the same
-        # iteration method shape. `.iterate` is the canonical name; `.each`
-        # is retained as a deprecated alias and will be removed in a future
-        # commit. Resolution-order inversion (mirrors commit 3cae4fa for
-        # .take/.borrow/.lock/.private): a user-defined member with the
-        # same name on the integer type shadows the intrinsic — fall
-        # through to the standard child lookup.
-        if child_name in ("each", "iterate"):
-            parent_type = self._check_path(path.parent)
-            if (
-                parent_type
-                and parent_type.name in _INTEGER_TYPES
-                and child_name not in parent_type.children
-            ):
-                fn = _make_type(f"{parent_type.name}.{child_name}", ZTypeType.FUNCTION)
-                fn.children["from"] = parent_type
-                optionval_template = self._resolve_name("optionval")
-                if optionval_template and optionval_template.isgeneric:
-                    optionval_defn = self._find_generic_defn(optionval_template)
-                    if optionval_defn:
-                        optionval_mono = self._monomorphize(
-                            optionval_template, {"t": parent_type}, optionval_defn
-                        )
-                        fn.return_type = optionval_mono
-                path.type = fn
-                return fn
-
-        # numeric dotted path: 0.u32, 42.i8, 0xff.u16
+        # numeric dotted path: 0.u32, 42.i8, 0xff.u16. Only treat as a
+        # numeric cast when child names a known numeric type; other
+        # suffixes (e.g. `.iterate`/`.each` declared natively on the
+        # integer record) fall through to standard dispatch which
+        # resolves the parent atom via _resolve_numeric below.
         if path.parent.nodetype == NodeType.ATOMID and _is_numeric_id(
             cast(zast.AtomId, path.parent).name
         ):
             child_name = path.child.name
             pname = cast(zast.AtomId, path.parent).name
-            _, _, err = parse_number(pname + child_name)
-            if err:
-                self._error(
-                    f"Invalid numeric cast {pname}.{child_name}: {err}", loc=path.start
-                )
-                return None
-            t = self._resolve_name(child_name)
-            if t:
-                path.type = t
-            return t
+            resolved_child = self._resolve_name(child_name)
+            if (
+                resolved_child is not None
+                and resolved_child.typetype != ZTypeType.FUNCTION
+            ):
+                _, _, err = parse_number(pname + child_name)
+                if err:
+                    self._error(
+                        f"Invalid numeric cast {pname}.{child_name}: {err}",
+                        loc=path.start,
+                    )
+                    return None
+                path.type = resolved_child
+                return resolved_child
 
         # regular dotted path resolution
         # ensure parent type is set for emitter (needed for class -> vs . dispatch)
         if path.parent.nodetype == NodeType.ATOMID:
             parent_atom = cast(zast.AtomId, path.parent)
-            parent_type = self._resolve_name(parent_atom.name)
+            # Numeric literal parent (`5.iterate`, `42.each`): resolve
+            # via the numeric inference so the standard child lookup
+            # finds natives declared on the integer record.
+            if _is_numeric_id(parent_atom.name):
+                parent_type = self._resolve_numeric(
+                    parent_atom.name, loc=parent_atom.start
+                )
+                if parent_type:
+                    parent_atom.type = parent_type
+            else:
+                parent_type = self._resolve_name(parent_atom.name)
             if parent_type:
                 path.parent.type = parent_type
                 # Narrowing stamp: same as in _check_atomid, so the
