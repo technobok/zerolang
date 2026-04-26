@@ -2,9 +2,13 @@
 Tests for the Tokenizer and Lexer
 """
 
+import pytest
+
 from conftest import make_tokenizer, make_lexer, collect_tokens, collect_lexer_tokens
 from ztokentype import TT
 from zlexer import isvalidunitname
+
+pytestmark = pytest.mark.lexer
 
 
 class TestTokenizerIdentifiers:

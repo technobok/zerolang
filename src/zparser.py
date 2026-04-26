@@ -277,15 +277,26 @@ class Parser:
 
     # pylint: disable=R0903
 
-    def __init__(self, vfs: ZVfs, mainunitname: str, verbose_fn=None):
+    def __init__(
+        self,
+        vfs: ZVfs,
+        mainunitname: str,
+        verbose_fn=None,
+        prebuilt: Optional[Dict[str, zast.Unit]] = None,
+    ):
         """
         vfs: Virtual Filesystem instance to gain access to the module source(s)
         mainunitname: name of main unit (within main; not path, no slashes) to compile
         verbose_fn: optional callback for verbose messages (called with a string)
+        prebuilt: optional pre-parsed units (e.g. system lib) keyed by unit name.
+            When provided, parse() will pre-seed `definitions` with these units
+            and skip re-parsing them. Used by the test harness to avoid
+            re-parsing the system lib on every test.
         """
         self.vfs: ZVfs = vfs
         self.mainunitname: str = mainunitname
         self._verbose_fn = verbose_fn
+        self._prebuilt: Dict[str, zast.Unit] = prebuilt or {}
 
         # self.nodetable: zast.NodeTable = zast.NodeTable()
         # self.environment = Environment()
@@ -307,11 +318,14 @@ class Parser:
         # list of external references (units) to be resolved
         # add in reverse order, will resolve bottom up
         unitstocompile: Dict[str, Optional[zast.AtomId]] = {}
+        # Pre-seed with cached units; their dependencies will be skipped by
+        # the `k not in definitions` check below.
+        definitions: Dict[str, zast.Unit] = dict(self._prebuilt)
+        core: Optional[zast.Unit] = definitions.get("core")
         unitstocompile[self.mainunitname] = None
-        # core must be first (so added last, will pop first)
-        unitstocompile["core"] = None
-        definitions: Dict[str, zast.Unit] = {}  # top level definition Nodes
-        core: Optional[zast.Unit] = None
+        # core must be first (so added last, will pop first); skip if cached
+        if "core" not in definitions:
+            unitstocompile["core"] = None
 
         # loop like this because we will be adding/removing each loop
         while unitstocompile:

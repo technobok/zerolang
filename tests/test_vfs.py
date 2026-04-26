@@ -5,6 +5,8 @@ Tests for the Virtual File System (ZVfs)
 import os
 import tempfile
 
+import pytest
+
 from zvfs import (
     ZVfs,
     FSProvider,
@@ -16,6 +18,9 @@ from zvfs import (
     DEntryNotFound,
     ProviderNodeType,
 )
+
+
+pytestmark = pytest.mark.infra
 
 
 class TestNullProvider:

@@ -5,19 +5,19 @@ Phase 7d: id-keyed cross-file unit resolution + SQL `unit` table.
 import os
 import sqlite3
 
-from conftest import make_parser_vfs
-from zparser import Parser
+import pytest
+
+from conftest import make_parser
 from ztypecheck import typecheck, TypeChecker
 from zsqldump import dump_sql
 
+pytestmark = pytest.mark.infra
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def _parse(src: str, unitname: str = "test"):
-    vfs, name = make_parser_vfs(src, unitname=unitname, src_dir=LIB_DIR)
-    program = Parser(vfs, name).parse()
-    return program
+    return make_parser(src, unitname=unitname, src_dir=LIB_DIR).parse()
 
 
 def _parse_check(src: str, unitname: str = "test"):

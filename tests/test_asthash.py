@@ -2,21 +2,23 @@
 Tests for the AST content hasher (zasthash)
 """
 
-from conftest import make_parser_vfs
-from zparser import Parser
+import pytest
+
+from conftest import make_parser
 from ztypecheck import typecheck
 import zast
 import zasthash
 
 import os
 
+pytestmark = pytest.mark.infra
+
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def parse_and_check(source: str, unitname: str = "test"):
     """Parse and typecheck a source string, returning the program."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
-    p = Parser(vfs, name)
+    p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
     errors = typecheck(program)

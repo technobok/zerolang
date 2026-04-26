@@ -17,7 +17,9 @@ import sys
 import sqlite3
 import tempfile
 
-from conftest import make_parser_vfs, collect_tokens
+import pytest
+
+from conftest import make_parser_vfs, collect_tokens, make_parser
 from zparser import Parser
 from ztypecheck import typecheck, audit_type_annotations
 from ztypes import ZTypeType
@@ -28,14 +30,32 @@ from zvfs import ZVfs, StringProvider
 import zsqldump
 
 
+pytestmark = pytest.mark.infra
+
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def parse_and_check(source: str, unitname: str = "test"):
     """Parse source, run type checker, return program (assert no errors)."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
-    p = Parser(vfs, name)
+    p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
+    assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
+    errors = typecheck(program)
+    assert errors == [], f"Type errors: {[e.msg for e in errors]}"
+    return program
+
+
+def parse_and_check_uncached(source: str, unitname: str = "test"):
+    """parse_and_check variant that bypasses the system-lib cache.
+
+    The cache reuses parsed system units across tests; their tokens carry
+    file IDs (fsno) from the seed VFS, not the per-test VFS. Tests that
+    inspect VFS file_table state or token-to-file foreign keys must use
+    this variant so system files are walked and assigned IDs in the per-test
+    VFS.
+    """
+    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
+    program = Parser(vfs, name).parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
     errors = typecheck(program)
     assert errors == [], f"Type errors: {[e.msg for e in errors]}"
@@ -314,7 +334,7 @@ class TestFinding8FileIdConsistency:
         assert "test.z" in path
 
     def test_file_table_contains_compiled_files(self):
-        program = parse_and_check('main: function is { print "hello" }')
+        program = parse_and_check_uncached('main: function is { print "hello" }')
         table = program.vfs.file_table()
         names = [name for _, name in table]
         # the test unit should appear
@@ -323,7 +343,7 @@ class TestFinding8FileIdConsistency:
         assert any("core.z" in n or "system.z" in n or "io.z" in n for n in names)
 
     def test_file_table_ids_match_token_fsno(self):
-        program = parse_and_check('main: function is { print "hello" }')
+        program = parse_and_check_uncached('main: function is { print "hello" }')
         table = program.vfs.file_table()
         file_ids = {fid for fid, _ in table}
         # the main function's token fsno should be in the file table
@@ -911,7 +931,7 @@ class TestSqlDump:
 
     def test_foreign_key_integrity(self):
         """All foreign keys should be valid (no dangling references)."""
-        program = parse_and_check(
+        program = parse_and_check_uncached(
             "box: class { value: i64 }\n"
             'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
         )

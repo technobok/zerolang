@@ -5,12 +5,14 @@ Tests for the Parser
 import os
 import pytest
 
-from conftest import make_parser_vfs
-from zparser import Parser
+from conftest import make_parser, make_parser_with_vfs
+from zparser import Parser  # noqa: F401
 from zvfs import ZVfs, FSProvider, BindType
 import zast
 from zast import ERR
 
+
+pytestmark = pytest.mark.parser
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
@@ -18,9 +20,7 @@ EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 def parse_unit(source: str, unitname: str = "test") -> zast.Program | zast.Error:
     """Parse a source string as a unit, returning Program or Error."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
-    p = Parser(vfs, name)
-    return p.parse()
+    return make_parser(source, unitname=unitname, src_dir=LIB_DIR).parse()
 
 
 def get_unit_body(result, unitname: str = "test"):
@@ -723,7 +723,7 @@ def parse_example(unitname: str) -> zast.Program | zast.Error:
     rootid = vfs.bind(
         parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
     )
-    p = Parser(vfs, unitname)
+    p = make_parser_with_vfs(vfs, unitname)
     return p.parse()
 
 

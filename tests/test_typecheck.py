@@ -5,9 +5,9 @@ Tests for the type checker (ztypecheck)
 import os
 from typing import Optional
 
+import pytest
 
-from conftest import make_parser_vfs
-from zparser import Parser
+from conftest import make_parser_vfs, make_parser, make_parser_with_vfs
 from ztypecheck import typecheck, TypeChecker
 from ztypes import (
     ZTypeType,
@@ -23,14 +23,14 @@ from ztypes import (
 import zast
 from zast import NodeType
 
+pytestmark = pytest.mark.typecheck
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def parse_and_check(source: str, unitname: str = "test"):
     """Parse source, run type checker, return (program, errors)."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
-    p = Parser(vfs, name)
+    p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
     errors = typecheck(program)
@@ -461,7 +461,7 @@ class TestBareBlockScope:
             unitname="test",
             src_dir=LIB_DIR,
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         result = p.parse()
         assert isinstance(result, zast.Error)
         assert "x" in result.msg
@@ -683,69 +683,6 @@ class TestCircularReferences:
     def test_non_circular_alias_chain(self):
         """a -> b -> i64 is a valid alias chain, not circular."""
         check_ok("b: i64\na: b\nmain: function is { x: a }")
-
-
-class TestExamplePrograms:
-    """Test that all v1 example programs type-check successfully."""
-
-    EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
-
-    def _check_example(self, name: str):
-        from zvfs import ZVfs, FSProvider, BindType
-
-        vfs = ZVfs()
-        systemdir = os.path.join(LIB_DIR, "system")
-        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
-        pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
-        rootid = vfs.walk()
-        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
-        rootid = vfs.bind(
-            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
-        )
-        p = Parser(vfs, name)
-        program = p.parse()
-        assert isinstance(program, zast.Program), f"Parse failed for {name}"
-        errors = typecheck(program)
-        return errors
-
-    def test_hello(self):
-        assert self._check_example("hello") == []
-
-    def test_factorial(self):
-        assert self._check_example("factorial") == []
-
-    def test_fibonacci(self):
-        assert self._check_example("fibonacci") == []
-
-    def test_records(self):
-        assert self._check_example("records") == []
-
-    def test_strings(self):
-        assert self._check_example("strings") == []
-
-    def test_data(self):
-        assert self._check_example("data") == []
-
-    def test_mathutil(self):
-        assert self._check_example("mathutil") == []
-
-    def test_multimod(self):
-        assert self._check_example("multimod") == []
-
-    def test_swap(self):
-        assert self._check_example("swap") == []
-
-    def test_case(self):
-        assert self._check_example("case") == []
-
-    def test_control(self):
-        assert self._check_example("control") == []
-
-    def test_classes(self):
-        assert self._check_example("classes") == []
-
-    def test_unions(self):
-        assert self._check_example("unions") == []
 
 
 class TestReturnTypeChecking:
@@ -992,7 +929,7 @@ class TestValTypeTagging:
             unitname="test",
             src_dir=LIB_DIR,
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         result = p.parse()
         assert isinstance(result, zast.Error)
 
@@ -1985,67 +1922,11 @@ class TestImplicitConstruction:
         assert any("meta.create" in e.msg for e in errors)
 
 
-class TestExampleProgramsOwnership:
-    """Verify all v1 example programs still pass with ownership checking."""
-
-    EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
-
-    def _check_example(self, name: str):
-        from zvfs import ZVfs, FSProvider, BindType
-
-        vfs = ZVfs()
-        systemdir = os.path.join(LIB_DIR, "system")
-        psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
-        pmainid = vfs.register(FSProvider(rootpath=self.EXAMPLES_DIR, parentpath=""))
-        rootid = vfs.walk()
-        rootid = vfs.bind(parentid=rootid, name=None, newid=psystemid)
-        rootid = vfs.bind(
-            parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
-        )
-        p = Parser(vfs, name)
-        program = p.parse()
-        assert isinstance(program, zast.Program), f"Parse failed for {name}"
-        errors = typecheck(program)
-        return errors
-
-    def test_hello(self):
-        assert self._check_example("hello") == []
-
-    def test_factorial(self):
-        assert self._check_example("factorial") == []
-
-    def test_fibonacci(self):
-        assert self._check_example("fibonacci") == []
-
-    def test_records(self):
-        assert self._check_example("records") == []
-
-    def test_strings(self):
-        assert self._check_example("strings") == []
-
-    def test_data(self):
-        assert self._check_example("data") == []
-
-    def test_mathutil(self):
-        assert self._check_example("mathutil") == []
-
-    def test_multimod(self):
-        assert self._check_example("multimod") == []
-
-    def test_swap(self):
-        assert self._check_example("swap") == []
-
-    def test_case(self):
-        assert self._check_example("case") == []
-
-    def test_control(self):
-        assert self._check_example("control") == []
-
-    def test_classes(self):
-        assert self._check_example("classes") == []
-
-    def test_unions(self):
-        assert self._check_example("unions") == []
+# Note: TestExamplePrograms and TestExampleProgramsOwnership were removed —
+# they parsed+type-checked the same examples that TestEmitterExamples
+# (test_emitter.py) compiles and runs end-to-end. The emitter pass subsumes
+# them (it has to type-check first to emit). See plan
+# /home/pawe/.claude/plans/for-zerolang-do-a-expressive-narwhal.md (B1).
 
 
 # ---- Phase 4d: Lock Checking Tests ----
@@ -4045,7 +3926,7 @@ class TestLockCheckingExamplePrograms:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         assert isinstance(program, zast.Program), f"Parse failed for {name}"
         errors = typecheck(program)
@@ -4514,7 +4395,7 @@ class TestUnionMatchExhaustiveness:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "unions")
+        p = make_parser_with_vfs(vfs, "unions")
         program = p.parse()
         assert isinstance(program, zast.Program), "Parse failed"
         errors = typecheck(program)
@@ -9147,61 +9028,24 @@ class TestConstantFolding:
         assert isinstance(inner, zast.AtomId)
         assert inner.const_value == 42
 
-    def test_const_value_binop_addition(self):
-        """1 + 2 should fold to const_value == 3."""
-        program = check_ok("main: function is { x: 1 + 2 }")
+    @pytest.mark.parametrize(
+        "expr,expected",
+        [
+            ("1 + 2", 3),
+            ("10 - 3", 7),
+            ("4 * 5", 20),
+            ("10 / 3", 3),  # truncation toward zero
+            ("-7 / 2", -3),  # C semantics
+            ("3 < 5", True),
+            ("5 < 3", False),
+            ("1 + 2 + 3", 6),  # chained, left-to-right
+        ],
+    )
+    def test_const_value_binop_folds(self, expr, expected):
+        program = check_ok(f"main: function is {{ x: {expr} }}")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 3
-
-    def test_const_value_binop_subtraction(self):
-        """10 - 3 should fold to const_value == 7."""
-        program = check_ok("main: function is { x: 10 - 3 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 7
-
-    def test_const_value_binop_multiplication(self):
-        """4 * 5 should fold to const_value == 20."""
-        program = check_ok("main: function is { x: 4 * 5 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 20
-
-    def test_const_value_binop_division(self):
-        """10 / 3 should fold to const_value == 3 (truncation toward zero)."""
-        program = check_ok("main: function is { x: 10 / 3 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 3
-
-    def test_const_value_negative_division(self):
-        """-7 / 2 should fold to -3 (truncation toward zero, C semantics)."""
-        program = check_ok("main: function is { x: -7 / 2 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == -3
-
-    def test_const_value_binop_comparison(self):
-        """3 < 5 should fold to const_value == True."""
-        program = check_ok("main: function is { x: 3 < 5 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is True
-
-    def test_const_value_comparison_false(self):
-        """5 < 3 should fold to const_value == False."""
-        program = check_ok("main: function is { x: 5 < 3 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is False
-
-    def test_const_value_chained(self):
-        """1 + 2 + 3 should fold to const_value == 6 (left-to-right)."""
-        program = check_ok("main: function is { x: 1 + 2 + 3 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 6
+        assert inner.const_value == expected
 
     def test_const_value_none_for_variables(self):
         """Variable + literal should NOT fold."""
@@ -9283,54 +9127,23 @@ class TestConstantFolding:
 
     # -- Float (f64) folding ---
 
-    def test_f64_addition(self):
-        """f64 addition should fold."""
-        program = check_ok("main: function is { x: 1.5 + 2.5 }")
+    @pytest.mark.parametrize(
+        "expr,expected",
+        [
+            ("1.5 + 2.5", 4.0),
+            ("5.0 - 1.5", 3.5),
+            ("2.0 * 3.5", 7.0),
+            ("7.0 / 2.0", 3.5),
+            ("1.0 < 2.0", True),
+            ("3.0 < 2.0", False),
+            ("1.0 + 2.0 + 3.0", 6.0),
+        ],
+    )
+    def test_f64_binop_folds(self, expr, expected):
+        program = check_ok(f"main: function is {{ x: {expr} }}")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 4.0
-
-    def test_f64_subtraction(self):
-        """f64 subtraction should fold."""
-        program = check_ok("main: function is { x: 5.0 - 1.5 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 3.5
-
-    def test_f64_multiplication(self):
-        """f64 multiplication should fold."""
-        program = check_ok("main: function is { x: 2.0 * 3.5 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 7.0
-
-    def test_f64_division(self):
-        """f64 division should fold (no truncation)."""
-        program = check_ok("main: function is { x: 7.0 / 2.0 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 3.5
-
-    def test_f64_comparison(self):
-        """f64 comparison should fold to bool."""
-        program = check_ok("main: function is { x: 1.0 < 2.0 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is True
-
-    def test_f64_comparison_false(self):
-        """f64 comparison should fold to False."""
-        program = check_ok("main: function is { x: 3.0 < 2.0 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is False
-
-    def test_f64_chained(self):
-        """Chained f64 operations should fold."""
-        program = check_ok("main: function is { x: 1.0 + 2.0 + 3.0 }")
-        inner = self._get_rhs_inner(program)
-        assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 6.0
+        assert inner.const_value == expected
 
     def test_f64_literal_const_value(self):
         """f64 literal should have const_value set."""

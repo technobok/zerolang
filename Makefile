@@ -8,7 +8,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-fast test-verbose fmt build clean bootstrap-lint
+.PHONY: check test test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-lf fmt build clean bootstrap-lint
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -87,6 +87,24 @@ test-fast:
 # where xdist makes output hard to read.
 test-verbose:
 	uv run python -m pytest tests/ -v
+
+# Marker-based subsets — see pyproject.toml [tool.pytest.ini_options].markers.
+# Useful when you've changed only one compiler stage and want a tighter loop.
+test-emitter:
+	uv run python -m pytest tests/ -m emitter -n auto
+
+test-typecheck:
+	uv run python -m pytest tests/ -m typecheck -n auto
+
+test-parser:
+	uv run python -m pytest tests/ -m parser -n auto
+
+test-infra:
+	uv run python -m pytest tests/ -m infra -n auto
+
+# Re-run only tests that failed in the previous run.
+test-lf:
+	uv run python -m pytest tests/ --lf -n auto
 
 fmt:
 	uv run ruff format src/ tests/

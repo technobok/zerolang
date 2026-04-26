@@ -7,6 +7,10 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
+pytestmark = pytest.mark.cli
+
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 SRC_DIR = os.path.join(os.path.dirname(__file__), "..", "src")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")

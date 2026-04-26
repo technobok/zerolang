@@ -5,13 +5,15 @@ Phase 7c: Entry/Variable/Scope id surfaces + SQL dump for the symbol table.
 import os
 import sqlite3
 
-from conftest import make_parser_vfs
-from zparser import Parser
+import pytest
+
+from conftest import make_parser
 from ztypecheck import typecheck
 from zsqldump import dump_sql
 from ztypes import Entry, ZType, ZTypeType, ZOwnership, ZNaming, ZVariable
 from zenv import SymbolTable
 
+pytestmark = pytest.mark.infra
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
@@ -21,8 +23,7 @@ def _make_ztype(name: str, tt: ZTypeType = ZTypeType.RECORD) -> ZType:
 
 
 def _parse_check(src: str, unitname: str = "test"):
-    vfs, name = make_parser_vfs(src, unitname=unitname, src_dir=LIB_DIR)
-    program = Parser(vfs, name).parse()
+    program = make_parser(src, unitname=unitname, src_dir=LIB_DIR).parse()
     errors = typecheck(program)
     assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
     return program

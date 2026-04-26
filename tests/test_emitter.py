@@ -6,12 +6,16 @@ import os
 import subprocess
 import tempfile
 
-from conftest import make_parser_vfs
-from zparser import Parser
+import pytest
+
+from conftest import make_parser_vfs, make_parser, make_parser_with_vfs
+from zparser import Parser  # noqa: F401  (kept for type references)
 from ztypecheck import typecheck
 import zemitterc
 import zast
 
+
+pytestmark = [pytest.mark.emitter, pytest.mark.runtime]
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
@@ -19,8 +23,7 @@ EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 def emit_source(source: str, unitname: str = "test") -> str:
     """Parse, type-check, and emit C source for a zerolang program."""
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
-    p = Parser(vfs, name)
+    p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
     errors = typecheck(program)
@@ -707,7 +710,7 @@ class TestEmitterBasic:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "test")
+        p = make_parser_with_vfs(vfs, "test")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -744,7 +747,7 @@ class TestEmitterBasic:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "test")
+        p = make_parser_with_vfs(vfs, "test")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -793,7 +796,7 @@ class TestEmitterBasic:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "test")
+        p = make_parser_with_vfs(vfs, "test")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -843,7 +846,7 @@ class TestEmitterExamples:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         assert isinstance(program, zast.Program), f"Parse failed for {name}"
         errors = typecheck(program)
@@ -1085,7 +1088,7 @@ class TestUserMethodStringTake:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "takeprobe")
+        p = make_parser_with_vfs(vfs, "takeprobe")
         program = p.parse()
         errors = typecheck(program)
         assert errors == []
@@ -1176,7 +1179,7 @@ class TestCliUnitEmission:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "cli_basic")
+        p = make_parser_with_vfs(vfs, "cli_basic")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -1836,7 +1839,7 @@ class TestEmitterMemorySafety:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "hello")
+        p = make_parser_with_vfs(vfs, "hello")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -1858,7 +1861,7 @@ class TestEmitterMemorySafety:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "strings")
+        p = make_parser_with_vfs(vfs, "strings")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -2120,7 +2123,7 @@ class TestEmitterClassIntegration:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "classes")
+        p = make_parser_with_vfs(vfs, "classes")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -2191,7 +2194,7 @@ class TestEmitterClassMemorySafety:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "classes")
+        p = make_parser_with_vfs(vfs, "classes")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -2339,7 +2342,7 @@ class TestEmitterClassDestructorIntegration:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "classes")
+        p = make_parser_with_vfs(vfs, "classes")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -2670,7 +2673,7 @@ class TestEmitterUnionIntegration:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "unions")
+        p = make_parser_with_vfs(vfs, "unions")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -2739,7 +2742,7 @@ class TestEmitterUnionMemorySafety:
         rootid = vfs.bind(
             parentid=rootid, name=None, newid=pmainid, bindtype=BindType.BEFORE
         )
-        p = Parser(vfs, "unions")
+        p = make_parser_with_vfs(vfs, "unions")
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -5937,7 +5940,7 @@ class TestConstantFolding:
         vfs, name = make_parser_vfs(
             "main: function is { x: 1 / 0 }", unitname="test", src_dir=LIB_DIR
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         assert isinstance(program, zast.Program)
         errors = typecheck(program)
@@ -8782,7 +8785,7 @@ class TestNarrowedFieldAccess:
             unitname="test",
             src_dir=LIB_DIR,
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         errors = typecheck(program)
         assert any("shadowed parent" in e.msg for e in errors), (
@@ -8917,7 +8920,7 @@ class TestNarrowedFullSemantics:
             unitname="test",
             src_dir=LIB_DIR,
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         errors = typecheck(program)
         assert any("shadowed parent" in e.msg for e in errors), (
@@ -8941,7 +8944,7 @@ class TestNarrowedFullSemantics:
             unitname="test",
             src_dir=LIB_DIR,
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         errors = typecheck(program)
         assert any(
@@ -8965,7 +8968,7 @@ class TestNarrowedFullSemantics:
             unitname="test",
             src_dir=LIB_DIR,
         )
-        p = Parser(vfs, name)
+        p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         errors = typecheck(program)
         assert any("has no field 'bogus'" in e.msg for e in errors), (

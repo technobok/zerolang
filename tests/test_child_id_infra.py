@@ -4,13 +4,15 @@ Phase 7b: tests for ZType child_id infrastructure + emitter stamp invariants.
 
 import os
 
-from conftest import make_parser_vfs
-from zparser import Parser
+import pytest
+
+from conftest import make_parser
 from ztypecheck import typecheck
 from ztypes import ZType, ZTypeType
 from zast import NodeType
 import zast
 
+pytestmark = pytest.mark.infra
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
@@ -61,8 +63,7 @@ class TestChildIdInfrastructure:
 
 
 def _parse_check(source: str, unitname: str = "test"):
-    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
-    program = Parser(vfs, name).parse()
+    program = make_parser(source, unitname=unitname, src_dir=LIB_DIR).parse()
     errors = typecheck(program)
     assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
     return program
