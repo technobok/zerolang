@@ -570,7 +570,16 @@ class CEmitter:
         return name
 
     def _alloc_arg_temp(self, ctype: str, expr: str) -> str:
-        """Allocate a temporary for a non-string argument (not freed)."""
+        """Allocate a stable C local for an argument (not freed).
+
+        Phase C step 2 moved per-arg call hoisting into the typechecker
+        (see `_hoist_arg` in ztypecheck.py). This helper now has only
+        one consumer left — the list `.extend` special path needs a
+        named storage slot to take the address of (`&{from_tmp}`); a
+        synth typecheck temp would suffice here too, but extend's
+        signature wants a pointer at the C level so we keep the
+        emit-time temp for that one site.
+        """
         name = self._temp_name("a")
         indent = self._indent()
         self._temp.decls.append(f"{indent}{ctype} {name} = {expr};\n")
@@ -5707,36 +5716,6 @@ class CEmitter:
             )
         return None
 
-    def _has_call(self, op: zast.Operation) -> bool:
-        """Check if an operation contains a function call."""
-        if op.nodetype == NodeType.EXPRESSION:
-            inner = cast(zast.Expression, op).expression
-            if inner.nodetype == NodeType.CALL:
-                return True
-            if inner.nodetype in (
-                NodeType.ATOMID,
-                NodeType.LABELVALUE,
-                NodeType.ATOMSTRING,
-                NodeType.EXPRESSION,
-                NodeType.DOTTEDPATH,
-                NodeType.BINOP,
-            ):
-                return self._has_call(cast(zast.Operation, inner))
-        if op.nodetype == NodeType.BINOP:
-            return self._has_call(cast(zast.BinOp, op).lhs) or self._has_call(
-                cast(zast.BinOp, op).rhs
-            )
-        return False
-
-    def _get_param_ctypes(self, call: zast.Call) -> List[str]:
-        """Get C types for each parameter of the called function."""
-        if not call.callable.type:
-            return []
-        ftype = call.callable.type
-        if ftype.typetype not in (ZTypeType.FUNCTION, ZTypeType.NULL):
-            return []
-        return [_ctype(v) for k, v in ftype.children.items()]
-
     def _emit_projected_arg(self, arg: zast.NamedOperation) -> str:
         """Emit an implicit protocol-projected argument.
 
@@ -5821,7 +5800,6 @@ class CEmitter:
 
     def _emit_call_args(self, call: zast.Call) -> str:
         parts: List[str] = []
-        param_ctypes = self._get_param_ctypes(call)
 
         # determine which arg names are generic type args (to skip in emission)
         generic_param_names: set = set()
@@ -5860,15 +5838,12 @@ class CEmitter:
                 continue
             val = self._emit_operation_value(arg.valtype)
             param_idx = ctype_idx + method_offset
-            if self._has_call(arg.valtype):
-                ctype = (
-                    param_ctypes[param_idx]
-                    if param_idx < len(param_ctypes)
-                    else "int64_t"
-                )
-                # string-returning calls are already temped by _alloc_temp
-                if ctype != "z_string_t":
-                    val = self._alloc_arg_temp(ctype, val)
+            # Pre-Phase-C: nested-call args were hoisted here via
+            # _alloc_arg_temp to give them a stable C name. Now the
+            # typechecker hoists every non-trivial arg into a synth
+            # `_tN: <expr>` Assignment in the parent Statement before
+            # this point arrives, so arg.valtype is already a bare
+            # AtomId at emit time and no per-emit hoisting is needed.
             # stack-allocated class passed as 'this': add &.
             # The C function expects a pointer for 'this' parameters, but the
             # argument is a stack-allocated struct. Detect 'this' by checking
