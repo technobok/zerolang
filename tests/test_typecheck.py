@@ -3639,6 +3639,26 @@ class TestValtypeReftypeEnforcement:
         )
         assert any("view" in e.msg for e in errors)
 
+    def test_user_method_with_from_this_rejected_in_aggregate(self):
+        """The dual-driven aggregate-escape check (commit 4) fires from
+        return_lock_target metadata. A user-defined method whose return
+        is annotated `from: this` must be rejected when stored into a
+        class field, even though its name is not in the legacy
+        _INLINE_LOCK_PROJECTIONS set. Covers the metadata path
+        independently of the syntactic constant.
+        """
+        errors = check_errors(
+            "src: class { val: 0u64 } as {\n"
+            "  peek: function {:this} out u64.borrow from: this is { return 0u64 }\n"
+            "}\n"
+            "holder: class { x: u64 }\n"
+            "main: function is {\n"
+            "  s: src\n"
+            "  h: holder x: s.peek\n"
+            "}"
+        )
+        assert any("lock-carrying" in e.msg.lower() for e in errors)
+
     # --- Positive controls: views remain legal outside aggregate storage.
 
     def test_stringview_as_local_allowed(self):
