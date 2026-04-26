@@ -6299,10 +6299,17 @@ class TypeChecker:
         # .each / .iterate on integer types: both synthesize the same
         # iteration method shape. `.iterate` is the canonical name; `.each`
         # is retained as a deprecated alias and will be removed in a future
-        # commit.
+        # commit. Resolution-order inversion (mirrors commit 3cae4fa for
+        # .take/.borrow/.lock/.private): a user-defined member with the
+        # same name on the integer type shadows the intrinsic — fall
+        # through to the standard child lookup.
         if child_name in ("each", "iterate"):
             parent_type = self._check_path(path.parent)
-            if parent_type and parent_type.name in _INTEGER_TYPES:
+            if (
+                parent_type
+                and parent_type.name in _INTEGER_TYPES
+                and child_name not in parent_type.children
+            ):
                 fn = _make_type(f"{parent_type.name}.{child_name}", ZTypeType.FUNCTION)
                 fn.children["from"] = parent_type
                 optionval_template = self._resolve_name("optionval")
