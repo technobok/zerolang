@@ -1161,6 +1161,21 @@ class TypeChecker:
         if func.return_lock_target is not None:
             ftype.return_lock_target = func.return_lock_target
 
+        # Record which parameter (if any) is bound to the receiver — i.e.
+        # whose declared TYPE was the `this` keyword. Both surface forms
+        # (`:this` -> param name "this", `h: this` -> param name "h")
+        # produce a path whose value name resolves to "this". Downstream
+        # code (missing-arg check, return_lock_target propagation) reads
+        # this field instead of hardcoding the literal "this" so the
+        # named-binding form behaves equivalently to the shorthand.
+        for pname, ppath in func.parameters.items():
+            value_name: Optional[str] = None
+            if ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+                value_name = cast(zast.AtomId, ppath).name
+            if value_name == "this":
+                ftype.this_param_name = pname
+                break
+
         # Phase A default: unannotated stack-reftype params (string, file,
         # bufreader, user classes — needs_destructor and not heap-allocated)
         # default to BORROW. The C ABI then passes them by pointer so
@@ -7023,12 +7038,16 @@ class TypeChecker:
                     provided.add(arg.name)
                 elif i < len(params):
                     provided.add(params[i][0])
-            # 'this' is implicitly provided by the receiver in method calls
+            # The receiver-bound parameter is implicitly provided by
+            # the receiver in method calls. Use this_param_name so the
+            # named form `h: this` is recognised as well as the `:this`
+            # shorthand (which sets this_param_name == "this").
             if (
                 call.callable.nodetype == NodeType.DOTTEDPATH
-                and "this" in callee_type.children
+                and callee_type.this_param_name is not None
+                and callee_type.this_param_name in callee_type.children
             ):
-                provided.add("this")
+                provided.add(callee_type.this_param_name)
             for pname, ptype in params:
                 if pname not in provided and pname not in callee_type.param_defaults:
                     self._error(
@@ -7065,7 +7084,7 @@ class TypeChecker:
         target_name = callee_type.return_lock_target
         if target_name is not None:
             out_path = self._resolve_return_lock_source(
-                target_name, call, lock_param_targets
+                target_name, call, callee_type, lock_param_targets
             )
             if out_path is not None:
                 self._pending_borrow_lock = out_path
@@ -7294,15 +7313,20 @@ class TypeChecker:
         self,
         target_name: str,
         call: zast.Call,
+        callee_type: ZType,
         lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]],
     ) -> Optional[Tuple[str, ...]]:
-        """Translate a callee's `return_lock_target` ("this" or a
-        parameter name) to the addressable source path in the *outer*
-        scope. Returns the path tuple to set as `_pending_borrow_lock`,
-        or None if the target is unresolvable (e.g. an omitted
-        default-using arg, or "this" on a non-method call).
+        """Translate a callee's `return_lock_target` (a parameter name)
+        to the addressable source path in the *outer* scope. Returns
+        the path tuple to set as `_pending_borrow_lock`, or None if
+        the target is unresolvable (an omitted default-using arg, or
+        a receiver-bound target on a non-method call).
         """
-        if target_name == "this":
+        # Receiver-bound parameter — covers both the `:this` shorthand
+        # (param named "this") and the named form `h: this` (param
+        # named "h"). _resolve_function_type records whichever one was
+        # used in callee_type.this_param_name.
+        if target_name == callee_type.this_param_name:
             if call.callable.nodetype != NodeType.DOTTEDPATH:
                 return None
             receiver = cast(zast.DottedPath, call.callable).parent
@@ -7310,11 +7334,11 @@ class TypeChecker:
             if recv_path is None:
                 return None
             return self._chain_through_synth_temp(recv_path)
-        # param-name target: prefer the leaf path captured in
-        # lock_param_targets (already through `_lock_*` resolution),
-        # falling back to walking call.arguments for the unlocked-arg
-        # case (valtype params, or borrow-default params that didn't
-        # install a leaf).
+        # Non-receiver param: explicit arg passed at the call site.
+        # Prefer the leaf path captured in lock_param_targets (already
+        # through `_lock_*` resolution), falling back to walking
+        # call.arguments for the unlocked-arg case (valtype params,
+        # borrow-default params that didn't install a leaf).
         for target_path, pname in lock_param_targets:
             if pname == target_name:
                 return self._chain_through_synth_temp(target_path)

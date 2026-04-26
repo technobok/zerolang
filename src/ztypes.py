@@ -223,6 +223,13 @@ class ZType:
     # for arg-locked returns, or None for owned returns. Drives the
     # aggregate-store-of-borrowed-view rejection in _check_aggregate_lock_escape.
     return_lock_target: "Optional[str]" = field(default=None, init=False)
+    # name of the parameter whose declared TYPE was the `this` keyword —
+    # i.e. the receiver-bound parameter. Set during _resolve_function_type.
+    # Both `:this` (param named "this") and `h: this` (param named "h")
+    # populate this; downstream code checks against this field instead of
+    # hardcoding the literal string "this", so the named-binding form
+    # works equivalently to the unnamed shorthand.
+    this_param_name: "Optional[str]" = field(default=None, init=False)
 
     isgeneric: bool = False
     isliteral: bool = False

@@ -1310,8 +1310,8 @@ class TestReturnLockPropagation:
             "holder: class {\n"
             "  val: string\n"
             "} as {\n"
-            "  pick: function {h: this prefix: stringview}"
-            " out string.borrow from: this is { return h.val }\n"
+            "  pick: function {:this prefix: stringview}"
+            " out string.borrow from: this is { return this.val }\n"
             "}\n"
             "main: function is {\n"
             '  src: holder val: "hi".string\n'
@@ -1336,6 +1336,31 @@ class TestReturnLockPropagation:
             '  src: "hi".string\n'
             "  v: get_view s: src\n"
             '  src = "bye".string\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_named_receiver_param_locked_return(self):
+        """Receiver-bound param spelled `h: this` instead of `:this` —
+        `from: h` must propagate to the receiver path identically.
+
+        Pre-fix: the resolver only matched the literal string "this";
+        `target_name == "h"` fell through to the empty arg-walking
+        branches and returned None. Errors list was empty.
+        """
+        errors = check_errors(
+            "holder: class {\n"
+            "  val: string\n"
+            "} as {\n"
+            "  pick: function {h: this prefix: stringview}"
+            " out string.borrow from: h is { return h.val }\n"
+            "}\n"
+            "main: function is {\n"
+            '  src: holder val: "hi".string\n'
+            '  v: src.pick prefix: ""\n'
+            '  src.val = "bye".string\n'
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() for e in errors), [
