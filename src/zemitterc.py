@@ -105,9 +105,16 @@ class ScopeState:
 
 @dataclass
 class TempState:
-    """Per-statement temporary variable state, pushed/popped at statement boundaries."""
+    """Per-statement temporary variable state, pushed/popped at statement boundaries.
+
+    `decls` flush before the statement's code; `post_code` flushes after.
+    Implicit-take invalidations belong in `post_code` — zeroing the source
+    BEFORE the call passes an empty value to the callee (was a latent bug
+    surfaced by per-call argument hoisting).
+    """
 
     decls: List[str] = field(default_factory=list)
+    post_code: List[str] = field(default_factory=list)
     frees: List[str] = field(default_factory=list)
     string_set: set = field(default_factory=set)
     class_set: Dict[str, str] = field(default_factory=dict)
@@ -4752,8 +4759,9 @@ class CEmitter:
         else:
             code = ""
 
-        # build result: temp decls + code + temp frees
-        result = "".join(self._temp.decls) + code
+        # build result: temp decls + code + post-code (implicit-take
+        # invalidations etc.) + temp frees
+        result = "".join(self._temp.decls) + code + "".join(self._temp.post_code)
         indent = self._indent()
         for t in self._temp.frees:
             if t in self._temp.string_set:
@@ -5655,7 +5663,16 @@ class CEmitter:
         return None
 
     def _get_implicit_take_var(self, op: zast.Operation) -> Optional[str]:
-        """Get the variable name for implicit take (plain variable reference)."""
+        """Get the variable name for implicit take (plain variable reference).
+
+        For aliased synth temps (`_tN -> b`), the C-level invalidation
+        targets the alias's *source* — `_tN` is not a real C local, so
+        zeroing it would emit a reference to an undeclared identifier.
+        Skip implicit take for alias names with non-trivial alias
+        expressions (e.g. dereferences); the source-side invalidation
+        is handled by typecheck's own `.take` semantics on the original
+        arg before hoisting.
+        """
         if op.nodetype == NodeType.ATOMID:
             name = cast(zast.AtomId, op).name
             if (
@@ -5664,6 +5681,16 @@ class CEmitter:
                 and self._typetype_of(name) != ZTypeType.DATA
                 and name not in self._const_names
             ):
+                # If this name is an alias, redirect implicit-take to
+                # the alias's storage:
+                # - trivial target (a bare C identifier) -> invalidate that;
+                # - non-trivial (dereference / member chain) -> skip,
+                #   the underlying storage is managed at its own scope.
+                if name in self._alias_map:
+                    target = self._alias_map[name]
+                    if target.replace("_", "").isalnum():
+                        return target
+                    return None
                 return _mangle_var(name)
         if op.nodetype == NodeType.EXPRESSION and cast(
             zast.Expression, op
@@ -6506,9 +6533,15 @@ class CEmitter:
                         f"z_{list_type_name}_insert({parent_val}, {from_val}, {at_val})"
                     )
                 if method_name == "extend" and call.arguments:
-                    from_val = self._emit_operation_value(call.arguments[0].valtype)
-                    # extend takes a pointer to the source list
+                    from_arg = call.arguments[0]
+                    from_val = self._emit_operation_value(from_arg.valtype)
+                    # extend takes a pointer to the source list, then
+                    # consumes its data (struct-copies the buffer). Zero
+                    # the source post-call so scope exit doesn't free a
+                    # buffer the destination now owns.
+                    indent = self._indent()
                     from_tmp = self._alloc_arg_temp(f"z_{list_type_name}_t", from_val)
+                    self._transfer_implicit_take(from_val, from_arg.valtype, indent)
                     return f"z_{list_type_name}_extend({parent_val}, &{from_tmp})"
                 if method_name == "extend_view" and call.arguments:
                     # extend_view takes a listview by value (copies, does
@@ -6910,9 +6943,18 @@ class CEmitter:
             return self._emit_numeric_literal(name)
         # binding alias: substitute the source expression at the reference site
         # (set by alias-optimized `with`, inline .take/.borrow bindings, and
-        # match-arm narrowed subjects).
+        # match-arm narrowed subjects). Chain lookups so a hoisted-arg synth
+        # alias `_tN -> w` flows through any pre-existing narrowing alias
+        # `w -> (*(z_T_t*)w.data)` rather than emitting the raw name.
         if name in self._alias_map:
-            return self._alias_map[name]
+            target = self._alias_map[name]
+            seen = {name}
+            while target.replace("_", "").isalnum() and target in self._alias_map:
+                if target in seen:
+                    break
+                seen.add(target)
+                target = self._alias_map[target]
+            return target
         # Narrowing unwrap fallback: handles any AtomId stamped with
         # `narrowed_subtype` that wasn't seeded into `_alias_map` (e.g.
         # subjects not bound to a simple addressable name). Match-arm emission
@@ -7821,7 +7863,10 @@ class CEmitter:
             return  # explicit .take invalidation handled by caller
         root = self._get_implicit_take_var(arg_op)
         if root:
-            self._temp.decls.append(
+            # post_code, not decls: zeroing must happen AFTER the
+            # consumer reads the value, not before (otherwise the
+            # callee receives an empty/zero struct).
+            self._temp.post_code.append(
                 self._emit_take_invalidation(root, arg_type, indent)
             )
 

@@ -1895,7 +1895,11 @@ class TestCallArgOrder:
         assert lines[2] == "3"
 
     def test_call_arg_hoisting_emitted(self):
-        """Call-expression args should be hoisted to temps in emitted C."""
+        """Call-expression args should be hoisted to typecheck-side synth
+        temps (`_tN`) in emitted C. After Phase C step 2 the typechecker
+        owns hoisting; the emitter renders the synth Assignments as
+        ordinary local-variable bindings.
+        """
         csource = emit_source(
             "inc: function {n: i64} out i64 is { return n + 1 }\n"
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
@@ -1905,13 +1909,15 @@ class TestCallArgOrder:
             '    print "\\{result}"\n'
             "}"
         )
-        # The emitted code should contain arg temps (_a) for the call args
-        assert "int64_t _a" in csource
+        # The emitted code should contain synth arg temps (_t0, _t1)
+        assert "int64_t _t0" in csource
+        assert "int64_t _t1" in csource
         output = compile_and_run(csource)
         assert output.strip() == "5"
 
     def test_pure_args_not_temped(self):
-        """Pure arguments (variables, literals) should NOT generate arg temps."""
+        """Pure arguments (variables, literals) should NOT generate synth
+        temps — the typechecker's _arg_is_trivial gate skips them."""
         csource = emit_source(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             "\n"
@@ -1921,8 +1927,8 @@ class TestCallArgOrder:
             '    print "\\{result}"\n'
             "}"
         )
-        # No arg temps needed for pure args
-        assert "int64_t _a" not in csource
+        # No synth temps for trivial args (bare AtomId, literal)
+        assert "int64_t _t0" not in csource
         output = compile_and_run(csource)
         assert output.strip() == "30"
 
@@ -3939,8 +3945,10 @@ class TestProtocols:
         assert "z_reader_t _p" in csource
         # protocol struct itself is not malloc'd
         assert "z_xmalloc(sizeof(z_reader_t))" not in csource
-        # the stack temp is destroyed by address
-        assert "z_reader_destroy(&_p" in csource
+        # the stack temp is destroyed by address — after Phase C step 2's
+        # arg hoisting, ownership transfers to a synth `_tN` temp whose
+        # destructor fires at function exit.
+        assert "z_reader_destroy(&" in csource
 
     def test_protocol_temp_runtime(self):
         """Stack-allocated temp protocol instance works at runtime."""

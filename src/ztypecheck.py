@@ -6895,7 +6895,9 @@ class TypeChecker:
             arg_borrow_path = self._pending_borrow_lock
             self._pending_borrow_lock = None  # clear protocol borrow for call args
 
-            # reftype aliasing check
+            # reftype aliasing check — runs against the ORIGINAL arg
+            # expression so that two args derived from the same reftype
+            # source are caught even after hoisting renames them.
             if arg_type and not _is_valtype(arg_type):
                 arg_name = self._get_arg_root_name(arg.valtype)
                 if arg_name:
@@ -6910,6 +6912,15 @@ class TypeChecker:
                         )
                     else:
                         reftype_args[arg_name] = arg.start
+
+            # Phase C step 2 / commit 2: hoist non-trivial args into a
+            # synth `_tN: <expr>` Assignment in the current Statement's
+            # preamble. arg.valtype becomes `AtomId(_tN)`; downstream
+            # type-matching, TAKE-application, and lock installation see
+            # a bare name through the simple-path codepath. Trivial args
+            # (bare AtomId / literal) bypass — no temp needed.
+            if arg_type is not None and not self._arg_is_trivial(arg):
+                self._hoist_arg(arg, arg_type, arg_borrow_path)
 
             if arg_type and arg.name and params:
                 # named argument: match by parameter name
@@ -7177,17 +7188,73 @@ class TypeChecker:
         temp_line = make_assignment(
             temp_name, arg.valtype, arg.valtype.start, origin="anf"
         )
+        # Stamp the synth Assignment + its wrapping Expression with the
+        # resolved arg_type so the emitter picks the right C type
+        # (otherwise _emit_assignment defaults to int64_t and breaks
+        # any non-i64 hoist).
+        temp_assn = cast(zast.Assignment, temp_line.statementline)
+        temp_assn.type = arg_type
+        temp_assn.value.type = arg_type
+        # If the source expression is alias-eligible, make the synth
+        # temp a C-level alias instead of a real local. Without this,
+        # hoisting `w.lock` into `_t1: w.lock` emits a struct copy
+        # that destroys an aliased reftype's resources twice.
+        #
+        # Three paths:
+        #   - lock-bearing projection (.lock / .stringview / .listview
+        #     / .borrow): the source root path is alias-safe (it
+        #     identifies a stack slot, not a fresh struct);
+        #   - explicit .take / .borrow suffix on a value path: defer
+        #     to _alias_target;
+        #   - everything else (protocol projection, method call): NOT
+        #     alias-safe — those return fresh structs that can't be
+        #     elided into a name-substitution.
+        if arg.valtype.nodetype == NodeType.DOTTEDPATH:
+            child_name = cast(zast.DottedPath, arg.valtype).child.name
+            # Aliasable suffixes: thin reinterpretations of the same
+            # storage. .stringview/.listview build fresh view structs
+            # of a *different* type (z_stringview_t / z_listview_T_t)
+            # so they can't be elided into a name substitution — emit
+            # the real assignment instead.
+            if child_name in ("take", "borrow", "lock"):
+                alias_target = self._alias_target_inner(
+                    cast(
+                        zast.Operation,
+                        cast(zast.DottedPath, arg.valtype).parent,
+                    )
+                )
+                if alias_target is not None:
+                    temp_assn.alias_of = alias_target
         self._call_preamble[-1].append(temp_line)
-        # Ownership of the temp follows the source expression: a borrow
-        # source becomes a BORROWED temp; otherwise OWNED. This mirrors
-        # _check_assignment's RHS-driven ownership logic without
-        # re-running it.
-        ownership = (
-            ZOwnership.BORROWED if arg_borrow_path is not None else ZOwnership.OWNED
-        )
-        borrow_origin = (
-            ".".join(arg_borrow_path) if arg_borrow_path is not None else None
-        )
+        # Ownership of the temp follows the source expression:
+        # - explicit `.borrow` / `.lock` / projection captured an
+        #   `arg_borrow_path` -> BORROWED temp rooted there;
+        # - otherwise, if the source is a method-call whose ZType
+        #   carries `return_ownership == BORROW`, the temp inherits
+        #   that borrow (e.g. mapentry.key) so downstream TAKE checks
+        #   still reject transferring the borrowed value;
+        # - otherwise OWNED.
+        ownership = ZOwnership.OWNED
+        borrow_origin: Optional[str] = None
+        if arg_borrow_path is not None:
+            ownership = ZOwnership.BORROWED
+            borrow_origin = ".".join(arg_borrow_path)
+        elif arg.valtype.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, arg.valtype)
+            parent_t = getattr(dp.parent, "type", None)
+            method = (
+                parent_t.children.get(dp.child.name)
+                if parent_t is not None
+                else None
+            )
+            if (
+                method is not None
+                and method.typetype == ZTypeType.FUNCTION
+                and method.return_ownership == ZParamOwnership.BORROW
+            ):
+                ownership = ZOwnership.BORROWED
+                root_name = self._get_arg_root_name(arg.valtype)
+                borrow_origin = root_name
         var = register_synth_var(
             arg_type,
             ownership,
