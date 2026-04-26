@@ -510,6 +510,56 @@ container or iterator from outside the loop. Per-iteration method
 dispatch takes and releases an exclusive lock on the receiver for each
 call. See the lock lifecycle walkthrough below for a worked example.
 
+#---: Per-Call Atomic Processing
+
+The locking algorithm above is implemented through a per-call
+#_+"sub-scope" model: every call -- not only those whose result is
+bound to a name -- opens its own scope while the typechecker
+processes it, and pops that scope when the call resolves. The
+sub-scope owns three things:
+
+#ul:
+  [#*: A #_+"call identity" string (#~"call:<nodeid>"). Locks taken
+  while processing this call -- on the receiver, on argument source
+  paths, or by recursion into nested calls -- carry this identity as
+  their holder. The conflict check treats locks with the current
+  call's identity as #_+"non-blocking self-locks", so a method call
+  whose argument also borrows the receiver (#~"f.poke side: f.a.borrow")
+  composes correctly: the receiver lock and the arg's prefix-overlapping
+  shared lock are attributed to the same call and merge under the
+  existing SHARED+EXCLUSIVE rules. Two #_+"different" calls get
+  different identities and live in their own sub-scopes.]
+  [#*: A list of #_+"synth temps" (#~"_t0", #~"_t1", ...) for any
+  argument that is not a bare name or literal. Each non-trivial
+  argument is rewritten in place to a fresh #~"AtomId(_tN)" reference,
+  with the original expression hoisted into a synth #~"_tN: <expr>"
+  Assignment that lives in the sub-scope. Temps are ordinary variables
+  in their sub-scope, so the existing scope-exit machinery releases
+  their locks and runs destructors on un-taken reftype temps when the
+  sub-scope pops. No special per-temp lifetime metadata is required.]
+  [#*: A drained #_+"preamble" of synth Assignment statements.
+  Source-order is preserved by the left-to-right argument walk: the
+  temp counter is monotonic, so the temp for the first argument always
+  sorts before the second.]
+
+When an argument is itself a call, the typechecker recurses: the
+inner call opens its own sub-scope, hoists its own arguments, and
+pops on resolution. Lock effects propagate naturally through the
+parent-scope mechanism -- locks the inner call's #_+"return value"
+carries become locks on the outer-scope binding (after rewriting
+the inner call's call-identity holder to the outer call's identity
+where applicable), exactly as they would for any nested expression.
+
+A method whose return is locked to its receiver or to a parameter
+is declared with #~"out T.borrow from: <name>". The
+#~"return_lock_target" the typechecker reads from this annotation
+is what propagates the source lock into the outer scope when the
+inner call resolves. There is no syntactic special-case for
+#~".byteview" / #~".listview" / #~".stringview" -- they are
+ordinary native methods declared in #~"lib/system/*.z" with the
+same #~"out T.borrow from: this" annotation, and the metadata
+drives the propagation uniformly.
+
 #---: Borrow-scoped Locking
 
 A Borrow-scoped Lock is acquired whenever a variable is bound to a

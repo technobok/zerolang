@@ -3428,6 +3428,17 @@ class TypeChecker:
                         if not has_non_this:
                             return t.return_type
                     return t
+                # Phase D: known unit, unknown child — surface as an
+                # error instead of silently returning None. Without this,
+                # `io.read_only` (or any other typo on a unit-qualified
+                # path) would slip through call argument resolution.
+                candidates = list((utype.children if utype else {}).keys())
+                suggestion = _suggest_similar(path.child.name, candidates)
+                self._error(
+                    f"unit '{pname}' has no member '{path.child.name}'",
+                    loc=path.start,
+                    hint=f"did you mean '{suggestion}'?" if suggestion else None,
+                )
                 return None
             # check if it's an inline unit name. Phase 7d: prefer id-keyed
             # cache when an inline unit AST handle is reachable via the
@@ -3449,6 +3460,14 @@ class TypeChecker:
                 child = parent_type.children.get(path.child.name)
                 if child:
                     return child
+                # Phase D: as above — known inline unit, unknown member.
+                candidates = list(parent_type.children.keys())
+                suggestion = _suggest_similar(path.child.name, candidates)
+                self._error(
+                    f"unit '{pname}' has no member '{path.child.name}'",
+                    loc=path.start,
+                    hint=f"did you mean '{suggestion}'?" if suggestion else None,
+                )
                 return None
             # otherwise resolve parent as a name; for numeric literals
             # (`5.iterate`, `42.each`) resolve via the numeric inference

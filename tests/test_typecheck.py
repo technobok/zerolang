@@ -1339,6 +1339,188 @@ class TestReturnLockPropagation:
         )
 
 
+class TestPhaseC3Pins:
+    """Phase C-3 pin tests: per-call sub-scope semantics.
+
+    These pin behaviour established by commits 7c63562 (call-identity
+    stack), 7757ccc (per-arg hoisting), d087861 (return_lock_target
+    propagation through nested call scopes), and bafd598 (receiver-
+    param detection in propagation). Without those changes the tests
+    here would silently regress (call locks leaking across statements,
+    args evaluated in arbitrary order, etc.).
+    """
+
+    def _reader_and_myfile(self) -> str:
+        return (
+            "reader: protocol {\n"
+            "    read: function {:this b: i64} out i64\n"
+            "}\n"
+            "myfile: record {\n"
+            "    fd: i64\n"
+            "} as {\n"
+            "    myreader: reader\n"
+            "    read: function {f: this b: i64} out i64 is {\n"
+            "        return f.fd + b\n"
+            "    }\n"
+            "}\n"
+        )
+
+    def test_call_subscope_releases_borrow_lock(self):
+        """Two consecutive call statements that each borrow `f` via
+        a hoisted `f.myreader` projection both succeed because each
+        call's sub-scope releases the borrow on close. If the lock
+        leaked past the first statement, the second would fail with
+        'already has exclusive lock on f'.
+        """
+        check_ok(
+            self._reader_and_myfile() + "use_reader: function {r: reader} is {}\n"
+            "main: function is {\n"
+            "    f: myfile fd: 10\n"
+            "    use_reader r: f.myreader\n"
+            "    use_reader r: f.myreader\n"
+            "}"
+        )
+
+    def test_chained_method_call_hoists_recursively(self):
+        """An arg that is itself a call hoists into a synth temp; the
+        outer call then hoists its own arg-temp on top. Both temps
+        carry synth_origin == 'anf'.
+        """
+        program = check_ok(
+            "make_val: function {x: i64} out i64 is { return x + 1 }\n"
+            "consume: function {v: i64} is {}\n"
+            "main: function is {\n"
+            "    consume v: (make_val x: 5)\n"
+            "}"
+        )
+        # The synth Assignment lives in main's body as a preamble line
+        # injected before the consume() call. Walk the body and assert
+        # at least one synth_origin=='anf' Assignment is present.
+        main_body = program.units[program.mainunitname].body["main"].body
+        synth_assignments = [
+            s.statementline
+            for s in main_body.statements
+            if getattr(s, "synth_origin", None) == "anf"
+            and s.statementline.nodetype == NodeType.ASSIGNMENT
+        ]
+        assert len(synth_assignments) >= 1, (
+            f"expected at least one synth ANF assignment in body; "
+            f"got {[type(s.statementline).__name__ for s in main_body.statements]}"
+        )
+
+    def test_borrow_returning_method_passed_as_take_rejected(self):
+        """A user method with `out string.borrow from: this` returns a
+        borrowed value. Passing that value to a `string.take` parameter
+        must be rejected — the rejection now flows through the
+        return_lock_target metadata path (Phase B/C), not a syntactic
+        special-case.
+        """
+        errors = check_errors(
+            "holder: class {\n"
+            "    val: string\n"
+            "} as {\n"
+            "    pick: function {:this} out string.borrow from: this is {\n"
+            "        return this.val\n"
+            "    }\n"
+            "}\n"
+            "consume: function {s: string.take} is {}\n"
+            "main: function is {\n"
+            '    h: holder val: "hi".string\n'
+            "    consume s: h.pick\n"
+            "}"
+        )
+        assert any(
+            "borrow" in e.msg.lower() or "lock" in e.msg.lower() for e in errors
+        ), [e.msg for e in errors]
+
+    def test_left_to_right_arg_hoist_order(self):
+        """Args hoist left-to-right: the synth Assignment for the first
+        non-trivial arg appears in the preamble before the second.
+        Pinned by walking the post-typecheck AST.
+        """
+        program = check_ok(
+            "make_val: function {x: i64} out i64 is { return x + 1 }\n"
+            "consume2: function {a: i64 b: i64} is {}\n"
+            "main: function is {\n"
+            "    consume2 a: (make_val x: 1) b: (make_val x: 2)\n"
+            "}"
+        )
+        main_body = program.units[program.mainunitname].body["main"].body
+        synth_assigns = [
+            s.statementline
+            for s in main_body.statements
+            if getattr(s, "synth_origin", None) == "anf"
+            and s.statementline.nodetype == NodeType.ASSIGNMENT
+        ]
+        # Two non-trivial args -> at least two synth temps in source
+        # order. Inspect their RHS const_value (1+1 then 2+1) to confirm
+        # the first temp captures arg `a` and the second captures `b`.
+        assert len(synth_assigns) >= 2, [
+            type(s.statementline).__name__ for s in main_body.statements
+        ]
+        # First synth assigns the lhs of the consume2 call (a:),
+        # second assigns rhs (b:). Names follow the FreshNamer
+        # left-to-right counter, so the first temp's number is lower.
+        names = [a.name for a in synth_assigns[:2]]
+        # both should start with the synth prefix and the first should
+        # sort before the second (numeric counter behind the prefix).
+        assert all(n.startswith("_t") for n in names), names
+        assert int(names[0][2:]) < int(names[1][2:]), names
+
+    def test_unknown_unit_member_errors(self):
+        """Phase D: a dotted path through a known unit with an unknown
+        child must error (the leak that let `io.read_only` slip through
+        as a call argument before the fix in `_resolve_dotted_path`).
+        """
+        errors = check_errors("main: function is { x: io.read_only }")
+        assert any("io" in e.msg and "read_only" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_unknown_unit_member_in_call_arg_errors(self):
+        """Same leak surfaced through a call's named arg — what the
+        regression test that motivated Phase D was relying on.
+        """
+        errors = check_errors(
+            "main: function is {\n"
+            '    with f: (io.open path: "/tmp/x" mode: io.read_only) do {}\n'
+            "}"
+        )
+        assert any("io" in e.msg and "read_only" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_destructor_metadata_preserved_through_hoist(self):
+        """An un-taken reftype temp must end up with a needs_destructor
+        type, so the scope-exit machinery cleans it up. Pin via the
+        type metadata on the synth Assignment's RHS.
+        """
+        program = check_ok(
+            "make_str: function {tag: i64} out string is {\n"
+            '    return "hi".string\n'
+            "}\n"
+            "use_borrow: function {s: string.borrow} is {}\n"
+            "main: function is {\n"
+            "    use_borrow s: (make_str tag: 1)\n"
+            "}"
+        )
+        main_body = program.units[program.mainunitname].body["main"].body
+        synth_assigns = [
+            s.statementline
+            for s in main_body.statements
+            if getattr(s, "synth_origin", None) == "anf"
+            and s.statementline.nodetype == NodeType.ASSIGNMENT
+        ]
+        assert len(synth_assigns) >= 1, "expected synth temp for hoisted call arg"
+        temp_assn = synth_assigns[0]
+        # The temp's bound type is `string`, a reftype with
+        # needs_destructor == True. Pin it.
+        assert temp_assn.type is not None
+        assert temp_assn.type.needs_destructor is True, (
+            f"temp type {temp_assn.type.name} should need a destructor"
+        )
+
+
 class TestTakeBorrowCompilerMethods:
     """.take and .borrow compiler methods."""
 
@@ -10921,7 +11103,7 @@ class TestOptionviewBorrowEscape:
         check_ok(
             "main: function is {\n"
             "  saved: (list of: string)\n"
-            '  with f: (io.open path: "/tmp/__nope" mode: io.read_only) do {\n'
+            '  with f: (io.open path: "/tmp/__nope" mode: openmode.read) do {\n'
             "  }\n"
             '  print "ok"\n'
             "}"

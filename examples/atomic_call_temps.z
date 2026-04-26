@@ -1,0 +1,39 @@
+# atomic_call_temps.z -- demonstrates per-call atomic processing.
+#
+# When a call's argument is a non-trivial expression (a projection,
+# a method call, a constructor), the typechecker hoists it into a
+# synth temp inside a per-call sub-scope. The temp's lock on the
+# source releases when that sub-scope pops, so back-to-back calls
+# on the same source compose without spurious lock conflicts.
+#
+# This example exercises both mechanics:
+#   1. Two consecutive `use_reader r: f.myreader` calls succeed
+#      because each call's sub-scope releases the borrow on close.
+#   2. Two args of one call, both derived from the same `f`, are
+#      attributed to the same call identity and merge correctly.
+
+reader: protocol {
+    read: function {:this b: i64} out i64
+}
+
+myfile: class {
+    fd: i64
+} as {
+    myreader: reader
+    read: function {f: this b: i64} out i64 is {
+        return f.fd + b
+    }
+}
+
+use_reader: function {r: reader} out i64 is {
+    n: r.read b: 1
+    return n
+}
+
+main: function is {
+    f: myfile fd: 100
+    # Two consecutive borrow-projections on the same source.
+    a: use_reader r: f.myreader
+    b: use_reader r: f.myreader
+    print "\{a} \{b}"
+}
