@@ -777,9 +777,7 @@ class TestNativeKeyword:
 
     def test_return_lock_target_from_this(self):
         """`out T.borrow from: this` parses, capturing return_lock_target."""
-        result = parse_unit(
-            "f: function {x: i64} out i64.borrow from: x is native"
-        )
+        result = parse_unit("f: function {x: i64} out i64.borrow from: x is native")
         body = get_unit_body(result)
         func = body["f"]
         assert isinstance(func, zast.Function)
