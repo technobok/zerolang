@@ -2805,6 +2805,30 @@ Also available is the fully qualified name for the parent object.
 
 #---: Predefined Methods on Types
 
+The compiler provides two tiers of pre-existing methods on types:
+
+#ul:
+  [#*: #_+"Intrinsics" -- #~".take", #~".release", #~".borrow", #~".lock",
+  #~".private". The compiler defines their semantics directly; no
+  #~"is native" declaration in the standard library is required. They
+  are also #_+"shadowable": a user-defined member with the same name on
+  a type takes precedence over the intrinsic for that type. Resolution
+  walks the parent type's children first; only when the lookup misses
+  does the intrinsic fire. This lets a class export its own #~".take"
+  or #~".release" without colliding with the language-level operation.]
+  [#*: #_+"Native methods" declared in #~"lib/system/*.z" with the
+  #~"is native" form. #~".copy" (per-type), #~".byteview",
+  #~".listview", #~".stringview", #~".iterate", #~".each",
+  #~".append", #~".length", and the collection / numeric-type methods
+  are all in this tier. They are visible to readers of the standard
+  library and resolve through the ordinary member-lookup path -- there
+  is no syntactic special case for them in the type checker.]
+
+The remaining subsections describe the intrinsic tier and a small set
+of compiler-introspection accessors (#~".generic", #~".tag",
+#~".typedef"). The native tier is covered by the per-type pages in the
+standard library reference.
+
 #----: take (method)
 
 #~"take" is a compiler-generated method predefined on all variable names that
@@ -2869,6 +2893,28 @@ Error conditions: cannot release a variable that is currently locked by another
 variable, and cannot release a top-level definition.
 
 See also the [#> to=ownership: ownership].
+
+#----: private (method)
+
+#~"private" is the compiler-generated friend-access intrinsic.
+#~"<receiver>.private" yields the receiver at the same type but with the
+type's #_+"private members" (those whose names start with an underscore
+or that the type marks as private through a #~".private" field type)
+visible. A user-defined #~".private" member on the receiver type shadows
+the intrinsic.
+
+Only code internal to the receiver type's methods, or code in a
+#_+"friend" type that holds the receiver via a #~".private" field, may
+apply #~".private" to it. Use from outside is a compile error
+(#_+"Cannot access '<type>.private' from outside the type definition").
+
+#~".private" takes no arguments. It does not transfer ownership and does
+not introduce a new borrow on its own -- it is purely a visibility
+adjustment. Subsequent suffixes such as #~".lock" / #~".borrow" attach
+their usual lock semantics to the projected reference.
+
+See #~"examples/listiter.z" for the canonical iterator-friend pattern
+built on #~".private".
 
 #----: generic (method)
 

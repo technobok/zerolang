@@ -159,6 +159,20 @@ Generic method bodies are deep-copied during monomorphization and type-checked
 with the concrete type arguments in scope. This ensures that each instantiation
 is independently validated.
 
+Compiler-injected methods on collections (#~".append", #~".set",
+#~".get", #~".byteview", #~".listview", #~".stringview", #~".iterate",
+#~".each", #~".length", and friends) are #_*"not" synthesised by the
+monomorphizer. They are declared with the #~"is native" form in
+#~"lib/system/system.z" and #~"lib/system/collections.z"; the
+monomorphizer clones those declarations alongside everything else.
+Resolution flows through the standard child-lookup path -- there is
+no syntactic special case in the type checker for these names, and a
+user-defined member of the same name on a non-collection type
+resolves normally. Methods that return a borrowed reference into a
+parameter or receiver are annotated with #~"out T.borrow from: <name>";
+the resulting #~"return_lock_target" metadata drives the call-site
+locking instead of name-based pattern matching.
+
 #---: Ownership and Lifetime
 
 The ownership status of each expression is determined using a 2-state model:
@@ -270,6 +284,46 @@ narrowing entry in the current scope. Reassignment resets the narrowing.
 
 If all branches of an #~"if" or #~"match" diverge, the parent scope is
 marked unreachable and subsequent statements are reported as dead code.
+
+
+#---: Synthesis Toolkit
+
+The type checker may need to introduce nodes that did not appear in
+the parsed source -- temporaries introduced by per-call argument
+hoisting, equality functions auto-generated from a type definition,
+and any future ANF / SSA rewrites. Those nodes are created through a
+small toolkit in #~"src/zsynth.py":
+
+#ul:
+  [#*: #+ FreshNamer -- monotonic per-typechecker temp namer.
+  Returns names of the form #~"_t0", #~"_t1", ... in the order they
+  are requested. The monotonicity matters: tests rely on the
+  numeric suffix to assert source-order evaluation of call
+  arguments.]
+  [#*: #+ make_atom_id, #+ make_assignment -- helpers that build
+  AST nodes with the right node-id allocation, source location
+  defaulting, and #~"synth_origin" stamping. Direct construction
+  of nodes outside the toolkit is discouraged because it bypasses
+  these defaults.]
+  [#*: #+ register_synth_var -- registers a synth temp's
+  #~"ZVariable" in the current symbol-table scope so downstream
+  resolution finds it. Used in tandem with #~"make_assignment" to
+  install a hoisted temp.]
+
+Every synthesised node carries a #~"synth_origin: str" field on the
+#~"Node" base class (and on #~"ZVariable" in the symbol table). The
+field names the rewrite that introduced the node (for example,
+#~"\"anf\"" for per-call argument hoisting). The field is persisted
+in the SQL dump (#~"src/zsqldump.py") so rewrite provenance survives
+into post-mortem inspection.
+
+Current consumers:
+
+#ul:
+  [#*: #~"_hoist_arg" in #~"src/ztypecheck.py" -- per-call atomic
+  processing rewrites every non-trivial call argument to a synth
+  temp inside a per-call sub-scope. See
+  #~"doc/ownership.pdoc:Per-Call Atomic Processing" for the model.]
 
 
 #--: Code Generator
