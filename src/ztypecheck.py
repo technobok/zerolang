@@ -7243,9 +7243,7 @@ class TypeChecker:
             dp = cast(zast.DottedPath, arg.valtype)
             parent_t = getattr(dp.parent, "type", None)
             method = (
-                parent_t.children.get(dp.child.name)
-                if parent_t is not None
-                else None
+                parent_t.children.get(dp.child.name) if parent_t is not None else None
             )
             if (
                 method is not None
