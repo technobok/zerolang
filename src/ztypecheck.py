@@ -7870,28 +7870,12 @@ class TypeChecker:
         otherwise release its held locks and invalidate its root name.
 
         Used by the standard call-ownership loop and by constructor-style
-        dispatch paths (`Type.create`, `box from:`, typedef `.create`) that
-        bypass that loop but still need to enforce a declared TAKE parameter.
-
-        A path whose leaf is a method-call returning an owned value
-        (`s.copy` and similar) yields a fresh temp. The TAKE consumes
-        that temp; the receiver is unaffected. Don't trace back through
-        `_get_arg_root_name` to the syntactic root in that case — that
-        would conflate the receiver with the source of the value being
-        moved and reject sound code (e.g. `lst.append from: s.copy`
-        where `s` is a borrowed param).
+        dispatch paths (`Type.create`, `box from:`, typedef `.create`).
+        Both paths now hoist non-trivial args into a synth `_tN` first
+        (via `_hoist_arg`), so by the time this runs, `arg.valtype` is
+        either a bare AtomId (variable, hoisted temp, or literal) or a
+        trivial expression — never a raw method-call DottedPath.
         """
-        if arg.valtype.nodetype == NodeType.DOTTEDPATH:
-            dp = cast(zast.DottedPath, arg.valtype)
-            parent_type = getattr(dp.parent, "type", None)
-            if parent_type is not None:
-                method = parent_type.children.get(dp.child.name)
-                if (
-                    method is not None
-                    and method.typetype == ZTypeType.FUNCTION
-                    and method.return_ownership != ZParamOwnership.BORROW
-                ):
-                    return
         arg_root = self._get_arg_root_name(arg.valtype)
         if not arg_root:
             return
@@ -7977,10 +7961,17 @@ class TypeChecker:
         # `.create` for a protocol takes ownership (move); for a facet it
         # copies the value into inline storage (no ownership change). This
         # dispatch path bypasses the standard call-ownership loop, so apply
-        # the declared `from:` param ownership here.
+        # the declared `from:` param ownership here. Hoist non-trivial args
+        # into a synth temp first (mirroring _check_call) so TAKE-application
+        # operates on a bare AtomId — unifies the constructor path with the
+        # standard call path.
         create_fn = proto_type.children.get("create")
         own = create_fn.param_ownership.get("from") if create_fn is not None else None
         if own == ZParamOwnership.TAKE:
+            arg_borrow_path = self._pending_borrow_lock
+            self._pending_borrow_lock = None
+            if not self._arg_is_trivial(from_arg):
+                self._hoist_arg(from_arg, arg_type, arg_borrow_path)
             self._apply_take_to_arg(from_arg, "from")
 
         call.type = proto_type
@@ -8071,7 +8062,13 @@ class TypeChecker:
             )
             return None
 
-        # `.create` takes ownership of the source.
+        # `.create` takes ownership of the source. Hoist non-trivial args
+        # into a synth temp first (mirroring _check_call) so TAKE-application
+        # operates on a bare AtomId.
+        arg_borrow_path = self._pending_borrow_lock
+        self._pending_borrow_lock = None
+        if not self._arg_is_trivial(from_arg):
+            self._hoist_arg(from_arg, arg_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
 
         call.type = typedef_type
@@ -8822,8 +8819,14 @@ class TypeChecker:
 
         # Boxing transfers ownership of the source into the box. The
         # box-construction dispatch bypasses the standard call-ownership
-        # loop at _check_call, so apply TAKE enforcement here. Literals
-        # have no root name and are unaffected.
+        # loop at _check_call, so apply TAKE enforcement here. Hoist
+        # non-trivial args into a synth temp first (mirroring _check_call)
+        # so TAKE-application operates on a bare AtomId. Literals have no
+        # root name and are unaffected.
+        arg_borrow_path = self._pending_borrow_lock
+        self._pending_borrow_lock = None
+        if not self._arg_is_trivial(from_arg):
+            self._hoist_arg(from_arg, inner_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
 
         # With stack-allocated classes and unions, all user-defined types

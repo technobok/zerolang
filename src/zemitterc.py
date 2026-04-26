@@ -8088,11 +8088,13 @@ class CEmitter:
             f"{indent}{ptr_ctype} {tmp} = ({ptr_ctype})z_xmalloc(sizeof({inner_ctype}));\n"
         )
         self._temp.decls.append(f"{indent}*{tmp} = {val};\n")
-        # ownership transferred to boxed copy — remove source from frees
-        # to avoid double-free of shared heap resources (e.g. string data)
-        if val in self._temp.frees:
-            self._temp.frees.remove(val)
-        # handle explicit .take — invalidate source variable
+        # Transfer ownership: drop the source from frees (boxed copy now
+        # owns the heap data) and zero-init the source so any scope-exit
+        # cleanup is a safe no-op. Mirrors the standard call's
+        # _apply_call_implicit_takes loop now that constructor-site
+        # hoisting routes hoisted args (`_tN`) through here.
+        self._transfer_implicit_take(val, value_arg.valtype, indent)
+        # handle explicit .take suffix — invalidate source variable
         take_var = self._get_take_var(value_arg.valtype)
         if take_var:
             val_type = self._get_operation_type(value_arg.valtype)

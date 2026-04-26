@@ -5957,6 +5957,26 @@ class TestProtocolCreateInvalidatesSource:
             "}"
         )
 
+    def test_box_from_owned_returning_method_succeeds(self):
+        """box from: s.copy — `.copy` on a borrowed source produces a fresh
+        owned value, satisfying TAKE on the constructor's `from:` param.
+        The receiver `s` remains usable afterward. Regression for
+        constructor-site hoisting (protocol.create / typedef.create /
+        box from:): the synth temp `_tN: s.copy` is OWNED, so
+        `_apply_take_to_arg` releases the temp's locks and invalidates
+        the temp — never the receiver. This shape was previously handled
+        by an `_apply_take_to_arg` short-circuit on `DOTTEDPATH`+owned-
+        returning method; that short-circuit is deleted once hoisting
+        reaches all three constructor sites.
+        """
+        check_ok(
+            "f: function {s: string} is {\n"
+            "    b: box from: s.copy\n"
+            '    print "{s}"\n'
+            "}\n"
+            "main: function is {}"
+        )
+
     def test_create_from_class_invalidates_source(self):
         """Classes: source invalidated by .create, no .take required at call site."""
         errors = check_errors(
