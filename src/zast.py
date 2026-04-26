@@ -409,6 +409,9 @@ class Function(Node):
     param_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
     # ownership annotation on the return type (if any)
     return_ownership: Optional["ZParamOwnership"] = None
+    # path the return value's lock is bound to ("this", a param name, or None).
+    # Spelled `out T.borrow from: <name>` in source.
+    return_lock_target: Optional[str] = None
     # native function: body is compiler-provided (not a spec)
     is_native: bool = False
     # 'as' clause: generic parameters and static functions

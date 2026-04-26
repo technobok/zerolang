@@ -1139,6 +1139,8 @@ class TypeChecker:
             ftype.param_ownership = dict(func.param_ownership)
         if func.return_ownership is not None:
             ftype.return_ownership = func.return_ownership
+        if func.return_lock_target is not None:
+            ftype.return_lock_target = func.return_lock_target
 
         # Phase A default: unannotated stack-reftype params (string, file,
         # bufreader, user classes — needs_destructor and not heap-allocated)

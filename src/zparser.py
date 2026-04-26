@@ -1051,6 +1051,7 @@ class Parser:
         parameters: Dict[str, zast.Path] = {}
         param_ownership: Dict[str, ZParamOwnership] = {}
         return_ownership: Optional[ZParamOwnership] = None
+        return_lock_target: Optional[str] = None
         # externs from 'accept' function parameters
         externparam: Dict[str, zast.AtomId] = {}
         # parameter names - local definitions for determining externs
@@ -1086,6 +1087,27 @@ class Parser:
                 returntype = stripped_ret
                 if ret_own is not None:
                     return_ownership = ret_own
+
+                # optional `from: <name>` clause binds the return value's
+                # lock to a parameter (e.g. `out T.borrow from: this`).
+                from_tok = lex.peek()
+                if from_tok.toktype == TT.LABEL and from_tok.tokstr == "from":
+                    lex.acceptany()  # consume `from:`
+                    target = self._accept_path(lex)
+                    if target is None:
+                        msg = (
+                            "Expected name after 'from:' in return-type lock annotation"
+                        )
+                        return zast.Error(
+                            start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
+                        )
+                    if target.is_error:
+                        return cast(zast.Error, target)
+                    target_node = cast(NodeX[zast.Path], target).node
+                    if target_node.nodetype != NodeType.ATOMID:
+                        msg = "'from:' lock target must be a simple name"
+                        return zast.Error(start=from_tok, err=ERR.BADARGUMENT, msg=msg)
+                    return_lock_target = cast(zast.AtomId, target_node).name
                 first = False
 
             elif lex.accept(TT.IS):
@@ -1224,6 +1246,7 @@ class Parser:
             start=start,
             param_ownership=param_ownership,
             return_ownership=return_ownership,
+            return_lock_target=return_lock_target,
             is_native=is_native,
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
