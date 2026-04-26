@@ -5998,8 +5998,12 @@ class TypeChecker:
         if child_name == "take":
             parent_type = self._check_path(path.parent)
             if parent_type:
+                # Resolution-order inversion: a user-defined .take member on
+                # the parent type shadows the intrinsic.
+                if "take" in parent_type.children:
+                    pass  # fall through to normal child lookup below
                 # protocol/facet/typedef.take is a constructor, not ownership transfer
-                if parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+                elif parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                     pass  # fall through to normal child lookup below
                 elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
@@ -6051,7 +6055,7 @@ class TypeChecker:
         # handle .release compiler method (early scope-exit for a variable)
         if child_name == "release":
             parent_type = self._check_path(path.parent)
-            if parent_type:
+            if parent_type and "release" not in parent_type.children:
                 # .release only valid on simple variable names
                 if path.parent.nodetype != NodeType.ATOMID:
                     self._error(
@@ -6104,8 +6108,12 @@ class TypeChecker:
         if child_name == "borrow":
             parent_type = self._check_path(path.parent)
             if parent_type:
+                # Resolution-order inversion: a user-defined .borrow member on
+                # the parent type shadows the intrinsic.
+                if "borrow" in parent_type.children:
+                    pass  # fall through to normal child lookup below
                 # protocol/facet/typedef.borrow is a constructor, not ownership borrow
-                if parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+                elif parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                     pass  # fall through to normal child lookup below
                 elif parent_type.typedef_base is not None:
                     pass  # fall through to normal child lookup below
@@ -6130,7 +6138,11 @@ class TypeChecker:
         # handle .lock compiler method (alias for .borrow)
         if child_name == "lock":
             parent_type = self._check_path(path.parent)
-            if parent_type:
+            if parent_type is None:
+                return parent_type
+            # Resolution-order inversion: a user-defined .lock member on
+            # the parent type shadows the intrinsic.
+            if "lock" not in parent_type.children:
                 src_path = self._get_dotted_path_tuple(path.parent)
                 if src_path:
                     self._pending_borrow_lock = src_path
@@ -6142,12 +6154,16 @@ class TypeChecker:
                         err=ERR.OWNERERROR,
                     )
                 path.type = parent_type
-            return parent_type
+                return parent_type
 
         # handle .private (friend access)
         if child_name == "private":
             parent_type = self._check_path(path.parent)
-            if parent_type:
+            if parent_type is None:
+                return parent_type
+            # Resolution-order inversion: a user-defined .private member on
+            # the parent type shadows the intrinsic.
+            if "private" not in parent_type.children:
                 # enforce: only internal access can use .private
                 if not self._is_internal_access(parent_type, path):
                     # also allow if the variable itself has private access
@@ -6163,7 +6179,7 @@ class TypeChecker:
                         )
                 self._pending_private_access = True
                 path.type = parent_type
-            return parent_type
+                return parent_type
 
         # .each on integer types: synthesize iteration method
         _INTEGER_TYPES = {

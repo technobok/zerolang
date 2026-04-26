@@ -1304,6 +1304,26 @@ class TestTakeBorrowCompilerMethods:
             "ownership transfer" in e.msg or "undefined" in e.msg for e in errors
         )
 
+    def test_user_method_shadows_take_intrinsic(self):
+        """A user-defined .take method on a class shadows the intrinsic.
+
+        Without resolution-order inversion the intrinsic would fire and
+        invalidate x; the subsequent x.value access would error. With
+        the user method shadowing, x stays a live variable.
+        """
+        check_ok(
+            "mybox: class {\n"
+            "  value: 0u64\n"
+            "} as {\n"
+            "  take: function {:this} out u64 is { return 42u64 }\n"
+            "}\n"
+            "main: function is {\n"
+            "  x: mybox\n"
+            "  y: x.take\n"
+            "  z: x.value\n"
+            "}"
+        )
+
 
 class TestReleaseCompilerMethod:
     """.release compiler method."""
