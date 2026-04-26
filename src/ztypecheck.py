@@ -7057,6 +7057,18 @@ class TypeChecker:
                 # SHARED ancestors will be reinstalled by the consumer's
                 # path walk in the result binding's scope.
                 self._pending_borrow_lock = target_path
+        # Phase C step 3: if the callee declares its return locked to a
+        # specific source ("this" or a parameter name), propagate that
+        # lock to the binding in the outer scope. Generalises the
+        # `lock_param_targets` transfer above to all `from: <name>`
+        # returns regardless of whether the param is `.lock`-annotated.
+        target_name = callee_type.return_lock_target
+        if target_name is not None:
+            out_path = self._resolve_return_lock_source(
+                target_name, call, lock_param_targets
+            )
+            if out_path is not None:
+                self._pending_borrow_lock = out_path
         # pop the call scope — all call-scoped locks vanish
         self.symtab.pop_to(call_marker)
         self._call_id_stack.pop()
@@ -7277,6 +7289,62 @@ class TypeChecker:
         if self._call_id_stack:
             return self._call_id_stack[-1]
         return "__call"
+
+    def _resolve_return_lock_source(
+        self,
+        target_name: str,
+        call: zast.Call,
+        lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]],
+    ) -> Optional[Tuple[str, ...]]:
+        """Translate a callee's `return_lock_target` ("this" or a
+        parameter name) to the addressable source path in the *outer*
+        scope. Returns the path tuple to set as `_pending_borrow_lock`,
+        or None if the target is unresolvable (e.g. an omitted
+        default-using arg, or "this" on a non-method call).
+        """
+        if target_name == "this":
+            if call.callable.nodetype != NodeType.DOTTEDPATH:
+                return None
+            receiver = cast(zast.DottedPath, call.callable).parent
+            recv_path = self._get_dotted_path_tuple(cast(zast.Operation, receiver))
+            if recv_path is None:
+                return None
+            return self._chain_through_synth_temp(recv_path)
+        # param-name target: prefer the leaf path captured in
+        # lock_param_targets (already through `_lock_*` resolution),
+        # falling back to walking call.arguments for the unlocked-arg
+        # case (valtype params, or borrow-default params that didn't
+        # install a leaf).
+        for target_path, pname in lock_param_targets:
+            if pname == target_name:
+                return self._chain_through_synth_temp(target_path)
+        for arg in call.arguments:
+            if arg.name == target_name:
+                path = self._get_dotted_path_tuple(arg.valtype)
+                if path is None:
+                    return None
+                return self._chain_through_synth_temp(path)
+        return None
+
+    def _chain_through_synth_temp(self, path: Tuple[str, ...]) -> Tuple[str, ...]:
+        """If the path roots at a synth temp (Phase C step 2's `_tN`)
+        whose `borrow_origin` is set, replace the root with the temp's
+        recorded source. Otherwise return the path unchanged.
+
+        Synth temps live in the call's CALL scope and vanish when
+        `pop_to(call_marker)` runs — propagating a path that roots at
+        such a temp would attach the lock to a name that no longer
+        exists in the outer scope. The chain step rewrites those paths
+        to refer to the ultimate source recorded at hoist time.
+        """
+        root = path[0]
+        var = self.symtab.lookup_var(root)
+        if var is None or var.borrow_origin is None:
+            return path
+        origin_parts = tuple(var.borrow_origin.split("."))
+        if len(path) == 1:
+            return origin_parts
+        return origin_parts + path[1:]
 
     def _lock_source_path(
         self, path_tuple: Tuple[str, ...], loc: Token

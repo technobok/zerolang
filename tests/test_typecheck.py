@@ -1284,6 +1284,78 @@ class TestStoreOfBorrowedRejection:
         assert any("'s'" in e.msg for e in errors), [e.msg for e in errors]
 
 
+class TestReturnLockPropagation:
+    """Phase C step 3: when a user-defined method declares
+    `out T.borrow from: <name>`, the call's binding must lock the
+    corresponding source path in the outer scope. Mutating that
+    source while the binding is live errors.
+
+    The stdlib's `.stringview` / `.listview` go through syntactic
+    intercepts that already do this; `.lock`-annotated params route
+    through the pre-existing `lock_param_targets` transfer. The hole
+    that step 3 closes: user-defined methods with `from:` whose param
+    is NOT `.lock`-annotated (and methods with `from: this` that are
+    NOT covered by a syntactic intercept).
+
+    Pre-step-3 these tests reported empty `errors` lists, silently
+    accepting unsound code.
+    """
+
+    def test_user_method_this_locked_return_locks_receiver(self):
+        """User-defined method with `out T.borrow from: this` —
+        no syntactic intercept covers it, so propagation must come
+        from `return_lock_target` metadata at call resolution.
+        """
+        errors = check_errors(
+            "holder: class {\n"
+            "  val: string\n"
+            "} as {\n"
+            "  pick: function {h: this prefix: stringview}"
+            " out string.borrow from: this is { return h.val }\n"
+            "}\n"
+            "main: function is {\n"
+            '  src: holder val: "hi".string\n'
+            '  v: src.pick prefix: ""\n'
+            '  src.val = "bye".string\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_user_method_param_locked_return_locks_arg_source(self):
+        """User-defined function with `out T.borrow from: s` where
+        `s` is a default-BORROW param (not `.lock`). The existing
+        `lock_param_targets` transfer only fires for `.lock` params,
+        so propagation must come from `return_lock_target`.
+        """
+        errors = check_errors(
+            "get_view: function {s: string}"
+            " out string.borrow from: s is { return s }\n"
+            "main: function is {\n"
+            '  src: "hi".string\n'
+            "  v: get_view s: src\n"
+            '  src = "bye".string\n'
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_no_propagation_when_no_lock_target(self):
+        """A function with `out T` (no `from:`) returns an owned value
+        — no propagation, no spurious lock, source remains mutable.
+        """
+        check_ok(
+            "make_copy: function {s: string} out string is { return s.copy }\n"
+            "main: function is {\n"
+            '  src: "hi".string\n'
+            "  v: make_copy s: src\n"
+            '  src = "bye".string\n'
+            "}"
+        )
+
+
 class TestTakeBorrowCompilerMethods:
     """.take and .borrow compiler methods."""
 
