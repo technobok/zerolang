@@ -3643,22 +3643,6 @@ class TypeChecker:
         # for string class: .string returns the same string type (no-op identity)
         if parent_type.subtype == ZSubType.STRING and child_name == "string":
             return self._resolve_name("string")
-        # .stringview on a string (reftype) or str (valtype) returns the
-        # stringview type and acquires an exclusive lock on the source path.
-        if child_name == "stringview" and (
-            parent_type.subtype == ZSubType.STRING or _is_str_type(parent_type)
-        ):
-            src_path = self._get_dotted_path_tuple(path.parent)
-            if src_path:
-                self._pending_borrow_lock = src_path
-            else:
-                self._error(
-                    "Cannot create view from temporary expression; "
-                    "assign the value to a variable first",
-                    loc=path.start,
-                    err=ERR.OWNERERROR,
-                )
-            return self._resolve_name("stringview")
         # for string class: .length and .capacity return u64 directly
         if parent_type.subtype == ZSubType.STRING and child_name in (
             "length",
@@ -3699,33 +3683,19 @@ class TypeChecker:
                         break
                 if not has_non_this:
                     return method.return_type
-        # for list types: .listview returns the listview type directly (zero-arg method)
-        # and acquires an exclusive lock on the source list
-        if _is_list_type(parent_type) and child_name == "listview":
-            src_path = self._get_dotted_path_tuple(path.parent)
-            if src_path:
-                self._pending_borrow_lock = src_path
-            else:
-                self._error(
-                    "Cannot create view from temporary expression; "
-                    "assign the value to a variable first",
-                    loc=path.start,
-                    err=ERR.OWNERERROR,
-                )
-            listview_child = parent_type.children.get("listview")
-            if listview_child and listview_child.return_type:
-                return listview_child.return_type
-        # Zero-arg method on a concrete class accessed as an rvalue
-        # coerces to the method's return type, so `fr: obj.flush` binds
-        # fr to the result rather than a function-pointer type. Placed
-        # after the type-specific shortcut rules (string.length,
-        # list.pop, list.listview) so those still win; placed before
-        # the generic child lookup so non-method children (e.g.
-        # list.length which is stored as a t_u64 child) still pass
-        # through unchanged. Previously implemented as ad-hoc per-class
-        # branches for `file.close`, `bufwriter.flush`, and
-        # `bufreader.read`; this unified rule subsumes them.
-        if parent_type.typetype == ZTypeType.CLASS:
+        # Zero-arg method on a concrete class or str-valtype accessed as
+        # an rvalue coerces to the method's return type, so `fr: obj.flush`
+        # binds fr to the result rather than a function-pointer type, and
+        # `v: s.stringview` binds v to a stringview rather than the
+        # function. Placed after the type-specific shortcut rules
+        # (string.length, list.pop) so those still win; placed before the
+        # generic child lookup so non-method children (e.g. list.length
+        # stored as a t_u64 child) still pass through unchanged.
+        # Subsumes the per-class file.close / bufwriter.flush /
+        # bufreader.read branches AND the syntactic .stringview /
+        # .listview branches (which set _pending_borrow_lock from the
+        # method's `return_lock_target = "this"` metadata).
+        if parent_type.typetype == ZTypeType.CLASS or _is_str_type(parent_type):
             method = parent_type.children.get(child_name)
             if (
                 method is not None
@@ -3738,6 +3708,21 @@ class TypeChecker:
                         has_non_this = True
                         break
                 if not has_non_this:
+                    # Method declared `out T.borrow from: this` installs an
+                    # exclusive lock on the receiver path. Replaces the
+                    # syntactic .stringview / .listview lock-setter that
+                    # previously did this directly.
+                    if method.return_lock_target == "this":
+                        src_path = self._get_dotted_path_tuple(path.parent)
+                        if src_path:
+                            self._pending_borrow_lock = src_path
+                        else:
+                            self._error(
+                                "Cannot create view from temporary expression; "
+                                "assign the value to a variable first",
+                                loc=path.start,
+                                err=ERR.OWNERERROR,
+                            )
                     return method.return_type
         # for records/enums, look up child in children
         # resolve public name (may redirect renamed members)
@@ -7723,9 +7708,19 @@ class TypeChecker:
                     err=ERR.OWNERERROR,
                 )
 
-    _INLINE_LOCK_PROJECTIONS = frozenset(
-        {"stringview", "listview", "byteview", "borrow", "lock"}
-    )
+    # Syntactic name match for aggregate-escape Case 1. `.stringview` and
+    # `.listview` projections previously lived here but have been migrated
+    # to the metadata path: their natives carry `return_lock_target = "this"`
+    # (commits bde6411 / bfc40c3), and the syntactic branches in
+    # `_resolve_dotted_path` were deleted in favour of the unified zero-arg
+    # method coercion that reads the metadata. `.byteview` remains because
+    # `bytes.byteview` is not a working method (aspirational only); its
+    # entry pins `test_class_cannot_hold_byteview` until that test is
+    # rewritten when blocker 2 lands. `.borrow` / `.lock` remain because
+    # they are intrinsic ownership projections, not methods, and have no
+    # `return_lock_target` metadata to consult — blocker 2 lifts them to
+    # metadata-bearing intrinsic methods so they can be removed too.
+    _INLINE_LOCK_PROJECTIONS = frozenset({"byteview", "borrow", "lock"})
 
     def _check_aggregate_lock_escape(self, call: zast.Call, callee_type: ZType) -> None:
         """Reject arguments carrying outstanding locks from escaping into an
