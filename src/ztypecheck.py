@@ -11,6 +11,7 @@ import zast
 from zast import ERR, NodeType, clone_function
 from zlexer import Token
 from zenv import SymbolTable
+from zsynth import FreshNamer, make_assignment, make_atom_id, register_synth_var
 import zasthash
 from ztypes import (
     ZType,
@@ -409,6 +410,15 @@ class TypeChecker:
         # locks on receiver + args (e.g. `f.method bv: f.byteview`)
         # without self-blocking.
         self._call_id_stack: List[str] = []
+
+        # Per-call argument hoisting (Phase C step 2). FreshNamer hands
+        # out monotonic synth names (`_t0`, `_t1`, ...). The preamble
+        # stack mirrors the depth of in-flight Statements: each entry is
+        # a list of synth Assignments to inject *before* the current
+        # StatementLine in that Statement. _check_statement push/pops
+        # entries; _check_call appends to the topmost.
+        self._fresh_namer = FreshNamer(prefix="_t")
+        self._call_preamble: List[List[zast.StatementLine]] = []
 
         # inline unit context stack: tracks nesting during resolution
         # each entry is (unitname, zast.Unit) for name lookup chain
@@ -5485,6 +5495,12 @@ class TypeChecker:
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
+        # Phase C step 2: each Statement maintains a preamble buffer for
+        # synth temp Assignments hoisted out of nested calls in its
+        # current StatementLine. The buffer drains *before* the
+        # StatementLine that produced it, preserving source order.
+        self._call_preamble.append([])
+        out: List[zast.StatementLine] = []
         for sline in stmt.statements:
             # dead code detection: if scope is unreachable, remaining
             # statements are dead code
@@ -5493,8 +5509,18 @@ class TypeChecker:
                     "Unreachable code",
                     loc=sline.start if hasattr(sline, "start") else None,
                 )
+                self._call_preamble.pop()
+                stmt.statements = out
                 return
             self._check_statement_line(sline)
+            # drain anything _check_call hoisted into the preamble during
+            # this StatementLine's processing — those synth Assignments
+            # belong before sline in source order.
+            preamble = self._call_preamble[-1]
+            if preamble:
+                out.extend(preamble)
+                preamble.clear()
+            out.append(sline)
             # after a non-completing expression, mark scope as unreachable
             inner = sline.statementline
             if inner.nodetype == NodeType.EXPRESSION:
@@ -5506,6 +5532,8 @@ class TypeChecker:
                     zast.CallKind.ERROR,
                 ):
                     self.symtab.mark_unreachable()
+        self._call_preamble.pop()
+        stmt.statements = out
 
     def _check_statement_line(self, sline: zast.StatementLine) -> None:
         inner = sline.statementline
@@ -7089,6 +7117,89 @@ class TypeChecker:
         err = self.symtab.try_lock(target_path, ZLockState.EXCLUSIVE, holder)
         if err:
             self._error(err, loc=loc)
+
+    def _arg_is_trivial(self, arg: zast.NamedOperation) -> bool:
+        """True iff `arg` is a hoisting-no-op: a bare AtomId (variable or
+        numeric literal), a LabelValue, or an AtomString without
+        interpolation. Anything else (Call, BinOp, DottedPath,
+        interpolated string) hoists into a synth temp.
+        """
+        op = arg.valtype
+        if op.nodetype == NodeType.ATOMID:
+            return True
+        if op.nodetype == NodeType.LABELVALUE:
+            return True
+        if op.nodetype == NodeType.ATOMSTRING:
+            atom_str = cast(zast.AtomString, op)
+            has_interp = any(
+                getattr(p, "nodetype", None) == NodeType.EXPRESSION
+                for p in atom_str.stringparts
+            )
+            return not has_interp
+        if op.nodetype == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, op).expression
+            if inner.nodetype == NodeType.ATOMID:
+                return True
+            if inner.nodetype == NodeType.LABELVALUE:
+                return True
+        return False
+
+    def _hoist_arg(
+        self,
+        arg: zast.NamedOperation,
+        arg_type: ZType,
+        arg_borrow_path: Optional[Tuple[str, ...]],
+    ) -> str:
+        """Hoist a non-trivial call argument into a fresh synth temp.
+
+        Side effects, in order:
+          1. Allocate `name = self._fresh_namer.next()` (e.g. `_t0`).
+          2. Build a synth `name: <arg.valtype>` Assignment via
+             `make_assignment` and append it to the current Statement's
+             preamble (`self._call_preamble[-1]`). The driver in
+             `_check_statement` drains this before the current
+             StatementLine.
+          3. Register a `ZVariable` for `name` in the current scope so
+             downstream lookups find it. `borrow_origin` carries the
+             source path captured by `.borrow`/`.lock`/protocol-projection
+             handling so the metadata-driven aggregate-escape check
+             (commit bde6411) fires on hoisted lock-bearing projections.
+          4. Mutate `arg.valtype` in-place to `AtomId(name)` so subsequent
+             type-matching, TAKE-application, and lock installation see a
+             bare name through the simple-path codepath.
+
+        Returns the synth temp's name (caller may already discard it).
+        """
+        temp_name = self._fresh_namer.next()
+        # Build the synth Assignment binding the temp to the original
+        # arg expression. _check_statement will inject this before the
+        # containing StatementLine.
+        temp_line = make_assignment(
+            temp_name, arg.valtype, arg.valtype.start, origin="anf"
+        )
+        self._call_preamble[-1].append(temp_line)
+        # Ownership of the temp follows the source expression: a borrow
+        # source becomes a BORROWED temp; otherwise OWNED. This mirrors
+        # _check_assignment's RHS-driven ownership logic without
+        # re-running it.
+        ownership = (
+            ZOwnership.BORROWED if arg_borrow_path is not None else ZOwnership.OWNED
+        )
+        borrow_origin = (
+            ".".join(arg_borrow_path) if arg_borrow_path is not None else None
+        )
+        var = register_synth_var(
+            arg_type,
+            ownership,
+            borrow_origin=borrow_origin,
+            origin="anf",
+        )
+        self.symtab.define_var(temp_name, var)
+        # Replace the arg's value with an AtomId reference to the temp.
+        atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
+        atom.type = arg_type
+        arg.valtype = atom
+        return temp_name
 
     def _current_call_holder(self) -> str:
         """Holder string for locks installed during the topmost in-flight

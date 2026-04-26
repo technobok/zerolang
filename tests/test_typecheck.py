@@ -20,6 +20,7 @@ from ztypes import (
     is_tag_origin,
 )
 import zast
+from zast import NodeType
 
 
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
@@ -1408,6 +1409,106 @@ class TestSwapOwnership:
     def test_swap_valtype_ok(self):
         """Swap of owned valtype variables is OK."""
         check_ok("main: function is {\n  a: 10\n  b: 20\n  a swap b\n}")
+
+
+class TestArgHoistInfrastructure:
+    """Phase C step 2 commit 1: dormant preamble + hoist helper.
+
+    Helpers are not yet wired into _check_call; these tests exercise
+    `_arg_is_trivial` and `_hoist_arg` directly to pin their shape
+    before commit 2 turns the wiring on.
+    """
+
+    def _fresh_checker(self):
+        """Build a TypeChecker over a minimal program and prime its
+        symtab with a function scope so define_var has somewhere to land.
+        """
+        program, errors = parse_and_check("main: function is {}")
+        assert errors == []
+        tc = TypeChecker(program)
+        tc.check()
+        # push a scope so _hoist_arg's define_var has a target
+        tc.symtab.push("test")
+        return tc
+
+    def test_arg_is_trivial_atom_id(self):
+        tc = self._fresh_checker()
+        atom = zast.AtomId(name="x", start=None)
+        arg = zast.NamedOperation(name=None, valtype=atom, start=None)
+        assert tc._arg_is_trivial(arg) is True
+
+    def test_arg_is_trivial_call_is_not(self):
+        tc = self._fresh_checker()
+        # Expression wrapping a Call counts as non-trivial.
+        call = zast.Call(
+            callable=zast.AtomId(name="f", start=None), arguments=[], start=None
+        )
+        expr = zast.Expression(expression=call, start=None)
+        arg = zast.NamedOperation(name=None, valtype=expr, start=None)
+        assert tc._arg_is_trivial(arg) is False
+
+    def test_arg_is_trivial_dotted_path_is_not(self):
+        tc = self._fresh_checker()
+        dp = zast.DottedPath(
+            parent=zast.AtomId(name="obj", start=None),
+            child=zast.AtomId(name="field", start=None),
+            start=None,
+        )
+        expr = zast.Expression(expression=dp, start=None)
+        arg = zast.NamedOperation(name=None, valtype=expr, start=None)
+        assert tc._arg_is_trivial(arg) is False
+
+    def test_hoist_appends_to_preamble_and_rewrites_arg(self):
+        """_hoist_arg pushes a synth Assignment into the topmost
+        preamble entry, registers a ZVariable, and rewrites
+        arg.valtype to an AtomId."""
+        tc = self._fresh_checker()
+        tc._call_preamble.append([])
+        # build a non-trivial arg: Expression(DottedPath(obj.field))
+        dp = zast.DottedPath(
+            parent=zast.AtomId(name="obj", start=None),
+            child=zast.AtomId(name="field", start=None),
+            start=None,
+        )
+        original_expr = zast.Expression(expression=dp, start=None)
+        arg = zast.NamedOperation(name="a", valtype=original_expr, start=None)
+        # any ZType works for the test — just assert plumbing
+        u64 = tc._resolve_name("u64")
+        assert u64 is not None
+        name = tc._hoist_arg(arg, u64, arg_borrow_path=None)
+        # 1) preamble grew
+        assert len(tc._call_preamble[-1]) == 1
+        synth_line = tc._call_preamble[-1][0]
+        assert synth_line.synth_origin == "anf"
+        # 2) arg.valtype was rewritten to an AtomId pointing at the temp
+        assert arg.valtype.nodetype == NodeType.ATOMID
+        assert arg.valtype.name == name
+        assert arg.valtype.synth_origin == "anf"
+        # 3) the temp is registered in the symtab as an OWNED variable
+        var = tc.symtab.lookup_var(name)
+        assert var is not None
+        assert var.ownership == ZOwnership.OWNED
+        assert var.synth_origin == "anf"
+        # 4) name follows the prefix convention
+        assert name.startswith("_t")
+
+    def test_hoist_borrow_source_marks_temp_borrowed(self):
+        tc = self._fresh_checker()
+        tc._call_preamble.append([])
+        dp = zast.DottedPath(
+            parent=zast.AtomId(name="src", start=None),
+            child=zast.AtomId(name="borrow", start=None),
+            start=None,
+        )
+        original_expr = zast.Expression(expression=dp, start=None)
+        arg = zast.NamedOperation(name=None, valtype=original_expr, start=None)
+        u64 = tc._resolve_name("u64")
+        assert u64 is not None
+        name = tc._hoist_arg(arg, u64, arg_borrow_path=("src",))
+        var = tc.symtab.lookup_var(name)
+        assert var is not None
+        assert var.ownership == ZOwnership.BORROWED
+        assert var.borrow_origin == "src"
 
 
 class TestBorrowValtypeAllowed:
