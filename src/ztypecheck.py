@@ -401,6 +401,15 @@ class TypeChecker:
         # _check_expression into ExprResult.private_access.
         self._pending_private_access: bool = False
 
+        # call-identity stack: pushed in _check_call before arg/receiver
+        # processing, popped after. Locks installed during a call's
+        # processing carry the topmost identity as their `holder`, and
+        # try_lock skips conflict checks where existing.holder matches the
+        # current call's identity. Lets a call freely take overlapping
+        # locks on receiver + args (e.g. `f.method bv: f.byteview`)
+        # without self-blocking.
+        self._call_id_stack: List[str] = []
+
         # inline unit context stack: tracks nesting during resolution
         # each entry is (unitname, zast.Unit) for name lookup chain
         self._unit_context: List[Tuple[str, zast.Unit]] = []
@@ -6839,6 +6848,12 @@ class TypeChecker:
 
         # push a call scope for call-scoped locking
         call_marker = self.symtab.push_call()
+        # push call identity onto the typechecker's stack — locks installed
+        # below carry this string as `holder`, and try_lock skips conflicts
+        # where existing.holder == this id (so receiver + arg locks owned
+        # by the same call merge naturally instead of self-blocking).
+        call_id = f"call:{call.nodeid}"
+        self._call_id_stack.append(call_id)
         # track which lock targets correspond to .lock parameters (for transfer)
         lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]] = []
 
@@ -7005,6 +7020,7 @@ class TypeChecker:
                 self._pending_borrow_lock = target_path
         # pop the call scope — all call-scoped locks vanish
         self.symtab.pop_to(call_marker)
+        self._call_id_stack.pop()
 
         call.type = ret if ret else self.t_null
         if call.call_kind == zast.CallKind.UNKNOWN:
@@ -7074,6 +7090,18 @@ class TypeChecker:
         if err:
             self._error(err, loc=loc)
 
+    def _current_call_holder(self) -> str:
+        """Holder string for locks installed during the topmost in-flight
+        call. Used both as the `holder` field on new locks and as the
+        `self_holder` predicate for try_lock so the call's own receiver
+        and arg locks merge instead of self-blocking. Falls back to the
+        legacy `__call` sentinel when no call is in flight (locks taken
+        by call-adjacent helpers like for-loop iterator setup).
+        """
+        if self._call_id_stack:
+            return self._call_id_stack[-1]
+        return "__call"
+
     def _lock_source_path(
         self, path_tuple: Tuple[str, ...], loc: Token
     ) -> Optional[Tuple[str, ...]]:
@@ -7089,13 +7117,17 @@ class TypeChecker:
         root_var = self.symtab.lookup_var(path_tuple[0])
         if root_var is None or root_var.ztype.typetype == ZTypeType.DATA:
             return None
-        holder = "__call"
+        holder = self._current_call_holder()
         for end in range(1, len(path_tuple)):
             sub = path_tuple[:end]
-            err = self.symtab.try_lock(sub, ZLockState.SHARED, holder)
+            err = self.symtab.try_lock(
+                sub, ZLockState.SHARED, holder, self_holder=holder
+            )
             if err:
                 self._error(err, loc=loc)
-        err = self.symtab.try_lock(path_tuple, ZLockState.EXCLUSIVE, holder)
+        err = self.symtab.try_lock(
+            path_tuple, ZLockState.EXCLUSIVE, holder, self_holder=holder
+        )
         if err:
             self._error(err, loc=loc)
             return None
@@ -7111,7 +7143,7 @@ class TypeChecker:
         call scope on `.lock` parameters, or None if no lock was installed
         (temp expressions, DATA, unresolved names).
         """
-        holder = "__call"
+        holder = self._current_call_holder()
 
         if op.nodetype == NodeType.EXPRESSION:
             inner = cast(zast.Expression, op).expression
@@ -7140,12 +7172,16 @@ class TypeChecker:
         # SHARED on each intermediate prefix
         for end in range(1, len(path_tuple)):
             sub = path_tuple[:end]
-            err = self.symtab.try_lock(sub, ZLockState.SHARED, holder)
+            err = self.symtab.try_lock(
+                sub, ZLockState.SHARED, holder, self_holder=holder
+            )
             if err:
                 self._error(err, loc=loc)
 
         # EXCLUSIVE on the leaf path
-        err = self.symtab.try_lock(path_tuple, ZLockState.EXCLUSIVE, holder)
+        err = self.symtab.try_lock(
+            path_tuple, ZLockState.EXCLUSIVE, holder, self_holder=holder
+        )
         if err:
             self._error(err, loc=loc)
             return None
@@ -7185,13 +7221,18 @@ class TypeChecker:
         if not root_var or root_var.ztype.typetype == ZTypeType.DATA:
             return
         # SHARED on each intermediate prefix
+        holder = self._current_call_holder()
         for end in range(1, len(receiver_path)):
             sub = receiver_path[:end]
-            err = self.symtab.try_lock(sub, ZLockState.SHARED, "__recv")
+            err = self.symtab.try_lock(
+                sub, ZLockState.SHARED, holder, self_holder=holder
+            )
             if err:
                 self._error(err, loc=callable_path.start)
         # EXCLUSIVE on the leaf
-        err = self.symtab.try_lock(receiver_path, ZLockState.EXCLUSIVE, "__recv")
+        err = self.symtab.try_lock(
+            receiver_path, ZLockState.EXCLUSIVE, holder, self_holder=holder
+        )
         if err:
             self._error(err, loc=callable_path.start)
 

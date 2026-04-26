@@ -317,7 +317,11 @@ class SymbolTable:
     # ---- lock operations (scope-based: locks are Entry.lock in scope chain) ----
 
     def try_lock(
-        self, path: Tuple[str, ...], lock_type: ZLockState, holder: str
+        self,
+        path: Tuple[str, ...],
+        lock_type: ZLockState,
+        holder: str,
+        self_holder: Optional[str] = None,
     ) -> Optional[str]:
         """Try to take a lock on `path`. Returns error message or None on success.
 
@@ -327,6 +331,11 @@ class SymbolTable:
         Conflict rule (prefix-overlap): two paths conflict iff one is a prefix
         of the other AND at least one is EXCLUSIVE. SHARED-on-SHARED never
         conflicts; SHARED-on-same-full-path dedupes (no entry added).
+
+        `self_holder` (when set) names a lock holder that should be treated
+        as "the current operation" — existing locks with that holder do not
+        block the new acquisition. Lets a call install receiver + arg
+        locks under one identity without self-conflict.
 
         On success, appends a lock Entry to the current scope keyed by
         `path[0]` so the existing scope-chain machinery (release on pop,
@@ -350,7 +359,12 @@ class SymbolTable:
                 entry = scope.entries[j]
                 if entry.name == target_name and entry.lock is not None:
                     existing = entry.lock
-                    if _lock_acquire_conflict(existing, path, lock_type):
+                    same_call = (
+                        self_holder is not None and existing.holder == self_holder
+                    )
+                    if not same_call and _lock_acquire_conflict(
+                        existing, path, lock_type
+                    ):
                         return _format_lock_conflict(path, lock_type, existing)
                     # SHARED-on-same-path is idempotent — skip adding a new
                     # entry to keep the scope chain compact (release stays
