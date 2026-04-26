@@ -123,6 +123,8 @@ Table of Contents</div>
 </li>
 <li><a href="#error">error</a>
 </li>
+<li><a href="#panic">panic</a>
+</li>
 <li><a href="#return">return</a>
 </li>
 <li><a href="#break">break</a>
@@ -202,6 +204,7 @@ operation can fail for reasons the caller needs to handle
 <p><strong>Control flow</strong></p>
 <ul>
 <li><a href="#error"><strong>error</strong> -- <code>function {msg: string} out never is native</code></a></li>
+<li><a href="#panic"><strong>panic</strong> -- <code>function {msg: string} out never is native</code></a></li>
 <li><a href="#return"><strong>return</strong> -- <code>function as { t: any.generic } in { result: t } out never is native</code></a></li>
 <li><a href="#break"><strong>break</strong> -- compiler-intrinsic</a></li>
 <li><a href="#continue"><strong>continue</strong> -- compiler-intrinsic</a></li>
@@ -302,8 +305,9 @@ non-nullable at the language level; <code>option</code> handles the
 <pre><code class="language-zerolang">  never: record is native</code></pre>
 <p>The bottom type: the empty type, with no values. Used as the
 return type of functions that never return normally (<code>error</code>,
-<code>return</code>). <code>never</code> is a subtype of every type, so an
-<code>error ...</code> call is usable in any expression position.</p>
+<code>panic</code>, <code>return</code>). <code>never</code> is a subtype of every type, so
+an <code>error ...</code> or <code>panic ...</code> call is usable in any expression
+position.</p>
 <p>Control-flow analysis tracks <code>never</code>-returning expressions to
 determine unreachable-code errors and branch exhaustiveness. See
 <a href="./spec.html">./spec.html</a>spec, dead code analysis.</p>
@@ -332,6 +336,7 @@ not do runtime type tagging at that level.</p>
       append:     function {:this s: stringview}
       reserve:    function {:this n: u64}
       shrink:     function {:this}
+      copy:       function {:this} out string
   }</code></pre>
 <p>Mutable, owned, heap-allocated UTF-8 text. Primary string type
 for building and modifying text. A two-word struct: size (current
@@ -361,6 +366,13 @@ Pre-allocates so subsequent <code>append</code> calls don't reallocate</li>
 <li><code>shrink</code> -- release unused capacity back to the allocator</li>
 <li><code>compare rhs: string</code> -- byte-wise <code>memcmp</code>-style;
 returns -1 / 0 / 1</li>
+<li><code>copy</code> -- fresh, independently-owned duplicate. Allocates
+a new heap buffer; mutating the copy does not affect the
+original (and vice versa). Use when you have a borrowed
+<code>string</code> and need to hand an owned value to a destination
+that requires ownership (a constructor field, a list/map
+insert) &#x2014; see <code>ownership.pdoc</code> for the borrow
+escape rules</li>
 </ul>
 <p><strong>Ordering.</strong> <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> are byte-wise
 lexicographic on the UTF-8 bytes. A shorter string is less than a
@@ -666,7 +678,32 @@ that must be statically dead; the <code>never</code> return type lets
           error msg: "never-valued T".string
       }
   }</code></pre>
-<h2 id="return"><a href="#return">22. return</a></h2>
+<h2 id="panic"><a href="#panic">22. panic</a></h2>
+<pre><code class="language-zerolang">  panic: function {msg: string} out never is native</code></pre>
+<p>Runtime terminal error. <code>panic msg: ...</code> prints
+<code>zpanic: &lt;msg&gt;</code> to stderr and exits the process with status
+<code>1</code>. Use <code>panic</code> for programmer errors that should never occur
+at runtime (invariants, unreachable defaults, bounds preconditions
+the caller is responsible for maintaining); for recoverable errors
+prefer <code>result t: T e: E</code>.</p>
+<p>The distinction from <code>error</code>: <code>error</code> is a compile-time
+construct -- an <code>error msg: ...</code> call in a statically-reachable
+branch aborts compilation. <code>panic</code> is the runtime counterpart,
+emitted as a call to the shared <code>z_panic</code> helper in the emitted
+C runtime. All internal unrecoverable exits (OOM, bounds checks,
+numeric cast overflow, stringview bounds) also funnel through
+<code>z_panic</code>, so every termination produces a consistent
+<code>zpanic:</code> prefixed diagnostic.</p>
+<pre><code class="language-zerolang">  check_positive: function {n: i64} out i64 is {
+      if n &lt;= 0 then {
+          panic msg: "expected a positive integer"
+      }
+      return n
+  }</code></pre>
+<p>Panics are terminal: there is no <code>recover</code> mechanism. The
+<code>never</code> return type ensures any code after a <code>panic</code> is
+statically unreachable.</p>
+<h2 id="return"><a href="#return">23. return</a></h2>
 <pre><code class="language-zerolang">  return: function as { t: any.generic } in { result: t } out never is native</code></pre>
 <p>Return from the enclosing function. Spelled as a function for
 uniformity with the control-flow dispatch model -- <code>return x</code>
@@ -680,7 +717,7 @@ applies.</p>
 <p>Return ownership semantics are tied to the function's declared
 return-ownership annotation; see <a href="./ownership.html">ownership for <code>.borrow</code> / <code>.lock</code> interactions and the
 lock-escape rules for view returns.</a></p>
-<h2 id="break"><a href="#break">23. break</a></h2>
+<h2 id="break"><a href="#break">24. break</a></h2>
 <p>Compiler-intrinsic. Breaks out of the enclosing <code>for</code> / <code>do</code>
 loop. Takes no argument. The <code>never</code> return type propagates
 through the enclosing block.</p>
@@ -691,7 +728,7 @@ through the enclosing block.</p>
 definition in <code>system.z</code>; it's registered directly by the
 compiler via its <code>ControlKind</code> dispatcher and re-exported by
 <code>core</code> under the <code>system.</code> namespace.</p>
-<h2 id="continue"><a href="#continue">24. continue</a></h2>
+<h2 id="continue"><a href="#continue">25. continue</a></h2>
 <p>Compiler-intrinsic. Skips to the next iteration of the enclosing
 <code>for</code> / <code>do</code> loop. Takes no argument.</p>
 <pre><code class="language-zerolang">  for i: 0.u64 to: 100.u64 loop {

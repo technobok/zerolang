@@ -326,7 +326,7 @@ take borrow lock generic
 this
 meta
 
-error
+error panic
 
 return break continue yield
 
@@ -696,6 +696,23 @@ is expected at runtime (right hand side of assignments, <code>if</code> conditio
 </ul>
 <h3 id="assignment"><a href="#assignment">4.1. assignment</a></h3>
 <h3 id="reassignment"><a href="#reassignment">4.2. reassignment</a></h3>
+<p>Reassignment replaces the value bound to an existing name or field.
+For valtype targets the RHS is copied into the slot. For reftype
+targets the existing value is destroyed first, the RHS is moved into
+the slot, and the RHS source name is invalidated &#x2014; use-after-move on
+the source name is a compile-time error. This "drop-and-transfer"
+rule keeps both sides free of aliasing while guaranteeing that no
+storage is lost to a leak and no value is freed twice.</p>
+<pre><code>: holder: class { msg: string }
+: h: holder msg: "initial".string
+: fresh: "updated".string
+: h.msg = fresh       # destroys the old msg, moves fresh in
+: # using `fresh` here is an error.</code></pre>
+<p>Reassigning a reftype field whose source is borrowed is an ownership
+error &#x2014; the borrow binding must stay live for its full scope.</p>
+<p>Use <code>swap</code> when both sides need to remain initialised and
+addressable: no move occurs, the two slots exchange contents and
+both stay valid.</p>
 <h3 id="swap"><a href="#swap">4.3. swap</a></h3>
 <h3 id="calls"><a href="#calls">4.4. Calls</a></h3>
 <p>A call executes a function by passing zero or more arguments and usually
@@ -733,6 +750,25 @@ supplied reftype argument in the function body. The variable supplied to a
 <code>.take</code> parameter is not valid after the call returns. Ownership transfer
 is performed implicitly; the caller does not need to call <code>.take</code> explicitly
 (though it may do so for clarity).</p>
+<p>Parameters with no ownership annotation are borrowed by default
+(equivalent to writing <code>.borrow</code> explicitly). For valtypes the borrow is a
+copy; for reftypes (string, file, bufreader, user classes) it is a
+pointer-pass at the C ABI &#x2014; mutations through the parameter are visible to
+the caller, and the caller retains ownership at scope exit. The implicit-take
+logic at call sites correctly skips these. Native functions
+(<code>is native</code> body) follow the same convention: each native is annotated
+based on what its body does with the input &#x2014; read-only natives take
+<code>stringview</code> (no allocation, no ownership question), and natives that
+store the input directly into a receiver use <code>.take</code> (no per-call
+deep-copy).</p>
+<p>Returning a borrowed parameter as owned (i.e. a function declared
+<code>out T</code> returning a <code>.borrow</code>-bound or default-borrow parameter) aliases
+the caller's heap data and is rejected at type-check time. Storing such a
+borrowed parameter into an aggregate field (<code>box label: borrowed_s</code>) is
+rejected for the same reason. Remediations are <code>.copy</code> (clone),
+<code>.take</code> on the parameter (transfer ownership in), or
+<code>out T.borrow</code> + <code>.lock</code>-annotated parameter (return a borrow tied to a
+locked source). See <code>ownership.pdoc</code> for details.</p>
 <p>In a call, the 'primary' parameter is the first parameter listed in the <code>in</code>
 parameter list of the <a href="#function">function definition</a>. In a type specifier, the
 'primary' is the first generic argument. If that is also the first argument
@@ -1124,7 +1160,8 @@ handle all looping variations:</p>
 <li>for/while/loop - boolean pre-condition</li>
 <li>for/loop/while - boolean post-condition</li>
 <li>for loop - loop forever</li>
-<li>'for'/'in' style loop against iterators and function calls</li>
+<li>'foreach' style loop against an iterator, an iterable, or a
+      function/method returning an option-shaped wrapper</li>
 </ul>
 <p>Arguments:</p>
 <table>
@@ -1138,23 +1175,32 @@ handle all looping variations:</p>
 </thead>
 <tbody>
 <tr><td>while</td><td>Yes</td><td>Boolean expression. Pre or post loop condition</td></tr>
-<tr><td>[var]:</td><td>No</td><td>'var' is bound to a value of an operation, or result of an iterator</td></tr>
+<tr><td>[var]:</td><td>No</td><td>'var' is bound to the some-payload of the iterator's per-iteration value</td></tr>
 <tr><td>loop</td><td>No</td><td>Block of code that may be executed 0 or more times</td></tr>
 </tbody>
 </table>
 <p>Pre-conditions can be boolean expressions specified by the <code>while</code> keyword.
 This is the default argument and the argument name can be omitted if it is the
 first argument.</p>
-<p>A single binding ([var]: call) can be specified before the loop. The 'call'
-is to an iterator (specified with <code>in</code>) or a standard function.  </p>
-<p>A binding to an iterator (<code>in</code> operation) is set up once on first loop, then
-each yielded value will be assigned (a borrow) to 'var'. The binding will fail
-(loop terminates) when the iterator calls <code>return</code> or comes to the end of the
-iterator function.</p>
-<p>A binding to a standard function will call that function before each loop and
-assign it to 'var'. If the result is an optional and is null, the <code>for</code> will
-terminate. 'var' will be owned in the loop body as with a normal function call
-(TODO: unless function returns a <code>borrow</code>).</p>
+<p>A single binding ([var]: operation) can be specified before the loop. The
+binding RHS may be any of: an instance of an iterator type, an instance of an
+iterable type, a constructor call producing an iterator, or a function/method
+call producing an option-shaped wrapper. The compiler picks an evaluation
+strategy from the RHS shape (see For-loop dispatch below). On each
+iteration a value of type <code>option(t)</code> / <code>optionval(t)</code> / <code>optionview(t)</code>
+is produced; the loop terminates when the value is <code>none</code>, and binds 'var'
+to the unwrapped some-payload otherwise.</p>
+<p>Inside the loop body, 'var' is the some-payload value (narrowed from the
+wrapper). It is not the wrapper &#x2014; no <code>match</code> arm is needed to unwrap it.
+The ownership of 'var' depends on the wrapper kind:</p>
+<ul>
+<li><code>option(t).some</code> - 'var' is the owned reftype <code>t</code></li>
+<li><code>optionval(t).some</code> - 'var' is the owned valtype <code>t</code> (copied)</li>
+<li><code>optionview(t).some</code> - 'var' is a borrowed view of <code>t</code>,
+lifetime-tied to the iterator's lock on its source. Storing
+'var' to an aggregate field or returning it from the loop is a
+compile error; use <code>.copy</code> first.</li>
+</ul>
 <p>A single <code>loop</code> clause may then follow. The body of this clause will be
 executed if all conditions succeed. The <code>loop</code> may contain a <code>continue</code> (early
 skip to next iteration) or <code>break</code> (terminate <code>for</code> clause). Or a <code>return</code>.</p>
@@ -1166,42 +1212,97 @@ single <code>for</code>.</p>
 processing subsequent tests.</p>
 <p><code>for</code> requires at least one argument (condition or <code>loop</code>). <code>for &lt;condition&gt;</code>
 will loop until condition is false; <code>for x: operation</code> will loop until
-operation is or returns null (discarding x each loop); <code>for loop { ... }</code> will
+operation produces <code>none</code> (discarding x each loop); <code>for loop { ... }</code> will
 loop unconditionally and indefinitely.</p>
 <p><code>for</code> can be used as an expression. The result will be a list of the final
 values of the <code>loop</code> statement.</p>
-<pre><code class="language-zerolang"># normal while 
+<pre><code class="language-zerolang"># normal while
 # (precondition)
 for x == y loop {
     # ...
 }
 
-# normal for..while 
+# normal for..while
 # (post condition; at least one iteration guaranteed)
 for loop {
     # ...
 } while x == y
 
-# 'foreach' style, myiterable is an iterator function
-for x: in myiterable loop {    
-    # x is available as a borrowed reference here
-    # the myiterable object is unavailable (locked until 'for' completes)
+# iterator-as-callable &#x2014; myiter is an instance of a class whose
+# .call returns option/optionval/optionview
+for x: myiter loop {
+    # x is the some-payload (narrowed)
+    # myiter is locked until 'for' completes
 }
 
-# 'foreach' style combined with boolean condition
-# only loops for x = 0, 1, 2, 3, 4
-# TODO: skip 'range'? Make integers iterable?
-for x: each 10 while x &lt; 5 loop {
+# iterable &#x2014; i64 has an .iterate method returning an integer-range
+# iterator. The lean form `for x: 5 loop` is sugar for
+# `for x: 5.iterate loop`.
+for x: 5 loop {
+    # x = 0, 1, 2, 3, 4
+}
+
+# constructor call returning an iterator instance (eager)
+for line: (textreader file: f) loop {
     # ...
 }
 
+# function reference called per iteration (deferred)
+for n: my_supplier loop {
+    # my_supplier is invoked before each iteration; loop ends
+    # when the result is none
+}
+
+# 'foreach' combined with a precondition
 cont: true
-for x: in iterator while cont loop {
-    # can specify multiple conditions
-    # they all must be true
-    # will short-circuit at first false condition
+for x: it while cont loop {
+    # multiple conditions all must hold; short-circuit at first false
     cont = false
 }</code></pre>
+<p>The grammar form <code>for x: in iter</code> (with the <code>in</code> keyword) is reserved
+and not currently accepted by the parser. The plain binding form
+<code>for x: iter</code> is canonical.</p>
+<h5 id="for-loop-dispatch">For-loop dispatch</h5>
+<p>The compiler classifies the binding RHS by AST shape and result type and
+picks one of five dispatch modes. Rules are checked in order; first match
+wins. Let R be the type produced by evaluating the RHS, and call a type
+"iterator-shaped" if it has a <code>.call</code> method whose only required parameter
+is <code>:this</code> and whose return type is <code>option(t)</code>, <code>optionval(t)</code>, or
+<code>optionview(t)</code> for some <code>t</code>.</p>
+<ol>
+<li><strong>Rule 1 (call returning iterator):</strong> RHS is a call expression
+AND R is iterator-shaped. The compiler invokes the call once
+eagerly before the loop and uses R as the iterator;
+<code>R.call</code> is invoked per iteration. Example:
+<code>for line: (textreader file: f) loop ...</code>.</li>
+<li><strong>Rule 2 (iterable):</strong> RHS is a non-call expression AND its
+type T has an <code>.iterate</code> method whose only required parameter
+is <code>:this</code> and whose return is iterator-shaped. The compiler
+synthesises the call to <code>.iterate</code> once before the loop;
+its result is the iterator. Example: <code>for x: 5 loop</code> lowers
+to <code>for x: 5.iterate loop</code>. Only the exact name <code>.iterate</code>
+triggers this rule; other iterator-producing methods such as
+<code>.iterate_keys</code> or <code>.iterate_items</code> must be invoked
+explicitly so they fall under rule 1.</li>
+<li><strong>Rule 3 (function as iterator):</strong> RHS is a call expression
+AND its return type is <code>option(t)</code> / <code>optionval(t)</code> /
+<code>optionview(t)</code> directly. The compiler defers the call: it is
+re-invoked once per iteration and the result is the
+per-iteration value.</li>
+<li><strong>Rule 4 (instance with call):</strong> RHS is a non-call expression
+AND its type T is itself iterator-shaped. T is the iterator;
+<code>T.call</code> is invoked per iteration. This is the typical shape
+for iterator instances bound by a prior <code>with</code>.</li>
+<li><strong>Rule 5 (none of the above):</strong> compile error. The diagnostic
+lists the three accepted shapes and suggests rewriting to a
+manual <code>for loop { ... break ... }</code> loop when none fit.</li>
+</ol>
+<p>The compiler does not auto-synthesise a trivial
+<code>iterate: function {:this} is { return :this }</code> on iterator types;
+authors who want their type to be both iterator and iterable must write
+both <code>.iterate</code> and <code>.call</code> explicitly.</p>
+<p>The for-loop expression form (a list of the loop body's final values) is
+available under all five dispatch rules.</p>
 <h3 id="take-on-function-names"><a href="#take-on-function-names">4.7. .take on Function Names</a></h3>
 <p>To obtain a function reference value (rather than calling the function), use
 the <code>.take</code> dotted operator on the function name. This is consistent with
@@ -1266,15 +1367,82 @@ type.</p>
 <a href="#variant">variant</a> is the value sum type. <a href="#union">union</a> is the reference sum type.</p>
 <p>Sum types are available at run time but can also be used to specify
 <a href="#generic-types">generic parameter</a> constraints.</p>
+<h5 id="falsy-first-convention">Falsy-first convention</h5>
+<p>For 2-arm sum types where one arm represents absence, failure, or
+falsity, list that arm first in the declaration so it receives
+discriminator tag 0. Stdlib types <code>option</code>, <code>optionval</code>,
+<code>result</code>, <code>resultval</code>, and <code>bool</code> all follow this convention.</p>
+<p>The convention has three benefits:</p>
+<ul>
+<li>Zero-initialised memory naturally reads as the falsy variant.</li>
+<li>Compiler comparisons (<code>if</code>, <code>for</code> termination) can use
+      tag 0 directly without per-type lookup.</li>
+<li>Visual reading is consistent: the early-exit / no-value case
+      is at the top of the declaration.</li>
+</ul>
+<p>User-defined sum types are encouraged but not required to follow this
+convention; the compiler does not enforce it on user code.</p>
+<h5 id="locked-union-arms">Locked union arms</h5>
+<p>A <code>union</code> arm may declare its payload type with a <code>.lock</code> suffix,
+indicating that the arm holds a locked reference into a parent rather
+than owning its payload:</p>
+<pre><code class="language-zerolang">optionview: union {
+    none: null
+    some: t.lock
+} as { t: any.generic }</code></pre>
+<p>Per-arm semantics:</p>
+<ul>
+<li><strong>Owned arms</strong> (the default &#x2014; e.g. <code>some: t</code>): the constructor
+takes ownership of the payload; the union's destructor frees the
+payload.</li>
+<li><strong>Locked arms</strong> (<code>some: t.lock</code>): the constructor takes a
+locked source via the <code>from:</code> parameter (consistent with
+<code>protocol.borrow from: x.lock</code>); the union's destructor releases
+the lock without freeing the payload. The union's lifetime cannot
+exceed the locked source's lifetime; escape analysis prevents
+storing the union into an aggregate that outlives the source.</li>
+</ul>
+<p>Mixed-ownership unions are permitted: arms may independently choose owned
+or locked semantics. The destructor walks the active arm via the tag and
+applies per-arm cleanup.</p>
+<p>The extension is union-only; <code>variant</code> arms must remain inline-stored
+valtypes. A locked arm holds a pointer to external data, which inherently
+introduces ownership/lifetime tracking that valtypes deliberately exclude.</p>
+<p><strong>Construction:</strong> the locked arm is constructed by passing <code>from:</code> with
+a locked source:</p>
+<pre><code class="language-zerolang">with v: my_lock_source do {
+    ov: optionview.some from: v
+    # ov.some is borrowed from v; ov cannot outlive this 'do' block
+}</code></pre>
+<p><strong>Destructor elision:</strong> if every arm of a union is either <code>null</code> or a
+locked reference, no runtime cleanup is required and the compiler emits no
+destructor for the union. For mixed unions, the emitted destructor's
+<code>switch</code> only contains <code>case</code> clauses for arms that need cleanup.</p>
 <h5 id="type-narrowing">Type Narrowing</h5>
 <p>The compiler keeps track of the type of every expression at every point in the
 program source via a flow-typing system (TypeState). This tracking is
 intra-function only and does not cross function call boundaries.</p>
 <p><a href="#sum-types">Sum types</a> can be 'narrowed' back to their specific child types
 by using <a href="#match">match</a> expressions or by assignment to a specific subtype.</p>
-<p>Within a successful <code>then</code> clause of a <code>match</code>, the target variable will be
-narrowed to the type(s) listed in the related <code>of</code> clause(s). Accessing a
-different subtype within the arm is a compile error.</p>
+<p>Within a successful <code>then</code> clause of a <code>match</code>, the narrowed name
+SHADOWS the parent binding &#x2014; it takes on the payload type for the
+duration of the arm. Field access, method dispatch, re-matching, and
+ownership transfer (<code>.take</code>) all flow through the narrowed name as
+if it were the payload value. Inside <code>case ok then</code> on a
+<code>result(filestat, ioerror)</code>, <code>s</code> IS the filestat &#x2014; <code>s.size</code>,
+<code>s.kind</code>, and <code>s.mtime_seconds</code> resolve directly; <code>match (s)</code>
+dispatches on filestat's layout; <code>stolen: s.take</code> transfers ownership
+and the resulting alias retains the narrowed view.</p>
+<p>Because the parent binding is shadowed, reaching back into the outer
+union through an explicit arm hop (<code>s.ok</code>, <code>s.err</code>) is a compile
+error within the arm &#x2014; the shadowed view has no such member and the
+typechecker emits a targeted diagnostic pointing at the shadowing.
+Passing the narrowed name to a function expecting the outer
+union/variant is also a type error for the same reason.</p>
+<p>Assignment-based narrowing is different &#x2014; a variable assigned a
+specific subtype (<code>x: result.ok 42</code>) keeps its outer type so it
+remains passable as the full union; the compiler tracks a
+<code>narrowed_subtype</code> sidecar that rejects accessing other arms.</p>
 <p>Also, a <code>match</code> clause that exits the current scope (using a <code>return</code>, <code>break</code>
 or <code>continue</code>) will also 'narrow' a named target for the remainder of that
 scope -- ie. the type of that named target will exclude the subtypes where a
@@ -1288,6 +1456,11 @@ if the new value is also a specific subtype.</p>
 <p>If all branches of an <code>if</code> or <code>match</code> exit the current scope (return, break,
 continue), any statements following that expression are unreachable and are
 flagged as a compile error.</p>
+<p>For-loop binding narrowing: in <code>for x: operation loop {...}</code> where
+<code>operation</code> returns <code>option(t)</code> or <code>optionval(t)</code>, the loop variable
+'x' is narrowed to the some-payload type 't' inside the body. The
+wrapper is never visible &#x2014; terminating on <code>none</code> is handled by the
+loop machinery, and <code>x</code> is the unwrapped value.</p>
 <p>Narrowing is purely a compile-time concept. The runtime representation of a
 variable is not changed by narrowing -- a union/variant variable retains its
 full tagged representation regardless of narrowing.</p>
@@ -1393,16 +1566,16 @@ for creating fields or parameters.</p>
 <p>Examples:</p>
 <pre><code class="language-zerolang"># option type for reference types (nullable pointer)
 option: union {
-    some: t
     none: null
+    some: t
 } as {
     t: any.reftype
 }
 
 # optionval type for value types (stack-allocated tagged variant)
 optionval: variant {
-    some: t
     none: null
+    some: t
 } as {
     t: any.valtype
 }
@@ -1424,7 +1597,25 @@ x3: optionval.some t: i64 from: 100
 # so must be specified
 # none takes only a single generic argument so the argument name can be
 # omitted
-x4: optionval.none i32</code></pre>
+x4: optionval.none i32
+
+# optionview type for borrowed views (used by container iterators).
+# Built on top of locked union arms &#x2014; see "Locked union arms" above.
+optionview: union {
+    none: null
+    some: t.lock
+} as {
+    t: any.generic
+}
+
+# optionview.some takes a locked source via from:, and binds a
+# borrowed view. The view's lifetime is tied to the source's lock;
+# the optionview cannot be stored in an aggregate that outlives
+# the source.
+with v: my_lock_source do {
+    v0: optionview.some from: v
+    v1: optionview.none i64
+}</code></pre>
 <h5 id="heterogeneous-union-constraints">Heterogeneous union constraints</h5>
 <p>A <code>union</code> used as a generic constraint via <code>.generic</code> may contain a mix of
 concrete type members and protocol/facet members. A concrete member accepts an
@@ -1760,7 +1951,7 @@ to a type reference (of the form <code>name: typereference</code>).</p>
     is declared in the <code>as</code> section.</li>
 <li>a type followed by <code>.take</code>, <code>.borrow</code>, or <code>.lock</code> in function
     parameter definitions to specify ownership and locking semantics. See
-    <a href="#ownership">ownership</a>.</li>
+    <code>ownership.pdoc</code>.</li>
 </ul>
 <h3 id="unit-types"><a href="#unit-types">5.2. Unit Types</a></h3>
 <p>Programs are constructed from one or more units.</p>
@@ -1965,7 +2156,7 @@ argument.</p>
 <h4 id="take"><a href="#take">5.3.7. take</a></h4>
 <p><code>take</code> is a predefined type attribute on all types. When used as a dotted
 path on a type in function parameter or return type declarations, it specifies
-ownership transfer semantics. See <a href="#ownership">ownership</a> for full
+ownership transfer semantics. See <code>ownership.pdoc</code> for full
 details. <code>.take</code> must be explicitly written on parameters -- it is not the
 default for any type family.</p>
 <p>As a type attribute on function parameters (<code>type.take</code>): ownership is taken
@@ -2299,6 +2490,28 @@ myobject: class {
     }
 }</code></pre>
 <h3 id="predefined-methods-on-types"><a href="#predefined-methods-on-types">5.4. Predefined Methods on Types</a></h3>
+<p>The compiler provides two tiers of pre-existing methods on types:</p>
+<ul>
+<li>Intrinsics -- <code>.take</code>, <code>.release</code>, <code>.borrow</code>, <code>.lock</code>,
+<code>.private</code>. The compiler defines their semantics directly; no
+<code>is native</code> declaration in the standard library is required. They
+are also shadowable: a user-defined member with the same name on
+a type takes precedence over the intrinsic for that type. Resolution
+walks the parent type's children first; only when the lookup misses
+does the intrinsic fire. This lets a class export its own <code>.take</code>
+or <code>.release</code> without colliding with the language-level operation.</li>
+<li>Native methods declared in <code>lib/system/*.z</code> with the
+<code>is native</code> form. <code>.copy</code> (per-type), <code>.byteview</code>,
+<code>.listview</code>, <code>.stringview</code>, <code>.iterate</code>, <code>.each</code>,
+<code>.append</code>, <code>.length</code>, and the collection / numeric-type methods
+are all in this tier. They are visible to readers of the standard
+library and resolve through the ordinary member-lookup path -- there
+is no syntactic special case for them in the type checker.</li>
+</ul>
+<p>The remaining subsections describe the intrinsic tier and a small set
+of compiler-introspection accessors (<code>.generic</code>, <code>.tag</code>,
+<code>.typedef</code>). The native tier is covered by the per-type pages in the
+standard library reference.</p>
 <h4 id="take-method"><a href="#take-method">5.4.1. take (method)</a></h4>
 <p><code>take</code> is a compiler-generated method predefined on all variable names that
 refer to a reftype. It takes ownership from the variable, converting it to an
@@ -2310,7 +2523,7 @@ type system only. Use of the <code>.take</code> method is optional when passing 
 <p><code>.take</code> can be used for defining local variables -- the new variable takes the
 value and the old name becomes undefined. Calling <code>.take</code> as an expression
 that is not used (not assigned or passed) destroys the instance.</p>
-<p>See also the <a href="#ownership">ownership</a>.</p>
+<p>See also the <code>ownership.pdoc</code>.</p>
 <h4 id="borrow-method"><a href="#borrow-method">5.4.2. borrow (method)</a></h4>
 <p><code>borrow</code> is a compiler-generated method predefined on variable names that
 refer to a reftype (class, union) or a generic type parameter. It returns a
@@ -2324,7 +2537,7 @@ to function parameters (parameters are borrowed by default).</p>
 <p><code>.borrow</code> can be used for defining local variables -- the new variable borrows
 the value and the source name is exclusively locked while the new name is in
 scope.</p>
-<p>See also the <a href="#ownership">ownership</a>.</p>
+<p>See also the <code>ownership.pdoc</code>.</p>
 <h4 id="lock-method"><a href="#lock-method">5.4.3. lock (method)</a></h4>
 <p><code>lock</code> is not a runtime method on instances. It is a type attribute used only
 in function parameter declarations (<code>type.lock</code>) to indicate that the
@@ -2342,8 +2555,25 @@ invalidated (no runtime effect).</p>
 new name.</p>
 <p>Error conditions: cannot release a variable that is currently locked by another
 variable, and cannot release a top-level definition.</p>
-<p>See also the <a href="#ownership">ownership</a>.</p>
-<h4 id="generic-method"><a href="#generic-method">5.4.5. generic (method)</a></h4>
+<p>See also the <code>ownership.pdoc</code>.</p>
+<h4 id="private-method"><a href="#private-method">5.4.5. private (method)</a></h4>
+<p><code>private</code> is the compiler-generated friend-access intrinsic.
+<code>&lt;receiver&gt;.private</code> yields the receiver at the same type but with the
+type's private members (those whose names start with an underscore
+or that the type marks as private through a <code>.private</code> field type)
+visible. A user-defined <code>.private</code> member on the receiver type shadows
+the intrinsic.</p>
+<p>Only code internal to the receiver type's methods, or code in a
+friend type that holds the receiver via a <code>.private</code> field, may
+apply <code>.private</code> to it. Use from outside is a compile error
+(Cannot access '&lt;type&gt;.private' from outside the type definition).</p>
+<p><code>.private</code> takes no arguments. It does not transfer ownership and does
+not introduce a new borrow on its own -- it is purely a visibility
+adjustment. Subsequent suffixes such as <code>.lock</code> / <code>.borrow</code> attach
+their usual lock semantics to the projected reference.</p>
+<p>See <code>examples/listiter.z</code> for the canonical iterator-friend pattern
+built on <code>.private</code>.</p>
+<h4 id="generic-method"><a href="#generic-method">5.4.6. generic (method)</a></h4>
 <p><code>generic</code> is a 'class method' predefined on all union, variant, protocol, facet
 and numeric types. It explicitly converts the receiver type to a generic
 argument. This makes it obvious at the call site that a generic argument is
@@ -2356,9 +2586,9 @@ always pass a type to a generic receiver.</p>
 arguments.</p>
 <p>See also the built-in <a href="#generic">generic type</a> or a description of
 <a href="#generic-types">generic types</a> in general.</p>
-<h4 id="tag-method"><a href="#tag-method">5.4.6. tag (method)</a></h4>
+<h4 id="tag-method"><a href="#tag-method">5.4.7. tag (method)</a></h4>
 <p>TODO:</p>
-<h4 id="typedef-method"><a href="#typedef-method">5.4.7. typedef (method)</a></h4>
+<h4 id="typedef-method"><a href="#typedef-method">5.4.8. typedef (method)</a></h4>
 <p>The <code>.typedef</code> accessor is a synthetic member available on all types. It is
 used exclusively in type definitions to mark that the enclosing type is a
 typedef wrapping the accessed type. See the typedef section above for full
@@ -2767,20 +2997,47 @@ fields block, indicating that the object's internal state is compiler-provided:<
 resolution path. The emitter maps each native-marked definition by its
 qualified name to the corresponding C implementation.</p>
 <h4 id="iterators"><a href="#iterators">5.11.5. Iterators</a></h4>
-<p>An iterator in Zerolang is any callable object: a <code>record</code> or <code>class</code>
-that defines a <code>call</code> method returning <code>(optionval t: T)</code>. The <code>for</code>
-loop drives an iterator by repeatedly invoking <code>call</code> until the result is
-<code>optionval.none</code>.</p>
-<p>Iterators are created explicitly with <code>with</code> before the <code>for</code> loop.
-The <code>with</code> form scopes the iterator's lifetime; the <code>for</code> loop binds a
-label to the next yielded value:</p>
-<pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
-<p>The recommended iterator form is a class with a <code>.lock</code> field referencing
-the container's private members. The container is locked for the iterator's
-lifetime; the iterator falls out of scope at the end of the <code>for</code> body
-and the lock on the container is released. Classes are single-owner (cannot
-be copied), which is what makes the <code>.lock</code> field safe. See
-<code>examples/listiter.z</code> for the canonical pattern and
+<p>An <strong>iterator</strong> in Zerolang is any type whose <code>.call</code> method takes only
+<code>:this</code> and returns one of <code>option(t)</code>, <code>optionval(t)</code>, or
+<code>optionview(t)</code>. The <code>for</code> loop drives an iterator by repeatedly
+invoking <code>.call</code> until the result's tag is <code>none</code>.</p>
+<p>An <strong>iterable</strong> is any type that exposes an <code>.iterate</code> method whose only
+required parameter is <code>:this</code> and whose return type is itself iterator-shaped.
+The for-loop's binding RHS may be either an iterator or an iterable; rule 2
+of the dispatch (see For-loop dispatch) synthesises the <code>.iterate</code>
+call. Stdlib examples: integers (<code>5.iterate</code>), <code>list</code> (<code>mylist.iterate</code>),
+<code>map</code> (<code>mymap.iterate</code> &#x2192; keys, <code>mymap.iterate_items</code> &#x2192; entries).</p>
+<p>Two iterator patterns are common:</p>
+<ul>
+<li><strong>Generator iterators</strong> yield owned per-iteration values via
+<code>option(t)</code> or <code>optionval(t)</code>. They synthesise their values
+from internal state: counters, integer ranges, parsers, network
+readers. Examples: <code>counter</code>, <code>intrange_i64</code>,
+<code>textreader</code>, <code>cpiter</code>, <code>linesiter</code>, <code>bagiter</code>.
+Each iteration produces a fresh value and the loop body owns
+it for the iteration's duration.</li>
+<li><strong>Container iterators</strong> yield non-owning views into a source
+collection via <code>optionview(t)</code>. The iterator holds a <code>.lock</code>
+reference into the source; each yielded value is a borrowed
+view, lifetime-tied to the iterator's lock. Examples:
+<code>listiter</code>, <code>mapkeyiter</code>, <code>mapitemiter</code>. The loop body
+cannot transfer ownership of a borrowed value (compile error;
+use <code>.copy</code> first).</li>
+</ul>
+<p>Iterators are typically created and bound explicitly with <code>with</code> so the
+iterator's lifetime is scoped to the surrounding block; the for-loop binds
+the loop variable to each <code>.call</code> result:</p>
+<pre><code class="language-zerolang">with iter: (textreader file: f) do for line: iter loop { ... }</code></pre>
+<p>When the iterator is constructed inline as the for-loop's binding RHS, the
+intermediate <code>with</code> can be omitted &#x2014; rule 1 of the dispatch creates a
+hidden binding with the same lifetime:</p>
+<pre><code class="language-zerolang">for line: (textreader file: f) loop { ... }</code></pre>
+<p>The recommended container-iterator form is a <code>class</code> with a <code>.lock</code> field
+referencing the container's private members. The container is locked for
+the iterator's lifetime; the iterator falls out of scope at the end of the
+<code>for</code> body and the lock on the container is released. Classes are
+single-owner (cannot be copied), which is what makes the <code>.lock</code> field safe.
+See <code>examples/listiter.z</code> for the canonical pattern and
 <code>doc/ownership.pdoc</code> for the lock-lifecycle walkthrough.</p>
 <h4 id="methods"><a href="#methods">5.11.6. Methods</a></h4>
 <p>Methods are a specialised form of function. They are defined similar to a
@@ -3256,6 +3513,24 @@ underlying data is not destroyed.</li>
 is created in a lower scope (eg. passing as a standard loaned argument), then
 after that scope the protocol instance is destroyed and the underlying variable
 is again available for use.</p>
+<p><em><strong>Implicit projection at call sites.</strong></em> When a function parameter is declared
+with a protocol (or facet) type, callers may pass a concrete value that
+declares conformance to that protocol directly &#x2014; no explicit
+<code>protocol.borrow from: x</code> / <code>protocol.create from: x</code> wrapper is needed.
+The compiler synthesises the projection at the call boundary:</p>
+<ul>
+<li><code>borrow</code> when the parameter's ownership annotation is <code>.borrow</code>
+or <code>.lock</code> (the default for protocol parameters). The caller retains
+ownership; the callee sees a borrowed protocol handle.</li>
+<li><code>take</code> when the parameter is annotated <code>.take</code>. The caller's
+binding is invalidated after the call and the callee's protocol handle
+owns the data.</li>
+</ul>
+<p>Non-conforming arguments are rejected with a standard type-mismatch error.
+This rule reduces boilerplate at every call site while preserving the
+explicit forms for cases where the projection kind must be named. Also see
+the <code>text</code> / <code>stringlike</code> heterogeneous union pattern for the analogous
+mechanism on generic constraints.</p>
 <pre><code class="language-zerolang">reader: protocol {
     read: function {:this b: i64} out i64
 }
@@ -3644,13 +3919,27 @@ programmer to define <code>==</code> explicitly when needed.</p>
         return a.value == b.value
     }
 }</code></pre>
-<p><strong>String Equality.</strong></p>
-<p>String is the exception: it has a built-in <code>==</code> that compares contents
-(byte-by-byte), not pointer identity. Two separately created strings with the
-same content are equal:</p>
+<p><strong>String Equality and Ordering.</strong></p>
+<p>String and stringview are the exception: each has built-in <code>==</code> / <code>!=</code>
+that compare contents (byte-by-byte), not pointer identity, plus the full
+four-operator ordering: <code>&lt;</code> <code>&lt;=</code> <code>&gt;</code> <code>&gt;=</code>. A <code>compare</code> method
+returns <code>i32</code> -- classic strcmp sign (-1 / 0 / 1) -- for stable-sort
+keys and ordered-map comparators. Two separately created strings with the
+same content are equal; <code>app</code> is less than <code>apple</code> because the
+shorter prefix loses the length tie-break:</p>
 <pre><code class="language-zerolang">a: "hello"
 b: "hello"
-if a == b then print "equal"   # prints "equal"</code></pre>
+if a == b then print "equal"   # prints "equal"
+
+if "app".string &lt; "apple".string then print "shorter wins"
+c: "apple".string.compare rhs: "banana".string
+# c == -1.i32</code></pre>
+<p>Comparison semantics: byte-wise lexicographic, matching C's <code>memcmp</code>.
+No locale awareness, no Unicode normalization, no case folding -- pure
+bytes. Callers that need locale-aware collation build it on top.
+Cross-type comparisons (<code>string &lt; stringview</code>) are not defined;
+project explicitly with <code>.stringview</code> to bring both operands into the
+same type.</p>
 <h2 id="compile-time-operations"><a href="#compile-time-operations">6. Compile Time Operations</a></h2>
 <h3 id="constant-folding"><a href="#constant-folding">6.1. Constant Folding</a></h3>
 <p>Operations on compile time constants are evaluated at compile time.
