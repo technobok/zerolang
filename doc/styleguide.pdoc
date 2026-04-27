@@ -1,0 +1,488 @@
+#doc.lang: en
+
+#//: Zerolang Style Guide
+
+#doc.title: Zerolang Style Guide
+#doc.content type=main id=content
+#doc.heading.number level=4
+#doc.heading.anchor level=4
+#doc.link rel=stylesheet href=style/zerolang.css
+#doc.link rel=icon type=image/png sizes=192x192 href=style/favicon-192x192.png
+#doc.link rel=icon type=image/x-icon href=style/favicon-48x48.ico
+#doc.link rel=icon type=image/png sizes=32x32 href=style/favicon-32x32.png
+#doc.link rel=icon type=image/png sizes=16x16 href=style/favicon-16x16.png
+
+#doc.script src=style/tocbot.min.js
+#doc.script src=style/init.js
+#doc.script src=style/prism.min.js
+#doc.script src=style/prism-zerolang.js
+#doc.author: pw <p@zerolang.org>
+#doc.datecreated: 2026-04-27
+#doc.version: v0.1
+
+#doc.body class=toc-sidebar
+#nav id=nav: [#include literal=true: style/nav.html]
+
+#header:
+  #-: Zerolang Style Guide
+
+#nav id=toc class=toc-sidebar:
+  #div id=tocfile: Table of Contents
+  #doc.toc
+
+This document is the canonical style guide for Zerolang source code. It is
+prescriptive: each rule states what to do, with a brief rationale only where
+the rule is non-obvious. Status: the standard library, examples and
+documentation will be migrated to comply with this guide in the next phase of
+the project; existing source may diverge in places until that migration lands.
+
+
+#--: General Formatting
+
+#---: Encoding and File Extension
+
+#ul:
+  #*: Source files are UTF-8. This is mandated by the language.
+  #*: Source files use the extension #~".z".
+  #*: Files end with a single trailing newline. No trailing whitespace on any line.
+
+#---: Indentation
+
+#ul:
+  #*: Indent with spaces. Tabs are not used.
+  #*: One indent step is four spaces.
+
+#---: Line Length
+
+A soft limit of 100 columns. Wrap when a line would otherwise harm
+readability; do not wrap purely to satisfy the limit when the result is worse.
+Treat 100 as a guideline, not a hard fail.
+
+#---: One Statement Per Line
+
+Use one executable statement or expression per source line. Semicolons are
+permitted by the grammar as line separators but should not appear in
+production code -- line feeds are the natural terminator.
+
+#---: Braces, Parentheses and Line Continuation
+
+Parentheses suspend line-feed termination; braces (in code) reenable it. The
+following rules cover wrapping:
+
+#ul:
+  [#*: An opening brace follows immediately after its related
+  statement or expression on the same line.]
+  [#*: When a statement continues after a closing brace, the continuation
+  appears on the same line as that closing brace.]
+  [#*: A braced or parenthesised clause that fits comfortably on a single
+  line is written on a single line, with no whitespace inside the opening
+  or closing delimiter.]
+  [#*: A clause that does not fit on a single line places its contents on
+  subsequent lines, indented one extra step (four spaces) deeper than the
+  lines bearing the opening and closing delimiters. The closing delimiter
+  sits on its own line at the parent indent.]
+  [#*: When a logical line will not fit on one file line, use embedded
+  parentheses or braces to wrap. If the expression has none, wrap the whole
+  expression in parentheses so the multi-line construct reads as a single
+  unit.]
+  [#*: Within parenthesised expressions and braced clauses (including #~"in"
+  parameter lists), introduce newlines wherever they improve readability --
+  for example, one parameter per line.]
+
+#code language=zerolang: """
+  # single-line clause: no internal padding
+  point: (record x: i64 y: i64)
+
+  # multi-line clause: contents indented one step beyond the delimiters
+  config: (
+      record
+      host: string
+      port: u16
+      timeout: u32
+  )
+  """
+
+#---: Whitespace Around Identifiers
+
+A single space separates identifiers that would otherwise abut and parse as a
+single identifier. The numeric and comparison operators are ordinary
+identifiers and #_+"must" be surrounded by whitespace.
+
+#code language=zerolang: """
+  total: a + b           # correct
+  # totaL: a+b           # parses as a single identifier 'a+b'
+  """
+
+#---: Definitions and the Colon
+
+Definitions are a label, then #~":", then an expression or definition. A
+single space follows the colon when the definition continues on the same
+line. A space #_+"before" the colon is forbidden by the language.
+
+Do not horizontally align the right-hand sides of consecutive definitions or
+their types. Aligned columns are noisy under diff and brittle under rename.
+
+#code language=zerolang: """
+  # correct
+  host: string
+  port: u16
+  timeout: u32
+
+  # avoid: padded for visual alignment
+  # host:    string
+  # port:    u16
+  # timeout: u32
+  """
+
+#---: Parentheses for Precedence Only
+
+Parentheses are used for precedence enforcement, for clarity in dense
+expressions, and for the multi-line wrapping case above. Do not parenthesise
+the conditions of #~"if" or #~"for", and do not parenthesise the arguments of
+a top-level call.
+
+There is one exception that catches readers off-guard: when a #_+"top-level"
+call takes an argument that is itself a call with named arguments, that
+argument call must be parenthesised so it is evaluated before the outer call.
+
+#code language=zerolang: """
+  # bare top-level call: no parentheses needed
+  print "hello"
+
+  # nested named-arg call: inner call parenthesised
+  print (format value: 42 width: 6)
+  """
+
+#---: Numeric Literals
+
+Numeric literals may use underscores to group digits for readability:
+
+#ul:
+  #*: Decimal literals: groups of three from the right.
+  #*: Binary and hexadecimal literals: groups of four. Use groups of eight only for literals 32 bits wide or larger.
+
+Typed literals use the dot suffix form: #~"65.u8", not #~"65u8".
+
+#code language=zerolang: """
+  population: 7_900_000_000
+  mask:       0xFFFF_FFFF
+  marker:     0b1010_0101
+  byte:       65.u8
+  """
+
+
+#--: Match and Case
+
+Place the subject expression in parentheses on its own line. Each #~"case"
+and the optional #~"else" begins at column 3, immediately after the closing
+delimiter of the previous arm.
+
+#code language=zerolang: """
+  match (
+      result
+  ) case ok then {
+      print "value=\{result.value}"
+  } case err then {
+      print "failed: \{result.detail}"
+  }
+  """
+
+When the entire #~"match" fits comfortably on one line, write it on one line.
+Use this form only when every arm is a short statement.
+
+#code language=zerolang: """
+  match (r) case some then { print "found" } case none then { print "missing" }
+  """
+
+
+#--: Naming
+
+#---: Units
+
+Unit names are lowercase printable ASCII with no whitespace; this is mandated
+by the language for filesystem compatibility. In addition:
+
+#ul:
+  #*: Aim for a single word.
+  #*: Do not use underscores.
+
+#---: Valtype Definitions
+
+#~"record", #~"variant" and #~"facet" definitions use a lowercase name. Aim
+for a single word. If the name needs more than one word, run the words
+together without underscores.
+
+#code language=zerolang: """
+  point:    (record x: i64 y: i64)
+  filekind: (variant tag: file dir symlink)
+  """
+
+#---: Reftype Definitions
+
+#~"class", #~"union" and #~"protocol" definitions use #_+"PascalCase". The
+casing distinguishes reftypes from valtypes at the point of use.
+
+#code language=zerolang: """
+  File:      class { ... }
+  ListView:  class { ... }
+  ReadStream: protocol { ... }
+  """
+
+#---: Variant Tags
+
+Variant tags are values, not types, and are written lowercase. Aim for a
+single word; if more is needed, use #~"lowerCamelCase".
+
+#code language=zerolang: """
+  result: (variant tag: ok err)
+  filekind: (variant tag: regularFile dir symlink)
+  """
+
+#---: Functions, Methods and Fields
+
+Aim for a single lowercase word. If the name needs more than one word, use
+#~"lowerCamelCase".
+
+#ul:
+  [#*: Getters list the name of the item being returned only. Do not prefix
+  getters with #~"get".]
+  [#*: Setters may be prefixed with #~"set" when the alternative would be
+  ambiguous.]
+  [#*: Predicate methods returning #~"bool" may be prefixed with #~"is" or
+  #~"has".]
+
+#code language=zerolang: """
+  # correct
+  f.size           # not f.getSize
+  user.setName name: "alice"
+  conn.isOpen
+  doc.hasErrors
+  """
+
+#---: Constants
+
+Top-level value definitions use #~"lowerCamelCase". Do not use uppercase or
+shouting snake case.
+
+#code language=zerolang: """
+  maxRetries:    3
+  defaultPort:   8080
+  """
+
+#---: Receivers
+
+The receiver in a method should be a short name -- preferably a single
+letter -- that relates to the type. For multi-word reftype names, an
+acronym is acceptable.
+
+#ul:
+  #*: All methods on the same type must use the same receiver name.
+  #*: The #~":this" shorthand is permitted but a short type-relevant name is preferred.
+
+#code language=zerolang: """
+  File: class { ... } as {
+      open:  function {f: this name: stringview} out File is { ... }
+      close: function {f: this} is { ... }
+      size:  function {f: this} out u64 is { ... }
+  }
+
+  ListView: class { ... } as {
+      length: function {lv: this} out u64 is { ... }
+      first:  function {lv: this} out (option t: of) is { ... }
+  }
+  """
+
+
+#--: Calls
+
+When a function or method call has exactly one argument and that argument is
+the leading parameter, omit the argument name.
+
+#code language=zerolang: """
+  print "hello"
+  outbuf.append 65.u8
+  """
+
+Re-introduce the argument name when omitting it would obscure the call's
+intent at the call site. The judgement applies most often to native or
+generic methods where a bare argument's role is not obvious from the
+receiver and method name.
+
+#code language=zerolang: """
+  # clear from receiver and method name -- omit
+  list.append item
+
+  # bare argument's role is not obvious -- name it
+  buf.write from: chunk
+  """
+
+
+#--: Item Definitions
+
+When an item is generic, the generic parameters appear first in the #~"as"
+section of the item definition.
+
+#code language=zerolang: """
+  Pair: class as {
+      generic a b
+      first:  a
+      second: b
+  }
+  """
+
+
+#--: Functions
+
+#---: Guard Clauses and Early Return
+
+Use #~"if" guards with early return to handle errors and edge cases up
+front. The remaining body is then the happy path with one less indent
+level.
+
+#code language=zerolang: """
+  read: function {f: this} out (result t: string) is {
+      if not f.isOpen then return result.err detail: "not open"
+      if f.atEnd     then return result.err detail: "eof"
+      ...
+      return result.ok value: data
+  }
+  """
+
+#---: Last-Expression Return
+
+For short functions, return the last expression and omit the explicit
+#~"return".
+
+#code language=zerolang: """
+  abs: function {n: i64} out i64 is {
+      if n < 0 then 0 - n else n
+  }
+  """
+
+#---: Expression Forms
+
+Prefer #~"if" and #~"for" as expressions to produce values. Avoid
+side-effecting an accumulator when an expression form is available.
+
+#code language=zerolang: """
+  # prefer
+  squares: for x: 5.iterate loop { x * x }
+
+  # avoid
+  squares: list of: i64
+  for x: 5.iterate loop { squares.append x * x }
+  """
+
+
+#--: Ownership Annotations
+
+Ownership annotations behave differently in parameter declarations and in
+inline code. The two are covered separately below.
+
+#---: Parameter Declarations
+
+#ul:
+  [#*: #~".borrow" is the default for #~"in" parameters. Do not write
+  #~".borrow" on an #~"in" parameter.]
+  [#*: #~".take" is the default for #~"out" parameters. Do not write
+  #~".take" on an #~"out" parameter.]
+  [#*: #~".borrow" on an #~"out" parameter is the only place #~".borrow"
+  is written explicitly. It indicates a borrowed return; at least one
+  #~"in" parameter must be marked #~".lock" to provide a parent for the
+  borrow's lifetime.]
+  [#*: #~".lock" has no default. Always write it explicitly when locking
+  is required.]
+
+#code language=zerolang: """
+  # in: borrow is implicit; out: take is implicit
+  area: function {p: point} out f64 is { ... }
+
+  # borrowed return: explicit .borrow on out, .lock on the parent
+  first: function {l: List.lock t: of} out of.borrow is { ... }
+  """
+
+#---: Inline Code
+
+#ul:
+  [#*: Do not write #~".borrow" in function bodies or on call arguments.
+  Borrow is implicit at every position where it is the default.]
+  [#*: Use #~".take" only when there is a receiving variable or parameter
+  of that type. The compiler enforces #~".take" based on the receiving
+  parameter; the call-site annotation is rarely needed for safety.]
+  [#*: As a general rule, omit #~".take" on call arguments. Add it only
+  where a specific call's readability is meaningfully improved.]
+  [#*: #~".take" may be used to move a reftype to a new variable name when
+  the new name improves documentation or clarity. Do not rename for its
+  own sake.]
+  [#*: #~".take" as a bare expression to release a reftype is forbidden.
+  Use #~".release".]
+  [#*: #~".release" is a standalone statement. It returns null and may
+  not appear inside an assignment, expression, or call argument.]
+
+#---: Lock and Release Methods
+
+#ul:
+  [#*: #~".lock" is permitted as a borrow-projection on a reftype variable
+  to produce a borrowed reference for the duration of an expression or
+  protocol creation.]
+  [#*: #~".release" on a borrowed variable, written as a standalone
+  statement, ends the borrow.]
+
+#code language=zerolang: """
+  borrowed: provider.borrow from: m2.lock
+  borrowed.use
+  borrowed.release
+  print "m2 still alive: factor=\{m2.factor}"
+  """
+
+
+#--: Comments and Documentation
+
+#---: Line Comments
+
+Zerolang line comments begin with #~"#". Comments document #_+"why", not
+what; do not paraphrase code that names itself. Place comments on the line
+above the item they describe, not trailing the code.
+
+Reach for a comment when the reader needs context the code cannot give:
+non-obvious invariants, lock ordering, ownership intent on exported APIs,
+references to specifications.
+
+#---: Native Declaration Doc Blocks
+
+For #~"native" declarations in standard library units, precede the
+declaration with a short doc block. The first line is the declared
+identifier, two dashes, and a one-sentence description. Further lines
+describe parameter and return semantics.
+
+#code language=zerolang: """
+  # get_env -- look up environment variable `key`. Returns option.none if
+  # the variable is not set; option.some with the value otherwise.
+  getEnv: function {key: stringview} out (option t: string) is native
+  """
+
+
+#--: Errors and Panics
+
+#~"error msg: \"...\"" is the compile-time form; #~"panic msg: \"...\"" is
+its runtime counterpart. Apply the same phrasing rules to both:
+
+#ul:
+  #*: Lowercase first letter.
+  #*: No trailing punctuation.
+  #*: Present tense, declarative.
+  #*: State the failed condition, not a stack-trace narrative.
+
+#code language=zerolang: """
+  if size > limit then error msg: "buffer exceeds maximum capacity"
+
+  if conn.closed then panic msg: "write on closed connection"
+  """
+
+
+#--: File Hygiene
+
+#ul:
+  #*: One trailing newline at end of file.
+  #*: No trailing whitespace on any line.
+  #*: A unit declaration, when present, sits at the very top of the file, before any imports or item definitions.
