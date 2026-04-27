@@ -218,11 +218,6 @@ class ZType:
     return_type: "Optional[ZType]" = field(default=None, init=False)
     # ownership annotation on the return type (if any)
     return_ownership: "Optional[ZParamOwnership]" = field(default=None, init=False)
-    # path the return value's lock is bound to: "this" for receiver-locked
-    # returns (e.g. .stringview / .listview / .byteview), a parameter name
-    # for arg-locked returns, or None for owned returns. Drives the
-    # aggregate-store-of-borrowed-view rejection in _check_aggregate_lock_escape.
-    return_lock_target: "Optional[str]" = field(default=None, init=False)
     # name of the parameter whose declared TYPE was the `this` keyword —
     # i.e. the receiver-bound parameter. Set during _resolve_function_type.
     # Both `:this` (param named "this") and `h: this` (param named "h")

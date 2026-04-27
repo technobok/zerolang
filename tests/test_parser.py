@@ -775,21 +775,6 @@ class TestNativeKeyword:
         assert func.is_native is True
         assert "n" in func.parameters
 
-    def test_return_lock_target_from_this(self):
-        """`out T.borrow from: this` parses, capturing return_lock_target."""
-        result = parse_unit("f: function {x: i64} out i64.borrow from: x is native")
-        body = get_unit_body(result)
-        func = body["f"]
-        assert isinstance(func, zast.Function)
-        assert func.return_lock_target == "x"
-
-    def test_no_lock_target_default(self):
-        """Function without `from:` clause has return_lock_target=None."""
-        result = parse_unit("f: function {n: i64} out i64 is native")
-        body = get_unit_body(result)
-        func = body["f"]
-        assert func.return_lock_target is None
-
     def test_native_not_spec(self):
         """Native function is distinguishable from a spec."""
         result = parse_unit("f: function out i64")

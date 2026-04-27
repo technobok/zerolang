@@ -7566,8 +7566,9 @@ class CEmitter:
             return (None, None)
         if method.return_type is None:
             return (None, None)
+        recv = method.this_param_name
         for p in method.children:
-            if p != "this":
+            if p != "this" and p != recv:
                 return (None, None)
         return (cls.name, method)
 

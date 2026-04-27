@@ -1246,33 +1246,27 @@ class TestStoreOfBorrowedRejection:
 
 
 class TestReturnLockPropagation:
-    """Phase C step 3: when a user-defined method declares
-    `out T.borrow from: <name>`, the call's binding must lock the
-    corresponding source path in the outer scope. Mutating that
-    source while the binding is live errors.
+    """When a user-defined method declares a `.lock` parameter and
+    returns a borrow, the call's binding must lock the corresponding
+    source path in the outer scope. Mutating that source while the
+    binding is live errors.
 
-    The stdlib's `.stringview` / `.listview` go through syntactic
-    intercepts that already do this; `.lock`-annotated params route
-    through the pre-existing `lock_param_targets` transfer. The hole
-    that step 3 closes: user-defined methods with `from:` whose param
-    is NOT `.lock`-annotated (and methods with `from: this` that are
-    NOT covered by a syntactic intercept).
-
-    Pre-step-3 these tests reported empty `errors` lists, silently
-    accepting unsound code.
+    The receiver case (`t: this.lock`) and the explicit-arg case
+    (`s: T.lock`) both route through `lock_param_targets` transfer.
     """
 
     def test_user_method_this_locked_return_locks_receiver(self):
-        """User-defined method with `out T.borrow from: this` —
-        no syntactic intercept covers it, so propagation must come
-        from `return_lock_target` metadata at call resolution.
+        """User-defined method with `t: this.lock` receiver:
+        propagation comes from the standard `.lock`-param transfer at
+        call resolution; the call's source-slot is exclusively locked
+        for the borrow's lifetime.
         """
         errors = check_errors(
             "holder: class {\n"
             "  val: string\n"
             "} as {\n"
-            "  pick: function {:this prefix: stringview}"
-            " out string.borrow from: this is { return this.val }\n"
+            "  pick: function {t: this.lock prefix: stringview}"
+            " out string.borrow is { return t.val }\n"
             "}\n"
             "main: function is {\n"
             '  src: holder val: "hi".string\n'
@@ -1285,17 +1279,16 @@ class TestReturnLockPropagation:
         ]
 
     def test_user_method_param_locked_return_locks_arg_source(self):
-        """User-defined function with `out T.borrow from: s` where
-        `s` is a default-BORROW param (not `.lock`). The existing
-        `lock_param_targets` transfer only fires for `.lock` params,
-        so propagation must come from `return_lock_target`.
+        """User-defined function with a `.lock`-annotated arg param:
+        the call's leaf-locked source survives as `_pending_borrow_lock`
+        for the binding to install.
         """
         errors = check_errors(
-            "get_view: function {s: string}"
-            " out string.borrow from: s is { return s }\n"
+            "get_view: function {s: string.lock}"
+            " out string.borrow is { return s }\n"
             "main: function is {\n"
             '  src: "hi".string\n'
-            "  v: get_view s: src\n"
+            "  v: get_view s: src.lock\n"
             '  src = "bye".string\n'
             "}"
         )
@@ -1304,19 +1297,16 @@ class TestReturnLockPropagation:
         ]
 
     def test_named_receiver_param_locked_return(self):
-        """Receiver-bound param spelled `h: this` instead of `:this` —
-        `from: h` must propagate to the receiver path identically.
-
-        Pre-fix: the resolver only matched the literal string "this";
-        `target_name == "h"` fell through to the empty arg-walking
-        branches and returned None. Errors list was empty.
+        """Receiver-bound param spelled `h: this.lock` (not `t:`) —
+        the receiver-source lock propagates identically regardless of
+        the parameter name.
         """
         errors = check_errors(
             "holder: class {\n"
             "  val: string\n"
             "} as {\n"
-            "  pick: function {h: this prefix: stringview}"
-            " out string.borrow from: h is { return h.val }\n"
+            "  pick: function {h: this.lock prefix: stringview}"
+            " out string.borrow is { return h.val }\n"
             "}\n"
             "main: function is {\n"
             '  src: holder val: "hi".string\n'
@@ -1325,6 +1315,21 @@ class TestReturnLockPropagation:
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_borrow_return_without_lock_param_rejected(self):
+        """A function declaring `out T.borrow` whose return root
+        traces back to a non-`.lock` parameter must be rejected at
+        the function definition site — the borrow has no lockable
+        source on the caller side.
+        """
+        errors = check_errors(
+            "get_view: function {s: string}"
+            " out string.borrow is { return s }\n"
+            "main: function is {}"
+        )
+        assert any("lock" in e.msg.lower() and "'s'" in e.msg for e in errors), [
             e.msg for e in errors
         ]
 
@@ -1346,11 +1351,10 @@ class TestPhaseC3Pins:
     """Phase C-3 pin tests: per-call sub-scope semantics.
 
     These pin behaviour established by commits 7c63562 (call-identity
-    stack), 7757ccc (per-arg hoisting), d087861 (return_lock_target
-    propagation through nested call scopes), and bafd598 (receiver-
-    param detection in propagation). Without those changes the tests
-    here would silently regress (call locks leaking across statements,
-    args evaluated in arbitrary order, etc.).
+    stack), 7757ccc (per-arg hoisting), and bafd598 (receiver-param
+    detection). Without those changes the tests here would silently
+    regress (call locks leaking across statements, args evaluated in
+    arbitrary order, etc.).
     """
 
     def _reader_and_myfile(self) -> str:
@@ -1412,18 +1416,17 @@ class TestPhaseC3Pins:
         )
 
     def test_borrow_returning_method_passed_as_take_rejected(self):
-        """A user method with `out string.borrow from: this` returns a
-        borrowed value. Passing that value to a `string.take` parameter
-        must be rejected — the rejection now flows through the
-        return_lock_target metadata path (Phase B/C), not a syntactic
-        special-case.
+        """A user method with `t: this.lock` receiver returns a
+        borrowed value. Passing that value to a `string.take`
+        parameter must be rejected — the borrow carries an outstanding
+        lock on its source which cannot transfer ownership.
         """
         errors = check_errors(
             "holder: class {\n"
             "    val: string\n"
             "} as {\n"
-            "    pick: function {:this} out string.borrow from: this is {\n"
-            "        return this.val\n"
+            "    pick: function {t: this.lock} out string.borrow is {\n"
+            "        return t.val\n"
             "    }\n"
             "}\n"
             "consume: function {s: string.take} is {}\n"
@@ -1529,14 +1532,14 @@ class TestSyntacticHooksDeletion:
     method semantics (`_INLINE_LOCK_PROJECTIONS`, the
     `child_name == \"byteview\"|\"listview\"|\"stringview\"` branches in
     `_resolve_dotted_path`, the integer `.iterate`/`.each` synth) are
-    gone. Aggregate-escape rejection now flows through
-    `return_lock_target` metadata exclusively. Reintroducing any of
+    gone. Aggregate-escape rejection now flows through standard
+    return-ownership / `.lock`-param metadata. Reintroducing any of
     these hooks should fail this test class first.
     """
 
     def test_no_inline_lock_projections_constant(self):
         """The constant must not be reintroduced. Aggregate-escape
-        Case 1 reads return_lock_target metadata exclusively."""
+        Case 1 reads return-ownership metadata exclusively."""
         with open(SRC_TYPECHECK_PATH) as f:
             src = f.read()
         assert "_INLINE_LOCK_PROJECTIONS" not in src
@@ -1545,8 +1548,8 @@ class TestSyntacticHooksDeletion:
         """No `child_name == \"byteview\"` / `\"listview\"` /
         `\"stringview\"` syntactic branches survive in the typechecker.
         These projections all resolve through their native declarations
-        in `lib/system/*.z` and propagate locks via
-        `return_lock_target` metadata."""
+        in `lib/system/*.z` and propagate locks via the standard
+        `.lock`-param transfer."""
         with open(SRC_TYPECHECK_PATH) as f:
             src = f.read()
         for name in ("byteview", "listview", "stringview"):
@@ -3980,14 +3983,12 @@ class TestValtypeReftypeEnforcement:
     def test_class_cannot_hold_byteview_via_metadata(self):
         """Pin the metadata-driven rejection.
 
-        Now that bytes.byteview is declared natively in
-        lib/system/system.z with `out byteview.borrow from: this`,
-        the resolved method type carries
-        return_lock_target == "this". After the legacy syntactic
-        constant `_INLINE_LOCK_PROJECTIONS` is deleted, this test
-        is the only thing pinning the byteview rejection — it must
-        keep passing solely via _check_aggregate_lock_escape Case 1's
-        has_metadata_lock branch.
+        bytes.byteview is declared natively in lib/system/system.z
+        with a `.lock`-annotated receiver and a borrow return. The
+        legacy syntactic constant `_INLINE_LOCK_PROJECTIONS` is gone;
+        this test pins the byteview rejection via
+        _check_aggregate_lock_escape Case 1, which keys off the
+        method's return ownership being BORROW.
         """
         errors = check_errors(
             "c: class { bv: byteview }\n"
@@ -4008,21 +4009,20 @@ class TestValtypeReftypeEnforcement:
         )
         assert any("view" in e.msg for e in errors)
 
-    def test_user_method_with_from_this_rejected_in_aggregate(self):
-        """The dual-driven aggregate-escape check (commit 4) fires from
-        return_lock_target metadata. A user-defined method whose return
-        is annotated `from: this` must be rejected when stored into a
-        class field, even though its name is not in the legacy
-        _INLINE_LOCK_PROJECTIONS set. Covers the metadata path
-        independently of the syntactic constant.
+    def test_user_method_with_lock_receiver_rejected_in_aggregate(self):
+        """The aggregate-escape check fires for any borrow-returning
+        user method (which by validation must have a `.lock` parameter).
+        A method storing its borrowed return into another class field
+        must be rejected — the value carries an outstanding lock on
+        its source.
         """
         errors = check_errors(
             "src: class { val: 0u64 } as {\n"
-            "  peek: function {:this} out u64.borrow from: this is { return 0u64 }\n"
+            "  peek: function {t: this.lock} out u64.borrow is { return t.val }\n"
             "}\n"
             "holder: class { x: u64 }\n"
             "main: function is {\n"
-            "  s: src\n"
+            "  s: src val: 5u64\n"
             "  h: holder x: s.peek\n"
             "}"
         )
@@ -9124,25 +9124,24 @@ class TestList:
         assert "list_i64" in names
         assert "list_u64" in names
 
-    def test_list_listview_carries_lock_target(self):
-        """The synthesised .listview on a mono list carries the lock-target
-        metadata declared on collections.z's native list.listview
-        (`out (listview of: of).borrow from: this`).
+    def test_list_listview_returns_borrow(self):
+        """The synthesised .listview on a mono list returns a borrowed
+        listview. The receiver lock transfers to the binding via the
+        standard `.lock`-param mechanism declared on collections.z's
+        native list.listview (`{t: this.lock} out (listview of: of).borrow`).
         """
         program = check_ok("main: function is { l: (list of: i64) }")
         monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
         mono = monos[0]
         listview_method = mono.children["listview"]
-        assert listview_method.return_lock_target == "this"
         assert listview_method.return_ownership == ZParamOwnership.BORROW
 
-    def test_list_iterate_carries_lock_target(self):
+    def test_list_iterate_returns_borrow(self):
         """Same propagation for the .iterate iterator method."""
         program = check_ok("main: function is { l: (list of: i64) }")
         monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
         mono = monos[0]
         iterate_method = mono.children["iterate"]
-        assert iterate_method.return_lock_target == "this"
         assert iterate_method.return_ownership == ZParamOwnership.BORROW
 
 

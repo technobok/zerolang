@@ -1158,14 +1158,12 @@ class TypeChecker:
             ftype.param_ownership = dict(func.param_ownership)
         if func.return_ownership is not None:
             ftype.return_ownership = func.return_ownership
-        if func.return_lock_target is not None:
-            ftype.return_lock_target = func.return_lock_target
 
         # Record which parameter (if any) is bound to the receiver — i.e.
         # whose declared TYPE was the `this` keyword. Both surface forms
         # (`:this` -> param name "this", `h: this` -> param name "h")
         # produce a path whose value name resolves to "this". Downstream
-        # code (missing-arg check, return_lock_target propagation) reads
+        # code (missing-arg check, rvalue method-as-value access) reads
         # this field instead of hardcoding the literal "this" so the
         # named-binding form behaves equivalently to the shorthand.
         for pname, ppath in func.parameters.items():
@@ -1224,21 +1222,25 @@ class TypeChecker:
             )
 
         # a function returning borrow must have at least one lock parameter
-        # OR explicitly bind the return to a source via `out T.borrow from: <name>`.
-        if ret_is_borrow and not has_lock_param and ftype.return_lock_target is None:
+        if ret_is_borrow and not has_lock_param:
             self._error(
                 "function returns 'borrow' but has no 'lock' parameter",
                 loc=func.start,
                 err=ERR.OWNERERROR,
-                hint="add .lock to a parameter to borrow from it, "
-                "or annotate the return with `from: <name>`",
+                hint="add .lock to a parameter to borrow from it",
             )
 
         # .lock on known valtype parameters is an error (locking requires
         # identity, which valtypes don't have). .borrow is fine on valtypes
         # (it's the default — just means copy without invalidation).
+        # Exempt: receiver params (`t: this.lock`) — even valtype-class
+        # receivers (e.g. `str`) carry internal heap state whose source
+        # slot must be locked against reassignment for borrowed views to
+        # remain valid.
         for pname, pown in own.items():
             if pown == ZParamOwnership.LOCK:
+                if ftype.this_param_name == pname:
+                    continue
                 ptype = ftype.children.get(pname)
                 if (
                     ptype
@@ -2923,12 +2925,10 @@ class TypeChecker:
     def _carry_native_method_metadata(
         self, template_type: ZType, defn: object, meth_name: str, synth: ZType
     ) -> None:
-        """Copy return-side metadata (return_lock_target, return_ownership)
-        from a natively-declared method's AST to a synthesised mono method.
-        Lets the lib's `out T.borrow from: this` annotation reach use
-        sites after monomorphisation. Reads from the AST because generic
-        templates don't have their methods resolved into ZType.children
-        until monomorphisation (see comment near
+        """Copy return-side metadata (return_ownership) from a natively-declared
+        method's AST to a synthesised mono method. Reads from the AST because
+        generic templates don't have their methods resolved into
+        ZType.children until monomorphisation (see comment near
         `for mname, mfunc in cls.functions.items()` in class resolution).
 
         `defn` may be a re-export DottedPath (e.g. core.z's
@@ -2949,8 +2949,6 @@ class TypeChecker:
                     break
         if ast_func is None:
             return
-        if ast_func.return_lock_target is not None:
-            synth.return_lock_target = ast_func.return_lock_target
         if ast_func.return_ownership is not None:
             synth.return_ownership = ast_func.return_ownership
 
@@ -3729,8 +3727,21 @@ class TypeChecker:
         # stored as a t_u64 child) still pass through unchanged.
         # Subsumes the per-class file.close / bufwriter.flush /
         # bufreader.read branches AND the syntactic .stringview /
-        # .listview branches (which set _pending_borrow_lock from the
-        # method's `return_lock_target = "this"` metadata).
+        # .listview branches: a `.lock`-annotated receiver param installs
+        # an exclusive lock on the receiver source path.
+        #
+        # Two shortcut conditions:
+        #   (a) the only parameter is named literally "this" — the
+        #       `:this` shorthand convention used by zero-user-arg
+        #       methods like `string.length`.
+        #   (b) the only parameter is the long-form receiver
+        #       (`t: this.lock`) — used by migrated natives like
+        #       `string.stringview`, `list.listview` etc. that need a
+        #       locked receiver.
+        # User methods with a non-receiver param (e.g. `bag.get self: b`
+        # is `{self: this}` but not .lock — that is the SHORTHAND case
+        # spelled the long way; user expects a normal method call) take
+        # neither branch and fall through to the regular method type.
         if parent_type.typetype == ZTypeType.CLASS or _is_str_type(parent_type):
             method = parent_type.children.get(child_name)
             if (
@@ -3738,17 +3749,36 @@ class TypeChecker:
                 and method.typetype == ZTypeType.FUNCTION
                 and method.return_type is not None
             ):
-                has_non_this = False
-                for p in method.children:
-                    if p != "this":
-                        has_non_this = True
-                        break
-                if not has_non_this:
-                    # Method declared `out T.borrow from: this` installs an
-                    # exclusive lock on the receiver path. Replaces the
-                    # syntactic .stringview / .listview lock-setter that
-                    # previously did this directly.
-                    if method.return_lock_target == "this":
+                # Three forms we treat as "no user-visible args":
+                #   (a) literal `:this` shorthand — sole param named "this"
+                #   (b) native method with a long-form locked receiver —
+                #       sole param matches `this_param_name` and is
+                #       `.lock`-annotated. Restricted to `is_native` so
+                #       user methods like `slice: function {c: this.lock}
+                #       ...` called as `container.slice c: c` resolve as
+                #       regular method calls.
+                #   (c) synthesized native methods (list.listview etc.) —
+                #       no params at all; receiver is implicit.
+                recv_param = method.this_param_name
+                fires = False
+                lock_install = False
+                if not method.children:
+                    fires = True
+                    lock_install = method.return_ownership == ZParamOwnership.BORROW
+                elif len(method.children) == 1 and "this" in method.children:
+                    fires = True
+                    lock_install = method.return_ownership == ZParamOwnership.BORROW
+                elif (
+                    len(method.children) == 1
+                    and recv_param is not None
+                    and recv_param in method.children
+                    and method.param_ownership.get(recv_param) == ZParamOwnership.LOCK
+                    and method.is_native
+                ):
+                    fires = True
+                    lock_install = True
+                if fires:
+                    if lock_install:
                         src_path = self._get_dotted_path_tuple(path.parent)
                         if src_path:
                             self._pending_borrow_lock = src_path
@@ -7081,19 +7111,23 @@ class TypeChecker:
                 # We transfer only the leaf path (the EXCLUSIVE one); any
                 # SHARED ancestors will be reinstalled by the consumer's
                 # path walk in the result binding's scope.
-                self._pending_borrow_lock = target_path
-        # Phase C step 3: if the callee declares its return locked to a
-        # specific source ("this" or a parameter name), propagate that
-        # lock to the binding in the outer scope. Generalises the
-        # `lock_param_targets` transfer above to all `from: <name>`
-        # returns regardless of whether the param is `.lock`-annotated.
-        target_name = callee_type.return_lock_target
-        if target_name is not None:
-            out_path = self._resolve_return_lock_source(
-                target_name, call, callee_type, lock_param_targets
-            )
-            if out_path is not None:
-                self._pending_borrow_lock = out_path
+                self._pending_borrow_lock = self._chain_through_synth_temp(target_path)
+        # Receiver-as-.lock-param: when the receiver parameter itself is
+        # `.lock`-annotated (e.g. `string.stringview`'s `t: this.lock`),
+        # the receiver path must transfer to the binding so the source
+        # slot stays locked for the borrowed return's lifetime. The
+        # receiver's call-scoped lock (taken by `_lock_receiver`) lives
+        # outside `lock_param_targets`, so add the propagation here.
+        recv_param = callee_type.this_param_name
+        if (
+            recv_param is not None
+            and recv_param in lock_param_names
+            and call.callable.nodetype == NodeType.DOTTEDPATH
+        ):
+            receiver = cast(zast.DottedPath, call.callable).parent
+            recv_path = self._get_dotted_path_tuple(cast(zast.Operation, receiver))
+            if recv_path is not None:
+                self._pending_borrow_lock = self._chain_through_synth_temp(recv_path)
         # pop the call scope — all call-scoped locks vanish
         self.symtab.pop_to(call_marker)
         self._call_id_stack.pop()
@@ -7315,47 +7349,6 @@ class TypeChecker:
             return self._call_id_stack[-1]
         return "__call"
 
-    def _resolve_return_lock_source(
-        self,
-        target_name: str,
-        call: zast.Call,
-        callee_type: ZType,
-        lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]],
-    ) -> Optional[Tuple[str, ...]]:
-        """Translate a callee's `return_lock_target` (a parameter name)
-        to the addressable source path in the *outer* scope. Returns
-        the path tuple to set as `_pending_borrow_lock`, or None if
-        the target is unresolvable (an omitted default-using arg, or
-        a receiver-bound target on a non-method call).
-        """
-        # Receiver-bound parameter — covers both the `:this` shorthand
-        # (param named "this") and the named form `h: this` (param
-        # named "h"). _resolve_function_type records whichever one was
-        # used in callee_type.this_param_name.
-        if target_name == callee_type.this_param_name:
-            if call.callable.nodetype != NodeType.DOTTEDPATH:
-                return None
-            receiver = cast(zast.DottedPath, call.callable).parent
-            recv_path = self._get_dotted_path_tuple(cast(zast.Operation, receiver))
-            if recv_path is None:
-                return None
-            return self._chain_through_synth_temp(recv_path)
-        # Non-receiver param: explicit arg passed at the call site.
-        # Prefer the leaf path captured in lock_param_targets (already
-        # through `_lock_*` resolution), falling back to walking
-        # call.arguments for the unlocked-arg case (valtype params,
-        # borrow-default params that didn't install a leaf).
-        for target_path, pname in lock_param_targets:
-            if pname == target_name:
-                return self._chain_through_synth_temp(target_path)
-        for arg in call.arguments:
-            if arg.name == target_name:
-                path = self._get_dotted_path_tuple(arg.valtype)
-                if path is None:
-                    return None
-                return self._chain_through_synth_temp(path)
-        return None
-
     def _chain_through_synth_temp(self, path: Tuple[str, ...]) -> Tuple[str, ...]:
         """If the path roots at a synth temp (Phase C step 2's `_tN`)
         whose `borrow_origin` is set, replace the root with the temp's
@@ -7366,8 +7359,13 @@ class TypeChecker:
         such a temp would attach the lock to a name that no longer
         exists in the outer scope. The chain step rewrites those paths
         to refer to the ultimate source recorded at hoist time.
+        Restricted to synth-temp names (`_tN`) so it does not rewrite
+        real user variables that legitimately have `borrow_origin` set
+        (e.g. a borrow holder bound to a longer-lived source).
         """
         root = path[0]
+        if not (root.startswith("_t") and root[2:].isdigit()):
+            return path
         var = self.symtab.lookup_var(root)
         if var is None or var.borrow_origin is None:
             return path
@@ -7737,9 +7735,8 @@ class TypeChecker:
         Three cases caught:
           1. Lock-bearing method projection in arg position
              (`b.byteview`, `s.stringview`, `xs.listview`, user methods
-             with `out T.borrow from: <name>`): the called method's
-             `return_lock_target` metadata identifies the source path
-             whose lock the return value carries.
+             with a `.lock` receiver): a method whose return ownership
+             is BORROW carries a lock on its source.
           2. Borrow-holder arg — `var.borrow_origin` is set, meaning `var`
              binds a borrow whose EXCLUSIVE lock lives on the source path
              (not on the holder's name).
@@ -7758,11 +7755,9 @@ class TypeChecker:
         for arg in call.arguments:
             if arg.name and arg.name in lock_param_names:
                 continue
-            # Case 1: lock-bearing method projection — the method's
-            # return_lock_target metadata identifies the source path
-            # whose lock the return value carries (set by `from: <name>`
-            # in the function signature; see ztypecheck of Function for
-            # the wiring at commit 48cb345).
+            # Case 1: lock-bearing method projection — a borrow-returning
+            # method (which by validation must have a `.lock` parameter)
+            # produces a value whose lock lives on its source path.
             if arg.valtype.nodetype == NodeType.DOTTEDPATH:
                 dp = cast(zast.DottedPath, arg.valtype)
                 parent_type = getattr(dp.parent, "type", None)
@@ -7773,7 +7768,8 @@ class TypeChecker:
                 )
                 has_metadata_lock = (
                     method_type is not None
-                    and method_type.return_lock_target is not None
+                    and method_type.typetype == ZTypeType.FUNCTION
+                    and method_type.return_ownership == ZParamOwnership.BORROW
                 )
                 if has_metadata_lock:
                     src_path = self._get_dotted_path_tuple(dp.parent)
@@ -8297,24 +8293,41 @@ class TypeChecker:
                     ),
                 )
 
-        # ownership check: cannot return a local variable as borrowed
+        # ownership check: a borrowed return must trace back to a `.lock`
+        # parameter. Two sub-cases:
+        #   * returned root IS a parameter — that parameter must be `.lock`
+        #     (default `.borrow` and `.take` are both rejected; their locks
+        #     don't survive the call).
+        #   * returned root is a local owned variable — its lifetime ends
+        #     at function exit; borrow would dangle.
         ret_own = self._current_func_return_ownership
         if ret_own == ZParamOwnership.BORROW and call.arguments:
             arg_op = call.arguments[0].valtype
             arg_name = self._get_arg_root_name(arg_op)
             if arg_name:
                 var = self.symtab.lookup_var(arg_name)
-                if var and var.ownership == ZOwnership.OWNED:
-                    # check if this is a function parameter (not a local var)
-                    # function parameters are in the function scope, locals may shadow
-                    # if the var is owned and not a lock parameter, it's a local
-                    param_own = self._current_func_ownership.get(arg_name)
-                    if param_own != ZParamOwnership.LOCK:
-                        self._error(
-                            f"Cannot return local variable '{arg_name}' as borrowed; "
-                            f"borrowed return values must originate from a 'lock' parameter",
-                            loc=call.start,
-                        )
+                param_own = self._current_func_ownership.get(arg_name)
+                if param_own is not None and param_own != ZParamOwnership.LOCK:
+                    self._error(
+                        f"Cannot return parameter '{arg_name}' as borrowed: "
+                        f"the parameter is not declared '.lock'",
+                        loc=call.start,
+                        err=ERR.OWNERERROR,
+                        hint=(
+                            f"declare '{arg_name}' as '.lock' so its lock "
+                            f"transfers to the returned borrow"
+                        ),
+                    )
+                elif (
+                    param_own is None
+                    and var is not None
+                    and var.ownership == ZOwnership.OWNED
+                ):
+                    self._error(
+                        f"Cannot return local variable '{arg_name}' as borrowed; "
+                        f"borrowed return values must originate from a 'lock' parameter",
+                        loc=call.start,
+                    )
 
         # escape check: a borrowed local cannot be returned. `borrow_origin`
         # marks variables that borrow from a function-local source; returning
