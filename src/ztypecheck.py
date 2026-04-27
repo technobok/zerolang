@@ -2925,11 +2925,17 @@ class TypeChecker:
     def _carry_native_method_metadata(
         self, template_type: ZType, defn: object, meth_name: str, synth: ZType
     ) -> None:
-        """Copy return-side metadata (return_ownership) from a natively-declared
-        method's AST to a synthesised mono method. Reads from the AST because
-        generic templates don't have their methods resolved into
-        ZType.children until monomorphisation (see comment near
-        `for mname, mfunc in cls.functions.items()` in class resolution).
+        """Copy method-level metadata (return_ownership, is_native) from a
+        natively-declared method's AST to a synthesised mono method. Reads
+        from the AST because generic templates don't have their methods
+        resolved into ZType.children until monomorphisation (see comment
+        near `for mname, mfunc in cls.functions.items()` in class
+        resolution).
+
+        `is_native` is also propagated uniformly to every FUNCTION child
+        of a native parent at the tail of `_monomorphize`; copying it
+        here keeps the helper complete in case it's ever called for a
+        synthesis context where the parent's native flag is unset.
 
         `defn` may be a re-export DottedPath (e.g. core.z's
         `list: collections.list` shadows the real class in some lookup
@@ -2951,6 +2957,8 @@ class TypeChecker:
             return
         if ast_func.return_ownership is not None:
             synth.return_ownership = ast_func.return_ownership
+        if ast_func.is_native:
+            synth.is_native = True
 
     def _make_meta_create_type(
         self,
@@ -4616,6 +4624,37 @@ class TypeChecker:
                 key = f"{unitname}.{mangled}"
                 self._resolved[key] = mono
                 break
+
+        # Compiler-managed collection types (list, map, listview,
+        # listiter, mapkeyiter, mapitemiter, mapentry, array, str)
+        # have every method synthesised inline above via `_make_type`.
+        # Each such method's body is compiler-provided — either as a
+        # runtime helper in `src/zemitterc_runtime.py` or inlined as
+        # struct-field access at emit time — so the corresponding
+        # ZType must carry `is_native=True`. This matches the
+        # underlying `is native` annotation on each method in
+        # `lib/system/{system,collections}.z`. Propagating uniformly
+        # here covers all ~15 synth sites without per-site
+        # assignments. Note: the parent's `is_native` flag itself is
+        # only set when the *class* is declared `is native`
+        # (string, listiter); for collection types whose class body
+        # is not `is native` (list, map, listview, mapkeyiter,
+        # mapitemiter, mapentry) the methods still are.
+        is_compiler_collection = (
+            _is_list_type(mono)
+            or _is_listview_type(mono)
+            or _is_listiter_type(mono)
+            or _is_map_type(mono)
+            or _is_mapkeyiter_type(mono)
+            or _is_mapitemiter_type(mono)
+            or _is_mapentry_type(mono)
+            or _is_array_type(mono)
+            or _is_str_type(mono)
+        )
+        if mono.is_native or is_compiler_collection:
+            for child in mono.children.values():
+                if child.typetype == ZTypeType.FUNCTION:
+                    child.is_native = True
 
         return mono
 

@@ -9196,6 +9196,68 @@ class TestList:
         assert iterate_method.return_ownership == ZParamOwnership.BORROW
 
 
+class TestSynthesisedNativeMethodFlag:
+    """Pin: every method synthesised for a monomorphised native
+    collection type carries `is_native=True`. The property holds
+    uniformly via the end-of-`_monomorphize` propagation loop, not
+    per-site assignments. If a future synth site adds a method ZType
+    on a native parent that escapes this property, this test fails
+    first.
+
+    Motivation: natives like `list_i64.iterate` are built via
+    `_make_type` at monomorphisation time, but pre-fix the synth
+    method itself had `is_native=False` even though its underlying
+    `lib/system/collections.z` declaration is `is native`. Existing
+    code only checked the parent's flag (correctly set), so nothing
+    broke — but a future method-level `is_native` check would silently
+    mishandle synth methods as user code. The propagation loop closes
+    that gap."""
+
+    def test_list_i64_methods_all_native(self):
+        program = check_ok("main: function is { l: (list of: i64) }")
+        list_i64 = next(m for m, _ in program.mono_types if m.name == "list_i64")
+        for name, child in list_i64.children.items():
+            if child.typetype == ZTypeType.FUNCTION:
+                assert child.is_native, f"list_i64.{name} should be is_native=True"
+
+    def test_map_methods_all_native(self):
+        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
+        map_mono = next(m for m, _ in program.mono_types if m.name == "map_i64_i64")
+        for name, child in map_mono.children.items():
+            if child.typetype == ZTypeType.FUNCTION:
+                assert child.is_native, (
+                    f"{map_mono.name}.{name} should be is_native=True"
+                )
+
+    def test_listview_methods_all_native(self):
+        program = check_ok(
+            "main: function is {\n  l: (list of: i64)\n  v: l.listview\n}"
+        )
+        lv_mono = next(
+            (m for m, _ in program.mono_types if m.name.startswith("listview_")),
+            None,
+        )
+        assert lv_mono is not None, [m.name for m, _ in program.mono_types]
+        for name, child in lv_mono.children.items():
+            if child.typetype == ZTypeType.FUNCTION:
+                assert child.is_native, (
+                    f"{lv_mono.name}.{name} should be is_native=True"
+                )
+
+    def test_listiter_call_native(self):
+        program = check_ok(
+            "main: function is {\n  l: (list of: i64)\n  with it: l.iterate do { }\n}"
+        )
+        li_mono = next(
+            (m for m, _ in program.mono_types if m.name.startswith("listiter_")),
+            None,
+        )
+        assert li_mono is not None, [m.name for m, _ in program.mono_types]
+        call_method = li_mono.children.get("call")
+        assert call_method is not None
+        assert call_method.is_native
+
+
 class TestMap:
     """Tests for map type resolution and monomorphization."""
 
