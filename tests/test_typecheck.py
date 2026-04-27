@@ -1346,6 +1346,57 @@ class TestReturnLockPropagation:
             "}"
         )
 
+    def test_user_method_lock_receiver_rvalue_coercion(self):
+        """A user-defined no-arg method with a `t: this.lock` receiver
+        coerces in value position the same way a native does — no
+        `is_native` asymmetry. Pinned after the auto-call coercion
+        moved out of `_resolve_dotted_path` and into `_check_dotted_path`,
+        so that path resolution is context-free and the call/value
+        disambiguation lives where it has visibility into the call.
+
+        Tests two forms must produce the same binding type:
+          (a) explicit-arg method call: `container.slice c: c`
+          (b) implicit-receiver value access: `c.slice`
+        Both must bind to `cview`.
+        """
+        program = check_ok(
+            "container: class { x: i64 } as { public: unit { :slice }\n"
+            "  slice: function {c: this.lock} out cview is {\n"
+            "    return cview source: c.private\n"
+            "  }\n"
+            "}\n"
+            "cview: class {\n"
+            "  source: container.private.lock\n"
+            "} as {\n"
+            "  create: function {source: container.private.lock} out this is {\n"
+            "    return meta.create source: source\n"
+            "  }\n"
+            "}\n"
+            "main: function is {\n"
+            "  c: container x: 7\n"
+            "  v1: container.slice c: c\n"
+            "  v2: c.slice\n"
+            "}"
+        )
+        # Walk main's body to locate v1 and v2 assignments and confirm
+        # both bind to cview (and not, say, a function pointer or a
+        # construction failure).
+        main_func = program.units[program.mainunitname].body["main"]
+        assert main_func.body is not None
+        bindings = {}
+        for stmt in main_func.body.statements:
+            sline = stmt.statementline
+            if (
+                sline.nodetype == NodeType.ASSIGNMENT
+                and getattr(sline, "value", None) is not None
+                and getattr(sline.value, "type", None) is not None
+            ):
+                bindings[sline.name] = sline.value.type
+        assert "v1" in bindings, list(bindings.keys())
+        assert "v2" in bindings, list(bindings.keys())
+        assert bindings["v1"].name == "cview", bindings["v1"].name
+        assert bindings["v2"].name == "cview", bindings["v2"].name
+
 
 class TestPhaseC3Pins:
     """Phase C-3 pin tests: per-call sub-scope semantics.

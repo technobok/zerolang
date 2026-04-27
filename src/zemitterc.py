@@ -7391,9 +7391,51 @@ class CEmitter:
                 acc = "->" if self._is_class_pointer_path(path.parent) else "."
                 return f"{parent}{acc}vtable->{child}({parent}{acc}data)"
 
-        # check if the dotted path resolves to a function (method call or field access)
+        # check if the dotted path resolves to a function (method call or
+        # field access). Two shapes hit this branch:
+        #   - path.type is FUNCTION directly (legacy: only happens now
+        #     when we explicitly opted out of auto-call coercion in the
+        #     typechecker — i.e. `path.type` was stamped via
+        #     `_check_path(..., coerce_method_to_return=False)` from
+        #     `_check_call`).
+        #   - path.type is the method's return type and the parent's
+        #     child by this name is a FUNCTION (the post-`546f7fd`
+        #     auto-call coercion in `_check_dotted_path`). For value-
+        #     position dotted paths (`p1.distance` inside a string
+        #     interpolation, or `v: s.stringview`), the typechecker
+        #     coerced path.type to the return type — but the path is
+        #     still semantically a no-arg method call and must lower
+        #     as one.
+        method_type: "ZType | None" = None
         if path.type and path.type.typetype == ZTypeType.FUNCTION:
-            func_name = path.type.name  # e.g. "calculator.op" or "point.distance"
+            method_type = path.type
+        elif (
+            path.parent.type
+            and path.parent.type.typetype
+            in (ZTypeType.CLASS, ZTypeType.RECORD, ZTypeType.UNION)
+            # Numeric casts (`x.u32`) lower to a C cast, not a method
+            # call, even though the typechecker now coerces the dotted
+            # path to the cast target's type. Defer to the dedicated
+            # numeric-cast branch below.
+            and child not in NUMERIC_CAST_TYPES
+            # Native classes (string, list, map, ...) declare zero-arg
+            # methods like `length`, `capacity` for typechecking
+            # convenience but lower to struct-field access at emit time
+            # (`s->length`, not `z_string_length(s)`). Skip the
+            # method-call dispatch for them — the same reason
+            # `_effective_class_zero_arg_method` returns None for
+            # `is_native` classes.
+            and not path.parent.type.is_native
+        ):
+            cand = path.parent.type.children.get(child)
+            if (
+                cand is not None
+                and cand.typetype == ZTypeType.FUNCTION
+                and cand.return_type is path.type
+            ):
+                method_type = cand
+        if method_type is not None:
+            func_name = method_type.name  # e.g. "calculator.op" or "point.distance"
             # function pointer fields (from 'is' section) → struct field access
             if func_name in self._is_func_fields:
                 parent = self._emit_path_value(path.parent)

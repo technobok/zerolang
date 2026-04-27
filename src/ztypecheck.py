@@ -3387,44 +3387,10 @@ class TypeChecker:
                 if utype:
                     child = utype.children.get(path.child.name)
                     if child:
-                        # Zero-arg native functions accessed via a
-                        # bare unit-qualified path coerce to the
-                        # return type, so `w: io.stdout` binds `w`
-                        # to the writer rather than the function
-                        # pointer. Matches the convention already in
-                        # place for zero-arg class/protocol methods.
-                        if (
-                            child.typetype == ZTypeType.FUNCTION
-                            and child.is_native
-                            and child.return_type is not None
-                        ):
-                            has_non_this = False
-                            for p in child.children:
-                                if p != "this":
-                                    has_non_this = True
-                                    break
-                            if not has_non_this:
-                                return child.return_type
                         return child
                 # fallback: demand-resolve the child
                 t = self._resolve_unit_name(pname, path.child.name)
                 if t:
-                    # Same zero-arg native coercion as the utype path
-                    # above, for children resolved via demand-driven
-                    # fallback (happens for system-unit members before
-                    # full unit resolution).
-                    if (
-                        t.typetype == ZTypeType.FUNCTION
-                        and t.is_native
-                        and t.return_type is not None
-                    ):
-                        has_non_this = False
-                        for p in t.children:
-                            if p != "this":
-                                has_non_this = True
-                                break
-                        if not has_non_this:
-                            return t.return_type
                     return t
                 # Phase D: known unit, unknown child — surface as an
                 # error instead of silently returning None. Without this,
@@ -3699,97 +3665,15 @@ class TypeChecker:
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
             return _list_element_type(parent_type)
-        # Protocol zero-arg method accessed as an rvalue coerces to the
-        # method's return type. Without this, `fr: c.close` binds fr
-        # to a function-pointer type, making `match (fr) ...` fail.
-        # Non-zero-arg methods still need the explicit call form.
-        if parent_type.typetype == ZTypeType.PROTOCOL:
-            method = parent_type.children.get(child_name)
-            if (
-                method is not None
-                and method.typetype == ZTypeType.FUNCTION
-                and method.return_type is not None
-            ):
-                has_non_this = False
-                for p in method.children:
-                    if p != "this":
-                        has_non_this = True
-                        break
-                if not has_non_this:
-                    return method.return_type
-        # Zero-arg method on a concrete class or str-valtype accessed as
-        # an rvalue coerces to the method's return type, so `fr: obj.flush`
-        # binds fr to the result rather than a function-pointer type, and
-        # `v: s.stringview` binds v to a stringview rather than the
-        # function. Placed after the type-specific shortcut rules
-        # (string.length, list.pop) so those still win; placed before the
-        # generic child lookup so non-method children (e.g. list.length
-        # stored as a t_u64 child) still pass through unchanged.
-        # Subsumes the per-class file.close / bufwriter.flush /
-        # bufreader.read branches AND the syntactic .stringview /
-        # .listview branches: a `.lock`-annotated receiver param installs
-        # an exclusive lock on the receiver source path.
-        #
-        # Two shortcut conditions:
-        #   (a) the only parameter is named literally "this" — the
-        #       `:this` shorthand convention used by zero-user-arg
-        #       methods like `string.length`.
-        #   (b) the only parameter is the long-form receiver
-        #       (`t: this.lock`) — used by migrated natives like
-        #       `string.stringview`, `list.listview` etc. that need a
-        #       locked receiver.
-        # User methods with a non-receiver param (e.g. `bag.get self: b`
-        # is `{self: this}` but not .lock — that is the SHORTHAND case
-        # spelled the long way; user expects a normal method call) take
-        # neither branch and fall through to the regular method type.
-        if parent_type.typetype == ZTypeType.CLASS or _is_str_type(parent_type):
-            method = parent_type.children.get(child_name)
-            if (
-                method is not None
-                and method.typetype == ZTypeType.FUNCTION
-                and method.return_type is not None
-            ):
-                # Three forms we treat as "no user-visible args":
-                #   (a) literal `:this` shorthand — sole param named "this"
-                #   (b) native method with a long-form locked receiver —
-                #       sole param matches `this_param_name` and is
-                #       `.lock`-annotated. Restricted to `is_native` so
-                #       user methods like `slice: function {c: this.lock}
-                #       ...` called as `container.slice c: c` resolve as
-                #       regular method calls.
-                #   (c) synthesized native methods (list.listview etc.) —
-                #       no params at all; receiver is implicit.
-                recv_param = method.this_param_name
-                fires = False
-                lock_install = False
-                if not method.children:
-                    fires = True
-                    lock_install = method.return_ownership == ZParamOwnership.BORROW
-                elif len(method.children) == 1 and "this" in method.children:
-                    fires = True
-                    lock_install = method.return_ownership == ZParamOwnership.BORROW
-                elif (
-                    len(method.children) == 1
-                    and recv_param is not None
-                    and recv_param in method.children
-                    and method.param_ownership.get(recv_param) == ZParamOwnership.LOCK
-                    and method.is_native
-                ):
-                    fires = True
-                    lock_install = True
-                if fires:
-                    if lock_install:
-                        src_path = self._get_dotted_path_tuple(path.parent)
-                        if src_path:
-                            self._pending_borrow_lock = src_path
-                        else:
-                            self._error(
-                                "Cannot create view from temporary expression; "
-                                "assign the value to a variable first",
-                                loc=path.start,
-                                err=ERR.OWNERERROR,
-                            )
-                    return method.return_type
+        # NOTE: the auto-call coercion that previously lived here (returning
+        # `method.return_type` and installing `_pending_borrow_lock` for
+        # zero-user-arg methods on PROTOCOL / CLASS / str-valtype) has moved
+        # to `_check_dotted_path` so the disambiguation has visibility into
+        # whether the path is the callable of a Call (callable position) or
+        # accessed as a value (value position). Path resolution is now
+        # context-free: a dotted path naming a method always returns the
+        # FUNCTION type. See `_check_dotted_path` for the value-position
+        # auto-call rule, gated on `coerce_method_to_return`.
         # for records/enums, look up child in children
         # resolve public name (may redirect renamed members)
         resolved_name = self._resolve_public_name(parent_type, child_name, path)
@@ -6121,7 +6005,16 @@ class TypeChecker:
             return t
         return None
 
-    def _check_path(self, path: zast.Path) -> Optional[ZType]:
+    def _check_path(
+        self, path: zast.Path, coerce_method_to_return: bool = True
+    ) -> Optional[ZType]:
+        """Type-check a path expression. When `coerce_method_to_return` is
+        True (the default for value-position uses), a dotted path naming a
+        no-user-arg method auto-calls — its type is the method's return
+        type. `_check_call` passes False so explicit method calls
+        (`container.slice c: c`) see the function type and dispatch
+        normally instead of falling into construction-of-return-type.
+        """
         if path.nodetype == NodeType.EXPRESSION:
             path_expr = cast(zast.Expression, path)
             t = self._check_expression(path_expr).ztype
@@ -6140,10 +6033,34 @@ class TypeChecker:
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             return self._check_atomid(cast(zast.AtomId, path))
         if path.nodetype == NodeType.DOTTEDPATH:
-            return self._check_dotted_path(cast(zast.DottedPath, path))
+            return self._check_dotted_path(
+                cast(zast.DottedPath, path),
+                coerce_method_to_return=coerce_method_to_return,
+            )
         return None
 
-    def _check_dotted_path(self, path: zast.DottedPath) -> Optional[ZType]:
+    def _method_has_no_user_args(self, method: ZType) -> bool:
+        """True if the method has no required user-visible parameters
+        beyond the implicit receiver. Three forms qualify:
+          (a) sole param literally named `this` (`:this` shorthand)
+          (b) sole param matches `this_param_name` (long-form receiver)
+          (c) no params recorded at all (synthesized natives like
+              `list.listview` after monomorphisation)
+        """
+        if not method.children:
+            return True
+        if len(method.children) != 1:
+            return False
+        only_param = next(iter(method.children))
+        if only_param == "this":
+            return True
+        if method.this_param_name == only_param:
+            return True
+        return False
+
+    def _check_dotted_path(
+        self, path: zast.DottedPath, coerce_method_to_return: bool = True
+    ) -> Optional[ZType]:
         """Check a dotted path, handling .take, .release, and .borrow compiler methods."""
         child_name = path.child.name
 
@@ -6440,6 +6357,38 @@ class TypeChecker:
             # name lookup when child_id stays -1.
             if parent_type is not None and path.child_id == -1:
                 path.child_id = parent_type.child_id_for(path.child.name)
+            # Auto-call coercion: a dotted path naming a method with no
+            # required user args (just the implicit receiver, or no
+            # params at all) is treated as a no-arg call when accessed
+            # as a value. `_check_call` opts out via
+            # coerce_method_to_return=False so explicit method calls
+            # like `container.slice c: c` see the function type and
+            # dispatch normally instead of falling into construction-of-
+            # return-type. Lock side-effect: when the auto-called
+            # method returns BORROW, install `_pending_borrow_lock` on
+            # the receiver source so the binding gets a borrow-scoped
+            # lock there. Receiver lock-install replaces the earlier
+            # in-`_resolve_dotted_path` shortcut and unifies behavior
+            # between native and user-defined methods.
+            if (
+                coerce_method_to_return
+                and t.typetype == ZTypeType.FUNCTION
+                and t.return_type is not None
+                and self._method_has_no_user_args(t)
+            ):
+                if t.return_ownership == ZParamOwnership.BORROW:
+                    src_path = self._get_dotted_path_tuple(path.parent)
+                    if src_path:
+                        self._pending_borrow_lock = src_path
+                    else:
+                        self._error(
+                            "Cannot create view from temporary expression; "
+                            "assign the value to a variable first",
+                            loc=path.start,
+                            err=ERR.OWNERERROR,
+                        )
+                path.type = t.return_type
+                return t.return_type
             # protocol/facet borrow: lock the source path
             if t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                 src_path = self._get_dotted_path_tuple(path.parent)
@@ -6569,7 +6518,12 @@ class TypeChecker:
         return None
 
     def _check_call(self, call: zast.Call) -> Optional[ZType]:
-        callee_type = self._check_path(call.callable)
+        # Resolve the callable as the function type itself, not its
+        # return type. The auto-call coercion in `_check_dotted_path`
+        # is for value-position uses; in callable position we want the
+        # function so the standard method-call dispatch below fires
+        # instead of construction-of-return-type fallthrough.
+        callee_type = self._check_path(call.callable, coerce_method_to_return=False)
         if not callee_type:
             return None
         # `_check_path` on a protocol/facet dotted callable (e.g.
@@ -6754,17 +6708,22 @@ class TypeChecker:
             return None
 
         # .stringview from: to: — substring view on string, str, or stringview
-        # (not record construction)
+        # (not record construction). After the auto-call coercion moved out
+        # of path resolution, the callable resolves to the function type;
+        # check via the function's return type instead of callee_type itself.
         if (
-            _is_stringview_type(callee_type)
-            and call.callable.nodetype == NodeType.DOTTEDPATH
+            call.callable.nodetype == NodeType.DOTTEDPATH
             and cast(zast.DottedPath, call.callable).child.name == "stringview"
+            and callee_type.typetype == ZTypeType.FUNCTION
+            and callee_type.return_type is not None
+            and _is_stringview_type(callee_type.return_type)
+            and any(arg.name in ("from", "to") for arg in call.arguments)
         ):
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            call.type = callee_type
+            call.type = callee_type.return_type
             call.call_kind = zast.CallKind.REGULAR
-            return callee_type
+            return callee_type.return_type
 
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
