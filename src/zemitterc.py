@@ -457,7 +457,7 @@ class CEmitter:
         # build a set of (line_start_offset, node_id) from tracked sections
         offset_to_node: List[tuple] = []
         for section in (self.struct_defs, self.func_defs, self.data_defs):
-            if getattr(section, "is_tracked_list", False):
+            if section.is_tracked_list:
                 for text, nid in zip(section, section.node_ids):
                     pos = output.find(text)
                     if pos >= 0:
@@ -1107,7 +1107,7 @@ class CEmitter:
                 # stream protocol don't need its vtable struct.
                 if self._resolved_type(pname) is None:
                     continue
-                self._current_node_id = getattr(defn, "nodeid", None)
+                self._current_node_id = defn.nodeid
                 self._emit_protocol(pname, defn)
         out = "".join(self.struct_defs)
         self.struct_defs = saved
@@ -1185,7 +1185,7 @@ class CEmitter:
             defn = io_unit.body.get(name)
             if defn is None or type(defn) is not zast.Class:
                 continue
-            self._current_node_id = getattr(defn, "nodeid", None)
+            self._current_node_id = defn.nodeid
             # Skip protocol-impl emission here; it needs the runtime
             # bodies (z_BufWriter_write, ...) to be declared first.
             # The impls are emitted separately via
@@ -1309,7 +1309,7 @@ class CEmitter:
                     continue
                 if self._is_generic_template(defn):
                     continue
-                self._current_node_id = getattr(defn, "nodeid", None)
+                self._current_node_id = defn.nodeid
                 defn_type = type(defn)
                 if defn_type == zast.Union and not cli_classes_only:
                     self._emit_union(name, cast(zast.Union, defn))
@@ -1441,7 +1441,7 @@ class CEmitter:
 
         def visit(scope_body: dict) -> None:
             for name, defn in scope_body.items():
-                if getattr(defn, "is_node", False) and defn.nodetype in (
+                if defn.nodetype in (
                     NodeType.RECORD,
                     NodeType.CLASS,
                     NodeType.UNION,
@@ -1450,14 +1450,14 @@ class CEmitter:
                     NodeType.FACET,
                 ):
                     names.add(name)
-                if getattr(defn, "is_node", False) and defn.nodetype == NodeType.UNIT:
+                if defn.nodetype == NodeType.UNIT:
                     visit(cast(zast.Unit, defn).body)
 
         visit(body)
         cli_unit = self.program.units.get("cli")
         if cli_unit is not None:
             for name, defn in cli_unit.body.items():
-                if getattr(defn, "is_node", False) and defn.nodetype == NodeType.CLASS:
+                if defn.nodetype == NodeType.CLASS:
                     # Leaf cli classes (flagdef / optiondef / positionaldef)
                     # are emitted in the early pass alongside cli records;
                     # monos over them are early, not late.
@@ -1807,7 +1807,7 @@ class CEmitter:
         # table (ZType.nodeid lives in a separate id space and would
         # produce orphan foreign-key references).
         for mono_type, template_defn in early_monos:
-            self._current_node_id = getattr(template_defn, "nodeid", None)
+            self._current_node_id = template_defn.nodeid
             self._emit_mono_type(mono_type, template_defn)
 
         # cli classes (spec / parsed) — emitted AFTER early monos
@@ -1824,7 +1824,7 @@ class CEmitter:
 
         # late mono types (depend on user structs emitted above)
         for mono_type, template_defn in late_monos:
-            self._current_node_id = getattr(template_defn, "nodeid", None)
+            self._current_node_id = template_defn.nodeid
             self._emit_mono_type(mono_type, template_defn)
 
         # emit monomorphized generic functions
@@ -2474,7 +2474,7 @@ class CEmitter:
             comparisons: List[str] = []
             # data fields
             for fname, fpath in items.items():
-                ft = getattr(fpath, "type", None)
+                ft = fpath.type
                 if ft and self._needs_eq_call(ft):
                     tname = ft.name.replace(".", "_")
                     # string/stringview eq functions take pointers
@@ -4502,7 +4502,7 @@ class CEmitter:
                         lines.append(" return true;\n")
                     else:
                         sub_ctype = self._get_subtype_ctype(spath)
-                        sub_type = getattr(spath, "type", None)
+                        sub_type = spath.type
                         if sub_type and self._needs_eq_call(sub_type):
                             tname = sub_type.name.replace(".", "_")
                             lines.append(
@@ -5819,9 +5819,12 @@ class CEmitter:
         # determine which arg names are generic type args (to skip in emission)
         generic_param_names: set = set()
         ftype = call.callable.type
-        origin_gp = getattr(ftype, "generic_origin", None)
-        if origin_gp is not None:
-            gp = getattr(origin_gp, "generic_params", None)
+        if (
+            ftype is not None
+            and ftype.generic_origin is not None
+            and ftype.generic_origin.is_ztype
+        ):
+            gp = cast(ZType, ftype.generic_origin).generic_params
             if gp:
                 generic_param_names = set(gp.keys())
 
@@ -6383,8 +6386,7 @@ class CEmitter:
                     if inner.nodetype == NodeType.EXPRESSION:
                         inner = cast(zast.Expression, inner).expression
                     if inner.nodetype == NodeType.ATOMSTRING and not any(
-                        getattr(p, "nodetype", None) == NodeType.EXPRESSION
-                        for p in cast(zast.AtomString, inner).stringparts
+                        p.is_node for p in cast(zast.AtomString, inner).stringparts
                     ):
                         cap = _str_capacity(target_type)
                         literal = self._collect_string_literal(
@@ -7094,10 +7096,10 @@ class CEmitter:
                 child_defn = unit_body.get(child)
                 if (
                     child_defn is not None
-                    and getattr(child_defn, "nodetype", None) == NodeType.FUNCTION
-                    and getattr(child_defn, "is_native", False)
+                    and child_defn.nodetype == NodeType.FUNCTION
+                    and cast(zast.Function, child_defn).is_native
                 ):
-                    fn_type = getattr(child_defn, "type", None)
+                    fn_type = child_defn.type
                     has_runtime_params = False
                     if fn_type is not None:
                         for p in fn_type.children:
@@ -7190,8 +7192,7 @@ class CEmitter:
             child == "string"
             and path.parent.nodetype == NodeType.ATOMSTRING
             and not any(
-                getattr(p, "nodetype", None) == NodeType.EXPRESSION
-                for p in cast(zast.AtomString, path.parent).stringparts
+                p.is_node for p in cast(zast.AtomString, path.parent).stringparts
             )
         ):
             self.needs_stringview = True
@@ -8329,10 +8330,7 @@ class CEmitter:
         return tmp
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
-        has_interp = any(
-            getattr(p, "nodetype", None) == NodeType.EXPRESSION
-            for p in atom.stringparts
-        )
+        has_interp = any(p.is_node for p in atom.stringparts)
 
         if not has_interp:
             self.needs_stringview = True
@@ -8349,7 +8347,7 @@ class CEmitter:
         # estimate capacity: literal lengths + 16 per expression
         est_cap = 0
         for p in atom.stringparts:
-            if getattr(p, "nodetype", None) == NodeType.EXPRESSION:
+            if p.is_node:
                 est_cap += 16
             else:
                 est_cap += len(p.tokstr)  # type: ignore[union-attr]
@@ -8360,7 +8358,7 @@ class CEmitter:
         self._temp.string_set.add(result)
 
         for p in atom.stringparts:
-            if getattr(p, "nodetype", None) == NodeType.EXPRESSION:
+            if p.is_node:
                 val = self._emit_expression_value(cast(zast.Expression, p))
                 val_type = self._get_expression_type(cast(zast.Expression, p))
                 if val_type and val_type.name in (
@@ -8429,7 +8427,7 @@ class CEmitter:
     def _collect_string_literal(self, parts: list) -> str:
         result: List[str] = []
         for p in parts:
-            if getattr(p, "nodetype", None) != NodeType.EXPRESSION:
+            if not p.is_node:
                 result.append(self._escape_c_string(p.tokstr))
         return "".join(result)
 
@@ -8728,7 +8726,7 @@ class CEmitter:
             return f"z_String_free(&{var_name});"
         if not elem_type.needs_destructor:
             return None
-        destructor = getattr(elem_type, "destructor_name", None)
+        destructor = elem_type.destructor_name
         if destructor:
             return f"{destructor}(&{var_name});"
         return None

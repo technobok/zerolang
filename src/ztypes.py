@@ -166,7 +166,7 @@ TAG_ORIGIN_ID: int = -1
 TAG_ORIGIN = _TagOrigin()
 
 
-def is_tag_origin(origin: "Optional[object]") -> bool:
+def is_tag_origin(origin: "Optional[ZType | _TagOrigin]") -> bool:
     """True if `origin` is the tag-origin sentinel. Callers should use
     this helper rather than `is TAG_ORIGIN` so the check runs off
     `nodeid == TAG_ORIGIN_ID` and future interning / serialization
@@ -174,7 +174,7 @@ def is_tag_origin(origin: "Optional[object]") -> bool:
     """
     if origin is None:
         return False
-    return getattr(origin, "nodeid", None) == TAG_ORIGIN_ID
+    return origin.nodeid == TAG_ORIGIN_ID
 
 
 @dataclass

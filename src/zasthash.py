@@ -297,7 +297,7 @@ def _hash_atomstring(node: zast.AtomString) -> str:
     h = hashlib.sha256()
     h.update(b"ATOMSTR")
     for part in node.stringparts:
-        if getattr(part, "nodetype", None) == NodeType.EXPRESSION:
+        if part.is_node:
             h.update(_hash_expression(cast(zast.Expression, part)).encode())
         else:
             # Token — hash its string content

@@ -560,7 +560,7 @@ class SymbolTable:
             for k, v in full_type.children.items()
             if v.typetype
             not in (ZTypeType.FUNCTION, ZTypeType.DATA, ZTypeType.TAG, ZTypeType.ENUM)
-            and not is_tag_origin(getattr(v, "generic_origin", None))
+            and not is_tag_origin(v.generic_origin)
         }
 
         # get current exclusions for this variable

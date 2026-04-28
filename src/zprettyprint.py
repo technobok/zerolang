@@ -431,7 +431,7 @@ def _pprintatomstring(node: Node, depth: int) -> str:
     del sepinner
     # output.append(sepinner)
     for s in node.stringparts:
-        if getattr(s, "nodetype", None) != NodeType.EXPRESSION:
+        if not s.is_node:
             o.append(f'"{cast(Token, s).tokstr}"')
         else:
             o.append("(")
