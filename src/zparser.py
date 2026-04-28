@@ -24,17 +24,14 @@ _OWNERSHIP_SUFFIXES = {
 
 class ObjectBodyKind(IntEnum):
     """
-    What kind of item is having its body parsed. Replaces the legacy
-    (allowtag, unlabelledpath, unlabelledid) triple-bool; the bools are
-    derived in `_get_object_body` from kind + whether this is the `as`
-    clause (static members) or the `is` clause (instance members).
+    What kind of item is having its body parsed. All bodies use
+    label-prefixed entries (`name: type`, `:type` shorthand, function
+    definitions, `is` clauses).
 
-    - FUNCTION_AS: generic params for a function's `as` clause (named only)
-    - PROTOCOL / FACET: interface / value-type interface bodies (named only)
-    - RECORD / CLASS: struct-like items — unlabelled paths are field types
-      named by their path leaf
+    - FUNCTION_AS: generic params for a function's `as` clause
+    - PROTOCOL / FACET: interface / value-type interface bodies
+    - RECORD / CLASS: struct-like items
     - VARIANT / UNION: struct-like with an optional `tag:` declaration
-    - ENUM: bare ids as values (unlabelled id permitted)
     """
 
     FUNCTION_AS = auto()
@@ -44,18 +41,7 @@ class ObjectBodyKind(IntEnum):
     CLASS = auto()
     VARIANT = auto()
     UNION = auto()
-    ENUM = auto()
 
-
-_OBJECT_BODY_ALLOWS_UNLABELLED_PATH = {
-    ObjectBodyKind.RECORD,
-    ObjectBodyKind.CLASS,
-    ObjectBodyKind.VARIANT,
-    ObjectBodyKind.UNION,
-}
-_OBJECT_BODY_ALLOWS_UNLABELLED_ID = {
-    ObjectBodyKind.ENUM,
-}
 
 # A Node type.
 TN = TypeVar("TN", bound=zast.Node, covariant=True)
@@ -1450,7 +1436,7 @@ class Parser:
                         False,
                     )
                 lex.acceptany()
-                b = self._get_object_body(lex, kind, as_clause=True)
+                b = self._get_object_body(lex, kind)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1490,34 +1476,18 @@ class Parser:
         self,
         lex: Lexer,
         kind: ObjectBodyKind,
-        as_clause: bool = False,
     ) -> Union[ObjectBody, zast.Error]:
         """
         Parse an object body (after `is` or `as`) for any item kind.
 
         `kind` is the item being parsed (RECORD / CLASS / VARIANT / UNION /
-        PROTOCOL / FACET / ENUM / FUNCTION_AS). `as_clause` is True when
-        we are parsing the `as` section (static members); the `as` section
-        never permits a `tag` declaration or unlabelled-id entries, and
-        mirrors the kind's unlabelled-path rule.
-
-        The legacy three-bool API (unlabelledpath, unlabelledid + a
-        dead `allowtag`) is derived here from (kind, as_clause) to keep
-        call sites declarative and prevent the invalid combinations the
-        old API allowed by convention only. `tag` is currently handled
-        as a regular named field and is enforced at the typechecker, not
-        the parser — so no parser-level tag gate is needed.
+        PROTOCOL / FACET / FUNCTION_AS). All entries are label-prefixed:
+        `name: type` (TT.LABEL) or `:name` shorthand (TT.LABELPRE), plus
+        `is type` clauses for protocol membership.
 
         Return an Error or the body components in an ObjectBody.
         """
         # pylint: disable=too-many-statements,too-many-branches,too-many-return-statements,too-many-locals
-        if as_clause:
-            unlabelledid = False
-            unlabelledpath = kind in _OBJECT_BODY_ALLOWS_UNLABELLED_PATH
-        else:
-            unlabelledpath = kind in _OBJECT_BODY_ALLOWS_UNLABELLED_PATH
-            unlabelledid = kind in _OBJECT_BODY_ALLOWS_UNLABELLED_ID
-
         if not lex.accept(TT.BRACEOPEN):
             msg = "Expected open brace '{' for 'is' argument"
             return zast.Error(start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg)
@@ -1618,8 +1588,13 @@ class Parser:
                             # is permitted on field types; .take/.borrow on
                             # field types are rejected by the type checker.
                             field_node: zast.Operation = opx.node
-                            if isinstance(field_node, zast.Path):
-                                stripped, own = self._strip_ownership(field_node)
+                            if field_node.nodetype in (
+                                NodeType.DOTTEDPATH,
+                                NodeType.ATOMID,
+                            ):
+                                stripped, own = self._strip_ownership(
+                                    cast(zast.Path, field_node)
+                                )
                                 if own is not None:
                                     field_ownership[label.tokstr] = own
                                     field_node = stripped
@@ -1635,69 +1610,8 @@ class Parser:
                                 msg=msg,
                             )
 
-            elif unlabelledpath:
-                # try an unnamed path - path can only have an refid at the root...
-                if lex.peek().toktype == TT.REFID:
-                    dottedidx = self._accept_path(lex)
-                    if dottedidx is not None and dottedidx.is_error:
-                        return cast(zast.Error, dottedidx)  # propagate error
-                    dottedidx = cast(Optional[NodeX[zast.Path]], dottedidx)
-                    if dottedidx is not None:
-                        dottedid = dottedidx.node
-                        # strip any ownership annotation (.lock) so the
-                        # remaining path's leaf gives the field name and the
-                        # type alone is stored as the field type.
-                        stripped_path, field_own = self._strip_ownership(dottedid)
-                        dottedid = stripped_path
-                        if dottedid.nodetype == NodeType.ATOMID:
-                            name = cast(zast.AtomId, dottedid).name
-                        elif dottedid.nodetype == NodeType.DOTTEDPATH:
-                            name = cast(
-                                zast.DottedPath, dottedid
-                            ).child.name  # name is after last dot
-                        else:
-                            # cannot happen
-                            msg = "Unknown DottedId type"
-                            return zast.Error(
-                                start=lex.acceptany(),
-                                err=ERR.BADITEM,
-                                msg=msg,
-                            )
-
-                        if name in items or name in functions:
-                            msg = f"Duplicate item name: {name}"
-                            return zast.Error(
-                                start=dottedid.start,
-                                err=ERR.BADITEM,
-                                msg=msg,
-                            )
-                        local.add(name)
-                        items[name] = dottedid
-                        if field_own is not None:
-                            field_ownership[name] = field_own
-                        # cannot refer to locals
-                        promoteexterns(addto=externitems, addfrom=dottedidx.extern)
-                    else:
-                        # no tottedidx, this can't happen, we have a LABEL above...
-                        pass
-                else:
-                    msg = "Expected a label, unlabelled expression or closing brace"
-                    return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
-            elif unlabelledid:
-                # an unnamed id... for enum only
-                atomidx = self._accept_atomid(lex)
-                if atomidx:
-                    atomid = atomidx.node
-                    name = atomid.name
-                    local.add(name)
-                    items[name] = atomid  # the atomid value is itself...
-                    # do NOT promoteexterns... this is an enum item (not a reference)
-                else:
-                    msg = "Expected a label, an id or closing brace"
-                    return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
             else:
-                # error - no other options
-                msg = "Expected a label, expression or closing brace"
+                msg = "Expected a label or closing brace"
                 return zast.Error(start=lex.acceptany(), err=ERR.BADITEM, msg=msg)
 
         # extern - add extern from items (skipping locals) since these can be self referntial
