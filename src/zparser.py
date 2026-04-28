@@ -101,6 +101,20 @@ class ObjectBody:
     is_error: bool = field(default=False, init=False)
 
 
+@dataclass
+class ParamBlock:
+    """
+    Parameter block for a function definition: the contents of an
+    explicit `in { … }` clause or an implicit `{ … }` first clause.
+    """
+
+    parameters: Dict[str, zast.Path] = field(default_factory=dict)
+    externparam: Dict[str, zast.AtomId] = field(default_factory=dict)
+    param_ownership: Dict[str, ZParamOwnership] = field(default_factory=dict)
+    localparam: Set[str] = field(default_factory=set)
+    is_error: bool = field(default=False, init=False)
+
+
 def _is_ws_only(s: str) -> bool:
     """Check if string contains only spaces and tabs."""
     return all(c in (" ", "\t") for c in s)
@@ -1023,6 +1037,71 @@ class Parser:
                 return path.parent, own
         return path, None
 
+    def _accept_param_block(self, lex: Lexer) -> Union[ParamBlock, zast.Error]:
+        """
+        Parse a `{ param param ... }` parameter block. Each entry is
+        either `:name` (label-value shorthand: parameter named after
+        its type, used for generics) or `name: typeref` (explicit
+        type, with optional `.take`/`.borrow`/`.lock` suffix stripped
+        into `param_ownership`).
+
+        Used for both the explicit `in { … }` clause and the implicit
+        first-clause `{ … }` form in `_accept_function_definition`.
+
+        Returns a `ParamBlock` on success or `zast.Error` on failure.
+        """
+        if not lex.accept(TT.BRACEOPEN):
+            msg = "Expected open brace '{' for parameter block"
+            return zast.Error(start=lex.peek(), err=ERR.BADARGUMENT, msg=msg)
+
+        block = ParamBlock()
+        while True:
+            lex.accept(TT.EOL)  # optional newline
+
+            paramnametok = lex.peek()
+            if paramnametok.toktype == TT.LABELPRE:
+                lex.acceptany()
+                paramname = paramnametok.tokstr
+                if paramname in block.parameters:
+                    msg = f"Duplicate parameter name: {paramname}"
+                    return zast.Error(start=paramnametok, err=ERR.BADPARAMETER, msg=msg)
+                lvx = self._make_label_value(paramnametok)
+                block.parameters[paramname] = lvx.node
+                promoteexterns(addto=block.externparam, addfrom=lvx.extern)
+                block.localparam.add(paramname)
+                continue
+
+            if paramnametok.toktype != TT.LABEL:
+                break
+
+            lex.acceptany()  # label
+            paramname = paramnametok.tokstr
+            if paramname in block.parameters:
+                msg = f"Duplicate parameter name: {paramname}"
+                return zast.Error(start=paramnametok, err=ERR.BADPARAMETER, msg=msg)
+
+            val = self._accept_path(lex)
+            if val is None:
+                msg = "Expected typeref or number for parameter type"
+                return zast.Error(start=lex.peek(), err=ERR.BADPARAMETER, msg=msg)
+            if val.is_error:
+                return cast(zast.Error, val)
+            val = cast(NodeX[zast.Path], val)
+
+            # params can refer to other params; locality is enforced after the loop
+            promoteexterns(addto=block.externparam, addfrom=val.extern)
+            stripped, own = self._strip_ownership(val.node)
+            block.parameters[paramname] = stripped
+            if own is not None:
+                block.param_ownership[paramname] = own
+            block.localparam.add(paramname)
+
+        if not lex.accept(TT.BRACECLOSE):
+            msg = "Expected closing brace '}' after function parameters"
+            return zast.Error(start=lex.peek(), err=ERR.BADPARAMETERBLOCK, msg=msg)
+
+        return block
+
     def _accept_function_definition(
         self, lex: Lexer
     ) -> Union[NodeX[zast.Function], zast.Error, None]:
@@ -1055,12 +1134,25 @@ class Parser:
         externparam: Dict[str, zast.AtomId] = {}
         # parameter names - local definitions for determining externs
         localparam: Set[str] = set()
-        gotaccept = False  # need this because accept could be empty block
+        gotaccept = False  # parameter block has been parsed (possibly empty)
         body: Optional[zast.Statement] = None  # None for spec
         is_native: bool = False  # True for native (compiler-provided) functions
         externbody: Dict[str, zast.AtomId] = {}  # externs from 'is' function body
         as_body: Optional[ObjectBody] = None  # 'as' clause for generic params
-        first = True  # true for first arg only (unnamed arg allowed)
+
+        # Pre-loop: an opening brace as the first clause is an implicit
+        # `in` parameter block. After any explicit clause, the `in`
+        # keyword is required.
+        if lex.peek().toktype == TT.BRACEOPEN:
+            block = self._accept_param_block(lex)
+            if block.is_error:
+                return cast(zast.Error, block)
+            block = cast(ParamBlock, block)
+            parameters = block.parameters
+            externparam = block.externparam
+            param_ownership = block.param_ownership
+            localparam = block.localparam
+            gotaccept = True
 
         while True:
             tok = lex.peek()
@@ -1086,7 +1178,6 @@ class Parser:
                 returntype = stripped_ret
                 if ret_own is not None:
                     return_ownership = ret_own
-                first = False
 
             elif lex.accept(TT.IS):
                 if body or is_native:
@@ -1095,7 +1186,6 @@ class Parser:
 
                 if lex.accept(TT.NATIVE):
                     is_native = True
-                    first = False
                 else:
                     statement = self._accept_block(lex)
                     if statement is None:
@@ -1112,7 +1202,6 @@ class Parser:
 
                     body = statement.node
                     externbody = statement.extern
-                    first = False
 
             elif lex.accept(TT.AS):
                 if as_body is not None:
@@ -1125,81 +1214,22 @@ class Parser:
                 b = cast(ObjectBody, b)
 
                 as_body = b
-                first = False
 
-            elif (
-                lex.accept(TT.IN) or first
-            ):  # must be last to handle other keywords first
-                if not first:
-                    lex.accept(TT.IN)
-
+            elif lex.accept(TT.IN):
                 if gotaccept:
                     msg = "Duplicate 'in'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
-                if not lex.accept(TT.BRACEOPEN):
-                    msg = "Expected open brace '{' after 'in'"
-                    return zast.Error(
-                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
-                    )
-
-                while True:
-                    lex.accept(TT.EOL)  # optional newline
-
-                    paramnametok = lex.peek()
-                    if paramnametok.toktype == TT.LABELPRE:
-                        lex.acceptany()
-                        paramname = paramnametok.tokstr
-                        if paramname in parameters:
-                            msg = f"Duplicate parameter name: {paramname}"
-                            return zast.Error(start=tok, err=ERR.BADPARAMETER, msg=msg)
-                        lvx = self._make_label_value(paramnametok)
-                        parameters[paramname] = lvx.node
-                        promoteexterns(addto=externparam, addfrom=lvx.extern)
-                        localparam.add(paramname)
-                        continue
-
-                    if paramnametok.toktype != TT.LABEL:
-                        break
-
-                    lex.acceptany()  # label
-                    paramname = paramnametok.tokstr
-                    if paramname in parameters:
-                        msg = f"Duplicate parameter name: {paramname}"
-                        return zast.Error(start=tok, err=ERR.BADPARAMETER, msg=msg)
-
-                    val = self._accept_path(lex)
-                    if val is None:
-                        msg = "Expected typeref or number for parameter type"
-                        return zast.Error(
-                            start=lex.acceptany(),
-                            err=ERR.BADPARAMETER,
-                            msg=msg,
-                        )
-
-                    if val.is_error:
-                        return cast(zast.Error, val)  # propagate error
-                    val = cast(NodeX[zast.Path], val)
-
-                    # params cann refer to other params, do local below
-                    promoteexterns(addto=externparam, addfrom=val.extern)
-                    # check for ownership annotation on the type path
-                    stripped, own = self._strip_ownership(val.node)
-                    parameters[paramname] = stripped
-                    if own is not None:
-                        param_ownership[paramname] = own
-                    localparam.add(paramname)
-
-                if not lex.accept(TT.BRACECLOSE):
-                    msg = "Expected closing brace '}' after function parameters"
-                    return zast.Error(
-                        start=lex.acceptany(),
-                        err=ERR.BADPARAMETERBLOCK,
-                        msg=msg,
-                    )
-
+                block = self._accept_param_block(lex)
+                if block.is_error:
+                    return cast(zast.Error, block)
+                block = cast(ParamBlock, block)
+                parameters = block.parameters
+                externparam = block.externparam
+                param_ownership = block.param_ownership
+                localparam = block.localparam
                 gotaccept = True
-                first = False
+
             else:
                 break  # nothing matched, end of function def
 
