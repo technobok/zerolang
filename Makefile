@@ -23,6 +23,7 @@ check:
 
 # Baseline counts of existing violations (update when migrating away)
 # isinstance:1  comprehension:14  lambda:0  try/except:8  hasattr:16
+# getattr:4 (F2 — defensive duck-typing on heterogeneous unions)
 # name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
 bootstrap-lint:
 	@fail=0; \
@@ -61,6 +62,14 @@ bootstrap-lint:
 		echo "ERROR: hasattr() usage increased ($$count > 16 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn 'hasattr(' src/*.py | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -rn 'getattr(' src/*.py | wc -l); \
+	if [ $$count -gt 4 ]; then \
+		echo "ERROR: getattr() usage increased ($$count > 4 baseline)"; \
+		echo "  F2: prefer direct attribute access; for genuinely"; \
+		echo "  heterogeneous unions, narrow with nodetype/type() and cast()."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -rn 'getattr(' src/*.py | tail -5; fail=1; \
 	fi; \
 	count=$$(grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' src/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
 	if [ $$count -gt 14 ]; then \
