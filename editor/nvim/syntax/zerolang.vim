@@ -55,11 +55,11 @@ syn match zerolangReserved /\<\%(macro\|goto\|repeat\|until\|flag\|cell\)\>/
 syn match zerolangReserved /\<\%(pragma\|enum\|view\|unsafe\|switch\)\>/
 
 " Built-in / predeclared identifiers
-syn match zerolangBuiltin /\<\%(null\|never\|any\|_\|typedef\|tag\)\>/
+syn match zerolangBuiltin /\<\%(null\|never\|Any\|_\|typedef\|tag\)\>/
 syn match zerolangBuiltin /\<\%(u8\|u16\|u32\|u64\|u128\)\>/
 syn match zerolangBuiltin /\<\%(i8\|i16\|i32\|i64\|i128\)\>/
 syn match zerolangBuiltin /\<\%(f8\|f16\|f32\|f64\|f128\)\>/
-syn match zerolangBuiltin /\<\%(c8\|c32\|string\)\>/
+syn match zerolangBuiltin /\<\%(c8\|c32\|String\)\>/
 syn match zerolangBuiltin /\<\%(true\|false\)\>/
 syn match zerolangBuiltin /\<\%(public\|private\)\>/
 syn match zerolangBuiltin /\<\%(this\|meta\|error\)\>/

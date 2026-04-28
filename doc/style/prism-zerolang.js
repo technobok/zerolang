@@ -37,11 +37,11 @@
     ];
 
     var builtins = [
-        'null', 'never', 'any', '_', 'typedef', 'tag',
+        'null', 'never', 'Any', '_', 'typedef', 'tag',
         'u8', 'u16', 'u32', 'u64', 'u128',
         'i8', 'i16', 'i32', 'i64', 'i128',
         'f8', 'f16', 'f32', 'f64', 'f128',
-        'c8', 'c32', 'string',
+        'c8', 'c32', 'String',
         'true', 'false',
         'public', 'private',
         'this', 'meta', 'error',

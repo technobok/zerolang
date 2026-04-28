@@ -73,7 +73,7 @@ module Rouge
         @builtins ||= %w(
           null
           never
-          any
+          Any
           _
           typedef
           tag
@@ -98,7 +98,7 @@ module Rouge
 
           c8
           c32
-          string
+          String
 
           true
           false
