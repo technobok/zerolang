@@ -944,6 +944,173 @@ class AtomString(Atom):
     stringparts: typing.List[typing.Union["Token", "Expression"]]
 
 
+def node_children(node: "Node") -> "typing.List[Node]":
+    """Return all direct child Nodes of `node`. Drives generic walkers
+    (zsqldump, ztypecheck consistency check) without
+    `__dataclass_fields__` reflection.
+
+    Tokens embedded in `node` (e.g. `node.start`, AtomString stringparts)
+    are NOT included; use `node_tokens` for the latter.
+    """
+    nt = node.nodetype
+    out: "typing.List[Node]" = []
+    if nt == NodeType.UNIT:
+        out.extend(cast(Unit, node).body.values())
+        return out
+    if nt == NodeType.FUNCTION:
+        fn = cast(Function, node)
+        if fn.returntype is not None:
+            out.append(fn.returntype)
+        out.extend(fn.parameters.values())
+        if fn.body is not None:
+            out.append(fn.body)
+        out.extend(fn.as_items.values())
+        out.extend(fn.as_functions.values())
+        return out
+    if nt in (NodeType.RECORD, NodeType.CLASS):
+        # Record and Class share a shape (items / implements / functions /
+        # as_items / as_functions). Cast to Record to read; the field
+        # layout matches Class exactly.
+        rc = cast(Record, node)
+        out.extend(rc.items.values())
+        out.extend(rc.implements)
+        out.extend(rc.functions.values())
+        out.extend(rc.as_items.values())
+        out.extend(rc.as_functions.values())
+        return out
+    if nt in (NodeType.UNION, NodeType.VARIANT):
+        uv = cast(Union, node)
+        out.extend(uv.items.values())
+        out.extend(uv.implements)
+        out.extend(uv.functions.values())
+        if uv.tag is not None:
+            out.append(uv.tag)
+        out.extend(uv.as_items.values())
+        out.extend(uv.as_functions.values())
+        return out
+    if nt == NodeType.ENUM:
+        en = cast(Enum, node)
+        out.extend(en.items.values())
+        out.extend(en.implements)
+        out.extend(en.functions.values())
+        if en.tag is not None:
+            out.append(en.tag)
+        out.extend(en.as_items.values())
+        out.extend(en.as_functions.values())
+        return out
+    if nt in (NodeType.PROTOCOL, NodeType.FACET):
+        pf = cast(Protocol, node)
+        out.extend(pf.parameters.values())
+        out.extend(pf.specs.values())
+        out.extend(pf.includes)
+        out.extend(pf.as_items.values())
+        out.extend(pf.as_functions.values())
+        return out
+    if nt == NodeType.EXPRESSION:
+        out.append(cast(Expression, node).expression)
+        return out
+    if nt == NodeType.IF:
+        ifn = cast(If, node)
+        out.extend(ifn.clauses)
+        if ifn.elseclause is not None:
+            out.append(ifn.elseclause)
+        return out
+    if nt == NodeType.IFCLAUSE:
+        ic = cast(IfClause, node)
+        out.extend(ic.conditions.values())
+        out.append(ic.statement)
+        return out
+    if nt == NodeType.NAMEDOPERATION:
+        out.append(cast(NamedOperation, node).valtype)
+        return out
+    if nt == NodeType.CASE:
+        cn = cast(Case, node)
+        out.append(cn.subject)
+        out.extend(cn.clauses)
+        if cn.elseclause is not None:
+            out.append(cn.elseclause)
+        return out
+    if nt == NodeType.CASECLAUSE:
+        cc = cast(CaseClause, node)
+        out.append(cc.match)
+        out.append(cc.statement)
+        return out
+    if nt == NodeType.FOR:
+        fn2 = cast(For, node)
+        out.extend(fn2.conditions.values())
+        if fn2.loop is not None:
+            out.append(fn2.loop)
+        out.extend(fn2.postconditions)
+        return out
+    if nt == NodeType.DO:
+        out.append(cast(Do, node).statement)
+        return out
+    if nt == NodeType.WITH:
+        w = cast(With, node)
+        out.append(w.value)
+        out.append(w.doexpr)
+        return out
+    if nt == NodeType.CALL:
+        c = cast(Call, node)
+        out.append(c.callable)
+        out.extend(c.arguments)
+        return out
+    if nt == NodeType.DATA:
+        out.extend(cast(Data, node).data)
+        return out
+    if nt == NodeType.BINOP:
+        bo = cast(BinOp, node)
+        out.append(bo.lhs)
+        out.append(bo.operator)
+        out.append(bo.rhs)
+        return out
+    if nt == NodeType.STATEMENT:
+        out.extend(cast(Statement, node).statements)
+        return out
+    if nt == NodeType.STATEMENTLINE:
+        out.append(cast(StatementLine, node).statementline)
+        return out
+    if nt == NodeType.ASSIGNMENT:
+        out.append(cast(Assignment, node).value)
+        return out
+    if nt == NodeType.REASSIGNMENT:
+        ra = cast(Reassignment, node)
+        out.append(ra.topath)
+        out.append(ra.value)
+        return out
+    if nt == NodeType.SWAP:
+        sw = cast(Swap, node)
+        out.append(sw.lhs)
+        out.append(sw.rhs)
+        return out
+    if nt == NodeType.DOTTEDPATH:
+        dp = cast(DottedPath, node)
+        out.append(dp.parent)
+        out.append(dp.child)
+        return out
+    if nt == NodeType.ATOMSTRING:
+        for p in cast(AtomString, node).stringparts:
+            if p.is_node:
+                out.append(cast(Expression, p))
+        return out
+    # ATOMID / LABELVALUE / ERROR have no Node children
+    return out
+
+
+def node_tokens(node: "Node") -> "typing.List[Token]":
+    """Return Tokens directly embedded in `node` (other than `node.start`,
+    which every Node has and callers should collect separately).
+
+    Currently only AtomString.stringparts contains embedded Tokens.
+    """
+    out: "typing.List[Token]" = []
+    if node.nodetype == NodeType.ATOMSTRING:
+        for p in cast(AtomString, node).stringparts:
+            if not p.is_node:
+                out.append(cast(Token, p))
+    return out
+
+
 # class NodeTable:
 #     """
 #     NodeTable - table of all ast nodes for a program

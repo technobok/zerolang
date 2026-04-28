@@ -9574,66 +9574,63 @@ def audit_type_annotations(program: zast.Program) -> List[str]:
     set but don't. Empty list means all Path nodes are annotated.
     """
     missing: List[str] = []
-    visited: set = set()
+    visited: set[int] = set()
 
-    def _walk(node: zast.Node, context: str) -> None:
+    def _is_skipped_path(
+        node: zast.Node, parent: Optional[zast.Node], in_data: bool
+    ) -> bool:
+        """Skip Path nodes that are structural components (not type
+        references): a DottedPath.child name selector, a BinOp.operator
+        name, a NamedOperation.valtype anywhere inside a Data.data list,
+        a CaseClause.match pattern, or a top-level Unit-body definition
+        (`name: 42`).
+        """
+        if parent is None:
+            # top-level Unit-body definition — `name: 42` style consts.
+            return True
+        if in_data:
+            # any path under a Data node is a literal value slot.
+            return True
+        if (
+            parent.nodetype == NodeType.DOTTEDPATH
+            and node is cast(zast.DottedPath, parent).child
+        ):
+            return True
+        if (
+            parent.nodetype == NodeType.BINOP
+            and node is cast(zast.BinOp, parent).operator
+        ):
+            return True
+        if (
+            parent.nodetype == NodeType.CASECLAUSE
+            and node is cast(zast.CaseClause, parent).match
+        ):
+            return True
+        return False
+
+    def _walk(node: zast.Node, parent: Optional[zast.Node], in_data: bool) -> None:
         nid = id(node)
         if nid in visited:
             return
         visited.add(nid)
-
-        # check Path nodes for .type, skipping structural components:
-        # - DottedPath.child: name selector, not a standalone type reference
-        # - BinOp operator: operation name, not a type reference
-        # - Data item values: literal values in data arrays (not type-checked)
-        # - Numeric constant defs: top-level `name: 42` (value is a literal)
-        # - Match/case patterns: pattern names for dispatch (not value expressions)
-        is_child_of_dotted = context.endswith(".child")
-        is_binop_operator = context.endswith(".operator")
-        is_data_value = ".data[" in context and context.endswith(".valtype")
-        is_case_match = context.endswith(".match")
-        is_toplevel_const = "." not in context  # top-level definition like `north: 0`
-        if node.nodetype in (
-            NodeType.ATOMID,
-            NodeType.DOTTEDPATH,
-        ):
-            skip = (
-                is_child_of_dotted
-                or is_binop_operator
-                or is_data_value
-                or is_case_match
-                or is_toplevel_const
-            )
-            if node.type is None and not skip:
+        if node.nodetype in (NodeType.ATOMID, NodeType.DOTTEDPATH):
+            if node.type is None and not _is_skipped_path(node, parent, in_data):
                 loc = f"{node.start.lineno}:{node.start.colno}" if node.start else "?"
                 name = (
                     cast(zast.AtomId, node).name
                     if node.nodetype == NodeType.ATOMID
                     else str(node)
                 )
-                missing.append(f"{context}: Path node '{name}' at {loc} has no .type")
-
-        # recurse into dataclass fields
-        if hasattr(node, "__dataclass_fields__"):
-            for fname in node.__dataclass_fields__:
-                val = getattr(node, fname, None)
-                if val is None:
-                    continue
-                if getattr(val, "is_node", False):
-                    _walk(val, f"{context}.{fname}")
-                elif type(val) is dict:
-                    for k, v in val.items():
-                        if getattr(v, "is_node", False):
-                            _walk(v, f"{context}.{fname}[{k}]")
-                elif type(val) is list:
-                    for i, v in enumerate(val):
-                        if getattr(v, "is_node", False):
-                            _walk(v, f"{context}.{fname}[{i}]")
+                missing.append(f"Path node '{name}' at {loc} has no .type")
+        child_in_data = in_data or node.nodetype == NodeType.DATA
+        for child in zast.node_children(node):
+            _walk(child, node, child_in_data)
 
     mainunit = program.units.get(program.mainunitname)
     if mainunit:
-        for name, defn in mainunit.body.items():
-            if getattr(defn, "is_node", False):
-                _walk(defn, name)
+        # Top-level Unit-body defs are treated as parent=None so they're
+        # recognised as toplevel-const slots.
+        for _name, defn in mainunit.body.items():
+            _walk(defn, None, False)
 
     return missing

@@ -149,72 +149,55 @@ CREATE TABLE IF NOT EXISTS entry (
 
 
 def _collect_tokens(program: zast.Program) -> List[Token]:
-    """Collect all unique tokens from AST nodes."""
+    """Collect all unique tokens from AST nodes via a typed walk."""
     tokens: dict[int, Token] = {}
     visited: set[int] = set()
-
-    def _walk(node):
+    pending: list[zast.Node] = list(program.units.values())
+    while pending:
+        node = pending.pop()
         nid = id(node)
         if nid in visited:
-            return
+            continue
         visited.add(nid)
-        if getattr(node, "is_node", False) and hasattr(node, "start") and node.start:
-            tok = node.start
+        if node.start is not None:
+            tokens[node.start.tokenid] = node.start
+        for tok in zast.node_tokens(node):
             tokens[tok.tokenid] = tok
-        if hasattr(node, "__dataclass_fields__"):
-            for fname in node.__dataclass_fields__:
-                val = getattr(node, fname, None)
-                if val is None:
-                    continue
-                if getattr(val, "is_node", False):
-                    _walk(val)
-                elif getattr(val, "is_token", False):
-                    tokens[val.tokenid] = val
-                elif type(val) is dict:
-                    for v in val.values():
-                        if getattr(v, "is_node", False):
-                            _walk(v)
-                elif type(val) is list:
-                    for v in val:
-                        if getattr(v, "is_node", False):
-                            _walk(v)
-
-    for unit in program.units.values():
-        _walk(unit)
+        pending.extend(zast.node_children(node))
     return list(tokens.values())
 
 
 def _collect_ast_nodes(program: zast.Program) -> List[Tuple[zast.Node, str]]:
-    """Collect all AST nodes with their definition name context."""
+    """Collect all AST nodes with a context name.
+
+    Top-level definitions in each unit's body get the dict key as their
+    context (e.g. `"main"`, `"foo.bar"`); nodes deeper in the tree
+    inherit the nearest top-level definition's name. Walk drives off the
+    typed `node_children` enumeration — no `__dataclass_fields__`
+    reflection.
+    """
     nodes: list[Tuple[zast.Node, str]] = []
     visited: set[int] = set()
 
-    def _walk(node, name: str):
-        nid = id(node)
-        if nid in visited:
-            return
-        visited.add(nid)
-        if getattr(node, "is_node", False):
-            nodes.append((node, name))
-        if hasattr(node, "__dataclass_fields__"):
-            for fname in node.__dataclass_fields__:
-                val = getattr(node, fname, None)
-                if val is None:
-                    continue
-                if getattr(val, "is_node", False):
-                    _walk(val, name)
-                elif type(val) is dict:
-                    for k, v in val.items():
-                        if getattr(v, "is_node", False):
-                            child_name = f"{name}.{k}" if name else k
-                            _walk(v, child_name)
-                elif type(val) is list:
-                    for v in val:
-                        if getattr(v, "is_node", False):
-                            _walk(v, name)
+    def _walk_subtree(root: zast.Node, label: str) -> None:
+        pending: list[zast.Node] = [root]
+        while pending:
+            node = pending.pop()
+            nid = id(node)
+            if nid in visited:
+                continue
+            visited.add(nid)
+            nodes.append((node, label))
+            pending.extend(zast.node_children(node))
 
     for uname, unit in program.units.items():
-        _walk(unit, uname)
+        # The Unit node itself is labeled with the unit name.
+        if id(unit) not in visited:
+            visited.add(id(unit))
+            nodes.append((unit, uname))
+        for dname, defn in unit.body.items():
+            sublabel = f"{uname}.{dname}" if uname else dname
+            _walk_subtree(defn, sublabel)
     return nodes
 
 
