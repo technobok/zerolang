@@ -99,7 +99,7 @@ the dependency chain. The dispatch site collapses from 35 lines of
 if/elif to a single `self.needs_io_natives.update(...)` call. The
 nodeid action item is deferred as noted.
 
-### F2. `getattr` proliferation in the back-end — High (goals 3, 5)
+### F2. `getattr` proliferation in the back-end — High (goals 3, 5) \[RESOLVED\]
 
 Counts (today):
 
@@ -141,23 +141,73 @@ This is exactly the in-memory layout that won't dump cleanly to a SQL
 schema (goal 5).
 
 Action items:
-- [ ] Pre-initialize all `Program` metadata fields to empty
+- [x] Pre-initialize all `Program` metadata fields to empty
       lists/dicts in the parser (or in `Program.__init__`); never
       attach conditionally.
-- [ ] Replace pattern (a) sites with direct field access. Guarantee
+      *(Discovered already-true: `Program` declares `mono_types`,
+      `mono_functions`, `func_aliases`, `cloned_methods`, `resolved`,
+      `unit_types_by_id` with `default_factory=list/dict` and
+      `symbol_table` with `default=None` — see `src/zast.py:255-298`.
+      The cleanup happened at the call sites: `getattr(self.program,
+      "X", default)` → `self.program.X`.)*
+- [x] Replace pattern (a) sites with direct field access. Guarantee
       every Node has `is_node = True`, `is_token = False`, `nodeid:
       int` (or use the existing `is_*` fields directly).
-- [ ] After cleanup, `getattr` count should be in the single digits
+      *(Done across `ztypecheck.py`, `zemitterc.py`, `zsqldump.py`,
+      `zparser.py`, `zenv.py`, `ztypes.py`, `zasthash.py`,
+      `zprettyprint.py`. The two reflection-based AST walkers were
+      replaced with a typed walker — see Stage C below.)*
+- [x] After cleanup, `getattr` count should be in the single digits
       (only legitimately optional cases). Add a `bootstrap-lint`
       baseline at that count (see F3).
+      *(Final count: 4. Lint baseline added in F3a.)*
 
-Note: the docstring at `src/zemitterc.py:1626` already advertises
-"resorting to isinstance / getattr probing" as something the code
-avoids — the code immediately below then reaches into
-`getattr(self.program, ...)`. Tightening the comment (see F12) and
-fixing the underlying optional-field problem are the same fix.
+**Resolved 2026-04-28** — landed in five staged commits:
 
-### F3. Add `getattr`, `startswith`, name-literal compares to bootstrap-lint — High (goals 3, 4)
+- **Stage A** (`emitter: F2/A — drop redundant getattr on Program metadata`):
+  13 sites in `zemitterc.py` + `zsqldump.py` cleaned to direct
+  attribute access; the resolved-lookup site lost an unreachable
+  `if resolved is None` branch. Count 125 → 112.
+- **Stage B** (`typecheck/emitter: F2/B — drop defensive getattr on
+  typed Node/ZType values`): ~80 sites covering Node-from-typed-dict
+  iteration, AtomString stringparts (`Token | Expression`
+  discriminated via `is_node`), Path/Node `.type` direct access, ZType
+  field direct access, Expression.expression direct access. `_NORETURN`
+  upgraded to `_NoReturnSentinel` with `is_ztype = False` so callers
+  can use `t.is_ztype` after a None check; `is_tag_origin` parameter
+  type tightened to `Optional[ZType | _TagOrigin]`. Count 112 → 28.
+- **Stage C** (`zsqldump: F2/C — typed AST walker in place of
+  __dataclass_fields__ reflection`): added `zast.node_children` and
+  `zast.node_tokens` — exhaustive typed enumerations keyed by
+  `NodeType`. Rewrote zsqldump's `_collect_tokens` /
+  `_collect_ast_nodes` and ztypecheck's `audit_type_annotations` on
+  top of the typed helpers; structural skip rules in the audit walker
+  now check identity against `parent.<slot>` plus a `Data`-ancestry
+  flag. Count 28 → 12.
+- **Stage D** (`compiler: F2/D — pre-init transient state;
+  SymbolTable Protocol module breaks zast<->zenv cycle`):
+  `_last_emitted_arg_vals` declared in `__init__`,
+  `_comprehension_list_var` / `_name` declared on the `For` dataclass.
+  New `src/zsymtab_proto.py` defines `SymbolTableProto`; zast types
+  `Program.symbol_table` against it; zsqldump uses direct
+  `symtab._scopes` / `_history`. Visitor-by-name dispatch removed:
+  `TypeChecker._definition_resolvers` is now a `dict[type, Callable]`
+  of bound methods built in `__init__`; `zsynth.Rewriter.handlers` is
+  a `Dict[NodeType, Callable]` populated by subclasses. Count 12 → 4.
+- **Stage E** (`Makefile: F3a — add getattr bootstrap-lint baseline`):
+  baseline locked at 4 (see F3 below).
+
+Total: getattr count 125 → 4. Files touched (commits 1a0756a, 2c16fa3,
+75afd74, 366d0d6, 7d34d5a):
+`src/zemitterc.py`, `src/ztypecheck.py`, `src/zsqldump.py`,
+`src/zast.py`, `src/zenv.py`, `src/ztypes.py`, `src/zasthash.py`,
+`src/zprettyprint.py`, `src/zparser.py`, `src/zsynth.py`, plus the
+new `src/zsymtab_proto.py`. The four surviving sites are all
+legitimately heterogeneous unions (Token-or-NodeX in `zparser.py`;
+`is_native` / `functions` only on some Unit.body members in
+`zemitterc.py` / `ztypecheck.py`).
+
+### F3. Add `getattr`, `startswith`, name-literal compares to bootstrap-lint — High (goals 3, 4) \[~partial\]
 
 Today's `Makefile:25-72` baselines: `isinstance:1, comprehension:14,
 lambda:0, try/except:8, hasattr:16, name-compare:14`. The lint
@@ -205,10 +255,13 @@ counts after Phase 2. Same `# ztc-string-compare-ok:` escape hatch
 already used by the `name-compare` rule.
 
 Action items:
-- [ ] After F2 lands: add `getattr` baseline.
+- [x] After F2 lands: add `getattr` baseline.
+      *(Done in commit `7d34d5a`. Baseline locked at 4. Sanity-checked
+      with a synthetic regression in `src/zc.py`.)*
 - [ ] After F4 lands: add `startswith` and name-literal-compare baselines.
-- [ ] Update the comment block at `Makefile:24-26` to reflect the
-      expanded set.
+- [~] Update the comment block at `Makefile:24-26` to reflect the
+      expanded set. *(getattr line added; startswith / name-literal
+      pending F4.)*
 
 ### F4. String-literal compares in the C emitter — High (goal 4)
 
@@ -530,9 +583,10 @@ Independent, low-risk; can be done in any order or in parallel.
 
 Each step depends on the previous one. F4 is the largest.
 
-1. [ ] F2 — pre-initialize `Program` metadata fields; drop defensive
-       `getattr`s.
-2. [ ] F3a — add `getattr` baseline to `bootstrap-lint`.
+1. [x] F2 — pre-initialize `Program` metadata fields; drop defensive
+       `getattr`s. *(Resolved 2026-04-28; count 125 → 4.)*
+2. [x] F3a — add `getattr` baseline to `bootstrap-lint`.
+       *(Resolved 2026-04-28; baseline 4.)*
 3. [ ] F4 — `Entry.is_receiver`, `BuiltinName`/`BuiltinFunc` enums,
        replace literal compares.
 4. [ ] F3b — add `startswith` and `name-literal-compare` baselines.
