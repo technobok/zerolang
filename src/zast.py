@@ -368,8 +368,7 @@ class Error(Node):
 TypeDefinition = typing.Union[
     "Unit",
     "Function",
-    "Record",
-    "Class",
+    "ObjectDef",
     "Variant",
     "Union",
     "Enum",
@@ -418,40 +417,31 @@ class Function(Node):
 
 
 @dataclass
-class Record(Node):
+class ObjectDef(Node):
     """
-    Record Definition Node
-    """
+    Unified type-definition node. `nodetype` discriminates which
+    kind of object this is:
 
-    nodetype: NodeType = field(default=NodeType.RECORD, init=False)
-    items: Dict[str, "Path"]  # generic and normal fields, a TyperefOrNum
-    implements: typing.List[
-        "Path"
-    ]  # 'is' interfaces satisfied by this record, a Typeref
-    functions: Dict[str, "Function"]
-    as_items: Dict[str, "Path"]
-    as_functions: Dict[str, "Function"]
-    is_native: bool = False  # native type: instance state is compiler-provided
-    # field name -> ZParamOwnership (only LOCK currently allowed on fields)
-    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
+    - RECORD / CLASS: struct-like; `items` are fields, `tag` unused
+    - VARIANT / UNION: sum types; `items` are arms, `tag` is the
+      optional discriminator type
+    - ENUM: `items` are values, `tag` is the numeric backing type
+    - PROTOCOL / FACET: interfaces; `items` are generic params,
+      `functions` are specs to implement
 
-
-@dataclass
-class Class(Node):
-    """
-    Class Definition Node
+    Some fields are only meaningful for some kinds (e.g. `tag` is
+    None for RECORD/CLASS/PROTOCOL/FACET; ENUM ignores `is_native`
+    and `field_ownership`). Consumers dispatch by `nodetype` and
+    only read fields that are valid for that kind.
     """
 
-    nodetype: NodeType = field(default=NodeType.CLASS, init=False)
-    items: Dict[str, "Path"]  # generic and normal, a TyperefOrNum
-    implements: typing.List[
-        "Path"
-    ]  # 'is' interfaces satisfied by this record, a Typeref
-    functions: Dict[str, "Function"]
-    as_items: Dict[str, "Path"]
-    as_functions: Dict[str, "Function"]
-    is_native: bool = False  # native type: instance state is compiler-provided
-    # field name -> ZParamOwnership (only LOCK currently allowed on fields)
+    items: Dict[str, "Path"] = field(default_factory=dict)
+    functions: Dict[str, "Function"] = field(default_factory=dict)
+    implements: typing.List["Path"] = field(default_factory=list)
+    as_items: Dict[str, "Path"] = field(default_factory=dict)
+    as_functions: Dict[str, "Function"] = field(default_factory=dict)
+    tag: Optional["Path"] = None
+    is_native: bool = False
     field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
 
@@ -975,10 +965,7 @@ def node_children(node: "Node") -> "typing.List[Node]":
         out.extend(fn.as_functions.values())
         return out
     if nt in (NodeType.RECORD, NodeType.CLASS):
-        # Record and Class share a shape (items / implements / functions /
-        # as_items / as_functions). Cast to Record to read; the field
-        # layout matches Class exactly.
-        rc = cast(Record, node)
+        rc = cast(ObjectDef, node)
         out.extend(rc.items.values())
         out.extend(rc.implements)
         out.extend(rc.functions.values())

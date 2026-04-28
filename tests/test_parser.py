@@ -99,7 +99,7 @@ class TestRecordDefinitions:
         body = get_unit_body(result)
         assert "point" in body
         rec = body["point"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
 
 
 class TestControlFlow:
@@ -520,7 +520,7 @@ class TestAsClause:
         result = parse_unit("p: record { x: f64 } as { y: f64 }")
         body = get_unit_body(result)
         rec = body["p"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert "x" in rec.items
         assert "y" in rec.as_items
 
@@ -529,7 +529,7 @@ class TestAsClause:
         result = parse_unit("p: record { x: f64 }")
         body = get_unit_body(result)
         rec = body["p"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert rec.as_items == {}
         assert rec.as_functions == {}
 
@@ -538,7 +538,7 @@ class TestAsClause:
         result = parse_unit("p: record is { x: f64 } as { y: f64 }")
         body = get_unit_body(result)
         rec = body["p"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert "x" in rec.items
         assert "y" in rec.as_items
 
@@ -547,7 +547,7 @@ class TestAsClause:
         result = parse_unit("p: record as { y: f64 } is { x: f64 }")
         body = get_unit_body(result)
         rec = body["p"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert "x" in rec.items
         assert "y" in rec.as_items
 
@@ -556,7 +556,7 @@ class TestAsClause:
         result = parse_unit("c: class { x: f64 } as { y: f64 }")
         body = get_unit_body(result)
         cls = body["c"]
-        assert isinstance(cls, zast.Class)
+        assert cls.nodetype == zast.NodeType.CLASS
         assert "x" in cls.items
         assert "y" in cls.as_items
 
@@ -674,7 +674,7 @@ class TestLabelValueShorthand:
         result = parse_unit("r: record { :i64\n :String }")
         body = get_unit_body(result)
         rec = body["r"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert "i64" in rec.items
         assert "String" in rec.items
 
@@ -789,7 +789,7 @@ class TestNativeKeyword:
         result = parse_unit("r: record is native")
         body = get_unit_body(result)
         rec = body["r"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert rec.is_native is True
         assert rec.items == {}
 
@@ -798,7 +798,7 @@ class TestNativeKeyword:
         result = parse_unit("r: record native")
         body = get_unit_body(result)
         rec = body["r"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert rec.is_native is True
 
     def test_native_class(self):
@@ -806,7 +806,7 @@ class TestNativeKeyword:
         result = parse_unit("c: class is native")
         body = get_unit_body(result)
         cls = body["c"]
-        assert isinstance(cls, zast.Class)
+        assert cls.nodetype == zast.NodeType.CLASS
         assert cls.is_native is True
 
     def test_native_class_with_as(self):
@@ -814,7 +814,7 @@ class TestNativeKeyword:
         result = parse_unit("c: class is native as { m: function out i64 is native }")
         body = get_unit_body(result)
         cls = body["c"]
-        assert isinstance(cls, zast.Class)
+        assert cls.nodetype == zast.NodeType.CLASS
         assert cls.is_native is True
         assert "m" in cls.as_functions
         assert cls.as_functions["m"].is_native is True
@@ -853,5 +853,5 @@ class TestNativeKeyword:
         result = parse_unit("r: record { x: i64 }")
         body = get_unit_body(result)
         rec = body["r"]
-        assert isinstance(rec, zast.Record)
+        assert rec.nodetype == zast.NodeType.RECORD
         assert rec.is_native is False

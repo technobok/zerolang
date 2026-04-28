@@ -818,7 +818,7 @@ class CEmitter:
             NodeType.VARIANT,
             NodeType.CLASS,
         ):
-            items = cast(zast.Record, defn).as_items
+            items = cast(zast.ObjectDef, defn).as_items
         elif defn.nodetype == NodeType.FUNCTION:
             func = cast(zast.Function, defn)
             items = func.as_items if func.as_items else func.parameters
@@ -856,7 +856,7 @@ class CEmitter:
         return False
 
     def _is_typedef_defn(
-        self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant"
+        self, defn: "zast.ObjectDef | zast.Union | zast.Variant"
     ) -> bool:
         """Check if a type definition is a typedef (single .typedef item)."""
         items = defn.items
@@ -870,7 +870,7 @@ class CEmitter:
         )
 
     def _typedef_base_name(
-        self, defn: "zast.Record | zast.Class | zast.Union | zast.Variant"
+        self, defn: "zast.ObjectDef | zast.Union | zast.Variant"
     ) -> str:
         """Extract the base type name from a typedef definition."""
         fpath = next(iter(defn.items.values()))
@@ -888,10 +888,10 @@ class CEmitter:
         """
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
-            defn_type = type(defn)
-            if defn_type == zast.Unit:
+            defn_type = defn.nodetype
+            if defn_type == NodeType.UNIT:
                 self._collect_pre_emission(qname, defn.body)
-            elif defn_type in (zast.Record, zast.Class):
+            elif defn_type in (NodeType.RECORD, NodeType.CLASS):
                 if not self._is_generic_template(defn):
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
@@ -920,20 +920,20 @@ class CEmitter:
                         # constant in 'as' section
                         if apath.const_value is not None:
                             self._const_names.add(f"{qname}.{label}")
-            elif defn_type in (zast.Union, zast.Variant):
+            elif defn_type in (NodeType.UNION, NodeType.VARIANT):
                 if not self._is_generic_template(defn):
                     for mname in defn.functions:
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
                         if apath.const_value is not None:
                             self._const_names.add(f"{qname}.{label}")
-            elif defn_type == zast.Protocol:
+            elif defn_type == NodeType.PROTOCOL:
                 if not self._is_generic_template(defn):
                     self._protocol_defs[qname] = defn
-            elif defn_type == zast.Facet:
+            elif defn_type == NodeType.FACET:
                 if not self._is_generic_template(defn):
                     self._facet_defs[qname] = defn
-            elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
+            elif defn_type == NodeType.ATOMID and _is_numeric_id(defn.name):
                 self._const_names.add(qname)
             elif hasattr(defn, "const_value") and defn.const_value is not None:
                 # unit-level expression that folded to a constant
@@ -960,10 +960,10 @@ class CEmitter:
             qname = self._qualify(prefix, name)
             if self._is_generic_template(defn):
                 continue
-            defn_type = type(defn)
-            if defn_type == zast.Unit:
+            defn_type = defn.nodetype
+            if defn_type == NodeType.UNIT:
                 self._pre_register_fields(qname, defn.body)
-            elif defn_type in (zast.Record, zast.Class):
+            elif defn_type in (NodeType.RECORD, NodeType.CLASS):
                 if qname not in self._type_field_names:
                     if self._is_typedef_defn(defn):
                         continue
@@ -984,37 +984,37 @@ class CEmitter:
                 continue
             # tag emitted output with the source AST node ID
             self._current_node_id = defn.nodeid if hasattr(defn, "nodeid") else None
-            defn_type = type(defn)
-            if defn_type == zast.Unit:
+            defn_type = defn.nodetype
+            if defn_type == NodeType.UNIT:
                 self._emit_unit_definitions(qname, defn.body)
-            elif defn_type == zast.Record:
+            elif defn_type == NodeType.RECORD:
                 self._emit_record(qname, defn)
-            elif defn_type == zast.Class:
+            elif defn_type == NodeType.CLASS:
                 self._emit_class(qname, defn)
-            elif defn_type == zast.Union:
+            elif defn_type == NodeType.UNION:
                 self._emit_union(qname, defn)
-            elif defn_type == zast.Variant:
+            elif defn_type == NodeType.VARIANT:
                 self._emit_variant(qname, defn)
-            elif defn_type == zast.Protocol:
+            elif defn_type == NodeType.PROTOCOL:
                 self._emit_protocol(qname, defn)
-            elif defn_type == zast.Facet:
+            elif defn_type == NodeType.FACET:
                 pass  # facets emitted in deferred pass
-            elif defn_type == zast.Function:
+            elif defn_type == NodeType.FUNCTION:
                 if defn.body:
                     self._emit_func_typedef(qname, defn)
                     self._emit_function(qname, defn)
                 else:
                     self._emit_spec_typedef(qname, defn)
-            elif defn_type == zast.Data:
+            elif defn_type == NodeType.DATA:
                 self._emit_data(qname, defn)
             elif (
-                defn_type == zast.Expression
+                defn_type == NodeType.EXPRESSION
                 and cast(zast.Expression, defn).expression.nodetype == NodeType.DATA
             ):
                 self._emit_data(
                     qname, cast(zast.Data, cast(zast.Expression, defn).expression)
                 )
-            elif defn_type == zast.AtomId and _is_numeric_id(defn.name):
+            elif defn_type == NodeType.ATOMID and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
             elif hasattr(defn, "const_value") and type(defn.const_value) in (
                 int,
@@ -1068,13 +1068,13 @@ class CEmitter:
         # first: emit facet struct definitions
         for name, defn in body.items():
             qname = self._qualify(prefix, name)
-            defn_type = type(defn)
-            if defn_type == zast.Unit:
+            defn_type = defn.nodetype
+            if defn_type == NodeType.UNIT:
                 self._emit_deferred_facets(qname, defn.body)
-            elif defn_type == zast.Facet:
+            elif defn_type == NodeType.FACET:
                 if not self._is_generic_template(defn):
                     self._emit_facet(qname, defn)
-            elif defn_type in (zast.Record, zast.Variant):
+            elif defn_type in (NodeType.RECORD, NodeType.VARIANT):
                 if not self._is_generic_template(defn):
                     for label, apath in defn.as_items.items():
                         facet_name = (
@@ -1105,7 +1105,7 @@ class CEmitter:
         self.struct_defs = TrackedList(self)
         for pname in ("Reader", "Writer", "Closer", "Seeker"):
             defn = io_unit.body.get(pname)
-            if defn is not None and type(defn) is zast.Protocol:
+            if defn is not None and defn.nodetype == NodeType.PROTOCOL:
                 # Only emit protocols whose ZType is resolved — an
                 # unresolved protocol has spec parameters with no
                 # type information and would emit `void`-typed
@@ -1114,7 +1114,7 @@ class CEmitter:
                 if self._resolved_type(pname) is None:
                     continue
                 self._current_node_id = defn.nodeid
-                self._emit_protocol(pname, defn)
+                self._emit_protocol(pname, cast(zast.Protocol, defn))
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -1139,9 +1139,9 @@ class CEmitter:
         if io_unit is None:
             return ""
         file_defn = io_unit.body.get("File")
-        if file_defn is None or type(file_defn) is not zast.Class:
+        if file_defn is None or file_defn.nodetype != NodeType.CLASS:
             return ""
-        file_cls = file_defn
+        file_cls = cast(zast.ObjectDef, file_defn)
         # Pull every file native into the runtime block so forward
         # declarations exist when the wrappers are compiled.
         self.needs_io_natives.update(
@@ -1189,8 +1189,9 @@ class CEmitter:
             if not self._io_class_referenced(name):
                 continue
             defn = io_unit.body.get(name)
-            if defn is None or type(defn) is not zast.Class:
+            if defn is None or defn.nodetype != NodeType.CLASS:
                 continue
+            defn = cast(zast.ObjectDef, defn)
             self._current_node_id = defn.nodeid
             # Skip protocol-impl emission here; it needs the runtime
             # bodies (z_BufWriter_write, ...) to be declared first.
@@ -1225,8 +1226,9 @@ class CEmitter:
             if not self._io_class_referenced(name):
                 continue
             defn = io_unit.body.get(name)
-            if defn is None or type(defn) is not zast.Class:
+            if defn is None or defn.nodetype != NodeType.CLASS:
                 continue
+            defn = cast(zast.ObjectDef, defn)
             for label, apath in defn.as_items.items():
                 proto_name = (
                     cast(zast.AtomId, apath).name
@@ -1316,12 +1318,12 @@ class CEmitter:
                 if self._is_generic_template(defn):
                     continue
                 self._current_node_id = defn.nodeid
-                defn_type = type(defn)
-                if defn_type == zast.Union and not cli_classes_only:
+                defn_type = defn.nodetype
+                if defn_type == NodeType.UNION and not cli_classes_only:
                     self._emit_union(name, cast(zast.Union, defn))
-                elif defn_type == zast.Variant and not cli_classes_only:
+                elif defn_type == NodeType.VARIANT and not cli_classes_only:
                     self._emit_variant(name, cast(zast.Variant, defn))
-                elif defn_type == zast.Record and (
+                elif defn_type == NodeType.RECORD and (
                     (
                         unitname == "cli"
                         and not cli_classes_only
@@ -1329,9 +1331,9 @@ class CEmitter:
                     )
                     or self._io_record_referenced(name)
                 ):
-                    self._emit_record(name, cast(zast.Record, defn))
+                    self._emit_record(name, cast(zast.ObjectDef, defn))
                 elif (
-                    defn_type == zast.Class
+                    defn_type == NodeType.CLASS
                     and unitname == "cli"
                     and self._system_type_resolved(unitname, name)
                 ):
@@ -1343,14 +1345,14 @@ class CEmitter:
                     # struct. Aggregator classes (spec / parsed — have
                     # list / map fields) emit in the cli_classes_only
                     # pass after the monos exist.
-                    is_leaf = self._is_cli_leaf_class(cast(zast.Class, defn))
+                    is_leaf = self._is_cli_leaf_class(cast(zast.ObjectDef, defn))
                     if cli_records_only and is_leaf:
-                        self._emit_class(name, cast(zast.Class, defn))
+                        self._emit_class(name, cast(zast.ObjectDef, defn))
                     elif cli_classes_only and not is_leaf:
-                        self._emit_class(name, cast(zast.Class, defn))
+                        self._emit_class(name, cast(zast.ObjectDef, defn))
                     elif not cli_records_only and not cli_classes_only:
-                        self._emit_class(name, cast(zast.Class, defn))
-                elif defn_type == zast.Class and name == "File" and io_file_used:
+                        self._emit_class(name, cast(zast.ObjectDef, defn))
+                elif defn_type == NodeType.CLASS and name == "File" and io_file_used:
                     # io.file: compiler-provided class. struct +
                     # destructor + close method come from the runtime.
                     # Emit inline (here, before mono types) so
@@ -1383,7 +1385,7 @@ class CEmitter:
             )
             self.struct_defs.append(parseerror_c)
 
-    def _is_cli_leaf_class(self, defn: "zast.Class") -> bool:
+    def _is_cli_leaf_class(self, defn: "zast.ObjectDef") -> bool:
         """A cli-unit class is "leaf" if its fields are only primitives,
         bools, or strings — i.e. the struct can be laid out without
         any user-defined or monomorphized collection types declared
@@ -1467,7 +1469,7 @@ class CEmitter:
                     # Leaf cli classes (flagdef / optiondef / positionaldef)
                     # are emitted in the early pass alongside cli records;
                     # monos over them are early, not late.
-                    if self._is_cli_leaf_class(cast(zast.Class, defn)):
+                    if self._is_cli_leaf_class(cast(zast.ObjectDef, defn)):
                         continue
                     names.add(name)
         return names
@@ -2110,7 +2112,7 @@ class CEmitter:
         impl_name: str,
         label: str,
         proto_name: str,
-        impl_defn: "zast.Record | zast.Class",
+        impl_defn: "zast.ObjectDef",
         proto: "Optional[zast.Protocol]" = None,
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a protocol implementation."""
@@ -2308,7 +2310,7 @@ class CEmitter:
         impl_name: str,
         label: str,
         facet_name: str,
-        impl_defn: "zast.Record | zast.Variant",
+        impl_defn: "zast.ObjectDef | zast.Variant",
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a facet implementation."""
         facet = self._facet_defs.get(facet_name)
@@ -2380,7 +2382,7 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
-    def _emit_record(self, name: str, rec: zast.Record) -> None:
+    def _emit_record(self, name: str, rec: zast.ObjectDef) -> None:
         if self._is_typedef(name):
             # Typedef: no struct, no meta.create — just emit as/is functions
             for mname, mfunc in rec.as_functions.items():
@@ -2794,9 +2796,7 @@ class CEmitter:
         If lines is None, appends to self.struct_defs.
         """
         assert defn.nodetype in (NodeType.RECORD, NodeType.CLASS)
-        rc_defn = cast(
-            zast.Record, defn
-        )  # Record and Class share items/functions/as_functions
+        rc_defn = cast(zast.ObjectDef, defn)
         ztype = self._resolved_type(name)
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
@@ -2825,7 +2825,7 @@ class CEmitter:
             self.struct_defs.append("".join(target))
 
     def _emit_class(
-        self, name: str, cls: zast.Class, skip_protocol_impls: bool = False
+        self, name: str, cls: zast.ObjectDef, skip_protocol_impls: bool = False
     ) -> None:
         if self._is_typedef(name):
             # Typedef: no struct, no destructor, no meta.create — just emit as/is functions
@@ -4343,7 +4343,9 @@ class CEmitter:
         cloned_methods = self.program.cloned_methods.get(name)
         func_aliases = self.program.func_aliases
         if template_defn.nodetype == NodeType.CLASS:
-            for mname, mfunc in cast(zast.Class, template_defn).as_functions.items():
+            for mname, mfunc in cast(
+                zast.ObjectDef, template_defn
+            ).as_functions.items():
                 if mfunc.body:
                     qualified = f"{name}.{mname}"
                     if qualified in func_aliases:

@@ -119,7 +119,7 @@ class TestFinding1TypeAnnotations:
         # find the record definition
         mainunit = program.units[program.mainunitname]
         point = mainunit.body["point"]
-        assert isinstance(point, zast.Record)
+        assert point.nodetype == zast.NodeType.RECORD
         for fname, fpath in point.items.items():
             assert fpath.type is not None, f"Field '{fname}' has no .type"
             assert fpath.type.name in ("f64",), (
@@ -157,7 +157,7 @@ class TestFinding1TypeAnnotations:
         )
         mainunit = program.units[program.mainunitname]
         box = mainunit.body["Box"]
-        assert isinstance(box, zast.Class)
+        assert box.nodetype == zast.NodeType.CLASS
         for fname, fpath in box.items.items():
             assert fpath.type is not None, f"Field '{fname}' has no .type"
 

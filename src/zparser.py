@@ -1255,9 +1255,13 @@ class Parser:
 
     # kind → (opening token, AST class). Record/Class carry
     # field_ownership; Variant/Union carry tag.
+    # Maps each item kind to (opening token, target).
+    # For RECORD/CLASS, target is a NodeType — the parser builds an
+    # ObjectDef with that nodetype. For VARIANT/UNION, target is the
+    # legacy AST class (will be migrated to NodeType in PR 2).
     _ITEM_TYPEDEF_MAP: Dict[ObjectBodyKind, tuple] = {
-        ObjectBodyKind.RECORD: (TT.RECORD, zast.Record),
-        ObjectBodyKind.CLASS: (TT.CLASS, zast.Class),
+        ObjectBodyKind.RECORD: (TT.RECORD, NodeType.RECORD),
+        ObjectBodyKind.CLASS: (TT.CLASS, NodeType.CLASS),
         ObjectBodyKind.VARIANT: (TT.VARIANT, zast.Variant),
         ObjectBodyKind.UNION: (TT.UNION, zast.Union),
     }
@@ -1273,11 +1277,11 @@ class Parser:
 
             item: keyword [ "is" ] ( "{" ... "}" | "native" ) [ "as" "{" ... "}" ]
 
-        `kind` is one of RECORD / CLASS / VARIANT / UNION and maps to
-        the opening token and target AST class. Variant/Union add a
-        `tag` field; Record/Class add `field_ownership`.
+        Record/Class produce a unified `ObjectDef` node discriminated
+        by `nodetype`; Variant/Union still produce their legacy
+        per-kind classes (migrated in PR 2).
         """
-        tt, ast_cls = self._ITEM_TYPEDEF_MAP[kind]
+        tt, target = self._ITEM_TYPEDEF_MAP[kind]
         start = lex.peek()
         if not lex.accept(tt):
             return None
@@ -1292,7 +1296,21 @@ class Parser:
         as_items = as_body.items if as_body else {}
         as_functions = as_body.functions if as_body else {}
 
-        if kind in (ObjectBodyKind.VARIANT, ObjectBodyKind.UNION):
+        node: zast.TypeDefinition
+        if kind in (ObjectBodyKind.RECORD, ObjectBodyKind.CLASS):
+            node = zast.ObjectDef(
+                nodetype=cast(NodeType, target),
+                items=items,
+                functions=functions,
+                implements=implements,
+                as_items=as_items,
+                as_functions=as_functions,
+                is_native=native,
+                field_ownership=is_body.field_ownership if is_body else {},
+                start=start,
+            )
+        elif kind in (ObjectBodyKind.VARIANT, ObjectBodyKind.UNION):
+            ast_cls = cast(type, target)
             node = ast_cls(
                 items=items,
                 implements=implements,
@@ -1304,28 +1322,21 @@ class Parser:
                 is_native=native,
                 field_ownership=is_body.field_ownership if is_body else {},
             )
-        else:
-            node = ast_cls(
-                items=items,
-                implements=implements,
-                functions=functions,
-                as_items=as_items,
-                as_functions=as_functions,
-                start=start,
-                is_native=native,
-                field_ownership=is_body.field_ownership if is_body else {},
-            )
         return NodeX(node=node, extern=extern)
 
-    def _accept_record(self, lex: Lexer) -> Union[NodeX[zast.Record], zast.Error, None]:
+    def _accept_record(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         return cast(
-            Union[NodeX[zast.Record], zast.Error, None],
+            Union[NodeX[zast.ObjectDef], zast.Error, None],
             self._accept_item_definition(lex, ObjectBodyKind.RECORD),
         )
 
-    def _accept_class(self, lex: Lexer) -> Union[NodeX[zast.Class], zast.Error, None]:
+    def _accept_class(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         return cast(
-            Union[NodeX[zast.Class], zast.Error, None],
+            Union[NodeX[zast.ObjectDef], zast.Error, None],
             self._accept_item_definition(lex, ObjectBodyKind.CLASS),
         )
 

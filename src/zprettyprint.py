@@ -78,7 +78,7 @@ def _pprintunitbody(body: Dict[str, zast.TypeDefinition], depth: int) -> str:
 def _pprintrecord(node: Node, depth: int) -> str:
     if node.nodetype != NodeType.RECORD:
         raise Exception("Error: wrong node type")
-    node = cast(zast.Record, node)
+    node = cast(zast.ObjectDef, node)
     sep = depth * "  "
 
     o: List[str] = []

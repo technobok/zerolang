@@ -458,18 +458,18 @@ class TypeChecker:
         self._optionval_template_id: int = -1
         self._optionview_template_id: int = -1
 
-        # _type_of_definition dispatch table: AST class -> bound resolver
-        # method. Keyed by type(defn) so the lookup is O(1) and avoids
-        # a getattr-by-name call.
-        self._definition_resolvers: "dict[type, Callable]" = {
-            zast.Function: self._resolve_function_type,
-            zast.Record: self._resolve_record_type,
-            zast.Class: self._resolve_class_type,
-            zast.Union: self._resolve_union_type,
-            zast.Variant: self._resolve_variant_type,
-            zast.Protocol: self._resolve_protocol_type,
-            zast.Facet: self._resolve_facet_type,
-            zast.Unit: self._resolve_inline_unit_type,
+        # _type_of_definition dispatch table: NodeType -> bound resolver
+        # method. Keyed by `defn.nodetype` so the lookup is O(1) and
+        # avoids a getattr-by-name call.
+        self._definition_resolvers: "dict[NodeType, Callable]" = {
+            NodeType.FUNCTION: self._resolve_function_type,
+            NodeType.RECORD: self._resolve_record_type,
+            NodeType.CLASS: self._resolve_class_type,
+            NodeType.UNION: self._resolve_union_type,
+            NodeType.VARIANT: self._resolve_variant_type,
+            NodeType.PROTOCOL: self._resolve_protocol_type,
+            NodeType.FACET: self._resolve_facet_type,
+            NodeType.UNIT: self._resolve_inline_unit_type,
         }
 
     # Keywords used to auto-categorise errors when no explicit code is given
@@ -707,7 +707,7 @@ class TypeChecker:
                 NodeType.VARIANT,
             ):
                 # All four types have is_native, as_functions, functions
-                defn_typed = cast(zast.Record, defn)
+                defn_typed = cast(zast.ObjectDef, defn)
                 if defn_typed.is_native:
                     self._error(
                         f"'native' is reserved for system library definitions: '{name}'",
@@ -811,7 +811,7 @@ class TypeChecker:
         """Type-check a definition, pushing/popping the resolving stack."""
         # dispatch structured types via table (built in __init__ so each
         # entry binds to the per-instance bound method — no getattr).
-        resolver = self._definition_resolvers.get(type(defn))
+        resolver = self._definition_resolvers.get(defn.nodetype)
         if resolver is not None:
             return resolver(unitname, name, defn)
         # alias: DottedPath reference
@@ -1280,7 +1280,9 @@ class TypeChecker:
                     loc=loc,
                 )
 
-    def _resolve_class_type(self, unitname: str, name: str, cls: zast.Class) -> ZType:
+    def _resolve_class_type(
+        self, unitname: str, name: str, cls: zast.ObjectDef
+    ) -> ZType:
         key = f"{unitname}.{name}"
         ctype = _make_type(name, ZTypeType.CLASS)
         self._resolved[key] = ctype  # early register for self-reference
@@ -2094,7 +2096,9 @@ class TypeChecker:
         self._resolving.pop()
         return dtype
 
-    def _resolve_record_type(self, unitname: str, name: str, rec: zast.Record) -> ZType:
+    def _resolve_record_type(
+        self, unitname: str, name: str, rec: zast.ObjectDef
+    ) -> ZType:
         key = f"{unitname}.{name}"
         rtype = _make_type(name, ZTypeType.RECORD)
         self._resolved[key] = rtype  # early register for self-reference
@@ -2287,7 +2291,7 @@ class TypeChecker:
         return False
 
     def _reject_record_lock_features(
-        self, name: str, rec: zast.Record, rtype: ZType
+        self, name: str, rec: zast.ObjectDef, rtype: ZType
     ) -> None:
         """Reject .lock fields and this.borrow constructors on records.
 
@@ -4523,8 +4527,10 @@ class TypeChecker:
             is_func_names: set = set()
             field_names: Optional[set] = None
             if defn.nodetype == NodeType.CLASS:
-                is_func_names = set(cast(zast.Class, defn).functions.keys())
-                field_names = set(cast(zast.Class, defn).items.keys()) | is_func_names
+                is_func_names = set(cast(zast.ObjectDef, defn).functions.keys())
+                field_names = (
+                    set(cast(zast.ObjectDef, defn).items.keys()) | is_func_names
+                )
             create_type = self._make_meta_create_type(
                 mangled, mono, is_func_names, field_names
             )
@@ -4554,7 +4560,7 @@ class TypeChecker:
             NodeType.VARIANT,
         ):
             # collect method sources from the template definition
-            defn_typed2 = cast(zast.Record, defn)
+            defn_typed2 = cast(zast.ObjectDef, defn)
             method_sources: list[tuple[str, zast.Function, str]] = []
             for mname, mfunc in defn_typed2.as_functions.items():
                 if mfunc.body:
