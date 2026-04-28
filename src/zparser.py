@@ -1960,15 +1960,11 @@ class Parser:
         bound = False  # whether a binding label has been consumed
         whileindex = 0  # counter for anonymous 'while' clause names
 
-        # The first clause may be a condition with the 'while' keyword
-        # omitted, but only when the next token is neither a binding
-        # label nor 'loop'. Subsequent conditions in the loop below
-        # require an explicit 'while'.
+        # The first clause may be a naked condition — no `while`, no
+        # binding label, no `loop`. All keyword-prefixed clauses
+        # (including `while COND`) are handled by the loop below.
         t = lex.peek()
-        if t.toktype not in (TT.LABEL, TT.LOOP):
-            if t.toktype == TT.WHILE:
-                lex.acceptany()
-                lex.accept(TT.EOL)
+        if t.toktype not in (TT.LABEL, TT.LOOP, TT.WHILE):
             op = self._accept_operation(lex)
             if op is not None and op.is_error:
                 return cast(zast.Error, op)
