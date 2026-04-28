@@ -176,13 +176,13 @@ identifiers start with a decimal digit after an optional sign.
 Other predefined identifiers:
 
 #code language=zerolang: """
-  null never any _ typedef tag
+  null never Any _ typedef tag
 
   u8 u16 u32 u64 u128
   i8 i16 i32 i64 i128
   f8 f16 f32 f64 f128
   c8     c32
-  string
+  String
 
   true false
 
@@ -405,7 +405,7 @@ Backslashes may only appear as part of a valid escape sequence.
 
   "an interpolated string showing the value of variable myvar: \{
       dosomething "hello"        # even with comments
-  }\nmore string\n"
+  }\nmore String\n"
 
   "an interpolated string showing the value of variable myvar.member: \{myvar.member}\n"
 
@@ -696,14 +696,14 @@ the caller, and the caller retains ownership at scope exit. The implicit-take
 logic at call sites correctly skips these. Native functions
 (#~"is native" body) follow the same convention: each native is annotated
 based on what its body does with the input — read-only natives take
-#~"stringview" (no allocation, no ownership question), and natives that
+#~"StringView" (no allocation, no ownership question), and natives that
 store the input directly into a receiver use #~".take" (no per-call
 deep-copy).
 
 Returning a borrowed parameter as owned (i.e. a function declared
 #~"out T" returning a #~".borrow"-bound or default-borrow parameter) aliases
 the caller's heap data and is rejected at type-check time. Storing such a
-borrowed parameter into an aggregate field (#~"box label: borrowed_s") is
+borrowed parameter into an aggregate field (#~"Box label: borrowed_s") is
 rejected for the same reason. Remediations are #~".copy" (clone),
 #~".take" on the parameter (transfer ownership in), or
 #~"out T.borrow" + #~".lock"-annotated parameter (return a borrow tied to a
@@ -795,7 +795,7 @@ Resolving as a child of the argument type:
   # ----- in unit file "io"
 
   mode: variant { READ: null  WRITE: null }  # an enumeration
-  open: function {name: string mode: mode} out filehandle is { 
+  open: function {name: String mode: mode} out filehandle is { 
       # ... 
   }
 
@@ -902,7 +902,7 @@ clause (the result of the last expression in the clause).
 
 #~"break" can be used for early exit of the #~"do" block. When a #~"do"
 block contains #~"break", the expression type becomes optional
-(#~"optionval(T)" for value types, #~"option(T)" for reference types).
+(#~"optionval(T)" for value types, #~"Option(T)" for reference types).
 Normal completion produces #~"some(value)", while #~"break" produces
 #~"none".
 
@@ -1187,7 +1187,7 @@ binding RHS may be any of: an instance of an iterator type, an instance of an
 iterable type, a constructor call producing an iterator, or a function/method
 call producing an option-shaped wrapper. The compiler picks an evaluation
 strategy from the RHS shape (see #_~"For-loop dispatch" below). On each
-iteration a value of type #~"option(t)" / #~"optionval(t)" / #~"optionview(t)"
+iteration a value of type #~"Option(t)" / #~"optionval(t)" / #~"OptionView(t)"
 is produced; the loop terminates when the value is #~"none", and binds 'var'
 to the unwrapped some-payload otherwise.
 
@@ -1196,9 +1196,9 @@ wrapper). It is not the wrapper — no #~"match" arm is needed to unwrap it.
 The ownership of 'var' depends on the wrapper kind:
 
 #ul:
-  #*: #~"option(t).some" - 'var' is the owned reftype #~"t"
+  #*: #~"Option(t).some" - 'var' is the owned reftype #~"t"
   #*: #~"optionval(t).some" - 'var' is the owned valtype #~"t" (copied)
-  [#*: #~"optionview(t).some" - 'var' is a borrowed view of #~"t",
+  [#*: #~"OptionView(t).some" - 'var' is a borrowed view of #~"t",
       lifetime-tied to the iterator's lock on its source. Storing
       'var' to an aggregate field or returning it from the loop is a
       compile error; use #~".copy" first.]
@@ -1253,7 +1253,7 @@ values of the #~"loop" statement.
   }
 
   # constructor call returning an iterator instance (eager)
-  for line: (textreader file: f) loop {
+  for line: (TextReader file: f) loop {
       # ...
   }
 
@@ -1281,15 +1281,15 @@ The compiler classifies the binding RHS by AST shape and result type and
 picks one of five dispatch modes. Rules are checked in order; first match
 wins. Let R be the type produced by evaluating the RHS, and call a type
 "iterator-shaped" if it has a #~".call" method whose only required parameter
-is #~":this" and whose return type is #~"option(t)", #~"optionval(t)", or
-#~"optionview(t)" for some #~"t".
+is #~":this" and whose return type is #~"Option(t)", #~"optionval(t)", or
+#~"OptionView(t)" for some #~"t".
 
 #ol:
   [#*: #b:"Rule 1 (call returning iterator):" RHS is a call expression
       AND R is iterator-shaped. The compiler invokes the call once
       eagerly before the loop and uses R as the iterator;
       #~"R.call" is invoked per iteration. Example:
-      #~"for line: (textreader file: f) loop ...".]
+      #~"for line: (TextReader File: f) loop ...".]
   [#*: #b:"Rule 2 (iterable):" RHS is a non-call expression AND its
       type T has an #~".iterate" method whose only required parameter
       is #~":this" and whose return is iterator-shaped. The compiler
@@ -1297,11 +1297,11 @@ is #~":this" and whose return type is #~"option(t)", #~"optionval(t)", or
       its result is the iterator. Example: #~"for x: 5 loop" lowers
       to #~"for x: 5.iterate loop". Only the exact name #~".iterate"
       triggers this rule; other iterator-producing methods such as
-      #~".iterate_keys" or #~".iterate_items" must be invoked
+      #~".iterate_keys" or #~".iterateItems" must be invoked
       explicitly so they fall under rule 1.]
   [#*: #b:"Rule 3 (function as iterator):" RHS is a call expression
-      AND its return type is #~"option(t)" / #~"optionval(t)" /
-      #~"optionview(t)" directly. The compiler defers the call: it is
+      AND its return type is #~"Option(t)" / #~"optionval(t)" /
+      #~"OptionView(t)" directly. The compiler defers the call: it is
       re-invoked once per iteration and the result is the
       per-iteration value.]
   [#*: #b:"Rule 4 (instance with call):" RHS is a non-call expression
@@ -1408,8 +1408,8 @@ Sum types are available at run time but can also be used to specify
 
 For 2-arm sum types where one arm represents absence, failure, or
 falsity, list that arm first in the declaration so it receives
-discriminator tag 0. Stdlib types #~"option", #~"optionval",
-#~"result", #~"resultval", and #~"bool" all follow this convention.
+discriminator tag 0. Stdlib types #~"Option", #~"optionval",
+#~"Result", #~"resultval", and #~"bool" all follow this convention.
 
 The convention has three benefits:
 
@@ -1433,7 +1433,7 @@ than owning its payload:
   optionview: union {
       none: null
       some: t.lock
-  } as { t: any.generic }
+  } as { t: Any.generic }
   """
 
 Per-arm semantics:
@@ -1462,7 +1462,7 @@ a locked source:
 
 #code language=zerolang: """
   with v: my_lock_source do {
-      ov: optionview.some from: v
+      ov: OptionView.some from: v
       # ov.some is borrowed from v; ov cannot outlive this 'do' block
   }
   """
@@ -1486,8 +1486,8 @@ SHADOWS the parent binding — it takes on the payload type for the
 duration of the arm. Field access, method dispatch, re-matching, and
 ownership transfer (#~".take") all flow through the narrowed name as
 if it were the payload value. Inside #~"case ok then" on a
-#~"result(filestat, ioerror)", #~"s" IS the filestat — #~"s.size",
-#~"s.kind", and #~"s.mtime_seconds" resolve directly; #~"match (s)"
+#~"Result(filestat, IoError)", #~"s" IS the filestat — #~"s.size",
+#~"s.kind", and #~"s.mtimeSeconds" resolve directly; #~"match (s)"
 dispatches on filestat's layout; #~"stolen: s.take" transfers ownership
 and the resulting alias retains the narrowed view.
 
@@ -1499,7 +1499,7 @@ Passing the narrowed name to a function expecting the outer
 union/variant is also a type error for the same reason.
 
 Assignment-based narrowing is different — a variable assigned a
-specific subtype (#~"x: result.ok 42") keeps its outer type so it
+specific subtype (#~"x: Result.ok 42") keeps its outer type so it
 remains passable as the full union; the compiler tracks a
 #~"narrowed_subtype" sidecar that rejects accessing other arms.
 
@@ -1509,7 +1509,7 @@ scope -- ie. the type of that named target will exclude the subtypes where a
 matching #~"of" clause has resulted in exiting the current scope.
 
 Assignment-based narrowing: when a variable of union or variant type is assigned
-a specific subtype value (eg. #~"x: result.ok 42"), the compiler narrows the
+a specific subtype value (eg. #~"x: Result.ok 42"), the compiler narrows the
 variable to that subtype. Reassignment resets narrowing and optionally re-narrows
 if the new value is also a specific subtype.
 
@@ -1521,7 +1521,7 @@ continue), any statements following that expression are unreachable and are
 flagged as a compile error.
 
 For-loop binding narrowing: in #~"for x: operation loop {...}" where
-#~"operation" returns #~"option(t)" or #~"optionval(t)", the loop variable
+#~"operation" returns #~"Option(t)" or #~"optionval(t)", the loop variable
 'x' is narrowed to the some-payload type 't' inside the body. The
 wrapper is never visible — terminating on #~"none" is handled by the
 loop machinery, and #~"x" is the unwrapped value.
@@ -1641,7 +1641,7 @@ they must be consistent. A conflict produces a compilation error.
 Generic function example with inference:
 
 #code language=zerolang: """
-  identity: function as { t: any.generic } in { val: t } out t is {
+  identity: function as { t: Any.generic } in { val: t } out t is {
       return val
   }
 
@@ -1655,7 +1655,7 @@ Generic function example with inference:
 Generic parameter with default type:
 
 #code language=zerolang: """
-  myfn: function as { t: (any.generic default: i64) } in { val: t } out t is {
+  myfn: function as { t: (Any.generic default: i64) } in { val: t } out t is {
       return val
   }
   """
@@ -1663,8 +1663,8 @@ Generic parameter with default type:
 Note that attempting to store a reference type into a value type via a generic
 type will fail to compile.
 
-The #~"any" type is a compiler defined union of all possible types declared in
-the current program. #~"any" can #_*"ONLY" be used for generic definitions, not
+The #~"Any" type is a compiler defined union of all possible types declared in
+the current program. #~"Any" can #_*"ONLY" be used for generic definitions, not
 for creating fields or parameters.
 
 Examples:
@@ -1675,7 +1675,7 @@ Examples:
       none: null
       some: t
   } as {
-      t: any.reftype
+      t: Any.reftype
   }
 
   # optionval type for value types (stack-allocated tagged variant)
@@ -1683,14 +1683,14 @@ Examples:
       none: null
       some: t
   } as {
-      t: any.valtype
+      t: Any.valtype
   }
 
   # usage:
 
   # option wraps reference types (classes, unions, strings, lists, maps)
-  x0: option.some "hello"
-  x1: option.none string
+  x0: Option.some "hello"
+  x1: Option.none String
 
   # optionval wraps value types (records, integers, variants)
   # the generic field type (t) is inferred from the concrete value supplied
@@ -1711,7 +1711,7 @@ Examples:
       none: null
       some: t.lock
   } as {
-      t: any.generic
+      t: Any.generic
   }
 
   # optionview.some takes a locked source via from:, and binds a
@@ -1719,8 +1719,8 @@ Examples:
   # the optionview cannot be stored in an aggregate that outlives
   # the source.
   with v: my_lock_source do {
-      v0: optionview.some from: v
-      v1: optionview.none i64
+      v0: OptionView.some from: v
+      v1: OptionView.none i64
   }
   """
 
@@ -1739,7 +1739,7 @@ members from first to last and returns at the first match. There is no special
 terms. The lib author controls dispatch entirely through the order in which
 members are listed.
 
-#_*"Compile time vs runtime" — this distinction applies to #~"any" heterogeneous
+#_*"Compile time vs runtime" — this distinction applies to #~"Any" heterogeneous
 union used as a generic constraint, not just the examples below:
 
 #ul:
@@ -1761,17 +1761,17 @@ Example — a stringlike constraint for generic-over-string functions:
 #code language=zerolang: """
   # text protocol: the converter method any "stringlike" conformer provides
   text: protocol {
-      stringview: function {:this} out stringview
+      stringview: function {:this} out StringView
   }
 
   # heterogeneous union: one concrete type + one protocol
-  stringlike: union { :stringview :text }
+  stringlike: union { :stringview :Text }
 
   # string and str both declare `:text` in their `as` clause, so both
   # satisfy `stringlike` via the protocol member. stringview satisfies
   # via the concrete member.
 
-  print: function as { T: stringlike.generic } in { msg: T } is native
+  print: function as { T: StringLike.generic } in { msg: T } is native
 
   main: function is {
       print "hi"                     # T = stringview
@@ -1780,15 +1780,15 @@ Example — a stringlike constraint for generic-over-string functions:
   }
   """
 
-Note: #~"option" is emitted as a nullable pointer in C. #~"option.some val" stores the
-reference directly; #~"option.none" is #~"NULL". This means #~"option(option(T))" has a
+Note: #~"Option" is emitted as a nullable pointer in C. #~"Option.some val" stores the
+reference directly; #~"Option.none" is #~"NULL". This means #~"Option(Option(T))" has a
 known ambiguity: the outer #~"none" (NULL) is indistinguishable from the inner #~"none"
 at runtime. Nesting options is legal but inadvisable; wrap in a class if needed.
 
 #----: box
 
-The #~"box" type converts any type into a reference type. It has a generic
-parameter #~"t" of type #~"any.generic" and a #~"from:" argument which takes
+The #~"Box" type converts any type into a reference type. It has a generic
+parameter #~"t" of type #~"Any.generic" and a #~"from:" argument which takes
 ownership.
 
 When the #~"from:" argument is a reference type, box is a zero-cost passthrough:
@@ -1799,8 +1799,8 @@ resulting variable is a reference type (pointer). Access to the boxed value is
 transparent: operators and fields work as if the value were unboxed. Destruction
 of a boxed value type frees the allocated memory.
 
-Example: #~"b: box from: 42" heap-allocates the integer; #~"r: b + 8" uses
-transparent arithmetic. #~"s: box from: \"hello\"" is a zero-cost passthrough.
+Example: #~"b: Box from: 42" heap-allocates the integer; #~"r: b + 8" uses
+transparent arithmetic. #~"s: Box from: \"hello\"" is a zero-cost passthrough.
 
 Embedding a generic type in another type:
 
@@ -1809,8 +1809,8 @@ Embedding a generic type in another type:
 
   generic_rec: record {
   } as {
-      a: any.generic
-      b: any.generic
+      a: Any.generic
+      b: Any.generic
   }
 
   # Embed: 
@@ -1823,7 +1823,7 @@ Embedding a generic type in another type:
       dd: (generic_rec a: aa b: String)    # ..or could be a combination
 
   } as {
-      aa: any.generic
+      aa: Any.generic
   }
   """
 
@@ -1831,7 +1831,7 @@ Example generic protocol:
 
 #code language=zerolang: """
   generic_factory: protocol {
-      t: any.generic
+      t: Any.generic
       next: function { :this } out t
   }
   """
@@ -2130,7 +2130,7 @@ The declaration typereference follows the name. It is:
   [#*: the name of the type followed by each generic argument using syntax similar
     to function calls (to specify a generic type). As with function calls, the
     name of the first generic argument may be omitted]
-  [#*: a type followed by #~".generic" (eg. #~"any.generic") to create a generic
+  [#*: a type followed by #~".generic" (eg. #~"Any.generic") to create a generic
     type parameter. For functions and protocols, the generic parameter is declared
     in the body. For records, unions, classes and variants, the generic parameter
     is declared in the #~"as" section.]
@@ -2176,7 +2176,7 @@ accessible from outside.
   # References 'helper' which is loaded from mymod/helper.z
   compute: function {n: i64} out i64 is {
       result: helper.square n
-      return result
+      return Result
   }
   """
 
@@ -2245,7 +2245,7 @@ Units can be generic. Generic type parameters are declared in the unit's
 
 #code language=zerolang: """
   mathops: unit as {
-      t: any.generic
+      t: Any.generic
       add: function {a: t b: t} out t is { return a + b }
       double: function {v: t} out t is { return v + v }
   }
@@ -2281,7 +2281,7 @@ Several types or type aliases are predefined.
 #~"null" is used to represent the nil type and nil value. It is not a runtime
 value — it cannot be assigned directly to a variable, passed as a function
 argument, or returned from a function. To use #~"null" at runtime, it must be
-encoded into a #>"union" or [#> to=variant: variant] (eg. #~"option.none").
+encoded into a #>"union" or [#> to=variant: variant] (eg. #~"Option.none").
 
 It can be used in some locations to indicate that an item is intentionally
 omitted or undefined eg. for a subitem in a #>"union" or [#>
@@ -2345,10 +2345,10 @@ Compiler created union type that contains all types except itself. Can
 #_*"only" be used as a generic field type.
 
 
-#~"any.reftype" constrains a generic parameter to reference types (classes,
-unions, protocols, strings, lists, maps). #~"any.valtype" constrains a generic
+#~"Any.reftype" constrains a generic parameter to reference types (classes,
+unions, protocols, strings, lists, maps). #~"Any.valtype" constrains a generic
 parameter to value types (records, variants, enums, numerics). These are used
-by the system #~"option" (reftype only) and #~"optionval" (valtype only) types.
+by the system #~"Option" (reftype only) and #~"optionval" (valtype only) types.
 
 #----: type
 
@@ -2520,8 +2520,8 @@ type is expected.
   mydict: class {
       base: (dict k: str v: i64).typedef
   } as {
-      k: any.generic
-      v: any.generic
+      k: Any.generic
+      v: Any.generic
   }
   """
 
@@ -2602,7 +2602,7 @@ The type of the expression is #>"never" for the current block, and defaults to
 
 #code language=zerolang: """
   # effective signature
-  break: function {t: any result: t} out never
+  break: function {t: Any result: t} out never
   """
 
 
@@ -2640,7 +2640,7 @@ argument for the current iteration.
 
 #code language=zerolang: """
   # effective signature
-  continue: function {t: any result: t} out never
+  continue: function {t: Any result: t} out never
   """
 
 #code language=zerolang: """
@@ -2656,7 +2656,7 @@ The builtin yield function.
 
 #code language=zerolang: """
   # effective signature
-  yield: function {t_out: any t_in: any result: t_out} out t_in
+  yield: function {t_out: Any t_in: Any result: t_out} out t_in
   """
 
 #table cols="2 2 4":
@@ -2683,7 +2683,7 @@ the return expression for the caller.
 
 #code language=zerolang: """
   # effective signature
-  return: function {t: any result: t} out never
+  return: function {t: Any result: t} out never
   """
 
 #table cols="2 2 4":
@@ -2913,7 +2913,7 @@ not introduce a new borrow on its own -- it is purely a visibility
 adjustment. Subsequent suffixes such as #~".lock" / #~".borrow" attach
 their usual lock semantics to the projected reference.
 
-See #~"examples/listiter.z" for the canonical iterator-friend pattern
+See #~"examples/ListIter.z" for the canonical iterator-friend pattern
 built on #~".private".
 
 #----: generic (method)
@@ -3034,13 +3034,13 @@ passed to functions. The entire array value is passed on the stack.
 #---: str
 
 #~"str" is a fixed-capacity, stack-allocated string valtype. It complements
-#~"string" (whose struct lives on the stack but whose data buffer is on the
+#~"String" (whose struct lives on the stack but whose data buffer is on the
 heap) with a lightweight alternative that can be used in records and
 variants, passed by value, and requires no ownership tracking or cleanup.
-#~"str" and #~"string" are separate types with no implicit coercion.
+#~"str" and #~"String" are separate types with no implicit coercion.
 
 The constructor is #~"str to: <capacity>" where #~"capacity" is the maximum
-number of bytes. An optional #~"from:" argument accepts a #~"string" value to
+number of bytes. An optional #~"from:" argument accepts a #~"String" value to
 initialize content; if the source exceeds capacity, it is silently truncated.
 
 #code language=zerolang: """
@@ -3074,23 +3074,23 @@ are incompatible.
 
 #---: list
 
-#~"list" is a growable collection reftype. It is generic over the element
+#~"List" is a growable collection reftype. It is generic over the element
 type and provides dynamic-length storage with amortized O(1) append. Lists
 follow reftype ownership semantics: they are tracked for scope cleanup and
 support #~".take" for ownership transfer. The list struct itself lives on
 the stack; only its element data buffer is heap-allocated.
 
-The constructor is #~"(list of: <type>)" for an empty list, or
-#~"(list of: <type>) capacity: <u64>" to pre-allocate storage. The C
+The constructor is #~"(List of: <type>)" for an empty list, or
+#~"(List of: <type>) capacity: <u64>" to pre-allocate storage. The C
 representation is a struct with #~"length" (u64), a typed #~"data"
 pointer to the heap buffer, and #~"capacity" (u64).
 
 #code language=zerolang: """
   # create an empty list
-  nums: (list of: i64)
+  nums: (List of: i64)
 
   # create with pre-allocated capacity
-  big: (list of: i64) capacity: 100.u64
+  big: (List of: i64) capacity: 100.u64
 
   # append elements
   nums.append from: 42
@@ -3109,7 +3109,7 @@ pointer to the heap buffer, and #~"capacity" (u64).
   nums.insert from: 50 at: 0.u64
 
   # extend from another list (takes ownership of source)
-  other: (list of: i64)
+  other: (List of: i64)
   other.append from: 1
   nums.extend from: other.take
 
@@ -3121,20 +3121,20 @@ pointer to the heap buffer, and #~"capacity" (u64).
 Out-of-bounds #~"get" and #~"set" calls, and #~"pop" on an empty list, print an
 error to stderr and exit the process. Growth uses the formula
 #~"newcap = oldcap + (oldcap >> 1) + 4". Different element types produce
-different monomorphized types: #~"list of: i64" and #~"list of: u64" are
+different monomorphized types: #~"List of: i64" and #~"List of: u64" are
 incompatible.
 
 #---: map
 
-#~"map" is a hash map (dictionary) reftype, generic over key type and value
+#~"Map" is a hash map (dictionary) reftype, generic over key type and value
 type. Maps use open-addressing with linear probing and automatic resizing.
 
-The constructor is #~"(map key: <key_type> value: <value_type>)" for an empty
-map, or #~"(map key: K value: V) capacity: <u64>" to pre-allocate buckets.
+The constructor is #~"(Map key: <key_type> value: <value_type>)" for an empty
+map, or #~"(Map key: K value: V) capacity: <u64>" to pre-allocate buckets.
 
 #code language=zerolang: """
   # create an empty map
-  ages: (map key: string value: i64)
+  ages: (Map key: String value: i64)
 
   # set entries (insert or replace)
   ages.set key: "alice" value: 30
@@ -3156,10 +3156,10 @@ map, or #~"(map key: K value: V) capacity: <u64>" to pre-allocate buckets.
   c: ages.capacity   # u64, current bucket count
   """
 
-Key types must be numeric types or #~"string". The map takes ownership of both
+Key types must be numeric types or #~"String". The map takes ownership of both
 keys and values. On replacement via #~"set", the old value is destroyed. On
 #~"delete", both key and value are destroyed. #~"get" returns a copy of the
-value wrapped in #~"option" (for reference-type values) or #~"optionval" (for
+value wrapped in #~"Option" (for reference-type values) or #~"optionval" (for
 value-type values).
 
 The table grows when the load factor exceeds 2/3. Capacity is always a power
@@ -3226,14 +3226,14 @@ details. A parameter #_*"must not" be private (#~"_") but may have ownership
 attributes (#~"type.take", #~"type.borrow", #~"type.lock") or it may have a
 default constant numeric value or a default function reference value. Parameters
 may reference generic types declared in the #~"as" clause. Declaring generic
-parameters directly in #~"in" (e.g. #~"t: any.generic") is a compile error.
+parameters directly in #~"in" (e.g. #~"t: Any.generic") is a compile error.
 
 The order of the parameters is significant. The first parameter may
 be the 'primary' argument that can be used without specifying the parameter
 name in a call. See #>"calls" for details.
 
 The #~"as" argument takes a brace delimited block of generic type parameter
-declarations of the form #~"name: constraint.generic" (e.g. #~"t: any.generic"
+declarations of the form #~"name: constraint.generic" (e.g. #~"t: Any.generic"
 or #~"n: u64.generic" for numeric generics). The #~"as" block follows the same
 form as the #~"as" clause on [#> to=record: compound type definitions]. The
 first generic parameter in #~"as" can be specified without name at call sites;
@@ -3335,14 +3335,14 @@ Generic function example:
 
 #code language=zerolang: """
   # generic identity function
-  identity: function as { t: any.generic } in { val: t } out t is {
+  identity: function as { t: Any.generic } in { val: t } out t is {
       return val
   }
 
   # generic function with multiple type parameters
   map: function
-      as { t: any.generic
-           u: any.generic }
+      as { t: Any.generic
+           u: Any.generic }
       in { val: t
            f: function in { x: t } out u }
       out u
@@ -3353,8 +3353,8 @@ Generic function example:
   # numeric generic parameter
   repeat: function as { n: u64.generic } in { val: i64 } out i64 is {
       result: 0
-      for n loop { result = result + val }
-      return result
+      for n loop { Result = Result + val }
+      return Result
   }
   """
 
@@ -3370,9 +3370,9 @@ function argument label), can be:
   #~"protocol" definition etc.)
 - a spec (a function definition without an #~"is" body). A function reference of
   the same type must be passed at the call
-- #~"address" followed by a function or method name. This will then be a #~"spec"
+- #~"address" followed by a function or method name. This will then be a #~"Spec"
   parameter with a default value equal to the function name specified.
-- a type followed by #~".generic" (eg. #~"any.generic", #~"myunion.generic",
+- a type followed by #~".generic" (eg. #~"Any.generic", #~"myunion.generic",
   #~"myprotocol.generic") to specify a generic type constraint
 - a type followed by #~".take" (eg. #~"reftype.take") to take ownership of the
   parameter
@@ -3389,7 +3389,7 @@ function argument label), can be:
 Function argument types can NOT be:
 
 - a bare function name (use #~".take" on the function name to obtain a function
-  reference for a #~"spec" argument)
+  reference for a #~"Spec" argument)
 
 
 #----: Specs
@@ -3440,32 +3440,32 @@ qualified name to the corresponding C implementation.
 #----: Iterators
 
 An #b:"iterator" in Zerolang is any type whose #~".call" method takes only
-#~":this" and returns one of #~"option(t)", #~"optionval(t)", or
-#~"optionview(t)". The #~"for" loop drives an iterator by repeatedly
+#~":this" and returns one of #~"Option(t)", #~"optionval(t)", or
+#~"OptionView(t)". The #~"for" loop drives an iterator by repeatedly
 invoking #~".call" until the result's tag is #~"none".
 
 An #b:"iterable" is any type that exposes an #~".iterate" method whose only
 required parameter is #~":this" and whose return type is itself iterator-shaped.
 The for-loop's binding RHS may be either an iterator or an iterable; rule 2
 of the dispatch (see #_~"For-loop dispatch") synthesises the #~".iterate"
-call. Stdlib examples: integers (#~"5.iterate"), #~"list" (#~"mylist.iterate"),
-#~"map" (#~"mymap.iterate" → keys, #~"mymap.iterate_items" → entries).
+call. Stdlib examples: integers (#~"5.iterate"), #~"List" (#~"mylist.iterate"),
+#~"Map" (#~"mymap.iterate" → keys, #~"mymap.iterateItems" → entries).
 
 Two iterator patterns are common:
 
 #ul:
   [#*: #b:"Generator iterators" yield owned per-iteration values via
-      #~"option(t)" or #~"optionval(t)". They synthesise their values
+      #~"Option(t)" or #~"optionval(t)". They synthesise their values
       from internal state: counters, integer ranges, parsers, network
       readers. Examples: #~"counter", #~"intrange_i64",
-      #~"textreader", #~"cpiter", #~"linesiter", #~"bagiter".
+      #~"TextReader", #~"CpIter", #~"LinesIter", #~"bagiter".
       Each iteration produces a fresh value and the loop body owns
       it for the iteration's duration.]
   [#*: #b:"Container iterators" yield non-owning views into a source
-      collection via #~"optionview(t)". The iterator holds a #~".lock"
+      collection via #~"OptionView(t)". The iterator holds a #~".lock"
       reference into the source; each yielded value is a borrowed
       view, lifetime-tied to the iterator's lock. Examples:
-      #~"listiter", #~"mapkeyiter", #~"mapitemiter". The loop body
+      #~"ListIter", #~"MapKeyIter", #~"MapItemIter". The loop body
       cannot transfer ownership of a borrowed value (compile error;
       use #~".copy" first).]
 
@@ -3488,7 +3488,7 @@ referencing the container's private members. The container is locked for
 the iterator's lifetime; the iterator falls out of scope at the end of the
 #~"for" body and the lock on the container is released. Classes are
 single-owner (cannot be copied), which is what makes the #~".lock" field safe.
-See #~"examples/listiter.z" for the canonical pattern and
+See #~"examples/ListIter.z" for the canonical pattern and
 #~"doc/ownership.pdoc" for the lock-lifecycle walkthrough.
 
 #----: Methods
@@ -3550,9 +3550,9 @@ level by passing a generic variable at the call site into the constructor.
 #code language=zerolang: """
   myobj: record {
       a: u32
-      b: string
+      b: String
 
-      create: function {a: 0.u32 b: string} out this is {
+      create: function {a: 0.u32 b: String} out this is {
           return meta.create :a :b      # no stuttering... can use default args
       }
   }
@@ -3647,7 +3647,7 @@ at the subtype construction form.
       bb: 2
       _cc: 3
       st: myobj
-      s: string   # string, reference type. 
+      s: String   # string, reference type. 
   }
   """
 
@@ -3851,22 +3851,22 @@ Generic types can also be used in records:
 #code language=zerolang: """
   # k and v can be anything (seperately)
   dictelement: record {
-      tk: generic any
-      tv: generic any
+      tk: generic Any
+      tv: generic Any
       k: tk
       v: tv
   }
 
   # k and v can be anything but must be the same anything for both
   dictelement2: record {
-      t: generic any
+      t: generic Any
       k: t
       v: t
   }
   """
 
-Record fields are pure value data. A record cannot contain #~"string",
-#~"list", #~"box", #~"map" or any other heap-backed type, and it cannot
+Record fields are pure value data. A record cannot contain #~"String",
+#~"List", #~"Box", #~"Map" or any other heap-backed type, and it cannot
 carry a #~".lock" field. Types that need to hold a locked reference to
 external data are #_*"classes" -- see
 #> to=lock-fields-on-classes: Lock Fields on Classes
@@ -4085,7 +4085,7 @@ The compiler synthesises the projection at the call boundary:
 Non-conforming arguments are rejected with a standard type-mismatch error.
 This rule reduces boilerplate at every call site while preserving the
 explicit forms for cases where the projection kind must be named. Also see
-the #~"text" / #~"stringlike" heterogeneous union pattern for the analogous
+the #~"Text" / #~"StringLike" heterogeneous union pattern for the analogous
 mechanism on generic constraints.
 
 #code language=zerolang: """
@@ -4096,15 +4096,15 @@ mechanism on generic constraints.
   myfile: record {
       fd: i64
   } as {
-      myreader: reader
+      myreader: Reader
       read: function {f: this b: i64} out i64 is {
           return f.fd + b
       }
   }
 
-  use_reader: function {r: reader} out i64 is {
+  use_reader: function {r: Reader} out i64 is {
       result: r.read b: 5
-      return result
+      return Result
   }
 
   main: function is {
@@ -4236,7 +4236,7 @@ If there is no associated type for a subtype, the type is specified with a
   myunion: union {
       u1: null       # no user stored value. Discriminator only
       :u32           # shortened syntax for 'u32: u32'
-      u4: string
+      u4: String
       u5: myclass    # a class defined elsewhere
   }
   """
@@ -4252,16 +4252,16 @@ ownership transfer via #~".take" or by passing an anonymous/literal value.
 #code language=zerolang: """
   result: union {
       ok: i64
-      err: string
+      err: String
       none: null
   }
 
-  a: result.ok 42                     # valtype: value is boxed
-  b: result.err "something went wrong" # reftype: string literal, ownership taken
-  c: result.none                      # null subtype: no argument
+  a: Result.ok 42                     # valtype: value is boxed
+  b: Result.err "something went wrong" # reftype: string literal, ownership taken
+  c: Result.none                      # null subtype: no argument
 
   # named argument form
-  d: result.err from: mystr.take      # explicit .take transfers ownership
+  d: Result.err from: mystr.take      # explicit .take transfers ownership
   """
 
 #----: Ownership
@@ -4287,7 +4287,7 @@ covered by case clauses, or an #~"else" clause must be present. Inside a case
 clause, the payload is accessed via dotted path on the union variable.
 
 #code language=zerolang: """
-  describe: function {r: result} out string is {
+  describe: function {r: Result} out String is {
       match r
           case ok then {
               # r.ok accesses the i64 payload (unboxed)
@@ -4319,7 +4319,7 @@ Creating/setting a union value:
   myunion2: union {
       t1: null      # discriminator only
       t2: u32       # a valtype in addition to the discriminator
-      t3: string
+      t3: String
       t5: myclass
   }
 
@@ -4340,7 +4340,7 @@ Creating/setting a union value:
   }
   """
 
-Unions are also used to define generic types along with protocols. #~"any" is a
+Unions are also used to define generic types along with protocols. #~"Any" is a
 system defined union that includes all possible types used in the current
 program.
 
@@ -4453,7 +4453,7 @@ followed by a question mark. The method returns a boolean.
 #code language=zerolang: """
   myunion: union {
       t1: u32
-      t2: string
+      t2: String
       t3: null
   }
 
@@ -4475,7 +4475,7 @@ Note that subtypes with no associated data cannot be assigned in this way.
 #code language=zerolang: """
   myunion: union {
       t1: u32
-      t2: string
+      t2: String
       t3: _
   }
 
@@ -4601,7 +4601,7 @@ shorter prefix loses the length tie-break:
 Comparison semantics: byte-wise lexicographic, matching C's #~"memcmp".
 No locale awareness, no Unicode normalization, no case folding -- pure
 bytes. Callers that need locale-aware collation build it on top.
-Cross-type comparisons (#~"string < stringview") are not defined;
+Cross-type comparisons (#~"String < StringView") are not defined;
 project explicitly with #~".stringview" to bring both operands into the
 same type.
 
@@ -4755,7 +4755,7 @@ code paths and compile-time validation of supported types.
 
 #code language=zerolang: """
   container: class { val: t } as {
-      t: any.generic
+      t: Any.generic
 
       typecheck: function {c: this} is {
           match t case i32 then {

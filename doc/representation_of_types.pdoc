@@ -47,18 +47,18 @@ the refactoring.
   that describes the object is a local variable or a field inside another
   struct. No #~"malloc" / #~"free" for the struct itself.]
   [#*: #+ Heap for data buffers only. The only heap allocations are
-  #~"box" (a single object on the heap), #~"list" data buffers, #~"string"
-  data buffers, and union subtype data. The controlling struct for #~"list"
-  and #~"string" (length, capacity, pointer) still lives on the stack.]
+  #~"Box" (a single object on the heap), #~"List" data buffers, #~"String"
+  data buffers, and union subtype data. The controlling struct for #~"List"
+  and #~"String" (length, capacity, pointer) still lives on the stack.]
   [#*: #+ Ownership tied to type class. Valtypes (records, variants) are
   freely copyable. Reftypes (classes, unions, protocol instances) are
   single-owner and cannot be copied -- only borrowed or taken.]
   [#*: #+ Flat valtypes. Valtypes may only contain other valtypes as fields.
-  They cannot contain #~"string", #~"list", #~"box", or any other type that
+  They cannot contain #~"String", #~"List", #~"Box", or any other type that
   requires heap cleanup. This guarantees that valtypes are always trivially
   copyable and never need a destructor.]
   [#*: #+ Reftypes may own heap resources. Reftypes (classes, unions, protocol
-  instances) may contain #~"string", #~"list", #~"box", or other reftype
+  instances) may contain #~"String", #~"List", #~"Box", or other reftype
   fields. However, a reftype is not required to own heap resources -- a class
   with only valtype fields is valid. Such a class still has identity and
   single-owner semantics but needs no destructor.]
@@ -96,7 +96,7 @@ methods. The pointer convention ensures:
 #ul:
   [#*: Methods can mutate fields and have those mutations persist across calls.]
   [#*: Method bodies work identically for stack-allocated and boxed instances --
-  #~"box(T)" is already a pointer, so calling a method on a boxed value passes
+  #~"Box(T)" is already a pointer, so calling a method on a boxed value passes
   the pointer directly without #~"&".]
 
 At call sites, the emitter generates #~"&var" to pass the address of a stack
@@ -130,8 +130,8 @@ A record is a C struct with all fields inline:
 #---: Field Restrictions
 
 Record fields must be valtypes: numeric types, bools, other records, variants,
-function references. Records #_*"cannot" contain #~"string", #~"list",
-#~"box", #~"map", classes, unions, or any type that requires heap cleanup.
+function references. Records #_*"cannot" contain #~"String", #~"List",
+#~"Box", #~"Map", classes, unions, or any type that requires heap cleanup.
 This restriction is enforced by the type checker.
 
 Records cannot have #~".lock" fields. Locks require identity (single-owner
@@ -188,8 +188,8 @@ struct is just #~"{ tag }".
 
 #---: Field Restrictions
 
-Variant subtypes must be valtypes. They cannot contain #~"string", #~"list",
-#~"box", classes, unions, or any type requiring heap cleanup. This ensures
+Variant subtypes must be valtypes. They cannot contain #~"String", #~"List",
+#~"Box", classes, unions, or any type requiring heap cleanup. This ensures
 variants are trivially copyable and need no destructor.
 
 #---: Ownership
@@ -220,8 +220,8 @@ frame of the declaring scope.
 
 #---: Field Types
 
-Classes may contain any field type: valtypes, other reftypes, #~"string",
-#~"list", #~"box", and #~"map". A class is not required to have heap-backed
+Classes may contain any field type: valtypes, other reftypes, #~"String",
+#~"List", #~"Box", and #~"Map". A class is not required to have heap-backed
 fields -- a class with only valtype fields is valid. Such a class still has
 identity and single-owner semantics (cannot be copied) but needs no destructor.
 
@@ -372,7 +372,7 @@ heap-allocated:
   [#*: For #~"null" subtypes: #~"data" is #~"NULL".]
 
 Because union subtypes can be reftypes, a union may indirectly contain
-#~"string", #~"list", #~"box", and other heap-backed fields within its
+#~"String", #~"List", #~"Box", and other heap-backed fields within its
 subtypes.
 
 #---: Destructor
@@ -480,8 +480,8 @@ protocol struct (it is on the stack):
   }
   """
 
-Since the wrapped data may be a reftype that contains #~"string", #~"list",
-#~"box", etc., protocol instances may indirectly own heap resources.
+Since the wrapped data may be a reftype that contains #~"String", #~"List",
+#~"Box", etc., protocol instances may indirectly own heap resources.
 
 
 #--: Facet Instances
@@ -510,18 +510,18 @@ The data is stored inline (not via pointer). The facet struct size is
 
 Because facets are valtypes, their implementations must be valtypes (records,
 variants). They cannot wrap reftypes (classes, unions) and therefore cannot
-indirectly contain #~"string", #~"list", #~"box", or other heap-backed fields.
+indirectly contain #~"String", #~"List", #~"Box", or other heap-backed fields.
 No destructor is needed.
 
 
 #--: box(T)
 
-#~"box" is a generic type that heap-allocates a single instance of any type.
+#~"Box" is a generic type that heap-allocates a single instance of any type.
 The C representation is a pointer to the inner type.
 
 #---: Memory Layout
 
-For #~"box(point)" where point is #~"{ i64 x, i64 y }":
+For #~"Box(point)" where point is #~"{ i64 x, i64 y }":
 
 #code language=c: """
   /* C type: z_point_t*  (pointer to heap-allocated point struct) */
@@ -582,7 +582,7 @@ When boxing a variable that already exists:
 
 #code language=zerolang: """
   p: point x: 1 y: 2
-  b: box from: p
+  b: Box from: p
   """
 
 The compiler generates: allocate on heap, copy the value. If the source is a
@@ -608,7 +608,7 @@ error-prone. The programmer should unbox/rebox explicitly if needed.
 
 #--: list(T)
 
-#~"list" is a generic growable array. The struct lives on the stack; only the
+#~"List" is a generic growable array. The struct lives on the stack; only the
 data buffer is heap-allocated.
 
 #---: Memory Layout
@@ -623,8 +623,8 @@ data buffer is heap-allocated.
 
 Field order: #~"length" first, #~"data" second, #~"capacity" last. This order
 is chosen so that the first two fields (#~"length", #~"data") match the
-#~"listview" layout, enabling zero-cost casting from #~"list*" to
-#~"listview*". Capacity is last because it is not present in views.
+#~"ListView" layout, enabling zero-cost casting from #~"List*" to
+#~"ListView*". Capacity is last because it is not present in views.
 
 The struct (24 bytes) is on the stack. The #~"data" pointer references a
 heap-allocated buffer sized to #~"capacity * sizeof(element)".
@@ -696,7 +696,7 @@ correct and the copy cost is negligible for element-sized data.
 
 #--: listview(T) (New)
 
-#~"listview" is a generic read-only view into a list. It is a class (single
+#~"ListView" is a generic read-only view into a list. It is a class (single
 ownership) with a #~".lock" field that holds a lock on the parent list.
 
 #---: Memory Layout
@@ -708,7 +708,7 @@ ownership) with a #~".lock" field that holds a lock on the parent list.
   } z_listview_i64_t;
   """
 
-Field order matches the first two fields of #~"list": #~"length" first,
+Field order matches the first two fields of #~"List": #~"length" first,
 #~"data" second. This enables zero-cost casting from a #~"z_list_i64_t*" to a
 #~"z_listview_i64_t*" -- the memory is reinterpreted without copying.
 
@@ -726,7 +726,7 @@ data it points to is owned by the parent list.
 The listview holds a compile-time lock on the source list:
 
 #code language=zerolang: """
-  nums: (list of: i64)
+  nums: (List of: i64)
   nums.append from: 10
   nums.append from: 20
   nums.append from: 30
@@ -741,7 +741,7 @@ The listview holds a compile-time lock on the source list:
 #ul:
   #*: #~"get(i: u64) out of" -- bounds-checked element access
   #*: #~"length() out u64" -- number of elements in the view
-  #*: #~"list() out list" -- materialise a new owned list from the view (copies data)
+  #*: #~"List() out List" -- materialise a new owned list from the view (copies data)
 
 #---: Zerolang Definition
 
@@ -749,16 +749,16 @@ The listview holds a compile-time lock on the source list:
   listview: class {
       get: function {:this i: u64} out of is native
       length: function {:this} out u64 is native
-      list: function {:this} out (list of: of) is native
+      list: function {:this} out (List of: of) is native
   } as {
-      of: any.generic
+      of: Any.generic
   }
   """
 
 
 #--: string -- Changed
 
-#~"string" is a growable UTF-8 byte buffer. The struct lives on the stack; only
+#~"String" is a growable UTF-8 byte buffer. The struct lives on the stack; only
 the data buffer is heap-allocated. This is changed from the current
 flexible-array-member design where the entire string (struct + data) was a
 single heap allocation.
@@ -774,8 +774,8 @@ single heap allocation.
   """
 
 Field order: #~"size" first, #~"data" second, #~"capacity" last. This matches
-the field order of #~"list" (#~"length", #~"data", #~"capacity") for
-consistency. The first two fields (#~"size", #~"data") match #~"stringview"
+the field order of #~"List" (#~"length", #~"data", #~"capacity") for
+consistency. The first two fields (#~"size", #~"data") match #~"StringView"
 layout, enabling zero-cost casting. Putting #~"size" first also enables a
 future small-string optimisation (SSO) where the high bit of #~"size" marks
 inline storage and the remaining bytes of the struct store the string data
@@ -835,8 +835,8 @@ All runtime functions are updated for the new layout:
 
 #--: stringview -- Changed
 
-#~"stringview" is now a #+ class (changed from born-borrowed record). It is a
-read-only view into a #~"string", with single-owner semantics and a #~".lock"
+#~"StringView" is now a #+ class (changed from born-borrowed record). It is a
+read-only view into a #~"String", with single-owner semantics and a #~".lock"
 on the source string.
 
 #---: Memory Layout
@@ -849,7 +849,7 @@ on the source string.
   """
 
 Field order: #~"length" first, #~"data" second. This matches the first two
-fields of #~"string" (#~"size", #~"data"), enabling zero-cost casting from
+fields of #~"String" (#~"size", #~"data"), enabling zero-cost casting from
 #~"z_string_t*" to #~"z_stringview_t*".
 
 #---: Ownership
@@ -865,19 +865,19 @@ Stringview has no destructor (no heap allocations).
 
 #ul:
   #*: #~"length() out u64" -- byte count
-  #*: #~"string() out string" -- materialise a new owned string from the view
-  #*: #~"==(rhs: stringview) out bool" -- content comparison
-  #*: #~"!=(rhs: stringview) out bool" -- negated comparison
+  #*: #~"String() out String" -- materialise a new owned string from the view
+  #*: #~"==(rhs: StringView) out bool" -- content comparison
+  #*: #~"!=(rhs: StringView) out bool" -- negated comparison
 
 
 #--: option / optionval -- Impact
 
-#~"option" is a union with subtypes #~"{ some: T, none: null }". Under the new
-model, the #~"option" struct (#~"{ tag, void* }") moves to the stack but its
+#~"Option" is a union with subtypes #~"{ some: T, none: null }". Under the new
+model, the #~"Option" struct (#~"{ tag, void* }") moves to the stack but its
 subtype data is still heap-allocated (standard union behaviour).
 
 The nullable-pointer optimisation (#~"is_nullable_ptr") is preserved: for
-pointer-typed payloads (box, protocol, etc.), #~"option" is represented as a
+pointer-typed payloads (box, protocol, etc.), #~"Option" is represented as a
 bare pointer with #~"NULL" sentinel, avoiding the tag + void* overhead entirely.
 
 
@@ -908,7 +908,7 @@ without any special born-borrowed mechanism. The class can be moved
 Types that were born-borrowed records become classes:
 
 #ul:
-  [#*: #~"stringview": becomes a class with #~".lock" on the source string.]
+  [#*: #~"StringView": becomes a class with #~".lock" on the source string.]
   [#*: Iterators (eg. #~"bagiter"): become classes with #~".lock" on the
   container.]
   [#*: Any record with #~".lock" fields: becomes a class.]
@@ -933,7 +933,7 @@ Removing born-borrowed from valtypes is a simplification but has trade-offs:
   [#*: #+ Con: Existing code. All existing born-borrowed records must be
   migrated to classes. This is a one-time migration cost. The compiler should
   emit clear errors guiding the migration.]
-  [#*: #+ Con: Semantic shift. A #~"stringview" that was previously a value
+  [#*: #+ Con: Semantic shift. A #~"StringView" that was previously a value
   (cheaply passed around, no ownership tracking) becomes a reference (needs
   ownership tracking, borrow annotations). This adds some friction for common
   string-passing patterns. However, since born-borrowed stringviews were
@@ -964,7 +964,7 @@ current state.
   class field access uses #~"." (only method #~"this" and boxed items use
   #~"->"); destructors emit only when a class has owned fields that need
   cleanup.]
-  [#*: #+ Phase 3 -- Stack-allocate list structs. #~"list" struct on the
+  [#*: #+ Phase 3 -- Stack-allocate list structs. #~"List" struct on the
   stack; the data buffer remains on the heap.]
   [#*: #+ Phase 4 -- Rewrite string runtime. #~"z_string_t" becomes
   #~"{ size, data*, capacity }" on the stack with a heap data buffer.]
@@ -976,16 +976,16 @@ current state.
   [#*: #+ Phase 7 -- Extend #~".lock" fields to classes.]
   [#*: #+ Phase 8 -- Remove born-borrowed from valtypes. Records may no
   longer hold #~".lock" fields or heap-backed types; types that needed
-  them became classes (#~"stringview", iterators, views).]
-  [#*: #+ Phase 9 -- Implement #~"listview" as a read-only class view into
-  a #~"list".]
-  [#*: #+ Phase 10 -- Box refinements. #~"box(T)" adapted to work with
+  them became classes (#~"StringView", iterators, views).]
+  [#*: #+ Phase 9 -- Implement #~"ListView" as a read-only class view into
+  a #~"List".]
+  [#*: #+ Phase 10 -- Box refinements. #~"Box(T)" adapted to work with
   stack-allocated classes and born-boxed construction.]
 
 The compile-time restrictions that the refactor introduced are:
 
 #ul:
-  [#*: Record fields cannot be #~"string", #~"list", #~"box", #~"map" or any
+  [#*: Record fields cannot be #~"String", #~"List", #~"Box", #~"Map" or any
   other heap-backed type. They also cannot be another user class or union.
   Records are pure valtypes.]
   [#*: #~".lock" fields are permitted on classes only. A record with a
@@ -1289,14 +1289,14 @@ Summary of completed work:
   user at classes.]
   [#*: Removed all born-borrowed record pointer-receiver handling and
   method-dispatch wrapping from the emitter.]
-  [#*: #~"stringview" in #~"lib/system/system.z" became a class.]
-  [#*: Migrated #~"borrowed_record.z", #~"listiter.z", and #~"strview.z"
+  [#*: #~"StringView" in #~"lib/system/system.z" became a class.]
+  [#*: Migrated #~"borrowed_record.z", #~"ListIter.z", and #~"strview.z"
   examples to the class-based form.]
 
 
 #--: Phase 9: Implement listview \[COMPLETE\]
 
-Goal: add the #~"listview" generic type.
+Goal: add the #~"ListView" generic type.
 
 Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
 
@@ -1305,8 +1305,8 @@ Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
 #~"lib/system/collections.z":
 
 #ul:
-  [#*: Add #~"listview" type definition.]
-  [#*: Add #~"listview" method to #~"list".]
+  [#*: Add #~"ListView" type definition.]
+  [#*: Add #~"ListView" method to #~"List".]
 
 #~"ztypes.py":
 
@@ -1321,7 +1321,7 @@ Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
 #~"ztypecheck.py":
 
 #ul:
-  [#*: Resolve #~"listview" monomorphisation.]
+  [#*: Resolve #~"ListView" monomorphisation.]
   [#*: Set #~"is_valtype = False" (class), #~"is_heap_allocated = False",
   #~"needs_destructor = False".]
 
@@ -1329,9 +1329,9 @@ Dependency: Phase 3 (list on stack), Phase 7 (.lock on classes).
 
 #ul:
   [#*: Add #~"_emit_mono_listview()" -- struct, get, length, list methods.]
-  [#*: Add #~"list.listview" method emission.]
+  [#*: Add #~"List.listview" method emission.]
 
-Testing: new test cases. New #~"examples/listview.z".
+Testing: new test cases. New #~"examples/ListView.z".
 
 
 #--: Phase 10: Box Refinements \[COMPLETE\]
@@ -1346,12 +1346,12 @@ Dependency: Phase 2 (classes on stack).
 #~"zemitterc.py" -- #~"_emit_mono_box()" (line 2063):
 
 #ul:
-  [#*: For #~"box(class_with_destructor)": destructor calls inner destructor +
+  [#*: For #~"Box(class_with_destructor)": destructor calls inner destructor +
   #~"free(v)".]
   [#*: For born-boxed construction: emit heap-allocating #~"meta.create" that
   constructs in-place.]
 
-Testing: update #~"box.z" example. Add tests for #~"box(class)".
+Testing: update #~"Box.z" example. Add tests for #~"Box(class)".
 
 
 #-: Pros, Cons, and Risks
@@ -1380,10 +1380,10 @@ Testing: update #~"box.z" example. Add tests for #~"box(class)".
 #ul:
   [#*: #+ Stack size. Large class structs consume stack space. For deeply
   recursive functions with large local classes, stack overflow is possible.
-  Mitigation: #~"box(T)" provides explicit opt-in to heap allocation.]
+  Mitigation: #~"Box(T)" provides explicit opt-in to heap allocation.]
   [#*: #+ Struct copy cost. Moving a large class (via #~".take" or function
   return) copies the entire struct. NRVO mitigates returns, but #~".take"
-  always copies. For large structs, #~"box" should be preferred.]
+  always copies. For large structs, #~"Box" should be preferred.]
   [#*: #+ Variant size. Inline tagged variants use the size of the largest
   subtype. For variants with subtypes of very different sizes, this wastes
   stack space. Rarely an issue in practice since variant subtypes must be
@@ -1393,7 +1393,7 @@ Testing: update #~"box.z" example. Add tests for #~"box(class)".
   [#*: #+ Born-borrowed migration cost. All born-borrowed records had to be
   rewritten as classes. One-time cost, now absorbed.]
   [#*: #+ Recursive types. Self-referential types (linked list nodes, tree
-  nodes) must use #~"box(self)" for the recursive field. Error message should
+  nodes) must use #~"Box(self)" for the recursive field. Error message should
   be clear.]
 
 
@@ -1419,17 +1419,17 @@ Testing: update #~"box.z" example. Add tests for #~"box(class)".
   string struct. The high bit can mark inline storage. When set, the remaining
   bytes of the struct (data pointer + capacity = 16 bytes) store the string
   data directly, avoiding a heap allocation for strings up to 15 bytes. The
-  same #~"size-first" layout applies to #~"stringview", #~"list", and
-  #~"listview" for consistency.]
+  same #~"size-first" layout applies to #~"StringView", #~"List", and
+  #~"ListView" for consistency.]
   [#*: #+ In-place list element creation. Construct elements directly in the
   data buffer without a stack intermediate.]
-  [#*: #+ Box swap across types. Allow swapping #~"box(T)" with #~"T" for the
+  [#*: #+ Box swap across types. Allow swapping #~"Box(T)" with #~"T" for the
   same underlying type.]
   [#*: #+ Automatic boxing. Compiler-inferred boxing when a class is passed to
-  a function expecting #~"box(T)".]
+  a function expecting #~"Box(T)".]
   [#*: #+ Move semantics. Elide struct copies when the compiler can prove the
   source is unused after the move.]
-  [#*: #+ Arena allocation. Allow #~"box" and #~"list" to allocate from a
+  [#*: #+ Arena allocation. Allow #~"Box" and #~"List" to allocate from a
   user-provided arena.]
 
 

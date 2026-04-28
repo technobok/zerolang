@@ -156,37 +156,37 @@ Table of Contents</div>
 <h2 id="overview"><a href="#overview">1. Overview</a></h2>
 <p>The <code>io</code> unit provides input / output: stream protocols, file
 handles, filesystem operations, buffered readers / writers, and
-the standard streams. Most entry points return <code>result t: T e:
-ioerror</code> so failures are explicit and type-checked. The unit is
+the standard streams. Most entry points return <code>Result t: T e:
+IoError</code> so failures are explicit and type-checked. The unit is
 accessed via qualified names -- <code>io.open ...</code>, <code>io.stdout</code>;
-the core types (<code>reader</code>, <code>writer</code>, <code>file</code>, <code>openmode</code>,
-<code>ioerror</code>, ...) are re-exported unqualified by <code>core</code>.</p>
+the core types (<code>Reader</code>, <code>Writer</code>, <code>File</code>, <code>openmode</code>,
+<code>IoError</code>, ...) are re-exported unqualified by <code>core</code>.</p>
 <p><strong>Design principles.</strong></p>
 <ul>
-<li><strong>result-first.</strong> Every fallible operation returns
-<code>result t: T e: ioerror</code>. Callers pattern-match or propagate
+<li><strong>Result-first.</strong> Every fallible operation returns
+<code>Result t: T e: IoError</code>. Callers pattern-match or propagate
 with <code>return</code></li>
-<li><strong>Byte-oriented core, text layered on top.</strong>
-<code>reader</code> / <code>writer</code> / <code>file</code> speak <code>bytes</code> /
-<code>byteview</code>. UTF-8 decoding and line splitting live in the
-text wrappers (<code>textreader</code>, <code>textwriter</code>)</li>
-<li><strong>RAII file handles.</strong> <code>file</code> closes its fd on scope
+<li><strong>Byte-oriented core, Text layered on top.</strong>
+<code>Reader</code> / <code>Writer</code> / <code>File</code> speak <code>Bytes</code> /
+<code>ByteView</code>. UTF-8 decoding and line splitting live in the
+text wrappers (<code>TextReader</code>, <code>TextWriter</code>)</li>
+<li><strong>RAII File handles.</strong> <code>File</code> closes its fd on scope
 exit unless the caller has already invoked <code>close</code>
 explicitly to surface a delayed-write error</li>
 <li><strong>Path-scoped locks on adapters.</strong> Buffered wrappers
-(<code>bufwriter</code>, <code>bufreader</code>) and text wrappers hold a
+(<code>BufWriter</code>, <code>BufReader</code>) and text wrappers hold a
 <code>.lock</code> borrow on their sink / source. The underlying
 writer / reader is compiler-enforced locked for the wrapper's
 lifetime</li>
 <li><strong>Stdin / stdout / stderr as protocol handles.</strong>
-<code>io.stdin</code> returns a <code>reader</code>, <code>io.stdout</code> /
-<code>io.stderr</code> return <code>writer</code>. Each is a borrowed view over
+<code>io.stdin</code> returns a <code>Reader</code>, <code>io.stdout</code> /
+<code>io.stderr</code> return <code>Writer</code>. Each is a borrowed view over
 a static fd; scope exit does not close the underlying fd</li>
 </ul>
 <h2 id="index"><a href="#index">2. Index</a></h2>
 <p><strong>Error and status types</strong></p>
 <ul>
-<li><a href="#ioerror"><strong>ioerror</strong> -- <code>union { notfound: null ... other: string }</code></a></li>
+<li><a href="#ioerror"><strong>IoError</strong> -- <code>union { notfound: null ... other: String }</code></a></li>
 <li><a href="#filekind"><strong>filekind</strong> -- <code>variant { file: null  dir: null  symlink: null  other: null }</code></a></li>
 <li><a href="#filestat"><strong>filestat</strong> -- <code>record { kind: filekind  size: u64  ... mode: u32 ... }</code></a></li>
 <li><a href="#seekorigin"><strong>seekorigin</strong> -- <code>variant { start: null  current: null  end: null }</code></a></li>
@@ -194,80 +194,80 @@ a static fd; scope exit does not close the underlying fd</li>
 </ul>
 <p><strong>Stream protocols</strong></p>
 <ul>
-<li><a href="#reader"><strong>reader</strong> -- <code>protocol { read: function {:this into: bytes max: u64} out (result t: u64 e: ioerror) }</code></a></li>
-<li><a href="#writer"><strong>writer</strong> -- <code>protocol { write: ...  flush: ... }</code></a></li>
-<li><a href="#closer"><strong>closer</strong> -- <code>protocol { close: function {:this} out (result t: null e: ioerror) }</code></a></li>
-<li><a href="#seeker"><strong>seeker</strong> -- <code>protocol { seek: function {:this to: i64 from: seekorigin} out (result t: u64 e: ioerror) }</code></a></li>
+<li><a href="#reader"><strong>Reader</strong> -- <code>protocol { read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) }</code></a></li>
+<li><a href="#writer"><strong>Writer</strong> -- <code>protocol { write: ...  flush: ... }</code></a></li>
+<li><a href="#closer"><strong>Closer</strong> -- <code>protocol { close: function {:this} out (Result t: null e: IoError) }</code></a></li>
+<li><a href="#seeker"><strong>Seeker</strong> -- <code>protocol { seek: function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError) }</code></a></li>
 </ul>
 <p><strong>File handle</strong></p>
 <ul>
-<li><a href="#file"><strong>file</strong> -- <code>class { fd: i32  closed: bool  ... } as { :reader :writer :closer :seeker }</code></a></li>
-<li><a href="#open"><strong>io.open</strong> -- <code>function {path: stringview mode: openmode} out (result t: file e: ioerror)</code></a></li>
+<li><a href="#file"><strong>File</strong> -- <code>class { fd: i32  closed: bool  ... } as { :Reader :Writer :Closer :Seeker }</code></a></li>
+<li><a href="#open"><strong>io.open</strong> -- <code>function {path: StringView mode: openmode} out (Result t: File e: IoError)</code></a></li>
 </ul>
 <p><strong>Standard streams</strong></p>
 <ul>
-<li><a href="#standard-streams"><strong>io.stdin</strong> -- <code>function out reader</code></a></li>
-<li><a href="#standard-streams"><strong>io.stdout</strong> -- <code>function out writer</code></a></li>
-<li><a href="#standard-streams"><strong>io.stderr</strong> -- <code>function out writer</code></a></li>
+<li><a href="#standard-streams"><strong>io.stdin</strong> -- <code>function out Reader</code></a></li>
+<li><a href="#standard-streams"><strong>io.stdout</strong> -- <code>function out Writer</code></a></li>
+<li><a href="#standard-streams"><strong>io.stderr</strong> -- <code>function out Writer</code></a></li>
 </ul>
 <p><strong>Text output</strong></p>
 <ul>
-<li><a href="#print"><strong>print</strong> -- <code>function as { T: stringlike.generic } in { msg: T }</code></a></li>
-<li><a href="#eprintln"><strong>io.eprintln</strong> -- <code>function {msg: stringview}</code></a></li>
+<li><a href="#print"><strong>print</strong> -- <code>function as { T: StringLike.generic } in { msg: T }</code></a></li>
+<li><a href="#eprintln"><strong>io.eprintln</strong> -- <code>function {msg: StringView}</code></a></li>
 </ul>
-<p><strong>One-shot file helpers</strong></p>
+<p><strong>One-shot File helpers</strong></p>
 <ul>
-<li><a href="#read-text"><strong>io.read_text</strong> -- <code>function {path: stringview} out (result t: string e: ioerror)</code></a></li>
-<li><a href="#write-text"><strong>io.write_text</strong> -- <code>function {path: stringview content: stringview} out (result t: null e: ioerror)</code></a></li>
-<li><a href="#append-text"><strong>io.append_text</strong> -- <code>function {path: stringview content: stringview} out (result t: null e: ioerror)</code></a></li>
+<li><a href="#read-text"><strong>io.readText</strong> -- <code>function {path: StringView} out (Result t: String e: IoError)</code></a></li>
+<li><a href="#write-text"><strong>io.writeText</strong> -- <code>function {path: StringView content: StringView} out (Result t: null e: IoError)</code></a></li>
+<li><a href="#append-text"><strong>io.appendText</strong> -- <code>function {path: StringView content: StringView} out (Result t: null e: IoError)</code></a></li>
 </ul>
 <p><strong>Filesystem queries</strong></p>
 <ul>
-<li><a href="#exists"><strong>io.exists</strong> -- <code>function {path: stringview} out bool</code></a></li>
-<li><a href="#stat"><strong>io.stat</strong> -- <code>function {path: stringview} out (result t: filestat e: ioerror)</code></a></li>
-<li><a href="#lstat"><strong>io.lstat</strong> -- <code>function {path: stringview} out (result t: filestat e: ioerror)</code></a></li>
-<li><a href="#readlink"><strong>io.readlink</strong> -- <code>function {path: stringview} out (result t: string e: ioerror)</code></a></li>
-<li><a href="#list-dir"><strong>io.list_dir</strong> -- <code>function {path: stringview} out (result t: (list of: string) e: ioerror)</code></a></li>
+<li><a href="#exists"><strong>io.exists</strong> -- <code>function {Path: StringView} out bool</code></a></li>
+<li><a href="#stat"><strong>io.stat</strong> -- <code>function {path: StringView} out (Result t: filestat e: IoError)</code></a></li>
+<li><a href="#lstat"><strong>io.lstat</strong> -- <code>function {path: StringView} out (Result t: filestat e: IoError)</code></a></li>
+<li><a href="#readlink"><strong>io.readlink</strong> -- <code>function {path: StringView} out (Result t: String e: IoError)</code></a></li>
+<li><a href="#list-dir"><strong>io.listDir</strong> -- <code>function {path: StringView} out (Result t: (List of: String) e: IoError)</code></a></li>
 </ul>
 <p><strong>Filesystem mutation</strong></p>
 <ul>
-<li><a href="#mkdir"><strong>io.mkdir</strong> -- <code>function {path: stringview} out (result t: null e: ioerror)</code></a></li>
-<li><a href="#mkdirp"><strong>io.mkdirp</strong> -- <code>function {path: stringview} out (result t: null e: ioerror)</code></a></li>
-<li><a href="#remove"><strong>io.remove</strong> -- <code>function {path: stringview} out (result t: null e: ioerror)</code></a></li>
-<li><a href="#rename"><strong>io.rename</strong> -- <code>function {from: stringview to: stringview} out (result t: null e: ioerror)</code></a></li>
-<li><a href="#symlink"><strong>io.symlink</strong> -- <code>function {target: stringview link: stringview} out (result t: null e: ioerror)</code></a></li>
+<li><a href="#mkdir"><strong>io.mkdir</strong> -- <code>function {Path: StringView} out (Result t: null e: IoError)</code></a></li>
+<li><a href="#mkdirp"><strong>io.mkdirp</strong> -- <code>function {Path: StringView} out (Result t: null e: IoError)</code></a></li>
+<li><a href="#remove"><strong>io.remove</strong> -- <code>function {Path: StringView} out (Result t: null e: IoError)</code></a></li>
+<li><a href="#rename"><strong>io.rename</strong> -- <code>function {from: StringView to: StringView} out (Result t: null e: IoError)</code></a></li>
+<li><a href="#symlink"><strong>io.symlink</strong> -- <code>function {target: StringView link: StringView} out (Result t: null e: IoError)</code></a></li>
 </ul>
 <p><strong>Buffered adapters</strong></p>
 <ul>
-<li><a href="#bufwriter"><strong>bufwriter</strong> -- <code>class { sink: writer.lock  buf: bytes  cap: u64 } as { :writer }</code></a></li>
-<li><a href="#bufreader"><strong>bufreader</strong> -- <code>class { source: reader.lock  buf: bytes  head: u64  cap: u64 } as { :reader }</code></a></li>
+<li><a href="#bufwriter"><strong>BufWriter</strong> -- <code>class { sink: Writer.lock  buf: Bytes  cap: u64 } as { :Writer }</code></a></li>
+<li><a href="#bufreader"><strong>BufReader</strong> -- <code>class { source: Reader.lock  buf: Bytes  head: u64  cap: u64 } as { :Reader }</code></a></li>
 </ul>
 <p><strong>Text adapters</strong></p>
 <ul>
-<li><a href="#textwriter"><strong>textwriter</strong> -- <code>class { sink: bufwriter.lock }</code></a></li>
-<li><a href="#textreader"><strong>textreader</strong> -- <code>class { source: bufreader.lock  buf: bytes }</code></a></li>
+<li><a href="#textwriter"><strong>TextWriter</strong> -- <code>class { sink: BufWriter.lock }</code></a></li>
+<li><a href="#textreader"><strong>TextReader</strong> -- <code>class { source: BufReader.lock  buf: Bytes }</code></a></li>
 </ul>
 <h2 id="ioerror"><a href="#ioerror">3. ioerror</a></h2>
 <pre><code class="language-zerolang">  ioerror: union {
       notfound:         null
       permissiondenied: null
       interrupted:      null
-      invalidpath:      string
+      invalidpath:      String
       eof:              null
       badencoding:      null
       exists:           null
       isdir:            null
       notdir:           null
       nospace:          null
-      other:            string
+      other:            String
   }</code></pre>
 <p>The failure arm of every fallible I/O operation. A union (not a
 variant) because two arms -- <code>invalidpath</code> and <code>other</code> --
-carry a <code>string</code> payload, and variants cannot hold reftypes.</p>
+carry a <code>String</code> payload, and variants cannot hold reftypes.</p>
 <p>The runtime constructs the appropriate variant from the
 underlying <code>errno</code>; user code pattern-matches the specific
 arms it cares about and treats the rest as <code>other</code>:</p>
-<pre><code class="language-zerolang">  match (io.read_text path: p)
+<pre><code class="language-zerolang">  match (io.readText path: p)
   case ok then handle ok
   case err then match (err)
       case notfound         then ...
@@ -304,9 +304,9 @@ followed so <code>symlink</code> only surfaces from <code>io.lstat</code>.</p>
 <pre><code class="language-zerolang">  filestat: record {
       kind:          filekind
       size:          u64
-      mtime_seconds: u64
-      atime_seconds: u64
-      ctime_seconds: u64
+      mtimeSeconds: u64
+      atimeSeconds: u64
+      ctimeSeconds: u64
       mode:          u32
       device:        u64
       inode:         u64
@@ -319,7 +319,7 @@ valtype: copied on assignment.</p>
 <li><code>kind</code> -- <code>filekind</code> classification</li>
 <li><code>size</code> -- byte length for files; implementation-defined
 for directories and special files</li>
-<li><code>mtime_seconds</code> / <code>atime_seconds</code> / <code>ctime_seconds</code>
+<li><code>mtimeSeconds</code> / <code>atimeSeconds</code> / <code>ctimeSeconds</code>
 -- Unix-epoch seconds (modified / accessed / changed). These
 will migrate to a typed <code>time</code> field in a follow-up when
 the time type lands</li>
@@ -340,7 +340,7 @@ filesystem object</li>
       current: null
       end:     null
   }</code></pre>
-<p>Origin for <code>seeker.seek to:</code> offsets. <code>start</code> is the byte-0
+<p>Origin for <code>Seeker.seek to:</code> offsets. <code>start</code> is the byte-0
 reference; <code>current</code> uses the current head; <code>end</code> is the
 end of the stream (combine with a negative offset to seek
 backwards).</p>
@@ -361,71 +361,71 @@ appends</li>
 </ul>
 <h2 id="reader"><a href="#reader">8. reader</a></h2>
 <pre><code class="language-zerolang">  reader: protocol {
-      read: function {:this into: bytes max: u64} out (result t: u64 e: ioerror)
+      read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError)
   }</code></pre>
 <p>Byte-oriented readable stream. Implementors fill <code>into</code> with
 up to <code>max</code> bytes and return the count actually read; <code>0</code>
-indicates EOF. <code>file</code> conforms directly; <code>bufreader</code> wraps
-any <code>reader</code> and issues fewer, larger source reads.</p>
-<p><strong>Ownership.</strong> <code>into: bytes</code> is borrowed in place -- the
+indicates EOF. <code>File</code> conforms directly; <code>BufReader</code> wraps
+any <code>Reader</code> and issues fewer, larger source reads.</p>
+<p><strong>Ownership.</strong> <code>into: Bytes</code> is borrowed in place -- the
 implementation appends into the caller's buffer and the caller
 sees the new bytes after return.</p>
 <h2 id="writer"><a href="#writer">9. writer</a></h2>
 <pre><code class="language-zerolang">  writer: protocol {
-      write: function {:this from: byteview} out (result t: u64 e: ioerror)
-      flush: function {:this} out (result t: null e: ioerror)
+      write: function {:this from: ByteView} out (Result t: u64 e: IoError)
+      flush: function {:this} out (Result t: null e: IoError)
   }</code></pre>
 <p>Byte-oriented writable stream. <code>write from: bv</code> emits the
 view's bytes; the return value is the count actually written
 (may be short). <code>flush</code> forces buffered output to its final
 destination -- a no-op on raw POSIX fds, meaningful for buffered
 adapters.</p>
-<p>Implementors: <code>file</code>, <code>bufwriter</code>. Callers should invoke
+<p>Implementors: <code>File</code>, <code>BufWriter</code>. Callers should invoke
 <code>flush</code> before dropping a buffered wrapper -- the wrappers do
 not auto-flush on scope exit.</p>
 <h2 id="closer"><a href="#closer">10. closer</a></h2>
 <pre><code class="language-zerolang">  closer: protocol {
-      close: function {:this} out (result t: null e: ioerror)
+      close: function {:this} out (Result t: null e: IoError)
   }</code></pre>
 <p>Explicit resource release. Errors here typically indicate a
 delayed write failure (kernel-buffered data couldn't be
 flushed). Calling <code>close</code> more than once is rejected at the
 type-check stage by the standard ownership rules.</p>
-<p>Implementors: <code>file</code>.</p>
+<p>Implementors: <code>File</code>.</p>
 <h2 id="seeker"><a href="#seeker">11. seeker</a></h2>
 <pre><code class="language-zerolang">  seeker: protocol {
-      seek: function {:this to: i64 from: seekorigin} out (result t: u64 e: ioerror)
+      seek: function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError)
   }</code></pre>
 <p>Reposition the read / write head. Returns the new absolute
 position measured from the start.</p>
-<p>Implementors: <code>file</code>.</p>
+<p>Implementors: <code>File</code>.</p>
 <h2 id="file"><a href="#file">12. file</a></h2>
 <pre><code class="language-zerolang">  file: class {
       fd:     i32
       closed: bool
-      close:  function {:this} out (result t: null e: ioerror) is native
-      read:   function {:this into: bytes max: u64} out (result t: u64 e: ioerror) is native
-      write:  function {:this from: byteview} out (result t: u64 e: ioerror) is native
-      flush:  function {:this} out (result t: null e: ioerror) is native
-      seek:   function {:this to: i64 from: seekorigin} out (result t: u64 e: ioerror) is native
+      close:  function {:this} out (Result t: null e: IoError) is native
+      read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
+      write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
+      flush:  function {:this} out (Result t: null e: IoError) is native
+      seek:   function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError) is native
   } as {
-      :reader
-      :writer
-      :closer
-      :seeker
+      :Reader
+      :Writer
+      :Closer
+      :Seeker
   }</code></pre>
 <p>An open OS file handle. Wraps a POSIX file descriptor.
 Single-owner: scope exit runs the destructor, which closes the
 fd unless <code>closed == true</code> (an explicit <code>.close</code> already
 happened).</p>
-<p><strong>Protocol conformance.</strong> <code>file</code> declares all four stream
-protocols. Project to a specific role via <code>.reader</code>,
-<code>.writer</code>, <code>.closer</code>, <code>.seeker</code>; the projection is a
+<p><strong>Protocol conformance.</strong> <code>File</code> declares all four stream
+protocols. Project to a specific role via <code>.Reader</code>,
+<code>.Writer</code>, <code>.Closer</code>, <code>.Seeker</code>; the projection is a
 borrowed protocol handle dispatching through a static vtable.
-Collection-typed parameters (<code>bytes</code>, <code>byteview</code>) travel
+Collection-typed parameters (<code>Bytes</code>, <code>ByteView</code>) travel
 through the vtable by pointer so in-place mutation stays visible
 across the protocol boundary.</p>
-<p><strong>Lifetime.</strong> The typical idiom is to hold the <code>file</code>
+<p><strong>Lifetime.</strong> The typical idiom is to hold the <code>File</code>
 directly and rely on RAII:</p>
 <pre><code class="language-zerolang">  match (io.open path: "in.txt" mode: (openmode.read null))
   case ok then {
@@ -439,8 +439,8 @@ directly and rely on RAII:</p>
       match (f.close) case ok then {} case err then io.eprintln ...
   }</code></pre>
 <h2 id="open"><a href="#open">13. open</a></h2>
-<pre><code class="language-zerolang">  open: function {path: stringview mode: openmode} out (result t: file e: ioerror) is native</code></pre>
-<p>Acquire a <code>file</code> handle at <code>path</code> in the requested mode.
+<pre><code class="language-zerolang">  open: function {path: StringView mode: openmode} out (Result t: File e: IoError) is native</code></pre>
+<p>Acquire a <code>File</code> handle at <code>Path</code> in the requested mode.
 The returned file owns its fd.</p>
 <pre><code class="language-zerolang">  match (io.open path: "config.toml" mode: (openmode.read null))
   case ok then parse ok
@@ -449,9 +449,9 @@ The returned file owns its fd.</p>
       case permissiondenied then ...
       case other            then io.eprintln ...</code></pre>
 <h2 id="standard-streams"><a href="#standard-streams">14. Standard streams</a></h2>
-<pre><code class="language-zerolang">  stdin:  function out reader  is native
-  stdout: function out writer  is native
-  stderr: function out writer  is native</code></pre>
+<pre><code class="language-zerolang">  stdin:  function out Reader  is native
+  stdout: function out Writer  is native
+  stderr: function out Writer  is native</code></pre>
 <p>Borrowed protocol handles over the three static POSIX fds (0 /
 1 / 2). Each call returns a fresh handle but the underlying fd
 is shared; there is no RAII close -- scope exit does nothing to
@@ -460,15 +460,15 @@ the fd.</p>
   w.write from: "hello\n".byteview</code></pre>
 <p>Most text output goes through <code>print</code>, which wraps
 <code>io.stdout</code> internally. Use the raw stream when you need
-<code>writer</code> semantics or want to wrap in a <code>bufwriter</code>.</p>
+<code>Writer</code> semantics or want to wrap in a <code>BufWriter</code>.</p>
 <h2 id="print"><a href="#print">15. print</a></h2>
-<pre><code class="language-zerolang">  print: function as { T: stringlike.generic } in { msg: T } is native</code></pre>
+<pre><code class="language-zerolang">  print: function as { T: StringLike.generic } in { msg: T } is native</code></pre>
 <p>Write <code>msg</code> to stdout, followed by a newline.</p>
-<p><code>T: stringlike.generic</code> accepts either <code>stringview</code> (fast
-path) or any type declaring <code>:text</code> conformance (dispatches
-through the <code>.stringview</code> method). <code>string</code> conforms, as
+<p><code>T: StringLike.generic</code> accepts either <code>StringView</code> (fast
+path) or any type declaring <code>:Text</code> conformance (dispatches
+through the <code>.stringview</code> method). <code>String</code> conforms, as
 does <code>str to: N</code> and any user aggregate that declares
-<code>:text</code>.</p>
+<code>:Text</code>.</p>
 <pre><code class="language-zerolang">  print "hello".stringview
   s: "world".string
   print s                          # implicit .stringview projection
@@ -477,52 +477,52 @@ does <code>str to: N</code> and any user aggregate that declares
 <p>Re-exported unqualified by <code>core</code>, so <code>print x</code> suffices
 without <code>io.</code>.</p>
 <h2 id="eprintln"><a href="#eprintln">16. eprintln</a></h2>
-<pre><code class="language-zerolang">  eprintln: function {msg: stringview} is native</code></pre>
+<pre><code class="language-zerolang">  eprintln: function {msg: StringView} is native</code></pre>
 <p>Write <code>msg</code> to stderr followed by a newline. Void return --
 intentionally never fails; if the underlying write errors, the
-message is silently dropped. Use the <code>file</code> / <code>writer</code>
+message is silently dropped. Use the <code>File</code> / <code>Writer</code>
 API for error-reporting writes that need to surface failures.</p>
 <h2 id="read-text"><a href="#read-text">17. read_text</a></h2>
-<pre><code class="language-zerolang">  read_text: function {path: stringview} out (result t: string e: ioerror) is native</code></pre>
-<p>Read the entire file at <code>path</code> into a newly-allocated heap
+<pre><code class="language-zerolang">  readText: function {path: StringView} out (Result t: String e: IoError) is native</code></pre>
+<p>Read the entire file at <code>Path</code> into a newly-allocated heap
 UTF-8 string. No encoding validation in this phase -- bytes are
 read verbatim; <code>badencoding</code> is reserved for future use when
 a text reader validates UTF-8 during iteration.</p>
 <h2 id="write-text"><a href="#write-text">18. write_text</a></h2>
-<pre><code class="language-zerolang">  write_text: function {path: stringview content: stringview} out (result t: null e: ioerror) is native</code></pre>
-<p>Create (or truncate) the file at <code>path</code> and write <code>content</code>.
+<pre><code class="language-zerolang">  writeText: function {path: StringView content: StringView} out (Result t: null e: IoError) is native</code></pre>
+<p>Create (or truncate) the file at <code>Path</code> and write <code>content</code>.
 Intermediate directories are NOT created -- the parent directory
 must already exist. Use <code>io.mkdirp</code> first if needed.</p>
 <h2 id="append-text"><a href="#append-text">19. append_text</a></h2>
-<pre><code class="language-zerolang">  append_text: function {path: stringview content: stringview} out (result t: null e: ioerror) is native</code></pre>
-<p>Open (or create) the file at <code>path</code> and append <code>content</code> to
+<pre><code class="language-zerolang">  appendText: function {path: StringView content: StringView} out (Result t: null e: IoError) is native</code></pre>
+<p>Open (or create) the file at <code>Path</code> and append <code>content</code> to
 the end. Atomicity is not guaranteed across multiple processes;
 use OS-level locks for that.</p>
 <h2 id="exists"><a href="#exists">20. exists</a></h2>
-<pre><code class="language-zerolang">  exists: function {path: stringview} out bool is native</code></pre>
+<pre><code class="language-zerolang">  exists: function {path: StringView} out bool is native</code></pre>
 <p>Returns true if anything (file, directory, symlink, ...) exists
-at <code>path</code>. A permission-denied on the parent directory also
+at <code>Path</code>. A permission-denied on the parent directory also
 surfaces as false. If you need to distinguish missing from
 permission-denied, use <code>stat</code>.</p>
 <h2 id="stat"><a href="#stat">21. stat</a></h2>
-<pre><code class="language-zerolang">  stat: function {path: stringview} out (result t: filestat e: ioerror) is native</code></pre>
-<p>Return metadata for <code>path</code>. Follows symlinks -- use
+<pre><code class="language-zerolang">  stat: function {path: StringView} out (Result t: filestat e: IoError) is native</code></pre>
+<p>Return metadata for <code>Path</code>. Follows symlinks -- use
 <code>io.lstat</code> to inspect the link itself. Errors surface in the
 standard ioerror shape.</p>
 <h2 id="lstat"><a href="#lstat">22. lstat</a></h2>
-<pre><code class="language-zerolang">  lstat: function {path: stringview} out (result t: filestat e: ioerror) is native</code></pre>
+<pre><code class="language-zerolang">  lstat: function {path: StringView} out (Result t: filestat e: IoError) is native</code></pre>
 <p>Like <code>stat</code> but does not follow symlinks. On a symbolic link,
-<code>kind</code> is <code>symlink</code> and <code>size</code>, <code>mtime_seconds</code>,
+<code>kind</code> is <code>symlink</code> and <code>size</code>, <code>mtimeSeconds</code>,
 <code>mode</code> describe the link itself rather than its target.</p>
 <h2 id="readlink"><a href="#readlink">23. readlink</a></h2>
-<pre><code class="language-zerolang">  readlink: function {path: stringview} out (result t: string e: ioerror) is native</code></pre>
+<pre><code class="language-zerolang">  readlink: function {path: StringView} out (Result t: String e: IoError) is native</code></pre>
 <p>Return the target path a symbolic link points at. Does not
-follow the link. Errors: <code>notfound</code> when <code>path</code> does not
+follow the link. Errors: <code>notfound</code> when <code>Path</code> does not
 exist, <code>invalidpath</code> when it exists but is not a symlink, the
 usual permission / I/O arms otherwise.</p>
 <h2 id="list-dir"><a href="#list-dir">24. list_dir</a></h2>
-<pre><code class="language-zerolang">  list_dir: function {path: stringview} out (result t: (list of: string) e: ioerror) is native</code></pre>
-<p>Enumerate the entries of directory <code>path</code>. Returns bare entry
+<pre><code class="language-zerolang">  listDir: function {path: StringView} out (Result t: (List of: String) e: IoError) is native</code></pre>
+<p>Enumerate the entries of directory <code>Path</code>. Returns bare entry
 names (not full paths), excluding <code>.</code> and <code>..</code>, in the order
 <code>readdir(2)</code> produces them (filesystem order; no sort). The
 returned list and its strings are owned by the caller.</p>
@@ -530,71 +530,71 @@ returned list and its strings are owned by the caller.</p>
 when it exists but isn't a directory, <code>permissiondenied</code> when
 the process can't read it.</p>
 <h2 id="mkdir"><a href="#mkdir">25. mkdir</a></h2>
-<pre><code class="language-zerolang">  mkdir: function {path: stringview} out (result t: null e: ioerror) is native</code></pre>
-<p>Create a directory at <code>path</code> with default permissions
-(<code>0755</code>). Fails with <code>ioerror.exists</code> if the target already
-exists, and with <code>ioerror.notfound</code> if the parent directory
+<pre><code class="language-zerolang">  mkdir: function {path: StringView} out (Result t: null e: IoError) is native</code></pre>
+<p>Create a directory at <code>Path</code> with default permissions
+(<code>0755</code>). Fails with <code>IoError.exists</code> if the target already
+exists, and with <code>IoError.notfound</code> if the parent directory
 is missing. Use <code>io.mkdirp</code> to create intermediate parents.</p>
 <h2 id="mkdirp"><a href="#mkdirp">26. mkdirp</a></h2>
-<pre><code class="language-zerolang">  mkdirp: function {path: stringview} out (result t: null e: ioerror) is native</code></pre>
-<p>Create <code>path</code> and every missing parent directory along the
+<pre><code class="language-zerolang">  mkdirp: function {path: StringView} out (Result t: null e: IoError) is native</code></pre>
+<p>Create <code>Path</code> and every missing parent directory along the
 way (like <code>mkdir -p</code>). Permissions <code>0755</code> on each new
-directory. Succeeds silently if <code>path</code> already exists as a
-directory; fails with <code>ioerror.exists</code> if it exists as a
+directory. Succeeds silently if <code>Path</code> already exists as a
+directory; fails with <code>IoError.exists</code> if it exists as a
 file.</p>
 <h2 id="remove"><a href="#remove">27. remove</a></h2>
-<pre><code class="language-zerolang">  remove: function {path: stringview} out (result t: null e: ioerror) is native</code></pre>
+<pre><code class="language-zerolang">  remove: function {path: StringView} out (Result t: null e: IoError) is native</code></pre>
 <p>Delete a file or an empty directory. Non-empty directories
-fail with <code>ioerror.other</code> (ENOTEMPTY).</p>
+fail with <code>IoError.other</code> (ENOTEMPTY).</p>
 <h2 id="rename"><a href="#rename">28. rename</a></h2>
-<pre><code class="language-zerolang">  rename: function {from: stringview to: stringview} out (result t: null e: ioerror) is native</code></pre>
+<pre><code class="language-zerolang">  rename: function {from: StringView to: StringView} out (Result t: null e: IoError) is native</code></pre>
 <p>Move the entity at <code>from</code> to <code>to</code>. If <code>to</code> already
 exists, POSIX replaces it (file overwrites file; directory
-overwrites empty directory; otherwise <code>ioerror</code>). Atomic on
+overwrites empty directory; otherwise <code>IoError</code>). Atomic on
 the same filesystem.</p>
 <h2 id="symlink"><a href="#symlink">29. symlink</a></h2>
-<pre><code class="language-zerolang">  symlink: function {target: stringview link: stringview} out (result t: null e: ioerror) is native</code></pre>
+<pre><code class="language-zerolang">  symlink: function {target: StringView link: StringView} out (Result t: null e: IoError) is native</code></pre>
 <p>Create a symbolic link at <code>link</code> pointing at <code>target</code>. The
 target is stored verbatim -- not resolved, not validated, not
 made absolute. Fails with <code>exists</code> if <code>link</code> already refers
 to anything.</p>
 <h2 id="bufwriter"><a href="#bufwriter">30. bufwriter</a></h2>
 <pre><code class="language-zerolang">  bufwriter: class {
-      sink: writer.lock
-      buf:  bytes
+      sink: Writer.lock
+      buf:  Bytes
       cap:  u64
   } as {
-      :writer
-      create: function {to: writer.lock capacity: u64} out this is native
-      write:  function {:this from: byteview} out (result t: u64 e: ioerror) is native
-      flush:  function {:this} out (result t: null e: ioerror) is native
+      :Writer
+      create: function {to: Writer.lock capacity: u64} out this is native
+      write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
+      flush:  function {:this} out (Result t: null e: IoError) is native
   }</code></pre>
-<p>Buffered adapter over any <code>writer</code>. Accumulates up to <code>cap</code>
+<p>Buffered adapter over any <code>Writer</code>. Accumulates up to <code>cap</code>
 bytes in <code>buf</code>, flushing to the underlying sink when the
 buffer would overflow or on an explicit <code>flush</code>.</p>
 <p><strong>Flush is not automatic.</strong> Callers must invoke <code>flush</code>
 before the wrapper's scope ends, or buffered data is lost.</p>
-<p><strong>Lock on sink.</strong> Constructed with <code>writer.lock</code>, the
+<p><strong>Lock on sink.</strong> Constructed with <code>Writer.lock</code>, the
 wrapper holds an EXCLUSIVE lock on the original writer for its
 lifetime. The source writer cannot be mutated, borrowed again,
 or locked while the bufwriter is alive -- path-scoped locking
 rejects such access at the source.</p>
 <pre><code class="language-zerolang">  w: io.stdout
-  bw: io.bufwriter.create to: w.lock capacity: 16.u64
+  bw: io.BufWriter.create to: w.lock capacity: 16.u64
   bw.write from: "hello, world\n".byteview
   match (bw.flush) case ok then {} case err then io.eprintln "flush failed".stringview</code></pre>
 <h2 id="bufreader"><a href="#bufreader">31. bufreader</a></h2>
 <pre><code class="language-zerolang">  bufreader: class {
-      source: reader.lock
-      buf:    bytes
+      source: Reader.lock
+      buf:    Bytes
       head:   u64
       cap:    u64
   } as {
-      :reader
-      create: function {from: reader.lock capacity: u64} out this is native
-      read:   function {:this into: bytes max: u64} out (result t: u64 e: ioerror) is native
+      :Reader
+      create: function {from: Reader.lock capacity: u64} out this is native
+      read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
   }</code></pre>
-<p>Buffered adapter over any <code>reader</code>. Issues exactly one source
+<p>Buffered adapter over any <code>Reader</code>. Issues exactly one source
 <code>read</code> per <code>capacity</code> bytes of data, regardless of how many
 small <code>read</code> calls the caller makes. Requests larger than
 <code>capacity</code> bypass the internal buffer and forward straight to
@@ -603,24 +603,24 @@ the source so we never double-copy a full chunk.</p>
 the cursor -- bytes in <code>[head, buf.length)</code> are still to be
 handed out. When <code>head == buf.length</code> the buffer is drained
 and the next <code>read</code> call refills it from the source.</p>
-<p><strong>Lock on source.</strong> Same story as <code>bufwriter</code>: the source
-<code>reader</code> is locked for the wrapper's lifetime.</p>
+<p><strong>Lock on source.</strong> Same story as <code>BufWriter</code>: the source
+<code>Reader</code> is locked for the wrapper's lifetime.</p>
 <h2 id="textwriter"><a href="#textwriter">32. textwriter</a></h2>
 <pre><code class="language-zerolang">  textwriter: class {
-      sink: bufwriter.lock
+      sink: BufWriter.lock
   } as {
-      create:     function {to: bufwriter.lock} out this is native
-      write:      function {:this from: stringview} out (result t: u64 e: ioerror) is native
-      write_line: function {:this from: stringview} out (result t: u64 e: ioerror) is native
-      flush:      function {:this} out (result t: null e: ioerror) is native
+      create:     function {to: BufWriter.lock} out this is native
+      write:      function {:this from: StringView} out (Result t: u64 e: IoError) is native
+      writeLine: function {:this from: StringView} out (Result t: u64 e: IoError) is native
+      flush:      function {:this} out (Result t: null e: IoError) is native
   }</code></pre>
-<p>String-oriented adapter over a <code>bufwriter</code>. Writes go through
+<p>String-oriented adapter over a <code>BufWriter</code>. Writes go through
 the buffered sink so callers benefit from batched syscalls.</p>
 <p><strong>Methods.</strong></p>
 <ul>
-<li><code>write from: stringview</code> -- emit the view's bytes
+<li><code>write from: StringView</code> -- emit the view's bytes
 (assumed UTF-8; no re-validation)</li>
-<li><code>write_line from: stringview</code> -- emit the view's bytes
+<li><code>writeLine from: StringView</code> -- emit the view's bytes
 followed by <code>\n</code></li>
 <li><code>flush</code> -- forward a flush to the underlying bufwriter</li>
 </ul>
@@ -629,19 +629,19 @@ bufwriter locks the underlying writer. As with bufwriter,
 <code>flush</code> is not automatic on scope exit.</p>
 <h2 id="textreader"><a href="#textreader">33. textreader</a></h2>
 <pre><code class="language-zerolang">  textreader: class {
-      source: bufreader.lock
-      buf:    bytes
+      source: BufReader.lock
+      buf:    Bytes
   } as {
-      create:    function {from: bufreader.lock} out this is native
-      read_line: function {:this} out (result t: string e: ioerror) is native
-      call:      function {:this} out (option t: string) is native
+      create:    function {from: BufReader.lock} out this is native
+      readLine: function {:this} out (Result t: String e: IoError) is native
+      call:      function {:this} out (Option t: String) is native
   }</code></pre>
-<p>String-oriented adapter over a <code>bufreader</code>. Reads flow
+<p>String-oriented adapter over a <code>BufReader</code>. Reads flow
 through the buffered source; line boundaries are found by
 scanning the accumulated <code>buf</code> for LF (<code>\n</code>). UTF-8
 validation runs on each complete line before it is surfaced as
-a <code>string</code>; invalid sequences surface as
-<code>ioerror.badencoding</code>.</p>
+a <code>String</code>; invalid sequences surface as
+<code>IoError.badencoding</code>.</p>
 <p><strong>#~".read_line" semantics.</strong></p>
 <ul>
 <li><code>ok(s)</code> -- one line read; the trailing LF is stripped.
@@ -658,8 +658,8 @@ failure</li>
 <code>for line: tr loop { ... }</code> yields each line (LF stripped)
 until the stream drains. Every non-<code>ok</code> result -- including
 <code>badencoding</code> and any I/O failure -- collapses to
-<code>option.none</code> and terminates the loop silently. Callers who
-need to distinguish the error cause must call <code>read_line</code>
+<code>Option.none</code> and terminates the loop silently. Callers who
+need to distinguish the error cause must call <code>readLine</code>
 directly rather than iterate.</p>
 </main>
 </body>

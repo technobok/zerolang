@@ -99,7 +99,7 @@ There are two major families of types with different runtime behaviour
 types; the user defined compound value types are #~"record" (product value
 type) and #~"variant" (sum value type). Each copy is an independently owned
 value. Record fields are restricted to pure value data -- a record cannot
-contain #~"string", #~"list", #~"box", #~"map", or any other heap-backed type.
+contain #~"String", #~"List", #~"Box", #~"Map", or any other heap-backed type.
 
 Function references are also valtypes. A function reference is a small,
 copyable pointer to immutable program text. Using #~".take" on a function name
@@ -114,8 +114,8 @@ copied. Only one variable owns a reftype instance at a time; any additional
 variables that refer to it are borrowed.
 
 All user-defined types -- records, classes, variants, unions, protocol
-instances and facet instances -- are allocated on the stack. Only #~"box" and
-the backing buffers of #~"string", #~"list" and similar containers live on the
+instances and facet instances -- are allocated on the stack. Only #~"Box" and
+the backing buffers of #~"String", #~"List" and similar containers live on the
 heap. A class lives inline on the stack, but copying is disallowed: the single
 stack slot for a class is its identity.
 
@@ -342,10 +342,10 @@ hand an owned value to a destination that requires ownership (a
 constructor field, a list/map insert) but only have a borrowed source:
 
 #code language=zerolang: """
-  store: function {s: string} out box.bag is {
+  store: function {s: String} out Box.bag is {
       # `s` is borrowed from the caller; the box wants to own its label,
       # so clone the data into a fresh allocation.
-      return box label: s.copy
+      return Box label: s.copy
   }
   """
 
@@ -353,7 +353,7 @@ Compare with #~".take" (transfer the source's ownership to the
 destination, invalidating the source) and inline #~".borrow" (alias the
 source via a lock, no allocation).
 
-Currently provided as a native method on #~"string"; the same shape is
+Currently provided as a native method on #~"String"; the same shape is
 available for any type that defines its own deep-copy logic.
 
 #---: .release
@@ -386,7 +386,7 @@ Error conditions:
 Example -- early cleanup without nesting:
 
 #code language=zerolang: """
-  h: box label: "hotel" value: 8
+  h: Box label: "hotel" value: 8
   print "h alive: \{h.label}"
   h.release
   print "h released -- no 'with' nesting needed"
@@ -463,7 +463,7 @@ on the leaf) self-consistent.
 
 A reftype can only appear once as an argument or as a receiver in a single
 function call (enforced by the Call-scoped Locking algorithm below). This
-prevents aliasing and is the property #~"doc/spec.pdoc" calls 'no aliasing
+prevents aliasing and is the property #~"doc/Spec.pdoc" calls 'no aliasing
 for reftypes'. Top-level #~"data" items are exempt -- they are immutable
 and never locked.
 
@@ -568,9 +568,9 @@ transfer drives the propagation uniformly.
 #---: Borrow-scoped Locking
 
 A Borrow-scoped Lock is acquired whenever a variable is bound to a
-borrow or view construct: #~".borrow", #~"string.stringview" or
-#~"str.stringview" (both produce a #~"stringview" class borrowing the
-source), the analogous #~"list.listview", a #~"with name: path do
+borrow or view construct: #~".borrow", #~"String.stringview" or
+#~"str.stringview" (both produce a #~"StringView" class borrowing the
+source), the analogous #~"List.listview", a #~"with name: Path do
 body" whose right-hand side is a bare name or dotted path (borrow by
 default, same rule as function parameters), the transfer from
 #~".lock" parameters to a return value, and #~".lock" fields on
@@ -679,7 +679,7 @@ saves the copy.
 Aliasing applies to:
 
 #ul:
-  [#*: #~"with name: path do body" whose RHS is a bare name
+  [#*: #~"with name: Path do body" whose RHS is a bare name
   (#~"with a: c do ..."), a dotted-valtype path
   (#~"with v: r.f do ..."), or inline #~".take" / #~".borrow" on either
   (#~"with a: c.take do ...").]
@@ -715,7 +715,7 @@ A function declared #~"out T" returns an owned value. Returning a
 borrowed parameter directly would alias the caller's heap data:
 
 #code language=zerolang: """
-  identity: function {s: string} out string is {
+  identity: function {s: String} out String is {
       return s          # error: 's' is borrowed; the caller still owns it
   }
   """
@@ -724,9 +724,9 @@ Remediations:
 
 #ul:
   [#*: #~"return s.copy" -- clone into a fresh owned string.]
-  [#*: Annotate the parameter as #~"s: string.take" -- the caller
+  [#*: Annotate the parameter as #~"s: String.take" -- the caller
   transfers ownership in, and the function may pass it through.]
-  [#*: Declare the function as #~"out string.borrow" with a
+  [#*: Declare the function as #~"out String.borrow" with a
   #~".lock"-annotated parameter -- the caller receives a borrow tied
   to the locked source.]
 
@@ -742,8 +742,8 @@ owned value. Storing a borrowed parameter into it would alias the
 caller's heap data the same way:
 
 #code language=zerolang: """
-  make_box: function {name: string} out box is {
-      return box label: name      # error: 'name' is borrowed
+  make_box: function {name: String} out Box is {
+      return Box label: name      # error: 'name' is borrowed
   }
   """
 
@@ -867,7 +867,7 @@ user-defined type. A protocol instance wraps its source either by borrow
 #---: Restrictions with Generics
 
 A class cannot be stored as the element of a generic container that copies
-its elements, because classes cannot be copied. #~"list of: myiter" is a
+its elements, because classes cannot be copied. #~"List of: myiter" is a
 compile error if #~"myiter" is a class. This applies to every class, not
 just classes with #~".lock" fields; the #~".lock" restriction merely adds
 the rule above (a class with a #~".lock" field cannot be nested as a field
@@ -986,32 +986,32 @@ that cover most code.
 #---: Owned and Borrowed Reftypes
 
 #code language=zerolang: """
-  box: class { label: string value: i64 }
+  box: class { label: String value: i64 }
 
-  a: box label: "alpha" value: 1   # a is OWNED
+  a: Box label: "alpha" value: 1   # a is OWNED
 
   # Reftype default: borrow. peek does not take ownership.
-  peek: function {b: box} out i64 is {
+  peek: function {b: Box} out i64 is {
     return b.value
   }
   v: peek a                        # a is borrowed, still valid after call
 
   # Explicit .take transfers ownership. a is invalid after this line.
-  consume: function {b: box.take} is {
+  consume: function {b: Box.take} is {
     print b.label
   }
   consume a                        # a is implicitly taken (ownership transferred)
   # a is invalid here -- compile error if used
 
   # Explicit .take to destroy
-  b: box label: "beta" value: 2
+  b: Box label: "beta" value: 2
   b.take                           # destroys b immediately
 
   # Borrow with lock: return a reference into the locked parameter
-  peek_label: function {b: box.lock} out string.borrow is {
+  peek_label: function {b: Box.lock} out String.borrow is {
     return b.label
   }
-  c: box label: "gamma" value: 3
+  c: Box label: "gamma" value: 3
   s: peek_label c                  # s borrows from c, c is locked
   print s                          # OK
   # c cannot be used here (locked by s)
@@ -1068,7 +1068,7 @@ An iterator system has three components:
 #---: Full Example
 
 The canonical class-based iterator (also in
-#~"examples/listiter.z"):
+#~"examples/ListIter.z"):
 
 #code language=zerolang: """
   # --- Container ---
@@ -1184,10 +1184,10 @@ value falls out of scope at the end of each loop iteration.
 #---: Views
 
 The same pattern underlies read-only views. A view is a small class holding a
-#~".private.lock" field into its source -- for example the #~"stringview"
-and #~"listview" types in the standard library. Because the view is a
+#~".private.lock" field into its source -- for example the #~"StringView"
+and #~"ListView" types in the standard library. Because the view is a
 single-owner class, the source stays safely locked for the view's
-lifetime and no copy of the view can outlive it. See #~"examples/listview.z"
+lifetime and no copy of the view can outlive it. See #~"examples/ListView.z"
 and #~"examples/borrowed_record.z" for worked examples.
 
 
@@ -1227,7 +1227,7 @@ available as the inline ownership method on runtime instances
 
 The #~"from:" parameter of a protocol's synthesised #~".create" is
 declared TAKE, so the compiler applies the standard ownership-transfer
-rules uniformly: writing #~"r: reader.create from: o" invalidates #~"o"
+rules uniformly: writing #~"r: Reader.create from: o" invalidates #~"o"
 afterward, with no call-site #~".take" required (writing #~"o.take" is
 accepted and equivalent). The same rule applies to #~"typedef.create".
 Facet #~".create" is a value-copy (facets are inline-data value
@@ -1241,17 +1241,17 @@ parameter. Use the owned form (#~".create") for a self-contained
 wrapper that is safe to return or store. These restrictions mirror the
 existing locked-reference escape rules from the previous section.
 
-Boxing (#~"b: box from: val") is itself an ownership transfer. The
+Boxing (#~"b: Box from: val") is itself an ownership transfer. The
 compiler invalidates the source after boxing: a stack class or record
-passed to #~"box from:" is consumed, mirroring the standard TAKE rule.
-Passing a boxed value to #~"box from:" again (which compiles to a
+passed to #~"Box from:" is consumed, mirroring the standard TAKE rule.
+Passing a boxed value to #~"Box from:" again (which compiles to a
 zero-cost passthrough) likewise invalidates the earlier boxed name, so
 only the newly-bound name may be used afterward.
 
 Boxing a conformer and then passing the box to #~"proto.create" is not
 supported: #~".create" already heap-allocates the owned copy
 internally, so composition is unnecessary. The conformance check rejects
-#~"proto.create from: (box from: x)" with a hint steering the user to
+#~"proto.create from: (Box from: x)" with a hint steering the user to
 the direct form.
 
 
@@ -1266,5 +1266,5 @@ the direct form.
   #~"out type.borrow" with no #~".lock" param               |Borrow return requires a lock parameter               |Add #~".lock" to input parameter
   #~".lock" field on a record                               |#~".lock" fields only allowed on classes              |Change the enclosing type from #~"record" to #~"class"
   #~".lock" field type mismatch                             |Field type must match constructor parameter type      |Make the parameter type match the field type
-  #~"list of: classtype"                                    |Cannot use a class as list element                   |Store a wrapping record or use indirection
+  #~"List of: classtype"                                    |Cannot use a class as list element                   |Store a wrapping record or use indirection
   Class with #~".lock" field as a field                     |Class with #~".lock" field cannot nest as a field     |Keep the instance in a block scope instead
