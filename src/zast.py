@@ -425,8 +425,12 @@ class ObjectDef(Node):
       `functions` are specs to implement
 
     Some fields are only meaningful for some kinds (e.g. ENUM ignores
-    `is_native` and `field_ownership`). Consumers dispatch by
-    `nodetype` and only read fields that are valid for that kind.
+    `is_native`). Consumers dispatch by `nodetype` and only read
+    fields that are valid for that kind.
+
+    Field-type ownership annotations (e.g. `x: Foo.lock`) ride on the
+    path stored in `items` and are recognised by the type checker via
+    `_strip_field_ownership`.
     """
 
     items: Dict[str, "Path"] = field(default_factory=dict)
@@ -435,7 +439,6 @@ class ObjectDef(Node):
     as_items: Dict[str, "Path"] = field(default_factory=dict)
     as_functions: Dict[str, "Function"] = field(default_factory=dict)
     is_native: bool = False
-    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
 
 ExpressionSubTypes = typing.Union[

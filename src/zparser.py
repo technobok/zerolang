@@ -72,9 +72,6 @@ class ObjectBody:
     islist: List[zast.Path]  # 'is' interfaces implimented/included by this record
     functions: Dict[str, zast.Function]
     extern: Dict[str, zast.AtomId]
-    # field name -> ownership annotation stripped from the field's type path
-    # (currently only .lock is permitted on fields)
-    field_ownership: Dict[str, ZParamOwnership] = field(default_factory=dict)
     is_error: bool = field(default=False, init=False)
 
 
@@ -1259,9 +1256,9 @@ class Parser:
 
         Builds a unified `ObjectDef` node with `nodetype=kind`. Tag
         discriminator info (for variant/union/enum) lives in
-        `as_items` and is recognised by the type checker. All four
-        populate `field_ownership` (variant arms reject .lock in the
-        type checker but the field is carried for diagnostics).
+        `as_items` and is recognised by the type checker. Field-type
+        ownership annotations (`.lock` etc.) ride on the path stored
+        in `items` and are also recognised by the type checker.
         """
         tt = self._ITEM_TYPEDEF_MAP[kind]
         start = lex.peek()
@@ -1280,7 +1277,6 @@ class Parser:
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
             is_native=native,
-            field_ownership=is_body.field_ownership if is_body else {},
             start=start,
         )
         return NodeX(node=node, extern=extern)
@@ -1491,7 +1487,6 @@ class Parser:
         islist: List[zast.Path] = []  # protocols that this object satisfies
         functions: Dict[str, zast.Function] = {}
         extern: Dict[str, zast.AtomId] = {}
-        field_ownership: Dict[str, ZParamOwnership] = {}
 
         # externs from each item typedefinition
         local: Set[str] = set()  # set of locally defined items
@@ -1576,22 +1571,11 @@ class Parser:
                                 msg = f"Duplicate item name: {label.tokstr}"
                                 return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
-                            # if the field type is a simple Path, strip any
-                            # ownership annotation (.lock) from it. Only .lock
-                            # is permitted on field types; .take/.borrow on
-                            # field types are rejected by the type checker.
-                            field_node: zast.Operation = opx.node
-                            if field_node.nodetype in (
-                                NodeType.DOTTEDPATH,
-                                NodeType.ATOMID,
-                            ):
-                                stripped, own = self._strip_ownership(
-                                    cast(zast.Path, field_node)
-                                )
-                                if own is not None:
-                                    field_ownership[label.tokstr] = own
-                                    field_node = stripped
-                            items[label.tokstr] = field_node  # type: ignore[assignment]
+                            # store the field type path as-is. Ownership
+                            # annotations (.lock for fields, rejection of
+                            # .take/.borrow) are recognised by the type
+                            # checker via _strip_field_ownership.
+                            items[label.tokstr] = opx.node  # type: ignore[assignment]
                             # promote to externitems (will be promoted to extern below, after locals)
                             promoteexterns(addto=externitems, addfrom=opx.extern)
                         else:
@@ -1615,7 +1599,6 @@ class Parser:
             islist=islist,
             functions=functions,
             extern=extern,
-            field_ownership=field_ownership,
         )
 
     def _accept_unit_definition(

@@ -332,6 +332,32 @@ def _check_private_redefinition(as_items: dict) -> Optional[zast.Unit]:
 # Names in 'as' that are structural, not user-defined members
 _AS_SPECIAL_NAMES = frozenset({"public", "private", "tag"})
 
+# Ownership annotations recognised as the leaf of a DottedPath in
+# field-type / parameter-type / return-type position.
+_OWNERSHIP_SUFFIXES = {
+    "take": ZParamOwnership.TAKE,
+    "borrow": ZParamOwnership.BORROW,
+    "lock": ZParamOwnership.LOCK,
+}
+
+
+def _strip_field_ownership(
+    path: zast.Operation,
+) -> tuple[zast.Operation, Optional[ZParamOwnership]]:
+    """If `path` is a DottedPath whose leaf is `.take`/`.borrow`/`.lock`,
+    return `(parent_path, ownership)`. Otherwise return `(path, None)`.
+
+    Only Path-shaped items have a leaf to inspect; non-Path operation
+    forms (BinOp constants, unit references) pass through unchanged
+    with no ownership.
+    """
+    if path.nodetype == NodeType.DOTTEDPATH:
+        dp = cast(zast.DottedPath, path)
+        own = _OWNERSHIP_SUFFIXES.get(dp.child.name)
+        if own is not None:
+            return dp.parent, own
+    return path, None
+
 
 class TypeChecker:
     """
@@ -1341,7 +1367,8 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         for fname, fpath in cls.items.items():
-            ft = self._resolve_typeref(fpath)
+            stripped_fpath, f_own = _strip_field_ownership(fpath)
+            ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
             if (
                 ft
                 and ft.typetype == ZTypeType.GENERIC_PARAM
@@ -1354,16 +1381,16 @@ class TypeChecker:
                 continue
             if ft:
                 ctype.children[fname] = ft
-                # detect .private field type (friend access)
+                # detect .private field type (friend access) on the
+                # post-ownership-strip path
                 if (
-                    fpath.nodetype == NodeType.DOTTEDPATH
-                    and cast(zast.DottedPath, fpath).child.name == "private"
+                    stripped_fpath.nodetype == NodeType.DOTTEDPATH
+                    and cast(zast.DottedPath, stripped_fpath).child.name == "private"
                 ):
                     ctype.private_fields.add(fname)
                 # Phase 7: .lock fields are now allowed on classes.
                 # Classes are stack-allocated with single-owner semantics,
                 # so they naturally prevent copies that would duplicate locks.
-                f_own = cls.field_ownership.get(fname)
                 if f_own == ZParamOwnership.LOCK:
                     ctype.lock_field_names.add(fname)
                     ctype.has_lock_fields = True
@@ -1660,7 +1687,9 @@ class TypeChecker:
             self._generic_context.append(generic_ctx)
         subtype_names = list(union_defn.items.keys())
         for sname, spath in union_defn.items.items():
-            st_check = self._resolve_typeref(spath)
+            stripped_spath, arm_own = _strip_field_ownership(spath)
+            stripped_path_typed = cast(zast.Path, stripped_spath)
+            st_check = self._resolve_typeref(stripped_path_typed)
             if (
                 st_check
                 and st_check.typetype == ZTypeType.GENERIC_PARAM
@@ -1672,18 +1701,17 @@ class TypeChecker:
                 )
                 continue
             if (
-                spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
-                and cast(zast.AtomId, spath).name == "null"
+                stripped_spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                and cast(zast.AtomId, stripped_spath).name == "null"
             ):
                 st = _make_type("null", ZTypeType.NULL)
                 st.is_valtype = True
             else:
-                st = self._resolve_typeref(spath)
+                st = self._resolve_typeref(stripped_path_typed)
             if st:
                 utype.children[sname] = st
             # detect locked arms: arm declared as `name: t.lock`. Only LOCK is
             # permitted; .take/.borrow on an arm are rejected.
-            arm_own = union_defn.field_ownership.get(sname)
             if arm_own == ZParamOwnership.LOCK:
                 utype.lock_arm_names.add(sname)
             elif arm_own is not None:
@@ -1887,14 +1915,15 @@ class TypeChecker:
             self._generic_context.append(generic_ctx)
         subtype_names = list(variant_defn.items.keys())
         for sname, spath in variant_defn.items.items():
+            stripped_spath, arm_own = _strip_field_ownership(spath)
             if (
-                spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
-                and cast(zast.AtomId, spath).name == "null"
+                stripped_spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                and cast(zast.AtomId, stripped_spath).name == "null"
             ):
                 st = _make_type("null", ZTypeType.NULL)
                 st.is_valtype = True
             else:
-                st = self._resolve_typeref(spath)
+                st = self._resolve_typeref(cast(zast.Path, stripped_spath))
                 # reject non-valtypes (skip for generic params — checked at instantiation)
                 if st and st.typetype != ZTypeType.GENERIC_PARAM:
                     if st.is_valtype is not None and not st.is_valtype:
@@ -1917,7 +1946,6 @@ class TypeChecker:
             # variants are valtype-only; locked arms hold an external pointer
             # (reftype-flavored ownership) which conflicts with the inline
             # storage model. Reject .lock arms here for a clear diagnostic.
-            arm_own = variant_defn.field_ownership.get(sname)
             if arm_own == ZParamOwnership.LOCK:
                 self._error(
                     f"Variant '{name}' arm '{sname}' cannot use '.lock'; "
@@ -2157,7 +2185,8 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         for fname, fpath in rec.items.items():
-            ft = self._resolve_typeref(fpath)
+            stripped_fpath, f_own = _strip_field_ownership(fpath)
+            ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
             if (
                 ft
                 and ft.typetype == ZTypeType.GENERIC_PARAM
@@ -2170,14 +2199,14 @@ class TypeChecker:
                 continue
             if ft:
                 rtype.children[fname] = ft
-                # detect .private field type (friend access)
+                # detect .private field type (friend access) on the
+                # post-ownership-strip path
                 if (
-                    fpath.nodetype == NodeType.DOTTEDPATH
-                    and cast(zast.DottedPath, fpath).child.name == "private"
+                    stripped_fpath.nodetype == NodeType.DOTTEDPATH
+                    and cast(zast.DottedPath, stripped_fpath).child.name == "private"
                 ):
                     rtype.private_fields.add(fname)
                 # detect .lock field annotation (Phase B)
-                f_own = rec.field_ownership.get(fname)
                 if f_own == ZParamOwnership.LOCK:
                     rtype.lock_field_names.add(fname)
                     rtype.has_lock_fields = True

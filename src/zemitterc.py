@@ -2961,11 +2961,15 @@ class CEmitter:
 
         Mirrors the type-checker's `lock_arm_names` on the resolved ZType,
         but read straight off the AST so it's available at emit time without
-        needing a back-reference to the resolved type.
+        needing a back-reference to the resolved type. The .lock suffix
+        rides on the item's path (DottedPath whose leaf is `lock`).
         """
         out: set = set()
-        for sname, own in union_defn.field_ownership.items():
-            if own == ZParamOwnership.LOCK:
+        for sname, spath in union_defn.items.items():
+            if (
+                spath.nodetype == NodeType.DOTTEDPATH
+                and cast(zast.DottedPath, spath).child.name == "lock"
+            ):
                 out.add(sname)
         return out
 
