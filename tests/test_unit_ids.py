@@ -1,5 +1,5 @@
 """
-Phase 7d: id-keyed cross-file unit resolution + SQL `unit` table.
+Phase 7d: id-keyed cross-File unit resolution + SQL `unit` table.
 """
 
 import os

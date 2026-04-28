@@ -92,7 +92,7 @@ def is_list_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "list"
+        and ztype.generic_origin.name == "List"
     )
 
 
@@ -110,7 +110,7 @@ def is_listview_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "listview"
+        and ztype.generic_origin.name == "ListView"
     )
 
 
@@ -128,7 +128,7 @@ def is_listiter_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "listiter"
+        and ztype.generic_origin.name == "ListIter"
     )
 
 
@@ -146,7 +146,7 @@ def is_mapkeyiter_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "mapkeyiter"
+        and ztype.generic_origin.name == "MapKeyIter"
     )
 
 
@@ -170,7 +170,7 @@ def is_mapitemiter_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "mapitemiter"
+        and ztype.generic_origin.name == "MapItemIter"
     )
 
 
@@ -194,7 +194,7 @@ def is_mapentry_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "mapentry"
+        and ztype.generic_origin.name == "MapEntry"
     )
 
 
@@ -218,7 +218,7 @@ def is_map_type(ztype: Optional[ZType]) -> bool:
     return (
         ztype.generic_origin is not None
         and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "map"
+        and ztype.generic_origin.name == "Map"
     )
 
 

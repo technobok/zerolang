@@ -15,14 +15,14 @@ from zparser import Parser
 
 
 def make_tokenizer(source: str) -> Tokenizer:
-    """Create a Tokenizer from a source string."""
+    """Create a Tokenizer from a source String."""
     fh = io.StringIO(source)
     openfile = ZVfsOpenFile(entryid=DEntryID(0), filehandle=fh)
     return Tokenizer(openfile)
 
 
 def make_lexer(source: str) -> Lexer:
-    """Create a Lexer from a source string."""
+    """Create a Lexer from a source String."""
     tok = make_tokenizer(source)
     return Lexer(tok)
 
@@ -53,7 +53,7 @@ def collect_lexer_tokens(source: str) -> list:
 
 @pytest.fixture
 def lib_dir():
-    """Return the path to the lib directory."""
+    """Return the Path to the lib directory."""
     return os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
@@ -128,7 +128,7 @@ def make_parser_with_vfs(
 ) -> Parser:
     """
     Like Parser(vfs, name) but with cached system-lib units injected.
-    Use when the test constructs its own custom VFS (e.g. multi-file tests).
+    Use when the test constructs its own custom VFS (e.g. multi-File tests).
     """
     if src_dir is None:
         src_dir = os.path.join(os.path.dirname(__file__), "..", "lib")

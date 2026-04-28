@@ -52,7 +52,7 @@ class TestEntryIdInfrastructure:
 
 class TestNarrowStampsIds:
     def test_narrow_stamps_narrowed_subtype_id(self):
-        outer = _make_ztype("result", ZTypeType.UNION)
+        outer = _make_ztype("Result", ZTypeType.UNION)
         ok = _make_ztype("ok_payload", ZTypeType.RECORD)
         outer.children["ok"] = ok
 
@@ -71,7 +71,7 @@ class TestNarrowStampsIds:
         assert outer.resolve_child_by_id(entry.narrowed_subtype_id) is ok
 
     def test_exclude_stamps_excluded_subtype_ids(self):
-        outer = _make_ztype("result", ZTypeType.UNION)
+        outer = _make_ztype("Result", ZTypeType.UNION)
         outer.children["ok"] = _make_ztype("ok_payload", ZTypeType.RECORD)
         outer.children["err"] = _make_ztype("err_payload", ZTypeType.RECORD)
         outer.children["none"] = _make_ztype("none", ZTypeType.NULL)
@@ -113,9 +113,9 @@ class TestSqlDumpSymtab:
 
     def test_scopes_and_entries_and_variables_populated(self):
         src = """
-result: union { ok: i64 err: string none: null }
+Result: union { ok: i64 err: String none: null }
 main: function is {
-    r: result.ok 42
+    r: Result.ok 42
     match (
         r
     ) case ok then { a: 1 } case err then { b: 2 } case none then { c: 3 }

@@ -111,14 +111,14 @@ main: function is {
 
     def test_match_clause_match_child_id_stamped(self):
         src = """
-result: union {
+Result: union {
     ok: i64
-    err: string
+    err: String
     none: null
 }
 
 main: function is {
-    r: result.ok 42
+    r: Result.ok 42
     match (
         r
     ) case ok then {

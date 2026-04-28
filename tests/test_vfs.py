@@ -309,7 +309,7 @@ class TestUnionCaching:
         assert eid == eid2
 
     def test_union_subdir_walk(self):
-        """Walk subdirectory path through union."""
+        """Walk subdirectory Path through union."""
         vfs = ZVfs()
         fs = vfs.register(StringProvider(files={"sub/test.z": "nested"}))
         rootid = vfs.walk()
@@ -322,7 +322,7 @@ class TestUnionCaching:
 
 class TestGetlineEdgeCases:
     def test_getline_past_end(self):
-        """getline() past end of file returns None."""
+        """getline() past end of File returns None."""
         with tempfile.TemporaryDirectory() as tmpdir:
             filepath = os.path.join(tmpdir, "test.z")
             with open(filepath, "w") as f:
@@ -338,7 +338,7 @@ class TestGetlineEdgeCases:
             assert line is None
 
     def test_getline_on_nonfile(self):
-        """getline() on non-file entry returns None (not crash)."""
+        """getline() on non-File entry returns None (not crash)."""
         with tempfile.TemporaryDirectory() as tmpdir:
             subdir = os.path.join(tmpdir, "sub")
             os.makedirs(subdir)

@@ -73,7 +73,7 @@ class TestVerboseOutput:
 
 class TestOutputFlag:
     def test_output_flag(self):
-        """The -o flag should write to the specified file."""
+        """The -o flag should write to the specified File."""
         with tempfile.NamedTemporaryFile(suffix=".c", delete=False) as f:
             outpath = f.name
         try:
@@ -129,7 +129,7 @@ class TestErrorFormat:
             assert "]:" in stderr
 
     def test_error_shows_file_location(self):
-        """Error messages should include --> file:line:col."""
+        """Error messages should include --> File:line:col."""
         with tempfile.TemporaryDirectory() as tmpdir:
             src = os.path.join(tmpdir, "errtest.z")
             with open(src, "w") as f:

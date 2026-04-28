@@ -19,12 +19,12 @@ EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
 
 def parse_unit(source: str, unitname: str = "test") -> zast.Program | zast.Error:
-    """Parse a source string as a unit, returning Program or Error."""
+    """Parse a source String as a unit, returning Program or Error."""
     return make_parser(source, unitname=unitname, src_dir=LIB_DIR).parse()
 
 
 def get_unit_body(result, unitname: str = "test"):
-    """Extract the unit body dict from a successful parse result."""
+    """Extract the unit body dict from a successful parse Result."""
     assert isinstance(result, zast.Program), f"Expected Program, got {result!r}"
     assert unitname in result.units
     return result.units[unitname].body
@@ -215,7 +215,7 @@ class TestStatements:
         assert isinstance(stmts[0].statementline, zast.Expression)
 
     def test_call_expression_statement(self):
-        """A call expression as a statement (e.g. return 42 is now parsed as call)"""
+        """A call expression as a statement (e.g. return 42 is now Parsed as call)"""
         result = parse_unit("f: function {g: i64} is { g 42 }")
         body = get_unit_body(result)
         func = body["f"]
@@ -324,7 +324,7 @@ class TestFunctionInKeyword:
 class TestFunctionAsClause:
     def test_function_as_before_in(self):
         """'as' clause before 'in' for generic params"""
-        result = parse_unit("f: function as { t: any.generic } in { x: t } out t")
+        result = parse_unit("f: function as { t: Any.generic } in { x: t } out t")
         body = get_unit_body(result)
         func = body["f"]
         assert isinstance(func, zast.Function)
@@ -332,8 +332,8 @@ class TestFunctionAsClause:
         assert "x" in func.parameters
 
     def test_function_as_after_out(self):
-        """'as' clause after 'out' — any order is valid"""
-        result = parse_unit("f: function in { x: t } out t as { t: any.generic }")
+        """'as' clause after 'out' — Any order is valid"""
+        result = parse_unit("f: function in { x: t } out t as { t: Any.generic }")
         body = get_unit_body(result)
         func = body["f"]
         assert isinstance(func, zast.Function)
@@ -342,7 +342,7 @@ class TestFunctionAsClause:
 
     def test_function_as_between_in_and_out(self):
         """'as' clause between 'in' and 'out'"""
-        result = parse_unit("f: function in { x: t } as { t: any.generic } out t")
+        result = parse_unit("f: function in { x: t } as { t: Any.generic } out t")
         body = get_unit_body(result)
         func = body["f"]
         assert isinstance(func, zast.Function)
@@ -351,7 +351,7 @@ class TestFunctionAsClause:
     def test_function_as_multiple_generics(self):
         """Multiple generic params in 'as'"""
         result = parse_unit(
-            "f: function as { t: any.generic\n u: any.generic } in { x: t } out u"
+            "f: function as { t: Any.generic\n u: Any.generic } in { x: t } out u"
         )
         body = get_unit_body(result)
         func = body["f"]
@@ -362,7 +362,7 @@ class TestFunctionAsClause:
     def test_function_as_duplicate_error(self):
         """Duplicate 'as' clause is an error"""
         result = parse_unit(
-            "f: function as { t: any.generic } as { u: any.generic } in { x: t } out t"
+            "f: function as { t: Any.generic } as { u: Any.generic } in { x: t } out t"
         )
         assert isinstance(result, zast.Error)
 
@@ -378,7 +378,7 @@ class TestFunctionAsClause:
     def test_function_as_with_static_function(self):
         """'as' clause can contain static functions"""
         result = parse_unit(
-            "f: function as { t: any.generic\n helper: function out i64 } in { x: t } out t"
+            "f: function as { t: Any.generic\n helper: function out i64 } in { x: t } out t"
         )
         body = get_unit_body(result)
         func = body["f"]
@@ -388,7 +388,7 @@ class TestFunctionAsClause:
 
     def test_function_as_requires_explicit_in(self):
         """When 'as' is first, unnamed brace block is not 'in'"""
-        result = parse_unit("f: function as { t: any.generic } { x: t } out t")
+        result = parse_unit("f: function as { t: Any.generic } { x: t } out t")
         # The '{' after 'as {...}' is not treated as 'in' — it's unexpected
         assert isinstance(result, zast.Error)
 
@@ -505,7 +505,7 @@ class TestFacetDefinition:
     def test_facet_with_generic_param(self):
         """facet with generic parameter"""
         result = parse_unit(
-            "f: facet { t: any.generic\n show: function {:this} out t }"
+            "f: facet { t: Any.generic\n show: function {:this} out t }"
         )
         body = get_unit_body(result)
         fac = body["f"]
@@ -671,12 +671,12 @@ class TestLabelValueShorthand:
 
     def test_record_field_label_value(self):
         """:x in record fields."""
-        result = parse_unit("r: record { :i64\n :string }")
+        result = parse_unit("r: record { :i64\n :String }")
         body = get_unit_body(result)
         rec = body["r"]
         assert isinstance(rec, zast.Record)
         assert "i64" in rec.items
-        assert "string" in rec.items
+        assert "String" in rec.items
 
     def test_union_field_label_value(self):
         """:x in union subtypes."""
@@ -713,7 +713,7 @@ class TestLabelValueShorthand:
 
 
 def parse_example(unitname: str) -> zast.Program | zast.Error:
-    """Parse an example .z file using the same VFS setup as zc.py."""
+    """Parse an example .z File using the same VFS setup as zc.py."""
     systemdir = os.path.join(LIB_DIR, "system")
     vfs = ZVfs()
     psystemid = vfs.register(FSProvider(rootpath=systemdir, parentpath=""))
@@ -743,7 +743,7 @@ EXAMPLES_NEEDING_UPDATE: set[str] = set()
 class TestExamples:
     @pytest.mark.parametrize("unitname", get_example_names())
     def test_example_parses(self, unitname):
-        """Each example .z file should parse without errors."""
+        """Each example .z File should parse without errors."""
         if unitname in EXAMPLES_NEEDING_UPDATE:
             pytest.xfail(f"{unitname}.z needs grammar update")
         result = parse_example(unitname)
@@ -776,7 +776,7 @@ class TestNativeKeyword:
         assert "n" in func.parameters
 
     def test_native_not_spec(self):
-        """Native function is distinguishable from a spec."""
+        """Native function is distinguishable from a Spec."""
         result = parse_unit("f: function out i64")
         body = get_unit_body(result)
         spec = body["f"]

@@ -2,7 +2,7 @@
 ZeroLang C code emitter
 
 Walks a type-checked AST and emits C source code.
-Includes ownership-based memory management for strings (z_string_t*).
+Includes ownership-based memory management for strings (z_String_t*).
 """
 
 from dataclasses import dataclass, field
@@ -200,10 +200,10 @@ def _ctype(ztype: Optional[ZType]) -> str:
     name = ztype.name
     if name in TYPEMAP:
         return TYPEMAP[name]
-    if name == "string":
-        return "z_string_t"
-    if name == "stringview":
-        return "z_stringview_t"
+    if name == "String":
+        return "z_String_t"
+    if name == "StringView":
+        return "z_StringView_t"
     # use pre-computed cname when available
     if ztype.cname:
         if ztype.is_heap_allocated:
@@ -355,7 +355,7 @@ class CEmitter:
         self.needs_io_natives: set[str] = set()
         self.needs_os_natives: set[str] = set()
         # stringview-method natives (Phase S1+). Tracked separately
-        # because these share the z_stringview_t substrate and the
+        # because these share the z_StringView_t substrate and the
         # late emission slot (after mono types are declared).
         self.needs_stringview_natives: set[str] = set()
         # cli-unit natives (spec_create, add_flag, parse, ...).
@@ -452,7 +452,7 @@ class CEmitter:
         """Build source_map: for each C output line, the AST node ID that produced it.
 
         Uses the tracked node IDs from struct_defs, func_defs, data_defs.
-        Lines from boilerplate (includes, z_string_t runtime, main wrapper) get None.
+        Lines from boilerplate (includes, z_String_t runtime, main wrapper) get None.
         """
         # build a set of (line_start_offset, node_id) from tracked sections
         offset_to_node: List[tuple] = []
@@ -564,7 +564,7 @@ class CEmitter:
         """Allocate a temporary variable for a stack-allocated string expression."""
         name = self._temp_name("t")
         indent = self._indent()
-        self._temp.decls.append(f"{indent}z_string_t {name} = {expr};\n")
+        self._temp.decls.append(f"{indent}z_String_t {name} = {expr};\n")
         self._temp.frees.append(name)
         self._temp.string_set.add(name)
         return name
@@ -615,7 +615,7 @@ class CEmitter:
         return result
 
     def _static_string(self, escaped: str) -> str:
-        """Return the name of a static z_string_t for this literal, deduplicating."""
+        """Return the name of a static z_String_t for this literal, deduplicating."""
         if escaped in self._string_literals:
             return self._string_literals[escaped]
         self._string_literal_counter += 1
@@ -642,24 +642,24 @@ class CEmitter:
         # Splitter / linesiter iterator methods (Phase S3). Track
         # under the stringview natives set so the shared impl struct
         # + call function emit in the correct late slot.
-        if mangled == "z_splitter_call":
+        if mangled == "z_Splitter_call":
             self.needs_stringview = True
             self.needs_string = True
             self.needs_stringview_natives.add("split")
             return
-        if mangled == "z_linesiter_call":
+        if mangled == "z_LinesIter_call":
             self.needs_stringview = True
             self.needs_string = True
             self.needs_stringview_natives.add("lines")
             return
-        if mangled == "z_cpiter_call":
+        if mangled == "z_CpIter_call":
             self.needs_stringview = True
             self.needs_string = True
             self.needs_stringview_natives.add("codepoints")
             return
-        if mangled == "z_string_join":
+        if mangled == "z_stringJoin":
             # Phase S7 free function. Lives in the stringview late
-            # slot so it can reference z_list_string_t.
+            # slot so it can reference z_List_String_t.
             self.needs_stringview = True
             self.needs_string = True
             self.needs_stringview_natives.add("join")
@@ -668,71 +668,71 @@ class CEmitter:
         # parsed class accessors. All routed through the cli late
         # emission slot so they can reference spec / parsed /
         # list_<def>_t / result_parsed_clierror_t.
-        if mangled == "z_spec_create":
+        if mangled == "z_Spec_create":
             self.needs_cli = True
             self.needs_string = True
             self.needs_cli_natives.add("spec_create")
             return
         if mangled in (
-            "z_cli_add_flag",
-            "z_cli_add_option",
-            "z_cli_add_positional",
+            "z_cli_addFlag",
+            "z_cli_addOption",
+            "z_cli_addPositional",
             "z_cli_parse",
-            "z_cli_help_text",
+            "z_cli_helpText",
         ):
             self.needs_cli = True
             self.needs_string = True
             self.needs_cli_natives.add(mangled[len("z_cli_") :])
             return
         if mangled in (
-            "z_parsed_has_flag",
-            "z_parsed_get_option",
-            "z_parsed_get_positional",
+            "z_Parsed_hasFlag",
+            "z_Parsed_option",
+            "z_Parsed_positional",
         ):
             self.needs_cli = True
             self.needs_string = True
-            self.needs_cli_natives.add(mangled[len("z_parsed_") :])
+            self.needs_cli_natives.add(mangled[len("z_Parsed_") :])
             return
-        if mangled.startswith("z_stringview_"):
+        if mangled.startswith("z_StringView_"):
             # stringview method natives (Phase S1+). Tracked separately
             # so emit_runtime_stringview_natives can per-name gate.
             # Skip the pre-existing comparison / conversion primitives
-            # baked into z_stringview.inc — they always emit.
-            name = mangled[len("z_stringview_") :]
+            # baked into z_StringView.inc — they always emit.
+            name = mangled[len("z_StringView_") :]
             if name in {
-                "is_empty",
-                "is_ascii",
-                "starts_with",
-                "ends_with",
+                "isEmpty",
+                "isAscii",
+                "startsWith",
+                "endsWith",
                 "contains",
-                "index_of",
-                "last_index_of",
-                "byte_at",
+                "indexOf",
+                "lastIndexOf",
+                "byteAt",
                 "trim",
-                "trim_start",
-                "trim_end",
-                "strip_prefix",
-                "strip_suffix",
+                "trimStart",
+                "trimEnd",
+                "stripPrefix",
+                "stripSuffix",
                 "split",
-                "split_once",
+                "splitOnce",
                 "lines",
-                "to_lower_ascii",
-                "to_upper_ascii",
+                "toLowerAscii",
+                "toUpperAscii",
                 "replace",
-                "replace_first",
+                "replaceFirst",
                 "repeated",
                 "concat",
                 "count",
                 "codepoints",
-                "parse_i64",
-                "parse_u64",
-                "parse_f64",
+                "parseI64",
+                "parseU64",
+                "parseF64",
             }:
                 self.needs_stringview = True
                 self.needs_string = True  # memcmp / strchr live in string.h
                 self.needs_stringview_natives.add(name)
                 # parse_f64 uses strtod + errno (ERANGE).
-                if name == "parse_f64":
+                if name == "parseF64":
                     self.needs_io = True
             return
         if mangled.startswith("z_io_"):
@@ -751,19 +751,19 @@ class CEmitter:
             # key/value and need the shared `z_sv_to_cstr` helper that
             # emit_runtime_io owns.
             if name in (
-                "get_env",
-                "set_env",
-                "unset_env",
+                "env",
+                "setEnv",
+                "unsetEnv",
                 "cwd",
-                "set_cwd",
+                "setCwd",
                 "pid",
                 "ppid",
-                "user_name",
-                "home_dir",
+                "userName",
+                "homeDir",
                 "hostname",
             ):
                 self.needs_io = True
-            if name == "env_names":
+            if name == "envNames":
                 self.needs_string = True
 
     def _emit_callable_expr(self, call: zast.Call) -> str:
@@ -1097,7 +1097,7 @@ class CEmitter:
             return ""
         saved = self.struct_defs
         self.struct_defs = TrackedList(self)
-        for pname in ("reader", "writer", "closer", "seeker"):
+        for pname in ("Reader", "Writer", "Closer", "Seeker"):
             defn = io_unit.body.get(pname)
             if defn is not None and type(defn) is zast.Protocol:
                 # Only emit protocols whose ZType is resolved — an
@@ -1116,23 +1116,23 @@ class CEmitter:
     # All four stream protocols can now be wrapped: the vtable ABI
     # takes collection params by pointer (see _proto_param_ctype),
     # which matches the native file impl without an extra adapter.
-    _IO_FILE_WRAPPABLE_PROTOCOLS = ("reader", "writer", "closer", "seeker")
+    _IO_FILE_WRAPPABLE_PROTOCOLS = ("Reader", "Writer", "Closer", "Seeker")
 
     def _emit_io_file_protocol_impls(self) -> str:
         """Emit vtables + wrappers + create functions for every
         protocol io.file conforms to.
 
-        Depends on (a) the io runtime functions (z_file_read /
-        z_file_write / z_file_close / z_file_flush / z_file_seek)
+        Depends on (a) the io runtime functions (z_File_read /
+        z_File_write / z_File_close / z_File_flush / z_File_seek)
         being declared earlier, and (b) the protocol structs
-        (z_reader_t, z_writer_vtable_t, ...) existing from the
+        (z_Reader_t, z_Writer_vtable_t, ...) existing from the
         deferred stream-protocol emission. Both are guaranteed by
         the emit() pipeline — this buffer lands after both.
         """
         io_unit = self.program.units.get("io")
         if io_unit is None:
             return ""
-        file_defn = io_unit.body.get("file")
+        file_defn = io_unit.body.get("File")
         if file_defn is None or type(file_defn) is not zast.Class:
             return ""
         file_cls = file_defn
@@ -1155,7 +1155,7 @@ class CEmitter:
                 proto = self._io_protocol_defs.get(proto_name)
                 if proto is not None:
                     self._emit_protocol_impl(
-                        "file", label, proto_name, file_cls, proto=proto
+                        "File", label, proto_name, file_cls, proto=proto
                     )
         out = "".join(self.struct_defs)
         self.struct_defs = saved
@@ -1166,11 +1166,11 @@ class CEmitter:
         + meta_create) into a deferred buffer. Called AFTER the stream
         protocol structs (writer_t / reader_t) so the `sink: writer.lock`
         / `source: reader.lock` field types resolve, and AFTER the
-        mono pass so `buf: bytes` → z_list_u8_t is defined.
+        mono pass so `buf: bytes` → z_List_u8_t is defined.
 
         Returns the concatenated C string; assembled into parts by
         the emit pipeline before io runtime functions (which dispatch
-        z_bufwriter_write / z_bufreader_read through the struct).
+        z_BufWriter_write / z_BufReader_read through the struct).
         """
         if not self._io_wrappers_referenced():
             return ""
@@ -1187,7 +1187,7 @@ class CEmitter:
                 continue
             self._current_node_id = getattr(defn, "nodeid", None)
             # Skip protocol-impl emission here; it needs the runtime
-            # bodies (z_bufwriter_write, ...) to be declared first.
+            # bodies (z_BufWriter_write, ...) to be declared first.
             # The impls are emitted separately via
             # _emit_io_wrapper_protocol_impls, after emit_runtime_io.
             self._emit_class(name, defn, skip_protocol_impls=True)
@@ -1198,13 +1198,13 @@ class CEmitter:
             # the auto-generated wrapper — emitting a subset would leave
             # undefined references.
             self.needs_io = True
-            if name == "bufwriter":
+            if name == "BufWriter":
                 self.needs_io_natives.update(
                     {"bufwriter_create", "bufwriter_write", "bufwriter_flush"}
                 )
-            elif name == "bufreader":
+            elif name == "BufReader":
                 self.needs_io_natives.update({"bufreader_create", "bufreader_read"})
-            elif name == "textwriter":
+            elif name == "TextWriter":
                 # textwriter forwards to bufwriter; the bufwriter
                 # runtime bodies are needed too. bufwriter's struct
                 # is emitted earlier in this loop because it appears
@@ -1222,7 +1222,7 @@ class CEmitter:
                         "bufwriter_flush",
                     }
                 )
-            elif name == "textreader":
+            elif name == "TextReader":
                 # textreader forwards to bufreader; same ordering
                 # constraint as textwriter -> bufwriter. `textreader_call`
                 # is the iterator hook used by `for line: tr loop`;
@@ -1243,7 +1243,7 @@ class CEmitter:
 
     def _emit_io_wrapper_protocol_impls(self) -> str:
         """Emit bufwriter / bufreader protocol vtables + wrappers. Lands
-        AFTER emit_runtime_io (which defines z_bufwriter_write etc.)
+        AFTER emit_runtime_io (which defines z_BufWriter_write etc.)
         so the vtable wrappers can forward to the runtime functions
         without needing separate forward declarations."""
         io_unit = self.program.units.get("io")
@@ -1274,8 +1274,8 @@ class CEmitter:
 
         The struct and destructor land early so that other type
         destructors (notably result(file, ioerror)) can call
-        z_file_destroy at their own emission site. The public close
-        method, z_file_close, lives in the io runtime (after the
+        z_File_destroy at their own emission site. The public close
+        method, z_File_close, lives in the io runtime (after the
         result/ioerror struct defs it depends on) — see
         emit_runtime_io.
 
@@ -1292,8 +1292,8 @@ class CEmitter:
             "typedef struct {\n",
             "    int32_t fd;\n",
             "    bool closed;\n",
-            "} z_file_t;\n\n",
-            "static void z_file_destroy(z_file_t* p) {\n",
+            "} z_File_t;\n\n",
+            "static void z_File_destroy(z_File_t* p) {\n",
             "    if (!p) return;\n",
             "    if (p->closed) return;\n",
             "    close(p->fd);\n",
@@ -1380,12 +1380,12 @@ class CEmitter:
                         self._emit_class(name, cast(zast.Class, defn))
                     elif not cli_records_only and not cli_classes_only:
                         self._emit_class(name, cast(zast.Class, defn))
-                elif defn_type == zast.Class and name == "file" and io_file_used:
+                elif defn_type == zast.Class and name == "File" and io_file_used:
                     # io.file: compiler-provided class. struct +
                     # destructor + close method come from the runtime.
                     # Emit inline (here, before mono types) so
                     # result(file, ioerror) destructors can reference
-                    # z_file_destroy. Skipped if `file` is never
+                    # z_File_destroy. Skipped if `file` is never
                     # referenced — otherwise every program would drag
                     # in <unistd.h> for close() via the destructor.
                     self._emit_io_file_class()
@@ -1400,7 +1400,7 @@ class CEmitter:
             parseerror_c = (
                 "typedef enum {\n"
                 "    Z_PARSEERROR_TAG_EMPTY,\n"
-                "    Z_PARSEERROR_TAG_INVALID_DIGIT,\n"
+                "    Z_PARSEERROR_TAG_INVALIDDIGIT,\n"
                 "    Z_PARSEERROR_TAG_OVERFLOW,\n"
                 "} z_parseerror_tag_t;\n\n"
                 "typedef struct {\n"
@@ -1562,7 +1562,7 @@ class CEmitter:
             return True
         for mono, _ in getattr(self.program, "mono_types", []):
             for child in mono.children.values():
-                if child.typetype == ZTypeType.CLASS and child.name == "file":
+                if child.typetype == ZTypeType.CLASS and child.name == "File":
                     return True
         # Scan the main unit AST for `io.<std-stream>` paths; those
         # force file-struct emission even before function-body
@@ -1575,7 +1575,7 @@ class CEmitter:
     _STD_STREAM_NAMES = ("stdin", "stdout", "stderr")
     # Emission order matters: textwriter wraps bufwriter, so
     # bufwriter's struct must be declared before textwriter's.
-    _IO_WRAPPER_NAMES = ("bufwriter", "bufreader", "textwriter", "textreader")
+    _IO_WRAPPER_NAMES = ("BufWriter", "BufReader", "TextWriter", "TextReader")
 
     def _ast_uses_std_streams(self, body: dict) -> bool:
         return self._ast_uses_io_names(body, self._STD_STREAM_NAMES)
@@ -1678,7 +1678,7 @@ class CEmitter:
         io_unit = self.program.units.get("io")
         if io_unit is not None:
             self._collect_pre_emission("", io_unit.body)
-            for pname in ("reader", "writer", "closer", "seeker"):
+            for pname in ("Reader", "Writer", "Closer", "Seeker"):
                 proto = self._protocol_defs.get(pname)
                 if proto is not None:
                     self._io_protocol_defs[pname] = proto
@@ -1758,7 +1758,7 @@ class CEmitter:
         # (io / os) that don't reference monomorphized collection
         # types — these must come before monos that use them
         # (e.g. `result(T, ioerror)` mono destructors call
-        # `z_ioerror_destroy`). cli *records* (flagdef / optiondef /
+        # `z_IoError_destroy`). cli *records* (flagdef / optiondef /
         # positionaldef) also go here so monos like list_flagdef
         # that reference them have a complete type to work with.
         self._emit_system_unit_definitions(include_cli=True, cli_records_only=True)
@@ -1768,7 +1768,7 @@ class CEmitter:
         # collection types:
         #
         #   (a) A user class holding a `list of: string` field needs
-        #       `z_list_string_t` declared first.
+        #       `z_List_String_t` declared first.
         #   (b) A monomorphized generic class like `holder<mycls>`
         #       needs the user `mycls` struct declared first.
         #
@@ -1838,7 +1838,7 @@ class CEmitter:
                 needs_string=self.needs_string,
                 needs_stringview=self.needs_stringview,
                 needs_io=self.needs_io,
-                needs_pwd="user_name" in self.needs_os_natives,
+                needs_pwd="userName" in self.needs_os_natives,
             )
         )
         parts.append(zrt.emit_static_stringviews(self._string_literals))
@@ -1853,31 +1853,31 @@ class CEmitter:
 
         # Stream protocol struct + vtable types (reader/writer/closer/
         # seeker). Deferred to here so their signatures can reference
-        # z_list_u8_t / z_listview_u8_t from the mono pass.
+        # z_List_u8_t / z_ListView_u8_t from the mono pass.
         parts.append(self._emit_io_stream_protocols())
 
         # Buffered wrappers (bufwriter / bufreader). Lands AFTER the
         # stream protocol structs (so writer.lock / reader.lock field
         # types resolve) and BEFORE the io runtime (which references
-        # z_bufwriter_t / z_bufreader_t in its dispatch helpers).
+        # z_BufWriter_t / z_BufReader_t in its dispatch helpers).
         parts.append(self._emit_io_wrapper_classes())
 
         # io.file protocol wrappers. Emitted AFTER the stream protocol
-        # types above (so z_reader_t etc. exist) and stored in a
+        # types above (so z_Reader_t etc. exist) and stored in a
         # buffer, appended after emit_runtime_io. Building the buffer
-        # here (before runtime_io) lets us record every z_file_*
+        # here (before runtime_io) lets us record every z_File_*
         # native the wrappers will call, so the runtime emits them.
         file_impls = ""
         if self.needs_io_natives and self._io_file_referenced():
             file_impls = self._emit_io_file_protocol_impls()
 
         # Buffered-wrapper protocol vtables + wrappers. Same deferral
-        # as file_impls — these reference z_bufwriter_* / z_bufreader_*
+        # as file_impls — these reference z_BufWriter_* / z_BufReader_*
         # bodies emitted by emit_runtime_io.
         wrapper_impls = self._emit_io_wrapper_protocol_impls()
 
         # io runtime helpers reference the compiler-generated struct
-        # names (z_ioerror_t, z_result_<T>_ioerror_t, ...) so they land
+        # names (z_IoError_t, z_Result_<T>_ioerror_t, ...) so they land
         # AFTER struct_defs rather than with the base runtime helpers.
         parts.append(
             zrt.emit_runtime_io(
@@ -1901,8 +1901,8 @@ class CEmitter:
         )
 
         # cli unit natives. Lands after stringview because
-        # `cli.parse` may call z_stringview_* helpers (and the cli
-        # runtime uses z_string_t / z_string_new from the base
+        # `cli.parse` may call z_StringView_* helpers (and the cli
+        # runtime uses z_String_t / z_String_new from the base
         # runtime plus mono list / map types from the struct_defs).
         parts.append(
             zrt.emit_runtime_cli_natives(
@@ -1912,7 +1912,7 @@ class CEmitter:
         )
 
         # io.stdin / io.stdout / io.stderr — emit after file_impls so
-        # z_file_reader_create / z_file_writer_create are declared.
+        # z_File_Reader_create / z_File_Writer_create are declared.
         parts.append(zrt.emit_io_std_streams(self.needs_io_natives))
 
         # os-unit helpers (exit / args / get_env). Independent of io;
@@ -3551,7 +3551,7 @@ class CEmitter:
     def _emit_mono_list(self, mono_type: ZType) -> None:
         """Emit a monomorphized list type (struct, create, destroy, methods).
 
-        Body comes from src/runtime/z_list.c.tmpl. Two parts vary per
+        Body comes from src/runtime/z_List.c.tmpl. Two parts vary per
         monomorphization:
 
         * `@@DESTROY_ELEMS@@` — empty when the element type is trivial;
@@ -3598,8 +3598,8 @@ class CEmitter:
                 f"    return *({lv_ctype}*)_this;\n"
                 f"}}\n"
                 f"\n"
-                f"static void z_{name}_extend_view({ctype}* _this, {lv_ctype} _from);\n"
-                f"static void z_{name}_extend_view({ctype}* _this, {lv_ctype} _from) {{\n"
+                f"static void z_{name}_extendView({ctype}* _this, {lv_ctype} _from);\n"
+                f"static void z_{name}_extendView({ctype}* _this, {lv_ctype} _from) {{\n"
                 f"    z_{name}_grow(_this, _this->length + _from.length);\n"
                 f"    memcpy(&_this->data[_this->length], _from.data, "
                 f"_from.length * sizeof({elem_ctype}));\n"
@@ -3610,7 +3610,7 @@ class CEmitter:
 
         self.struct_defs.append(
             ztmpl.apply(
-                "z_list",
+                "z_List",
                 {
                     "NAME": name,
                     "ELEM_T": elem_ctype,
@@ -3691,7 +3691,7 @@ class CEmitter:
 
         Listview has the same first two fields as list ({length, data*})
         for zero-cost casting. No destructor — listview doesn't own data.
-        Body comes from src/runtime/z_listview.c.tmpl.
+        Body comes from src/runtime/z_ListView.c.tmpl.
         """
         self.needs_stdint = True
         self.needs_stdlib = True
@@ -3701,7 +3701,7 @@ class CEmitter:
             return
         self.struct_defs.append(
             ztmpl.apply(
-                "z_listview",
+                "z_ListView",
                 {"NAME": mono_type.name, "ELEM_T": _ctype(elem_type)},
             )
         )
@@ -3720,8 +3720,8 @@ class CEmitter:
             return
         key_ctype = _ctype(key_type)
         val_ctype = _ctype(value_type)
-        key_is_string = key_ctype == "z_string_t"
-        val_is_string = val_ctype == "z_string_t"
+        key_is_string = key_ctype == "z_String_t"
+        val_is_string = val_ctype == "z_String_t"
         val_is_reftype = val_ctype.endswith("*")
         bucket_type = f"z_{name}_bucket_t"
         lines: List[str] = []
@@ -3983,7 +3983,7 @@ class CEmitter:
                 lines.append(f"    int64_t idx = {find_fn}(_this, _key, h);\n")
                 lines.append("    if (idx >= 0) {\n")
                 if val_is_string:
-                    lines.append("        z_string_t _copy = {0};\n")
+                    lines.append("        z_String_t _copy = {0};\n")
                     lines.append(
                         "        _copy.size = _this->buckets[idx].value.size;\n"
                     )
@@ -4042,7 +4042,7 @@ class CEmitter:
                 if val_is_reftype:
                     if val_is_string:
                         lines.append(
-                            "        z_string_t* _copy = (z_string_t*)z_xmalloc(sizeof(z_string_t));\n"
+                            "        z_String_t* _copy = (z_String_t*)z_xmalloc(sizeof(z_String_t));\n"
                         )
                         lines.append(
                             "        _copy->size = _this->buckets[idx].value.size;\n"
@@ -4108,7 +4108,7 @@ class CEmitter:
         # an `.iterate_items` child. mapentry's C representation is a
         # typedef alias for the bucket type; .key / .value emit through
         # the bucket pointer.
-        iterate_items_child = mono_type.children.get("iterate_items")
+        iterate_items_child = mono_type.children.get("iterateItems")
         if iterate_items_child and iterate_items_child.return_type:
             self._emit_mapitemiter_runtime(
                 ctype, name, bucket_type, iterate_items_child.return_type
@@ -4238,10 +4238,10 @@ class CEmitter:
         lines.append("    return _out;\n")
         lines.append("}\n\n")
         lines.append(
-            f"static {mii_ctype} z_{map_name}_iterate_items({map_ctype}* _this);\n"
+            f"static {mii_ctype} z_{map_name}_iterateItems({map_ctype}* _this);\n"
         )
         lines.append(
-            f"static {mii_ctype} z_{map_name}_iterate_items({map_ctype}* _this) {{\n"
+            f"static {mii_ctype} z_{map_name}_iterateItems({map_ctype}* _this) {{\n"
         )
         lines.append(f"    {mii_ctype} _it = {{0}};\n")
         lines.append("    _it.m = _this;\n")
@@ -4546,7 +4546,7 @@ class CEmitter:
         if not func.returntype:
             return "void"
         ct = _ctype(func.returntype.type)
-        if ct == "z_string_t":
+        if ct == "z_String_t":
             self.needs_string = True
             self.needs_stdlib = True
         elif ct.endswith("*"):
@@ -4728,7 +4728,7 @@ class CEmitter:
         # free remaining temps before return
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                result += f"{indent}z_string_free(&{t});\n"
+                result += f"{indent}z_String_free(&{t});\n"
             elif t in self._temp.proto_set:
                 proto_name = self._temp.proto_set[t]
                 result += f"{indent}z_{proto_name}_destroy(&{t});\n"
@@ -4774,7 +4774,7 @@ class CEmitter:
         indent = self._indent()
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                result += f"{indent}z_string_free(&{t});\n"
+                result += f"{indent}z_String_free(&{t});\n"
             elif t in self._temp.proto_set:
                 proto_name = self._temp.proto_set[t]
                 result += f"{indent}z_{proto_name}_destroy(&{t});\n"
@@ -4828,7 +4828,7 @@ class CEmitter:
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
         if assign.type and assign.type.needs_destructor:
-            if ctype == "z_string_t":
+            if ctype == "z_String_t":
                 self.needs_string = True
             self.needs_stdlib = True
             # the variable now owns the value — remove from temp frees
@@ -4915,7 +4915,7 @@ class CEmitter:
             return f"{indent}continue;\n"
         # panic(msg): route through the shared z_panic helper in the runtime
         # preamble. msg is declared as `string`, but after type coercion
-        # we may have a z_string_t or a z_stringview_t; both expose `.data`
+        # we may have a z_String_t or a z_StringView_t; both expose `.data`
         # as a `const char*`-compatible pointer. Materialising msg may pull
         # in the string runtime, so set the corresponding needs_* flags.
         if expr.call_kind == zast.CallKind.PANIC:
@@ -4965,7 +4965,7 @@ class CEmitter:
                     if self._is_class_pointer_path(dp.parent)
                     else f"&{parent_val}"
                 )
-                return f"{indent}z_string_shrink({recv});\n"
+                return f"{indent}z_String_shrink({recv});\n"
         if (
             inner.nodetype == zast.NodeType.DOTTEDPATH
             and cast(zast.DottedPath, inner).child.name == "take"
@@ -5342,25 +5342,25 @@ class CEmitter:
                 self.needs_stringview = True
                 # Direct stringview argument: pass through.
                 if arg_type and arg_type.subtype == ZSubType.STRINGVIEW:
-                    return f"{indent}z_stringview_print({arg});\n"
+                    return f"{indent}z_StringView_print({arg});\n"
                 # String (reftype) fast path — call its existing runtime
                 # primitive directly, no projection needed.
                 if arg_type and arg_type.subtype == ZSubType.STRING:
                     self.needs_string = True
-                    return f"{indent}z_string_print(&{arg});\n"
+                    return f"{indent}z_String_print(&{arg});\n"
                 # Any other T (str_N or user type) — conforms to `text` by
                 # virtue of having passed the constraint check. Project
                 # through the conformer's `.stringview` method, which
                 # resolves to the concrete type's per-monomorphization
-                # emitter and produces a `z_stringview_t`.
+                # emitter and produces a `z_StringView_t`.
                 if arg_type and _is_str_type(arg_type):
                     # str_N has (data, len) laid out directly — zero-cost
                     # projection emitted inline rather than through a
                     # function call, matching how str.stringview would
                     # emit anyway.
                     return (
-                        f"{indent}z_stringview_print("
-                        f"(z_stringview_t){{{arg}.data, {arg}.len}});\n"
+                        f"{indent}z_StringView_print("
+                        f"(z_StringView_t){{{arg}.data, {arg}.len}});\n"
                     )
                 # User type conforming to `text`: call the type's
                 # declared `.stringview` method. The method's C name
@@ -5378,11 +5378,11 @@ class CEmitter:
                     ):
                         recv = f"&{arg}"
                     return (
-                        f"{indent}z_stringview_print(z_{tname}_stringview({recv}));\n"
+                        f"{indent}z_StringView_print(z_{tname}_stringview({recv}));\n"
                     )
                 # Unknown type — shouldn't happen post-typecheck, but keep
                 # a safe fallback.
-                return f"{indent}z_stringview_print({arg});\n"
+                return f"{indent}z_StringView_print({arg});\n"
             return f'{indent}printf("\\n");\n'
 
         # check call_kind first, then fallback to callable type's control_kind
@@ -5473,13 +5473,13 @@ class CEmitter:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
                     self.needs_stringview = True
                     return (
-                        f"{indent}z_string_append({recv}, {arg}.data, {arg}.length);\n"
+                        f"{indent}z_String_append({recv}, {arg}.data, {arg}.length);\n"
                     )
                 if method_name == "reserve" and call.arguments:
                     arg = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"{indent}z_string_reserve({recv}, (uint64_t){arg});\n"
+                    return f"{indent}z_String_reserve({recv}, (uint64_t){arg});\n"
                 if method_name == "shrink":
-                    return f"{indent}z_string_shrink({recv});\n"
+                    return f"{indent}z_String_shrink({recv});\n"
 
         args = self._emit_call_args(call)
         args = self._prepend_method_receiver(call, args)
@@ -5527,7 +5527,7 @@ class CEmitter:
                                 # temp created by .string conversion — zero-init
                                 # so scope cleanup doesn't double-free
                                 code += (
-                                    f"{indent}{emitted_vals[i]} = (z_string_t){{0}};\n"
+                                    f"{indent}{emitted_vals[i]} = (z_String_t){{0}};\n"
                                 )
 
         return code
@@ -5624,7 +5624,7 @@ class CEmitter:
             # free remaining temps (intermediates) before return
             for t in self._temp.frees:
                 if t in self._temp.string_set:
-                    result += f"{indent}z_string_free(&{t});\n"
+                    result += f"{indent}z_String_free(&{t});\n"
                 elif t in self._temp.proto_set:
                     proto_name = self._temp.proto_set[t]
                     result += f"{indent}z_{proto_name}_destroy(&{t});\n"
@@ -6203,7 +6203,7 @@ class CEmitter:
                 if method_name == "string":
                     self.needs_stringview = True
                     self.needs_stdlib = True
-                    result = f"z_string_from_view({parent_val})"
+                    result = f"z_String_from_view({parent_val})"
                     return self._alloc_temp(result)
                 if method_name == "length":
                     self.needs_stringview = True
@@ -6212,7 +6212,7 @@ class CEmitter:
                     rhs_val = self._emit_operation_value(call.arguments[0].valtype)
                     self.needs_stringview = True
                     self.needs_stdint = True
-                    return f"z_stringview_cmp({parent_val}, {rhs_val})"
+                    return f"z_StringView_cmp({parent_val}, {rhs_val})"
 
         # string and str method calls: .stringview (both), .length / .capacity (string)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -6251,13 +6251,13 @@ class CEmitter:
                     rhs_val = self._emit_operation_value(call.arguments[0].valtype)
                     self.needs_stdint = True
                     self.needs_string = True
-                    return f"z_string_cmp(&{parent_val}, &{rhs_val})"
+                    return f"z_String_cmp(&{parent_val}, &{rhs_val})"
                 if is_string and method_name == "copy":
                     self.needs_string = True
                     self.needs_stdlib = True
                     is_pointer_path = self._is_class_pointer_path(dp.parent)
                     arg = parent_val if is_pointer_path else f"&{parent_val}"
-                    return self._alloc_temp(f"z_string_copy({arg})")
+                    return self._alloc_temp(f"z_String_copy({arg})")
 
         # string construction: string or string capacity: N
         if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
@@ -6268,7 +6268,7 @@ class CEmitter:
                 if arg.name == "capacity":
                     cap = self._emit_operation_value(arg.valtype)
                     break
-            return self._alloc_temp(f"z_string_create((uint64_t){cap})")
+            return self._alloc_temp(f"z_String_create((uint64_t){cap})")
 
         # str construction: (str to: N) — always empty
         if call.callable.type and _is_str_type(call.callable.type):
@@ -6342,7 +6342,7 @@ class CEmitter:
                 if method_name == "string":
                     self.needs_stringview = True
                     self.needs_stdlib = True
-                    result = f"z_string_from_view({parent_val})"
+                    result = f"z_String_from_view({parent_val})"
                     return self._alloc_temp(result)
 
         # .str conversion method on string, str, and stringview types
@@ -6386,18 +6386,18 @@ class CEmitter:
                     # emit call to shared converter
                     if dp_parent_type.subtype == ZSubType.STRING:
                         return (
-                            f"z_string_to_{target_name}"
+                            f"z_String_to_{target_name}"
                             f"({parent_val}->data, {parent_val}->size)"
                         )
                     elif _is_stringview_type(dp_parent_type):
                         self.needs_stringview = True
                         return (
-                            f"z_string_to_{target_name}"
+                            f"z_String_to_{target_name}"
                             f"({parent_val}.data, {parent_val}.length)"
                         )
                     else:
                         return (
-                            f"z_string_to_{target_name}"
+                            f"z_String_to_{target_name}"
                             f"({parent_val}.data, {parent_val}.len)"
                         )
 
@@ -6415,7 +6415,7 @@ class CEmitter:
                     self.needs_io = True
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_close")
-                    return f"z_file_close({parent_val})"
+                    return f"z_File_close({parent_val})"
                 if method_name == "read":
                     # args: into: (list of u8), max: u64
                     into_val = None
@@ -6432,7 +6432,7 @@ class CEmitter:
                     self.needs_io = True
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_read")
-                    return f"z_file_read({parent_val}, {into_val}, {max_val})"
+                    return f"z_File_read({parent_val}, {into_val}, {max_val})"
                 if method_name == "write":
                     # args: from: (list of u8)
                     from_val = None
@@ -6444,7 +6444,7 @@ class CEmitter:
                     self.needs_io = True
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_write")
-                    return f"z_file_write({parent_val}, {from_val})"
+                    return f"z_File_write({parent_val}, {from_val})"
                 if method_name == "seek":
                     # args: to: i64, from: seekorigin
                     to_val = None
@@ -6457,14 +6457,14 @@ class CEmitter:
                     self.needs_io = True
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_seek")
-                    return f"z_file_seek({parent_val}, {to_val}, {origin_val})"
+                    return f"z_File_seek({parent_val}, {to_val}, {origin_val})"
                 if method_name == "flush":
                     # no-op on raw POSIX fds; declared for writer
                     # protocol conformance.
                     self.needs_io = True
                     self.needs_stdio = True
                     self.needs_io_natives.add("file_flush")
-                    return f"z_file_flush({parent_val})"
+                    return f"z_File_flush({parent_val})"
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -6518,13 +6518,13 @@ class CEmitter:
                     from_tmp = self._alloc_arg_temp(f"z_{list_type_name}_t", from_val)
                     self._transfer_implicit_take(from_val, from_arg.valtype, indent)
                     return f"z_{list_type_name}_extend({parent_val}, &{from_tmp})"
-                if method_name == "extend_view" and call.arguments:
-                    # extend_view takes a listview by value (copies, does
+                if method_name == "extendView" and call.arguments:
+                    # extendView takes a listview by value (copies, does
                     # not consume). The argument is typed as a listview of
                     # the list's element; the mono emitter generates a
-                    # z_{listname}_extend_view(z_{listname}_t*, z_listview_T_t).
+                    # z_{listname}_extendView(z_{listname}_t*, z_ListView_T_t).
                     from_val = self._emit_operation_value(call.arguments[0].valtype)
-                    return f"z_{list_type_name}_extend_view({parent_val}, {from_val})"
+                    return f"z_{list_type_name}_extendView({parent_val}, {from_val})"
                 if method_name == "get" and call.arguments:
                     idx_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{list_type_name}_get({parent_val}, {idx_val})"
@@ -6693,7 +6693,7 @@ class CEmitter:
                 ftype = call.callable.type
                 if ftype and ftype.return_ownership == ZParamOwnership.BORROW:
                     tmp = self._temp_name("t")
-                    self._temp.decls.append(f"{indent}z_string_t {tmp} = {result};\n")
+                    self._temp.decls.append(f"{indent}z_String_t {tmp} = {result};\n")
                 else:
                     tmp = self._alloc_temp(result)
                 self._apply_call_implicit_takes(call, indent)
@@ -6802,14 +6802,14 @@ class CEmitter:
                 return call
             # string content comparison (native == on string class)
             if binop.lhs.type.subtype == ZSubType.STRING:
-                call = f"z_string_eq(&{lhs}, &{rhs})"
+                call = f"z_String_eq(&{lhs}, &{rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
             # stringview content comparison
             if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
                 self.needs_stringview = True
-                call = f"z_stringview_eq({lhs}, {rhs})"
+                call = f"z_StringView_eq({lhs}, {rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
@@ -6820,12 +6820,12 @@ class CEmitter:
             if binop.lhs.type.subtype == ZSubType.STRING:
                 self.needs_stdint = True
                 cop = C_OPS.get(op, op)
-                return f"(z_string_cmp(&{lhs}, &{rhs}) {cop} 0)"
+                return f"(z_String_cmp(&{lhs}, &{rhs}) {cop} 0)"
             if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
                 self.needs_stdint = True
                 self.needs_stringview = True
                 cop = C_OPS.get(op, op)
-                return f"(z_stringview_cmp({lhs}, {rhs}) {cop} 0)"
+                return f"(z_StringView_cmp({lhs}, {rhs}) {cop} 0)"
         cop = C_OPS.get(op, op)
         return f"({lhs} {cop} {rhs})"
 
@@ -6954,12 +6954,12 @@ class CEmitter:
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
             return f"z_{name}_create({zero_args})"
-        # string class: bare "string" as value -> empty string constructor
-        # only when the name IS "string" (not a variable that has string type)
-        if name == "string" and atom.type and atom.type.subtype == ZSubType.STRING:
+        # string class: bare "String" as value -> empty string constructor
+        # only when the name IS "String" (not a variable that has string type)
+        if name == "String" and atom.type and atom.type.subtype == ZSubType.STRING:
             self.needs_string = True
             self.needs_stdlib = True
-            return self._alloc_temp("z_string_create((uint64_t)0)")
+            return self._alloc_temp("z_String_create((uint64_t)0)")
         if tt == ZTypeType.CLASS and resolved is not None and resolved.name == name:
             self.needs_stdlib = True
             # Follow typedef wrappers (e.g. `bytes` → `list of: u8`)
@@ -7152,7 +7152,7 @@ class CEmitter:
         # str: .size constant access
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "size":
             return f"z_{parent_type_dp.name}_size"
-        # str: .string conversion (str -> z_string_t*)
+        # str: .string conversion (str -> z_String_t*)
         if parent_type_dp and _is_str_type(parent_type_dp) and child == "string":
             parent = self._emit_path_value(path.parent)
             result = f"z_{parent_type_dp.name}_string({parent})"
@@ -7162,15 +7162,15 @@ class CEmitter:
             self.needs_stringview = True
             parent = self._emit_path_value(path.parent)
             return f"{parent}.length"
-        # stringview: .string conversion (stringview -> z_string_t*)
+        # stringview: .string conversion (stringview -> z_String_t*)
         if parent_type_dp and _is_stringview_type(parent_type_dp) and child == "string":
             self.needs_stringview = True
             self.needs_stdlib = True
             parent = self._emit_path_value(path.parent)
-            result = f"z_string_from_view({parent})"
+            result = f"z_String_from_view({parent})"
             return self._alloc_temp(result)
-        # string literal .string: literal is a z_stringview_t constant;
-        # .string creates an owned heap copy via z_string_from_view
+        # string literal .string: literal is a z_StringView_t constant;
+        # .string creates an owned heap copy via z_String_from_view
         if (
             child == "string"
             and path.parent.nodetype == NodeType.ATOMSTRING
@@ -7183,7 +7183,7 @@ class CEmitter:
             self.needs_string = True
             self.needs_stdlib = True
             sname = self._emit_path_value(path.parent)
-            result = f"z_string_from_view({sname})"
+            result = f"z_String_from_view({sname})"
             return self._alloc_temp(result)
         # string: .string identity (no-op for already-owned strings)
         if (
@@ -7211,7 +7211,7 @@ class CEmitter:
             self.needs_stdlib = True
             parent = self._emit_path_value(path.parent)
             arg = parent if self._is_class_pointer_path(path.parent) else f"&{parent}"
-            return self._alloc_temp(f"z_string_copy({arg})")
+            return self._alloc_temp(f"z_String_copy({arg})")
         # .stringview conversion at path-access position, for both `string`
         # (reftype) and `str_N` (valtype). Only str differs in the length
         # field name (`len` vs `size`); pointer-vs-value access depends on
@@ -7268,13 +7268,13 @@ class CEmitter:
             # bytes/byteview are transparent typedefs over list/listview of u8
             # (lib/system/system.z:586-590). bytes.byteview is the same C-level
             # operation as list_u8.listview, so route through the existing
-            # z_list_u8_listview helper auto-emitted by _emit_mono_listview.
-            if cls_name == "bytes" and child == "byteview":
-                return f"z_list_u8_listview({parent})"
+            # z_List_u8_listview helper auto-emitted by _emit_mono_listview.
+            if cls_name == "Bytes" and child == "byteview":
+                return f"z_List_u8_listview({parent})"
             return f"z_{cls_name}_{child}({parent})"
 
         # io.file: protocol projection. `f.closer` / `f.seeker` emit
-        # a call to the matching `z_file_<proto>_create` wrapper
+        # a call to the matching `z_File_<proto>_create` wrapper
         # (borrowed — no copy, no destroy). `reader` / `writer` are
         # held back until the vtable collection-param ABI mismatch
         # is resolved; they typecheck but don't project yet.
@@ -7286,7 +7286,7 @@ class CEmitter:
                 "&"
             ):
                 parent = f"&{parent}"
-            return f"z_file_{child}_create({parent})"
+            return f"z_File_{child}_create({parent})"
 
         # stringview: zero-arg query methods (Phase S1 / S2). These
         # need a call emission — the field-access path below would
@@ -7296,31 +7296,31 @@ class CEmitter:
             and _is_stringview_type(parent_type_dp)
             and child
             in (
-                "is_empty",
-                "is_ascii",
+                "isEmpty",
+                "isAscii",
                 "trim",
-                "trim_start",
-                "trim_end",
+                "trimStart",
+                "trimEnd",
                 "lines",
-                "to_lower_ascii",
-                "to_upper_ascii",
+                "toLowerAscii",
+                "toUpperAscii",
                 "count",
                 "codepoints",
-                "parse_i64",
-                "parse_u64",
-                "parse_f64",
+                "parseI64",
+                "parseU64",
+                "parseF64",
             )
         ):
             self.needs_stringview = True
             self.needs_string = True
             self.needs_stringview_natives.add(child)
-            if child == "parse_f64":
+            if child == "parseF64":
                 # strtod + errno (ERANGE) — pull in errno.h / stdlib.h.
                 self.needs_io = True
             parent = self._emit_path_value(path.parent)
             if not parent.startswith("&"):
                 parent = f"&{parent}"
-            return f"z_stringview_{child}({parent})"
+            return f"z_StringView_{child}({parent})"
         # list: .pop as dotted path (zero-arg method call)
         if parent_type_dp and _is_list_type(parent_type_dp) and child == "pop":
             parent = self._emit_path_value(path.parent)
@@ -7380,7 +7380,7 @@ class CEmitter:
         # rvalue (assignment, return, condition) — `c.close`.
         # Must run before the generic FUNCTION-typed dotted-path
         # branch below, which would otherwise emit a function name
-        # like `z_closer_close` (no such free function exists — the
+        # like `z_Closer_close` (no such free function exists — the
         # dispatch is vtable-based).
         if path.parent.type and path.parent.type.typetype == ZTypeType.PROTOCOL:
             parent_type_p = path.parent.type
@@ -7421,7 +7421,7 @@ class CEmitter:
             # Native classes (string, list, map, ...) declare zero-arg
             # methods like `length`, `capacity` for typechecking
             # convenience but lower to struct-field access at emit time
-            # (`s->length`, not `z_string_length(s)`). Skip the
+            # (`s->length`, not `z_String_length(s)`). Skip the
             # method-call dispatch for them — the same reason
             # `_effective_class_zero_arg_method` returns None for
             # `is_native` classes.
@@ -7542,7 +7542,7 @@ class CEmitter:
             `r: result(file, ioerror)`.
         """
         pt = path.type
-        if pt and pt.typetype == ZTypeType.CLASS and pt.name == "file":
+        if pt and pt.typetype == ZTypeType.CLASS and pt.name == "File":
             return True
         if (
             pt
@@ -7551,7 +7551,7 @@ class CEmitter:
         ):
             dp = cast(zast.DottedPath, path)
             sub = pt.children.get(dp.child.name)
-            if sub and sub.typetype == ZTypeType.CLASS and sub.name == "file":
+            if sub and sub.typetype == ZTypeType.CLASS and sub.name == "File":
                 return True
         return False
 
@@ -7595,7 +7595,7 @@ class CEmitter:
         at emit time those resolve to struct-field access
         (`s->capacity`) rather than a C function call — routing them
         through this branch would produce calls to non-existent
-        `z_string_capacity` symbols. Field-access emission happens in
+        `z_String_capacity` symbols. Field-access emission happens in
         the fallthrough path at the end of _emit_dotted_path_value.
         """
         cls = self._effective_class_type(path.parent)
@@ -7615,9 +7615,9 @@ class CEmitter:
         return (cls.name, method)
 
     _IO_CLASS_METHOD_NATIVES: "dict[tuple[str, str], str]" = {
-        ("file", "close"): "file_close",
-        ("bufwriter", "flush"): "bufwriter_flush",
-        ("textwriter", "flush"): "textwriter_flush",
+        ("File", "close"): "file_close",
+        ("BufWriter", "flush"): "bufwriter_flush",
+        ("TextWriter", "flush"): "textwriter_flush",
     }
 
     def _record_io_native_for_class_method(
@@ -7705,7 +7705,7 @@ class CEmitter:
         from_val: Optional[str],
         to_val: Optional[str],
     ) -> str:
-        """Build a `z_stringview_t` literal from a string or str operand.
+        """Build a `z_StringView_t` literal from a string or str operand.
 
         `string` exposes `size`; `str_N` exposes `len`. Field access is via
         `->` when reading through a class-pointer path, `.` otherwise.
@@ -7717,7 +7717,7 @@ class CEmitter:
         data_access = f"{parent_val}{acc}data"
         len_access = f"{parent_val}{acc}{len_field}"
         if from_val is None or to_val is None:
-            return f"(z_stringview_t){{ {data_access}, {len_access} }}"
+            return f"(z_StringView_t){{ {data_access}, {len_access} }}"
         self.needs_stdlib = True
         self.needs_stdio = True
         indent = self._indent()
@@ -7728,7 +7728,7 @@ class CEmitter:
             f' z_panic("stringview: bounds error");\n'
         )
         return (
-            f"(z_stringview_t){{ {data_access}"
+            f"(z_StringView_t){{ {data_access}"
             f" + (uint64_t){from_val},"
             f" (uint64_t){to_val} - (uint64_t){from_val} }}"
         )
@@ -8059,7 +8059,7 @@ class CEmitter:
                 else:
                     # valtype: box it (malloc + copy)
                     box_ctype = subtype_ctype or "int64_t"
-                    box_tmp = self._temp_name("box")
+                    box_tmp = self._temp_name("Box")
                     self._temp.decls.append(
                         f"{indent}{box_ctype}* {box_tmp} = ({box_ctype}*)z_xmalloc(sizeof({box_ctype}));\n"
                     )
@@ -8116,7 +8116,7 @@ class CEmitter:
             return "NULL"
         inner_ctype = _ctype(inner_type)
         ptr_ctype = f"{inner_ctype}*"
-        tmp = self._temp_name("box")
+        tmp = self._temp_name("Box")
 
         # find the from: argument
         value_arg = None
@@ -8339,7 +8339,7 @@ class CEmitter:
             else:
                 est_cap += len(p.tokstr)  # type: ignore[union-attr]
         self._temp.decls.append(
-            f"{indent}z_string_t {result} = z_string_create((uint64_t){est_cap});\n"
+            f"{indent}z_String_t {result} = z_String_create((uint64_t){est_cap});\n"
         )
         self._temp.frees.append(result)
         self._temp.string_set.add(result)
@@ -8364,7 +8364,7 @@ class CEmitter:
                         f' 32, "%ld", (long)(int64_t){val});\n'
                     )
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result},"
+                        f"{indent}z_String_append(&{result},"
                         f" {buf}, (uint64_t){buf}_n);\n"
                     )
                 elif val_type and val_type.name in ("f32", "f64"):
@@ -8374,22 +8374,22 @@ class CEmitter:
                         f' 64, "%g", (double){val});\n'
                     )
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result},"
+                        f"{indent}z_String_append(&{result},"
                         f" {buf}, (uint64_t){buf}_n);\n"
                     )
                 elif val_type and val_type.subtype == ZSubType.STRING:
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result}, {val}.data, {val}.size);\n"
+                        f"{indent}z_String_append(&{result}, {val}.data, {val}.size);\n"
                     )
                 elif val_type and _is_stringview_type(val_type):
                     self.needs_stringview = True
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result},"
+                        f"{indent}z_String_append(&{result},"
                         f" {val}.data, {val}.length);\n"
                     )
                 elif val_type and _is_str_type(val_type):
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result}, {val}.data, {val}.len);\n"
+                        f"{indent}z_String_append(&{result}, {val}.data, {val}.len);\n"
                     )
                 else:
                     buf = self._temp_name("b")
@@ -8398,14 +8398,14 @@ class CEmitter:
                         f' 32, "%ld", (long)(int64_t){val});\n'
                     )
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result},"
+                        f"{indent}z_String_append(&{result},"
                         f" {buf}, (uint64_t){buf}_n);\n"
                     )
             else:
                 literal = self._escape_c_string(p.tokstr)  # type: ignore[union-attr]
                 if literal:
                     self._temp.decls.append(
-                        f"{indent}z_string_append(&{result},"
+                        f"{indent}z_String_append(&{result},"
                         f' "{literal}", sizeof("{literal}")-1);\n'
                     )
 
@@ -8689,7 +8689,7 @@ class CEmitter:
         # track reftype ownership
         if ifnode.type and ifnode.type.needs_destructor:
             self._temp.frees.append(tmp)
-            if ctype == "z_string_t":
+            if ctype == "z_String_t":
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 
@@ -8710,7 +8710,7 @@ class CEmitter:
             return None
         if elem_type.subtype == ZSubType.STRING:
             self.needs_string = True
-            return f"z_string_free(&{var_name});"
+            return f"z_String_free(&{var_name});"
         if not elem_type.needs_destructor:
             return None
         destructor = getattr(elem_type, "destructor_name", None)
@@ -9139,7 +9139,7 @@ class CEmitter:
         if val_type:
             ctype = _ctype(val_type)
 
-        is_string = ctype == "z_string_t"
+        is_string = ctype == "z_String_t"
         is_class = ctype.startswith("z_") and ctype.endswith("_t*")
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
@@ -9164,7 +9164,7 @@ class CEmitter:
             parts.append(doexpr_code)
             for t in self._temp.frees:
                 if t in self._temp.string_set:
-                    parts.append(f"{inner_indent}z_string_free(&{t});\n")
+                    parts.append(f"{inner_indent}z_String_free(&{t});\n")
                 elif t in self._temp.class_set:
                     parts.append(
                         f"{inner_indent}{self._emit_class_free(t, self._temp.class_set[t])}\n"
@@ -9213,7 +9213,7 @@ class CEmitter:
         parts.append(doexpr_code)
         for t in self._temp.frees:
             if t in self._temp.string_set:
-                parts.append(f"{inner_indent}z_string_free(&{t});\n")
+                parts.append(f"{inner_indent}z_String_free(&{t});\n")
             elif t in self._temp.class_set:
                 parts.append(
                     f"{inner_indent}{self._emit_class_free(t, self._temp.class_set[t])}\n"
@@ -9227,7 +9227,7 @@ class CEmitter:
             if is_union and val_type:
                 parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
             elif is_string:
-                parts.append(f"{inner_indent}z_string_free(&{cname});\n")
+                parts.append(f"{inner_indent}z_String_free(&{cname});\n")
             elif is_class and val_type:
                 parts.append(f"{inner_indent}z_{val_type.name}_destroy({cname});\n")
             elif is_class:
@@ -9541,7 +9541,7 @@ class CEmitter:
         # track reftype ownership
         if casenode.type and casenode.type.needs_destructor:
             self._temp.frees.append(tmp)
-            if ctype == "z_string_t":
+            if ctype == "z_String_t":
                 self._temp.string_set.add(tmp)
                 self.needs_string = True
 

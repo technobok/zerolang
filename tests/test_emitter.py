@@ -138,7 +138,7 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
 class TestEmitterBasic:
     def test_hello_world(self):
         csource = emit_source('main: function is { print "Hello, World!" }')
-        assert "z_string_print" in csource
+        assert "z_String_print" in csource
         assert "z_main" in csource
         output = compile_and_run(csource)
         assert output.strip() == "Hello, World!"
@@ -372,7 +372,7 @@ class TestEmitterBasic:
         assert output.strip() == "done"
 
     def test_for_comprehension(self):
-        """for-as-expression returns a list."""
+        """for-as-expression returns a List."""
         csource = emit_source(
             "main: function is {\n"
             "  result: for x: 3.each loop { x * 2 }\n"
@@ -420,10 +420,10 @@ class TestEmitterBasic:
         assert "for (int64_t x = 0; x < 3" in csource
 
     def test_list_iterate_i64(self):
-        """list.iterate yields borrowed views to each i64 element."""
+        """List.iterate yields borrowed views to each i64 element."""
         csource = emit_source(
             "main: function is {\n"
-            "  xs: (list of: i64)\n"
+            "  xs: (List of: i64)\n"
             "  xs.append from: 10\n"
             "  xs.append from: 20\n"
             "  xs.append from: 30\n"
@@ -436,10 +436,10 @@ class TestEmitterBasic:
         assert output.strip() == "x=10\nx=20\nx=30"
 
     def test_list_iterate_string(self):
-        """list.iterate also works for reftype element types (string)."""
+        """List.iterate also works for reftype element types (String)."""
         csource = emit_source(
             "main: function is {\n"
-            "  xs: (list of: string)\n"
+            "  xs: (List of: String)\n"
             '  xs.append from: "a".string\n'
             '  xs.append from: "b".string\n'
             '  xs.append from: "c".string\n'
@@ -452,24 +452,24 @@ class TestEmitterBasic:
         assert output.strip() == "s=a\ns=b\ns=c"
 
     def test_list_iterate_emits_listiter_struct(self):
-        """The list mono pass emits the listiter runtime layout + .call."""
+        """The List mono pass emits the ListIter runtime layout + .call."""
         csource = emit_source(
             "main: function is {\n"
-            "  xs: (list of: i64)\n"
+            "  xs: (List of: i64)\n"
             "  xs.append from: 1\n"
             "  with it: xs.iterate do for x: it loop {}\n"
             "}"
         )
         # listiter struct: pointer to source list + index
-        assert "z_listiter_i64_t" in csource
-        assert "z_list_i64_iterate" in csource
-        assert "z_listiter_i64_call" in csource
+        assert "z_ListIter_i64_t" in csource
+        assert "z_List_i64_iterate" in csource
+        assert "z_ListIter_i64_call" in csource
 
     def test_map_iterate_keys(self):
-        """map.iterate yields borrowed views of each USED bucket's key."""
+        """Map.iterate yields borrowed views of each USED bucket's key."""
         csource = emit_source(
             "main: function is {\n"
-            "  m: (map key: i64 value: i64)\n"
+            "  m: (Map key: i64 value: i64)\n"
             "  m.set key: 1 value: 100\n"
             "  m.set key: 2 value: 200\n"
             "  m.set key: 3 value: 300\n"
@@ -485,28 +485,28 @@ class TestEmitterBasic:
         assert seen == ["k=1", "k=2", "k=3"]
 
     def test_map_iterate_emits_mapkeyiter(self):
-        """The map mono pass emits the mapkeyiter runtime + factory."""
+        """The Map mono pass emits the MapKeyIter runtime + factory."""
         csource = emit_source(
             "main: function is {\n"
-            "  m: (map key: i64 value: i64)\n"
+            "  m: (Map key: i64 value: i64)\n"
             "  m.set key: 1 value: 100\n"
             "  with it: m.iterate do for k: it loop {}\n"
             "}"
         )
-        assert "z_mapkeyiter_i64_i64_t" in csource
-        assert "z_map_i64_i64_iterate" in csource
-        assert "z_mapkeyiter_i64_i64_call" in csource
+        assert "z_MapKeyIter_i64_i64_t" in csource
+        assert "z_Map_i64_i64_iterate" in csource
+        assert "z_MapKeyIter_i64_i64_call" in csource
 
     def test_map_iterate_items_basic(self):
-        """map.iterate_items yields borrowed mapentry views over USED
+        """Map.iterateItems yields borrowed MapEntry views over USED
         buckets; .key and .value project through the bucket pointer."""
         csource = emit_source(
             "main: function is {\n"
-            "  m: (map key: i64 value: i64)\n"
+            "  m: (Map key: i64 value: i64)\n"
             "  m.set key: 1 value: 100\n"
             "  m.set key: 2 value: 200\n"
             "  m.set key: 3 value: 300\n"
-            "  with it: m.iterate_items do for e: it loop {\n"
+            "  with it: m.iterateItems do for e: it loop {\n"
             '    print "k=\\{e.key} v=\\{e.value}"\n'
             "  }\n"
             "}"
@@ -517,43 +517,43 @@ class TestEmitterBasic:
         assert seen == ["k=1 v=100", "k=2 v=200", "k=3 v=300"]
 
     def test_map_iterate_items_emits_runtime(self):
-        """The map mono pass emits the mapitemiter runtime + mapentry
-        typedef + .iterate_items factory."""
+        """The Map mono pass emits the MapItemIter runtime + MapEntry
+        typedef + .iterateItems factory."""
         csource = emit_source(
             "main: function is {\n"
-            "  m: (map key: i64 value: i64)\n"
+            "  m: (Map key: i64 value: i64)\n"
             "  m.set key: 1 value: 100\n"
-            "  with it: m.iterate_items do for e: it loop {}\n"
+            "  with it: m.iterateItems do for e: it loop {}\n"
             "}"
         )
-        assert "z_mapitemiter_i64_i64_t" in csource
-        assert "z_map_i64_i64_iterate_items" in csource
-        assert "z_mapitemiter_i64_i64_call" in csource
+        assert "z_MapItemIter_i64_i64_t" in csource
+        assert "z_Map_i64_i64_iterateItems" in csource
+        assert "z_MapItemIter_i64_i64_call" in csource
         # mapentry is a typedef alias for the bucket type
-        assert "typedef z_map_i64_i64_bucket_t z_mapentry_i64_i64_t" in csource
+        assert "typedef z_Map_i64_i64_bucket_t z_MapEntry_i64_i64_t" in csource
 
     def test_optionview_reftype_binds_by_pointer(self):
-        """Reftype optionview payload (string) emits a borrow pointer,
+        """Reftype OptionView payload (String) emits a borrow pointer,
         not a struct copy. The body's `s.method` calls go through the
         source storage so mutations land there."""
         csource = emit_source(
             "main: function is {\n"
-            "  xs: (list of: string)\n"
+            "  xs: (List of: String)\n"
             '  xs.append from: "hello".string\n'
             "  with it: xs.iterate do for s: it loop {}\n"
             "}"
         )
         # pointer binding, not struct copy
-        assert "z_string_t* __borrow_s = (z_string_t*)" in csource
-        assert "z_string_t s = *(z_string_t*)" not in csource
+        assert "z_String_t* __borrow_s = (z_String_t*)" in csource
+        assert "z_String_t s = *(z_String_t*)" not in csource
 
     def test_optionview_valtype_still_value_copy(self):
-        """Valtype optionview payload (i64) keeps the value-copy emit;
+        """Valtype OptionView payload (i64) keeps the value-copy emit;
         copies are safe for valtypes and the loop var is the natural
         local."""
         csource = emit_source(
             "main: function is {\n"
-            "  xs: (list of: i64)\n"
+            "  xs: (List of: i64)\n"
             "  xs.append from: 1\n"
             "  with it: xs.iterate do for x: it loop {}\n"
             "}"
@@ -562,12 +562,12 @@ class TestEmitterBasic:
         assert "__borrow_x" not in csource
 
     def test_optionview_reftype_mutation_lands_in_source(self):
-        """Mutating-method calls through a borrowed string-list iterator
-        binding modify the source list element. Read-back outside the
+        """Mutating-method calls through a borrowed String-List iterator
+        binding modify the source List element. Read-back outside the
         loop sees the new value."""
         csource = emit_source(
             "main: function is {\n"
-            "  xs: (list of: string)\n"
+            "  xs: (List of: String)\n"
             '  xs.append from: "hello".string\n'
             '  suffix_str: " world".string\n'
             "  suffix: suffix_str.stringview\n"
@@ -585,7 +585,7 @@ class TestEmitterBasic:
         """Generic unit instantiation with function."""
         csource = emit_source(
             "mathops: unit as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  add: function {a: t b: t} out t is { return a + b }\n"
             "}\n"
             "intmath: (mathops t: i64)\n"
@@ -601,7 +601,7 @@ class TestEmitterBasic:
         """Same generic unit instantiated with different types."""
         csource = emit_source(
             "ops: unit as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  double: function {v: t} out t is { return v + v }\n"
             "}\n"
             "iops: (ops t: i64)\n"
@@ -618,7 +618,7 @@ class TestEmitterBasic:
         """Generic unit with multiple functions."""
         csource = emit_source(
             "utils: unit as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  identity: function {v: t} out t is { return v }\n"
             "  sum: function {a: t b: t} out t is { return a + b }\n"
             "}\n"
@@ -635,9 +635,9 @@ class TestEmitterBasic:
         """3-level generic composition: outer unit → inner subunit."""
         csource = emit_source(
             "outer: unit as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  inner: unit as {\n"
-            "    u: any.generic\n"
+            "    u: Any.generic\n"
             "    add_both: function {a: t b: u} out t is { return a + b.i64 }\n"
             "  }\n"
             "  add: function {a: t b: t} out t is { return a + b }\n"
@@ -656,11 +656,11 @@ class TestEmitterBasic:
         """4-level generic nesting: level1 → level2 → level3, each with own param."""
         csource = emit_source(
             "level1: unit as {\n"
-            "  a: any.generic\n"
+            "  a: Any.generic\n"
             "  level2: unit as {\n"
-            "    b: any.generic\n"
+            "    b: Any.generic\n"
             "    level3: unit as {\n"
-            "      c: any.generic\n"
+            "      c: Any.generic\n"
             "      sum3: function {x: a y: b z: c} out a is {\n"
             "        return x + y.i64 + z.i64\n"
             "      }\n"
@@ -682,7 +682,7 @@ class TestEmitterBasic:
         assert output.strip() == "10\n15\n6"
 
     def test_generic_file_unit(self):
-        """Generic file unit instantiated from another file."""
+        """Generic File unit instantiated from another File."""
         from zvfs import ZVfs, StringProvider, FSProvider, BindType
 
         lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
@@ -699,7 +699,7 @@ class TestEmitterBasic:
                         "}"
                     ),
                     "mathutil.z": (
-                        "t: any.generic\n"
+                        "t: Any.generic\n"
                         "add: function {a: t b: t} out t is { return a + b }\n"
                     ),
                 }
@@ -720,7 +720,7 @@ class TestEmitterBasic:
         assert output.strip() == "8"
 
     def test_hidden_file_unit(self):
-        """Hidden file unit (subunit in directory) is loaded and callable."""
+        """Hidden File unit (subunit in directory) is loaded and callable."""
         from zvfs import ZVfs, StringProvider, FSProvider, BindType
 
         lib_dir = os.path.join(os.path.dirname(__file__), "..", "lib")
@@ -989,7 +989,7 @@ class TestEmitterExamples:
         assert lines[0] == "i64=-42"
         assert lines[1] == "u64=1234567890"
         assert lines[2] == "f64=3.14"
-        assert lines[3] == "invalid_digit"
+        assert lines[3] == "invalidDigit"
 
     def test_string_codepoints(self):
         csource = self._emit_example("string_codepoints")
@@ -1032,8 +1032,8 @@ class TestEmitterExamples:
         output = compile_and_run(csource)
         lines = output.strip().split("\n")
         assert lines[0] == "trim.length=12"
-        assert lines[1] == "trim_start.length=14"
-        assert lines[2] == "trim_end.length=14"
+        assert lines[1] == "trimStart.length=14"
+        assert lines[2] == "trimEnd.length=14"
         assert lines[3] == "stripped=7"
         assert lines[4] == "no match ok"
         assert lines[5] == "stem.length=5"
@@ -1056,7 +1056,7 @@ class TestEmitterExamples:
 
 
 class TestUserMethodStringTake:
-    """Regression test for C4: user class methods with `string.take`
+    """Regression test for C4: user class methods with `String.take`
     parameters must emit the call site pass-by-value (no `&`) and
     zero-init the caller's source to avoid double-free at scope
     exit. The earlier emission produced `&_t` against a by-value
@@ -1069,7 +1069,7 @@ class TestUserMethodStringTake:
             "holder: class {\n"
             "    n: i64\n"
             "} as {\n"
-            "    greet: function {:this s: string.take} is {\n"
+            "    greet: function {:this s: String.take} is {\n"
             "        print s\n"
             "    }\n"
             "}\n"
@@ -1102,16 +1102,16 @@ class TestUserMethodStringTake:
 
 class TestPrintStackClassDispatch:
     """Regression test for the print-through-projection emission path:
-    when a stack-allocated class conforms to `text`, the `.stringview`
+    when a stack-allocated class conforms to `Text`, the `.stringview`
     method takes `this` as a pointer, so the call site must pass
     `&receiver`. Pre-fix emission generated `z_T_stringview(m)` against
     a `z_T_stringview(z_T_t*)` signature, failing gcc at -Werror."""
 
     def test_print_stack_class_passes_address(self):
         src = (
-            "mylabel: class { s: string } as {\n"
-            "    :text\n"
-            "    stringview: function {m: this} out stringview is {\n"
+            "mylabel: class { s: String } as {\n"
+            "    :Text\n"
+            "    stringview: function {m: this} out StringView is {\n"
             "        return m.s.stringview\n"
             "    }\n"
             "}\n"
@@ -1130,10 +1130,10 @@ class TestPrintStackClassDispatch:
         """Control: records (valtypes) continue to receive `this` by
         value. The `&` prefix guard must only trigger for classes."""
         src = (
-            "tag: class { val: string } as {}\n"
+            "tag: class { val: String } as {}\n"
             "mypair: record { name: tag } as {\n"
-            "    :text\n"
-            "    stringview: function {p: this} out stringview is {\n"
+            "    :Text\n"
+            "    stringview: function {p: this} out StringView is {\n"
             "        return p.name.val.stringview\n"
             "    }\n"
             "}\n"
@@ -1146,8 +1146,8 @@ class TestPrintStackClassDispatch:
         # from the caller), so returning the view is legal.
         src = (
             "mypair: record { s: (str to: 16) } as {\n"
-            "    :text\n"
-            "    stringview: function {p: this} out stringview is {\n"
+            "    :Text\n"
+            "    stringview: function {p: this} out StringView is {\n"
             "        return p.s.stringview\n"
             "    }\n"
             "}\n"
@@ -1295,19 +1295,19 @@ def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
 
 
 class TestEmitterStringOwnership:
-    """Tests for string ownership semantics in emitted C code."""
+    """Tests for String ownership semantics in emitted C code."""
 
     def test_string_scope_cleanup(self):
-        """String variables freed at function exit via z_string_free."""
+        """String variables freed at function exit via z_String_free."""
         csource = emit_source('main: function is {\n  s: "hello".string\n  print s\n}')
-        assert "z_string_free(&s);" in csource
+        assert "z_String_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
     def test_string_return(self):
-        """Function returning a string; returned value usable, not double-freed."""
+        """Function returning a String; returned value usable, not double-freed."""
         csource = emit_source(
-            "greet: function {n: i64} out string is {\n"
+            "greet: function {n: i64} out String is {\n"
             '  return "Hello \\{n}!"\n'
             "}\n"
             "main: function is {\n"
@@ -1319,11 +1319,11 @@ class TestEmitterStringOwnership:
         assert output.strip() == "Hello 42!"
 
     def test_string_reassignment(self):
-        """Old value freed via z_string_free, new value assigned correctly."""
+        """Old value freed via z_String_free, new value assigned correctly."""
         csource = emit_source(
             'main: function is {\n  s: "hello".string\n  s = "world".string\n  print s\n}'
         )
-        assert "z_string_free(&s);" in csource
+        assert "z_String_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "world"
 
@@ -1344,21 +1344,21 @@ class TestEmitterStringOwnership:
         assert lines[1] == "first"
 
     def test_string_temporaries(self):
-        """Interpolation result freed via z_string_free."""
+        """Interpolation Result freed via z_String_free."""
         csource = emit_source(
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
         # verify result string is freed (append chain, single allocation)
-        assert "z_string_free(&_s" in csource
-        # verify interpolation uses append chain, not z_string_cat
+        assert "z_String_free(&_s" in csource
+        # verify interpolation uses append chain, not z_String_cat
         main_body = csource[csource.index("void z_main") :]
-        assert "z_string_cat(" not in main_body
-        assert "z_string_append(" in main_body
+        assert "z_String_cat(" not in main_body
+        assert "z_String_append(" in main_body
         output = compile_and_run(csource)
         assert output.strip() == "Hello, Zero!"
 
     def test_string_copy_independent_owners(self):
-        """`.copy` produces an independently-owned string; mutating
+        """`.copy` produces an independently-owned String; mutating
         the source does not change the copy and both are freed
         separately at scope exit."""
         csource = emit_source(
@@ -1370,18 +1370,18 @@ class TestEmitterStringOwnership:
             '  print "y=\\{y}"\n'
             "}"
         )
-        assert "z_string_copy(&x)" in csource
-        assert "z_string_free(&x);" in csource
-        assert "z_string_free(&y);" in csource
+        assert "z_String_copy(&x)" in csource
+        assert "z_String_free(&x);" in csource
+        assert "z_String_free(&y);" in csource
         lines = compile_and_run(csource).strip().split("\n")
         assert lines == ["x=hello world", "y=hello"]
 
     def test_string_param_borrow_passes_pointer(self):
-        """Phase A: unannotated string param is pointer-passed; the
-        emitted C signature uses `z_string_t*`, callers wrap with `&`,
+        """Phase A: unannotated String param is pointer-passed; the
+        emitted C signature uses `z_String_t*`, callers wrap with `&`,
         and the caller's variable is NOT zeroed after the call."""
         csource = emit_source(
-            "f: function {s: string} is {\n"
+            "f: function {s: String} is {\n"
             '  print "got=\\{s}"\n'
             "}\n"
             "main: function is {\n"
@@ -1390,17 +1390,17 @@ class TestEmitterStringOwnership:
             "}"
         )
         # signature is pointer-typed
-        assert "void z_f(z_string_t* s)" in csource
+        assert "void z_f(z_String_t* s)" in csource
         # call site wraps with &
         assert "z_f(&x)" in csource
         # caller's x is not zeroed by an implicit-take
-        assert "x = (z_string_t){0}" not in csource
+        assert "x = (z_String_t){0}" not in csource
 
     def test_string_param_mutation_lands_in_caller(self):
-        """Phase A: a borrowed string param mutated inside the callee
+        """Phase A: a borrowed String param mutated inside the callee
         shows the mutation in the caller's storage afterwards."""
         csource = emit_source(
-            "mutate: function {s: string} is {\n"
+            "mutate: function {s: String} is {\n"
             '  s.append s: " world"\n'
             "}\n"
             "main: function is {\n"
@@ -1410,20 +1410,20 @@ class TestEmitterStringOwnership:
             "}"
         )
         # s.append on a pointer-receiver should not double-address
-        assert "z_string_append(s," in csource
-        assert "z_string_append(&s," not in csource
+        assert "z_String_append(s," in csource
+        assert "z_String_append(&s," not in csource
         output = compile_and_run(csource).strip()
         assert output == "x=hello world"
 
     def test_release_on_borrowed_string_skips_free(self):
-        """`.release` on a borrowed string (e.g. one bound from an
+        """`.release` on a borrowed String (e.g. one bound from an
         `out T.borrow` return) must NOT free the underlying buffer —
         the source still owns it. Previously this emitted an
-        unconditional `z_string_free(&s)` and corrupted the source's
+        unconditional `z_String_free(&s)` and corrupted the source's
         heap data."""
         csource = emit_source(
-            "mybox: class { label: string }\n"
-            "peek: function {b: mybox.lock} out string.borrow is {\n"
+            "mybox: class { label: String }\n"
+            "peek: function {b: mybox.lock} out String.borrow is {\n"
             "  return b.label\n"
             "}\n"
             "main: function is {\n"
@@ -1437,26 +1437,26 @@ class TestEmitterStringOwnership:
         # The borrow `s` must NOT be freed by `.release` — only zeroed.
         # Extract the section between `s = _t...` and the next non-`s`
         # line to inspect the .release emit specifically.
-        assert "z_string_free(&s);" not in csource
+        assert "z_String_free(&s);" not in csource
         # `e` is still alive after `s.release`, so the second print
         # must see a valid box.label — runtime check.
         lines = compile_and_run(csource).strip().split("\n")
         assert lines == ["peeked: echo", "e still alive: echo"]
 
     def test_release_on_owned_string_frees(self):
-        """Regression: `.release` on an owned string still frees and
+        """Regression: `.release` on an owned String still frees and
         zeros, so scope-exit cleanup is a no-op afterwards."""
         csource = emit_source(
             'main: function is {\n  s: "hello".string\n  s.release\n  print "ok"\n}'
         )
         # owned string: free + zero
-        assert "z_string_free(&s);" in csource
-        assert "s = (z_string_t){0};" in csource
+        assert "z_String_free(&s);" in csource
+        assert "s = (z_String_t){0};" in csource
         assert compile_and_run(csource).strip() == "ok"
 
     def test_native_stringview_caller_retains(self):
-        """Read-only natives take `stringview` (Phase A native ABI);
-        the caller's `string` variable used via `.stringview` is NOT
+        """Read-only natives take `StringView` (Phase A native ABI);
+        the caller's `String` variable used via `.stringview` is NOT
         consumed and remains valid afterwards."""
         csource = emit_source(
             "main: function is {\n"
@@ -1466,28 +1466,28 @@ class TestEmitterStringOwnership:
             "}"
         )
         # caller's `p` not zeroed by an implicit-take
-        assert "p = (z_string_t){0}" not in csource
+        assert "p = (z_String_t){0}" not in csource
         # runtime: print sees the original path
         assert compile_and_run(csource).strip() == "p=/does/not/exist"
 
     def test_native_take_consumes_caller(self):
-        """Store-into-receiver natives take `string.take`; the caller's
+        """Store-into-receiver natives take `String.take`; the caller's
         variable is invalidated after the call (the runtime now owns
         the buffer directly without the deep-copy that pre-Phase-A
         natives did)."""
         csource = emit_source(
             "main: function is {\n"
-            '  sp: cli.spec.create program_name: "p".string summary: "s".string\n'
+            '  sp: cli.Spec.create programName: "p".string summary: "s".string\n'
             '  n: "--verbose".string\n'
             '  s: "-v".string\n'
             '  h: "be loud".string\n'
-            "  cli.add_flag spec: sp name: n short_name: s help: h\n"
+            "  cli.addFlag spec: sp name: n shortName: s help: h\n"
             "}"
         )
         # caller's name/short_name/help are zeroed after the take call
-        assert "n = (z_string_t){0}" in csource
-        assert "s = (z_string_t){0}" in csource
-        assert "h = (z_string_t){0}" in csource
+        assert "n = (z_String_t){0}" in csource
+        assert "s = (z_String_t){0}" in csource
+        assert "h = (z_String_t){0}" in csource
         # runtime: must run cleanly under MALLOC_CHECK_ (no leak/double-free)
         compile_and_run(csource)
 
@@ -1508,11 +1508,11 @@ class TestEmitterStringOwnership:
         assert lines == ["hello", "world", "!"]
 
     def test_string_in_with_do(self):
-        """Scoped string variable freed at end of with block via z_string_free."""
+        """Scoped String variable freed at end of with block via z_String_free."""
         csource = emit_source(
             'main: function is {\n  with s: "hello".string do print s\n}'
         )
-        assert "z_string_free(&s);" in csource
+        assert "z_String_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
@@ -1533,7 +1533,7 @@ class TestBareBlockScope:
         csource = emit_source(
             'main: function is {\n  { s: "hello".string\n  print s }\n  print "done"\n}'
         )
-        assert "z_string_free(&s);" in csource
+        assert "z_String_free(&s);" in csource
         output = compile_and_run(csource)
         assert output.strip().split("\n") == ["hello", "done"]
 
@@ -1562,7 +1562,7 @@ class TestImplicitReturn:
     def test_implicit_return_string(self):
         """String as implicit return, no memory leak."""
         csource = emit_source(
-            'greet: function {name: string} out string is { "hello".string }\n'
+            'greet: function {name: String} out String is { "hello".string }\n'
             'main: function is { print (greet "world".string) }'
         )
         output = compile_and_run(csource)
@@ -1614,7 +1614,7 @@ class TestImplicitReturn:
         assert output.strip() == "0 50 100"
 
     def test_void_function_discards_value(self):
-        """Void function with string last expression: value is discarded and freed."""
+        """Void function with String last expression: value is discarded and freed."""
         csource = emit_source(
             'f: function {n: i64} is {\n  s: "hello"\n  print s\n}\n'
             "main: function is { f 1 }"
@@ -1622,7 +1622,7 @@ class TestImplicitReturn:
         output = compile_and_run(csource)
         assert output.strip() == "hello"
         # string should be freed at scope exit
-        assert "z_string_free" in csource
+        assert "z_String_free" in csource
 
 
 class TestMatchExpression:
@@ -1641,7 +1641,7 @@ class TestMatchExpression:
         assert output.strip() == "10 20 30"
 
     def test_match_expression_assigned(self):
-        """Match expression result assigned to a variable."""
+        """Match expression Result assigned to a variable."""
         csource = emit_source(
             "north: 0\nsouth: 1\n"
             "main: function is {\n"
@@ -1682,16 +1682,16 @@ class TestMatchExpression:
 
 
 class TestEmitterStaticStrings:
-    """Tests for stringview string literal emission."""
+    """Tests for StringView String literal emission."""
 
     def test_literal_uses_static(self):
-        """Plain string literal should emit static z_stringview_t, not z_string_new."""
+        """Plain String literal should emit static z_StringView_t, not z_String_new."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        assert "static const z_stringview_t _zs" in csource
-        assert 'z_string_new("hello")' not in csource
+        assert "static const z_StringView_t _zs" in csource
+        assert 'z_String_new("hello")' not in csource
 
     def test_static_deduplication(self):
-        """Same literal used twice should produce one static z_stringview_t."""
+        """Same literal used twice should produce one static z_StringView_t."""
         csource = emit_source(
             'main: function is {\n  a: "hello"\n  b: "hello"\n  print a\n  print b\n}'
         )
@@ -1703,27 +1703,27 @@ class TestEmitterStaticStrings:
         )
 
     def test_interp_fragments_use_static(self):
-        """Literal fragments in interpolation should use static z_stringview_t."""
+        """Literal fragments in interpolation should use static z_StringView_t."""
         csource = emit_source(
             'main: function is {\n  name: "Zero"\n  print "Hello, \\{name}!"\n}'
         )
-        assert "static const z_stringview_t" in csource
+        assert "static const z_StringView_t" in csource
         # "Hello, " and "!" fragments should be static
-        assert 'z_string_new("Hello, ")' not in csource
-        assert 'z_string_new("!")' not in csource
+        assert 'z_String_new("Hello, ")' not in csource
+        assert 'z_String_new("!")' not in csource
 
     def test_static_string_var_no_temp(self):
         """Static literal assigned to var should not create a temp."""
         csource = emit_source('main: function is {\n  s: "hello"\n  print s\n}')
-        # Should directly assign: z_stringview_t s = _zs1;
-        assert "z_stringview_t s = _zs" in csource
+        # Should directly assign: z_StringView_t s = _zs1;
+        assert "z_StringView_t s = _zs" in csource
         # No temp allocation
-        assert "z_string_t* _t" not in csource or "_t1 = z_string_new" not in csource
+        assert "z_String_t* _t" not in csource or "_t1 = z_String_new" not in csource
 
     def test_static_string_passed_to_function(self):
-        """Static string can be passed to and returned from functions."""
+        """Static String can be passed to and returned from functions."""
         csource = emit_source(
-            "greet: function {n: i64} out string is {\n"
+            "greet: function {n: i64} out String is {\n"
             '  return "hello".string\n'
             "}\n"
             "main: function is {\n"
@@ -1744,21 +1744,21 @@ class TestEmitterStaticStrings:
         assert result.stdout.strip() == "world"
 
     def test_static_empty_string(self):
-        """Empty string literal should use static z_stringview_t."""
+        """Empty String literal should use static z_StringView_t."""
         csource = emit_source('main: function is {\n  s: ""\n  print s\n}')
-        assert "static const z_stringview_t" in csource
-        assert 'z_string_new("")' not in csource
+        assert "static const z_StringView_t" in csource
+        assert 'z_String_new("")' not in csource
 
-    def test_z_string_free_in_scope_cleanup(self):
-        """Scope cleanup for string vars should use z_string_free."""
+    def test_z_String_free_in_scope_cleanup(self):
+        """Scope cleanup for String vars should use z_String_free."""
         csource = emit_source('main: function is {\n  s: "hello".string\n  print s\n}')
-        assert "z_string_free(&s);" in csource
-        # the main body should not use raw free(s), only z_string_free
+        assert "z_String_free(&s);" in csource
+        # the main body should not use raw free(s), only z_String_free
         main_body = csource[csource.index("void z_main") :]
         assert "if (s) free(s);" not in main_body
 
     def test_v2_string_struct(self):
-        """z_string_t struct should have size and capacity fields."""
+        """z_String_t struct should have size and capacity fields."""
         csource = emit_source('main: function is { print "hello" }')
         assert "uint64_t size;" in csource
         assert "uint64_t capacity;" in csource
@@ -1775,7 +1775,7 @@ class TestEmitterMemorySafety:
 
     def test_string_return_no_leak(self):
         csource = emit_source(
-            "greet: function {n: i64} out string is {\n"
+            "greet: function {n: i64} out String is {\n"
             '  return "Hello \\{n}!"\n'
             "}\n"
             "main: function is {\n"
@@ -2032,11 +2032,11 @@ class TestEmitterClassIntegration:
         assert output.strip() == "7"
 
     def test_self_field_method_call_statement_prepends_receiver(self):
-        """Regression for the emitter gap unblocked by path-scoped locks:
+        """Regression for the emitter gap unblocked by Path-scoped locks:
         `this.field.method arg` on a concrete class field in statement
         position must emit `z_method(&this->field, arg)`, not
         `z_method(arg)`. Before Commit D, the pattern was rejected at
-        typecheck; the emitter's statement path never handled it."""
+        typecheck; the emitter's statement Path never handled it."""
         csource = emit_source(
             "sink: class { total: i64 } as {\n"
             "  add: function {:this n: i64} is {\n"
@@ -2212,12 +2212,12 @@ class TestEmitterClassDestructors:
     """Tests for class destructor generation and usage."""
 
     def test_class_destructor_with_string_field(self):
-        """Class with string field: destructor frees string."""
+        """Class with String field: destructor frees String."""
         csource = emit_source(
-            'myclass: class { name: string\n x: 0 }\nmain: function is { c: myclass name: "" }'
+            'myclass: class { name: String\n x: 0 }\nmain: function is { c: myclass name: "" }'
         )
         assert "z_myclass_destroy" in csource
-        assert "z_string_free(&p->name);" in csource
+        assert "z_String_free(&p->name);" in csource
 
     def test_class_destructor_with_class_field(self):
         """Class with class field: destructor recurses."""
@@ -2249,7 +2249,7 @@ class TestEmitterClassDestructors:
     def test_scope_exit_calls_destructor(self):
         """Scope-exit cleanup calls z_{name}_destroy."""
         csource = emit_source(
-            'myclass: class { name: string }\nmain: function is { c: myclass name: "" }'
+            'myclass: class { name: String }\nmain: function is { c: myclass name: "" }'
         )
         # should call destructor with address-of, not bare free
         assert "z_myclass_destroy(&c);" in csource
@@ -2291,9 +2291,9 @@ class TestEmitterClassDestructorIntegration:
     """Integration tests for class destructors using ASan."""
 
     def test_class_string_field_asan(self):
-        """Class with string field: no leak under ASan."""
+        """Class with String field: no leak under ASan."""
         csource = emit_source(
-            "myclass: class { name: string\n x: i64 }\n"
+            "myclass: class { name: String\n x: i64 }\n"
             'main: function is {\n  c: myclass name: "hello".string x: 42\n  print "\\{c.name}"\n}'
         )
         result = compile_and_run_asan(csource)
@@ -2505,21 +2505,21 @@ class TestEmitterUnionIntegration:
     """Integration tests: compile and run union programs."""
 
     def test_result_err_forward_across_result_shapes(self):
-        """End-to-end: a function receives a `result<u64, i64>`, returns
-        `result<null, i64>` by matching and reconstructing. Exercises
-        the err-propagation pattern that bufwriter.flush needs
-        (`return result.err r t: null` in the narrowed err arm)."""
+        """End-to-end: a function receives a `Result<u64, i64>`, returns
+        `Result<null, i64>` by matching and reconstructing. Exercises
+        the err-propagation pattern that BufWriter.flush needs
+        (`return Result.err r t: null` in the narrowed err arm)."""
         csource = emit_source(
-            "forward: function {r: (result t: u64 e: i64)}"
-            " out (result t: null e: i64) is {\n"
+            "forward: function {r: (Result t: u64 e: i64)}"
+            " out (Result t: null e: i64) is {\n"
             "    match (r) case ok then {\n"
-            "        return (result.ok null e: i64)\n"
+            "        return (Result.ok null e: i64)\n"
             "    } case err then {\n"
-            "        return (result.err r t: null)\n"
+            "        return (Result.err r t: null)\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    s: (result.err 42 t: u64)\n"
+            "    s: (Result.err 42 t: u64)\n"
             "    o: (forward r: s)\n"
             "    match (o) case ok then {\n"
             '        print "ok branch"\n'
@@ -2534,16 +2534,16 @@ class TestEmitterUnionIntegration:
     def test_result_ok_forward_across_result_shapes(self):
         """Same pattern but the ok arm is taken."""
         csource = emit_source(
-            "forward: function {r: (result t: u64 e: i64)}"
-            " out (result t: null e: i64) is {\n"
+            "forward: function {r: (Result t: u64 e: i64)}"
+            " out (Result t: null e: i64) is {\n"
             "    match (r) case ok then {\n"
-            "        return (result.ok null e: i64)\n"
+            "        return (Result.ok null e: i64)\n"
             "    } case err then {\n"
-            "        return (result.err r t: null)\n"
+            "        return (Result.err r t: null)\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    s: (result.ok 7.u64 e: i64)\n"
+            "    s: (Result.ok 7.u64 e: i64)\n"
             "    o: (forward r: s)\n"
             "    match (o) case ok then {\n"
             '        print "ok branch"\n'
@@ -2599,7 +2599,7 @@ class TestEmitterUnionIntegration:
 
     def test_union_string_variant(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is {\n"
             '  x: myunion.b "hello".string\n'
             '  print "ok"\n'
@@ -2641,8 +2641,8 @@ class TestEmitterUnionIntegration:
 
     def test_union_function_param(self):
         csource = emit_source(
-            "result: union { ok: i64\n err: string\n none: null }\n"
-            "describe: function {r: result} out string is {\n"
+            "Result: union { ok: i64\n err: String\n none: null }\n"
+            "describe: function {r: Result} out String is {\n"
             "  match (\n"
             "    r\n"
             "  ) case ok then {\n"
@@ -2654,7 +2654,7 @@ class TestEmitterUnionIntegration:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  a: result.ok 42\n"
+            "  a: Result.ok 42\n"
             '  print "a is \\{describe a}"\n'
             "}"
         )
@@ -2699,7 +2699,7 @@ class TestEmitterUnionMemorySafety:
 
     def test_union_string_no_leak(self):
         csource = emit_source(
-            "myunion: union { a: string\n b: null }\n"
+            "myunion: union { a: String\n b: null }\n"
             'main: function is { x: myunion.a "hello".string\n print "ok" }'
         )
         result = compile_and_run_asan(csource)
@@ -2781,15 +2781,15 @@ class TestStandaloneTake:
         assert "x = (z_myunion_t){0};" in csource
 
     def test_standalone_take_string(self):
-        """s.take as statement on string → free + zero-init."""
+        """s.take as statement on String → free + zero-init."""
         csource = emit_source('main: function is {\n  s: "hello".string\n  s.take\n}')
-        assert "z_string_free(&s);" in csource
-        assert "s = (z_string_t){0};" in csource
+        assert "z_String_free(&s);" in csource
+        assert "s = (z_String_t){0};" in csource
 
     def test_standalone_take_class_asan(self):
-        """Standalone .take on class with string field → no leak, no double-free."""
+        """Standalone .take on class with String field → no leak, no double-free."""
         csource = emit_source(
-            "myclass: class { name: string }\n"
+            "myclass: class { name: String }\n"
             "main: function is {\n"
             '  c: myclass name: "hello".string\n'
             "  c.take\n"
@@ -2817,12 +2817,12 @@ class TestStandaloneRelease:
         assert "c = (z_myclass_t){0};" in csource
 
     def test_release_string(self):
-        """s.release on string → free + zero-init."""
+        """s.release on String → free + zero-init."""
         csource = emit_source(
             'main: function is {\n  s: "hello".string\n  s.release\n}'
         )
-        assert "z_string_free(&s);" in csource
-        assert "s = (z_string_t){0};" in csource
+        assert "z_String_free(&s);" in csource
+        assert "s = (z_String_t){0};" in csource
 
     def test_release_valtype_no_destroy(self):
         """x.release on valtype → no destroy call in C output."""
@@ -2832,7 +2832,7 @@ class TestStandaloneRelease:
     def test_release_class_asan(self):
         """Standalone .release on class → no leak, no double-free."""
         csource = emit_source(
-            "myclass: class { name: string }\n"
+            "myclass: class { name: String }\n"
             "main: function is {\n"
             '  c: myclass name: "hello".string\n'
             "  c.release\n"
@@ -2900,7 +2900,7 @@ class TestImplicitTake:
 
 
 class TestReturnPathTake:
-    """Tests for .take in return-path class construction."""
+    """Tests for .take in return-Path class construction."""
 
     def test_return_class_construction_take(self):
         """Return with class construction using .take → source nullified.
@@ -2910,8 +2910,8 @@ class TestReturnPathTake:
         defaults reftype params to BORROW; the explicit `.take` opts out
         and gives the body owned access."""
         csource = emit_source(
-            "myclass: class { name: string }\n"
-            "wrap: function {s: string.take} out myclass is {\n"
+            "myclass: class { name: String }\n"
+            "wrap: function {s: String.take} out myclass is {\n"
             "  return myclass name: s.take\n"
             "}\n"
             "main: function is {\n"
@@ -2919,7 +2919,7 @@ class TestReturnPathTake:
             '  print "ok"\n'
             "}"
         )
-        assert "s = (z_string_t){0};" in csource
+        assert "s = (z_String_t){0};" in csource
 
 
 # ---- Phase 4h.2: Constructor Infrastructure (meta.create) ----
@@ -3024,9 +3024,9 @@ class TestEmitterConstructorIntegration:
         assert output.strip() == "3 7"
 
     def test_class_string_field_take(self):
-        """Class with string field: take semantics work via meta.create."""
+        """Class with String field: take semantics work via meta.create."""
         csource = emit_source(
-            "myclass: class { name: string }\n"
+            "myclass: class { name: String }\n"
             'main: function is {\n  c: myclass name: "hello".string\n  print "\\{c.name}"\n}'
         )
         output = compile_and_run(csource)
@@ -3046,9 +3046,9 @@ class TestEmitterConstructorMemorySafety:
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
     def test_class_string_field_no_leak(self):
-        """Class with string field: no leak under ASan."""
+        """Class with String field: no leak under ASan."""
         csource = emit_source(
-            "myclass: class { name: string }\n"
+            "myclass: class { name: String }\n"
             'main: function is {\n  c: myclass name: "hello".string\n  print "\\{c.name}"\n}'
         )
         result = compile_and_run_asan(csource)
@@ -3092,7 +3092,7 @@ class TestEmitterLabelValueIntegration:
     def test_union_label_value_basic(self):
         """Compile and run union with :x subtypes."""
         csource = emit_source(
-            "myunion: union { :u8\n :string }\n"
+            "myunion: union { :u8\n :String }\n"
             'main: function is { x: myunion.u8 42\n print "ok" }'
         )
         output = compile_and_run(csource)
@@ -3118,7 +3118,7 @@ class TestInlineUnits:
         assert "z_m_f" in csource
 
     def test_inline_unit_constant(self):
-        """Inline unit constant accessible via dotted path."""
+        """Inline unit constant accessible via dotted Path."""
         csource = emit_source(
             'm: unit { X: 42 }\nmain: function is { print "\\{m.X}" }'
         )
@@ -3127,7 +3127,7 @@ class TestInlineUnits:
         assert output.strip() == "42"
 
     def test_nested_inline_unit_function(self):
-        """Nested inline unit function emits with full path mangling."""
+        """Nested inline unit function emits with full Path mangling."""
         csource = emit_source(
             "a: unit { b: unit { f: function {x: i64} out i64 is { return x } } }\n"
             'main: function is { print "\\{a.b.f 7}" }'
@@ -3309,7 +3309,7 @@ class TestSpecs:
     """Tests for specs (function pointer types) — Phase 20."""
 
     def test_spec_generates_typedef(self):
-        """A spec definition generates a typedef in C output."""
+        """A Spec definition generates a typedef in C output."""
         csource = emit_source(
             "binop: function {a: i64 b: i64} out i64\n"
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
@@ -3381,7 +3381,7 @@ class TestSpecs:
         assert lines[1] == "-5"
 
     def test_record_with_func_pointer_field(self):
-        """Record with function pointer field (spec in 'is' section)."""
+        """Record with function pointer field (Spec in 'is' section)."""
         csource = emit_source(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             "calculator: record {\n"
@@ -3788,7 +3788,7 @@ class TestStringWhitespace:
         assert output == "  hello\n  world"
 
     def test_simple_string_unchanged(self):
-        """Simple single-line string is not affected."""
+        """Simple single-line String is not affected."""
         csource = emit_source('main: function is { print "hello" }')
         output = compile_and_run(csource).rstrip("\n")
         assert output == "hello"
@@ -3827,13 +3827,13 @@ class TestStringWhitespace:
 
 class TestProtocols:
     PROTO_SOURCE = (
-        "reader: protocol {\n"
+        "Reader: protocol {\n"
         "    read: function {:this b: i64} out i64\n"
         "}\n"
         "myfile: record {\n"
         "    fd: i64\n"
         "} as {\n"
-        "    myreader: reader\n"
+        "    myreader: Reader\n"
         "    read: function {f: this b: i64} out i64 is {\n"
         "        return f.fd + b\n"
         "    }\n"
@@ -3843,13 +3843,13 @@ class TestProtocols:
     # Class-based version for .borrow/.lock tests (records are valtypes,
     # cannot be locked).
     PROTO_CLASS_SOURCE = (
-        "reader: protocol {\n"
+        "Reader: protocol {\n"
         "    read: function {:this b: i64} out i64\n"
         "}\n"
         "myfile: class {\n"
         "    fd: i64\n"
         "} as {\n"
-        "    myreader: reader\n"
+        "    myreader: Reader\n"
         "    read: function {f: this b: i64} out i64 is {\n"
         "        return f.fd + b\n"
         "    }\n"
@@ -3861,10 +3861,10 @@ class TestProtocols:
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is { f: myfile fd: 1 }"
         )
-        assert "z_reader_vtable_t" in csource
-        assert "z_reader_t" in csource
+        assert "z_Reader_vtable_t" in csource
+        assert "z_Reader_t" in csource
         assert "void* data;" in csource
-        assert "z_reader_vtable_t* vtable;" in csource
+        assert "z_Reader_vtable_t* vtable;" in csource
         assert "void (*destroy)(void*);" in csource
 
     def test_protocol_impl_wrapper(self):
@@ -3879,7 +3879,7 @@ class TestProtocols:
     def test_protocol_dispatch_runtime(self):
         """End-to-end: create record, create protocol instance, call method, verify output."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -3894,18 +3894,18 @@ class TestProtocols:
     def test_protocol_with_class(self):
         """Protocol dispatch with class (pointer semantics)."""
         csource = emit_source(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myobj: class {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {o: this b: i64} out i64 is {\n"
             "        return o.fd + b\n"
             "    }\n"
             "}\n"
-            "use_reader: function {r: reader} out i64 is {\n"
+            "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 7\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -3920,7 +3920,7 @@ class TestProtocols:
     def test_protocol_asan(self):
         """ASan clean: no memory leaks or errors with protocol instances."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -3936,7 +3936,7 @@ class TestProtocols:
     def test_protocol_temp_no_malloc(self):
         """Temp protocol instances use stack allocation, not malloc."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -3944,19 +3944,19 @@ class TestProtocols:
             '    print "\\{use_reader f.myreader}"\n'
             "}\n"
         )
-        # temp path should be stack-allocated (z_reader_t directly, not pointer)
-        assert "z_reader_t _p" in csource
+        # temp path should be stack-allocated (z_Reader_t directly, not pointer)
+        assert "z_Reader_t _p" in csource
         # protocol struct itself is not malloc'd
-        assert "z_xmalloc(sizeof(z_reader_t))" not in csource
+        assert "z_xmalloc(sizeof(z_Reader_t))" not in csource
         # the stack temp is destroyed by address — after Phase C step 2's
         # arg hoisting, ownership transfers to a synth `_tN` temp whose
         # destructor fires at function exit.
-        assert "z_reader_destroy(&" in csource
+        assert "z_Reader_destroy(&" in csource
 
     def test_protocol_temp_runtime(self):
         """Stack-allocated temp protocol instance works at runtime."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -3970,7 +3970,7 @@ class TestProtocols:
     def test_protocol_temp_asan(self):
         """ASan clean with stack-allocated temp protocol instances."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -3985,7 +3985,7 @@ class TestProtocols:
     def test_protocol_named_var_still_heap(self):
         """Named protocol variables still use heap allocation."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
@@ -4002,7 +4002,7 @@ class TestProtocols:
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create from: f.take\n"
+            "    r: Reader.create from: f.take\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
         )
@@ -4012,20 +4012,20 @@ class TestProtocols:
     def test_owned_protocol_create_class(self):
         """Owned protocol create from class compiles and runs."""
         csource = emit_source(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myobj: class {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {o: this b: i64} out i64 is {\n"
             "        return o.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    o: myobj fd: 20\n"
-            "    r: reader.create from: o.take\n"
+            "    r: Reader.create from: o.take\n"
             '    print "\\{r.read b: 7}"\n'
             "}\n"
         )
@@ -4037,7 +4037,7 @@ class TestProtocols:
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create from: f.take\n"
+            "    r: Reader.create from: f.take\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
         )
@@ -4048,12 +4048,12 @@ class TestProtocols:
     def test_owned_protocol_dispatch(self):
         """Method dispatch on owned protocol works via use_reader."""
         csource = emit_source(
-            self.PROTO_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create from: f.take\n"
+            "    r: Reader.create from: f.take\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
         )
@@ -4065,7 +4065,7 @@ class TestProtocols:
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create from: f.take\n"
+            "    r: Reader.create from: f.take\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
         )
@@ -4073,11 +4073,11 @@ class TestProtocols:
         assert "boxed_destroy" in csource
 
     def test_protocol_borrow_record(self):
-        """reader.borrow from: f.lock compiles and runs (class, since records are valtypes)."""
+        """Reader.borrow from: f.lock compiles and runs (class, since records are valtypes)."""
         csource = emit_source(
             self.PROTO_CLASS_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f.lock\n"
+            "    r: Reader.borrow from: f.lock\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
         )
@@ -4085,22 +4085,22 @@ class TestProtocols:
         assert output.strip() == "15"
 
     def test_protocol_borrow_class(self):
-        """reader.borrow from class compiles and runs."""
+        """Reader.borrow from class compiles and runs."""
         csource = emit_source(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myobj: class {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {o: this b: i64} out i64 is {\n"
             "        return o.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    o: myobj fd: 20\n"
-            "    r: reader.borrow from: o.lock\n"
+            "    r: Reader.borrow from: o.lock\n"
             '    print "\\{r.read b: 7}"\n'
             "}\n"
         )
@@ -4112,7 +4112,7 @@ class TestProtocols:
         csource = emit_source(
             self.PROTO_CLASS_SOURCE + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f.lock\n"
+            "    r: Reader.borrow from: f.lock\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
         )
@@ -4123,12 +4123,12 @@ class TestProtocols:
     def test_protocol_borrow_source_accessible_after_scope(self):
         """Underlying object accessible after borrowed protocol used in function."""
         csource = emit_source(
-            self.PROTO_CLASS_SOURCE + "use_reader: function {r: reader} out i64 is {\n"
+            self.PROTO_CLASS_SOURCE + "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f.lock\n"
+            "    r: Reader.borrow from: f.lock\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
         )
@@ -4142,7 +4142,7 @@ class TestGenericsEmission:
     def test_generic_union_template_not_emitted(self):
         """Generic union template should not produce C struct."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         # template should NOT be emitted
@@ -4152,7 +4152,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_emitted(self):
         """Monomorphized union emits tag enum + struct + destructor."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         assert "z_myopt_i64_tag_t" in csource
@@ -4164,7 +4164,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_construction_compiles(self):
         """Generic union construction compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             '    print "ok"\n'
@@ -4176,7 +4176,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_match(self):
         """Match on monomorphized union works."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "  x: myopt.some 42\n"
             "  match (\n"
@@ -4194,7 +4194,7 @@ class TestGenericsEmission:
     def test_monomorphized_union_scope_cleanup(self):
         """Monomorphized union destroyed at function exit."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         assert "z_myopt_i64_destroy(&x);" in csource
@@ -4202,7 +4202,7 @@ class TestGenericsEmission:
     def test_two_different_instantiations(self):
         """Two different instantiations produce two distinct types."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.some 3.14\n"
@@ -4224,7 +4224,7 @@ class TestGenericsEmission:
     def test_generic_union_asan(self):
         """Monomorphized union passes AddressSanitizer."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.none i32\n"
@@ -4238,7 +4238,7 @@ class TestGenericsEmission:
     def test_generic_union_from_compiles(self):
         """Generic union construction with from: compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             '    print "ok"\n'
@@ -4250,7 +4250,7 @@ class TestGenericsEmission:
     def test_generic_union_explicit_type_and_from_compiles(self):
         """Generic union with explicit type param and from: compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some t: i64 from: 42\n"
             '    print "ok"\n'
@@ -4262,7 +4262,7 @@ class TestGenericsEmission:
     def test_generic_union_from_emits_correct_type(self):
         """from: syntax produces same monomorphized type as positional."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some from: 42 }"
         )
         assert "z_myopt_i64_t" in csource
@@ -4271,7 +4271,7 @@ class TestGenericsEmission:
     def test_generic_union_from_asan(self):
         """Generic union from: passes AddressSanitizer."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             "    y: myopt.none i32\n"
@@ -4289,10 +4289,10 @@ class TestGenericsEmission:
         assert output.strip() == "ok"
 
     def test_nullable_ptr_option_with_string(self):
-        """option.some with string (reftype) emits nullable pointer."""
+        """Option.some with String (reftype) emits nullable pointer."""
         csource = emit_source(
             "main: function is {\n"
-            '    x: option.some "hello".string\n'
+            '    x: Option.some "hello".string\n'
             "    match (x) case some then {\n"
             '        print "is some"\n'
             "    } case none then {\n"
@@ -4304,10 +4304,10 @@ class TestGenericsEmission:
         assert output.strip() == "is some"
 
     def test_nullable_ptr_option_none_string(self):
-        """option.none string emits NULL."""
+        """Option.none String emits NULL."""
         csource = emit_source(
             "main: function is {\n"
-            "    x: option.none string\n"
+            "    x: Option.none String\n"
             "    match (x) case some then {\n"
             '        print "is some"\n'
             "    } case none then {\n"
@@ -4366,7 +4366,7 @@ class TestGenericsEmission:
         """Map.get() with valtype values returns optionval."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 1 value: 42\n"
             "    r: m.get key: 1\n"
             '    match (r) case some then { print "found" } case none then { print "missing" }\n'
@@ -4392,9 +4392,9 @@ class TestGenericsEmission:
     # ---- box type ----
 
     def test_box_valtype_compiles(self):
-        """box from: valtype compiles and runs."""
+        """Box from: valtype compiles and runs."""
         csource = emit_source(
-            'main: function is {\n    b: box from: 42\n    print "ok"\n}'
+            'main: function is {\n    b: Box from: 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
@@ -4403,7 +4403,7 @@ class TestGenericsEmission:
         """Arithmetic on boxed valtype auto-derefs."""
         csource = emit_source(
             "main: function is {\n"
-            "    b: box from: 10\n"
+            "    b: Box from: 10\n"
             "    r: b + 5\n"
             '    print "\\{r}"\n'
             "}"
@@ -4412,10 +4412,10 @@ class TestGenericsEmission:
         assert output.strip() == "15"
 
     def test_box_string_value(self):
-        """box from: string — heap-allocates the stack string struct."""
+        """Box from: String — heap-allocates the stack String struct."""
         # Just verify it compiles & runs cleanly (box manages lifetime)
         csource = emit_source(
-            'main: function is {\n    b: box from: "hello".string\n    print "done"\n}'
+            'main: function is {\n    b: Box from: "hello".string\n    print "done"\n}'
         )
         output = compile_and_run(csource)
         assert "done" in output
@@ -4424,7 +4424,7 @@ class TestGenericsEmission:
         """Comparison on boxed valtype auto-derefs."""
         csource = emit_source(
             "main: function is {\n"
-            "    b: box from: 42\n"
+            "    b: Box from: 42\n"
             '    if b == 42 then { print "yes" } else { print "no" }\n'
             "}"
         )
@@ -4434,28 +4434,28 @@ class TestGenericsEmission:
     # ---- any.valtype / any.reftype constraints ----
 
     def test_valtype_constraint_record_compiles(self):
-        """Record with any.valtype constraint compiles and runs."""
+        """Record with Any.valtype constraint compiles and runs."""
         csource = emit_source(
-            "myrec: record { x: t } as { t: any.valtype }\n"
+            "myrec: record { x: t } as { t: Any.valtype }\n"
             'main: function is {\n    r: myrec x: 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
     def test_valtype_constraint_union_compiles(self):
-        """Union with any.valtype constraint compiles and runs."""
+        """Union with Any.valtype constraint compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: any.valtype }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.valtype }\n"
             'main: function is {\n    x: myopt.some 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
     def test_reftype_constraint_class_compiles(self):
-        """Record with any.reftype constraint compiles and runs with class."""
+        """Record with Any.reftype constraint compiles and runs with class."""
         csource = emit_source(
             "mycls: class { v: i64 }\n"
-            "holder: record { ref: t } as { t: any.reftype }\n"
+            "holder: record { ref: t } as { t: Any.reftype }\n"
             "main: function is {\n"
             "    c: mycls v: 10\n"
             "    h: holder ref: c\n"
@@ -4497,7 +4497,7 @@ class TestGenericsEmission:
     def test_generic_class_template_not_emitted(self):
         """Generic class template should not produce C struct."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         assert "z_mycls_t " not in csource or "z_mycls_i64_t" in csource
@@ -4507,7 +4507,7 @@ class TestGenericsEmission:
     def test_generic_class_compiles(self):
         """Generic class construction compiles and runs."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: mycls val: 42\n"
             '    print "ok"\n'
@@ -4519,7 +4519,7 @@ class TestGenericsEmission:
     def test_generic_class_asan(self):
         """Monomorphized class passes AddressSanitizer."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: mycls val: 42\n"
             "}"
@@ -4531,7 +4531,7 @@ class TestGenericsEmission:
         """Generic class with as-methods compiles."""
         csource = emit_source(
             "mycls: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  getval: function {c: this} out i64 is { return c.val }\n"
             "}\n"
             "main: function is {\n"
@@ -4545,7 +4545,7 @@ class TestGenericsEmission:
     def test_generic_class_destructor(self):
         """Monomorphized class with only valtype fields has no destructor."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         # valtype-only class: no destructor emitted or called
@@ -4557,7 +4557,7 @@ class TestGenericsEmission:
         """Generic protocol definition compiles (template skipped)."""
         csource = emit_source(
             "myproto: protocol {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\n"
             'main: function is { print "ok" }'
@@ -4575,7 +4575,7 @@ class TestGenericFunctionEmission:
     def test_generic_function_template_not_emitted(self):
         """Generic function template should not produce C function."""
         csource = emit_source(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
         # template cname should NOT appear as a function definition
@@ -4584,7 +4584,7 @@ class TestGenericFunctionEmission:
     def test_monomorphized_function_emitted(self):
         """Monomorphized generic function emits a C function."""
         csource = emit_source(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
         assert "z_id_i64" in csource
@@ -4592,7 +4592,7 @@ class TestGenericFunctionEmission:
     def test_monomorphized_function_called(self):
         """Generic function call emits call to monomorphized C function."""
         csource = emit_source(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
         # main should call z_id_i64
@@ -4601,7 +4601,7 @@ class TestGenericFunctionEmission:
     def test_multiple_instantiations(self):
         """Different type args produce different C functions."""
         csource = emit_source(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42\n y: id 3.14 }"
         )
         assert "z_id_i64" in csource
@@ -4610,7 +4610,7 @@ class TestGenericFunctionEmission:
     def test_generic_function_compiles_and_runs(self):
         """Generic function compiles to working C binary."""
         csource = emit_source(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is {\n"
             "    x: id 42\n"
             '    print "ok"\n'
@@ -4856,7 +4856,7 @@ class TestCodeDeduplication:
         """Structurally different instantiations are NOT deduped."""
         csource = emit_source(
             "mycls: class { val: t } as {\n"
-            "    t: any.generic\n"
+            "    t: Any.generic\n"
             "    getval: function {c: this} out i64 is { return 0 }\n"
             "}\n"
             "main: function is {\n"
@@ -5096,22 +5096,22 @@ class TestArrayEmission:
 
 
 class TestBytesByteview:
-    """`bytes.byteview` is the bytes analog of `string.stringview` /
-    `list.listview`. Declared natively in lib/system/system.z; the
-    emitter routes the call through z_list_u8_listview because bytes
-    is a transparent typedef over `list of: u8`."""
+    """`Bytes.byteview` is the Bytes analog of `String.stringview` /
+    `List.listview`. Declared natively in lib/system/system.z; the
+    emitter routes the call through z_List_u8_ListView because Bytes
+    is a transparent typedef over `List of: u8`."""
 
     def test_byteview_empty_length_zero(self):
         csource = emit_source(
-            "use_view: function {bv: byteview} out u64 is { return bv.length }\n"
+            "use_view: function {bv: ByteView} out u64 is { return bv.length }\n"
             "main: function is {\n"
-            "    b: bytes\n"
+            "    b: Bytes\n"
             "    n: use_view bv: b.byteview\n"
             '    print "\\{n}"\n'
             "}"
         )
         # Routes through the existing list-of-u8 listview helper.
-        assert "z_list_u8_listview" in csource
+        assert "z_List_u8_listview" in csource
         output = compile_and_run(csource)
         assert output.strip() == "0"
 
@@ -5145,7 +5145,7 @@ class TestStr:
         assert output.strip() == "0"
 
     def test_str_from_literal_length(self):
-        """Create str from string literal via .str method, read length."""
+        """Create str from String literal via .str method, read length."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello".str to: 32\n'
@@ -5164,7 +5164,7 @@ class TestStr:
         assert output.strip() == "32"
 
     def test_str_truncation(self):
-        """Long string truncated to str capacity via .str method."""
+        """Long String truncated to str capacity via .str method."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello world".str to: 4\n'
@@ -5175,7 +5175,7 @@ class TestStr:
         assert output.strip() == "4"
 
     def test_str_string_conversion(self):
-        """.string converts to heap-allocated z_string_t*."""
+        """.string converts to heap-allocated z_String_t*."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello".str to: 32\n'
@@ -5228,13 +5228,13 @@ class TestStr:
         assert output.strip() == "4"
 
     def test_str_literal_optimization(self):
-        """string.str with literal uses direct struct init (no malloc)."""
+        """String.str with literal uses direct struct init (no malloc)."""
         csource = emit_source('main: function is { s: "hello".str to: 32 }')
         # should have direct compound literal
         assert '(z_str_32_t){5, "hello"}' in csource
 
     def test_string_to_str_method(self):
-        """string.str to: N converts heap string to str."""
+        """String.str to: N converts heap String to str."""
         csource = emit_source(
             "main: function is {\n"
             '    msg: "hello world"\n'
@@ -5315,7 +5315,7 @@ class TestStr:
         assert lines[1] == "bob"
 
     def test_str_stringview_zero_arg_shape(self):
-        """str.stringview emits (z_stringview_t){ s.data, s.len } at path access."""
+        """str.stringview emits (z_StringView_t){ s.data, s.len } at Path access."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello".str to: 32\n'
@@ -5323,7 +5323,7 @@ class TestStr:
             "    print v\n"
             "}"
         )
-        assert "(z_stringview_t){ s.data, s.len }" in csource
+        assert "(z_StringView_t){ s.data, s.len }" in csource
 
     def test_str_stringview_zero_arg_runs(self):
         """End-to-end: str.stringview prints the str's content."""
@@ -5353,7 +5353,7 @@ class TestStr:
         assert "stringview: bounds error" in csource
 
     def test_str_stringview_substring_runs(self):
-        """End-to-end: substring view prints the sliced bytes."""
+        """End-to-end: substring view prints the sliced Bytes."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello world".str to: 32\n'
@@ -5383,9 +5383,9 @@ class TestStr:
         assert output.strip() == "alice"
 
     def test_string_stringview_zero_arg_shape(self):
-        """string.stringview emits (z_stringview_t){ s.data, s.size }. Same
+        """String.stringview emits (z_StringView_t){ s.data, s.size }. Same
         struct shape as str.stringview, but the length field is `size` (not
-        `len`) because that's what `z_string_t` declares."""
+        `len`) because that's what `z_String_t` declares."""
         csource = emit_source(
             "main: function is {\n"
             '    s: "hello".string\n'
@@ -5393,12 +5393,12 @@ class TestStr:
             "    print v\n"
             "}"
         )
-        assert "(z_stringview_t){ s.data, s.size }" in csource
+        assert "(z_StringView_t){ s.data, s.size }" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hello"
 
     def test_string_stringview_substring_bounds_check(self):
-        """Substring form on a string emits a runtime bounds check against
+        """Substring form on a String emits a runtime bounds check against
         s.size, mirroring the str form's check against s.len."""
         csource = emit_source(
             "main: function is {\n"
@@ -5413,7 +5413,7 @@ class TestStr:
         assert output.strip() == "world"
 
     def test_z_string_to_str_deduplication(self):
-        """One z_string_to_str_N function per target capacity regardless of sources."""
+        """One z_String_to_str_N function per target capacity regardless of sources."""
         csource = emit_source(
             "main: function is {\n"
             '    a: "hello".str to: 32\n'
@@ -5422,40 +5422,40 @@ class TestStr:
             "    c: msg.str to: 32\n"
             "}"
         )
-        # only one z_string_to_str_32 function should be emitted
-        assert csource.count("z_string_to_str_32(") >= 2  # call sites
+        # only one z_String_to_str_32 function should be emitted
+        assert csource.count("z_String_to_str_32(") >= 2  # call sites
         # the definition should appear exactly once
         assert (
-            csource.count("static z_str_32_t z_string_to_str_32(") == 2
+            csource.count("static z_str_32_t z_String_to_str_32(") == 2
         )  # fwd decl + def
 
 
 class TestList:
-    """Tests for list type emission and runtime behavior."""
+    """Tests for List type emission and runtime behavior."""
 
     def test_list_struct_emitted(self):
         """List struct has capacity, length, and data fields."""
-        csource = emit_source("main: function is { l: (list of: i64) }")
-        assert "z_list_i64_t" in csource
+        csource = emit_source("main: function is { l: (List of: i64) }")
+        assert "z_List_i64_t" in csource
         assert "uint64_t capacity;" in csource
         assert "uint64_t length;" in csource
         assert "int64_t* data;" in csource
 
     def test_list_create_emitted(self):
         """List create function is emitted."""
-        csource = emit_source("main: function is { l: (list of: i64) }")
-        assert "z_list_i64_create" in csource
+        csource = emit_source("main: function is { l: (List of: i64) }")
+        assert "z_List_i64_create" in csource
 
     def test_list_destroy_emitted(self):
         """List destroy function is emitted."""
-        csource = emit_source("main: function is { l: (list of: i64) }")
-        assert "z_list_i64_destroy" in csource
+        csource = emit_source("main: function is { l: (List of: i64) }")
+        assert "z_List_i64_destroy" in csource
 
     def test_list_append_and_length(self):
         """Append elements and check length."""
         csource = emit_source(
             "main: function is {\n"
-            "    l: (list of: i64)\n"
+            "    l: (List of: i64)\n"
             "    l.append from: 10\n"
             "    l.append from: 20\n"
             '    print "\\{l.length}"\n'
@@ -5468,7 +5468,7 @@ class TestList:
         """Get element at valid index."""
         csource = emit_source(
             "main: function is {\n"
-            "    l: (list of: i64)\n"
+            "    l: (List of: i64)\n"
             "    l.append from: 42\n"
             "    l.append from: 99\n"
             '    print "\\{l.get i: 0.u64}"\n'
@@ -5484,7 +5484,7 @@ class TestList:
         """Set replaces element and returns old value."""
         csource = emit_source(
             "main: function is {\n"
-            "    l: (list of: i64)\n"
+            "    l: (List of: i64)\n"
             "    l.append from: 10\n"
             "    old: l.set i: 0.u64 val: 77\n"
             '    print "\\{old}"\n'
@@ -5500,7 +5500,7 @@ class TestList:
         """Pop returns last element."""
         csource = emit_source(
             "main: function is {\n"
-            "    l: (list of: i64)\n"
+            "    l: (List of: i64)\n"
             "    l.append from: 1\n"
             "    l.append from: 2\n"
             "    l.append from: 3\n"
@@ -5515,7 +5515,7 @@ class TestList:
         """Insert shifts elements."""
         csource = emit_source(
             "main: function is {\n"
-            "    l: (list of: i64)\n"
+            "    l: (List of: i64)\n"
             "    l.append from: 1\n"
             "    l.append from: 3\n"
             "    l.insert from: 2 at: 1.u64\n"
@@ -5526,13 +5526,13 @@ class TestList:
         assert output.strip() == "1 2 3"
 
     def test_list_extend_bulk_copies(self):
-        """Extend copies elements from another list."""
+        """Extend copies elements from another List."""
         csource = emit_source(
             "main: function is {\n"
-            "    a: (list of: i64)\n"
+            "    a: (List of: i64)\n"
             "    a.append from: 1\n"
             "    a.append from: 2\n"
-            "    b: (list of: i64)\n"
+            "    b: (List of: i64)\n"
             "    b.append from: 3\n"
             "    b.append from: 4\n"
             "    a.extend from: b.take\n"
@@ -5543,18 +5543,18 @@ class TestList:
         assert output.strip() == "4 3 4"
 
     def test_list_extend_view_copies_without_consuming(self):
-        """extend_view copies elements from a listview (borrowed); the
-        source remains usable after the call. Needed so `bytes` can
-        append from a `byteview` without consuming the view's backing
+        """extendView copies elements from a ListView (borrowed); the
+        source remains usable after the call. Needed so `Bytes` can
+        append from a `ByteView` without consuming the view's backing
         buffer."""
         csource = emit_source(
             "main: function is {\n"
-            "    a: bytes\n"
+            "    a: Bytes\n"
             "    a.append from: 104.u8\n"
             "    a.append from: 105.u8\n"
-            "    b: bytes\n"
-            "    bv: byteview.borrow from: a.listview\n"
-            "    b.extend_view other: bv\n"
+            "    b: Bytes\n"
+            "    bv: ByteView.borrow from: a.listview\n"
+            "    b.extendView other: bv\n"
             '    print "\\{b.length} \\{b.get i: 0.u64} \\{b.get i: 1.u64}"\n'
             "}"
         )
@@ -5562,16 +5562,16 @@ class TestList:
         assert output.strip() == "2 104 105"
 
     def test_list_extend_view_generic_over_element(self):
-        """extend_view lives on list<T>, so non-u8 element types get it
-        via the same generic monomorphization path as other list
+        """extendView lives on List<T>, so non-u8 element types get it
+        via the same generic monomorphization Path as other List
         methods."""
         csource = emit_source(
             "main: function is {\n"
-            "    a: (list of: i64)\n"
+            "    a: (List of: i64)\n"
             "    a.append from: 10\n"
             "    a.append from: 20\n"
-            "    b: (list of: i64)\n"
-            "    b.extend_view other: a.listview\n"
+            "    b: (List of: i64)\n"
+            "    b.extendView other: a.listview\n"
             '    print "\\{b.length} \\{b.get i: 1.u64}"\n'
             "}"
         )
@@ -5582,7 +5582,7 @@ class TestList:
         """Pre-allocated capacity is reported correctly."""
         csource = emit_source(
             "main: function is {\n"
-            "    l: (list of: i64) capacity: 10.u64\n"
+            "    l: (List of: i64) capacity: 10.u64\n"
             '    print "\\{l.capacity} \\{l.length}"\n'
             "}"
         )
@@ -5591,15 +5591,15 @@ class TestList:
 
     def test_list_scope_cleanup(self):
         """List is destroyed on scope exit (ASan-safe)."""
-        csource = emit_source("main: function is { l: (list of: i64) }")
-        assert "z_list_i64_destroy(&l)" in csource
+        csource = emit_source("main: function is { l: (List of: i64) }")
+        assert "z_List_i64_destroy(&l)" in csource
         # should compile and run without issues
         compile_and_run(csource)
 
     def test_list_oob_get_exits(self):
         """Out-of-bounds get exits with error."""
         csource = emit_source(
-            "main: function is {\n    l: (list of: i64)\n    x: l.get i: 0.u64\n}"
+            "main: function is {\n    l: (List of: i64)\n    x: l.get i: 0.u64\n}"
         )
         with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
             f.write(csource)
@@ -5623,9 +5623,9 @@ class TestList:
                     os.unlink(p)
 
     def test_list_pop_empty_exits(self):
-        """Pop on empty list exits with error."""
+        """Pop on empty List exits with error."""
         csource = emit_source(
-            "main: function is {\n    l: (list of: i64)\n    p: l.pop\n}"
+            "main: function is {\n    l: (List of: i64)\n    p: l.pop\n}"
         )
         with tempfile.NamedTemporaryFile(suffix=".c", mode="w", delete=False) as f:
             f.write(csource)
@@ -5650,27 +5650,27 @@ class TestList:
 
 
 class TestMap:
-    """Tests for map type emission and runtime behavior."""
+    """Tests for Map type emission and runtime behavior."""
 
     def test_map_struct_emitted(self):
         """Map struct has capacity, length, and buckets fields."""
-        csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
-        assert "z_map_i64_i64_t" in csource
-        assert "z_map_i64_i64_bucket_t" in csource
+        csource = emit_source("main: function is { m: (Map key: i64 value: i64) }")
+        assert "z_Map_i64_i64_t" in csource
+        assert "z_Map_i64_i64_bucket_t" in csource
         assert "uint64_t capacity;" in csource
         assert "uint64_t length;" in csource
 
     def test_map_create_destroy_emitted(self):
         """Map create and destroy functions are emitted."""
-        csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
-        assert "z_map_i64_i64_create" in csource
-        assert "z_map_i64_i64_destroy" in csource
+        csource = emit_source("main: function is { m: (Map key: i64 value: i64) }")
+        assert "z_Map_i64_i64_create" in csource
+        assert "z_Map_i64_i64_destroy" in csource
 
     def test_map_set_and_length(self):
         """Set entries and check length."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 1 value: 100\n"
             "    m.set key: 2 value: 200\n"
             '    print "\\{m.length}"\n'
@@ -5680,10 +5680,10 @@ class TestMap:
         assert output.strip() == "2"
 
     def test_map_get_found(self):
-        """.get returns option.some for existing key."""
+        """.get returns Option.some for existing key."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 42 value: 999\n"
             "    r: m.get key: 42\n"
             '    match (r) case some then { print "found" } case none then { print "missing" }\n'
@@ -5693,10 +5693,10 @@ class TestMap:
         assert output.strip() == "found"
 
     def test_map_get_missing(self):
-        """.get returns option.none for missing key."""
+        """.get returns Option.none for missing key."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    r: m.get key: 99\n"
             '    match (r) case some then { print "found" } case none then { print "missing" }\n'
             "}"
@@ -5708,7 +5708,7 @@ class TestMap:
         """.has returns true for existing key, false for missing."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 1 value: 10\n"
             '    print "\\{m.has key: 1} \\{m.has key: 2}"\n'
             "}"
@@ -5720,7 +5720,7 @@ class TestMap:
         """.delete removes entry and returns true."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 1 value: 10\n"
             "    m.set key: 2 value: 20\n"
             "    d: m.delete key: 1\n"
@@ -5734,7 +5734,7 @@ class TestMap:
         """.delete returns false for missing key."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    d: m.delete key: 99\n"
             '    print "\\{d}"\n'
             "}"
@@ -5746,7 +5746,7 @@ class TestMap:
         """Setting same key replaces the value."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 1 value: 100\n"
             "    m.set key: 1 value: 200\n"
             '    print "\\{m.length}"\n'
@@ -5761,7 +5761,7 @@ class TestMap:
 
     def test_map_resize(self):
         """Map resizes correctly when load factor exceeded."""
-        lines = ["m: (map key: i64 value: i64)"]
+        lines = ["m: (Map key: i64 value: i64)"]
         for i in range(20):
             lines.append(f"m.set key: {i} value: {i * 10}")
         lines.append('print "\\{m.length}"')
@@ -5779,7 +5779,7 @@ class TestMap:
         """Deleted slots are reused on insert."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64)\n"
+            "    m: (Map key: i64 value: i64)\n"
             "    m.set key: 1 value: 10\n"
             "    m.set key: 2 value: 20\n"
             "    m.delete key: 1\n"
@@ -5791,10 +5791,10 @@ class TestMap:
         assert output.strip() == "2 0 1 1"
 
     def test_map_string_keys(self):
-        """Map with string keys works correctly."""
+        """Map with String keys works correctly."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: string value: i64)\n"
+            "    m: (Map key: String value: i64)\n"
             '    m.set key: "hello".string value: 42\n'
             '    m.set key: "world".string value: 99\n'
             '    print "\\{m.length}"\n'
@@ -5814,7 +5814,7 @@ class TestMap:
         """Pre-allocated capacity works."""
         csource = emit_source(
             "main: function is {\n"
-            "    m: (map key: i64 value: i64) capacity: 32.u64\n"
+            "    m: (Map key: i64 value: i64) capacity: 32.u64\n"
             '    print "\\{m.capacity} \\{m.length}"\n'
             "}"
         )
@@ -5823,8 +5823,8 @@ class TestMap:
 
     def test_map_scope_cleanup(self):
         """Map is destroyed on scope exit."""
-        csource = emit_source("main: function is { m: (map key: i64 value: i64) }")
-        assert "z_map_i64_i64_destroy(m)" in csource
+        csource = emit_source("main: function is { m: (Map key: i64 value: i64) }")
+        assert "z_Map_i64_i64_destroy(m)" in csource
         compile_and_run(csource)
 
 
@@ -6061,7 +6061,7 @@ class TestIfExpression:
         assert output.strip() == "yes"
 
     def test_if_expression_multiline_branch(self):
-        """Multi-statement branch: result is last expression."""
+        """Multi-statement branch: Result is last expression."""
         csource = emit_source(
             "main: function is {\n"
             "  x: if 1 < 2 then {\n"
@@ -6083,7 +6083,7 @@ class TestIfExpression:
         assert output.strip() == "10"
 
     def test_if_expression_in_interpolation(self):
-        """If-expression used in string interpolation."""
+        """If-expression used in String interpolation."""
         csource = emit_source(
             'main: function is {\n  print "\\{if 1 < 2 then 42 else 0}"\n}'
         )
@@ -6379,7 +6379,7 @@ class TestNativeEmitter:
         """Generic type match emits only the matching arm in C."""
         csource = emit_source(
             "mybox: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i32 then { print "32" }'
             ' case i64 then { print "64" } else { print "other" }\n'
@@ -6393,7 +6393,7 @@ class TestNativeEmitter:
         assert '"other"' not in csource
 
     def test_native_string_operations(self):
-        """String operations via native string type work in generated C."""
+        """String operations via native String type work in generated C."""
         output = compile_and_run(
             emit_source(
                 "main: function is {\n"
@@ -6490,21 +6490,21 @@ class TestIteratorPattern:
         assert lines == ["10", "20", "30", "done"]
 
     def test_callable_iterator_yields_string_no_double_free(self):
-        """Reftype-payload iterator: `option t: string` consumed by a
+        """Reftype-payload iterator: `Option t: String` consumed by a
         for-loop. Previously the emitter shallow-copied the payload and
-        then called the union destructor, which z_string_free'd the
+        then called the union destructor, which z_String_free'd the
         same heap buffer out from under the iteration binding. The fix
-        moves ownership out of the option's box into the binding and
-        registers the per-iteration z_string_free at end of iteration.
+        moves ownership out of the Option's Box into the binding and
+        registers the per-iteration z_String_free at end of iteration.
         Runs under ASan so the double-free / use-after-free surfaces."""
         csource = emit_source(
             "stringiter: class { n: i64 } as {\n"
-            "  call: function {it: this} out (option t: string) is {\n"
+            "  call: function {it: this} out (Option t: String) is {\n"
             "    if it.n > 0 then {\n"
             "      it.n = it.n - 1\n"
-            '      return (option.some "hello".string)\n'
+            '      return (Option.some "hello".string)\n'
             "    }\n"
-            "    return (option.none string)\n"
+            "    return (Option.none String)\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
@@ -6541,13 +6541,13 @@ class TestIteratorPattern:
         """Public method can access private fields via this."""
         output = compile_and_run(
             emit_source(
-                "box: class { secret: i64 } as {\n"
+                "Box: class { secret: i64 } as {\n"
                 "    public: unit { :reveal }\n"
                 "    reveal: function {self: this} out i64 is { return self.secret }\n"
                 "}\n"
                 "main: function is {\n"
-                "    b: box secret: 42\n"
-                '    print "\\{box.reveal self: b}"\n'
+                "    b: Box secret: 42\n"
+                '    print "\\{Box.reveal self: b}"\n'
                 "}"
             )
         )
@@ -6560,15 +6560,15 @@ class TestMatchTake:
     def test_union_match_take_one_arm(self):
         """Take in one arm, not the other — compiles and runs correctly.
         Under shadow narrowing the narrowed name is the payload type,
-        so consume takes `box.take` (not `r.take`)."""
+        so consume takes `Box.take` (not `r.take`)."""
         csource = emit_source(
-            "box: class { n: i64 }\n"
-            "r: union { ok: box  err: box }\n"
-            "consume: function {x: box.take} is {\n"
+            "Box: class { n: i64 }\n"
+            "r: union { ok: Box  err: Box }\n"
+            "consume: function {x: Box.take} is {\n"
             '  print "consumed"\n'
             "}\n"
             "main: function is {\n"
-            "  u: r.ok (box n: 42)\n"
+            "  u: r.ok (Box n: 42)\n"
             "  match (u) case ok then {\n"
             "    consume u\n"
             "  } case err then {\n"
@@ -6582,13 +6582,13 @@ class TestMatchTake:
     def test_union_match_take_all_arms(self):
         """Take in all arms — compiles and runs correctly."""
         csource = emit_source(
-            "box: class { n: i64 }\n"
-            "r: union { ok: box  err: box }\n"
-            "consume: function {x: box.take} is {\n"
+            "Box: class { n: i64 }\n"
+            "r: union { ok: Box  err: Box }\n"
+            "consume: function {x: Box.take} is {\n"
             '  print "consumed"\n'
             "}\n"
             "main: function is {\n"
-            "  u: r.ok (box n: 42)\n"
+            "  u: r.ok (Box n: 42)\n"
             "  match (u) case ok then {\n"
             "    consume u\n"
             "  } case err then {\n"
@@ -6622,7 +6622,7 @@ class TestAutoGeneratedEquality:
     """Test C code emission for auto-generated == and != on value types."""
 
     def test_record_eq_c_output(self):
-        """Small record (<=16 bytes) uses field-by-field comparison."""
+        """Small record (<=16 Bytes) uses field-by-field comparison."""
         csource = emit_source(
             "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
@@ -6662,7 +6662,7 @@ class TestAutoGeneratedEquality:
         assert "!z_point_eq(a, b)" in csource
 
     def test_record_eq_compiles_and_runs(self):
-        """Record equality compiles and produces correct result."""
+        """Record equality compiles and produces correct Result."""
         csource = emit_source(
             "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
@@ -6684,30 +6684,30 @@ class TestAutoGeneratedEquality:
     def test_variant_eq_c_output(self):
         """Small integer variant uses tag+payload comparison."""
         csource = emit_source(
-            "result: variant { ok: i64  err: i64 }\n"
+            "Result: variant { ok: i64  err: i64 }\n"
             "main: function is {\n"
-            "  a: result.ok 1\n"
-            "  b: result.ok 1\n"
+            "  a: Result.ok 1\n"
+            "  b: Result.ok 1\n"
             "  if a == b then return 0\n"
             "}"
         )
-        assert "z_result_eq" in csource
+        assert "z_Result_eq" in csource
         # 12 bytes (tag + i64 union): below threshold, uses tag+payload
         assert "a.tag != b.tag" in csource
 
     def test_variant_float_eq_c_output(self):
         """Variant with float payload uses tag+payload comparison."""
         csource = emit_source(
-            "result: variant { ok: f64  none: null }\n"
+            "Result: variant { ok: f64  none: null }\n"
             "main: function is {\n"
-            "  a: result.ok 1.0\n"
-            "  b: result.ok 1.0\n"
+            "  a: Result.ok 1.0\n"
+            "  b: Result.ok 1.0\n"
             "  if a == b then return 0\n"
             "}"
         )
-        assert "z_result_eq" in csource
+        assert "z_Result_eq" in csource
         assert "a.tag != b.tag" in csource
-        assert "memcmp(&a, &b, sizeof(z_result_t))" not in csource
+        assert "memcmp(&a, &b, sizeof(z_Result_t))" not in csource
 
     def test_enum_eq_compiles_and_runs(self):
         """Pure enum equality compiles and runs correctly."""
@@ -6755,7 +6755,7 @@ class TestAutoGeneratedEquality:
         assert "memcmp(&a, &b, sizeof(z_outer_t))" not in csource
 
     def test_simple_eq_small_record_field_compare(self):
-        """Small simple record (<=16 bytes) uses field-by-field."""
+        """Small simple record (<=16 Bytes) uses field-by-field."""
         csource = emit_source(
             "small: record { a: 0 }\n"
             "main: function is {\n"
@@ -6768,7 +6768,7 @@ class TestAutoGeneratedEquality:
         assert "memcmp(&a, &b, sizeof(z_small_t))" not in csource
 
     def test_simple_eq_large_record_memcmp(self):
-        """Large simple record (>16 bytes) uses memcmp."""
+        """Large simple record (>16 Bytes) uses memcmp."""
         csource = emit_source(
             "big: record { a: 0  b: 0  c: 0 }\n"
             "main: function is {\n"
@@ -6818,15 +6818,15 @@ class TestAutoGeneratedEquality:
     def test_simple_eq_small_variant_tag_compare(self):
         """Small integer variant uses tag+payload, not memcmp."""
         csource = emit_source(
-            "result: variant { ok: i64  err: i64 }\n"
+            "Result: variant { ok: i64  err: i64 }\n"
             "main: function is {\n"
-            "  a: result.ok 1\n"
-            "  b: result.ok 1\n"
+            "  a: Result.ok 1\n"
+            "  b: Result.ok 1\n"
             "  if a == b then return 0\n"
             "}"
         )
         assert "a.tag != b.tag" in csource
-        assert "memcmp(&a, &b, sizeof(z_result_t))" not in csource
+        assert "memcmp(&a, &b, sizeof(z_Result_t))" not in csource
 
     def test_float_eq_compiles_and_runs(self):
         """Float field-by-field equality compiles and works correctly."""
@@ -6848,7 +6848,7 @@ class TestAutoGeneratedEquality:
 
 
 class TestStringEquality:
-    """Test string == / != C emission."""
+    """Test String == / != C emission."""
 
     def test_string_eq_compiles_and_runs(self):
         """String == compares content, not pointers."""
@@ -6859,7 +6859,7 @@ class TestStringEquality:
             '  if a == b then print "equal"\n'
             "}"
         )
-        assert "z_stringview_eq" in csource
+        assert "z_StringView_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "equal"
 
@@ -6872,14 +6872,14 @@ class TestStringEquality:
             '  if a != b then print "different"\n'
             "}"
         )
-        assert "z_stringview_eq" in csource
+        assert "z_StringView_eq" in csource
         output = compile_and_run(csource)
         assert output.strip() == "different"
 
 
 class TestStringOrdering:
     """Byte-wise lexicographic <, <=, >, >= and the `compare` method on
-    string and stringview. Same algorithm as C's memcmp with the
+    String and StringView. Same algorithm as C's memcmp with the
     length tie-break: shorter prefix is less than the longer extension."""
 
     def test_string_lt_shorter_prefix(self):
@@ -6891,7 +6891,7 @@ class TestStringOrdering:
             '  if a < b then { print "yes" }\n'
             "}"
         )
-        assert "z_string_cmp" in csource
+        assert "z_String_cmp" in csource
         assert compile_and_run(csource).strip() == "yes"
 
     def test_string_lt_distinct(self):
@@ -6952,12 +6952,12 @@ class TestStringOrdering:
             '  print "\\{z}"\n'
             "}"
         )
-        assert "z_string_cmp" in csource
+        assert "z_String_cmp" in csource
         output = compile_and_run(csource)
         assert output.strip().splitlines() == ["-1", "0", "1"]
 
     def test_stringview_ordering_and_compare(self):
-        """The same four ordering ops plus compare work on stringview."""
+        """The same four ordering ops plus compare work on StringView."""
         csource = emit_source(
             "main: function is {\n"
             '  a: "apple"\n'
@@ -6967,12 +6967,12 @@ class TestStringOrdering:
             '  print "\\{x}"\n'
             "}"
         )
-        assert "z_stringview_cmp" in csource
+        assert "z_StringView_cmp" in csource
         output = compile_and_run(csource)
         assert output.strip().splitlines() == ["lt", "-1"]
 
     def test_empty_string_is_less_than_any_nonempty(self):
-        """Empty string is lexicographically less than any non-empty."""
+        """Empty String is lexicographically less than Any non-empty."""
         csource = emit_source(
             "main: function is {\n"
             '  a: "".string\n'
@@ -7004,9 +7004,9 @@ class TestStringOrdering:
 
 
 class TestBoxRefinements:
-    """Phase 10: box(class) and box(string) heap-allocate a copy; no leaks.
+    """Phase 10: Box(class) and Box(String) heap-allocate a copy; no leaks.
 
-    All user-defined types are stack-allocated now, so box always creates
+    All user-defined types are stack-allocated now, so Box always creates
     a real heap copy (no more passthrough for classes/strings).
     """
 
@@ -7014,12 +7014,12 @@ class TestBoxRefinements:
         """Box a class with heap-backed fields chains destructor correctly."""
         csource = emit_source(
             "named: class {\n"
-            "    label: string\n"
+            "    label: String\n"
             "    value: i64\n"
             "}\n"
             "main: function is {\n"
             '    n: named label: "hello".string value: 42\n'
-            "    b: box from: n.take\n"
+            "    b: Box from: n.take\n"
             '    print "done"\n'
             "}"
         )
@@ -7030,43 +7030,43 @@ class TestBoxRefinements:
         assert "done" in output
 
     def test_box_string_heap_allocates(self):
-        """box from: string heap-allocates a copy (string is stack-allocated now)."""
+        """Box from: String heap-allocates a copy (String is stack-allocated now)."""
         csource = emit_source(
-            'main: function is {\n    b: box from: "hello".string\n    print "done"\n}'
+            'main: function is {\n    b: Box from: "hello".string\n    print "done"\n}'
         )
-        # box allocates z_string_t* on the heap
-        assert "(z_string_t*)z_xmalloc(sizeof(z_string_t))" in csource
+        # box allocates z_String_t* on the heap
+        assert "(z_String_t*)z_xmalloc(sizeof(z_String_t))" in csource
         output = compile_and_run(csource)
         assert "done" in output
 
 
 class TestListView:
-    """Phase 9: listview — generic read-only view into a list.
+    """Phase 9: ListView — generic read-only view into a List.
 
-    Listview is a class with the same first two fields as list ({length,
+    Listview is a class with the same first two fields as List ({length,
     data*}) enabling zero-cost casting. It is a reftype (single-owner).
     """
 
     def test_listview_struct_layout(self):
-        """listview struct has {length, data*} matching list's first two fields."""
-        csource = emit_source("main: function is { l: (list of: i64)\nv: l.listview }")
+        """ListView struct has {length, data*} matching List's first two fields."""
+        csource = emit_source("main: function is { l: (List of: i64)\nv: l.listview }")
         # listview struct matches first two fields of list for zero-cost cast
         assert (
-            "typedef struct {\n    uint64_t length;\n    int64_t* data;\n} z_listview_i64_t;"
+            "typedef struct {\n    uint64_t length;\n    int64_t* data;\n} z_ListView_i64_t;"
             in csource
         )
 
     def test_listview_listview_is_cast(self):
-        """list.listview is a zero-cost reinterpret_cast in C."""
-        csource = emit_source("main: function is { l: (list of: i64)\nv: l.listview }")
+        """List.listview is a zero-cost reinterpret_cast in C."""
+        csource = emit_source("main: function is { l: (List of: i64)\nv: l.listview }")
         # listview is a cast, not a copy
-        assert "return *(z_listview_i64_t*)_this;" in csource
+        assert "return *(z_ListView_i64_t*)_this;" in csource
 
     def test_listview_length_and_get(self):
         """Listview provides .length and .get methods."""
         csource = emit_source(
             "main: function is {\n"
-            "    nums: (list of: i64)\n"
+            "    nums: (List of: i64)\n"
             "    nums.append from: 10\n"
             "    nums.append from: 20\n"
             "    nums.append from: 30\n"
@@ -7127,24 +7127,24 @@ class TestClassLockFields:
         """A class that holds BOTH a `.lock` field and a field whose
         type carries a destructor must have its destructor clean up
         the owned field while leaving the `.lock` field untouched.
-        This is the exact shape a pure-Zerolang bufwriter would have
-        (`sink: writer.lock` + an owned payload) — the native Phase
-        1b implementation skipped this path in the test suite.
+        This is the exact shape a pure-Zerolang BufWriter would have
+        (`sink: Writer.lock` + an owned payload) — the native Phase
+        1b implementation skipped this Path in the test suite.
 
-        Uses an inner user class with a string field to force
+        Uses an inner user class with a String field to force
         `needs_field_cleanup` without depending on generic-type mono
-        ordering (user classes with `bytes` fields hit a separate
+        ordering (user classes with `Bytes` fields hit a separate
         pre-existing emitter ordering bug unrelated to lock semantics)."""
         csource = emit_source(
             "bag: class { a: i64 }\n"
-            "payload: class { label: string }\n"
+            "payload: class { label: String }\n"
             "mixed: class {\n"
             "  target: bag.lock\n"
             "  inner:  payload\n"
             "}\n"
             "main: function is {\n"
             "  b: bag a: 1\n"
-            '  s: string from: "hi"\n'
+            '  s: String from: "hi"\n'
             "  p: payload label: s\n"
             "  m: mixed target: b inner: p\n"
             '  print "done"\n'
@@ -7183,9 +7183,9 @@ class TestTakeInArmMemorySafety:
     def test_take_in_one_if_arm_no_leak(self):
         """Take in then-arm, else-arm runs at runtime -- no leak."""
         csource = emit_source(
-            "box: class { label: string }\n"
+            "Box: class { label: String }\n"
             "main: function is {\n"
-            '  a: box label: "hello".string\n'
+            '  a: Box label: "hello".string\n'
             '  print "\\{a.label}"\n'
             "  x: 0\n"
             "  if x > 0 then { b: a.take }\n"
@@ -7197,9 +7197,9 @@ class TestTakeInArmMemorySafety:
     def test_take_in_one_if_arm_no_double_free(self):
         """Take in then-arm, then-arm runs at runtime -- no double-free."""
         csource = emit_source(
-            "box: class { label: string }\n"
+            "Box: class { label: String }\n"
             "main: function is {\n"
-            '  a: box label: "hello".string\n'
+            '  a: Box label: "hello".string\n'
             '  print "\\{a.label}"\n'
             "  x: 1\n"
             "  if x > 0 then { b: a.take }\n"
@@ -7211,10 +7211,10 @@ class TestTakeInArmMemorySafety:
     def test_take_in_if_else_no_leak(self):
         """Take in then-arm, no take in else-arm, else runs -- no leak."""
         csource = emit_source(
-            "box: class { label: string }\n"
-            "consume: function {b: box.take} is {}\n"
+            "Box: class { label: String }\n"
+            "consume: function {b: Box.take} is {}\n"
             "main: function is {\n"
-            '  a: box label: "hello".string\n'
+            '  a: Box label: "hello".string\n'
             '  print "\\{a.label}"\n'
             "  x: 0\n"
             '  if x > 0 then { consume a } else { print "else" }\n'
@@ -7226,10 +7226,10 @@ class TestTakeInArmMemorySafety:
     def test_arm_local_var_cleanup(self):
         """Variable declared inside arm is cleaned up inside arm scope."""
         csource = emit_source(
-            "box: class { label: string }\n"
+            "Box: class { label: String }\n"
             "main: function is {\n"
             "  x: 1\n"
-            '  if x > 0 then { b: box label: "inner".string\n print "\\{b.label}" }\n'
+            '  if x > 0 then { b: Box label: "inner".string\n print "\\{b.label}" }\n'
             "}"
         )
         result = compile_and_run_asan(csource)
@@ -7239,7 +7239,7 @@ class TestTakeInArmMemorySafety:
 class TestAliasBinding:
     """Phase B: binding alias optimization.
 
-    When the RHS of `with name: expr do body` is a plain path reference,
+    When the RHS of `with name: expr do body` is a plain Path reference,
     and when `x: y.take` / `x: y.borrow` is inline, the emitter skips the
     C local declaration and substitutes the source expression at reference
     sites. Calls and reftype-pointer hops are NOT aliased.
@@ -7251,7 +7251,7 @@ class TestAliasBinding:
             'main: function is {\n  c: "hi".string\n  with a: c do print a\n}'
         )
         assert "/* alias: a => c */" in csource
-        assert "z_string_t a =" not in csource
+        assert "z_String_t a =" not in csource
 
     def test_with_take_alias_no_double_free(self):
         """with a: c.take do ... aliases and runs cleanly (single free)."""
@@ -7285,7 +7285,7 @@ class TestAliasBinding:
         assert "/* alias: b" not in csource
 
     def test_with_dotted_valtype_path_alias(self):
-        """with v: e.name do ... aliases v to e.name (all-valtype path)."""
+        """with v: e.name do ... aliases v to e.name (all-valtype Path)."""
         csource = emit_source(
             "entry: record { name: (str to: 16) age: i64 }\n"
             "main: function is {\n"
@@ -7301,9 +7301,9 @@ class TestAliasBinding:
         """with v: inner.label do ... — inner is a class (reftype pointer),
         no alias; v gets a real local to pin the pointer in a register."""
         csource = emit_source(
-            "box: class { label: string }\n"
+            "Box: class { label: String }\n"
             "main: function is {\n"
-            '  b: box label: "hello".string\n'
+            '  b: Box label: "hello".string\n'
             '  with v: b.label do print "\\{v}"\n'
             "}"
         )
@@ -7361,9 +7361,9 @@ class TestMatchArmAlias:
     def test_variant_arm_aliased(self):
         """Variant arm seeds an alias comment and substitutes at use sites."""
         csource = emit_source(
-            "result: variant { ok: i64 err: i64 none: null }\n"
+            "Result: variant { ok: i64 err: i64 none: null }\n"
             "main: function is {\n"
-            "  c: result.ok 99\n"
+            "  c: Result.ok 99\n"
             "  match ( c ) case ok then {\n"
             '    print "\\{c}"\n'
             "  } case err then {\n"
@@ -7399,9 +7399,9 @@ class TestMatchArmAlias:
     def test_null_payload_arm_not_aliased(self):
         """Null-payload arms have nothing to unwrap; no alias is emitted."""
         csource = emit_source(
-            "result: variant { ok: i64 none: null }\n"
+            "Result: variant { ok: i64 none: null }\n"
             "main: function is {\n"
-            "  r: result.none\n"
+            "  r: Result.none\n"
             "  match ( r ) case ok then {\n"
             '    print "ok"\n'
             "  } case none then {\n"
@@ -7418,9 +7418,9 @@ class TestMatchArmAlias:
     def test_arm_alias_end_to_end(self):
         """Multiple arms each seed their own alias; program runs under ASan."""
         csource = emit_source(
-            "result: variant { ok: i64 err: i64 none: null }\n"
+            "Result: variant { ok: i64 err: i64 none: null }\n"
             "main: function is {\n"
-            "  r: result.ok 42\n"
+            "  r: Result.ok 42\n"
             "  match ( r ) case ok then {\n"
             '    print "\\{r}"\n'
             "  } case err then {\n"
@@ -7438,14 +7438,14 @@ class TestMatchArmAlias:
 
 
 class TestIOFileStreaming:
-    """I/O Phase 6: file handles, RAII close, streaming read/write.
+    """I/O Phase 6: File handles, RAII close, streaming read/write.
 
     Runs the compiled binary end-to-end. Temp files live in /tmp and
     are cleaned up inside the test body.
     """
 
     def test_io_open_raii_close(self, tmp_path):
-        """io.open returns a file whose fd is closed by its destructor."""
+        """io.open returns a File whose fd is closed by its destructor."""
         target = tmp_path / "io_open_test.txt"
         csource = emit_source(
             "main: function is {\n"
@@ -7462,7 +7462,7 @@ class TestIOFileStreaming:
         assert target.exists()
 
     def test_io_open_nonexistent_returns_err(self, tmp_path):
-        """Opening a missing file for read returns the err arm."""
+        """Opening a missing File for read returns the err arm."""
         missing = tmp_path / "does-not-exist"
         csource = emit_source(
             "main: function is {\n"
@@ -7478,18 +7478,18 @@ class TestIOFileStreaming:
         assert output.strip() == "got err"
 
     def test_file_write_read_roundtrip(self, tmp_path):
-        """Write bytes, close, reopen, read — content survives."""
+        """Write Bytes, close, reopen, read — content survives."""
         target = tmp_path / "rw.bin"
         csource = emit_source(
             "main: function is {\n"
-            "    buf: bytes\n"
+            "    buf: Bytes\n"
             "    buf.append from: 72.u8\n"
             "    buf.append from: 73.u8\n"
             f'    w: io.open path: "{target}" mode: openmode.write\n'
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        bv: byteview.borrow from: buf.listview\n"
+            "        bv: ByteView.borrow from: buf.listview\n"
             "        wr: w.write from: bv\n"
             "        match (\n"
             "            wr\n"
@@ -7503,7 +7503,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        b2: bytes\n"
+            "        b2: Bytes\n"
             "        rr: r.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
@@ -7522,13 +7522,13 @@ class TestIOFileStreaming:
         assert target.read_bytes() == b"HI"
 
     def test_file_projected_to_closer_runs_close(self, tmp_path):
-        """Project a file value to `closer` and invoke `close` through
+        """Project a File value to `Closer` and invoke `close` through
         the protocol vtable. Exercises the wrapper + static vtable +
-        create function emitted for io.file's `:closer` conformance.
+        create function emitted for io.File's `:Closer` conformance.
         """
         target = tmp_path / "proj_closer.txt"
         csource = emit_source(
-            "tidy: function {c: closer} is {\n"
+            "tidy: function {c: Closer} is {\n"
             "    r: c.close\n"
             "    match (\n"
             "        r\n"
@@ -7543,7 +7543,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        fr\n"
             "    ) case ok then {\n"
-            "        tidy c: fr.closer\n"
+            "        tidy c: fr.Closer\n"
             "    } case err then {\n"
             '        print "open err"\n'
             "    }\n"
@@ -7551,25 +7551,25 @@ class TestIOFileStreaming:
         )
         # Emitter must produce the wrapper, static vtable, and create
         # function — the symptoms of an absent conformance codegen.
-        assert "z_file_closer_create" in csource
-        assert "z_file_closer_vtable" in csource
-        assert "z_file_closer_close_wrapper" in csource
+        assert "z_File_Closer_create" in csource
+        assert "z_File_Closer_vtable" in csource
+        assert "z_File_Closer_close_wrapper" in csource
         output = compile_and_run(csource)
         assert output.strip() == "closed"
         assert target.exists()
 
     def test_file_projected_to_reader_writer_through_vtable(self, tmp_path):
-        """Project a file through `writer` to write bytes, reopen and
-        project through `reader` to read them back. Exercises the
+        """Project a File through `Writer` to write Bytes, reopen and
+        project through `Reader` to read them back. Exercises the
         full vtable pipeline for protocols with collection-typed
-        parameters (bytes / byteview)."""
+        parameters (Bytes / ByteView)."""
         target = tmp_path / "proj_rw.bin"
         csource = emit_source(
-            "send: function {w: writer} is {\n"
-            "    msg: bytes\n"
+            "send: function {w: Writer} is {\n"
+            "    msg: Bytes\n"
             "    msg.append from: 65.u8\n"
             "    msg.append from: 66.u8\n"
-            "    bv: byteview.borrow from: msg.listview\n"
+            "    bv: ByteView.borrow from: msg.listview\n"
             "    r: w.write from: bv\n"
             "    match (\n"
             "        r\n"
@@ -7579,8 +7579,8 @@ class TestIOFileStreaming:
             '        print "send err"\n'
             "    }\n"
             "}\n"
-            "recv: function {rd: reader} is {\n"
-            "    buf: bytes\n"
+            "recv: function {rd: Reader} is {\n"
+            "    buf: Bytes\n"
             "    r: rd.read into: buf max: 32.u64\n"
             "    match (\n"
             "        r\n"
@@ -7595,7 +7595,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        send w: w.writer\n"
+            "        send w: w.Writer\n"
             "    } case err then {\n"
             '        print "open-w"\n'
             "    }\n"
@@ -7603,16 +7603,16 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        recv rd: r.reader\n"
+            "        recv rd: r.Reader\n"
             "    } case err then {\n"
             '        print "open-r"\n'
             "    }\n"
             "}"
         )
-        assert "z_file_reader_create" in csource
-        assert "z_file_writer_create" in csource
-        assert "z_file_reader_read_wrapper" in csource
-        assert "z_file_writer_write_wrapper" in csource
+        assert "z_File_Reader_create" in csource
+        assert "z_File_Writer_create" in csource
+        assert "z_File_Reader_read_wrapper" in csource
+        assert "z_File_Writer_write_wrapper" in csource
         output = compile_and_run(csource)
         lines = output.strip().splitlines()
         assert "sent" in lines
@@ -7620,12 +7620,12 @@ class TestIOFileStreaming:
         assert target.read_bytes() == b"AB"
 
     def test_file_projected_to_seeker_through_vtable(self, tmp_path):
-        """Seek via the seeker protocol (not via the file handle
-        directly) — the vtable entry forwards to z_file_seek."""
+        """Seek via the Seeker protocol (not via the File handle
+        directly) — the vtable entry forwards to z_File_seek."""
         target = tmp_path / "proj_seeker.bin"
         csource = emit_source(
             "main: function is {\n"
-            "    buf: bytes\n"
+            "    buf: Bytes\n"
             "    buf.append from: 65.u8\n"
             "    buf.append from: 66.u8\n"
             "    buf.append from: 67.u8\n"
@@ -7633,7 +7633,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        bv: byteview.borrow from: buf.listview\n"
+            "        bv: ByteView.borrow from: buf.listview\n"
             "        wr: w.write from: bv\n"
             "        match (\n"
             "            wr\n"
@@ -7649,7 +7649,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        s: r.seeker\n"
+            "        s: r.Seeker\n"
             "        pos: s.seek to: 0.i64 from: seekorigin.end\n"
             "        match (\n"
             "            pos\n"
@@ -7663,13 +7663,13 @@ class TestIOFileStreaming:
             "    }\n"
             "}"
         )
-        assert "z_file_seeker_create" in csource
-        assert "z_file_seeker_vtable" in csource
+        assert "z_File_Seeker_create" in csource
+        assert "z_File_Seeker_vtable" in csource
         output = compile_and_run(csource)
         assert "seeked to end" in output.splitlines()
 
     def test_mkdirp_and_stat_roundtrip(self, tmp_path):
-        """io.mkdirp creates a nested path; io.stat confirms it's a
+        """io.mkdirp creates a nested Path; io.stat confirms it's a
         directory and reports a non-zero byte size."""
         target = tmp_path / "a" / "b" / "c"
         csource = emit_source(
@@ -7689,7 +7689,7 @@ class TestIOFileStreaming:
             "        ) case dir then {\n"
             '            print "dir"\n'
             "        } case file then {\n"
-            '            print "file"\n'
+            '            print "File"\n'
             "        } case symlink then {\n"
             '            print "link"\n'
             "        } case other then {\n"
@@ -7709,7 +7709,7 @@ class TestIOFileStreaming:
         assert target.is_dir()
 
     def test_stat_reports_mtime_and_mode(self, tmp_path):
-        """filestat carries mtime_seconds (Unix epoch) and raw POSIX
+        """filestat carries mtimeSeconds (Unix epoch) and raw POSIX
         mode bits; stat on a just-created directory populates both
         with non-zero values."""
         target = tmp_path / "statfields"
@@ -7720,7 +7720,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            "        hasmtime: s.mtime_seconds > 0.u64\n"
+            "        hasmtime: s.mtimeSeconds > 0.u64\n"
             "        hasmode: s.mode > 0.u32\n"
             '        print "mtime=\\{hasmtime} mode=\\{hasmode}"\n'
             "    } case err then {\n"
@@ -7728,7 +7728,7 @@ class TestIOFileStreaming:
             "    }\n"
             "}"
         )
-        assert "mtime_seconds" in csource
+        assert "mtimeSeconds" in csource
         output = compile_and_run(csource)
         assert output.strip() == "mtime=1 mode=1"
 
@@ -7736,7 +7736,7 @@ class TestIOFileStreaming:
         """Extended filestat carries device, inode, nlink, and the two
         additional timestamps. For a freshly-created regular file: inode
         is non-zero (POSIX guarantees it), nlink is 1 (no hard links),
-        device is non-zero (any backing fs), atime/ctime are populated."""
+        device is non-zero (Any backing fs), atime/ctime are populated."""
         target = tmp_path / "extfields.txt"
         target.write_text("x")
         csource = emit_source(
@@ -7748,8 +7748,8 @@ class TestIOFileStreaming:
             "        hasdev:   s.device > 0.u64\n"
             "        hasinode: s.inode > 0.u64\n"
             "        nlink_one: s.nlink == 1.u64\n"
-            "        hasatime: s.atime_seconds > 0.u64\n"
-            "        hasctime: s.ctime_seconds > 0.u64\n"
+            "        hasatime: s.atimeSeconds > 0.u64\n"
+            "        hasctime: s.ctimeSeconds > 0.u64\n"
             '        print "dev=\\{hasdev} ino=\\{hasinode} nl=\\{nlink_one}"\n'
             '        print "at=\\{hasatime} ct=\\{hasctime}"\n'
             "    } case err then {\n"
@@ -7784,7 +7784,7 @@ class TestIOFileStreaming:
             "        ) case symlink then {\n"
             '            print "link"\n'
             "        } case file then {\n"
-            '            print "file"\n'
+            '            print "File"\n'
             "        } case dir then {\n"
             '            print "dir"\n'
             "        } case other then {\n"
@@ -7800,17 +7800,17 @@ class TestIOFileStreaming:
         assert output.strip() == "link"
 
     def test_io_stdout_writes_to_stdout(self):
-        """`io.stdout` returns a borrowed writer over fd 1; writing
+        """`io.stdout` returns a borrowed Writer over fd 1; writing
         to it goes directly to the process's stdout (captured by
         compile_and_run)."""
         csource = emit_source(
             "main: function is {\n"
             "    w: io.stdout\n"
-            "    msg: bytes\n"
+            "    msg: Bytes\n"
             "    msg.append from: 104.u8\n"
             "    msg.append from: 105.u8\n"
             "    msg.append from: 10.u8\n"
-            "    bv: byteview.borrow from: msg.listview\n"
+            "    bv: ByteView.borrow from: msg.listview\n"
             "    r: w.write from: bv\n"
             "    match (\n"
             "        r\n"
@@ -7820,41 +7820,41 @@ class TestIOFileStreaming:
             "}"
         )
         assert "z_io_stdout" in csource
-        assert "z_io_stdout_file" in csource
+        assert "z_io_stdout_File" in csource
         output = compile_and_run(csource)
         assert output.strip() == "hi"
 
     def test_bytes_typedef_emits_to_list_u8(self):
-        """`bytes` — a class typedef over `list of: u8` — must lower to
-        the base list type end-to-end: construction, append, length,
-        scope cleanup. Regression guard for Phase 6d (the bytes typedef
+        """`Bytes` — a class typedef over `List of: u8` — must lower to
+        the base List type end-to-end: construction, append, length,
+        scope cleanup. Regression guard for Phase 6d (the Bytes typedef
         was previously not being followed in the emitter)."""
         csource = emit_source(
             "main: function is {\n"
-            "    b: bytes\n"
+            "    b: Bytes\n"
             "    b.append from: 72.u8\n"
             "    b.append from: 73.u8\n"
             '    print "\\{b.length}"\n'
             "}"
         )
-        # C must reference the base type, never `z_bytes_t` /
-        # `z_bytes_create` / `z_bytes_destroy` — none of those are
+        # C must reference the base type, never `z_Bytes_t` /
+        # `z_Bytes_create` / `z_Bytes_destroy` — none of those are
         # defined anywhere.
-        assert "z_bytes_t" not in csource
-        assert "z_bytes_create" not in csource
-        assert "z_bytes_destroy" not in csource
-        assert "z_list_u8_create" in csource
-        assert "z_list_u8_append" in csource
-        assert "z_list_u8_destroy" in csource
+        assert "z_Bytes_t" not in csource
+        assert "z_Bytes_create" not in csource
+        assert "z_Bytes_destroy" not in csource
+        assert "z_List_u8_create" in csource
+        assert "z_List_u8_append" in csource
+        assert "z_List_u8_destroy" in csource
         output = compile_and_run(csource)
         assert output.strip() == "2"
 
     def test_file_seek_roundtrip(self, tmp_path):
-        """Write bytes, reopen, seek past a prefix, read the remainder."""
+        """Write Bytes, reopen, seek past a prefix, read the remainder."""
         target = tmp_path / "seek.bin"
         csource = emit_source(
             "main: function is {\n"
-            "    buf: bytes\n"
+            "    buf: Bytes\n"
             "    buf.append from: 72.u8\n"
             "    buf.append from: 101.u8\n"
             "    buf.append from: 108.u8\n"
@@ -7864,7 +7864,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        bv: byteview.borrow from: buf.listview\n"
+            "        bv: ByteView.borrow from: buf.listview\n"
             "        wr: w.write from: bv\n"
             "        match (\n"
             "            wr\n"
@@ -7884,7 +7884,7 @@ class TestIOFileStreaming:
             "        ) case ok then { } case err then {\n"
             '            print "seek err"\n'
             "        }\n"
-            "        b2: bytes\n"
+            "        b2: Bytes\n"
             "        rr: r.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
@@ -7903,7 +7903,7 @@ class TestIOFileStreaming:
         assert output.strip() == "3"
 
     def test_explicit_close_idempotent_with_raii(self, tmp_path):
-        """Calling file.close and then letting RAII run must not double-close."""
+        """Calling File.close and then letting RAII run must not double-close."""
         target = tmp_path / "close.txt"
         csource = emit_source(
             "main: function is {\n"
@@ -7927,13 +7927,13 @@ class TestIOFileStreaming:
         assert output.strip() == "closed ok"
 
     def test_list_dir_happy_path(self, tmp_path):
-        """io.list_dir on a populated directory returns the correct
+        """io.listDir on a populated directory returns the correct
         entry count, excluding `.` and `..`."""
         for n in ("a.txt", "b.txt", "c.txt"):
             (tmp_path / n).write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{tmp_path}"\n'
+            f'    r: io.listDir "{tmp_path}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7943,20 +7943,20 @@ class TestIOFileStreaming:
             "    }\n"
             "}"
         )
-        assert "z_io_list_dir" in csource
-        assert "z_list_string_t" in csource
+        assert "z_io_listDir" in csource
+        assert "z_List_String_t" in csource
         output = compile_and_run(csource)
         assert output.strip() == "len=3"
 
     def test_list_dir_notfound(self, tmp_path):
-        """list_dir on a nonexistent path takes the err arm. Drilling
-        into the specific ioerror variant is a separate test via a
+        """listDir on a nonexistent Path takes the err arm. Drilling
+        into the specific IoError variant is a separate test via a
         helper function; direct re-matching on a narrowed union subject
         is a Phase 6j narrowing limitation."""
         missing = tmp_path / "does-not-exist"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{missing}"\n'
+            f'    r: io.listDir "{missing}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7970,15 +7970,15 @@ class TestIOFileStreaming:
         assert output.strip() == "err"
 
     def test_list_dir_notdir(self, tmp_path):
-        """list_dir on a regular file takes the err arm (ENOTDIR). The
-        specific ioerror-variant discrimination is tested indirectly:
-        the emitted ioerror tag enum must include NOTDIR, and the errno
-        map must route ENOTDIR to it."""
+        """listDir on a regular File takes the err arm (ENOTDIR). The
+        specific IoError-variant discrimination is tested indirectly:
+        the emitted IoError tag enum must include NOTDIR, and the errno
+        Map must route ENOTDIR to it."""
         target = tmp_path / "regular.txt"
         target.write_text("hello")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{target}"\n'
+            f'    r: io.listDir "{target}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7994,10 +7994,10 @@ class TestIOFileStreaming:
         assert output.strip() == "err"
 
     def test_bufwriter_roundtrip_over_file(self, tmp_path):
-        """Phase 1b: open a file for write, wrap it in bufwriter, write
-        bytes (smaller than capacity so they stay buffered), flush to
-        drain to the fd, close; reopen for read and verify the file
-        content survived the buffered path."""
+        """Phase 1b: open a File for write, wrap it in BufWriter, write
+        Bytes (smaller than capacity so they stay buffered), flush to
+        drain to the fd, close; reopen for read and verify the File
+        content survived the buffered Path."""
         target = tmp_path / "buf.bin"
         csource = emit_source(
             "main: function is {\n"
@@ -8005,12 +8005,12 @@ class TestIOFileStreaming:
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        bw: io.bufwriter.create to: w.lock capacity: 32.u64\n"
-            "        buf: bytes\n"
+            "        bw: io.BufWriter.create to: w.lock capacity: 32.u64\n"
+            "        buf: Bytes\n"
             "        buf.append from: 65.u8\n"
             "        buf.append from: 66.u8\n"
             "        buf.append from: 67.u8\n"
-            "        bv: byteview.borrow from: buf.listview\n"
+            "        bv: ByteView.borrow from: buf.listview\n"
             "        wr: bw.write from: bv\n"
             "        bv.release\n"
             "        match (\n"
@@ -8033,7 +8033,7 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        b2: bytes\n"
+            "        b2: Bytes\n"
             "        rr: r.read into: b2 max: 16.u64\n"
             "        match (\n"
             "            rr\n"
@@ -8047,35 +8047,35 @@ class TestIOFileStreaming:
             "    }\n"
             "}"
         )
-        # emission order: struct_defs must place z_list_u8_t + z_writer_t
-        # before z_bufwriter_t (struct references both), and z_bufwriter_*
+        # emission order: struct_defs must place z_List_u8_t + z_Writer_t
+        # before z_BufWriter_t (struct references both), and z_BufWriter_*
         # runtime bodies must land before the vtable wrappers that call
         # them. Check positional ordering.
-        assert "} z_list_u8_t;" in csource
-        assert "} z_writer_t;" in csource
-        assert "} z_bufwriter_t;" in csource
-        list_pos = csource.index("} z_list_u8_t;")
-        writer_pos = csource.index("} z_writer_t;")
-        wrapper_pos = csource.index("} z_bufwriter_t;")
-        runtime_pos = csource.index("z_bufwriter_write(\n")
+        assert "} z_List_u8_t;" in csource
+        assert "} z_Writer_t;" in csource
+        assert "} z_BufWriter_t;" in csource
+        list_pos = csource.index("} z_List_u8_t;")
+        writer_pos = csource.index("} z_Writer_t;")
+        wrapper_pos = csource.index("} z_BufWriter_t;")
+        runtime_pos = csource.index("z_BufWriter_write(\n")
         assert list_pos < wrapper_pos, (
-            "z_list_u8_t must be declared before z_bufwriter_t struct"
+            "z_List_u8_t must be declared before z_BufWriter_t struct"
         )
         assert writer_pos < wrapper_pos, (
-            "z_writer_t must be declared before z_bufwriter_t struct"
+            "z_Writer_t must be declared before z_BufWriter_t struct"
         )
         assert wrapper_pos < runtime_pos, (
-            "z_bufwriter_t struct must be declared before z_bufwriter_write body"
+            "z_BufWriter_t struct must be declared before z_BufWriter_write body"
         )
         output = compile_and_run(csource)
         assert output.strip() == "flushed\n3"
         assert target.read_bytes() == b"ABC"
 
     def test_textwriter_roundtrip_over_file(self, tmp_path):
-        """Phase 1c: three-layer stack (file -> bufwriter -> textwriter).
-        write_line emits content + LF through the buffered sink; flush
-        drains the buffered bytes to the fd. Reopen for read and
-        verify the file contains 'hi\\nbye\\n'."""
+        """Phase 1c: three-layer stack (File -> BufWriter -> TextWriter).
+        writeLine emits content + LF through the buffered sink; flush
+        drains the buffered Bytes to the fd. Reopen for read and
+        verify the File contains 'hi\\nbye\\n'."""
         target = tmp_path / "tw.txt"
         csource = emit_source(
             "main: function is {\n"
@@ -8083,15 +8083,15 @@ class TestIOFileStreaming:
             "    match (\n"
             "        w\n"
             "    ) case ok then {\n"
-            "        bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
-            "        tw: io.textwriter.create to: bw.lock\n"
-            '        wr: tw.write_line from: "hi"\n'
+            "        bw: io.BufWriter.create to: w.lock capacity: 64.u64\n"
+            "        tw: io.TextWriter.create to: bw.lock\n"
+            '        wr: tw.writeLine from: "hi"\n'
             "        match (\n"
             "            wr\n"
             "        ) case ok then { } case err then {\n"
             '            print "write err"\n'
             "        }\n"
-            '        wr2: tw.write_line from: "bye"\n'
+            '        wr2: tw.writeLine from: "bye"\n'
             "        match (\n"
             "            wr2\n"
             "        ) case ok then { } case err then {\n"
@@ -8114,26 +8114,26 @@ class TestIOFileStreaming:
         # holds a bufwriter.lock field). Textwriter runtime bodies
         # must land after bufwriter runtime bodies (write_line
         # forwards to bufwriter_write).
-        assert "} z_bufwriter_t;" in csource
-        assert "} z_textwriter_t;" in csource
-        bufwriter_struct_pos = csource.index("} z_bufwriter_t;")
-        textwriter_struct_pos = csource.index("} z_textwriter_t;")
+        assert "} z_BufWriter_t;" in csource
+        assert "} z_TextWriter_t;" in csource
+        bufwriter_struct_pos = csource.index("} z_BufWriter_t;")
+        textwriter_struct_pos = csource.index("} z_TextWriter_t;")
         assert bufwriter_struct_pos < textwriter_struct_pos, (
-            "z_bufwriter_t struct must be declared before z_textwriter_t"
+            "z_BufWriter_t struct must be declared before z_TextWriter_t"
         )
-        bufwriter_body_pos = csource.index("z_bufwriter_write(\n")
-        textwriter_body_pos = csource.index("z_textwriter_write_line(\n")
+        bufwriter_body_pos = csource.index("z_BufWriter_write(\n")
+        textwriter_body_pos = csource.index("z_TextWriter_writeLine(\n")
         assert bufwriter_body_pos < textwriter_body_pos, (
-            "z_bufwriter_write body must precede z_textwriter_write_line"
+            "z_BufWriter_write body must precede z_TextWriter_write_line"
         )
         output = compile_and_run(csource)
         assert output.strip() == "flushed"
         assert target.read_bytes() == b"hi\nbye\n"
 
     def test_textreader_reads_lines_and_reports_eof(self, tmp_path):
-        """Phase 1c/2: three-layer read stack (file -> bufreader ->
-        textreader). Fixture written via write_text with real LFs;
-        textreader strips each line's LF and surfaces `ioerror.eof`
+        """Phase 1c/2: three-layer read stack (File -> BufReader ->
+        TextReader). Fixture written via writeText with real LFs;
+        TextReader strips each line's LF and surfaces `IoError.eof`
         once the stream is drained."""
         target = tmp_path / "tr.txt"
         target.write_bytes(b"alpha\nbeta\ngamma\n")
@@ -8143,27 +8143,27 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
-            "        l1: tr.read_line\n"
+            "        br: io.BufReader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
+            "        l1: tr.readLine\n"
             "        match (\n"
             "            l1\n"
             "        ) case ok then { print l1 } case err then {\n"
             '            print "l1 err"\n'
             "        }\n"
-            "        l2: tr.read_line\n"
+            "        l2: tr.readLine\n"
             "        match (\n"
             "            l2\n"
             "        ) case ok then { print l2 } case err then {\n"
             '            print "l2 err"\n'
             "        }\n"
-            "        l3: tr.read_line\n"
+            "        l3: tr.readLine\n"
             "        match (\n"
             "            l3\n"
             "        ) case ok then { print l3 } case err then {\n"
             '            print "l3 err"\n'
             "        }\n"
-            "        l4: tr.read_line\n"
+            "        l4: tr.readLine\n"
             "        match (\n"
             "            l4\n"
             "        ) case ok then {\n"
@@ -8177,17 +8177,17 @@ class TestIOFileStreaming:
             "}"
         )
         # textreader struct + runtime body must follow bufreader
-        assert "} z_bufreader_t;" in csource
-        assert "} z_textreader_t;" in csource
-        bufreader_struct_pos = csource.index("} z_bufreader_t;")
-        textreader_struct_pos = csource.index("} z_textreader_t;")
+        assert "} z_BufReader_t;" in csource
+        assert "} z_TextReader_t;" in csource
+        bufreader_struct_pos = csource.index("} z_BufReader_t;")
+        textreader_struct_pos = csource.index("} z_TextReader_t;")
         assert bufreader_struct_pos < textreader_struct_pos, (
-            "z_bufreader_t struct must be declared before z_textreader_t"
+            "z_BufReader_t struct must be declared before z_TextReader_t"
         )
-        bufreader_body_pos = csource.index("z_bufreader_read(\n")
-        textreader_body_pos = csource.index("z_textreader_read_line(\n")
+        bufreader_body_pos = csource.index("z_BufReader_read(\n")
+        textreader_body_pos = csource.index("z_TextReader_readLine(\n")
         assert bufreader_body_pos < textreader_body_pos, (
-            "z_bufreader_read body must precede z_textreader_read_line"
+            "z_BufReader_read body must precede z_TextReader_read_line"
         )
         # UTF-8 validator must be emitted (read_line calls it)
         assert "z_io_utf8_is_valid(" in csource
@@ -8201,7 +8201,7 @@ class TestIOFileStreaming:
 
     def test_textreader_returns_unterminated_tail_then_eof(self, tmp_path):
         """A trailing unterminated chunk is surfaced once as ok(tail);
-        the next read_line returns err(eof)."""
+        the next readLine returns err(eof)."""
         target = tmp_path / "tail.txt"
         target.write_bytes(b"one\ntwo")  # note: no trailing LF
         csource = emit_source(
@@ -8210,21 +8210,21 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 16.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
-            "        l1: tr.read_line\n"
+            "        br: io.BufReader.create from: r.lock capacity: 16.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
+            "        l1: tr.readLine\n"
             "        match (\n"
             "            l1\n"
             "        ) case ok then { print l1 } case err then {\n"
             '            print "l1 err"\n'
             "        }\n"
-            "        l2: tr.read_line\n"
+            "        l2: tr.readLine\n"
             "        match (\n"
             "            l2\n"
             "        ) case ok then { print l2 } case err then {\n"
             '            print "l2 err"\n'
             "        }\n"
-            "        l3: tr.read_line\n"
+            "        l3: tr.readLine\n"
             "        match (\n"
             "            l3\n"
             "        ) case ok then {\n"
@@ -8251,8 +8251,8 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
+            "        br: io.BufReader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
             "        for line: tr loop { print line }\n"
             '        print "done"\n'
             "    } case err then {\n"
@@ -8260,7 +8260,7 @@ class TestIOFileStreaming:
             "    }\n"
             "}"
         )
-        assert "z_textreader_call" in csource
+        assert "z_TextReader_call" in csource
         output = compile_and_run(csource)
         assert output.strip().splitlines() == [
             "alpha",
@@ -8279,8 +8279,8 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
+            "        br: io.BufReader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
             '        for line: tr loop { print "got" }\n'
             '        print "done"\n'
             "    } case err then {\n"
@@ -8302,8 +8302,8 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 16.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
+            "        br: io.BufReader.create from: r.lock capacity: 16.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
             "        for line: tr loop { print line }\n"
             '        print "done"\n'
             "    } case err then {\n"
@@ -8316,7 +8316,7 @@ class TestIOFileStreaming:
 
     def test_textreader_for_loop_asan_clean(self, tmp_path):
         """Iterating over every line must not leak or double-free. The
-        per-iteration string binding owns its heap buffer only until
+        per-iteration String binding owns its heap buffer only until
         the loop head re-runs; ASan catches either leak."""
         target = tmp_path / "asan.txt"
         # Vary line length so the allocator sees different sizes and a
@@ -8328,8 +8328,8 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 16.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
+            "        br: io.BufReader.create from: r.lock capacity: 16.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
             "        for line: tr loop { print line }\n"
             '        print "done"\n'
             "    } case err then {\n"
@@ -8359,15 +8359,15 @@ class TestIOFileStreaming:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        br: io.bufreader.create from: r.lock capacity: 32.u64\n"
-            "        tr: io.textreader.create from: br.lock\n"
-            "        l1: tr.read_line\n"
+            "        br: io.BufReader.create from: r.lock capacity: 32.u64\n"
+            "        tr: io.TextReader.create from: br.lock\n"
+            "        l1: tr.readLine\n"
             "        match (\n"
             "            l1\n"
             "        ) case ok then { print l1 } case err then {\n"
             '            print "l1 err"\n'
             "        }\n"
-            "        l2: tr.read_line\n"
+            "        l2: tr.readLine\n"
             "        match (\n"
             "            l2\n"
             "        ) case ok then { print l2 } case err then {\n"
@@ -8383,17 +8383,17 @@ class TestIOFileStreaming:
 
 
 class TestBufReader:
-    """bufreader now actually buffers: a single source `read` pulls up
-    to `cap` bytes, and subsequent small reads are served from the
+    """BufReader now actually buffers: a single source `read` pulls up
+    to `cap` Bytes, and subsequent small reads are served from the
     internal buffer until it drains. Oversize requests (max >= cap)
     bypass the buffer. Textreader keeps working unchanged because it
-    always asks for `cap` bytes and hits the bypass branch.
+    always asks for `cap` Bytes and hits the bypass branch.
 
     The test shape unrolls each `br.read` call explicitly rather than
     looping, to sidestep a pre-existing emitter issue with union
     locals declared inside a `for while` body (their scope-exit
     destructor lands outside the loop body in generated C). Each
-    test still exercises the bufreader path through multiple reads
+    test still exercises the BufReader Path through multiple reads
     of varying sizes."""
 
     @staticmethod
@@ -8420,7 +8420,7 @@ class TestBufReader:
         )
 
     def _program(self, path, cap, reads):
-        """Build a main body that opens `path`, creates a bufreader
+        """Build a main body that opens `Path`, creates a BufReader
         with capacity `cap`, and issues each read in `reads` in order
         (each a `N.u64` max argument)."""
         calls = "".join(
@@ -8432,8 +8432,8 @@ class TestBufReader:
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            f"        br: io.bufreader.create from: r.lock capacity: {cap}.u64\n"
-            "        buf: bytes\n"
+            f"        br: io.BufReader.create from: r.lock capacity: {cap}.u64\n"
+            "        buf: Bytes\n"
             f"{calls}"
             '        print "end"\n'
             "    } case err then {\n"
@@ -8444,7 +8444,7 @@ class TestBufReader:
 
     def test_bufreader_small_reads_aggregate(self, tmp_path):
         """10-byte fixture, cap=32. Four reads of max=3 return sizes
-        3/3/3/1, a fifth read hits EOF. All bytes come from a single
+        3/3/3/1, a fifth read hits EOF. All Bytes come from a single
         source syscall (observable only indirectly here — the totals
         match the fixture)."""
         target = tmp_path / "small.txt"
@@ -8455,7 +8455,7 @@ class TestBufReader:
 
     def test_bufreader_straddle_refill(self, tmp_path):
         """10-byte fixture, cap=5, reads of max=3. The buffer holds at
-        most 5 bytes; after it drains, the next read triggers a refill
+        most 5 Bytes; after it drains, the next read triggers a refill
         for another 5, and the read-in-progress returns whatever the
         current buffer can satisfy. Verify totals match and the refill
         actually occurred by counting reads needed to drain."""
@@ -8473,10 +8473,10 @@ class TestBufReader:
         assert len(chunks) >= 4
 
     def test_bufreader_oversize_bypass(self, tmp_path):
-        """max >= cap takes the direct-source-read path. The fixture
+        """max >= cap takes the direct-source-read Path. The fixture
         is larger than cap; one oversize read should return the whole
-        file (or most of it, if the kernel short-reads) in one call,
-        with no intermediate copy through the bufreader buffer."""
+        File (or most of it, if the kernel short-reads) in one call,
+        with no intermediate copy through the BufReader buffer."""
         target = tmp_path / "big.txt"
         target.write_bytes(b"x" * 500)
         csource = emit_source(self._program(target, 16, ["1024.u64", "1024.u64"]))
@@ -8498,9 +8498,9 @@ class TestBufReader:
         assert output.strip().splitlines() == ["eof", "end"]
 
     def test_bufreader_asan_clean(self, tmp_path):
-        """Multiple reads through a small-capacity bufreader under
+        """Multiple reads through a small-capacity BufReader under
         ASan. Exercises refill cycles, the buf field's scope-exit
-        destroy, and the realloc path on the caller's `into` list."""
+        destroy, and the realloc Path on the caller's `into` List."""
         target = tmp_path / "asan.txt"
         target.write_bytes(b"z" * 50)
         csource = emit_source(self._program(target, 8, ["5.u64"] * 16))
@@ -8513,8 +8513,8 @@ class TestBufReader:
 
 class TestIoSymlink:
     """io.symlink creates a symbolic link; io.readlink reads its target.
-    Both route through standard ioerror mapping; readlink additionally
-    surfaces `invalidpath` when the path exists but isn't a symlink."""
+    Both route through standard IoError mapping; readlink additionally
+    surfaces `invalidpath` when the Path exists but isn't a symlink."""
 
     def test_symlink_creates_link_and_readlink_reads_target(self, tmp_path):
         """symlink `link` -> `target`; readlink(link) returns `target`
@@ -8551,7 +8551,7 @@ class TestIoSymlink:
         assert link.is_symlink()
 
     def test_readlink_on_non_symlink_returns_invalidpath(self, tmp_path):
-        """EINVAL from readlink(2) means the path exists but isn't a
+        """EINVAL from readlink(2) means the Path exists but isn't a
         symbolic link; surface as invalidpath so callers can tell it
         apart from notfound / permissiondenied."""
         real = tmp_path / "plain.txt"
@@ -8578,8 +8578,8 @@ class TestIoSymlink:
         assert output.strip() == "invalidpath"
 
     def test_symlink_exists_errors_on_existing_target(self, tmp_path):
-        """EEXIST from symlink(2) maps to ioerror.exists when the `link`
-        path already refers to something."""
+        """EEXIST from symlink(2) maps to IoError.exists when the `link`
+        Path already refers to something."""
         occupied = tmp_path / "existing"
         occupied.write_text("x")
         csource = emit_source(
@@ -8606,7 +8606,7 @@ class TestIoSymlink:
 
 class TestOsUnit:
     """`os` unit: process-level primitives. argv/env/exit have no
-    companion struct types (unlike the `io` file/stream stack) so the
+    companion struct types (unlike the `io` File/stream stack) so the
     plumbing is smaller: three native function bodies plus two globals
     populated by main() for `args` to read."""
 
@@ -8630,7 +8630,7 @@ class TestOsUnit:
         assert r.returncode == 7
 
     def test_args_exposes_argv(self, tmp_path):
-        """os.args returns a list of strings copied from argv. When the
+        """os.args returns a List of strings copied from argv. When the
         program is run with extra args, the count reflects that."""
         csource = emit_source(
             "main: function is {\n"
@@ -8657,10 +8657,10 @@ class TestOsUnit:
         assert r.stdout.strip() == "argc=3"
 
     def test_get_env_some_and_none(self, tmp_path):
-        """option.some payload on hit, option.none on miss."""
+        """Option.some payload on hit, Option.none on miss."""
         csource = emit_source(
             "main: function is {\n"
-            '    ev: os.get_env key: "Z_OS_TEST_VAR"\n'
+            '    ev: os.env key: "Z_OS_TEST_VAR"\n'
             "    match (\n"
             "        ev\n"
             "    ) case some then {\n"
@@ -8670,7 +8670,7 @@ class TestOsUnit:
             "    }\n"
             "}"
         )
-        assert "z_os_get_env(" in csource
+        assert "z_os_env(" in csource
         assert "getenv(" in csource
         import subprocess
         import shutil
@@ -8698,19 +8698,19 @@ class TestOsUnit:
 
 
 class TestListOfStringDestructor:
-    """The list destructor iterates and calls z_string_free per element
+    """The List destructor iterates and calls z_String_free per element
     when the element type carries a destructor. Before this phase the
     element loop fired only when the C ctype was pointer-suffixed, so
-    list of: string leaked per-element heap data."""
+    List of: String leaked per-element heap data."""
 
     def test_list_of_string_destructor_frees_elements(self, tmp_path):
-        """Emitted list_string destructor must call z_string_free on
+        """Emitted List_string destructor must call z_String_free on
         each element, not just free the data array."""
         (tmp_path / "a.txt").write_text("x")
         (tmp_path / "b.txt").write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{tmp_path}"\n'
+            f'    r: io.listDir "{tmp_path}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8721,7 +8721,7 @@ class TestListOfStringDestructor:
             "}"
         )
         # the per-element free loop must be present
-        assert "z_string_free(&p->data[i])" in csource
+        assert "z_String_free(&p->data[i])" in csource
         # and the overall run must still succeed
         output = compile_and_run(csource)
         assert output.strip() == "2"
@@ -8772,7 +8772,7 @@ class TestNarrowedFieldAccess:
             "        ) case dir then {\n"
             '            print "dir"\n'
             "        } case file then {\n"
-            '            print "file"\n'
+            '            print "File"\n'
             "        } case symlink then {\n"
             '            print "link"\n'
             "        } case other then {\n"
@@ -8848,12 +8848,12 @@ class TestNarrowedFullSemantics:
     the parent arm is a targeted type error."""
 
     def test_method_dispatch_on_narrowed_list(self, tmp_path):
-        """`r.get 0.u64` on a narrowed `list of: string` threads the
-        list payload as `_this`, returning the first entry."""
+        """`r.get 0.u64` on a narrowed `List of: String` threads the
+        List payload as `_this`, returning the first entry."""
         (tmp_path / "only.txt").write_text("x")
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{tmp_path}"\n'
+            f'    r: io.listDir "{tmp_path}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -8864,12 +8864,12 @@ class TestNarrowedFullSemantics:
             "    }\n"
             "}"
         )
-        assert "z_list_string_get(&(*(z_list_string_t*)r.data)" in csource
+        assert "z_List_String_get(&(*(z_List_String_t*)r.data)" in csource
         output = compile_and_run(csource)
         assert output.strip() == "name=only.txt"
 
     def test_method_dispatch_on_narrowed_class(self, tmp_path):
-        """`r.close` on a narrowed `io.file` dispatches to the file
+        """`r.close` on a narrowed `io.File` dispatches to the File
         class's close method."""
         target = tmp_path / "a.txt"
         target.write_text("x")
@@ -8897,14 +8897,14 @@ class TestNarrowedFullSemantics:
 
     def test_rematch_on_narrowed_subject(self, tmp_path):
         """Re-matching the narrowed subject inside its arm dispatches
-        on the PAYLOAD's tag (ioerror), not the outer result's tag.
+        on the PAYLOAD's tag (IoError), not the outer Result's tag.
         This is the canonical form — `match (r)` when r is already
-        narrowed to ioerror — not the old `match (r.err)` compound
+        narrowed to IoError — not the old `match (r.err)` compound
         form (which reaches into the shadowed parent)."""
         missing = tmp_path / "nope"
         csource = emit_source(
             "main: function is {\n"
-            f'    r: io.list_dir "{missing}"\n'
+            f'    r: io.listDir "{missing}"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -9037,7 +9037,7 @@ class TestPanic:
         assert stdout == ""
 
     def test_panic_with_dynamic_message(self):
-        """Panic works with a composed string, not just a literal."""
+        """Panic works with a composed String, not just a literal."""
         csource = emit_source(
             "main: function is {\n"
             '    where: "phase-2"\n'
@@ -9066,21 +9066,21 @@ class TestPanic:
         assert stdout.strip() == "ok"
 
     def test_bounds_check_uses_zpanic(self):
-        """A list bounds violation routes through the shared `z_panic`
+        """A List bounds violation routes through the shared `z_panic`
         helper and produces a `zpanic:` prefixed stderr line."""
         csource = emit_source(
             "main: function is {\n"
-            "    xs: (list of: i64)\n"
+            "    xs: (List of: i64)\n"
             "    xs.append from: 10\n"
             "    _: xs.get i: 5.u64\n"
             "}"
         )
         rc, _stdout, stderr = compile_and_capture(csource)
         assert rc == 1
-        assert "zpanic: list get: index 5 out of bounds" in stderr, stderr
+        assert "zpanic: List get: index 5 out of bounds" in stderr, stderr
 
     def test_xalloc_path_uses_zpanic(self):
-        """The OOM path in the x-alloc helpers calls `z_panic("out of
+        """The OOM Path in the x-alloc helpers calls `z_panic("out of
         memory")`. Grep the emitted C to verify the wiring (running
         it reliably requires `ulimit` which is brittle in CI)."""
         csource = emit_source(

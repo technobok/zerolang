@@ -124,13 +124,13 @@ class TestTokenizerStrings:
         # no STRMID for empty string
 
     def test_raw_string(self):
-        tokens = collect_tokens('"""raw text"""')
+        tokens = collect_tokens('"""raw Text"""')
         types = [t.toktype for t in tokens]
         assert TT.STRBEG in types
         assert TT.STRMID in types
         assert TT.STREND in types
         mid = [t for t in tokens if t.toktype == TT.STRMID]
-        assert mid[0].tokstr == "raw text"
+        assert mid[0].tokstr == "raw Text"
 
     def test_string_interpolation(self):
         # Zero uses \{ for string interpolation expressions

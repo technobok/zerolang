@@ -2,10 +2,10 @@ typedef struct {
     uint64_t size;       /* byte count of current content */
     char* data;          /* heap-allocated data buffer */
     uint64_t capacity;   /* allocated buffer size */
-} z_string_t;
+} z_String_t;
 
-static z_string_t z_string_new(const char* s) {
-    z_string_t z = {0};
+static z_String_t z_String_new(const char* s) {
+    z_String_t z = {0};
     z.size = (uint64_t)strlen(s);
     z.capacity = z.size + 1;
     z.data = (char*)z_xmalloc(z.capacity);
@@ -14,8 +14,8 @@ static z_string_t z_string_new(const char* s) {
     return z;
 }
 
-static z_string_t z_string_cat(z_string_t* a, z_string_t* b) {
-    z_string_t z = {0};
+static z_String_t z_String_cat(z_String_t* a, z_String_t* b) {
+    z_String_t z = {0};
     z.size = a->size + b->size;
     z.capacity = z.size + 1;
     z.data = (char*)z_xmalloc(z.capacity);
@@ -25,34 +25,34 @@ static z_string_t z_string_cat(z_string_t* a, z_string_t* b) {
     return z;
 }
 
-static z_string_t z_string_from_i64(int64_t n) {
+static z_String_t z_String_from_i64(int64_t n) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%ld", (long)n);
-    return z_string_new(buf);
+    return z_String_new(buf);
 }
 
-static z_string_t z_string_from_f64(double n) {
+static z_String_t z_String_from_f64(double n) {
     char buf[64];
     snprintf(buf, sizeof(buf), "%g", n);
-    return z_string_new(buf);
+    return z_String_new(buf);
 }
 
-static void z_string_print(z_string_t* s) {
+static void z_String_print(z_String_t* s) {
     printf("%.*s\n", (int)s->size, s->data);
 }
 
-static void z_string_free(z_string_t* s) {
+static void z_String_free(z_String_t* s) {
     if (s && s->data) free(s->data);
 }
 
-static bool z_string_eq(z_string_t* a, z_string_t* b) {
+static bool z_String_eq(z_String_t* a, z_String_t* b) {
     if (a == b) return true;
     return a->size == b->size && memcmp(a->data, b->data, a->size) == 0;
 }
 
 /* byte-wise lexicographic compare: returns -1 / 0 / 1. Shorter
    string is less than longer when they share a prefix. */
-static int32_t z_string_cmp(z_string_t* a, z_string_t* b) {
+static int32_t z_String_cmp(z_String_t* a, z_String_t* b) {
     if (a == b) return 0;
     uint64_t n = a->size < b->size ? a->size : b->size;
     int c = n > 0 ? memcmp(a->data, b->data, n) : 0;
@@ -62,7 +62,7 @@ static int32_t z_string_cmp(z_string_t* a, z_string_t* b) {
     return 0;
 }
 
-static void z_string_reserve(z_string_t* s, uint64_t additional) {
+static void z_String_reserve(z_String_t* s, uint64_t additional) {
     uint64_t needed = s->size + additional;
     if (needed <= s->capacity) return;
     uint64_t new_cap = s->capacity + (s->capacity >> 1) + 16;
@@ -71,21 +71,21 @@ static void z_string_reserve(z_string_t* s, uint64_t additional) {
     s->capacity = new_cap;
 }
 
-static void z_string_append(z_string_t* s, const char* data, uint64_t len) {
-    z_string_reserve(s, len);
+static void z_String_append(z_String_t* s, const char* data, uint64_t len) {
+    z_String_reserve(s, len);
     memcpy(s->data + s->size, data, len);
     s->size += len;
     s->data[s->size] = '\0';
 }
 
-static void z_string_shrink(z_string_t* s) {
+static void z_String_shrink(z_String_t* s) {
     if (s->size == s->capacity) return;
     s->data = (char*)z_xrealloc(s->data, s->size + 1);
     s->capacity = s->size;
 }
 
-static z_string_t z_string_create(uint64_t cap) {
-    z_string_t z = {0};
+static z_String_t z_String_create(uint64_t cap) {
+    z_String_t z = {0};
     z.capacity = cap;
     if (cap > 0) {
         z.data = (char*)z_xmalloc(cap + 1);
@@ -94,8 +94,8 @@ static z_string_t z_string_create(uint64_t cap) {
     return z;
 }
 
-static z_string_t z_string_copy(z_string_t* s) {
-    z_string_t z = {0};
+static z_String_t z_String_copy(z_String_t* s) {
+    z_String_t z = {0};
     z.size = s->size;
     z.capacity = s->size + 1;
     z.data = (char*)z_xmalloc(z.capacity);

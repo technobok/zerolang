@@ -48,7 +48,7 @@ def check_ok(source: str, unitname: str = "test"):
 
 
 def check_errors(source: str, unitname: str = "test"):
-    """Parse and type-check, assert errors, return error list."""
+    """Parse and type-check, assert errors, return error List."""
     program, errors = parse_and_check(source, unitname)
     assert errors != [], "Expected type errors but got none"
     return errors
@@ -61,7 +61,7 @@ def find_user_monos(program, *, origin_name: Optional[str] = None):
     a generic (e.g. `optionval<T>` from each integer record's `iterate`
     native). Tests that previously assumed `mono_types[0]` is the user's
     mono must filter past those system-load monos. Pass `origin_name`
-    (e.g. `"option"`, `"box"`) to filter by generic-origin name; omit to
+    (e.g. `"Option"`, `"Box"`) to filter by generic-origin name; omit to
     return all monos with nodes whose definition is in a user unit.
     """
     result = []
@@ -151,8 +151,8 @@ class TestAssignment:
         """Reftype field '=' reassignment moves RHS into LHS (drop-and-
         transfer); the RHS name is invalidated after the move."""
         check_ok(
-            "h: class { msg: string } as {\n"
-            "  set: function {x: this v: string.take} is { x.msg = v }\n"
+            "h: class { msg: String } as {\n"
+            "  set: function {x: this v: String.take} is { x.msg = v }\n"
             "}\n"
             'main: function is { a: h msg: "init".string\n'
             '  b: "next".string\n'
@@ -164,8 +164,8 @@ class TestAssignment:
         """After `this.field = v`, the source name `v` is invalidated —
         re-using it is an ownership error."""
         errors = check_errors(
-            "h: class { msg: string } as {\n"
-            "  set: function {x: this v: string.take} out u64 is {\n"
+            "h: class { msg: String } as {\n"
+            "  set: function {x: this v: String.take} out u64 is {\n"
             "    x.msg = v\n"
             "    n: v.length\n"
             "    return n\n"
@@ -186,8 +186,8 @@ class TestAssignment:
         """A borrowed RHS can't be moved into a reftype field (borrow
         binding must stay live for its full scope)."""
         errors = check_errors(
-            "h: class { msg: string } as {\n"
-            "  set: function {x: this v: string.borrow} is { x.msg = v }\n"
+            "h: class { msg: String } as {\n"
+            "  set: function {x: this v: String.borrow} is { x.msg = v }\n"
             "}\n"
             'main: function is { a: h msg: "init".string\n'
             '  b: "s".string\n'
@@ -222,20 +222,20 @@ class TestAssignment:
         inner call's access to the field."""
         check_ok(
             "p: protocol {\n"
-            "  read: function {:this into: bytes max: u64}"
-            " out (result t: u64 e: ioerror)\n"
+            "  read: function {:this into: Bytes max: u64}"
+            " out (Result t: u64 e: IoError)\n"
             "}\n"
             "w: class {\n"
             "  source: p.lock\n"
-            "  buf: bytes\n"
+            "  buf: Bytes\n"
             "  cap: u64\n"
             "} as {\n"
             "  create: function {from: p.lock} out this is {\n"
-            "    return meta.create source: from buf: bytes cap: 16.u64\n"
+            "    return meta.create source: from buf: Bytes cap: 16.u64\n"
             "  }\n"
             "  fill: function {:this}"
-            " out (result t: u64 e: ioerror) is {\n"
-            "    this.buf = bytes\n"
+            " out (Result t: u64 e: IoError) is {\n"
+            "    this.buf = Bytes\n"
             "    r: this.source.read into: this.buf max: this.cap\n"
             "    return r\n"
             "  }\n"
@@ -265,7 +265,7 @@ class TestNonRuntimeTypes:
         assert any("null" in e.msg for e in errors)
 
     def test_never_assignment_error(self):
-        """Cannot assign never (return result) to a variable."""
+        """Cannot assign never (return Result) to a variable."""
         errors = check_errors(
             "f: function out i64 is { return 42 }\nmain: function is { x: return 0 }"
         )
@@ -292,7 +292,7 @@ class TestNonRuntimeTypes:
         assert any("never" in e.msg for e in errors)
 
     def test_null_in_union_is_ok(self):
-        """Null as a union subtype (eg. option.none) is fine."""
+        """Null as a union subtype (eg. Option.none) is fine."""
         check_ok(
             "myopt: union { some: i64\n none: null }\n"
             "main: function is { x: myopt.none }"
@@ -350,7 +350,7 @@ class TestTypeResolution:
             check_ok(f"f: function {{n: {t}}} is {{}}")
 
     def test_string_type_resolves(self):
-        check_ok("f: function {s: string} is {}")
+        check_ok("f: function {s: String} is {}")
 
     def test_bool_type_resolves(self):
         check_ok("f: function {b: bool} is {}")
@@ -451,7 +451,7 @@ class TestWithDo:
         check_ok(
             "abs: function {n: i64} out i64 is { return n }\n"
             "main: function is {\n"
-            '  with y: abs -5 do print "result = \\{y}"\n'
+            '  with y: abs -5 do print "Result = \\{y}"\n'
             "}"
         )
 
@@ -921,7 +921,7 @@ class TestValTypeTagging:
         tc = TypeChecker(program)
         tc.check(full=True)
         system = tc.unit_types["system"]
-        any_type = system.children.get("any")
+        any_type = system.children.get("Any")
         assert any_type is not None
         assert any_type.is_valtype is False
 
@@ -950,7 +950,7 @@ class TestOwnershipSignatureValidation:
     """Test ownership rules on function signatures."""
 
     def test_borrow_return_without_lock_param_error(self):
-        """Returning borrow without any lock parameter is an error."""
+        """Returning borrow without Any lock parameter is an error."""
         errors = check_errors(
             "f: function {t: i64} out i64.borrow is { return t }\nmain: function is {}"
         )
@@ -1014,9 +1014,9 @@ class TestOwnershipReturnChecking:
         )
 
     def test_return_borrowed_string_param_rejected(self):
-        """Returning an unannotated string param as owned aliases caller data."""
+        """Returning an unannotated String param as owned aliases caller data."""
         errors = check_errors(
-            "f: function {s: string} out string is { return s }\nmain: function is {}"
+            "f: function {s: String} out String is { return s }\nmain: function is {}"
         )
         assert any(
             "borrowed parameter" in e.msg.lower() and "'s'" in e.msg for e in errors
@@ -1025,21 +1025,21 @@ class TestOwnershipReturnChecking:
     def test_return_taken_string_param_allowed(self):
         """`.take` on the param transfers ownership in — return is then sound."""
         check_ok(
-            "f: function {s: string.take} out string is { return s }\n"
+            "f: function {s: String.take} out String is { return s }\n"
             "main: function is {}"
         )
 
     def test_return_copy_of_borrowed_string_param_allowed(self):
         """`.copy` on the value returns a fresh independent owner."""
         check_ok(
-            "f: function {s: string} out string is { return s.copy }\n"
+            "f: function {s: String} out String is { return s.copy }\n"
             "main: function is {}"
         )
 
     def test_return_borrow_of_lock_param_still_works(self):
         """Existing `out T.borrow` + `.lock` parameter pattern unaffected."""
         check_ok(
-            "f: function {s: string.lock} out string.borrow is { return s }\n"
+            "f: function {s: String.lock} out String.borrow is { return s }\n"
             "main: function is {}"
         )
 
@@ -1047,11 +1047,11 @@ class TestOwnershipReturnChecking:
         """Regression: return-construction shorthand `return Type field: val`
         must type-check the field args, otherwise nested paths never get
         their `.type` stamped and the emitter silently falls through to
-        field access. The smoking gun is a path like `s.copy` in a field
-        slot — verify type resolution propagates to the path's parent."""
+        field access. The smoking gun is a Path like `s.copy` in a field
+        slot — verify type resolution propagates to the Path's parent."""
         program = check_ok(
-            "mybox: class { label: string }\n"
-            "mk: function {s: string.take} out mybox is {\n"
+            "mybox: class { label: String }\n"
+            "mk: function {s: String.take} out mybox is {\n"
             "  return mybox label: s.copy\n"
             "}\n"
             "main: function is {}"
@@ -1079,8 +1079,8 @@ class TestOwnershipReturnChecking:
         field aliases the caller's storage. Reject; user must `.copy`,
         `.take` the param, or annotate the field as `.lock`."""
         errors = check_errors(
-            "mybox: class { label: string }\n"
-            "mk: function {s: string} out mybox is {\n"
+            "mybox: class { label: String }\n"
+            "mk: function {s: String} out mybox is {\n"
             "  return mybox label: s\n"
             "}\n"
             "main: function is {}"
@@ -1093,8 +1093,8 @@ class TestOwnershipReturnChecking:
         """`.copy` produces a fresh owned value — break the borrow
         chain, allow the store."""
         check_ok(
-            "mybox: class { label: string }\n"
-            "mk: function {s: string} out mybox is {\n"
+            "mybox: class { label: String }\n"
+            "mk: function {s: String} out mybox is {\n"
             "  return mybox label: s.copy\n"
             "}\n"
             "main: function is {}"
@@ -1102,10 +1102,10 @@ class TestOwnershipReturnChecking:
 
     def test_store_taken_param_in_aggregate_field_allowed(self):
         """`.take` on the param transfers ownership in — the body owns
-        `s` and may move it into the box."""
+        `s` and may move it into the Box."""
         check_ok(
-            "mybox: class { label: string }\n"
-            "mk: function {s: string.take} out mybox is {\n"
+            "mybox: class { label: String }\n"
+            "mk: function {s: String.take} out mybox is {\n"
             "  return mybox label: s\n"
             "}\n"
             "main: function is {}"
@@ -1114,7 +1114,7 @@ class TestOwnershipReturnChecking:
     def test_store_lock_param_in_lock_field_allowed(self):
         """`.lock`-annotated params are user-explicit borrow holders;
         they may legitimately be projected into matching `.lock` fields
-        (the borrowed_record / listiter examples). The store-borrow
+        (the borrowed_record / ListIter examples). The store-borrow
         check exempts `.lock`-annotated params."""
         check_ok(
             "container: class { x: i64 } as { public: unit { :slice }\n"
@@ -1137,17 +1137,17 @@ class TestStoreOfBorrowedRejection:
     """Pin the rejection of storing a default-borrowed reftype param into
     an aggregate slot via collection mutation methods or field
     reassignment. Coverage exists via two separate mechanisms — TAKE
-    annotations on synthesized list/map params (rejected by
+    annotations on synthesized List/Map params (rejected by
     `_apply_take_to_arg`) and the borrowed-RHS check in
     `_check_reassignment`. These tests lock that behaviour in so a
     future refactor can't silently regress it."""
 
     def test_list_append_borrowed_rejected(self):
-        """`lst.append from: s` with a borrowed-string param `s` aliases
-        the caller's storage into the list. Rejected via the `from`
+        """`lst.append from: s` with a borrowed-String param `s` aliases
+        the caller's storage into the List. Rejected via the `from`
         param's TAKE annotation."""
         errors = check_errors(
-            "f: function {lst: (list of: string) s: string} is {\n"
+            "f: function {lst: (List of: String) s: String} is {\n"
             "  lst.append from: s\n"
             "}\n"
             "main: function is {}"
@@ -1158,9 +1158,9 @@ class TestStoreOfBorrowedRejection:
         ), [e.msg for e in errors]
 
     def test_list_append_copy_allowed(self):
-        """`.copy` produces a fresh owned string — append is sound."""
+        """`.copy` produces a fresh owned String — append is sound."""
         check_ok(
-            "f: function {lst: (list of: string) s: string} is {\n"
+            "f: function {lst: (List of: String) s: String} is {\n"
             "  lst.append from: s.copy\n"
             "}\n"
             "main: function is {}"
@@ -1169,7 +1169,7 @@ class TestStoreOfBorrowedRejection:
     def test_list_insert_borrowed_rejected(self):
         """`lst.insert from: s at: 0u64` — same TAKE rejection on `from`."""
         errors = check_errors(
-            "f: function {lst: (list of: string) s: string} is {\n"
+            "f: function {lst: (List of: String) s: String} is {\n"
             "  lst.insert from: s at: 0u64\n"
             "}\n"
             "main: function is {}"
@@ -1182,7 +1182,7 @@ class TestStoreOfBorrowedRejection:
     def test_list_set_borrowed_rejected(self):
         """`lst.set i: 0u64 val: s` — TAKE annotation is on `val`."""
         errors = check_errors(
-            "f: function {lst: (list of: string) s: string} is {\n"
+            "f: function {lst: (List of: String) s: String} is {\n"
             "  lst.set i: 0u64 val: s\n"
             "}\n"
             "main: function is {}"
@@ -1194,9 +1194,9 @@ class TestStoreOfBorrowedRejection:
 
     def test_list_extend_borrowed_rejected(self):
         """`a.extend from: b` with both lists borrowed — `extend` consumes
-        its `from` argument so passing a borrowed list aliases."""
+        its `from` argument so passing a borrowed List aliases."""
         errors = check_errors(
-            "f: function {a: (list of: string) b: (list of: string)} is {\n"
+            "f: function {a: (List of: String) b: (List of: String)} is {\n"
             "  a.extend from: b\n"
             "}\n"
             "main: function is {}"
@@ -1211,7 +1211,7 @@ class TestStoreOfBorrowedRejection:
         Pin the value-side rejection (the first TAKE failure stops
         further checks, so we test value via a fresh-owned key)."""
         errors = check_errors(
-            "f: function {m: (map key: string value: string) v: string} is {\n"
+            "f: function {m: (Map key: String value: String) v: String} is {\n"
             '  m.set key: "k".copy value: v\n'
             "}\n"
             "main: function is {}"
@@ -1224,20 +1224,20 @@ class TestStoreOfBorrowedRejection:
     def test_map_set_copy_value_allowed(self):
         """`.copy` on the borrowed value param breaks the alias."""
         check_ok(
-            "f: function {m: (map key: string value: string) v: string} is {\n"
+            "f: function {m: (Map key: String value: String) v: String} is {\n"
             '  m.set key: "k".copy value: v.copy\n'
             "}\n"
             "main: function is {}"
         )
 
     def test_field_reassign_borrowed_rejected(self):
-        """`b.label = s` where `s` is a default-borrowed string param
+        """`b.label = s` where `s` is a default-borrowed String param
         and `b` is a locked class instance. Rejected by
         `_check_reassignment`'s borrowed-RHS rule — storing the borrow
-        into the box's owned-string slot would alias caller storage."""
+        into the Box's owned-String slot would alias caller storage."""
         errors = check_errors(
-            "mybox: class { label: string }\n"
-            "f: function {b: mybox.lock s: string} is {\n"
+            "mybox: class { label: String }\n"
+            "f: function {b: mybox.lock s: String} is {\n"
             "  b.label = s\n"
             "}\n"
             "main: function is {}"
@@ -1248,7 +1248,7 @@ class TestStoreOfBorrowedRejection:
 class TestReturnLockPropagation:
     """When a user-defined method declares a `.lock` parameter and
     returns a borrow, the call's binding must lock the corresponding
-    source path in the outer scope. Mutating that source while the
+    source Path in the outer scope. Mutating that source while the
     binding is live errors.
 
     The receiver case (`t: this.lock`) and the explicit-arg case
@@ -1263,10 +1263,10 @@ class TestReturnLockPropagation:
         """
         errors = check_errors(
             "holder: class {\n"
-            "  val: string\n"
+            "  val: String\n"
             "} as {\n"
-            "  pick: function {t: this.lock prefix: stringview}"
-            " out string.borrow is { return t.val }\n"
+            "  pick: function {t: this.lock prefix: StringView}"
+            " out String.borrow is { return t.val }\n"
             "}\n"
             "main: function is {\n"
             '  src: holder val: "hi".string\n'
@@ -1284,8 +1284,8 @@ class TestReturnLockPropagation:
         for the binding to install.
         """
         errors = check_errors(
-            "get_view: function {s: string.lock}"
-            " out string.borrow is { return s }\n"
+            "get_view: function {s: String.lock}"
+            " out String.borrow is { return s }\n"
             "main: function is {\n"
             '  src: "hi".string\n'
             "  v: get_view s: src.lock\n"
@@ -1303,10 +1303,10 @@ class TestReturnLockPropagation:
         """
         errors = check_errors(
             "holder: class {\n"
-            "  val: string\n"
+            "  val: String\n"
             "} as {\n"
-            "  pick: function {h: this.lock prefix: stringview}"
-            " out string.borrow is { return h.val }\n"
+            "  pick: function {h: this.lock prefix: StringView}"
+            " out String.borrow is { return h.val }\n"
             "}\n"
             "main: function is {\n"
             '  src: holder val: "hi".string\n'
@@ -1325,8 +1325,8 @@ class TestReturnLockPropagation:
         source on the caller side.
         """
         errors = check_errors(
-            "get_view: function {s: string}"
-            " out string.borrow is { return s }\n"
+            "get_view: function {s: String}"
+            " out String.borrow is { return s }\n"
             "main: function is {}"
         )
         assert any("lock" in e.msg.lower() and "'s'" in e.msg for e in errors), [
@@ -1338,7 +1338,7 @@ class TestReturnLockPropagation:
         — no propagation, no spurious lock, source remains mutable.
         """
         check_ok(
-            "make_copy: function {s: string} out string is { return s.copy }\n"
+            "make_copy: function {s: String} out String is { return s.copy }\n"
             "main: function is {\n"
             '  src: "hi".string\n'
             "  v: make_copy s: src\n"
@@ -1351,7 +1351,7 @@ class TestReturnLockPropagation:
         coerces in value position the same way a native does — no
         `is_native` asymmetry. Pinned after the auto-call coercion
         moved out of `_resolve_dotted_path` and into `_check_dotted_path`,
-        so that path resolution is context-free and the call/value
+        so that Path resolution is context-free and the call/value
         disambiguation lives where it has visibility into the call.
 
         Tests two forms must produce the same binding type:
@@ -1410,13 +1410,13 @@ class TestPhaseC3Pins:
 
     def _reader_and_myfile(self) -> str:
         return (
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -1431,7 +1431,7 @@ class TestPhaseC3Pins:
         'already has exclusive lock on f'.
         """
         check_ok(
-            self._reader_and_myfile() + "use_reader: function {r: reader} is {}\n"
+            self._reader_and_myfile() + "use_reader: function {r: Reader} is {}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
             "    use_reader r: f.myreader\n"
@@ -1468,19 +1468,19 @@ class TestPhaseC3Pins:
 
     def test_borrow_returning_method_passed_as_take_rejected(self):
         """A user method with `t: this.lock` receiver returns a
-        borrowed value. Passing that value to a `string.take`
+        borrowed value. Passing that value to a `String.take`
         parameter must be rejected — the borrow carries an outstanding
         lock on its source which cannot transfer ownership.
         """
         errors = check_errors(
             "holder: class {\n"
-            "    val: string\n"
+            "    val: String\n"
             "} as {\n"
-            "    pick: function {t: this.lock} out string.borrow is {\n"
+            "    pick: function {t: this.lock} out String.borrow is {\n"
             "        return t.val\n"
             "    }\n"
             "}\n"
-            "consume: function {s: string.take} is {}\n"
+            "consume: function {s: String.take} is {}\n"
             "main: function is {\n"
             '    h: holder val: "hi".string\n'
             "    consume s: h.pick\n"
@@ -1525,7 +1525,7 @@ class TestPhaseC3Pins:
         assert int(names[0][2:]) < int(names[1][2:]), names
 
     def test_unknown_unit_member_errors(self):
-        """Phase D: a dotted path through a known unit with an unknown
+        """Phase D: a dotted Path through a known unit with an unknown
         child must error (the leak that let `io.read_only` slip through
         as a call argument before the fix in `_resolve_dotted_path`).
         """
@@ -1553,10 +1553,10 @@ class TestPhaseC3Pins:
         type metadata on the synth Assignment's RHS.
         """
         program = check_ok(
-            "make_str: function {tag: i64} out string is {\n"
+            "make_str: function {tag: i64} out String is {\n"
             '    return "hi".string\n'
             "}\n"
-            "use_borrow: function {s: string.borrow} is {}\n"
+            "use_borrow: function {s: String.borrow} is {}\n"
             "main: function is {\n"
             "    use_borrow s: (make_str tag: 1)\n"
             "}"
@@ -1581,10 +1581,10 @@ class TestPhaseC3Pins:
 class TestSyntacticHooksDeletion:
     """Pin: the typecheck-side syntactic hooks that previously injected
     method semantics (`_INLINE_LOCK_PROJECTIONS`, the
-    `child_name == \"byteview\"|\"listview\"|\"stringview\"` branches in
+    `child_name == \"ByteView\"|\"ListView\"|\"StringView\"` branches in
     `_resolve_dotted_path`, the integer `.iterate`/`.each` synth) are
     gone. Aggregate-escape rejection now flows through standard
-    return-ownership / `.lock`-param metadata. Reintroducing any of
+    return-ownership / `.lock`-param metadata. Reintroducing Any of
     these hooks should fail this test class first.
     """
 
@@ -1596,14 +1596,14 @@ class TestSyntacticHooksDeletion:
         assert "_INLINE_LOCK_PROJECTIONS" not in src
 
     def test_no_view_method_syntactic_branches(self):
-        """No `child_name == \"byteview\"` / `\"listview\"` /
-        `\"stringview\"` syntactic branches survive in the typechecker.
+        """No `child_name == \"ByteView\"` / `\"ListView\"` /
+        `\"StringView\"` syntactic branches survive in the typechecker.
         These projections all resolve through their native declarations
         in `lib/system/*.z` and propagate locks via the standard
         `.lock`-param transfer."""
         with open(SRC_TYPECHECK_PATH) as f:
             src = f.read()
-        for name in ("byteview", "listview", "stringview"):
+        for name in ("ByteView", "ListView", "StringView"):
             assert f'child_name == "{name}"' not in src, (
                 f'syntactic branch on child_name == "{name}" found in '
                 f"src/ztypecheck.py — this projection must route through "
@@ -1889,7 +1889,7 @@ class TestBorrowValtypeAllowed:
     def test_borrow_generic_param_allowed(self):
         """Generic parameters may monomorphize to reftype — .borrow is allowed."""
         check_ok(
-            "identity: function {a: t.borrow} out t as { t: any.generic } is {\n"
+            "identity: function {a: t.borrow} out t as { t: Any.generic } is {\n"
             "  return a\n"
             "}\n"
             "main: function is {}"
@@ -1898,7 +1898,7 @@ class TestBorrowValtypeAllowed:
     def test_lock_generic_param_allowed(self):
         """Generic parameters may monomorphize to reftype — .lock is allowed."""
         check_ok(
-            "identity: function {a: t.lock} out t.borrow as { t: any.generic } is {\n"
+            "identity: function {a: t.lock} out t.borrow as { t: Any.generic } is {\n"
             "  return a\n"
             "}\n"
             "main: function is {}"
@@ -1908,10 +1908,10 @@ class TestBorrowValtypeAllowed:
         # Reading a valtype field through a borrowed class produces a fresh
         # value and is freely passable.
         check_ok(
-            "box: class { v: i64 }\n"
-            "f: function {b: box} out i64 is { return b.v }\n"
+            "Box: class { v: i64 }\n"
+            "f: function {b: Box} out i64 is { return b.v }\n"
             "main: function is {\n"
-            "  c: box v: 5\n"
+            "  c: Box v: 5\n"
             "  r: f c\n"
             "}"
         )
@@ -2198,7 +2198,7 @@ class TestImplicitConstruction:
         )
 
     def test_meta_create_top_level_error(self):
-        """meta.create outside any type body is an error."""
+        """meta.create outside Any type body is an error."""
         errors = check_errors("main: function is { r: meta.create x: 1 }")
         assert any("meta.create" in e.msg for e in errors)
 
@@ -2314,8 +2314,8 @@ class TestSymbolTableLocking:
         assert st.try_lock(("obj", "b"), ZLockState.EXCLUSIVE, "h2") is None
 
     def test_ancestor_exclusive_blocks_descendant_lock(self):
-        """EXCLUSIVE on (obj,) owns the whole subtree — any new lock below
-        is rejected with a path-aware message."""
+        """EXCLUSIVE on (obj,) owns the whole subtree — Any new lock below
+        is rejected with a Path-aware message."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
         assert st.try_lock(("obj",), ZLockState.EXCLUSIVE, "h1") is None
         err = st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h2")
@@ -2324,7 +2324,7 @@ class TestSymbolTableLocking:
         assert "exclusive" in err.lower()
 
     def test_descendant_lock_blocks_ancestor_exclusive(self):
-        """A new EXCLUSIVE on an ancestor would absorb any outstanding
+        """A new EXCLUSIVE on an ancestor would absorb Any outstanding
         sub-lock; rejected."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
         assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
@@ -2334,7 +2334,7 @@ class TestSymbolTableLocking:
 
     def test_shared_ancestor_permits_exclusive_descendant(self):
         """Multi-granularity: SHARED on an ancestor is INTENT-shared and
-        allows any lock (S or X) on descendants. This is what lets a
+        allows Any lock (S or X) on descendants. This is what lets a
         single operation install SHARED on each intermediate prefix and
         EXCLUSIVE on the leaf without self-conflict."""
         st = self._make_symtab_with_vars("obj", "h1")
@@ -2342,7 +2342,7 @@ class TestSymbolTableLocking:
         assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
 
     def test_shared_stacking_and_idempotence(self):
-        """Two SHARED on the same full path dedupe (no extra entry); SHARED
+        """Two SHARED on the same full Path dedupe (no extra entry); SHARED
         on ancestor and SHARED on descendant both live (distinct entries,
         independent release)."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
@@ -2401,8 +2401,8 @@ class TestLockEnforcement:
     """Mutation-site enforcement of outstanding exclusive Borrow-scoped Locks.
 
     While a variable holds an exclusive Borrow-scoped Lock (e.g. from
-    `.borrow` or `string.stringview`), the compiler must reject reassignment,
-    field reassignment, swap, and method calls whose path is rooted at the
+    `.borrow` or `String.stringview`), the compiler must reject reassignment,
+    field reassignment, swap, and method calls whose Path is rooted at the
     locked variable. See doc/ownership.pdoc, Mutation-Site Enforcement.
     """
 
@@ -2427,9 +2427,9 @@ class TestLockEnforcement:
 
     def test_field_reassign_of_locked_leaf_rejected(self):
         """Reassigning the locked leaf field errors — the view installs an
-        EXCLUSIVE Borrow-scoped Lock on the leaf path `(p, name)`."""
+        EXCLUSIVE Borrow-scoped Lock on the leaf Path `(p, name)`."""
         errors = check_errors(
-            "namepair: record { name: string other: string }\n"
+            "namepair: record { name: String other: String }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
             "  v: p.name.stringview\n"
@@ -2442,7 +2442,7 @@ class TestLockEnforcement:
         """Path-scoped locks: reassigning a sibling field is permitted while
         another field is borrowed."""
         check_ok(
-            "namepair: class { name: string other: i64 }\n"
+            "namepair: class { name: String other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
@@ -2466,9 +2466,9 @@ class TestLockEnforcement:
         )
 
     def test_swap_rejects_locked_leaf(self):
-        """Swap on the locked leaf path errors — sibling-field swaps are OK."""
+        """Swap on the locked leaf Path errors — sibling-field swaps are OK."""
         errors = check_errors(
-            "namepair: record { name: string other: string }\n"
+            "namepair: record { name: String other: String }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
             '  a: "c".string\n'
@@ -2484,7 +2484,7 @@ class TestLockEnforcement:
     def test_swap_sibling_field_permitted(self):
         """Sibling-field swap is permitted while another field is borrowed."""
         check_ok(
-            "namepair: class { name: string other: string }\n"
+            "namepair: class { name: String other: String }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: "b".string\n'
             '  a: "c".string\n'
@@ -2518,7 +2518,7 @@ class TestLockEnforcement:
 
     def test_method_call_with_arg_derived_from_receiver_allowed(self):
         """Call-identity stack (Phase C step 1): a method call whose
-        argument borrows from the same receiver path should not
+        argument borrows from the same receiver Path should not
         self-block. Receiver lock and the arg's prefix-overlapping lock
         carry the same call identity now, so try_lock's same-holder
         predicate skips the conflict.
@@ -2552,7 +2552,7 @@ class TestLockEnforcement:
     # --- Phase 2: acquisition-path coverage ---
 
     def test_borrow_on_dotted_path_locks_leaf(self):
-        """.borrow on a field path locks the leaf path EXCLUSIVE; reassigning
+        """.borrow on a field Path locks the leaf Path EXCLUSIVE; reassigning
         the locked field errors but sibling fields remain mutable."""
         errors = check_errors(
             "inner: class { value: 0 }\n"
@@ -2578,7 +2578,7 @@ class TestLockEnforcement:
         )
 
     def test_lock_inline_on_dotted_path_locks_leaf(self):
-        """.lock on a field path locks the leaf (alias for .borrow)."""
+        """.lock on a field Path locks the leaf (alias for .borrow)."""
         errors = check_errors(
             "inner: class { value: 0 }\n"
             "point: record { a: inner b: inner }\n"
@@ -2625,7 +2625,7 @@ class TestLockEnforcement:
         """A user-chosen receiver name ('me: this') triggers the root lock
         on the method parameter name."""
         errors = check_errors(
-            "thing: class { s: string } as {\n"
+            "thing: class { s: String } as {\n"
             "  peek: function {me: this} is {\n"
             "    v: me.s.stringview\n"
             '    me.s = "new".string\n'
@@ -2667,9 +2667,9 @@ class TestLockEnforcement:
     # --- Commit D: path-scoped lock integration ---
 
     def test_self_field_borrow_and_sibling_method_call(self):
-        """bufwriter-style flush: a method that borrows one self field and
+        """BufWriter-style flush: a method that borrows one self field and
         calls a method through a sibling self field must type-check under
-        the path-scoped lock model. Under the old name-scoped model this
+        the Path-scoped lock model. Under the old name-scoped model this
         was rejected because both operations took a root lock on `this`.
 
         The method body is only checked if `pipe` is instantiated and
@@ -2728,34 +2728,34 @@ class TestLockEnforcement:
           processing the first argument, otherwise `bv` (which already
           holds EXCLUSIVE on `(this, buf)`) would conflict with a
           re-lock of `this` during arg handling.
-        * Arithmetic on `list.length` (u64). The synthesized u64
+        * Arithmetic on `List.length` (u64). The synthesized u64
           record previously had no `+` method, so
           `this.buf.length + from.length` failed to resolve. Wiring
           length/capacity to the global u64 type restores arithmetic
-          operators on list-length results."""
+          operators on List-length results."""
         check_ok(
             "myproto: protocol {\n"
-            "  write: function {:this from: byteview}"
-            " out (result t: u64 e: ioerror)\n"
+            "  write: function {:this from: ByteView}"
+            " out (Result t: u64 e: IoError)\n"
             "}\n"
             "holder: class {\n"
             "  sink: myproto.lock\n"
-            "  buf:  bytes\n"
+            "  buf:  Bytes\n"
             "  cap:  u64\n"
             "} as {\n"
             "  flush: function {:this}"
-            " out (result t: null e: ioerror) is {\n"
+            " out (Result t: null e: IoError) is {\n"
             "    if this.buf.length + this.cap > this.cap then {\n"
-            "      bv: byteview.borrow from: this.buf.listview\n"
+            "      bv: ByteView.borrow from: this.buf.listview\n"
             "      fr: this.sink.write from: bv\n"
             "      bv.release\n"
             "      match (fr) case ok then {\n"
-            "        return (result.ok null e: ioerror)\n"
+            "        return (Result.ok null e: IoError)\n"
             "      } case err then {\n"
-            "        return (result.err fr t: null)\n"
+            "        return (Result.err fr t: null)\n"
             "      }\n"
             "    }\n"
-            "    return (result.ok null e: ioerror)\n"
+            "    return (Result.ok null e: IoError)\n"
             "  }\n"
             "}\n"
             "main: function is {}\n"
@@ -2763,27 +2763,27 @@ class TestLockEnforcement:
 
     def test_return_lock_method_with_borrowed_param_typechecks(self):
         """Companion to the flush-pattern regression above: a method
-        that `return`s the result of a `.lock`-field protocol call
+        that `return`s the Result of a `.lock`-field protocol call
         whose argument is a sibling `:this` parameter borrow. Mirrors
-        the oversize-bypass branch a pure-Zerolang `bufwriter.write`
+        the oversize-bypass branch a pure-Zerolang `BufWriter.write`
         would contain:
 
             return this.sink.write from: from
 
         Exercises lifetime flow through the `.lock` callable without
-        the result being decomposed into explicit `result.ok`/`err`
+        the Result being decomposed into explicit `Result.ok`/`err`
         arms — the flush pattern covers decomposition; this covers
-        the straight-through path."""
+        the straight-through Path."""
         check_ok(
             "mysink: protocol {\n"
-            "  write: function {:this from: byteview}"
-            " out (result t: u64 e: ioerror)\n"
+            "  write: function {:this from: ByteView}"
+            " out (Result t: u64 e: IoError)\n"
             "}\n"
             "holder: class {\n"
             "  sink: mysink.lock\n"
             "} as {\n"
-            "  write: function {:this from: byteview}"
-            " out (result t: u64 e: ioerror) is {\n"
+            "  write: function {:this from: ByteView}"
+            " out (Result t: u64 e: IoError) is {\n"
             "    return this.sink.write from: from\n"
             "  }\n"
             "}\n"
@@ -2792,7 +2792,7 @@ class TestLockEnforcement:
 
     def test_self_field_mutation_of_sibling_permitted(self):
         """Within a method, mutating a sibling field of the locked leaf is
-        permitted under the path-scoped lock model."""
+        permitted under the Path-scoped lock model."""
         check_ok(
             "inner: class { val: i64 } as {\n"
             "  peek: function {i: this} out i64 is { return i.val }\n"
@@ -2817,7 +2817,7 @@ class TestLockEnforcement:
     def test_lock_field_capture_transfers_lock_to_binding(self):
         """A protocol `.borrow from: X.lock` constructor retains the source
         lock through its `.lock` field. The transferred lock moves into the
-        result binding's scope — mutating the source while the wrapper is
+        Result binding's scope — mutating the source while the wrapper is
         alive errors."""
         errors = check_errors(
             "provider: protocol {\n"
@@ -2911,9 +2911,9 @@ class TestLockEnforcement:
 
     def test_read_sibling_field_permitted(self):
         """Reading a sibling field of a locked-leaf class is permitted under
-        the path-scoped lock model."""
+        the Path-scoped lock model."""
         check_ok(
-            "namepair: class { name: string other: i64 }\n"
+            "namepair: class { name: String other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
@@ -2922,9 +2922,9 @@ class TestLockEnforcement:
         )
 
     def test_read_locked_leaf_field_rejected(self):
-        """Reading the locked leaf path itself remains an error."""
+        """Reading the locked leaf Path itself remains an error."""
         errors = check_errors(
-            "namepair: record { name: string other: i64 }\n"
+            "namepair: record { name: String other: i64 }\n"
             "main: function is {\n"
             '  p: namepair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
@@ -2987,7 +2987,7 @@ class TestLockEnforcement:
         )
 
     def test_field_reassign_with_locked_rhs_rejected(self):
-        """Reassigning an aggregate field with a locked RHS path is a storage
+        """Reassigning an aggregate field with a locked RHS Path is a storage
         transfer and must reject: the lock would escape into the field slot."""
         errors = check_errors(
             "inner: class { value: 0 }\n"
@@ -3022,10 +3022,10 @@ class TestLockEnforcement:
     # --- G2: value-level lock-escape at return sites ---
 
     def test_return_view_of_local_rejected(self):
-        """Returning a stringview over a function-local source is rejected:
+        """Returning a StringView over a function-local source is rejected:
         the local dies at function exit, leaving the view dangling."""
         errors = check_errors(
-            "g: function out stringview is {\n"
+            "g: function out StringView is {\n"
             '  local: "hi".string\n'
             "  return local.stringview\n"
             "}\n"
@@ -3040,7 +3040,7 @@ class TestLockEnforcement:
         """Returning a view over a borrow-typed parameter is legal: the
         caller owns the source, so the view outlives the method call."""
         check_ok(
-            "f: function {s: string} out stringview is {\n"
+            "f: function {s: String} out StringView is {\n"
             "  return s.stringview\n"
             "}\n"
             "main: function is {\n"
@@ -3053,9 +3053,9 @@ class TestLockEnforcement:
         """A method returning a view of its receiver's field is legal —
         `this` is borrowed from the caller and outlives the call."""
         check_ok(
-            "mylabel: class { s: string } as {\n"
-            "    :text\n"
-            "    stringview: function {m: this} out stringview is {\n"
+            "mylabel: class { s: String } as {\n"
+            "    :Text\n"
+            "    stringview: function {m: this} out StringView is {\n"
             "        return m.s.stringview\n"
             "    }\n"
             "}\n"
@@ -3068,7 +3068,7 @@ class TestLockEnforcement:
     def test_return_unlocked_value_allowed(self):
         """Positive control: returning an owned unlocked value is fine."""
         check_ok(
-            "f: function out string is {\n"
+            "f: function out String is {\n"
             '  return "hi".string\n'
             "}\n"
             "main: function is { v: f }"
@@ -3079,7 +3079,7 @@ class TestWithOwnership:
     """`with name: expr do body` ownership.
 
     Mirrors function-argument rules:
-    - bare name / dotted path → BORROW (EXCLUSIVE-lock the source root)
+    - bare name / dotted Path → BORROW (EXCLUSIVE-lock the source root)
     - `.take` inline          → OWNED (source invalidated)
     - `.borrow` inline        → BORROW (same as default for names)
     - call / constructor      → OWNED (fresh value)
@@ -3148,10 +3148,10 @@ class TestWithOwnership:
         )
 
     def test_dotted_path_locks_leaf(self):
-        """`with a: r.f do ...` locks the leaf path; reassigning that leaf
+        """`with a: r.f do ...` locks the leaf Path; reassigning that leaf
         errors but sibling fields stay mutable."""
         errors = check_errors(
-            "pair: record { first: string other: string }\n"
+            "pair: record { first: String other: String }\n"
             "main: function is {\n"
             '  p: pair first: "a".string other: "b".string\n'
             "  with v: p.first do {\n"
@@ -3164,7 +3164,7 @@ class TestWithOwnership:
     def test_dotted_path_permits_sibling_in_with(self):
         """`with a: r.f do ...` permits mutation of sibling fields in the body."""
         check_ok(
-            "pair: class { first: string other: string }\n"
+            "pair: class { first: String other: String }\n"
             "main: function is {\n"
             '  p: pair first: "a".string other: "b".string\n'
             "  with v: p.first do {\n"
@@ -3197,31 +3197,31 @@ class TestIoWrappers:
     The wrapper classes are declared in lib/system/io.z with native
     methods. These tests exercise the contracts the typechecker has to
     enforce: construction signatures, return-type coercion on zero-arg
-    `.flush`, and the path-scoped lock transfer that blocks access to
-    the source writer/reader while the wrapper is alive."""
+    `.flush`, and the Path-scoped lock transfer that blocks access to
+    the source Writer/Reader while the wrapper is alive."""
 
     def test_bufwriter_create_and_flush_typecheck(self):
-        """bufwriter.create accepts (to: writer.lock, capacity: u64) and
+        """BufWriter.create accepts (to: Writer.lock, capacity: u64) and
         `.flush` on the resulting class coerces to its return type so
-        `fr: bw.flush` binds fr to `result(null, ioerror)`."""
+        `fr: bw.flush` binds fr to `Result(null, IoError)`."""
         check_ok(
             "main: function is {\n"
             "  w: io.stdout\n"
-            "  bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "  bw: io.BufWriter.create to: w.lock capacity: 16.u64\n"
             "  fr: bw.flush\n"
             "  match (fr) case ok then {} case err then {}\n"
             "}\n"
         )
 
     def test_bufwriter_write_byteview(self):
-        """bufwriter.write takes a byteview and returns result(u64, ioerror)."""
+        """BufWriter.write takes a ByteView and returns Result(u64, IoError)."""
         check_ok(
             "main: function is {\n"
             "  w: io.stdout\n"
-            "  bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
-            "  msg: bytes\n"
+            "  bw: io.BufWriter.create to: w.lock capacity: 16.u64\n"
+            "  msg: Bytes\n"
             "  msg.append from: 72.u8\n"
-            "  bv: byteview.borrow from: msg.listview\n"
+            "  bv: ByteView.borrow from: msg.listview\n"
             "  wr: bw.write from: bv\n"
             "  bv.release\n"
             "  match (wr) case ok then {} case err then {}\n"
@@ -3229,13 +3229,13 @@ class TestIoWrappers:
         )
 
     def test_bufwriter_locks_source_writer(self):
-        """While bw holds a borrow on w via writer.lock, calling a method
-        on w is rejected (path-scoped lock conflict)."""
+        """While bw holds a borrow on w via Writer.lock, calling a method
+        on w is rejected (Path-scoped lock conflict)."""
         errors = check_errors(
             "main: function is {\n"
             '  w: io.open path: "/tmp/x" mode: openmode.write\n'
             "  match (w) case ok then {\n"
-            "    bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "    bw: io.BufWriter.create to: w.lock capacity: 16.u64\n"
             "    cr: w.close\n"
             "  } case err then {}\n"
             "}\n"
@@ -3245,14 +3245,14 @@ class TestIoWrappers:
         )
 
     def test_bufreader_create_and_read(self):
-        """bufreader.create takes (from: reader.lock, capacity: u64) and
-        .read returns result(u64, ioerror) with bytes appended to `into`."""
+        """BufReader.create takes (from: Reader.lock, capacity: u64) and
+        .read returns Result(u64, IoError) with Bytes appended to `into`."""
         check_ok(
             "main: function is {\n"
             '  r: io.open path: "/tmp/x" mode: openmode.read\n'
             "  match (r) case ok then {\n"
-            "    br: io.bufreader.create from: r.lock capacity: 16.u64\n"
-            "    buf: bytes\n"
+            "    br: io.BufReader.create from: r.lock capacity: 16.u64\n"
+            "    buf: Bytes\n"
             "    rr: br.read into: buf max: 32.u64\n"
             '    print "read"\n'
             "  } case err then {\n"
@@ -3262,29 +3262,29 @@ class TestIoWrappers:
         )
 
     def test_textwriter_create_and_write_line_typecheck(self):
-        """textwriter.create takes (to: bufwriter.lock), and
-        write_line takes a stringview and returns result(u64, ioerror).
-        Exercises the two-layer wrapper construction (file -> bufwriter
-        -> textwriter) that's the canonical Phase 1c caller shape."""
+        """TextWriter.create takes (to: BufWriter.lock), and
+        writeLine takes a StringView and returns Result(u64, IoError).
+        Exercises the two-layer wrapper construction (File -> BufWriter
+        -> TextWriter) that's the canonical Phase 1c caller shape."""
         check_ok(
             "main: function is {\n"
             "  w: io.stdout\n"
-            "  bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
-            "  tw: io.textwriter.create to: bw.lock\n"
-            '  wr: tw.write_line from: "hi"\n'
+            "  bw: io.BufWriter.create to: w.lock capacity: 64.u64\n"
+            "  tw: io.TextWriter.create to: bw.lock\n"
+            '  wr: tw.writeLine from: "hi"\n'
             "  match (wr) case ok then {} case err then {}\n"
             "}\n"
         )
 
     def test_textwriter_locks_bufwriter_source(self):
-        """While tw holds a borrow on bw via bufwriter.lock, calling
-        bw.flush is rejected -- the source bufwriter cannot be drained
-        directly while the textwriter is alive."""
+        """While tw holds a borrow on bw via BufWriter.lock, calling
+        bw.flush is rejected -- the source BufWriter cannot be drained
+        directly while the TextWriter is alive."""
         errors = check_errors(
             "main: function is {\n"
             "  w: io.stdout\n"
-            "  bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
-            "  tw: io.textwriter.create to: bw.lock\n"
+            "  bw: io.BufWriter.create to: w.lock capacity: 64.u64\n"
+            "  tw: io.TextWriter.create to: bw.lock\n"
             "  fr: bw.flush\n"
             "}\n"
         )
@@ -3294,42 +3294,42 @@ class TestIoWrappers:
         )
 
     def test_textreader_create_and_read_line_typecheck(self):
-        """textreader.create takes (from: bufreader.lock); read_line
-        returns result(string, ioerror). Mirrors the textwriter shape
+        """TextReader.create takes (from: BufReader.lock); readLine
+        returns Result(String, IoError). Mirrors the TextWriter shape
         on the read side of the stack."""
         check_ok(
             "main: function is {\n"
             "  r: io.stdin\n"
-            "  br: io.bufreader.create from: r.lock capacity: 64.u64\n"
-            "  tr: io.textreader.create from: br.lock\n"
-            "  l: tr.read_line\n"
+            "  br: io.BufReader.create from: r.lock capacity: 64.u64\n"
+            "  tr: io.TextReader.create from: br.lock\n"
+            "  l: tr.readLine\n"
             "  match (l) case ok then {} case err then {}\n"
             "}\n"
         )
 
     def test_textreader_is_iterable(self):
-        """textreader exposes `call: function {:this} out (option t: string)`,
+        """TextReader exposes `call: function {:this} out (Option t: String)`,
         so it plugs into the for-loop iterator protocol directly:
-        `for line: tr loop { ... }` binds `line` to a string."""
+        `for line: tr loop { ... }` binds `line` to a String."""
         check_ok(
             "main: function is {\n"
             "  r: io.stdin\n"
-            "  br: io.bufreader.create from: r.lock capacity: 64.u64\n"
-            "  tr: io.textreader.create from: br.lock\n"
+            "  br: io.BufReader.create from: r.lock capacity: 64.u64\n"
+            "  tr: io.TextReader.create from: br.lock\n"
             "  for line: tr loop { print line }\n"
             "}\n"
         )
 
     def test_textreader_locks_bufreader_source(self):
-        """While tr holds a borrow on br via bufreader.lock, calling
-        br.read is rejected -- the source bufreader cannot be consumed
-        directly while the textreader is alive."""
+        """While tr holds a borrow on br via BufReader.lock, calling
+        br.read is rejected -- the source BufReader cannot be consumed
+        directly while the TextReader is alive."""
         errors = check_errors(
             "main: function is {\n"
             "  r: io.stdin\n"
-            "  br: io.bufreader.create from: r.lock capacity: 64.u64\n"
-            "  tr: io.textreader.create from: br.lock\n"
-            "  buf: (bytes)\n"
+            "  br: io.BufReader.create from: r.lock capacity: 64.u64\n"
+            "  tr: io.TextReader.create from: br.lock\n"
+            "  buf: (Bytes)\n"
             "  rr: br.read into: buf.borrow max: 16.u64\n"
             "}\n"
         )
@@ -3339,28 +3339,28 @@ class TestIoWrappers:
         )
 
     def test_textwriter_flush_zero_arg_coerces_to_return_type(self):
-        """`fr: tw.flush` must bind fr to result(null, ioerror) via
+        """`fr: tw.flush` must bind fr to Result(null, IoError) via
         the generalised zero-arg class-method coercion (previously
         required a per-class special case in the typechecker)."""
         check_ok(
             "main: function is {\n"
             "  w: io.stdout\n"
-            "  bw: io.bufwriter.create to: w.lock capacity: 64.u64\n"
-            "  tw: io.textwriter.create to: bw.lock\n"
+            "  bw: io.BufWriter.create to: w.lock capacity: 64.u64\n"
+            "  tw: io.TextWriter.create to: bw.lock\n"
             "  fr: tw.flush\n"
             "  match (fr) case ok then {} case err then {}\n"
             "}\n"
         )
 
     def test_bufwriter_flush_zero_arg_call_form(self):
-        """The `bw.flush` dotted-path form must produce a call whose
-        result typechecks as result(null, ioerror) — not a function
-        reference. Covers the path-value coercion added alongside
-        the file.close precedent in ztypecheck._resolve_dotted_child."""
+        """The `bw.flush` dotted-Path form must produce a call whose
+        Result typechecks as Result(null, IoError) — not a function
+        reference. Covers the Path-value coercion added alongside
+        the File.close precedent in ztypecheck._resolve_dotted_child."""
         check_ok(
             "main: function is {\n"
             "  w: io.stdout\n"
-            "  bw: io.bufwriter.create to: w.lock capacity: 16.u64\n"
+            "  bw: io.BufWriter.create to: w.lock capacity: 16.u64\n"
             "  fr: bw.flush\n"
             "  match (fr) case ok then {\n"
             '    print "ok"\n'
@@ -3375,20 +3375,20 @@ class TestOsUnit:
     """`os` unit: process-level primitives (argv / env / exit).
     Thin compared to io -- only three natives -- but exercises the
     same machinery: unit-qualified dispatch, zero-arg native
-    coercion, and ownership of string-returning results."""
+    coercion, and ownership of String-returning results."""
 
     def test_args_returns_list_of_string(self):
         """os.args is a zero-arg native whose return type coerces to
-        `list of: string`, so `argv: os.args` binds argv to the list
+        `List of: String`, so `argv: os.args` binds argv to the List
         directly (not to a function pointer)."""
         check_ok('main: function is {\n  argv: os.args\n  print "\\{argv.length}"\n}\n')
 
     def test_get_env_returns_option_string(self):
-        """os.get_env returns option(string); the typechecker accepts
+        """os.env returns Option(String); the typechecker accepts
         matching on some/none arms in the usual way."""
         check_ok(
             "main: function is {\n"
-            '  ev: os.get_env key: "PATH"\n'
+            '  ev: os.env key: "PATH"\n'
             "  match (ev) case some then {\n"
             "    print ev\n"
             "  } case none then {\n"
@@ -3399,15 +3399,15 @@ class TestOsUnit:
 
     def test_exit_is_no_return(self):
         """os.exit has no return; calling it with a numeric i32 is
-        legal and the scope does not need to dispatch a result."""
+        legal and the scope does not need to dispatch a Result."""
         check_ok("main: function is {\n  os.exit code: 0.i32\n}\n")
 
     def test_set_env_returns_result_null_ioerror(self):
-        """os.set_env takes two strings and returns result(null, ioerror),
+        """os.setEnv takes two strings and returns Result(null, IoError),
         matching io's fallible write shape."""
         check_ok(
             "main: function is {\n"
-            '  r: os.set_env key: "X" value: "y"\n'
+            '  r: os.setEnv key: "X" value: "y"\n'
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
@@ -3417,10 +3417,10 @@ class TestOsUnit:
         )
 
     def test_unset_env_returns_result_null_ioerror(self):
-        """os.unset_env consumes just `key` and returns result(null, ioerror)."""
+        """os.unsetEnv consumes just `key` and returns Result(null, IoError)."""
         check_ok(
             "main: function is {\n"
-            '  r: os.unset_env key: "X"\n'
+            '  r: os.unsetEnv key: "X"\n'
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
@@ -3430,17 +3430,14 @@ class TestOsUnit:
         )
 
     def test_env_names_returns_list_of_string(self):
-        """os.env_names is a zero-arg native returning an owned list of
+        """os.envNames is a zero-arg native returning an owned List of
         strings — same coercion rule as os.args."""
         check_ok(
-            "main: function is {\n"
-            "  names: os.env_names\n"
-            '  print "\\{names.length}"\n'
-            "}\n"
+            'main: function is {\n  names: os.envNames\n  print "\\{names.length}"\n}\n'
         )
 
     def test_cwd_returns_result_string_ioerror(self):
-        """os.cwd is zero-arg and returns result(string, ioerror)."""
+        """os.cwd is zero-arg and returns Result(String, IoError)."""
         check_ok(
             "main: function is {\n"
             "  r: os.cwd\n"
@@ -3455,7 +3452,7 @@ class TestOsUnit:
     def test_set_cwd_takes_path_returns_result_null_ioerror(self):
         check_ok(
             "main: function is {\n"
-            '  r: os.set_cwd path: "/tmp"\n'
+            '  r: os.setCwd path: "/tmp"\n'
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
@@ -3477,8 +3474,8 @@ class TestOsUnit:
     def test_user_name_and_home_dir_return_result_string_ioerror(self):
         check_ok(
             "main: function is {\n"
-            "  un: os.user_name\n"
-            "  hd: os.home_dir\n"
+            "  un: os.userName\n"
+            "  hd: os.homeDir\n"
             "  match (un) case ok then {\n"
             "    print un\n"
             "  } case err then {\n"
@@ -3538,15 +3535,15 @@ class TestOsUnit:
 
 
 class TestStringviewQueries:
-    """Phase S1 non-allocating query methods on stringview."""
+    """Phase S1 non-allocating query methods on StringView."""
 
     def test_is_empty_and_is_ascii_are_zero_arg_methods(self):
         check_ok(
             "main: function is {\n"
             '  s: "hi".string\n'
             "  sv: s.stringview\n"
-            "  e: sv.is_empty\n"
-            "  a: sv.is_ascii\n"
+            "  e: sv.isEmpty\n"
+            "  a: sv.isAscii\n"
             '  print "\\{e} \\{a}"\n'
             "}\n"
         )
@@ -3556,8 +3553,8 @@ class TestStringviewQueries:
             "main: function is {\n"
             '  s: "hello".string\n'
             "  sv: s.stringview\n"
-            '  sw: sv.starts_with prefix: "he"\n'
-            '  ew: sv.ends_with suffix: "lo"\n'
+            '  sw: sv.startsWith prefix: "he"\n'
+            '  ew: sv.endsWith suffix: "lo"\n'
             '  print "\\{sw} \\{ew}"\n'
             "}\n"
         )
@@ -3577,7 +3574,7 @@ class TestStringviewQueries:
             "main: function is {\n"
             '  s: "hello".string\n'
             "  sv: s.stringview\n"
-            '  r: sv.index_of needle: "l"\n'
+            '  r: sv.indexOf needle: "l"\n'
             "  match (r) case some then {\n"
             '    print "\\{r}"\n'
             "  } case none then {\n"
@@ -3591,7 +3588,7 @@ class TestStringviewQueries:
             "main: function is {\n"
             '  s: "hello".string\n'
             "  sv: s.stringview\n"
-            '  r: sv.last_index_of needle: "l"\n'
+            '  r: sv.lastIndexOf needle: "l"\n'
             "  match (r) case some then {\n"
             '    print "\\{r}"\n'
             "  } case none then {\n"
@@ -3605,7 +3602,7 @@ class TestStringviewQueries:
             "main: function is {\n"
             '  s: "hi".string\n'
             "  sv: s.stringview\n"
-            "  b: sv.byte_at i: 0.u64\n"
+            "  b: sv.byteAt i: 0.u64\n"
             "  match (b) case some then {\n"
             '    print "\\{b}"\n'
             "  } case none then {\n"
@@ -3616,7 +3613,7 @@ class TestStringviewQueries:
 
 
 class TestStringviewSlicing:
-    """Phase S2 view-returning slicing helpers on stringview."""
+    """Phase S2 view-returning slicing helpers on StringView."""
 
     def test_trim_returns_stringview(self):
         check_ok(
@@ -3634,8 +3631,8 @@ class TestStringviewSlicing:
             "main: function is {\n"
             '  s: "  hi  ".string\n'
             "  sv: s.stringview\n"
-            "  a: sv.trim_start\n"
-            "  b: sv.trim_end\n"
+            "  a: sv.trimStart\n"
+            "  b: sv.trimEnd\n"
             "  la: a.length\n"
             "  lb: b.length\n"
             '  print "\\{la} \\{lb}"\n'
@@ -3647,7 +3644,7 @@ class TestStringviewSlicing:
             "main: function is {\n"
             '  s: "--x".string\n'
             "  sv: s.stringview\n"
-            '  r: sv.strip_prefix p: "--"\n'
+            '  r: sv.stripPrefix p: "--"\n'
             "  match (r) case some then {\n"
             "    l: r.length\n"
             '    print "\\{l}"\n'
@@ -3662,7 +3659,7 @@ class TestStringviewSlicing:
             "main: function is {\n"
             '  s: "a.txt".string\n'
             "  sv: s.stringview\n"
-            '  r: sv.strip_suffix s: ".txt"\n'
+            '  r: sv.stripSuffix s: ".txt"\n'
             "  match (r) case some then {\n"
             "    l: r.length\n"
             '    print "\\{l}"\n'
@@ -3692,7 +3689,7 @@ class TestStringviewSplitting:
             "main: function is {\n"
             '  s: "k=v".string\n'
             "  sv: s.stringview\n"
-            '  r: sv.split_once sep: "="\n'
+            '  r: sv.splitOnce sep: "="\n'
             "  match (r) case some then {\n"
             '    print "\\{r}"\n'
             "  } case none then {\n"
@@ -3714,15 +3711,15 @@ class TestStringviewSplitting:
 
 
 class TestStringviewTransforms:
-    """Phase S4 allocating string transforms on stringview."""
+    """Phase S4 allocating String transforms on StringView."""
 
     def test_to_lower_and_to_upper(self):
         check_ok(
             "main: function is {\n"
             '  s: "Hi".string\n'
             "  sv: s.stringview\n"
-            "  lo: sv.to_lower_ascii\n"
-            "  up: sv.to_upper_ascii\n"
+            "  lo: sv.toLowerAscii\n"
+            "  up: sv.toUpperAscii\n"
             "  print lo\n"
             "  print up\n"
             "}\n"
@@ -3734,7 +3731,7 @@ class TestStringviewTransforms:
             '  s: "aaa".string\n'
             "  sv: s.stringview\n"
             '  r: sv.replace needle: "a" replacement: "b"\n'
-            '  rf: sv.replace_first needle: "a" replacement: "b"\n'
+            '  rf: sv.replaceFirst needle: "a" replacement: "b"\n'
             "  print r\n"
             "  print rf\n"
             "}\n"
@@ -3781,14 +3778,14 @@ class TestStringviewCodepoints:
 
 
 class TestStringviewParsing:
-    """Phase S6 numeric parsing on stringview."""
+    """Phase S6 numeric parsing on StringView."""
 
     def test_parse_i64_returns_result_i64_parseerror(self):
         check_ok(
             "main: function is {\n"
             '  s: "-42".string\n'
             "  sv: s.stringview\n"
-            "  r: sv.parse_i64\n"
+            "  r: sv.parseI64\n"
             "  match (r) case ok then {\n"
             '    print "\\{r}"\n'
             "  } case err then {\n"
@@ -3802,7 +3799,7 @@ class TestStringviewParsing:
             "main: function is {\n"
             '  s: "42".string\n'
             "  sv: s.stringview\n"
-            "  r: sv.parse_u64\n"
+            "  r: sv.parseU64\n"
             "  match (r) case ok then {\n"
             '    print "\\{r}"\n'
             "  } case err then {\n"
@@ -3816,7 +3813,7 @@ class TestStringviewParsing:
             "main: function is {\n"
             '  s: "3.14".string\n'
             "  sv: s.stringview\n"
-            "  r: sv.parse_f64\n"
+            "  r: sv.parseF64\n"
             "  match (r) case ok then {\n"
             '    print "\\{r}"\n'
             "  } case err then {\n"
@@ -3831,13 +3828,13 @@ class TestStringviewParsing:
             "main: function is {\n"
             '  s: "x".string\n'
             "  sv: s.stringview\n"
-            "  r: sv.parse_i64\n"
+            "  r: sv.parseI64\n"
             "  match (r) case ok then {\n"
             '    print "ok"\n'
             "  } case err then {\n"
             "    match (r) case empty then {\n"
             '      print "empty"\n'
-            "    } case invalid_digit then {\n"
+            "    } case invalidDigit then {\n"
             '      print "inv"\n'
             "    } case overflow then {\n"
             '      print "ovf"\n'
@@ -3848,15 +3845,15 @@ class TestStringviewParsing:
 
 
 class TestStringJoin:
-    """Phase S7 string_join free function."""
+    """Phase S7 stringJoin free function."""
 
     def test_join_parts_and_sep(self):
         check_ok(
             "main: function is {\n"
-            "  parts: (list of: string)\n"
+            "  parts: (List of: String)\n"
             '  parts.append from: "a".string\n'
             '  parts.append from: "b".string\n'
-            '  j: string_join parts: parts sep: ","\n'
+            '  j: stringJoin parts: parts sep: ","\n'
             "  print j\n"
             "}\n"
         )
@@ -3864,8 +3861,8 @@ class TestStringJoin:
     def test_join_empty_list(self):
         check_ok(
             "main: function is {\n"
-            "  parts: (list of: string)\n"
-            '  j: string_join parts: parts sep: ","\n'
+            "  parts: (List of: String)\n"
+            '  j: stringJoin parts: parts sep: ","\n'
             "  l: j.length\n"
             '  print "\\{l}"\n'
             "}\n"
@@ -3873,25 +3870,25 @@ class TestStringJoin:
 
 
 class TestCliUnit:
-    """cli unit: spec / parsed / registration + parse + help_text."""
+    """cli unit: Spec / Parsed / registration + parse + helpText."""
 
     def test_spec_create_and_register(self):
         check_ok(
             "main: function is {\n"
-            '  sp: cli.spec.create program_name: "p".string summary: "s".string\n'
-            '  cli.add_flag spec: sp name: "--v".string short_name: "-v".string help: "".string\n'
-            '  cli.add_option spec: sp name: "--o".string short_name: "-o".string help: "".string required: true\n'
-            '  cli.add_positional spec: sp name: "x".string help: "".string required: true\n'
+            '  sp: cli.Spec.create programName: "p".string summary: "s".string\n'
+            '  cli.addFlag spec: sp name: "--v".string shortName: "-v".string help: "".string\n'
+            '  cli.addOption spec: sp name: "--o".string shortName: "-o".string help: "".string required: true\n'
+            '  cli.addPositional spec: sp name: "x".string help: "".string required: true\n'
             "}\n"
         )
 
     def test_parse_returns_result(self):
         check_ok(
             "main: function is {\n"
-            '  sp: cli.spec.create program_name: "p".string summary: "".string\n'
+            '  sp: cli.Spec.create programName: "p".string summary: "".string\n'
             "  r: cli.parse spec: sp args: os.args\n"
             "  match (r) case ok then {\n"
-            '    v: r.has_flag name: "--v"\n'
+            '    v: r.hasFlag name: "--v"\n'
             '    print "\\{v}"\n'
             "  } case err then {\n"
             '    print "err"\n'
@@ -3902,8 +3899,8 @@ class TestCliUnit:
     def test_help_text_returns_string(self):
         check_ok(
             "main: function is {\n"
-            '  sp: cli.spec.create program_name: "p".string summary: "".string\n'
-            "  h: cli.help_text spec: sp\n"
+            '  sp: cli.Spec.create programName: "p".string summary: "".string\n'
+            "  h: cli.helpText spec: sp\n"
             "  print h\n"
             "}\n"
         )
@@ -3912,27 +3909,27 @@ class TestCliUnit:
 class TestValtypeReftypeEnforcement:
     """Valtypes (record / variant / facet) cannot hold reftype fields
     directly or transitively. This is the language invariant described
-    in CLAUDE.md; reftypes are string / class / union / protocol and
-    generic collection templates (list / map / box / option / result).
+    in CLAUDE.md; reftypes are String / class / union / protocol and
+    generic collection templates (List / Map / Box / Option / Result).
     """
 
     def test_record_cannot_hold_string(self):
         errors = check_errors(
-            'r: record { s: string }\nmain: function is { p: r s: "hello".string }'
+            'r: record { s: String }\nmain: function is { p: r s: "hello".string }'
         )
-        assert any("reftype" in e.msg and "string" in e.msg for e in errors)
+        assert any("reftype" in e.msg and "String" in e.msg for e in errors)
 
     def test_record_cannot_hold_list(self):
         errors = check_errors(
-            "r: record { xs: (list of: i32) }\n"
-            "main: function is { p: r xs: (list of: i32) }"
+            "r: record { xs: (List of: i32) }\n"
+            "main: function is { p: r xs: (List of: i32) }"
         )
         assert any("reftype" in e.msg for e in errors)
 
     def test_record_cannot_hold_map(self):
         errors = check_errors(
-            "r: record { m: (map key: string value: i32) }\n"
-            "main: function is { p: r m: (map key: string value: i32) }"
+            "r: record { m: (Map key: String value: i32) }\n"
+            "main: function is { p: r m: (Map key: String value: i32) }"
         )
         assert any("reftype" in e.msg for e in errors)
 
@@ -3952,8 +3949,8 @@ class TestValtypeReftypeEnforcement:
 
     def test_variant_cannot_hold_list(self):
         errors = check_errors(
-            "v: variant { a: (list of: i64) b: null }\n"
-            "main: function is { x: v.a (list of: i64) }"
+            "v: variant { a: (List of: i64) b: null }\n"
+            "main: function is { x: v.a (List of: i64) }"
         )
         assert any("reftype" in e.msg for e in errors)
 
@@ -3981,7 +3978,7 @@ class TestValtypeReftypeEnforcement:
     def test_class_allows_reftype_fields(self):
         """Reftype fields in classes are fine — classes are themselves
         reftypes, so the self-containment rule doesn't apply."""
-        check_ok("c: class { s: string xs: (list of: i64) }\nmain: function is { }")
+        check_ok("c: class { s: String xs: (List of: i64) }\nmain: function is { }")
 
     # --- Views: rejected in all aggregates (record / variant / class)
     # per doc/strings.pdoc. Views lock their source and v2 does not
@@ -3989,30 +3986,30 @@ class TestValtypeReftypeEnforcement:
 
     def test_record_cannot_hold_stringview(self):
         errors = check_errors(
-            "r: record { sv: stringview }\n"
+            "r: record { sv: StringView }\n"
             "main: function is {\n"
             '  s: "hi".string\n'
             "  v: s.stringview\n"
             "  p: r sv: v\n"
             "}"
         )
-        assert any("stringview" in e.msg and "view" in e.msg for e in errors)
+        assert any("StringView" in e.msg and "view" in e.msg for e in errors)
 
     def test_variant_cannot_hold_stringview(self):
         errors = check_errors(
-            "v: variant { a: stringview b: null }\n"
+            "v: variant { a: StringView b: null }\n"
             "main: function is {\n"
             '  s: "hi".string\n'
             "  x: v.a s.stringview\n"
             "}"
         )
-        assert any("stringview" in e.msg and "view" in e.msg for e in errors)
+        assert any("StringView" in e.msg and "view" in e.msg for e in errors)
 
     def test_class_cannot_hold_stringview(self):
         """After G3 the class declaration itself is permitted; construction
         with a locked RHS is rejected by the value-level G1 check."""
         errors = check_errors(
-            "c: class { sv: stringview }\n"
+            "c: class { sv: StringView }\n"
             "main: function is {\n"
             '  s: "hi".string\n'
             "  v: s.stringview\n"
@@ -4023,9 +4020,9 @@ class TestValtypeReftypeEnforcement:
 
     def test_class_cannot_hold_byteview(self):
         errors = check_errors(
-            "c: class { bv: byteview }\n"
+            "c: class { bv: ByteView }\n"
             "main: function is {\n"
-            "  b: bytes\n"
+            "  b: Bytes\n"
             "  p: c bv: b.byteview\n"
             "}"
         )
@@ -4034,17 +4031,17 @@ class TestValtypeReftypeEnforcement:
     def test_class_cannot_hold_byteview_via_metadata(self):
         """Pin the metadata-driven rejection.
 
-        bytes.byteview is declared natively in lib/system/system.z
+        Bytes.byteview is declared natively in lib/system/system.z
         with a `.lock`-annotated receiver and a borrow return. The
         legacy syntactic constant `_INLINE_LOCK_PROJECTIONS` is gone;
-        this test pins the byteview rejection via
+        this test pins the ByteView rejection via
         _check_aggregate_lock_escape Case 1, which keys off the
         method's return ownership being BORROW.
         """
         errors = check_errors(
-            "c: class { bv: byteview }\n"
+            "c: class { bv: ByteView }\n"
             "main: function is {\n"
-            "  b: bytes\n"
+            "  b: Bytes\n"
             "  p: c bv: b.byteview\n"
             "}"
         )
@@ -4052,16 +4049,16 @@ class TestValtypeReftypeEnforcement:
 
     def test_class_cannot_hold_listview(self):
         errors = check_errors(
-            "c: class { lv: (listview of: i64) }\n"
+            "c: class { lv: (ListView of: i64) }\n"
             "main: function is {\n"
-            "  xs: (list of: i64)\n"
+            "  xs: (List of: i64)\n"
             "  p: c lv: xs.listview\n"
             "}"
         )
         assert any("view" in e.msg for e in errors)
 
     def test_user_method_with_lock_receiver_rejected_in_aggregate(self):
-        """The aggregate-escape check fires for any borrow-returning
+        """The aggregate-escape check fires for Any borrow-returning
         user method (which by validation must have a `.lock` parameter).
         A method storing its borrowed return into another class field
         must be rejected — the value carries an outstanding lock on
@@ -4088,7 +4085,7 @@ class TestValtypeReftypeEnforcement:
 
     def test_stringview_as_function_parameter_allowed(self):
         check_ok(
-            "f: function {v: stringview} is { print v }\n"
+            "f: function {v: StringView} is { print v }\n"
             "main: function is {\n"
             '  t: "hi".string\n'
             "  f v: t.stringview\n"
@@ -4097,8 +4094,8 @@ class TestValtypeReftypeEnforcement:
 
 
 class TestPureZerolangBufferedShapes:
-    """Ownership-path coverage for the shapes a pure-Zerolang
-    bufwriter/bufreader body would have exercised.
+    """Ownership-Path coverage for the shapes a pure-Zerolang
+    BufWriter/BufReader body would have exercised.
 
     Phase 1b shipped the wrappers with native C method bodies, so
     these ownership paths never got user-code exercise in the test
@@ -4109,41 +4106,41 @@ class TestPureZerolangBufferedShapes:
     def test_self_dispatch_in_method_body_typechecks(self):
         """Inside `write`, calling `this.flush` — a zero-arg method
         on the same concrete class — must typecheck and bind `fr` to
-        `result<null, ioerror>` (the flush return type), not to a
+        `Result<null, IoError>` (the flush return type), not to a
         function-pointer. Exercises the typechecker's generalised
-        zero-arg class-method coercion (previously only file.close /
-        bufwriter.flush got this treatment via per-class branches)
+        zero-arg class-method coercion (previously only File.close /
+        BufWriter.flush got this treatment via per-class branches)
         and the emitter's matching dispatch. A pure-Zerolang
-        `bufwriter.write` would call `this.flush` when the buffer
+        `BufWriter.write` would call `this.flush` when the buffer
         would overflow."""
         check_ok(
             "mysink: protocol {\n"
-            "  write: function {:this from: byteview}"
-            " out (result t: u64 e: ioerror)\n"
+            "  write: function {:this from: ByteView}"
+            " out (Result t: u64 e: IoError)\n"
             "}\n"
             "holder: class {\n"
             "  sink: mysink.lock\n"
-            "  buf:  bytes\n"
+            "  buf:  Bytes\n"
             "  cap:  u64\n"
             "} as {\n"
             "  flush: function {:this}"
-            " out (result t: null e: ioerror) is {\n"
-            "    bv: byteview.borrow from: this.buf.listview\n"
+            " out (Result t: null e: IoError) is {\n"
+            "    bv: ByteView.borrow from: this.buf.listview\n"
             "    fr: this.sink.write from: bv\n"
             "    bv.release\n"
             "    match (fr) case ok then {\n"
-            "      return (result.ok null e: ioerror)\n"
+            "      return (Result.ok null e: IoError)\n"
             "    } case err then {\n"
-            "      return (result.err fr t: null)\n"
+            "      return (Result.err fr t: null)\n"
             "    }\n"
             "  }\n"
-            "  write: function {:this from: byteview}"
-            " out (result t: u64 e: ioerror) is {\n"
+            "  write: function {:this from: ByteView}"
+            " out (Result t: u64 e: IoError) is {\n"
             "    fr: this.flush\n"
             "    match (fr) case ok then {\n"
-            "      return (result.ok 0.u64 e: ioerror)\n"
+            "      return (Result.ok 0.u64 e: IoError)\n"
             "    } case err then {\n"
-            "      return (result.err fr t: u64)\n"
+            "      return (Result.err fr t: u64)\n"
             "    }\n"
             "  }\n"
             "}\n"
@@ -4152,26 +4149,26 @@ class TestPureZerolangBufferedShapes:
 
     def test_extend_view_from_param_into_self_field_typechecks(self):
         """A method holds a parameter borrow live across a mutation
-        of a sibling self field: `this.buf.extend_view other: from`
-        where `from: byteview` is the parameter and `buf: bytes` is a
+        of a sibling self field: `this.buf.extendView other: from`
+        where `from: ByteView` is the parameter and `buf: Bytes` is a
         self field. Path-scoped locking must treat `from` and
         `(this, buf)` as disjoint paths — both can hold their locks
-        simultaneously. A pure-Zerolang `bufwriter.write` fast-path
-        does exactly this to append incoming bytes into the buffer."""
+        simultaneously. A pure-Zerolang `BufWriter.write` fast-Path
+        does exactly this to append incoming Bytes into the buffer."""
         check_ok(
             "holder: class {\n"
-            "  buf: bytes\n"
+            "  buf: Bytes\n"
             "  cap: u64\n"
             "} as {\n"
-            "  stash: function {:this from: byteview} is {\n"
-            "    this.buf.extend_view other: from\n"
+            "  stash: function {:this from: ByteView} is {\n"
+            "    this.buf.extendView other: from\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  h: holder buf: bytes cap: 16.u64\n"
-            "  src: bytes\n"
+            "  h: holder buf: Bytes cap: 16.u64\n"
+            "  src: Bytes\n"
             "  src.append from: 65.u8\n"
-            "  bv: byteview.borrow from: src.listview\n"
+            "  bv: ByteView.borrow from: src.listview\n"
             "  h.stash from: bv\n"
             "  bv.release\n"
             "}\n"
@@ -4185,22 +4182,22 @@ class TestPureZerolangBufferedShapes:
 
         Exercises the same pending-borrow-lift-on-`(this,)` mechanism
         the existing flush regression (test_bufwriter_style_flush_...)
-        covered for a borrowed param, but with a mutable `into: bytes`
+        covered for a borrowed param, but with a mutable `into: Bytes`
         parameter — the call must drop the pending lock on `this`
         before processing `into`, otherwise `into` would conflict
         with a re-lock of `this`. This is the shape of a
-        pure-Zerolang `bufreader.read` pass-through."""
+        pure-Zerolang `BufReader.read` pass-through."""
         check_ok(
             "mysource: protocol {\n"
-            "  read: function {:this into: bytes max: u64}"
-            " out (result t: u64 e: ioerror)\n"
+            "  read: function {:this into: Bytes max: u64}"
+            " out (Result t: u64 e: IoError)\n"
             "}\n"
             "holder: class {\n"
             "  source: mysource.lock\n"
             "  cap:    u64\n"
             "} as {\n"
-            "  read: function {:this into: bytes max: u64}"
-            " out (result t: u64 e: ioerror) is {\n"
+            "  read: function {:this into: Bytes max: u64}"
+            " out (Result t: u64 e: IoError) is {\n"
             "    return this.source.read into: into max: max\n"
             "  }\n"
             "}\n"
@@ -4421,28 +4418,28 @@ class TestClassOwnership:
 
 
 class TestStringMigration:
-    """Phase 4g: string resolves via class path, not record special-case."""
+    """Phase 4g: String resolves via class Path, not record special-case."""
 
     def test_string_resolves_as_class_type(self):
-        """string should resolve as ZTypeType.CLASS."""
+        """String should resolve as ZTypeType.CLASS."""
         program = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()
-        st = tc._resolved.get("system.string")
+        st = tc._resolved.get("system.String")
         assert st is not None
         assert st.typetype == ZTypeType.CLASS
 
     def test_string_is_reftype(self):
-        """string should be tagged as reftype (is_valtype=False) via class path."""
+        """String should be tagged as reftype (is_valtype=False) via class Path."""
         program = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()
-        st = tc._resolved.get("system.string")
+        st = tc._resolved.get("system.String")
         assert st is not None
         assert st.is_valtype is False
 
     def test_string_take_invalidates(self):
-        """After .take on a string variable, the source is invalidated."""
+        """After .take on a String variable, the source is invalidated."""
         errors = check_errors(
             'main: function is {\n  s: "hello".string\n  d: s.take\n  e: s\n}'
         )
@@ -4451,7 +4448,7 @@ class TestStringMigration:
         )
 
     def test_string_borrow_locks(self):
-        """Borrowing a string variable should lock the source."""
+        """Borrowing a String variable should lock the source."""
         errors = check_errors(
             'main: function is {\n  s: "hello"\n  d: s.borrow\n  e: s.borrow\n}'
         )
@@ -4460,15 +4457,15 @@ class TestStringMigration:
         )
 
     def test_string_swap_ok(self):
-        """Swapping two string variables should work."""
+        """Swapping two String variables should work."""
         check_ok(
             'main: function is {\n  a: "hello".string\n  b: "world".string\n  a swap b\n}'
         )
 
     def test_string_aliasing_error(self):
-        """Passing the same string twice to a call is an aliasing error."""
+        """Passing the same String twice to a call is an aliasing error."""
         errors = check_errors(
-            "f: function {a: string b: string} is {}\n"
+            "f: function {a: String b: String} is {}\n"
             "main: function is {\n"
             '  s: "hello".string\n'
             "  f a: s b: s\n"
@@ -4486,7 +4483,7 @@ class TestUnionTypeResolution:
     def test_union_resolves_as_union_type(self):
         """A union definition resolves to ZTypeType.UNION."""
         program = check_ok(
-            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4509,7 +4506,7 @@ class TestUnionTypeResolution:
     def test_union_subtypes_stored_as_children(self):
         """Union subtypes should be stored as children."""
         program = check_ok(
-            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4519,7 +4516,7 @@ class TestUnionTypeResolution:
         assert "b" in ut.children
         assert "c" in ut.children
         assert ut.children["a"].name == "i64"
-        assert ut.children["b"].name == "string"
+        assert ut.children["b"].name == "String"
         assert ut.children["c"].name == "null"
 
     def test_union_tag_type_generated(self):
@@ -4568,9 +4565,9 @@ class TestUnionConstruction:
         )
 
     def test_union_string_construction(self):
-        """Calling union.stringsubtype with string arg creates a union."""
+        """Calling union.stringsubtype with String arg creates a union."""
         check_ok(
-            "myunion: union { a: string\n b: null }\n"
+            "myunion: union { a: String\n b: null }\n"
             'main: function is { x: myunion.a "hello" }'
         )
 
@@ -4652,7 +4649,7 @@ class TestUnionMatchExhaustiveness:
     def test_missing_case_error(self):
         """Missing case without else is an error."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is {\n"
             "  x: myunion.a 1\n"
             "  match (\n"
@@ -4669,7 +4666,7 @@ class TestUnionMatchExhaustiveness:
     def test_else_covers_remaining(self):
         """Else clause covers remaining subtypes."""
         check_ok(
-            "myunion: union { a: i64\n b: string\n c: null }\n"
+            "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is {\n"
             "  x: myunion.a 1\n"
             "  match (\n"
@@ -5010,13 +5007,13 @@ class TestLabelValueShorthand:
     def test_union_label_value_subtype_names(self):
         """Label value union subtypes resolve to their payload types."""
         program = check_ok(
-            "myunion: union { :u8\n :string }\nmain: function is { x: myunion.u8 42 }"
+            "myunion: union { :u8\n :String }\nmain: function is { x: myunion.u8 42 }"
         )
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
         assert ut.children["u8"].name == "u8"
-        assert ut.children["string"].name == "string"
+        assert ut.children["String"].name == "String"
 
     def test_function_with_label_value_param(self):
         """Function with :i64 parameter type checks."""
@@ -5190,9 +5187,9 @@ class TestVariantTypeResolution:
         assert vt.children["b"].is_valtype is True
 
     def test_variant_rejects_string(self):
-        """Variant subtypes that are reftypes (string) should be rejected."""
+        """Variant subtypes that are reftypes (String) should be rejected."""
         errors = check_errors(
-            "myvar: variant { a: string\n b: null }\nmain: function is { x: myvar.b }"
+            "myvar: variant { a: String\n b: null }\nmain: function is { x: myvar.b }"
         )
         assert any("value type" in e.msg.lower() for e in errors)
 
@@ -5282,7 +5279,7 @@ class TestSpecs:
     """Tests for specs (function pointer types) — Phase 20."""
 
     def test_spec_resolves_to_function_type(self):
-        """A spec (function without body) resolves to a FUNCTION type."""
+        """A Spec (function without body) resolves to a FUNCTION type."""
         program = check_ok(
             "binop: function {a: i64 b: i64} out i64\n"
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
@@ -5302,7 +5299,7 @@ class TestSpecs:
         )
 
     def test_take_on_spec_is_error(self):
-        """Taking a spec name is an error (specs are types, not values)."""
+        """Taking a Spec name is an error (specs are types, not values)."""
         errors = check_errors(
             "binop: function {a: i64 b: i64} out i64\n"
             "main: function is { cb: binop.take }"
@@ -5320,7 +5317,7 @@ class TestSpecs:
         )
 
     def test_structural_equivalence(self):
-        """Different-named functions with same signature are compatible with a spec."""
+        """Different-named functions with same signature are compatible with a Spec."""
         check_ok(
             "binop: function {a: i64 b: i64} out i64\n"
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
@@ -5377,7 +5374,7 @@ class TestSpecs:
         )
 
     def test_record_with_spec_field_in_is(self):
-        """Record with spec (function without body) in 'is' section becomes a field."""
+        """Record with Spec (function without body) in 'is' section becomes a field."""
         check_ok(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             "calculator: record {\n"
@@ -5584,16 +5581,16 @@ class TestNumericCasting:
 
 class TestProtocols:
     def test_protocol_resolves(self):
-        """Protocol definition creates PROTOCOL ZType with spec children."""
+        """Protocol definition creates PROTOCOL ZType with Spec children."""
         program = check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
         tc.check()
-        t = tc._resolve_unit_name("test", "reader")
+        t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
         assert t.typetype == ZTypeType.PROTOCOL
         assert t.is_valtype is False
@@ -5603,13 +5600,13 @@ class TestProtocols:
     def test_protocol_conformance_ok(self):
         """Record with correct methods passes conformance check."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -5618,15 +5615,15 @@ class TestProtocols:
         )
 
     def test_protocol_conformance_missing(self):
-        """Record missing a spec method errors."""
+        """Record missing a Spec method errors."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "}\n"
             "main: function is { f: myfile fd: 1 }"
         )
@@ -5635,10 +5632,10 @@ class TestProtocols:
     def test_protocol_as_param_type(self):
         """Function accepting protocol type resolves correctly."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "use_reader: function {r: reader} out i64 is {\n"
+            "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n"
             "    return result\n"
             "}\n"
@@ -5648,13 +5645,13 @@ class TestProtocols:
     def test_protocol_instance_via_dotted_path(self):
         """f.myreader resolves to PROTOCOL type."""
         program = check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -5674,11 +5671,11 @@ class TestProtocols:
     def test_protocol_is_field(self):
         """Protocol in 'is' block becomes instance field."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "wrapper: record {\n"
-            "    r: reader\n"
+            "    r: Reader\n"
             "}\n"
             "main: function is {}"
         )
@@ -5686,13 +5683,13 @@ class TestProtocols:
     def test_protocol_signature_matching_ok(self):
         """Matching signatures pass conformance check."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -5701,15 +5698,15 @@ class TestProtocols:
         )
 
     def test_protocol_signature_param_count_mismatch(self):
-        """Error when impl has different param count than spec."""
+        """Error when impl has different param count than Spec."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this} out i64 is {\n"
             "        return f.fd\n"
             "    }\n"
@@ -5719,15 +5716,15 @@ class TestProtocols:
         assert any("0 param" in e.msg and "expects 1" in e.msg for e in errors)
 
     def test_protocol_signature_param_type_mismatch(self):
-        """Error when impl param type differs from spec."""
+        """Error when impl param type differs from Spec."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: bool} out i64 is {\n"
             "        return f.fd\n"
             "    }\n"
@@ -5739,15 +5736,15 @@ class TestProtocols:
         )
 
     def test_protocol_signature_return_type_mismatch(self):
-        """Error when impl return type differs from spec."""
+        """Error when impl return type differs from Spec."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out bool is {\n"
             "        return 0.bool\n"
             "    }\n"
@@ -5757,7 +5754,7 @@ class TestProtocols:
         assert any("returns 'bool'" in e.msg and "'i64'" in e.msg for e in errors)
 
     def test_protocol_signature_no_return_both_ok(self):
-        """Both spec and impl with no return type is fine."""
+        """Both Spec and impl with no return type is fine."""
         check_ok(
             "worker: protocol {\n"
             "    work: function {:this}\n"
@@ -5774,13 +5771,13 @@ class TestProtocols:
     def test_protocol_borrow_lock_source(self):
         """Source is locked after protocol borrow — second borrow errors."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -5798,13 +5795,13 @@ class TestProtocols:
     def test_protocol_double_borrow_error(self):
         """Double protocol borrow of same source errors."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -5822,18 +5819,18 @@ class TestProtocols:
     def test_protocol_temp_no_lock(self):
         """Temp protocol usage (f.myreader passed directly) doesn't lock source."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
-            "use_reader: function {r: reader} out i64 is {\n"
+            "use_reader: function {r: Reader} out i64 is {\n"
             "    result: r.read b: 5\n"
             "    return result\n"
             "}\n"
@@ -5847,69 +5844,69 @@ class TestProtocols:
     def test_protocol_has_create(self):
         """Protocol type has `create` child (FUNCTION)."""
         program = check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
         tc.check()
-        t = tc._resolve_unit_name("test", "reader")
+        t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
         assert "create" in t.children
         assert t.children["create"].typetype == ZTypeType.FUNCTION
 
     def test_protocol_create_typechecks(self):
-        """reader.create from: f.take type-checks, result is PROTOCOL."""
+        """Reader.create from: f.take type-checks, Result is PROTOCOL."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create from: f.take\n"
+            "    r: Reader.create from: f.take\n"
             "}\n"
         )
 
     def test_protocol_create_nonconforming_error(self):
         """from: with non-conforming type errors."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "other: record { x: i64 }\n"
             "main: function is {\n"
             "    o: other x: 1\n"
-            "    r: reader.create from: o.take\n"
+            "    r: Reader.create from: o.take\n"
             "}\n"
         )
         assert any("does not conform" in e.msg for e in errors)
 
     def test_protocol_create_missing_from_error(self):
-        """reader.create with wrong arg name errors."""
+        """Reader.create with wrong arg name errors."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create x: f.take\n"
+            "    r: Reader.create x: f.take\n"
             "}\n"
         )
         assert any("requires 'from:'" in e.msg for e in errors)
@@ -5918,7 +5915,7 @@ class TestProtocols:
         """Generic (unmonomorphized) protocol has no `create`."""
         program = check_ok(
             "myproto: protocol {\n"
-            "    t: any.generic\n"
+            "    t: Any.generic\n"
             "    get: function {:this} out t\n"
             "}\n"
             "main: function is {}"
@@ -5933,36 +5930,36 @@ class TestProtocols:
     def test_protocol_has_no_take(self):
         """Protocol type has no `.take` child; `.take` is not a constructor."""
         program = check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
         tc.check()
-        t = tc._resolve_unit_name("test", "reader")
+        t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
         assert "take" not in t.children
         assert "create" in t.children
         assert "borrow" in t.children
 
     def test_protocol_take_rejected_with_hint(self):
-        """`reader.take from: ...` errors with a migration hint."""
+        """`Reader.take from: ...` errors with a migration hint."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.take from: f.take\n"
+            "    r: Reader.take from: f.take\n"
             "}\n"
         )
         assert any(
@@ -5975,69 +5972,69 @@ class TestProtocols:
     def test_protocol_has_borrow(self):
         """Protocol type has `borrow` child (FUNCTION)."""
         program = check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
         tc.check()
-        t = tc._resolve_unit_name("test", "reader")
+        t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
         assert "borrow" in t.children
         assert t.children["borrow"].typetype == ZTypeType.FUNCTION
 
     def test_protocol_borrow_typechecks(self):
-        """reader.borrow from: f.lock type-checks, result is PROTOCOL."""
+        """Reader.borrow from: f.lock type-checks, Result is PROTOCOL."""
         check_ok(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: class {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f.lock\n"
+            "    r: Reader.borrow from: f.lock\n"
             "}\n"
         )
 
     def test_protocol_borrow_nonconforming_error(self):
         """from: with non-conforming type errors for borrow."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "other: record { x: i64 }\n"
             "main: function is {\n"
             "    o: other x: 1\n"
-            "    r: reader.borrow from: o.lock\n"
+            "    r: Reader.borrow from: o.lock\n"
             "}\n"
         )
         assert any("does not conform" in e.msg for e in errors)
 
     def test_protocol_borrow_missing_from_error(self):
-        """reader.borrow with wrong arg name errors."""
+        """Reader.borrow with wrong arg name errors."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow x: f.lock\n"
+            "    r: Reader.borrow x: f.lock\n"
             "}\n"
         )
         assert any("requires 'from:'" in e.msg for e in errors)
@@ -6045,20 +6042,20 @@ class TestProtocols:
     def test_protocol_borrow_locks_source(self):
         """Source is locked after borrow — second borrow errors (like obj.label)."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f.lock\n"
+            "    r: Reader.borrow from: f.lock\n"
             "    b: f.borrow\n"
             "}\n"
         )
@@ -6070,7 +6067,7 @@ class TestProtocols:
         """Generic (unmonomorphized) protocol has no `take`."""
         program = check_ok(
             "myproto: protocol {\n"
-            "    t: any.generic\n"
+            "    t: Any.generic\n"
             "    get: function {:this} out t\n"
             "}\n"
             "main: function is {}"
@@ -6086,7 +6083,7 @@ class TestProtocols:
         """Generic (unmonomorphized) protocol has no `borrow`."""
         program = check_ok(
             "myproto: protocol {\n"
-            "    t: any.generic\n"
+            "    t: Any.generic\n"
             "    get: function {:this} out t\n"
             "}\n"
             "main: function is {}"
@@ -6110,13 +6107,13 @@ class TestProtocolCreateInvalidatesSource:
 
     def _reader_and_myfile(self) -> str:
         return (
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -6128,7 +6125,7 @@ class TestProtocolCreateInvalidatesSource:
         errors = check_errors(
             self._reader_and_myfile() + "main: function is {\n"
             "    o: myfile fd: 20\n"
-            "    r: reader.create from: o\n"
+            "    r: Reader.create from: o\n"
             '    print "\\{o.fd}"\n'
             "}"
         )
@@ -6141,7 +6138,7 @@ class TestProtocolCreateInvalidatesSource:
         errors = check_errors(
             self._reader_and_myfile() + "main: function is {\n"
             "    o: myfile fd: 20\n"
-            "    r: reader o\n"
+            "    r: Reader o\n"
             '    print "\\{o.fd}"\n'
             "}"
         )
@@ -6154,16 +6151,16 @@ class TestProtocolCreateInvalidatesSource:
         check_ok(
             self._reader_and_myfile() + "main: function is {\n"
             "    o: myfile fd: 20\n"
-            "    r: reader.create from: o.take\n"
+            "    r: Reader.create from: o.take\n"
             "}"
         )
 
     def test_box_from_owned_returning_method_succeeds(self):
-        """box from: s.copy — `.copy` on a borrowed source produces a fresh
+        """Box from: s.copy — `.copy` on a borrowed source produces a fresh
         owned value, satisfying TAKE on the constructor's `from:` param.
         The receiver `s` remains usable afterward. Regression for
         constructor-site hoisting (protocol.create / typedef.create /
-        box from:): the synth temp `_tN: s.copy` is OWNED, so
+        Box from:): the synth temp `_tN: s.copy` is OWNED, so
         `_apply_take_to_arg` releases the temp's locks and invalidates
         the temp — never the receiver. This shape was previously handled
         by an `_apply_take_to_arg` short-circuit on `DOTTEDPATH`+owned-
@@ -6171,8 +6168,8 @@ class TestProtocolCreateInvalidatesSource:
         reaches all three constructor sites.
         """
         check_ok(
-            "f: function {s: string} is {\n"
-            "    b: box from: s.copy\n"
+            "f: function {s: String} is {\n"
+            "    b: Box from: s.copy\n"
             '    print "{s}"\n'
             "}\n"
             "main: function is {}"
@@ -6181,20 +6178,20 @@ class TestProtocolCreateInvalidatesSource:
     def test_create_from_class_invalidates_source(self):
         """Classes: source invalidated by .create, no .take required at call site."""
         errors = check_errors(
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: class {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
             "    o: myfile fd: 20\n"
-            "    r: reader.create from: o\n"
+            "    r: Reader.create from: o\n"
             '    print "\\{o.fd}"\n'
             "}"
         )
@@ -6206,7 +6203,7 @@ class TestProtocolCreateInvalidatesSource:
         """Passing a borrowed local to .create yields the standard error."""
         errors = check_errors(
             self._reader_and_myfile() + "use_borrow: function {b: myfile.borrow} is {\n"
-            "    r: reader.create from: b\n"
+            "    r: Reader.create from: b\n"
             "}\n"
             "main: function is {\n"
             "    o: myfile fd: 20\n"
@@ -6228,13 +6225,13 @@ class TestProtocolBorrowLocksSource:
 
     def _reader_and_myfile(self) -> str:
         return (
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -6253,11 +6250,11 @@ class TestProtocolBorrowLocksSource:
         )
 
     def test_explicit_borrow_does_not_invalidate_source(self):
-        """`reader.borrow from: f` mirrors the label form."""
+        """`Reader.borrow from: f` mirrors the label form."""
         check_ok(
             self._reader_and_myfile() + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f\n"
+            "    r: Reader.borrow from: f\n"
             "    n: r.read b: 5\n"
             '    print "\\{n}"\n'
             "}"
@@ -6314,9 +6311,9 @@ class TestTypedefCreateInvalidatesSource:
 
 
 class TestBoxInvalidatesSource:
-    """Phase B: `box from:` must invalidate its source name.
+    """Phase B: `Box from:` must invalidate its source name.
 
-    Boxing is an ownership transfer from the source into the box — the
+    Boxing is an ownership transfer from the source into the Box — the
     source becomes inaccessible afterward. Literals remain legal (nothing
     to invalidate).
 
@@ -6326,15 +6323,15 @@ class TestBoxInvalidatesSource:
 
     def test_box_from_literal_ok(self):
         """Literal sources have no root name — unaffected."""
-        check_ok("main: function is { b: box from: 42 }")
-        check_ok('main: function is { b: box from: "hi".string }')
+        check_ok("main: function is { b: Box from: 42 }")
+        check_ok('main: function is { b: Box from: "hi".string }')
 
     def test_box_passthrough_invalidates_source(self):
-        """Nested box: `box from: b` invalidates `b`; later read is rejected."""
+        """Nested box: `Box from: b` invalidates `b`; later read is rejected."""
         errors = check_errors(
             "main: function is {\n"
-            "    b: box from: 42\n"
-            "    b2: box from: b\n"
+            "    b: Box from: 42\n"
+            "    b2: Box from: b\n"
             '    print "\\{b}"\n'
             "}"
         )
@@ -6346,9 +6343,9 @@ class TestBoxInvalidatesSource:
         """Long passthrough chain — only the final name is usable afterward."""
         check_ok(
             "main: function is {\n"
-            "    b: box from: 42\n"
-            "    b2: box from: b\n"
-            "    b3: box from: b2\n"
+            "    b: Box from: 42\n"
+            "    b2: Box from: b\n"
+            "    b3: Box from: b2\n"
             '    print "\\{b3}"\n'
             "}"
         )
@@ -6359,7 +6356,7 @@ class TestBoxInvalidatesSource:
             "myrec: record { n: i64 }\n"
             "main: function is {\n"
             "    r: myrec n: 5\n"
-            "    b: box from: r\n"
+            "    b: Box from: r\n"
             '    print "\\{r.n}"\n'
             "}"
         )
@@ -6368,11 +6365,11 @@ class TestBoxInvalidatesSource:
         ), f"expected ownership-transfer error on 'r', got: {[e.msg for e in errors]}"
 
     def test_box_in_second_position_uses_fresh_sources(self):
-        """After boxing source1, a second box requires a separate source."""
+        """After boxing source1, a second Box requires a separate source."""
         check_ok(
             "main: function is {\n"
-            "    b1: box from: 42\n"
-            "    b2: box from: 99\n"
+            "    b1: Box from: 42\n"
+            "    b2: Box from: 99\n"
             '    print "\\{b1}"\n'
             '    print "\\{b2}"\n'
             "}"
@@ -6394,13 +6391,13 @@ class TestBorrowedProtocolEscape:
 
     def _reader_and_myfile(self) -> str:
         return (
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -6410,7 +6407,7 @@ class TestBorrowedProtocolEscape:
     def test_return_label_borrowed_protocol_rejected(self):
         """`r: f.myreader; return r` — borrow cannot escape."""
         errors = check_errors(
-            self._reader_and_myfile() + "make_reader: function out reader is {\n"
+            self._reader_and_myfile() + "make_reader: function out Reader is {\n"
             "    f: myfile fd: 10\n"
             "    r: f.myreader\n"
             "    return r\n"
@@ -6424,11 +6421,11 @@ class TestBorrowedProtocolEscape:
         )
 
     def test_return_explicit_borrow_protocol_rejected(self):
-        """Same via `reader.borrow from: f`."""
+        """Same via `Reader.borrow from: f`."""
         errors = check_errors(
-            self._reader_and_myfile() + "make_reader: function out reader is {\n"
+            self._reader_and_myfile() + "make_reader: function out Reader is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.borrow from: f\n"
+            "    r: Reader.borrow from: f\n"
             "    return r\n"
             "}\n"
             "main: function is { }"
@@ -6442,9 +6439,9 @@ class TestBorrowedProtocolEscape:
     def test_return_owned_protocol_accepted(self):
         """Owned protocol is escape-capable — legal to return."""
         check_ok(
-            self._reader_and_myfile() + "make_reader: function out reader is {\n"
+            self._reader_and_myfile() + "make_reader: function out Reader is {\n"
             "    f: myfile fd: 10\n"
-            "    r: reader.create from: f\n"
+            "    r: Reader.create from: f\n"
             "    return r\n"
             "}\n"
             "main: function is {\n"
@@ -6455,7 +6452,7 @@ class TestBorrowedProtocolEscape:
     def test_store_borrowed_protocol_in_record_field_rejected(self):
         """Borrowed protocol cannot be stored in a wrapper record."""
         errors = check_errors(
-            self._reader_and_myfile() + "wrapper: record { r: reader }\n"
+            self._reader_and_myfile() + "wrapper: record { r: Reader }\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
             "    r: f.myreader\n"
@@ -6469,7 +6466,7 @@ class TestBorrowedProtocolEscape:
     def test_pass_borrowed_protocol_to_take_param_rejected(self):
         """Borrowed protocol cannot flow into a TAKE parameter."""
         errors = check_errors(
-            self._reader_and_myfile() + "store: function {r: reader.take} out i64 is "
+            self._reader_and_myfile() + "store: function {r: Reader.take} out i64 is "
             "{ return r.read b: 0 }\n"
             "main: function is {\n"
             "    f: myfile fd: 10\n"
@@ -6483,24 +6480,24 @@ class TestBorrowedProtocolEscape:
 
 
 class TestBoxProtocolComposition:
-    """Phase D: `box → protocol.create` composition.
+    """Phase D: `Box → protocol.create` composition.
 
-    Investigation confirmed: `box(T)` does not propagate protocol
-    conformance, so `proto.create from: b` where `b: box from: T` fails at
+    Investigation confirmed: `Box(T)` does not propagate protocol
+    conformance, so `proto.create from: b` where `b: Box from: T` fails at
     the conformance check. This is the intended design — `proto.create`
-    already heap-allocates internally, making the box-first composition
+    already heap-allocates internally, making the Box-first composition
     redundant. The error message hints at the direct form.
     """
 
     def _proto_and_myfile(self) -> str:
         return (
-            "reader: protocol {\n"
+            "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
             "myfile: record {\n"
             "    fd: i64\n"
             "} as {\n"
-            "    myreader: reader\n"
+            "    myreader: Reader\n"
             "    read: function {f: this b: i64} out i64 is {\n"
             "        return f.fd + b\n"
             "    }\n"
@@ -6512,8 +6509,8 @@ class TestBoxProtocolComposition:
         errors = check_errors(
             self._proto_and_myfile() + "main: function is {\n"
             "    f: myfile fd: 10\n"
-            "    b: box from: f\n"
-            "    p: reader.create from: b\n"
+            "    b: Box from: f\n"
+            "    p: Reader.create from: b\n"
             "}"
         )
         assert any("does not conform" in e.msg for e in errors), (
@@ -6526,9 +6523,9 @@ class TestBoxProtocolComposition:
     def test_direct_create_from_record_is_the_supported_form(self):
         """`.create` already produces an escape-capable owned protocol."""
         check_ok(
-            self._proto_and_myfile() + "make: function out reader is {\n"
+            self._proto_and_myfile() + "make: function out Reader is {\n"
             "    f: myfile fd: 10\n"
-            "    p: reader.create from: f\n"
+            "    p: Reader.create from: f\n"
             "    return p\n"
             "}\n"
             "main: function is {\n"
@@ -6539,26 +6536,26 @@ class TestBoxProtocolComposition:
 
 
 class TestResultGenericType:
-    """I/O Phase 1: built-in generic `result t: type, e: type`.
+    """I/O Phase 1: built-in generic `Result t: type, e: type`.
 
-    `result` is a two-arm union (ok / err) parameterized over both arms.
-    Used as the foundation for I/O fallible operations and any future
+    `Result` is a two-arm union (ok / err) parameterized over both arms.
+    Used as the foundation for I/O fallible operations and Any future
     API that wants pattern-matchable success/failure.
     """
 
     def test_result_ok_construction_with_explicit_err_type(self):
-        """`result.ok 42 e: i64` constructs the ok arm; e supplied explicitly."""
-        check_ok("main: function is {\n    r: result.ok 42 e: i64\n}")
+        """`Result.ok 42 e: i64` constructs the ok arm; e supplied explicitly."""
+        check_ok("main: function is {\n    r: Result.ok 42 e: i64\n}")
 
     def test_result_err_construction_with_explicit_t_type(self):
-        """`result.err msg t: u64` constructs the err arm; t supplied explicitly."""
-        check_ok("main: function is {\n    r: result.err 99 t: u64\n}")
+        """`Result.err msg t: u64` constructs the err arm; t supplied explicitly."""
+        check_ok("main: function is {\n    r: Result.err 99 t: u64\n}")
 
     def test_result_pattern_match_dispatches_arms(self):
-        """Match on result reaches both arms."""
+        """Match on Result reaches both arms."""
         check_ok(
             "main: function is {\n"
-            "    r: result.ok 42 e: i64\n"
+            "    r: Result.ok 42 e: i64\n"
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6570,81 +6567,81 @@ class TestResultGenericType:
         )
 
     def test_result_with_reftype_ok_arm(self):
-        """ok arm may be a reftype (string), err a valtype (i64)."""
-        check_ok('main: function is {\n    r: result.ok "hi".string e: i64\n}')
+        """ok arm may be a reftype (String), err a valtype (i64)."""
+        check_ok('main: function is {\n    r: Result.ok "hi".string e: i64\n}')
 
     def test_result_with_reftype_err_arm(self):
-        """err arm may be a reftype (string), ok a valtype (i64)."""
-        check_ok('main: function is {\n    r: result.err "boom".string t: i64\n}')
+        """err arm may be a reftype (String), ok a valtype (i64)."""
+        check_ok('main: function is {\n    r: Result.err "boom".string t: i64\n}')
 
     def test_result_err_with_null_t_type_arg(self):
-        """`t: null` is valid for constructing `result<null, E>.err` — the
-        null-arm case is exactly what `writer.flush` returns, and
-        downstream code (e.g. bufwriter.flush) needs to forward
-        incoming errs with `result.err x t: null`."""
-        check_ok("main: function is {\n    r: result.err 42 t: null\n}")
+        """`t: null` is valid for constructing `Result<null, E>.err` — the
+        null-arm case is exactly what `Writer.flush` returns, and
+        downstream code (e.g. BufWriter.flush) needs to forward
+        incoming errs with `Result.err x t: null`."""
+        check_ok("main: function is {\n    r: Result.err 42 t: null\n}")
 
     def test_result_err_forward_across_result_shapes(self):
         """Propagation pattern: a function that converts a
-        `result<u64, ioerror>` into a `result<null, ioerror>` by
+        `Result<u64, IoError>` into a `Result<null, IoError>` by
         returning ok-null on success and reconstructing err on failure
         using the narrowed err payload."""
         check_ok(
-            "forward: function {r: (result t: u64 e: i64)}"
-            " out (result t: null e: i64) is {\n"
+            "forward: function {r: (Result t: u64 e: i64)}"
+            " out (Result t: null e: i64) is {\n"
             "    match (r) case ok then {\n"
-            "        return (result.ok null e: i64)\n"
+            "        return (Result.ok null e: i64)\n"
             "    } case err then {\n"
-            "        return (result.err r t: null)\n"
+            "        return (Result.err r t: null)\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    s: (result.err 42 t: u64)\n"
+            "    s: (Result.err 42 t: u64)\n"
             "    o: (forward r: s)\n"
             "}\n"
         )
 
 
 class TestIoErrorVariant:
-    """I/O Phase 2: `ioerror` variant + result-with-ioerror integration.
+    """I/O Phase 2: `IoError` variant + Result-with-IoError integration.
 
-    `ioerror` is the failure side of every fallible io operation; it's
+    `IoError` is the failure side of every fallible io operation; it's
     constructed in the C runtime from the underlying errno. User code
     pattern-matches the specific variants it cares about and treats the
     rest as `other`.
     """
 
     def test_ioerror_can_be_constructed(self):
-        """Each ioerror variant arm is constructable."""
+        """Each IoError variant arm is constructable."""
         check_ok(
             "main: function is {\n"
-            "    a: ioerror.notfound\n"
-            "    b: ioerror.permissiondenied\n"
-            "    c: ioerror.eof\n"
-            '    d: ioerror.invalidpath "x"\n'
+            "    a: IoError.notfound\n"
+            "    b: IoError.permissiondenied\n"
+            "    c: IoError.eof\n"
+            '    d: IoError.invalidpath "x"\n'
             "}"
         )
 
     def test_ioerror_construction_from_mainunit(self):
-        """Phase 4 regression: bare `ioerror.<arm>` resolves and emits
+        """Phase 4 regression: bare `IoError.<arm>` resolves and emits
         proper construction when used in a main unit that does not
-        redeclare ioerror. Before the emitter's cross-unit resolver
+        redeclare IoError. Before the emitter's cross-unit resolver
         fallback, the bare name failed to resolve and the emitter fell
-        through to literal-text output that wouldn't compile.
+        through to literal-Text output that wouldn't compile.
         """
         check_ok(
             "main: function is {\n"
-            "    e: ioerror.notfound\n"
-            '    e2: ioerror.invalidpath "p".string\n'
+            "    e: IoError.notfound\n"
+            '    e2: IoError.invalidpath "p".string\n'
             "    s: seekorigin.start\n"
             "}"
         )
 
     def test_ioerror_pattern_match(self):
-        """Match on ioerror reaches every variant."""
+        """Match on IoError reaches every variant."""
         check_ok(
             "main: function is {\n"
-            "    e: ioerror.notfound\n"
+            "    e: IoError.notfound\n"
             "    match (\n"
             "        e\n"
             "    ) case notfound then {\n"
@@ -6674,10 +6671,10 @@ class TestIoErrorVariant:
         )
 
     def test_result_with_ioerror_in_err_arm(self):
-        """`result` parameterized with ioerror in the err arm — the canonical io return shape."""
+        """`Result` parameterized with IoError in the err arm — the canonical io return shape."""
         check_ok(
             "main: function is {\n"
-            "    r: result.ok 42 e: ioerror\n"
+            "    r: Result.ok 42 e: IoError\n"
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6690,7 +6687,7 @@ class TestIoErrorVariant:
 
 
 class TestStreamProtocolsAndFile:
-    """I/O Phase 3: reader/writer/closer/seeker protocols + file class.
+    """I/O Phase 3: Reader/Writer/Closer/Seeker protocols + File class.
 
     Type-system scaffolding only. Native operations and method bodies
     arrive in Phase 4 along with the dispatch infrastructure.
@@ -6707,26 +6704,26 @@ class TestStreamProtocolsAndFile:
         )
 
     def test_file_class_can_be_declared(self):
-        """file class instances can be constructed."""
-        check_ok("main: function is {\n    f: file fd: 0 closed: 0 == 1\n}")
+        """File class instances can be constructed."""
+        check_ok("main: function is {\n    f: File fd: 0 closed: 0 == 1\n}")
 
     def test_file_class_resolves_as_class(self):
-        """file is a CLASS type with fd and closed fields."""
+        """File is a CLASS type with fd and closed fields."""
         program = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        f = tc._resolved.get("system.io.file") or tc._resolved.get("io.file")
+        f = tc._resolved.get("system.io.File") or tc._resolved.get("io.File")
         assert f is not None
         assert f.typetype == ZTypeType.CLASS
         assert "fd" in f.children
         assert "closed" in f.children
 
     def test_protocols_resolve(self):
-        """reader/writer/closer/seeker resolve as PROTOCOL types."""
+        """Reader/Writer/Closer/Seeker resolve as PROTOCOL types."""
         program = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        for p in ("reader", "writer", "closer", "seeker"):
+        for p in ("Reader", "Writer", "Closer", "Seeker"):
             t = tc._resolved.get(f"system.io.{p}") or tc._resolved.get(f"io.{p}")
             assert t is not None, f"protocol {p} not resolved"
             assert t.typetype == ZTypeType.PROTOCOL, (
@@ -6739,10 +6736,10 @@ class TestStreamProtocolsAndFile:
         tc = TypeChecker(program)
         tc.check(full=True)
         expected = {
-            "reader": {"read"},
-            "writer": {"write", "flush"},
-            "closer": {"close"},
-            "seeker": {"seek"},
+            "Reader": {"read"},
+            "Writer": {"write", "flush"},
+            "Closer": {"close"},
+            "Seeker": {"seek"},
         }
         for proto, methods in expected.items():
             t = tc._resolved.get(f"system.io.{proto}") or tc._resolved.get(
@@ -6765,33 +6762,33 @@ class TestIoNativeDispatch:
     """
 
     def test_eprintln_typechecks(self):
-        """io.eprintln msg: stringview is callable."""
+        """io.eprintln msg: StringView is callable."""
         check_ok('main: function is {\n    io.eprintln "diag"\n}')
 
     def test_eprintln_with_stringview_literal(self):
-        """io.eprintln accepts a bare string literal (auto-projects to stringview)."""
+        """io.eprintln accepts a bare String literal (auto-projects to StringView)."""
         check_ok('main: function is { io.eprintln "error" }')
 
     def test_read_text_typechecks(self):
-        """io.read_text path: string returns result(string, ioerror).
-        The native dispatch plus result union monomorphization must both
+        """io.readText path: String returns Result(String, IoError).
+        The native dispatch plus Result union monomorphization must both
         resolve."""
-        check_ok('main: function is {\n    r: io.read_text "/tmp/x"\n}')
+        check_ok('main: function is {\n    r: io.readText "/tmp/x"\n}')
 
     def test_write_text_typechecks(self):
-        """io.write_text returns result(null, ioerror)."""
+        """io.writeText returns Result(null, IoError)."""
         check_ok(
-            'main: function is {\n    r: io.write_text path: "/tmp/x" content: "hi"\n}'
+            'main: function is {\n    r: io.writeText path: "/tmp/x" content: "hi"\n}'
         )
 
     def test_append_text_typechecks(self):
-        """io.append_text has the same shape as write_text."""
+        """io.appendText has the same shape as writeText."""
         check_ok(
-            'main: function is {\n    r: io.append_text path: "/tmp/x" content: "hi"\n}'
+            'main: function is {\n    r: io.appendText path: "/tmp/x" content: "hi"\n}'
         )
 
     def test_exists_returns_bool(self):
-        """io.exists returns plain bool — no result wrapper."""
+        """io.exists returns plain bool — no Result wrapper."""
         check_ok(
             "main: function is {\n"
             '    b: io.exists "/tmp/x"\n'
@@ -6800,7 +6797,7 @@ class TestIoNativeDispatch:
         )
 
     def test_mkdir_remove_rename_typecheck(self):
-        """mkdir / remove / rename all return result(null, ioerror)."""
+        """mkdir / remove / rename all return Result(null, IoError)."""
         check_ok(
             "main: function is {\n"
             '    r1: io.mkdir "/tmp/d"\n'
@@ -6810,10 +6807,10 @@ class TestIoNativeDispatch:
         )
 
     def test_read_text_pattern_match(self):
-        """Result of io.read_text can be matched on ok/err arms."""
+        """Result of io.readText can be matched on ok/err arms."""
         check_ok(
             "main: function is {\n"
-            '    r: io.read_text "/tmp/x"\n'
+            '    r: io.readText "/tmp/x"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -6825,10 +6822,10 @@ class TestIoNativeDispatch:
         )
 
     def test_open_returns_result_file(self):
-        """io.open path:_ mode:_ returns result(file, ioerror).
+        """io.open Path:_ mode:_ returns Result(File, IoError).
 
         Exercises cross-unit reference to `openmode` (re-exported from
-        core) and the result-monomorphization path over the file class.
+        core) and the Result-monomorphization Path over the File class.
         """
         check_ok(
             'main: function is {\n    r: io.open path: "/tmp/x" mode: openmode.read\n}'
@@ -6859,27 +6856,27 @@ class TestIoNativeDispatch:
         )
 
     def test_file_has_destructor(self):
-        """The io.file class must carry a destructor so result(file, _)
-        destructors invoke z_file_destroy on the ok payload (RAII close)."""
+        """The io.File class must carry a destructor so Result(File, _)
+        destructors invoke z_File_destroy on the ok payload (RAII close)."""
         program, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        file_type = tc._resolved.get("io.file")
+        file_type = tc._resolved.get("io.File")
         assert file_type is not None
         assert file_type.needs_destructor is True
-        assert file_type.destructor_name == "z_file_destroy"
+        assert file_type.destructor_name == "z_File_destroy"
 
     def test_file_read_typechecks(self):
-        """file.read takes (into: bytes, max: u64) and returns
-        result(u64, ioerror). Exercised through the match-ok narrowing
-        pattern that unwraps the file handle out of io.open's result."""
+        """File.read takes (into: Bytes, max: u64) and returns
+        Result(u64, IoError). Exercised through the match-ok narrowing
+        pattern that unwraps the File handle out of io.open's Result."""
         check_ok(
             "main: function is {\n"
             '    r: io.open path: "/tmp/x" mode: openmode.read\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        buf: bytes\n"
+            "        buf: Bytes\n"
             "        n: r.read into: buf max: 1024.u64\n"
             '        print "ok"\n'
             "    } case err then {\n"
@@ -6889,17 +6886,17 @@ class TestIoNativeDispatch:
         )
 
     def test_file_write_typechecks(self):
-        """file.write takes (from: byteview) and returns
-        result(u64, ioerror)."""
+        """File.write takes (from: ByteView) and returns
+        Result(u64, IoError)."""
         check_ok(
             "main: function is {\n"
             '    r: io.open path: "/tmp/x" mode: openmode.write\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
-            "        buf: bytes\n"
+            "        buf: Bytes\n"
             "        buf.append from: 65.u8\n"
-            "        bv: byteview.borrow from: buf.listview\n"
+            "        bv: ByteView.borrow from: buf.listview\n"
             "        n: r.write from: bv\n"
             '        print "ok"\n'
             "    } case err then {\n"
@@ -6909,8 +6906,8 @@ class TestIoNativeDispatch:
         )
 
     def test_file_seek_typechecks(self):
-        """file.seek takes (to: i64, from: seekorigin) and returns
-        result(u64, ioerror)."""
+        """File.seek takes (to: i64, from: seekorigin) and returns
+        Result(u64, IoError)."""
         check_ok(
             "main: function is {\n"
             '    r: io.open path: "/tmp/x" mode: openmode.read\n'
@@ -6926,36 +6923,36 @@ class TestIoNativeDispatch:
         )
 
     def test_file_declares_all_stream_protocol_conformance(self):
-        """io.file declares `:reader :writer :closer :seeker`. Protocol
+        """io.File declares `:Reader :Writer :Closer :Seeker`. Protocol
         conformance validation compares method signatures against each
         protocol; all four must match for this to typecheck."""
         program, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
-        file_type = tc._resolved.get("io.file")
+        file_type = tc._resolved.get("io.File")
         assert file_type is not None
-        labels = [lbl for (lbl, _) in tc._protocol_labels.get("file", [])]
-        for expected in ("reader", "writer", "closer", "seeker"):
+        labels = [lbl for (lbl, _) in tc._protocol_labels.get("File", [])]
+        for expected in ("Reader", "Writer", "Closer", "Seeker"):
             assert expected in labels, (
                 f"file should declare :{expected} conformance; labels: {labels}"
             )
             assert file_type.children.get(expected) is not None
 
     def test_file_projects_to_closer(self):
-        """A file value can be passed as a `closer` parameter via the
-        `.closer` projection. Verifies that the typechecker accepts
-        projection through `fr.closer` inside the ok arm of a
-        result match."""
+        """A File value can be passed as a `Closer` parameter via the
+        `.Closer` projection. Verifies that the typechecker accepts
+        projection through `fr.Closer` inside the ok arm of a
+        Result match."""
         check_ok(
-            "use_closer: function {c: closer} is {\n"
-            '    print "got closer"\n'
+            "use_closer: function {c: Closer} is {\n"
+            '    print "got Closer"\n'
             "}\n"
             "main: function is {\n"
             '    fr: io.open path: "/tmp/x" mode: openmode.write\n'
             "    match (\n"
             "        fr\n"
             "    ) case ok then {\n"
-            "        use_closer c: fr.closer\n"
+            "        use_closer c: fr.Closer\n"
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -6964,10 +6961,10 @@ class TestIoNativeDispatch:
 
     def test_stdio_handles_coerce_to_protocol(self):
         """`io.stdin` / `io.stdout` / `io.stderr` are declared as
-        zero-arg native functions; accessing them via bare path
-        coerces to their return type (`reader` / `writer`) so users
+        zero-arg native functions; accessing them via bare Path
+        coerces to their return type (`Reader` / `Writer`) so users
         can write `w: io.stdout` and immediately treat `w` as a
-        writer."""
+        Writer."""
         check_ok(
             "main: function is {\n"
             "    w: io.stdout\n"
@@ -6983,7 +6980,7 @@ class TestIoNativeDispatch:
         check_ok('main: function is {\n    w: stdout\n    print "ok"\n}')
 
     def test_stat_typechecks(self):
-        """io.stat returns result(filestat, ioerror); filestat has
+        """io.stat returns Result(filestat, IoError); filestat has
         `kind: filekind` and `size: u64`."""
         check_ok(
             "main: function is {\n"
@@ -6999,7 +6996,7 @@ class TestIoNativeDispatch:
         )
 
     def test_mkdirp_typechecks(self):
-        """io.mkdirp returns result(null, ioerror), same shape as mkdir."""
+        """io.mkdirp returns Result(null, IoError), same shape as mkdir."""
         check_ok(
             "main: function is {\n"
             '    r: io.mkdirp "/tmp/x/y/z"\n'
@@ -7014,8 +7011,8 @@ class TestIoNativeDispatch:
         )
 
     def test_filekind_variant_subtypes(self):
-        """filekind has file / dir / symlink / other arms; each is
-        pattern-matchable through a stat result."""
+        """filekind has File / dir / symlink / other arms; each is
+        pattern-matchable through a stat Result."""
         check_ok(
             "main: function is {\n"
             '    s: io.stat "/tmp/x"\n'
@@ -7040,7 +7037,7 @@ class TestIoNativeDispatch:
         )
 
     def test_lstat_typechecks(self):
-        """io.lstat shares stat's signature: result(filestat, ioerror)."""
+        """io.lstat shares stat's signature: Result(filestat, IoError)."""
         check_ok(
             "main: function is {\n"
             '    s: io.lstat "/tmp/x"\n'
@@ -7055,7 +7052,7 @@ class TestIoNativeDispatch:
         )
 
     def test_filestat_mtime_and_mode_typecheck(self):
-        """filestat exposes mtime_seconds: u64 and mode: u32 for
+        """filestat exposes mtimeSeconds: u64 and mode: u32 for
         callers that want freshness or permission bits."""
         check_ok(
             "main: function is {\n"
@@ -7063,7 +7060,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            '        print "\\{s.mtime_seconds} \\{s.mode}"\n'
+            '        print "\\{s.mtimeSeconds} \\{s.mode}"\n'
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -7071,11 +7068,11 @@ class TestIoNativeDispatch:
         )
 
     def test_list_dir_typechecks(self):
-        """io.list_dir signature parses and resolves; ok-arm is a list
-        of strings, err-arm is ioerror."""
+        """io.listDir signature parses and resolves; ok-arm is a List
+        of strings, err-arm is IoError."""
         check_ok(
             "main: function is {\n"
-            '    r: io.list_dir "/tmp"\n'
+            '    r: io.listDir "/tmp"\n'
             "    match (\n"
             "        r\n"
             "    ) case ok then {\n"
@@ -7095,7 +7092,7 @@ class TestIoNativeDispatch:
             "    match (\n"
             "        s\n"
             "    ) case ok then {\n"
-            '        print "\\{s.size} \\{s.mtime_seconds}"\n'
+            '        print "\\{s.size} \\{s.mtimeSeconds}"\n'
             "    } case err then {\n"
             '        print "err"\n'
             "    }\n"
@@ -7121,8 +7118,8 @@ class TestIoNativeDispatch:
         assert any("narrowed" in e.msg for e in errors)
 
     def test_protocol_zero_arg_method_coerces_to_return_type(self):
-        """Accessing a zero-arg protocol spec as an rvalue types as
-        the spec's return type, not as the function pointer. Enables
+        """Accessing a zero-arg protocol Spec as an rvalue types as
+        the Spec's return type, not as the function pointer. Enables
         `r: c.close` to typecheck cleanly without explicit call
         parens when the method has no non-this params."""
         check_ok(
@@ -7146,8 +7143,8 @@ class TestIoNativeDispatch:
     def test_union_payload_method_call(self):
         """Method calls on a narrowed union subject dispatch through the
         payload type: inside `case ok then` the narrowed `r` IS the
-        file, so `r.close` dispatches directly. The inner match on the
-        fresh `cr` value uses the standard (non-narrowed) ok/err path."""
+        File, so `r.close` dispatches directly. The inner match on the
+        fresh `cr` value uses the standard (non-narrowed) ok/err Path."""
         check_ok(
             "main: function is {\n"
             '    r: io.open path: "/tmp/x" mode: openmode.write\n'
@@ -7170,49 +7167,49 @@ class TestIoNativeDispatch:
 
 
 class TestBytesAndPathTypedefs:
-    """I/O Phase 1: bytes / byteview / path / pathview typedefs.
+    """I/O Phase 1: Bytes / ByteView / Path / PathView typedefs.
 
-    Typedef wrappers over `list of: u8` / `listview of: u8` / `string` /
-    `stringview` so that signatures read for what they mean. Backward-
-    compatible: list / string operations on bytes / path work via the
+    Typedef wrappers over `List of: u8` / `ListView of: u8` / `String` /
+    `StringView` so that signatures read for what they mean. Backward-
+    compatible: List / String operations on Bytes / Path work via the
     typedef rule.
     """
 
     def test_bytes_can_be_declared(self):
-        check_ok("main: function is {\n    b: bytes\n}")
+        check_ok("main: function is {\n    b: Bytes\n}")
 
     def test_bytes_inherits_list_methods(self):
-        """append, length etc. work because bytes typedefs over list of: u8.
+        """append, length etc. work because Bytes typedefs over List of: u8.
 
-        The monomorphized list of: u8 synthesizes its `append` with
+        The monomorphized List of: u8 synthesizes its `append` with
         `from:` as the parameter name (see _monomorphize in
-        ztypecheck), so callers use `from:` on bytes too.
+        ztypecheck), so callers use `from:` on Bytes too.
         """
         check_ok(
             "main: function is {\n"
-            "    b: bytes\n"
+            "    b: Bytes\n"
             "    b.append from: 65.u8\n"
             "    n: b.length\n"
             "}"
         )
 
     def test_path_can_be_declared(self):
-        check_ok('main: function is {\n    p: path.create from: "hello.txt".string\n}')
+        check_ok('main: function is {\n    p: Path.create from: "hello.txt".string\n}')
 
     def test_path_inherits_string_methods(self):
-        """length etc. work because path typedefs over string."""
+        """length etc. work because Path typedefs over String."""
         check_ok(
             "main: function is {\n"
-            '    p: path.create from: "hello.txt".string\n'
+            '    p: Path.create from: "hello.txt".string\n'
             "    n: p.length\n"
             "}"
         )
 
     def test_byteview_can_be_obtained_from_bytes(self):
-        """byteview borrowed from a bytes value via the inherited listview method."""
+        """ByteView borrowed from a Bytes value via the inherited ListView method."""
         check_ok(
             "main: function is {\n"
-            "    b: bytes\n"
+            "    b: Bytes\n"
             "    b.append from: 65.u8\n"
             "    v: b.listview\n"
             "}"
@@ -7223,9 +7220,9 @@ class TestGenerics:
     """Tests for generic type resolution and monomorphization."""
 
     def test_generic_record_resolution(self):
-        """Record with t: any.generic puts t in generic_params, not children."""
+        """Record with t: Any.generic puts t in generic_params, not children."""
         program = check_ok(
-            "myrec: record { x: i64 } as { t: any.generic }\nmain: function is {}"
+            "myrec: record { x: i64 } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -7239,7 +7236,7 @@ class TestGenerics:
     def test_generic_record_with_generic_field_ref(self):
         """Record field referencing generic param: x: t resolves to GENERIC_PARAM."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.generic }\nmain: function is {}"
+            "myrec: record { x: t } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -7250,9 +7247,9 @@ class TestGenerics:
         assert myrec.children["x"].typetype == ZTypeType.GENERIC_PARAM
 
     def test_generic_union_resolution(self):
-        """Union with t: any.generic detects generic params correctly."""
+        """Union with t: Any.generic detects generic params correctly."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -7268,7 +7265,7 @@ class TestGenerics:
     def test_generic_union_subtype_is_generic_param_ref(self):
         """Union subtype referencing generic param: some: t is GENERIC_PARAM."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -7280,7 +7277,7 @@ class TestGenerics:
     def test_multiple_generic_params(self):
         """Record with multiple generic params."""
         program = check_ok(
-            "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
+            "mypair: record { x: a\n y: b } as { a: Any.generic\n b: Any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -7294,9 +7291,9 @@ class TestGenerics:
         assert "y" in pair.children
 
     def test_generic_function_resolution(self):
-        """Function with generic param in 'as' clause: t: any.generic."""
+        """Function with generic param in 'as' clause: t: Any.generic."""
         program = check_ok(
-            "myfn: function as { t: any.generic } in { x: t } out t\nmain: function is {}"
+            "myfn: function as { t: Any.generic } in { x: t } out t\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -7310,7 +7307,7 @@ class TestGenerics:
     def test_generic_function_multiple_params(self):
         """Function with multiple generic params in 'as'."""
         program = check_ok(
-            "myfn: function as { t: any.generic\n u: any.generic } "
+            "myfn: function as { t: Any.generic\n u: Any.generic } "
             "in { x: t\n y: u } out t\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -7326,7 +7323,7 @@ class TestGenerics:
     def test_generic_function_any_clause_order(self):
         """Function with 'as' after 'out' resolves correctly."""
         program = check_ok(
-            "myfn: function in { x: t } out t as { t: any.generic }\nmain: function is {}"
+            "myfn: function in { x: t } out t as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -7338,7 +7335,7 @@ class TestGenerics:
     def test_generic_param_in_function_in_error(self):
         """Generic params in function 'in' section should error."""
         errors = check_errors(
-            "myfn: function { t: any.generic\n x: t } out t\nmain: function is {}"
+            "myfn: function { t: Any.generic\n x: t } out t\nmain: function is {}"
         )
         assert any(
             "generic parameters must be declared in the 'as' section" in e.msg.lower()
@@ -7349,7 +7346,7 @@ class TestGenerics:
         """Method (function with 'this' type) cannot have 'as' clause."""
         errors = check_errors(
             "myrec: record { x: i64 } as {\n"
-            "  meth: function as { t: any.generic } in { self: this\n val: t } out t is { val }\n"
+            "  meth: function as { t: Any.generic } in { self: this\n val: t } out t is { val }\n"
             "}\nmain: function is { r: myrec x: 1 }"
         )
         assert any(
@@ -7360,7 +7357,7 @@ class TestGenerics:
         """Static function (no 'this') in type's 'as' block can have own 'as'."""
         program = check_ok(
             "myrec: record { x: i64 } as {\n"
-            "  helper: function as { t: any.generic } in { val: t } out i64 is { 0 }\n"
+            "  helper: function as { t: Any.generic } in { val: t } out i64 is { 0 }\n"
             "}\nmain: function is { r: myrec x: 1 }"
         )
         tc = TypeChecker(program)
@@ -7375,7 +7372,7 @@ class TestGenerics:
     def test_generic_function_infer_single_arg(self):
         """Generic function call infers type from single value arg."""
         program = check_ok(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
         assert len(program.mono_functions) >= 1
@@ -7386,7 +7383,7 @@ class TestGenerics:
     def test_generic_function_infer_multiple_same_param(self):
         """Multiple args of the same generic param must agree."""
         program = check_ok(
-            "pair: function as { t: any.generic } in { a: t\n b: t } out t is { return a }\n"
+            "pair: function as { t: Any.generic } in { a: t\n b: t } out t is { return a }\n"
             "main: function is { x: pair 1 b: 2 }"
         )
         assert len(program.mono_functions) >= 1
@@ -7396,7 +7393,7 @@ class TestGenerics:
     def test_generic_function_conflict_error(self):
         """Same generic param with conflicting value types → error."""
         errors = check_errors(
-            "pair: function as { t: any.generic } in { a: t\n b: t } out t is { return a }\n"
+            "pair: function as { t: Any.generic } in { a: t\n b: t } out t is { return a }\n"
             "main: function is { x: pair 1 b: 3.14 }"
         )
         assert any("conflicting types" in e.msg.lower() for e in errors)
@@ -7404,7 +7401,7 @@ class TestGenerics:
     def test_generic_function_explicit_type_arg(self):
         """Explicit generic arg in function call."""
         program = check_ok(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id t: i64 val: 42 }"
         )
         assert len(program.mono_functions) >= 1
@@ -7414,7 +7411,7 @@ class TestGenerics:
     def test_generic_function_explicit_conflicts_with_inferred(self):
         """Explicit generic arg conflicts with inferred type → error."""
         errors = check_errors(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id t: i32 val: 42 }"
         )
         assert any("conflicting types" in e.msg.lower() for e in errors)
@@ -7422,82 +7419,82 @@ class TestGenerics:
     def test_generic_function_multiple_params_inferred(self):
         """Multiple generic params, both inferred from args."""
         program = check_ok(
-            "pick: function as { a: any.generic\n b: any.generic }\n"
+            "pick: function as { a: Any.generic\n b: Any.generic }\n"
             "  in { x: a\n y: b } out b is { return y }\n"
             'main: function is { r: pick 42 y: "hello" }'
         )
         assert len(program.mono_functions) >= 1
         mono, _ = program.mono_functions[0]
         assert "i64" in mono.name
-        assert "string" in mono.name
+        assert "String" in mono.name
 
     def test_generic_function_constraint_violation(self):
         """Generic function with valtype constraint rejects reftype arg."""
         errors = check_errors(
-            "id: function as { t: any.valtype } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.valtype } in { val: t } out t is { return val }\n"
             'main: function is { x: id "hello".string }'
         )
         assert any("not a value type" in e.msg.lower() for e in errors)
 
     def test_generic_function_stringlike_accepts_members(self):
-        """Union-as-constraint: stringlike admits both string and stringview."""
+        """Union-as-constraint: StringLike admits both String and StringView."""
         check_ok(
-            "id: function as { t: stringlike.generic } in { v: t } out t is "
+            "id: function as { t: StringLike.generic } in { v: t } out t is "
             "{ return v }\n"
             'main: function is { a: id "hi"\n b: id "hi".string }'
         )
 
     def test_generic_function_stringlike_rejects_non_member(self):
-        """Union-as-constraint: stringlike rejects a non-member type."""
+        """Union-as-constraint: StringLike rejects a non-member type."""
         errors = check_errors(
-            "id: function as { t: stringlike.generic } in { v: t } out t is "
+            "id: function as { t: StringLike.generic } in { v: t } out t is "
             "{ return v }\n"
             "main: function is { x: id 42 }"
         )
-        assert any("does not satisfy constraint 'stringlike'" in e.msg for e in errors)
+        assert any("does not satisfy constraint 'StringLike'" in e.msg for e in errors)
 
     def test_generic_function_stringlike_accepts_str_via_text(self):
-        """stringlike union includes `text` protocol; str conforms via :text."""
+        """StringLike union includes `Text` protocol; str conforms via :Text."""
         check_ok(
-            "show: function as { t: stringlike.generic } in { v: t } is "
+            "show: function as { t: StringLike.generic } in { v: t } is "
             "{ print v }\n"
             'main: function is { s: "hi".str to: 16\n show s }'
         )
 
     def test_generic_function_stringlike_accepts_user_text_conformer(self):
-        """Any user type declaring :text and the spec method satisfies stringlike.
-        `mytext` is a class holding an owned string because views cannot be
-        aggregate fields (doc/strings.pdoc); the stringview is produced on
+        """Any user type declaring :Text and the Spec method satisfies StringLike.
+        `mytext` is a class holding an owned String because views cannot be
+        aggregate fields (doc/strings.pdoc); the StringView is produced on
         demand by the protocol method."""
         check_ok(
-            "mytext: class { data_: string } as {\n"
-            "    :text\n"
-            "    stringview: function {t: this} out stringview is "
+            "mytext: class { data_: String } as {\n"
+            "    :Text\n"
+            "    stringview: function {t: this} out StringView is "
             "{ return t.data_.stringview }\n"
             "}\n"
-            "show: function as { t: stringlike.generic } in { v: t } is "
+            "show: function as { t: StringLike.generic } in { v: t } is "
             "{ print v }\n"
             'main: function is { m: mytext data_: "hi".string\n show m }'
         )
 
     def test_generic_function_stringlike_rejects_missing_text_conformance(self):
-        """A type that does not declare :text but has a .stringview method
+        """A type that does not declare :Text but has a .stringview method
         is still rejected — conformance is explicit, not structural."""
         errors = check_errors(
-            "nottext: record { data_: stringview } as {\n"
-            "    stringview: function {t: this} out stringview is { return t.data_ }\n"
+            "nottext: record { data_: StringView } as {\n"
+            "    stringview: function {t: this} out StringView is { return t.data_ }\n"
             "}\n"
-            "show: function as { t: stringlike.generic } in { v: t } is "
+            "show: function as { t: StringLike.generic } in { v: t } is "
             "{ print v }\n"
             'main: function is { n: nottext data_: "hi"\n show n }'
         )
-        assert any("does not satisfy constraint 'stringlike'" in e.msg for e in errors)
+        assert any("does not satisfy constraint 'StringLike'" in e.msg for e in errors)
 
     def test_generic_function_stringlike_declaration_order_stringview_wins(self):
-        """stringlike declares :stringview before :text; a stringview T
-        matches :stringview even if stringview conformed to text."""
+        """StringLike declares :StringView before :Text; a StringView T
+        matches :StringView even if StringView conformed to Text."""
         program = check_ok(
-            "show: function as { t: stringlike.generic } in { v: t } is "
+            "show: function as { t: StringLike.generic } in { v: t } is "
             "{ print v }\n"
             'main: function is { show "hi" }'
         )
@@ -7505,14 +7502,14 @@ class TestGenerics:
         sv_monos = [
             m
             for m, _ in program.mono_functions
-            if "stringview" in m.name and m.name.startswith("show_")
+            if "StringView" in m.name and m.name.startswith("show_")
         ]
         assert len(sv_monos) == 1
 
     def test_generic_function_monomorphization_cached(self):
         """Same instantiation produces one cached mono function."""
         program = check_ok(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42\n y: id 99 }"
         )
         i64_monos = [m for m, _ in program.mono_functions if "i64" in m.name]
@@ -7521,7 +7518,7 @@ class TestGenerics:
     def test_generic_function_different_instantiations(self):
         """Different type args produce different mono functions."""
         program = check_ok(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42\n y: id 3.14 }"
         )
         names = {m.name for m, _ in program.mono_functions}
@@ -7531,7 +7528,7 @@ class TestGenerics:
     def test_generic_function_return_type_resolved(self):
         """Monomorphized function has resolved return type."""
         program = check_ok(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
         mono, _ = program.mono_functions[0]
@@ -7541,7 +7538,7 @@ class TestGenerics:
     def test_generic_function_no_inferrable_args_error(self):
         """Generic function call with non-generic args only → cannot infer."""
         errors = check_errors(
-            "id: function as { t: any.generic } in { val: t\n x: i64 } out t\n"
+            "id: function as { t: Any.generic } in { val: t\n x: i64 } out t\n"
             "  is { return val }\n"
             "main: function is { r: id x: 42 }"
         )
@@ -7553,7 +7550,7 @@ class TestGenerics:
         """Unit instantiation inside function body → error."""
         errors = check_errors(
             "mathops: unit as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  add: function {a: t b: t} out t is { return a + b }\n"
             "}\n"
             "main: function is { u: (mathops t: i64) }"
@@ -7565,7 +7562,7 @@ class TestGenerics:
     def test_generic_function_type_args_only_error(self):
         """Generic function call with only type args (no value args) → missing args."""
         errors = check_errors(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id t: i64 }"
         )
         assert any("missing required" in e.msg.lower() for e in errors)
@@ -7575,7 +7572,7 @@ class TestGenerics:
     def test_generic_function_default_used(self):
         """Default type is used when generic param cannot be inferred."""
         program = check_ok(
-            "id: function as { t: (any.generic default: i64) } in { val: t } out t\n"
+            "id: function as { t: (Any.generic default: i64) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id 42 }"
         )
@@ -7586,7 +7583,7 @@ class TestGenerics:
     def test_generic_record_default_used(self):
         """Default type fills in when not inferred for records."""
         program = check_ok(
-            "myrec: record { x: t\n y: i64 } as { t: (any.generic default: i64) }\n"
+            "myrec: record { x: t\n y: i64 } as { t: (Any.generic default: i64) }\n"
             "main: function is { r: myrec x: 42 y: 1 }"
         )
         monos = find_user_monos(program, origin_name="myrec")
@@ -7597,7 +7594,7 @@ class TestGenerics:
     def test_generic_default_overridden_by_explicit(self):
         """Explicit generic arg overrides default."""
         program = check_ok(
-            "id: function as { t: (any.generic default: i64) } in { val: t } out t\n"
+            "id: function as { t: (Any.generic default: i64) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id t: f64 val: 3.14 }"
         )
@@ -7608,7 +7605,7 @@ class TestGenerics:
     def test_generic_default_overridden_by_inference(self):
         """Inferred type takes priority over default."""
         program = check_ok(
-            "id: function as { t: (any.generic default: i32) } in { val: t } out t\n"
+            "id: function as { t: (Any.generic default: i32) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id 42 }"
         )
@@ -7622,7 +7619,7 @@ class TestGenerics:
     def test_inline_generic_and_value_args(self):
         """Generic arg inline with value args in function call."""
         program = check_ok(
-            "id: function as { t: any.generic } in { val: t } out t is { return val }\n"
+            "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id t: i64 val: 42 }"
         )
         assert len(program.mono_functions) >= 1
@@ -7632,7 +7629,7 @@ class TestGenerics:
     def test_inline_multiple_generic_args(self):
         """Multiple generic args inline with value args."""
         program = check_ok(
-            "pick: function as { a: any.generic\n b: any.generic }\n"
+            "pick: function as { a: Any.generic\n b: Any.generic }\n"
             "  in { x: a\n y: b } out b is { return y }\n"
             "main: function is { r: pick a: i64 b: f64 x: 42 y: 3.14 }"
         )
@@ -7644,7 +7641,7 @@ class TestGenerics:
     def test_generic_default_stored_on_type(self):
         """Default type is stored in generic_defaults dict."""
         program = check_ok(
-            "id: function as { t: (any.generic default: i64) } in { val: t } out t\n"
+            "id: function as { t: (Any.generic default: i64) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id 42 }"
         )
@@ -7656,9 +7653,9 @@ class TestGenerics:
         assert ftype.generic_defaults["t"].name == "i64"
 
     def test_option_some_infers_i64(self):
-        """option.some 42 infers t=i64."""
+        """Option.some 42 infers t=i64."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         monos = find_user_monos(program, origin_name="myopt")
@@ -7668,9 +7665,9 @@ class TestGenerics:
         assert mono.generic_origin is not None
 
     def test_option_none_explicit_type_arg(self):
-        """option.none i32 with explicit type argument."""
+        """Option.none i32 with explicit type argument."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.none i32 }"
         )
         monos = find_user_monos(program, origin_name="myopt")
@@ -7681,7 +7678,7 @@ class TestGenerics:
     def test_same_generic_different_types(self):
         """Same generic instantiated with different types creates different monomorphizations."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.some 3.14\n"
@@ -7695,7 +7692,7 @@ class TestGenerics:
     def test_duplicate_instantiation_cached(self):
         """Duplicate instantiation with same type returns cached type."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 1\n"
             "    y: myopt.some 2\n"
@@ -7716,7 +7713,7 @@ class TestGenerics:
     def test_monomorphized_union_has_tag(self):
         """Monomorphized union has proper :tag enum."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         mono, _ = program.mono_types[0]
@@ -7729,7 +7726,7 @@ class TestGenerics:
     def test_monomorphized_union_concrete_subtypes(self):
         """Monomorphized union replaces generic param with concrete type."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         monos = find_user_monos(program, origin_name="myopt")
@@ -7743,7 +7740,7 @@ class TestGenerics:
     def test_error_generic_union_no_args(self):
         """Using generic union subtype with no inferrable args emits error."""
         errors = check_errors(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some }"
         )
         assert any("cannot infer type arguments" in e.msg for e in errors)
@@ -7751,15 +7748,15 @@ class TestGenerics:
     def test_error_generic_union_none_no_args(self):
         """Using generic union null subtype with no type arg emits error."""
         errors = check_errors(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.none }"
         )
         assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_generic_union_from_infers_type(self):
-        """option.some from: 42 infers t=i64 via from: syntax."""
+        """Option.some from: 42 infers t=i64 via from: syntax."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some from: 42 }"
         )
         monos = find_user_monos(program, origin_name="myopt")
@@ -7769,9 +7766,9 @@ class TestGenerics:
         assert mono.generic_origin is not None
 
     def test_generic_union_explicit_type_and_from(self):
-        """option.some t: i64 from: 42 with explicit generic param and from: value."""
+        """Option.some t: i64 from: 42 with explicit generic param and from: value."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some t: i64 from: 42 }"
         )
         monos = find_user_monos(program, origin_name="myopt")
@@ -7782,7 +7779,7 @@ class TestGenerics:
     def test_generic_union_from_with_different_types(self):
         """from: syntax with different types creates different monomorphizations."""
         program = check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.generic }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             "    y: myopt.some from: 3.14\n"
@@ -7801,12 +7798,12 @@ class TestGenerics:
         assert mono.generic_origin is not None
 
     def test_option_requires_reftype(self):
-        """option.some with valtype should error (requires any.reftype)."""
-        errors = check_errors("main: function is { x: option.some 42 }")
+        """Option.some with valtype should error (requires Any.reftype)."""
+        errors = check_errors("main: function is { x: Option.some 42 }")
         assert any("not a reference type" in e.msg for e in errors)
 
     def test_optionval_requires_valtype(self):
-        """optionval with reftype should error (requires any.valtype)."""
+        """optionval with reftype should error (requires Any.valtype)."""
         errors = check_errors('main: function is { x: optionval.some "hello".string }')
         assert any("not a value type" in e.msg for e in errors)
 
@@ -7839,14 +7836,14 @@ class TestGenerics:
         assert mono.is_valtype is True
 
     def test_option_nullable_ptr_flag(self):
-        """Monomorphized option(stack-struct) does NOT use nullable-ptr."""
-        program = check_ok('main: function is { x: option.some "hello".string }')
+        """Monomorphized Option(stack-struct) does NOT use nullable-ptr."""
+        program = check_ok('main: function is { x: Option.some "hello".string }')
         mono, _ = program.mono_types[0]
         assert mono.is_nullable_ptr is False
 
     def test_box_valtype_creates_reftype(self):
-        """box from: valtype creates a box reftype."""
-        program = check_ok("main: function is { b: box from: 42 }")
+        """Box from: valtype creates a Box reftype."""
+        program = check_ok("main: function is { b: Box from: 42 }")
         box_monos = [(m, d) for m, d in program.mono_types if m.is_box]
         assert len(box_monos) >= 1
         mono, _ = box_monos[0]
@@ -7854,15 +7851,15 @@ class TestGenerics:
         assert mono.is_valtype is False
 
     def test_box_string_creates_box_mono(self):
-        """box from: string creates a box monomorphized type (strings are stack now)."""
-        program = check_ok('main: function is { b: box from: "hello".string }')
+        """Box from: String creates a Box monomorphized type (strings are stack now)."""
+        program = check_ok('main: function is { b: Box from: "hello".string }')
         # string is stack-allocated now; box creates a real box mono
         box_monos = [m for m, _ in program.mono_types if m.is_box]
         assert len(box_monos) >= 1
 
     def test_box_valtype_has_inner_children(self):
-        """box(valtype) has children copied from inner type for transparent access."""
-        program = check_ok("main: function is { b: box from: 42 }")
+        """Box(valtype) has children copied from inner type for transparent access."""
+        program = check_ok("main: function is { b: Box from: 42 }")
         box_monos = [(m, d) for m, d in program.mono_types if m.is_box]
         assert len(box_monos) >= 1
         mono, _ = box_monos[0]
@@ -7873,14 +7870,14 @@ class TestGenerics:
     def test_error_generic_record_no_args(self):
         """Using generic record with no args emits error."""
         errors = check_errors(
-            "myrec: record { x: t } as { t: any.generic }\nmain: function is { r: myrec }"
+            "myrec: record { x: t } as { t: Any.generic }\nmain: function is { r: myrec }"
         )
         assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_error_generic_record_no_inferrable_args(self):
         """Using generic record with args that don't cover generic params emits error."""
         errors = check_errors(
-            "myrec: record { x: t\n y: i64 } as { t: any.generic }\n"
+            "myrec: record { x: t\n y: i64 } as { t: Any.generic }\n"
             "main: function is { r: myrec y: 42 }"
         )
         assert any("cannot infer" in e.msg for e in errors)
@@ -7888,7 +7885,7 @@ class TestGenerics:
     def test_generic_record_infer_from_value(self):
         """myrec x: 42 infers t=i64 from field type."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
             "main: function is { r: myrec x: 42 }"
         )
         monos = find_user_monos(program, origin_name="myrec")
@@ -7900,7 +7897,7 @@ class TestGenerics:
     def test_generic_record_explicit_and_value(self):
         """myrec t: i64 x: 42 — both explicit type arg and value, compatible."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
             "main: function is { r: myrec t: i64 x: 42 }"
         )
         monos = find_user_monos(program, origin_name="myrec")
@@ -7911,15 +7908,15 @@ class TestGenerics:
     def test_generic_record_conflict_error(self):
         """myrec t: i32 x: "hello" — conflicting types for t emits error."""
         errors = check_errors(
-            "myrec: record { x: t } as { t: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
             'main: function is { r: myrec t: i32 x: "hello" }'
         )
         assert any("Conflicting types" in e.msg for e in errors)
 
     def test_generic_record_multi_param_infer(self):
-        """pair x: 42 y: "hi".string infers a=i64, b=string."""
+        """pair x: 42 y: "hi".string infers a=i64, b=String."""
         program = check_ok(
-            "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
+            "mypair: record { x: a\n y: b } as { a: Any.generic\n b: Any.generic }\n"
             'main: function is { p: mypair x: 42 y: "hi".string }'
         )
         # Find the user mypair mono; stdlib method signatures may
@@ -7927,12 +7924,12 @@ class TestGenerics:
         # from stringview.index_of) that land ahead of it.
         mono = next(m for m, _ in program.mono_types if m.name.startswith("mypair_"))
         assert mono.children["x"].name == "i64"
-        assert mono.children["y"].name == "string"
+        assert mono.children["y"].name == "String"
 
     def test_generic_type_in_type_position_concrete(self):
         """(myrec t: i64) in field type position produces concrete monomorphization."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
             "wrapper: record { inner: (myrec t: i64) }\n"
             "main: function is {}"
         )
@@ -7949,8 +7946,8 @@ class TestGenerics:
     def test_generic_type_in_type_position_partial(self):
         """(myrec t: u) in field type position produces partial instantiation."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.generic }\n"
-            "wrapper: record { inner: (myrec t: u) } as { u: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
+            "wrapper: record { inner: (myrec t: u) } as { u: Any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -7966,8 +7963,8 @@ class TestGenerics:
     def test_partial_instantiation_full_monomorphize(self):
         """Wrapper with (myrec t: u) fully resolves inner when monomorphized."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.generic }\n"
-            "wrapper: record { inner: (myrec t: u) } as { u: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
+            "wrapper: record { inner: (myrec t: u) } as { u: Any.generic }\n"
             "main: function is { w: wrapper u: i64 inner: (myrec x: 42) }"
         )
         monos = {m.name: m for m, _ in program.mono_types}
@@ -7981,7 +7978,7 @@ class TestGenerics:
     def test_error_bare_generic_in_type_position(self):
         """Using bare generic type in field position emits error."""
         errors = check_errors(
-            "myrec: record { x: t } as { t: any.generic }\n"
+            "myrec: record { x: t } as { t: Any.generic }\n"
             "wrapper: record { inner: myrec }\n"
             "main: function is { w: wrapper inner: (myrec x: 42) }"
         )
@@ -7990,7 +7987,7 @@ class TestGenerics:
     def test_error_missing_type_arg_in_type_position(self):
         """Missing type arg in (myrec) call emits error."""
         errors = check_errors(
-            "mypair: record { x: a\n y: b } as { a: any.generic\n b: any.generic }\n"
+            "mypair: record { x: a\n y: b } as { a: Any.generic\n b: Any.generic }\n"
             "wrapper: record { inner: (mypair a: i64) }\n"
             'main: function is { w: wrapper inner: (mypair x: 1 y: "a") }'
         )
@@ -7999,7 +7996,7 @@ class TestGenerics:
     def test_generic_param_in_is_error(self):
         """Generic params in is-section should error for record/union/class."""
         errors = check_errors(
-            "myrec: record { t: any.generic\n x: t }\n"
+            "myrec: record { t: Any.generic\n x: t }\n"
             "main: function is { r: myrec x: 42 }"
         )
         assert any(
@@ -8010,9 +8007,9 @@ class TestGenerics:
     # ---- Generic Classes ----
 
     def test_generic_class_resolution(self):
-        """Class with t: any.generic puts t in generic_params, not children."""
+        """Class with t: Any.generic puts t in generic_params, not children."""
         program = check_ok(
-            "mycls: class { x: i64 } as { t: any.generic }\nmain: function is {}"
+            "mycls: class { x: i64 } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -8026,7 +8023,7 @@ class TestGenerics:
     def test_generic_class_field_uses_param(self):
         """Class field referencing generic param: val: t resolves to GENERIC_PARAM."""
         program = check_ok(
-            "mycls: class { val: t } as { t: any.generic }\nmain: function is {}"
+            "mycls: class { val: t } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -8039,7 +8036,7 @@ class TestGenerics:
     def test_generic_class_construction_infers(self):
         """mycls val: 42 infers t=i64 and produces monomorphized type."""
         program = check_ok(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         monos = find_user_monos(program, origin_name="mycls")
@@ -8054,7 +8051,7 @@ class TestGenerics:
     def test_generic_class_explicit_type_arg(self):
         """mycls t: i64 val: 42 with explicit type arg."""
         program = check_ok(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls t: i64 val: 42 }"
         )
         monos = find_user_monos(program, origin_name="mycls")
@@ -8066,7 +8063,7 @@ class TestGenerics:
     def test_generic_class_is_reftype(self):
         """Monomorphized generic class is still a reference type."""
         program = check_ok(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         monos = find_user_monos(program, origin_name="mycls")
@@ -8077,7 +8074,7 @@ class TestGenerics:
     def test_generic_class_has_create(self):
         """Monomorphized class has :meta.create constructor."""
         program = check_ok(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
         monos = find_user_monos(program, origin_name="mycls")
@@ -8089,7 +8086,7 @@ class TestGenerics:
     def test_error_generic_class_no_args(self):
         """Bare generic class name in expression is an error."""
         errors = check_errors(
-            "mycls: class { val: t } as { t: any.generic }\n"
+            "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls }"
         )
         assert any("generic" in e.msg.lower() for e in errors)
@@ -8097,10 +8094,10 @@ class TestGenerics:
     # ---- Generic Protocols ----
 
     def test_generic_protocol_resolution(self):
-        """Protocol with t: any.generic param is generic."""
+        """Protocol with t: Any.generic param is generic."""
         program = check_ok(
             "myproto: protocol {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\nmain: function is {}"
         )
@@ -8115,7 +8112,7 @@ class TestGenerics:
         """Spec function uses generic param type."""
         program = check_ok(
             "myproto: protocol {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\nmain: function is {}"
         )
@@ -8133,7 +8130,7 @@ class TestGenerics:
         """Bare generic protocol name in expression is an error."""
         errors = check_errors(
             "myproto: protocol {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\n"
             "myrec: record { x: i64 } as { p: myproto }\n"
@@ -8144,25 +8141,25 @@ class TestGenerics:
     # ---- any.valtype / any.reftype constraint subtypes ----
 
     def test_valtype_constraint_record_ok(self):
-        """Record with t: any.valtype accepts record types."""
+        """Record with t: Any.valtype accepts record types."""
         check_ok(
-            "myrec: record { x: t } as { t: any.valtype }\n"
+            "myrec: record { x: t } as { t: Any.valtype }\n"
             "inner: record { v: i64 }\n"
             "main: function is { r: myrec x: (inner v: 1) }"
         )
 
     def test_valtype_constraint_i64_ok(self):
-        """Record with t: any.valtype accepts numeric types."""
+        """Record with t: Any.valtype accepts numeric types."""
         check_ok(
-            "myrec: record { x: t } as { t: any.valtype }\n"
+            "myrec: record { x: t } as { t: Any.valtype }\n"
             "main: function is { r: myrec x: 42 }"
         )
 
     def test_valtype_constraint_class_error(self):
-        """Record with t: any.valtype rejects class types."""
+        """Record with t: Any.valtype rejects class types."""
         errors = check_errors(
             "mycls: class { v: i64 }\n"
-            "myrec: record { x: t } as { t: any.valtype }\n"
+            "myrec: record { x: t } as { t: Any.valtype }\n"
             "main: function is {\n"
             "    c: mycls v: 1\n"
             "    r: myrec x: c\n"
@@ -8171,10 +8168,10 @@ class TestGenerics:
         assert any("not a value type" in e.msg for e in errors)
 
     def test_valtype_constraint_union_error(self):
-        """Record with t: any.valtype rejects union types."""
+        """Record with t: Any.valtype rejects union types."""
         errors = check_errors(
             "myunion: union { a: i64\n b: null }\n"
-            "myrec: record { x: t } as { t: any.valtype }\n"
+            "myrec: record { x: t } as { t: Any.valtype }\n"
             "main: function is {\n"
             "    u: myunion.a 1\n"
             "    r: myrec x: u\n"
@@ -8183,10 +8180,10 @@ class TestGenerics:
         assert any("not a value type" in e.msg for e in errors)
 
     def test_reftype_constraint_class_ok(self):
-        """Record with t: any.reftype accepts class types."""
+        """Record with t: Any.reftype accepts class types."""
         check_ok(
             "mycls: class { v: i64 }\n"
-            "myrec: record { x: t } as { t: any.reftype }\n"
+            "myrec: record { x: t } as { t: Any.reftype }\n"
             "main: function is {\n"
             "    c: mycls v: 1\n"
             "    r: myrec x: c\n"
@@ -8194,10 +8191,10 @@ class TestGenerics:
         )
 
     def test_reftype_constraint_union_ok(self):
-        """Record with t: any.reftype accepts union types."""
+        """Record with t: Any.reftype accepts union types."""
         check_ok(
             "myunion: union { a: i64\n b: null }\n"
-            "myrec: record { x: t } as { t: any.reftype }\n"
+            "myrec: record { x: t } as { t: Any.reftype }\n"
             "main: function is {\n"
             "    u: myunion.a 1\n"
             "    r: myrec x: u\n"
@@ -8205,26 +8202,26 @@ class TestGenerics:
         )
 
     def test_reftype_constraint_record_error(self):
-        """Record with t: any.reftype rejects record types."""
+        """Record with t: Any.reftype rejects record types."""
         errors = check_errors(
             "inner: record { v: i64 }\n"
-            "myrec: record { x: t } as { t: any.reftype }\n"
+            "myrec: record { x: t } as { t: Any.reftype }\n"
             "main: function is { r: myrec x: (inner v: 1) }"
         )
         assert any("not a reference type" in e.msg for e in errors)
 
     def test_reftype_constraint_i64_error(self):
-        """Record with t: any.reftype rejects numeric types."""
+        """Record with t: Any.reftype rejects numeric types."""
         errors = check_errors(
-            "myrec: record { x: t } as { t: any.reftype }\n"
+            "myrec: record { x: t } as { t: Any.reftype }\n"
             "main: function is { r: myrec x: 42 }"
         )
         assert any("not a reference type" in e.msg for e in errors)
 
     def test_valtype_constraint_in_generic_params(self):
-        """any.valtype constraint stored correctly in generic_params."""
+        """Any.valtype constraint stored correctly in generic_params."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.valtype }\nmain: function is {}"
+            "myrec: record { x: t } as { t: Any.valtype }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -8232,12 +8229,12 @@ class TestGenerics:
         assert myrec is not None
         assert myrec.isgeneric
         assert "t" in myrec.generic_params
-        assert myrec.generic_params["t"].name == "any.valtype"
+        assert myrec.generic_params["t"].name == "Any.valtype"
 
     def test_reftype_constraint_in_generic_params(self):
-        """any.reftype constraint stored correctly in generic_params."""
+        """Any.reftype constraint stored correctly in generic_params."""
         program = check_ok(
-            "myrec: record { x: t } as { t: any.reftype }\nmain: function is {}"
+            "myrec: record { x: t } as { t: Any.reftype }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
@@ -8245,20 +8242,20 @@ class TestGenerics:
         assert myrec is not None
         assert myrec.isgeneric
         assert "t" in myrec.generic_params
-        assert myrec.generic_params["t"].name == "any.reftype"
+        assert myrec.generic_params["t"].name == "Any.reftype"
 
     def test_valtype_union_subtype_ok(self):
-        """Union with t: any.valtype accepts valtypes for subtype construction."""
+        """Union with t: Any.valtype accepts valtypes for subtype construction."""
         check_ok(
-            "myopt: union { some: t\n none: null } as { t: any.valtype }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.valtype }\n"
             "main: function is { x: myopt.some 42 }"
         )
 
     def test_valtype_union_subtype_class_error(self):
-        """Union with t: any.valtype rejects class type in subtype construction."""
+        """Union with t: Any.valtype rejects class type in subtype construction."""
         errors = check_errors(
             "mycls: class { v: i64 }\n"
-            "myopt: union { some: t\n none: null } as { t: any.valtype }\n"
+            "myopt: union { some: t\n none: null } as { t: Any.valtype }\n"
             "main: function is {\n"
             "    c: mycls v: 1\n"
             "    x: myopt.some c\n"
@@ -8427,7 +8424,7 @@ class TestTypedefs:
 
 class TestFacets:
     def test_facet_resolves(self):
-        """Facet definition creates FACET ZType with spec children."""
+        """Facet definition creates FACET ZType with Spec children."""
         program = check_ok(
             "showable: facet {\n"
             "    show: function {:this} out i64\n"
@@ -8475,7 +8472,7 @@ class TestFacets:
         )
 
     def test_facet_conformance_missing_method(self):
-        """Record missing a spec method errors."""
+        """Record missing a Spec method errors."""
         errors = check_errors(
             "showable: facet {\n"
             "    show: function {:this} out i64\n"
@@ -8622,7 +8619,7 @@ class TestNumericGenerics:
     def test_mixed_type_and_numeric_generics(self):
         """(myarray t: i64 size: 10) creates myarray_i64_10."""
         program = check_ok(
-            "myarray: record { payload: t } as { t: any.generic\n size: u64.generic }\n"
+            "myarray: record { payload: t } as { t: Any.generic\n size: u64.generic }\n"
             "main: function is { a: (myarray t: i64 size: 10) payload: 42 }"
         )
         monos = [m for m, _ in program.mono_types if m.name == "myarray_i64_10"]
@@ -8681,7 +8678,7 @@ class TestNumericGenerics:
         assert mono.param_defaults["off"] == "-5"
 
     def test_numeric_generic_auto_field(self):
-        """Numeric param auto-creates field when not referenced by any child."""
+        """Numeric param auto-creates field when not referenced by Any child."""
         program = check_ok(
             "myrec: record { x: i64 } as { n: u32.generic }\n"
             "main: function is { a: (myrec n: 42) x: 1 }"
@@ -8829,7 +8826,7 @@ class TestStr:
         assert mono.param_defaults.get("size") == "32"
 
     def test_str_string_method(self):
-        """.string method is synthesized returning string type."""
+        """.string method is synthesized returning String type."""
         program = check_ok("main: function is { s: (str to: 32) }")
         monos = [m for m, _ in program.mono_types if m.name == "str_32"]
         mono = monos[0]
@@ -8838,7 +8835,7 @@ class TestStr:
         assert string_method.typetype == ZTypeType.FUNCTION
         ret = string_method.return_type
         assert ret is not None
-        assert ret.name == "string"
+        assert ret.name == "String"
 
     def test_str_different_capacities_different_types(self):
         """str to: 16 and str to: 32 are different types."""
@@ -8850,11 +8847,11 @@ class TestStr:
         assert "str_32" in names
 
     def test_str_from_string_literal(self):
-        """str via .str method on string literal."""
+        """str via .str method on String literal."""
         check_ok('main: function is { s: "hello".str to: 32 }')
 
     def test_str_from_string_variable(self):
-        """str via .str method on string variable."""
+        """str via .str method on String variable."""
         check_ok('main: function is {\n    msg: "hello"\n    s: msg.str to: 32\n}')
 
     def test_str_in_record(self):
@@ -8865,7 +8862,7 @@ class TestStr:
         )
 
     def test_string_str_method_resolves(self):
-        """string.str to: N resolves to str_N type."""
+        """String.str to: N resolves to str_N type."""
         program = check_ok('main: function is { s: "hello".str to: 32 }')
         monos = [m for m, _ in program.mono_types if m.name == "str_32"]
         assert len(monos) >= 1
@@ -8891,12 +8888,12 @@ class TestStr:
 
 
 class TestStrStringview:
-    """stringview created from a str valtype.
+    """StringView created from a str valtype.
 
-    str.stringview installs a borrow-scoped path lock on the source: SHARED
-    on each intermediate prefix and EXCLUSIVE on the leaf path. Sibling
+    str.stringview installs a borrow-scoped Path lock on the source: SHARED
+    on each intermediate prefix and EXCLUSIVE on the leaf Path. Sibling
     paths remain accessible; reads / writes that overlap with the locked
-    leaf (the leaf itself, any descendant, or any prefix) are rejected.
+    leaf (the leaf itself, Any descendant, or Any prefix) are rejected.
     """
 
     def test_returns_stringview(self):
@@ -8946,7 +8943,7 @@ class TestStrStringview:
 
     def test_permits_sibling_field_read(self):
         """View of `e.name` locks the leaf `(e, name)` — reading `e.age`
-        (a sibling) is permitted under the path-scoped lock model."""
+        (a sibling) is permitted under the Path-scoped lock model."""
         check_ok(
             "entry: record { name: (str to: 16) age: i64 }\n"
             "main: function is {\n"
@@ -8983,7 +8980,7 @@ class TestStrStringview:
 
     def test_permits_sibling_field_reassign(self):
         """Sibling-field reassignment is permitted while another field is
-        viewed (path-scoped lock model)."""
+        viewed (Path-scoped lock model)."""
         check_ok(
             "entry: record { name: (str to: 16) age: i64 }\n"
             "main: function is {\n"
@@ -9031,13 +9028,13 @@ class TestStrStringview:
 
         There is no way to make a str.stringview escape because str is a
         valtype (stack-local) and .lock cannot be applied to valtype
-        parameters — so a borrowed stringview return can never be rooted at
+        parameters — so a borrowed StringView return can never be rooted at
         a surviving source. The function definition itself is rejected for
         declaring borrow-return with no .lock parameter, and returning the
         local view also errors.
         """
         errors = check_errors(
-            "f: function out stringview.borrow is {\n"
+            "f: function out StringView.borrow is {\n"
             '  s: "hi".str to: 32\n'
             "  return s.stringview\n"
             "}\n"
@@ -9052,7 +9049,7 @@ class TestStrStringview:
         there is no .lock-able source to anchor the borrow to.
         """
         errors = check_errors(
-            "f: function {s: (str to: 32).lock} out stringview.borrow is {\n"
+            "f: function {s: (str to: 32).lock} out StringView.borrow is {\n"
             "  return s.stringview\n"
             "}\n"
             "main: function is {}"
@@ -9063,46 +9060,46 @@ class TestStrStringview:
 
 
 class TestList:
-    """Tests for list type resolution and monomorphization."""
+    """Tests for List type resolution and monomorphization."""
 
     def test_list_creation(self):
-        """list of: i64 creates a monomorphized list type."""
-        program = check_ok("main: function is { l: (list of: i64) }")
+        """List of: i64 creates a monomorphized List type."""
+        program = check_ok("main: function is { l: (List of: i64) }")
         # look specifically for list_i64 (not listview_i64, which is also mono'd)
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         assert len(monos) == 1
 
     def test_list_creation_with_capacity(self):
-        """list of: i64 with capacity argument type-checks."""
-        check_ok("main: function is { l: (list of: i64) capacity: 10.u64 }")
+        """List of: i64 with capacity argument type-checks."""
+        check_ok("main: function is { l: (List of: i64) capacity: 10.u64 }")
 
     def test_list_is_reftype(self):
-        """list is a reference type (not valtype)."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        """List is a reference type (not valtype)."""
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         assert len(monos) == 1
         assert monos[0].is_valtype is False
 
     def test_list_length_field(self):
         """.length is synthesized as u64 field."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "length" in mono.children
         assert mono.children["length"].name == "u64"
 
     def test_list_capacity_field(self):
         """.capacity is synthesized as u64 field."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "capacity" in mono.children
         assert mono.children["capacity"].name == "u64"
 
     def test_list_append_method(self):
         """.append is synthesized with from: parameter."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "append" in mono.children
         append = mono.children["append"]
@@ -9111,8 +9108,8 @@ class TestList:
 
     def test_list_get_method(self):
         """.get is synthesized returning element type."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "get" in mono.children
         get = mono.children["get"]
@@ -9124,8 +9121,8 @@ class TestList:
 
     def test_list_set_method(self):
         """.set is synthesized returning element type."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "set" in mono.children
         set_m = mono.children["set"]
@@ -9135,8 +9132,8 @@ class TestList:
 
     def test_list_pop_method(self):
         """.pop is synthesized returning element type."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "pop" in mono.children
         pop = mono.children["pop"]
@@ -9147,8 +9144,8 @@ class TestList:
 
     def test_list_insert_method(self):
         """.insert is synthesized with from: and at: parameters."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "insert" in mono.children
         insert = mono.children["insert"]
@@ -9158,8 +9155,8 @@ class TestList:
 
     def test_list_extend_method(self):
         """.extend is synthesized with from: list_T parameter."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "extend" in mono.children
         extend = mono.children["extend"]
@@ -9167,30 +9164,30 @@ class TestList:
         assert "from" in extend.children
 
     def test_list_different_element_types(self):
-        """list of: i64 and list of: u64 are different types."""
+        """List of: i64 and List of: u64 are different types."""
         program = check_ok(
-            "main: function is {\n    a: (list of: i64)\n    b: (list of: u64)\n}"
+            "main: function is {\n    a: (List of: i64)\n    b: (List of: u64)\n}"
         )
-        names = [m.name for m, _ in program.mono_types if "list" in m.name]
-        assert "list_i64" in names
-        assert "list_u64" in names
+        names = [m.name for m, _ in program.mono_types if "List" in m.name]
+        assert "List_i64" in names
+        assert "List_u64" in names
 
     def test_list_listview_returns_borrow(self):
-        """The synthesised .listview on a mono list returns a borrowed
-        listview. The receiver lock transfers to the binding via the
+        """The synthesised .listview on a mono List returns a borrowed
+        ListView. The receiver lock transfers to the binding via the
         standard `.lock`-param mechanism declared on collections.z's
-        native list.listview (`{t: this.lock} out (listview of: of).borrow`).
+        native List.listview (`{t: this.lock} out (ListView of: of).borrow`).
         """
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         listview_method = mono.children["listview"]
         assert listview_method.return_ownership == ZParamOwnership.BORROW
 
     def test_list_iterate_returns_borrow(self):
         """Same propagation for the .iterate iterator method."""
-        program = check_ok("main: function is { l: (list of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "list_i64"]
+        program = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
         mono = monos[0]
         iterate_method = mono.children["iterate"]
         assert iterate_method.return_ownership == ZParamOwnership.BORROW
@@ -9204,7 +9201,7 @@ class TestSynthesisedNativeMethodFlag:
     on a native parent that escapes this property, this test fails
     first.
 
-    Motivation: natives like `list_i64.iterate` are built via
+    Motivation: natives like `List_i64.iterate` are built via
     `_make_type` at monomorphisation time, but pre-fix the synth
     method itself had `is_native=False` even though its underlying
     `lib/system/collections.z` declaration is `is native`. Existing
@@ -9214,15 +9211,15 @@ class TestSynthesisedNativeMethodFlag:
     that gap."""
 
     def test_list_i64_methods_all_native(self):
-        program = check_ok("main: function is { l: (list of: i64) }")
-        list_i64 = next(m for m, _ in program.mono_types if m.name == "list_i64")
+        program = check_ok("main: function is { l: (List of: i64) }")
+        list_i64 = next(m for m, _ in program.mono_types if m.name == "List_i64")
         for name, child in list_i64.children.items():
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, f"list_i64.{name} should be is_native=True"
 
     def test_map_methods_all_native(self):
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        map_mono = next(m for m, _ in program.mono_types if m.name == "map_i64_i64")
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        map_mono = next(m for m, _ in program.mono_types if m.name == "Map_i64_i64")
         for name, child in map_mono.children.items():
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, (
@@ -9231,10 +9228,10 @@ class TestSynthesisedNativeMethodFlag:
 
     def test_listview_methods_all_native(self):
         program = check_ok(
-            "main: function is {\n  l: (list of: i64)\n  v: l.listview\n}"
+            "main: function is {\n  l: (List of: i64)\n  v: l.listview\n}"
         )
         lv_mono = next(
-            (m for m, _ in program.mono_types if m.name.startswith("listview_")),
+            (m for m, _ in program.mono_types if m.name.startswith("ListView_")),
             None,
         )
         assert lv_mono is not None, [m.name for m, _ in program.mono_types]
@@ -9246,10 +9243,10 @@ class TestSynthesisedNativeMethodFlag:
 
     def test_listiter_call_native(self):
         program = check_ok(
-            "main: function is {\n  l: (list of: i64)\n  with it: l.iterate do { }\n}"
+            "main: function is {\n  l: (List of: i64)\n  with it: l.iterate do { }\n}"
         )
         li_mono = next(
-            (m for m, _ in program.mono_types if m.name.startswith("listiter_")),
+            (m for m, _ in program.mono_types if m.name.startswith("ListIter_")),
             None,
         )
         assert li_mono is not None, [m.name for m, _ in program.mono_types]
@@ -9259,40 +9256,40 @@ class TestSynthesisedNativeMethodFlag:
 
 
 class TestMap:
-    """Tests for map type resolution and monomorphization."""
+    """Tests for Map type resolution and monomorphization."""
 
     def test_map_creation(self):
-        """map key: i64 value: i64 creates a monomorphized map type."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        monos = [m for m, _ in program.mono_types if "map" in m.name]
+        """Map key: i64 value: i64 creates a monomorphized Map type."""
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        monos = [m for m, _ in program.mono_types if "Map" in m.name]
         assert len(monos) >= 1
-        assert any(m.name == "map_i64_i64" for m in monos)
+        assert any(m.name == "Map_i64_i64" for m in monos)
 
     def test_map_is_reftype(self):
-        """map is a reference type (not valtype)."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "map_i64_i64"]
+        """Map is a reference type (not valtype)."""
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        monos = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"]
         assert len(monos) == 1
         assert monos[0].is_valtype is False
 
     def test_map_length_field(self):
         """.length is synthesized as u64 field."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
         assert "length" in mono.children
         assert mono.children["length"].name == "u64"
 
     def test_map_capacity_field(self):
         """.capacity is synthesized as u64 field."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
         assert "capacity" in mono.children
         assert mono.children["capacity"].name == "u64"
 
     def test_map_set_method(self):
         """.set is synthesized with key: and value: parameters."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
         assert "set" in mono.children
         set_m = mono.children["set"]
         assert set_m.typetype == ZTypeType.FUNCTION
@@ -9300,9 +9297,9 @@ class TestMap:
         assert "value" in set_m.children
 
     def test_map_get_method_returns_option(self):
-        """.get is synthesized returning option of value type."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        """.get is synthesized returning Option of value type."""
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
         assert "get" in mono.children
         get_m = mono.children["get"]
         assert get_m.typetype == ZTypeType.FUNCTION
@@ -9312,8 +9309,8 @@ class TestMap:
 
     def test_map_delete_method(self):
         """.delete is synthesized returning bool."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
         assert "delete" in mono.children
         del_m = mono.children["delete"]
         assert del_m.typetype == ZTypeType.FUNCTION
@@ -9324,8 +9321,8 @@ class TestMap:
 
     def test_map_has_method(self):
         """.has is synthesized returning bool."""
-        program = check_ok("main: function is { m: (map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "map_i64_i64"][0]
+        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
         assert "has" in mono.children
         has_m = mono.children["has"]
         assert has_m.typetype == ZTypeType.FUNCTION
@@ -9337,19 +9334,19 @@ class TestMap:
         """Different key/value types produce different monomorphized types."""
         program = check_ok(
             "main: function is {\n"
-            "    a: (map key: i64 value: i64)\n"
-            "    b: (map key: string value: u64)\n"
+            "    a: (Map key: i64 value: i64)\n"
+            "    b: (Map key: String value: u64)\n"
             "}"
         )
-        names = [m.name for m, _ in program.mono_types if "map" in m.name]
-        assert "map_i64_i64" in names
-        assert "map_string_u64" in names
+        names = [m.name for m, _ in program.mono_types if "Map" in m.name]
+        assert "Map_i64_i64" in names
+        assert "Map_String_u64" in names
 
     def test_map_string_key(self):
-        """map with string keys type-checks (caller projects literal to string)."""
+        """Map with String keys type-checks (caller projects literal to String)."""
         check_ok(
             "main: function is {\n"
-            "    m: (map key: string value: i64)\n"
+            "    m: (Map key: String value: i64)\n"
             '    m.set key: "hello".string value: 42\n'
             "}"
         )
@@ -9735,7 +9732,7 @@ class TestNativeTypeCheck:
         assert program is not None
 
     def test_system_native_types_resolve(self):
-        """System native types (bool, null, string) resolve and are usable."""
+        """System native types (bool, null, String) resolve and are usable."""
         check_ok('main: function is { x: "hello"\n print x }')
 
     def test_native_function_in_user_code_errors(self):
@@ -9776,7 +9773,7 @@ class TestNativeTypeCheck:
         assert any("native" in e.msg.lower() for e in errors)
 
     def test_return_is_native_not_spec_error(self):
-        """return (native) should not trigger 'Cannot take spec' error."""
+        """return (native) should not trigger 'Cannot take Spec' error."""
         # This test verifies the fix: native functions have body=None but
         # should not be treated as specs for error purposes
         check_ok("main: function out i64 is { return 42 }")
@@ -9889,7 +9886,7 @@ class TestCompileTimeError:
         assert any("nreachable" in e.msg for e in errors)
 
     def test_error_generic_fallback_message(self):
-        """error with interpolated string uses generic fallback message."""
+        """error with interpolated String uses generic fallback message."""
         errors = check_errors('N: 0\nmain: function is { error "value is \\{N}" }')
         assert any(e.msg == "compile-time error" for e in errors)
 
@@ -9985,7 +9982,7 @@ class TestGenericTypeMatch:
         """match t in monomorphized method resolves to the correct arm."""
         check_ok(
             "mybox: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  bits: function {b: this} out i64 is {\n"
             "    match t case i32 then { return 32 }"
             " case i64 then { return 64 } else { return 0 }\n"
@@ -9998,7 +9995,7 @@ class TestGenericTypeMatch:
         """error in non-matching generic arm is suppressed."""
         check_ok(
             "mybox: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i32 then { error "i32 not supported" }'
             ' case i64 then { x: 1 } else { error "unsupported" }\n'
@@ -10011,7 +10008,7 @@ class TestGenericTypeMatch:
         """error in matching generic arm triggers."""
         errors = check_errors(
             "mybox: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i32 then { error "i32 not supported" }'
             " case i64 then { x: 1 }\n"
@@ -10025,7 +10022,7 @@ class TestGenericTypeMatch:
         """else suppressed when a generic type arm matches."""
         check_ok(
             "mybox: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i64 then { x: 1 } else { error "unsupported" }\n'
             "  }\n"
@@ -10037,7 +10034,7 @@ class TestGenericTypeMatch:
         """else triggers when no generic type arm matches."""
         errors = check_errors(
             "mybox: class { val: t } as {\n"
-            "  t: any.generic\n"
+            "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             "    match t case i32 then { x: 1 }"
             ' case i64 then { x: 2 } else { error "unsupported" }\n'
@@ -10130,12 +10127,12 @@ class TestPrivateFriendAccess:
         """A field declared as mytype.private grants private access."""
         check_ok(
             "bag: class { secret: i64 } as { public: unit {} }\n"
-            "reader: class { src: bag.private } as {\n"
+            "Reader: class { src: bag.private } as {\n"
             "  read: function {r: this} out i64 is { return r.src.secret }\n"
             "}\n"
             "main: function is { b: bag secret: 42\n"
-            "  r: reader src: b.take\n"
-            '  print "\\{reader.read r: r}" }'
+            "  r: Reader src: b.take\n"
+            '  print "\\{Reader.read r: r}" }'
         )
 
     def test_external_private_access_blocked(self):
@@ -10162,12 +10159,12 @@ class TestPrivateFriendAccess:
         """Without .private, external code still can't access private fields."""
         errors = check_errors(
             "bag: class { secret: i64 } as { public: unit {} }\n"
-            "reader: class { src: bag } as {\n"
+            "Reader: class { src: bag } as {\n"
             "  read: function {r: this} out i64 is { return r.src.secret }\n"
             "}\n"
             "main: function is { b: bag secret: 42\n"
-            "  r: reader src: b.take\n"
-            '  print "\\{reader.read r: r}" }'
+            "  r: Reader src: b.take\n"
+            '  print "\\{Reader.read r: r}" }'
         )
         assert any("not public" in e.msg.lower() for e in errors)
 
@@ -10522,9 +10519,9 @@ class TestIsAsNamespaceCollision:
         """Generic param in 'as' doesn't collide with field in 'is'."""
         # 'val' is in 'is', 't' is in 'as' — different names, no collision
         check_ok(
-            "box: record { val: t } as { t: any.generic }\n"
+            "Box: record { val: t } as { t: Any.generic }\n"
             "main: function is {\n"
-            "  b: box val: 42\n"
+            "  b: Box val: 42\n"
             '  print "\\{b.val}"\n'
             "}"
         )
@@ -10628,7 +10625,7 @@ class TestAsConstants:
         )
 
     def test_string_constant_cannot_be_reassigned(self):
-        """Reassigning a string constant from 'as' is a compile error."""
+        """Reassigning a String constant from 'as' is a compile error."""
         errors = check_errors(
             'r: record { x: i64 } as { name: "hello" }\n'
             "main: function is {\n"
@@ -10762,10 +10759,10 @@ class TestAutoGeneratedEquality:
     def test_variant_auto_eq(self):
         """Variant with value subtypes gets ==."""
         check_ok(
-            "result: variant { ok: i64  err: i64 }\n"
+            "Result: variant { ok: i64  err: i64 }\n"
             "main: function is {\n"
-            "  a: result.ok 1\n"
-            "  b: result.ok 2\n"
+            "  a: Result.ok 1\n"
+            "  b: Result.ok 2\n"
             "  if a == b then return 0\n"
             "}"
         )
@@ -10905,32 +10902,32 @@ class TestAutoGeneratedEquality:
     def test_memcmp_eq_variant_with_int_payloads(self):
         """Variant with integer payloads is memcmp-safe."""
         program = check_ok(
-            "result: variant { ok: i64  err: u8 }\n"
+            "Result: variant { ok: i64  err: u8 }\n"
             "main: function is {\n"
-            "  a: result.ok 1\n"
-            "  b: result.ok 1\n"
+            "  a: Result.ok 1\n"
+            "  b: Result.ok 1\n"
             "  if a == b then return 0\n"
             "}"
         )
-        result_type = program.resolved.get("test.result")
+        result_type = program.resolved.get("test.Result")
         assert result_type.children["=="].is_simple_eq
 
     def test_memcmp_eq_variant_with_float_payload(self):
         """Variant with float payload is NOT memcmp-safe."""
         program = check_ok(
-            "result: variant { ok: f64  none: null }\n"
+            "Result: variant { ok: f64  none: null }\n"
             "main: function is {\n"
-            "  a: result.ok 1.0\n"
-            "  b: result.ok 1.0\n"
+            "  a: Result.ok 1.0\n"
+            "  b: Result.ok 1.0\n"
             "  if a == b then return 0\n"
             "}"
         )
-        result_type = program.resolved.get("test.result")
+        result_type = program.resolved.get("test.Result")
         assert not result_type.children["=="].is_simple_eq
 
 
 class TestStringEquality:
-    """Test string == / != operators."""
+    """Test String == / != operators."""
 
     def test_string_eq_resolves(self):
         """== on strings type-checks."""
@@ -10968,7 +10965,7 @@ class TestStringEquality:
         )
 
     def test_stringview_ordering_resolves(self):
-        """<, <=, >, >= on stringview type-check; `compare` returns i32."""
+        """<, <=, >, >= on StringView type-check; `compare` returns i32."""
         check_ok(
             "main: function is {\n"
             '  a: "hello"\n'
@@ -10999,9 +10996,9 @@ class TestTakeInArm:
     def test_take_in_one_if_arm_invalidates(self):
         """Take in then-arm, variable invalid after if."""
         errors = check_errors(
-            "box: class { value: i64 }\n"
+            "Box: class { value: i64 }\n"
             "main: function is {\n"
-            "  a: box value: 1\n"
+            "  a: Box value: 1\n"
             "  if 1 > 0 then { b: a.take }\n"
             '  print "\\{a.value}"\n'
             "}"
@@ -11011,10 +11008,10 @@ class TestTakeInArm:
     def test_take_in_if_else_both_arms_invalidates(self):
         """Take in both arms, variable invalid after if."""
         errors = check_errors(
-            "box: class { value: i64 }\n"
-            "consume: function {b: box.take} is {}\n"
+            "Box: class { value: i64 }\n"
+            "consume: function {b: Box.take} is {}\n"
             "main: function is {\n"
-            "  a: box value: 1\n"
+            "  a: Box value: 1\n"
             "  if 1 > 0 then { consume a } else { consume a }\n"
             '  print "\\{a.value}"\n'
             "}"
@@ -11022,11 +11019,11 @@ class TestTakeInArm:
         assert any("ownership transfer" in e.msg.lower() for e in errors)
 
     def test_no_take_in_any_arm_still_valid(self):
-        """No take in any arm, variable still valid after if."""
+        """No take in Any arm, variable still valid after if."""
         check_ok(
-            "box: class { value: i64 }\n"
+            "Box: class { value: i64 }\n"
             "main: function is {\n"
-            "  a: box value: 1\n"
+            "  a: Box value: 1\n"
             '  if 1 > 0 then { print "hello" } else { print "world" }\n'
             '  print "\\{a.value}"\n'
             "}"
@@ -11035,9 +11032,9 @@ class TestTakeInArm:
     def test_take_in_one_if_arm_no_else_invalidates(self):
         """Take in then-arm with no else, variable invalid after if."""
         errors = check_errors(
-            "box: class { value: i64 }\n"
+            "Box: class { value: i64 }\n"
             "main: function is {\n"
-            "  a: box value: 1\n"
+            "  a: Box value: 1\n"
             "  if 1 > 0 then { b: a.take }\n"
             '  print "\\{a.value}"\n'
             "}"
@@ -11141,17 +11138,17 @@ class TestUnionLockedArm:
 
 
 class TestOptionview:
-    """The stdlib `optionview` type — built on locked union arms.
+    """The stdlib `OptionView` type — built on locked union arms.
     Container iterators use it to yield non-owning views into their
     source. Layout: standard {tag, void*}; the .some arm holds a
     pointer to the source's storage."""
 
     def test_optionview_template_resolves(self):
-        """The optionview template exists in stdlib and is a generic union."""
-        program = check_ok("main: function is { x: optionview.none i64 }")
+        """The OptionView template exists in stdlib and is a generic union."""
+        program = check_ok("main: function is { x: OptionView.none i64 }")
         tc = TypeChecker(program)
         tc.check()
-        ovt = tc._resolve_name("optionview")
+        ovt = tc._resolve_name("OptionView")
         assert ovt is not None
         assert ovt.typetype == ZTypeType.UNION
         assert ovt.isgeneric
@@ -11161,62 +11158,62 @@ class TestOptionview:
         # unions; see test_optionview_mono_no_destructor for the mono case.
 
     def test_optionview_none_compiles(self):
-        """optionview.none with explicit type arg compiles cleanly."""
-        check_ok("main: function is { x: optionview.none i64 }")
+        """OptionView.none with explicit type arg compiles cleanly."""
+        check_ok("main: function is { x: OptionView.none i64 }")
 
     def test_optionview_some_from_class(self):
-        """optionview.some from: lvalue compiles for a reftype source."""
+        """OptionView.some from: lvalue compiles for a reftype source."""
         check_ok(
             "src: class { v: i64 }\n"
             "main: function is {\n"
             "  s: src v: 42\n"
-            "  ov: optionview.some from: s\n"
+            "  ov: OptionView.some from: s\n"
             "}"
         )
 
     def test_optionview_mono_no_destructor(self):
-        """A monomorphized optionview<T> needs no runtime cleanup."""
+        """A monomorphized OptionView<T> needs no runtime cleanup."""
         program = check_ok(
             "src: class { v: i64 }\n"
             "main: function is {\n"
             "  s: src v: 7\n"
-            "  ov: optionview.some from: s\n"
+            "  ov: OptionView.some from: s\n"
             "}"
         )
         tc = TypeChecker(program)
         tc.check()
         mono = None
         for k, v in tc._resolved.items():
-            if "optionview" in k and v.typetype == ZTypeType.UNION:
+            if "OptionView" in k and v.typetype == ZTypeType.UNION:
                 if v.generic_origin is not None and not is_tag_origin(v.generic_origin):
                     mono = v
                     break
-        assert mono is not None, "optionview mono not resolved"
+        assert mono is not None, "OptionView mono not resolved"
         assert mono.needs_destructor is False
         assert mono.destructor_name is None
         assert "some" in mono.lock_arm_names
 
     def test_is_iterator_wrapper_recognises_all_three(self):
-        """The for-loop dispatch helper accepts option, optionval, AND
-        optionview."""
+        """The for-loop dispatch helper accepts Option, optionval, AND
+        OptionView."""
         program = check_ok(
             "src: class { v: i64 }\n"
             "main: function is {\n"
-            '  a: option.some "x".string\n'
+            '  a: Option.some "x".string\n'
             "  b: optionval.some 1\n"
             "  s: src v: 7\n"
-            "  c: optionview.some from: s\n"
+            "  c: OptionView.some from: s\n"
             "}"
         )
         tc = TypeChecker(program)
         tc.check()
         a_t = b_t = c_t = None
         for k, v in tc._resolved.items():
-            if "option_string" in k and v.typetype == ZTypeType.UNION:
+            if "Option_String" in k and v.typetype == ZTypeType.UNION:
                 a_t = v
             elif "optionval_i64" in k and v.typetype == ZTypeType.VARIANT:
                 b_t = v
-            elif "optionview" in k and v.typetype == ZTypeType.UNION:
+            elif "OptionView" in k and v.typetype == ZTypeType.UNION:
                 if v.generic_origin is not None and not is_tag_origin(v.generic_origin):
                     c_t = v
         assert a_t and b_t and c_t
@@ -11226,17 +11223,17 @@ class TestOptionview:
 
 
 class TestOptionviewBorrowEscape:
-    """Loop variables bound from optionview iteration carry borrow_origin
-    and trigger the existing lock-escape checks. option / optionval
+    """Loop variables bound from OptionView iteration carry borrow_origin
+    and trigger the existing lock-escape checks. Option / optionval
     bindings stay owned (regression guard)."""
 
     def test_optionview_loop_var_rejects_move_into_aggregate(self):
         """Cannot move a borrowed loop var into another collection."""
         errors = check_errors(
             "main: function is {\n"
-            "  xs: (list of: string)\n"
+            "  xs: (List of: String)\n"
             '  xs.append from: "hello".string\n'
-            "  sink: (list of: string)\n"
+            "  sink: (List of: String)\n"
             "  with it: xs.iterate do for s: it loop {\n"
             "    sink.append from: s\n"
             "  }\n"
@@ -11247,14 +11244,14 @@ class TestOptionviewBorrowEscape:
     def test_optionview_loop_var_rejects_return(self):
         """Cannot return a borrowed loop var from the enclosing function."""
         errors = check_errors(
-            "get_first: function {xs: (list of: string)} out string is {\n"
+            "get_first: function {xs: (List of: String)} out String is {\n"
             "  with it: xs.iterate do for s: it loop {\n"
             "    return s\n"
             "  }\n"
             '  return "empty".string\n'
             "}\n"
             "main: function is {\n"
-            "  xs: (list of: string)\n"
+            "  xs: (List of: String)\n"
             '  xs.append from: "hi".string\n'
             "  print get_first xs: xs\n"
             "}"
@@ -11262,10 +11259,10 @@ class TestOptionviewBorrowEscape:
         assert any("borrowed" in e.msg.lower() for e in errors)
 
     def test_optionview_inloop_read_still_works(self):
-        """In-loop read access of a borrowed string view is allowed."""
+        """In-loop read access of a borrowed String view is allowed."""
         check_ok(
             "main: function is {\n"
-            "  xs: (list of: string)\n"
+            "  xs: (List of: String)\n"
             '  xs.append from: "hello".string\n'
             "  with it: xs.iterate do for s: it loop {\n"
             '    print "s=\\{s}"\n'
@@ -11274,13 +11271,13 @@ class TestOptionviewBorrowEscape:
         )
 
     def test_option_loop_var_still_owned_regression(self):
-        """option / optionval iterators yield owned values that may be
+        """Option / optionval iterators yield owned values that may be
         moved (regression guard for the borrow-only scoping in W-D)."""
         # textreader yields option(string); the loop body may consume
         # each line by moving it into a collection.
         check_ok(
             "main: function is {\n"
-            "  saved: (list of: string)\n"
+            "  saved: (List of: String)\n"
             '  with f: (io.open path: "/tmp/__nope" mode: openmode.read) do {\n'
             "  }\n"
             '  print "ok"\n'
@@ -11288,14 +11285,14 @@ class TestOptionviewBorrowEscape:
         )
 
     def test_map_iterate_items_borrow_escape_rejected(self):
-        """mapentry from map.iterate_items is borrowed; transferring
+        """MapEntry from Map.iterateItems is borrowed; transferring
         a key into another collection fails the escape check."""
         errors = check_errors(
             "main: function is {\n"
-            "  m: (map key: string value: i64)\n"
+            "  m: (Map key: String value: i64)\n"
             '  m.set key: "k".string value: 1\n'
-            "  sink: (list of: string)\n"
-            "  with it: m.iterate_items do for e: it loop {\n"
+            "  sink: (List of: String)\n"
+            "  with it: m.iterateItems do for e: it loop {\n"
             "    sink.append from: e.key\n"
             "  }\n"
             "}"

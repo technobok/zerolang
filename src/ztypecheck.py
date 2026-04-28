@@ -185,7 +185,7 @@ def _set_destructor_metadata(ztype: ZType) -> None:
     """Set needs_destructor, destructor_name, is_heap_allocated based on type."""
     if ztype.subtype == ZSubType.STRING:
         ztype.needs_destructor = True
-        ztype.destructor_name = "z_string_free"
+        ztype.destructor_name = "z_String_free"
         ztype.is_heap_allocated = False  # stack struct, heap data buffer
     elif ztype.subtype == ZSubType.STRINGVIEW:
         ztype.needs_destructor = False
@@ -229,9 +229,9 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
     # underlying fd (RAII). The fd/closed fields don't themselves
     # need cleanup, so the general rule below would wrongly clear
     # the destructor.
-    if ztype.typetype == ZTypeType.CLASS and ztype.name == "file":
+    if ztype.typetype == ZTypeType.CLASS and ztype.name == "File":
         ztype.needs_destructor = True
-        ztype.destructor_name = "z_file_destroy"
+        ztype.destructor_name = "z_File_destroy"
         return
 
     # Stack-allocated class with no heap fields needs no destructor.
@@ -1300,9 +1300,9 @@ class TypeChecker:
         ctype.is_valtype = False  # classes are reference types
         if cls.is_native:
             ctype.is_native = True
-            if name == "string":
+            if name == "String":
                 ctype.subtype = ZSubType.STRING
-            elif name == "stringview":
+            elif name == "StringView":
                 ctype.subtype = ZSubType.STRINGVIEW
         _set_destructor_metadata(ctype)
         self._assign_cname_type(ctype)
@@ -2359,17 +2359,17 @@ class TypeChecker:
         aggregate fields (doc/strings.pdoc).
         """
         if ftype.subtype == ZSubType.STRING:
-            return "`string` is a reftype"
+            return "`String` is a reftype"
         if ftype.subtype == ZSubType.STRINGVIEW:
             return (
-                "`stringview` is a view — locks its source; cannot escape "
+                "`StringView` is a view — locks its source; cannot escape "
                 "to aggregate storage"
             )
         if ftype.typetype == ZTypeType.CLASS:
             # View-class typedefs (byteview / listview) have non-STRING
             # subtype — reject them the same way as stringview. Generic
             # listview monomorphizations also land here.
-            if ftype.name in ("byteview", "listview") or _is_listview_type(ftype):
+            if ftype.name in ("ByteView", "ListView") or _is_listview_type(ftype):
                 return (
                     f"`{ftype.name}` is a view — locks its source; cannot "
                     "escape to aggregate storage"
@@ -2649,7 +2649,7 @@ class TypeChecker:
                         loc=start,
                     )
                 else:
-                    sv_type = self._resolve_name("stringview")
+                    sv_type = self._resolve_name("StringView")
                     if sv_type:
                         # collect the raw string content from token parts
                         raw = "".join(
@@ -3466,7 +3466,7 @@ class TypeChecker:
                 getattr(p, "nodetype", None) == NodeType.EXPRESSION
                 for p in atom_str.stringparts
             )
-            parent_type = self._resolve_name("string" if has_interp else "stringview")
+            parent_type = self._resolve_name("String" if has_interp else "StringView")
         if not parent_type:
             return None
         # check for .typedef — creates a marker detected by type resolvers
@@ -3644,13 +3644,13 @@ class TypeChecker:
             return elem_type
         # for str types: .string returns the string type directly (not the function)
         if _is_str_type(parent_type) and child_name == "string":
-            return self._resolve_name("string")
+            return self._resolve_name("String")
         # for stringview types: .string returns the string type directly
         if _is_stringview_type(parent_type) and child_name == "string":
-            return self._resolve_name("string")
+            return self._resolve_name("String")
         # for string class: .string returns the same string type (no-op identity)
         if parent_type.subtype == ZSubType.STRING and child_name == "string":
-            return self._resolve_name("string")
+            return self._resolve_name("String")
         # for string class: .length and .capacity return u64 directly
         if parent_type.subtype == ZSubType.STRING and child_name in (
             "length",
@@ -3948,21 +3948,21 @@ class TypeChecker:
             if not constraint:
                 continue
             # any.valtype / any.reftype constraints
-            if constraint.name == "any.valtype":
+            if constraint.name == "Any.valtype":
                 if not _is_valtype(concrete_type):
                     self._error(
                         f"Type '{concrete_type.name}' is not a value type; "
                         f"generic parameter '{param_name}' requires any.valtype"
                     )
                 continue
-            if constraint.name == "any.reftype":
+            if constraint.name == "Any.reftype":
                 if _is_valtype(concrete_type):
                     self._error(
                         f"Type '{concrete_type.name}' is not a reference type; "
                         f"generic parameter '{param_name}' requires any.reftype"
                     )
                 continue
-            if constraint.name != "any":
+            if constraint.name != "Any":
                 # constraint is a union: check concrete type matches a subtype
                 if constraint.typetype == ZTypeType.UNION:
                     subtype_names = {
@@ -4216,7 +4216,7 @@ class TypeChecker:
                 mono.param_defaults["size"] = str(str_cap)
             # synthesize .string method: function {} out string
             string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
-            string_method.return_type = self._resolve_name("string") or self.t_null
+            string_method.return_type = self._resolve_name("String") or self.t_null
             mono.children["string"] = string_method
 
         # for listview types: set reftype, synthesize methods
@@ -4247,7 +4247,7 @@ class TypeChecker:
             _set_destructor_metadata(mono)
             elem_type = _listiter_element_type(mono)
             if elem_type is not None:
-                ov_template = self._resolve_name("optionview")
+                ov_template = self._resolve_name("OptionView")
                 if ov_template:
                     ov_defn = self._find_generic_defn(ov_template)
                     if ov_defn:
@@ -4270,7 +4270,7 @@ class TypeChecker:
             _set_destructor_metadata(mono)
             key_t = _mapkeyiter_key_type(mono)
             if key_t is not None:
-                ov_template = self._resolve_name("optionview")
+                ov_template = self._resolve_name("OptionView")
                 if ov_template:
                     ov_defn = self._find_generic_defn(ov_template)
                     if ov_defn:
@@ -4315,7 +4315,7 @@ class TypeChecker:
             value_t = _mapitemiter_value_type(mono)
             if key_t is not None and value_t is not None:
                 # monomorphise mapentry<K,V> first (the call's payload)
-                me_template = self._resolve_name("mapentry")
+                me_template = self._resolve_name("MapEntry")
                 me_mono = None
                 if me_template:
                     me_defn = self._find_generic_defn(me_template)
@@ -4327,7 +4327,7 @@ class TypeChecker:
                         )
                 # then optionview<mapentry<K,V>>
                 if me_mono is not None:
-                    ov_template = self._resolve_name("optionview")
+                    ov_template = self._resolve_name("OptionView")
                     if ov_template:
                         ov_defn = self._find_generic_defn(ov_template)
                         if ov_defn:
@@ -4392,7 +4392,7 @@ class TypeChecker:
                 mono.children["pop"] = pop_type
                 # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
                 # Get or create the monomorphized listview type
-                listview_template = self._resolve_name("listview")
+                listview_template = self._resolve_name("ListView")
                 listview_mono = None
                 if listview_template:
                     lv_defn = self._find_generic_defn(listview_template)
@@ -4412,16 +4412,16 @@ class TypeChecker:
                 # — copies bytes from a borrowed view (does NOT consume).
                 if listview_mono is not None:
                     extend_view_type = _make_type(
-                        f"{mangled}.extend_view", ZTypeType.FUNCTION
+                        f"{mangled}.extendView", ZTypeType.FUNCTION
                     )
                     extend_view_type.children["other"] = listview_mono
                     extend_view_type.param_ownership["other"] = ZParamOwnership.BORROW
-                    mono.children["extend_view"] = extend_view_type
+                    mono.children["extendView"] = extend_view_type
                 # synthesize .iterate method: function {:this} out (listiter of: elem)
                 # — borrowed-view iterator over the list. Triggers
                 # monomorphization of listiter<elem> so the emitter can
                 # generate the iterator struct + .call function.
-                listiter_template = self._resolve_name("listiter")
+                listiter_template = self._resolve_name("ListIter")
                 if listiter_template:
                     li_defn = self._find_generic_defn(listiter_template)
                     if li_defn:
@@ -4470,7 +4470,7 @@ class TypeChecker:
                 if _is_valtype(value_type):
                     opt_template = self._resolve_name("optionval")
                 else:
-                    opt_template = self._resolve_name("option")
+                    opt_template = self._resolve_name("Option")
                 if opt_template and opt_template.isgeneric:
                     opt_defn = self._find_generic_defn(opt_template)
                     if opt_defn:
@@ -4493,7 +4493,7 @@ class TypeChecker:
                 # (mapkeyiter key: K value: V) — borrowed-key iterator.
                 # Triggers monomorphization of mapkeyiter<K,V> so the
                 # emitter can generate the iterator struct + .call.
-                mki_template = self._resolve_name("mapkeyiter")
+                mki_template = self._resolve_name("MapKeyIter")
                 if mki_template:
                     mki_defn = self._find_generic_defn(mki_template)
                     if mki_defn:
@@ -4513,7 +4513,7 @@ class TypeChecker:
                 # synthesize .iterate_items: borrowed-entry iterator
                 # yielding mapentry views. Triggers mapitemiter<K,V> +
                 # mapentry<K,V> monos.
-                mii_template = self._resolve_name("mapitemiter")
+                mii_template = self._resolve_name("MapItemIter")
                 if mii_template:
                     mii_defn = self._find_generic_defn(mii_template)
                     if mii_defn:
@@ -4523,13 +4523,13 @@ class TypeChecker:
                             mii_defn,
                         )
                         iterate_items_type = _make_type(
-                            f"{mangled}.iterate_items", ZTypeType.FUNCTION
+                            f"{mangled}.iterateItems", ZTypeType.FUNCTION
                         )
                         iterate_items_type.return_type = mii_mono
                         self._carry_native_method_metadata(
-                            template_type, defn, "iterate_items", iterate_items_type
+                            template_type, defn, "iterateItems", iterate_items_type
                         )
-                        mono.children["iterate_items"] = iterate_items_type
+                        mono.children["iterateItems"] = iterate_items_type
 
         # for classes: rebuild meta_create for the monomorphized class
         if (
@@ -4772,7 +4772,7 @@ class TypeChecker:
         if _is_valtype(value_type):
             template = self._resolve_name("optionval")
         else:
-            template = self._resolve_name("option")
+            template = self._resolve_name("Option")
         if template and template.isgeneric:
             defn = self._find_generic_defn(template)
             if defn:
@@ -5199,7 +5199,7 @@ class TypeChecker:
             constraint = template.generic_params.get(param_name)
             if not constraint:
                 continue
-            if constraint.name == "any.valtype":
+            if constraint.name == "Any.valtype":
                 if not _is_valtype(concrete_type):
                     self._error(
                         f"Type '{concrete_type.name}' is not a value type; "
@@ -5207,7 +5207,7 @@ class TypeChecker:
                         loc=call.start,
                     )
                 continue
-            if constraint.name == "any.reftype":
+            if constraint.name == "Any.reftype":
                 if _is_valtype(concrete_type):
                     self._error(
                         f"Type '{concrete_type.name}' is not a reference type; "
@@ -5215,7 +5215,7 @@ class TypeChecker:
                         loc=call.start,
                     )
                 continue
-            if constraint.name != "any":
+            if constraint.name != "Any":
                 if constraint.typetype == ZTypeType.UNION:
                     # Walk union members in declaration order; first match
                     # wins. Concrete members match by name; protocol/facet
@@ -6067,7 +6067,7 @@ class TypeChecker:
                 getattr(p, "nodetype", None) == NodeType.EXPRESSION
                 for p in path_str.stringparts
             )
-            path_str.type = self._resolve_name("string" if has_interp else "stringview")
+            path_str.type = self._resolve_name("String" if has_interp else "StringView")
             return path_str.type
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             return self._check_atomid(cast(zast.AtomId, path))
@@ -6378,7 +6378,7 @@ class TypeChecker:
                 getattr(p, "nodetype", None) == NodeType.EXPRESSION
                 for p in atom_str.stringparts
             )
-            atom_str.type = self._resolve_name("string" if has_interp else "stringview")
+            atom_str.type = self._resolve_name("String" if has_interp else "StringView")
         elif path.parent.nodetype == NodeType.EXPRESSION:
             self._check_expression(cast(zast.Expression, path.parent))
         t = self._resolve_dotted_path(path)
@@ -6797,7 +6797,7 @@ class TypeChecker:
         if (
             callee_type.typetype == ZTypeType.CLASS
             and callee_type.isgeneric
-            and callee_type.name == "box"
+            and callee_type.name == "Box"
             and "t" in callee_type.generic_params
             and not callee_type.children
         ):
@@ -7282,7 +7282,7 @@ class TypeChecker:
             child_name = cast(zast.DottedPath, arg.valtype).child.name
             # Aliasable suffixes: thin reinterpretations of the same
             # storage. .stringview/.listview build fresh view structs
-            # of a *different* type (z_stringview_t / z_listview_T_t)
+            # of a *different* type (z_StringView_t / z_ListView_T_t)
             # so they can't be elided into a name substitution — emit
             # the real assignment instead.
             if child_name in ("take", "borrow", "lock"):
@@ -7665,7 +7665,7 @@ class TypeChecker:
             if child_name in ("take", "borrow"):
                 # unwrap: alias applies to the underlying path
                 return self._alias_target_inner(cast(zast.Operation, dp.parent))
-            if child_name in ("release", "lock", "stringview", "listview"):
+            if child_name in ("release", "lock", "StringView", "ListView"):
                 # compiler methods: not a plain path reference
                 return None
             # field access — the parent must be a valtype (struct-field
@@ -8877,7 +8877,7 @@ class TypeChecker:
     def _option_template_nodeid(self) -> int:
         """Resolve and cache the stdlib `option` generic-template nodeid."""
         if self._option_template_id == -1:
-            t = self._resolve_name("option")
+            t = self._resolve_name("Option")
             if t is not None:
                 self._option_template_id = t.nodeid
         return self._option_template_id
@@ -8893,7 +8893,7 @@ class TypeChecker:
     def _optionview_template_nodeid(self) -> int:
         """Resolve and cache the stdlib `optionview` generic-template nodeid."""
         if self._optionview_template_id == -1:
-            t = self._resolve_name("optionview")
+            t = self._resolve_name("OptionView")
             if t is not None:
                 self._optionview_template_id = t.nodeid
         return self._optionview_template_id
@@ -9037,7 +9037,7 @@ class TypeChecker:
         self.symtab.pop()
         # for-as-expression: return list of elem_type (non-null values only)
         if elem_type and elem_type != self.t_null and elem_type.name != "null":
-            list_template = self._resolve_name("list")
+            list_template = self._resolve_name("List")
             if list_template and list_template.isgeneric:
                 list_defn = self._find_generic_defn(list_template)
                 if list_defn:
@@ -9118,8 +9118,8 @@ class TypeChecker:
                     "release",
                     "borrow",
                     "lock",
-                    "stringview",
-                    "listview",
+                    "StringView",
+                    "ListView",
                 ):
                     is_plain_path = True
             if is_plain_path:

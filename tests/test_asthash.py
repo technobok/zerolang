@@ -17,7 +17,7 @@ LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 
 
 def parse_and_check(source: str, unitname: str = "test"):
-    """Parse and typecheck a source string, returning the program."""
+    """Parse and typecheck a source String, returning the program."""
     p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
@@ -82,7 +82,7 @@ class TestAstHash:
         assert h1 != h2
 
     def test_deterministic(self):
-        """Same function hashed twice gives same result."""
+        """Same function hashed twice gives same Result."""
         program = parse_and_check(
             "f1: function {x: i64} out i64 is { return x + 1 }\n"
             "main: function is { f1 1 }"

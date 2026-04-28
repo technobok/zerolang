@@ -4,8 +4,8 @@ Tests for code review findings infrastructure (Findings 1, 3, 7, 8, 10, 11, 12, 
 These test the new fields and metadata added during the code review:
 - Finding 1: type annotations on all Path nodes
 - Finding 3: destructor metadata on ZType
-- Finding 7: Token IDs, VFS file_table, CallKind, source map
-- Finding 8: file ID consistency
+- Finding 7: Token IDs, VFS File_table, CallKind, source Map
+- Finding 8: File ID consistency
 - Finding 10: type annotation audit
 - Finding 11: ScopeState / TempState
 - Finding 12: self-hosting patterns
@@ -48,9 +48,9 @@ def parse_and_check(source: str, unitname: str = "test"):
 def parse_and_check_uncached(source: str, unitname: str = "test"):
     """parse_and_check variant that bypasses the system-lib cache.
 
-    The cache reuses parsed system units across tests; their tokens carry
-    file IDs (fsno) from the seed VFS, not the per-test VFS. Tests that
-    inspect VFS file_table state or token-to-file foreign keys must use
+    The cache reuses Parsed system units across tests; their tokens carry
+    File IDs (fsno) from the seed VFS, not the per-test VFS. Tests that
+    inspect VFS File_table state or token-to-File foreign keys must use
     this variant so system files are walked and assigned IDs in the per-test
     VFS.
     """
@@ -152,22 +152,22 @@ class TestFinding1TypeAnnotations:
 
     def test_class_field_types_annotated(self):
         program = parse_and_check(
-            "box: class is { value: i64 }\n"
-            'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
+            "Box: class is { value: i64 }\n"
+            'main: function is {\n    b: Box value: 42\n    print "\\{b.value}"\n}'
         )
         mainunit = program.units[program.mainunitname]
-        box = mainunit.body["box"]
+        box = mainunit.body["Box"]
         assert isinstance(box, zast.Class)
         for fname, fpath in box.items.items():
             assert fpath.type is not None, f"Field '{fname}' has no .type"
 
     def test_union_subtype_annotated(self):
         program = parse_and_check(
-            "result: union is { ok: i64  err: string }\n"
-            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+            "Result: union is { ok: i64  err: String }\n"
+            'main: function is {\n    r: Result.ok 42\n    print "ok"\n}'
         )
         mainunit = program.units[program.mainunitname]
-        result = mainunit.body["result"]
+        result = mainunit.body["Result"]
         assert isinstance(result, zast.Union)
         for sname, spath in result.items.items():
             assert spath.type is not None, f"Subtype '{sname}' has no .type"
@@ -182,49 +182,49 @@ class TestFinding3DestructorMetadata:
     def test_string_destructor(self):
         program = parse_and_check('main: function is {\n    s: "hello"\n    print s\n}')
         # string type should have destructor metadata
-        _ = program.resolved.get("system.string")
+        _ = program.resolved.get("system.String")
         # string might not be in resolved directly; check via a known type
         # use the record field approach
         program2 = parse_and_check(
-            "box: class is { name: string }\n"
-            'main: function is {\n    b: box name: "hi"\n    print b.name\n}'
+            "Box: class is { name: String }\n"
+            'main: function is {\n    b: Box name: "hi"\n    print b.name\n}'
         )
         mainunit = program2.units[program2.mainunitname]
-        box = mainunit.body["box"]
+        box = mainunit.body["Box"]
         name_type = box.items["name"].type
         assert name_type is not None
-        assert name_type.name == "string"
+        assert name_type.name == "String"
         assert name_type.needs_destructor is True
-        assert name_type.destructor_name == "z_string_free"
+        assert name_type.destructor_name == "z_String_free"
         assert name_type.is_heap_allocated is False
 
     def test_class_destructor(self):
         program = parse_and_check(
-            "box: class is { value: i64 }\n"
-            'main: function is {\n    b: box value: 0\n    print "ok"\n}'
+            "Box: class is { value: i64 }\n"
+            'main: function is {\n    b: Box value: 0\n    print "ok"\n}'
         )
         t = None
         for key, ztype in program.resolved.items():
-            if ztype.name == "box" and ztype.typetype == ZTypeType.CLASS:
+            if ztype.name == "Box" and ztype.typetype == ZTypeType.CLASS:
                 t = ztype
                 break
-        assert t is not None, "box type not found in resolved"
+        assert t is not None, "Box type not found in resolved"
         assert t.needs_destructor is False
         assert t.is_heap_allocated is False
 
     def test_union_destructor(self):
         program = parse_and_check(
-            "result: union is { ok: i64  err: string }\n"
-            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+            "Result: union is { ok: i64  err: String }\n"
+            'main: function is {\n    r: Result.ok 42\n    print "ok"\n}'
         )
         t = None
         for key, ztype in program.resolved.items():
-            if ztype.name == "result" and ztype.typetype == ZTypeType.UNION:
+            if ztype.name == "Result" and ztype.typetype == ZTypeType.UNION:
                 t = ztype
                 break
-        assert t is not None, "result type not found in resolved"
+        assert t is not None, "Result type not found in resolved"
         assert t.needs_destructor is True
-        assert t.destructor_name == "z_result_destroy"
+        assert t.destructor_name == "z_Result_destroy"
         assert t.is_heap_allocated is False
 
     def test_record_no_destructor(self):
@@ -275,7 +275,7 @@ class TestFinding7TokenIds:
 
 
 class TestFinding7VfsFileTable:
-    """Finding 7: VFS should expose a file_table() for SQL serialization."""
+    """Finding 7: VFS should expose a File_table() for SQL serialization."""
 
     def test_file_table_returns_walked_files(self):
         vfs = ZVfs()
@@ -418,8 +418,8 @@ class TestFinding7CallKind:
 
     def test_class_create(self):
         program = parse_and_check(
-            "box: class is { value: i64 }\n"
-            'main: function is {\n    b: box value: 42\n    print "ok"\n}'
+            "Box: class is { value: i64 }\n"
+            'main: function is {\n    b: Box value: 42\n    print "ok"\n}'
         )
         mainunit = program.units[program.mainunitname]
         calls = self._find_calls(mainunit.body["main"])
@@ -428,8 +428,8 @@ class TestFinding7CallKind:
 
     def test_union_create(self):
         program = parse_and_check(
-            "result: union is { ok: i64  err: string }\n"
-            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+            "Result: union is { ok: i64  err: String }\n"
+            'main: function is {\n    r: Result.ok 42\n    print "ok"\n}'
         )
         mainunit = program.units[program.mainunitname]
         calls = self._find_calls(mainunit.body["main"])
@@ -456,7 +456,7 @@ class TestFinding7CallKind:
 
 
 class TestFinding7SourceMap:
-    """Finding 7: emitter should produce a source map (C line → AST node ID)."""
+    """Finding 7: emitter should produce a source Map (C line → AST node ID)."""
 
     def test_source_map_length_matches_output(self):
         csource, emitter = emit_with_emitter(
@@ -531,16 +531,16 @@ class TestFinding10TypeAnnotationAudit:
 
     def test_audit_clean_for_class(self):
         program = parse_and_check(
-            "box: class is { value: i64 }\n"
-            'main: function is {\n    b: box value: 42\n    print "ok"\n}'
+            "Box: class is { value: i64 }\n"
+            'main: function is {\n    b: Box value: 42\n    print "ok"\n}'
         )
         missing = audit_type_annotations(program)
         assert missing == [], f"Unexpected missing annotations: {missing}"
 
     def test_audit_clean_for_union(self):
         program = parse_and_check(
-            "result: union is { ok: i64  err: string }\n"
-            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+            "Result: union is { ok: i64  err: String }\n"
+            'main: function is {\n    r: Result.ok 42\n    print "ok"\n}'
         )
         missing = audit_type_annotations(program)
         assert missing == [], f"Unexpected missing annotations: {missing}"
@@ -622,7 +622,7 @@ class TestFinding10TypeAnnotationAudit:
         assert missing == [], f"Unexpected missing annotations: {missing}"
 
     def test_audit_clean_for_dotted_path_access(self):
-        """Dotted path access (field reads) should be annotated."""
+        """Dotted Path access (field reads) should be annotated."""
         program = parse_and_check(
             "point: record is { x: f64  y: f64 }\n"
             'main: function is {\n    p: point x: 1.0 y: 2.0\n    print "\\{p.x}"\n}'
@@ -689,30 +689,30 @@ class TestFinding11ScopeState:
     def test_class_cleanup_emitted(self):
         """Class variables with only valtype fields need no destroy at scope exit."""
         csource, emitter = emit_with_emitter(
-            "box: class { value: i64 }\n"
-            'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
+            "Box: class { value: i64 }\n"
+            'main: function is {\n    b: Box value: 42\n    print "\\{b.value}"\n}'
         )
-        assert "z_box_destroy" not in csource
+        assert "z_Box_destroy" not in csource
 
     def test_string_cleanup_emitted(self):
-        """String variables should get z_string_free at scope exit."""
+        """String variables should get z_String_free at scope exit."""
         csource, emitter = emit_with_emitter(
-            "greet: function {name: string} out string is "
+            "greet: function {name: String} out String is "
             '{ return "hello".string }\n'
             "main: function is {\n"
             '    s: greet name: "world".string\n'
             "    print s\n"
             "}"
         )
-        assert "z_string_free" in csource
+        assert "z_String_free" in csource
 
     def test_union_cleanup_emitted(self):
         """Union variables should get destroy calls at scope exit."""
         csource, emitter = emit_with_emitter(
-            "result: union is { ok: i64  err: string }\n"
-            'main: function is {\n    r: result.ok 42\n    print "ok"\n}'
+            "Result: union is { ok: i64  err: String }\n"
+            'main: function is {\n    r: Result.ok 42\n    print "ok"\n}'
         )
-        assert "z_result_destroy" in csource
+        assert "z_Result_destroy" in csource
 
     def test_cleanup_uses_destructor_name(self):
         """Scope cleanup should use ZType.destructor_name (type-driven, not cascades)."""
@@ -720,15 +720,15 @@ class TestFinding11ScopeState:
         from ztypes import ZType, ZTypeType
 
         # verify that a ZType with destructor_name set gets correct cleanup
-        t = ZType(name="box", typetype=ZTypeType.CLASS, parent=None)
+        t = ZType(name="Box", typetype=ZTypeType.CLASS, parent=None)
         t.needs_destructor = True
-        t.destructor_name = "z_box_destroy"
+        t.destructor_name = "z_Box_destroy"
         s = ScopeState()
         s.cleanup_vars.append(("myvar", t))
         # the cleanup_vars list stores (var_name, ZType) — verify structure
         assert len(s.cleanup_vars) == 1
         assert s.cleanup_vars[0][0] == "myvar"
-        assert s.cleanup_vars[0][1].destructor_name == "z_box_destroy"
+        assert s.cleanup_vars[0][1].destructor_name == "z_Box_destroy"
 
 
 # ---- Finding 12: Python-specific patterns simplified for self-hosting ----
@@ -811,7 +811,7 @@ class TestSqlDump:
     """SQL schema dump: compile a program, dump SQL, verify integrity."""
 
     def test_dump_sql_produces_output(self):
-        """dump_sql should return non-empty SQL string."""
+        """dump_sql should return non-empty SQL String."""
         program = parse_and_check(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             'main: function is { print "\\{add a: 1 b: 2}" }'
@@ -852,7 +852,7 @@ class TestSqlDump:
         conn.close()
 
     def test_tokens_table_populated(self):
-        """tokens table should contain parsed tokens."""
+        """tokens table should contain Parsed tokens."""
         program = parse_and_check('main: function is { print "hello" }')
         sql = zsqldump.dump_sql(program)
         conn = _load_sql(sql)
@@ -861,7 +861,7 @@ class TestSqlDump:
         conn.close()
 
     def test_ast_nodes_table_populated(self):
-        """ast_nodes table should contain parsed AST nodes."""
+        """ast_nodes table should contain Parsed AST nodes."""
         program = parse_and_check(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             'main: function is { print "\\{add a: 1 b: 2}" }'
@@ -932,8 +932,8 @@ class TestSqlDump:
     def test_foreign_key_integrity(self):
         """All foreign keys should be valid (no dangling references)."""
         program = parse_and_check_uncached(
-            "box: class { value: i64 }\n"
-            'main: function is {\n    b: box value: 42\n    print "\\{b.value}"\n}'
+            "Box: class { value: i64 }\n"
+            'main: function is {\n    b: Box value: 42\n    print "\\{b.value}"\n}'
         )
         emitter = zemitterc.CEmitter(program)
         csource = emitter.emit()
@@ -944,7 +944,7 @@ class TestSqlDump:
         # tokens → files: every token.file_id should exist in files
         orphan_tokens = conn.execute("""
             SELECT COUNT(*) FROM tokens t
-            WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.file_id = t.file_id)
+            WHERE NOT EXISTS (SELECT 1 FROM files f WHERE f.File_id = t.File_id)
         """).fetchone()[0]
         assert orphan_tokens == 0, f"{orphan_tokens} tokens reference missing files"
 
@@ -993,22 +993,22 @@ class TestSqlDump:
     def test_destructor_metadata_in_types(self):
         """Types with destructors should have needs_destructor and destructor_name."""
         program = parse_and_check(
-            "box: class { value: i64 }\n"
-            'main: function is {\n    b: box value: 42\n    print "ok"\n}'
+            "Box: class { value: i64 }\n"
+            'main: function is {\n    b: Box value: 42\n    print "ok"\n}'
         )
         sql = zsqldump.dump_sql(program)
         conn = _load_sql(sql)
         row = conn.execute(
             "SELECT needs_destructor, destructor_name, is_heap_allocated "
-            "FROM types WHERE name = 'box'"
+            "FROM types WHERE name = 'Box'"
         ).fetchone()
-        assert row is not None, "box type not in types table"
+        assert row is not None, "Box type not in types table"
         assert row[0] == 0  # needs_destructor (valtype-only class)
         assert row[2] == 0  # is_heap_allocated
         conn.close()
 
     def test_cli_dump_sql_flag(self):
-        """zc --dump-sql should write valid SQL to a file."""
+        """zc --dump-sql should write valid SQL to a File."""
         import subprocess
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1039,7 +1039,7 @@ class TestSqlDump:
                 timeout=30,
             )
             assert result.returncode == 0, f"zc failed: {result.stderr}"
-            assert os.path.exists(sql_path), "SQL file not created"
+            assert os.path.exists(sql_path), "SQL File not created"
             sql = open(sql_path).read()
             assert "CREATE TABLE" in sql
             assert "INSERT INTO" in sql
@@ -1189,13 +1189,13 @@ class TestCname:
         )
 
     def test_generic_monomorphization_collision_resolved(self):
-        """Non-generic box_i64 record and generic box[of i64] get distinct cnames."""
+        """Non-generic Box_i64 record and generic Box[of i64] get distinct cnames."""
         program = parse_and_check(
-            "box: union { some: t\n none: null } as { t: any.generic }\n"
-            "box_i64: record is { val: i64 }\n"
+            "Box: union { some: t\n none: null } as { t: Any.generic }\n"
+            "Box_i64: record is { val: i64 }\n"
             "main: function is {\n"
-            "    a: box.some 42\n"
-            "    b: box_i64 val: 99\n"
+            "    a: Box.some 42\n"
+            "    b: Box_i64 val: 99\n"
             '    print "\\{b.val}"\n'
             "}"
         )
@@ -1203,12 +1203,12 @@ class TestCname:
         mono_cname = None
         plain_cname = None
         for ztype in program.resolved.values():
-            if ztype.name == "box_i64" and ztype.generic_origin:
+            if ztype.name == "Box_i64" and ztype.generic_origin:
                 mono_cname = ztype.cname
-            elif ztype.name == "box_i64" and not ztype.generic_origin:
+            elif ztype.name == "Box_i64" and not ztype.generic_origin:
                 plain_cname = ztype.cname
-        assert mono_cname is not None, "Monomorphized box_i64 not found"
-        assert plain_cname is not None, "Plain box_i64 not found"
+        assert mono_cname is not None, "Monomorphized Box_i64 not found"
+        assert plain_cname is not None, "Plain Box_i64 not found"
         assert mono_cname != plain_cname, (
             f"Collision not resolved: both have cname {mono_cname}"
         )

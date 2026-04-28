@@ -127,7 +127,7 @@ def test_loader_caches():
 
 
 def test_listview_template_compiles():
-    body = apply("z_listview", {"NAME": "listview_i64", "ELEM_T": "int64_t"})
+    body = apply("z_ListView", {"NAME": "ListView_i64", "ELEM_T": "int64_t"})
     rc, err = _gcc_compile(body)
     assert rc == 0, err
 
@@ -163,8 +163,8 @@ def test_str_template_compiles():
             "EQ_BODY": "",
         },
     )
-    # z_str uses z_string_t in the .string method — stub it for this test
-    stub = "typedef struct { uint64_t size; char* data; uint64_t capacity; } z_string_t;\n\n"
+    # z_str uses z_String_t in the .string method — stub it for this test
+    stub = "typedef struct { uint64_t size; char* data; uint64_t capacity; } z_String_t;\n\n"
     rc, err = _gcc_compile(stub + body)
     assert rc == 0, err
 
@@ -181,9 +181,9 @@ def test_list_template_compiles_with_destroy_loop():
         "static void z_str_16_destroy(z_str_16_t* p) { (void)p; }\n\n"
     )
     body = apply(
-        "z_list",
+        "z_List",
         {
-            "NAME": "list_str_16",
+            "NAME": "List_str_16",
             "ELEM_T": "z_str_16_t",
             "DESTROY_ELEMS": destroy_elems,
             "LISTVIEW_METHODS": "",
@@ -195,23 +195,23 @@ def test_list_template_compiles_with_destroy_loop():
 
 def test_list_template_compiles_with_listview_methods():
     listview_methods = (
-        "static z_listview_i64_t z_list_i64_listview(z_list_i64_t* _this);\n"
-        "static z_listview_i64_t z_list_i64_listview(z_list_i64_t* _this) {\n"
-        "    return *(z_listview_i64_t*)_this;\n"
+        "static z_ListView_i64_t z_List_i64_listview(z_List_i64_t* _this);\n"
+        "static z_ListView_i64_t z_List_i64_listview(z_List_i64_t* _this) {\n"
+        "    return *(z_ListView_i64_t*)_this;\n"
         "}\n"
         "\n"
-        "static void z_list_i64_extend_view(z_list_i64_t* _this, z_listview_i64_t _from);\n"
-        "static void z_list_i64_extend_view(z_list_i64_t* _this, z_listview_i64_t _from) {\n"
-        "    z_list_i64_grow(_this, _this->length + _from.length);\n"
+        "static void z_List_i64_extend_view(z_List_i64_t* _this, z_ListView_i64_t _from);\n"
+        "static void z_List_i64_extend_view(z_List_i64_t* _this, z_ListView_i64_t _from) {\n"
+        "    z_List_i64_grow(_this, _this->length + _from.length);\n"
         "    memcpy(&_this->data[_this->length], _from.data, _from.length * sizeof(int64_t));\n"
         "    _this->length += _from.length;\n"
         "}\n\n"
     )
-    listview = apply("z_listview", {"NAME": "listview_i64", "ELEM_T": "int64_t"})
+    listview = apply("z_ListView", {"NAME": "ListView_i64", "ELEM_T": "int64_t"})
     body = apply(
-        "z_list",
+        "z_List",
         {
-            "NAME": "list_i64",
+            "NAME": "List_i64",
             "ELEM_T": "int64_t",
             "DESTROY_ELEMS": "",
             "LISTVIEW_METHODS": listview_methods,

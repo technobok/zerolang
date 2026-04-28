@@ -9,32 +9,32 @@
 # Defined as a union (not variant) because two arms (`invalidpath`,
 # `other`) carry a `string` payload, which is a reftype and so cannot
 # appear in a variant.
-ioerror: union {
+IoError: union {
     notfound: null
     permissiondenied: null
     interrupted: null
-    invalidpath: string
+    invalidpath: String
     eof: null
     badencoding: null
     exists: null
     isdir: null
     notdir: null
     nospace: null
-    other: string
+    other: String
 }
 
 # `print` is generic over `stringlike` (string | stringview). The
 # typechecker monomorphizes per concrete subtype and rejects any
 # argument whose type is not one of the union's members. `str` values
 # must be explicitly projected: `print mystr.stringview`.
-print: function as { T: stringlike.generic } in { msg: T } is native
+print: function as { T: StringLike.generic } in { msg: T } is native
 
 # eprintln -- write `msg` to stderr followed by a newline. Simple
 # void-return variant for diagnostic output (errors, traces).
 # Intentionally never fails: if the underlying write errors, the
 # message is silently dropped. Use the file / writer API for
 # error-reporting writes.
-eprintln: function {msg: stringview} is native
+eprintln: function {msg: StringView} is native
 
 # read_text -- read an entire file at `path` into a heap-allocated
 # UTF-8 string. Returns the content on success, or an ioerror describing
@@ -43,45 +43,45 @@ eprintln: function {msg: stringview} is native
 # Content is read as bytes; no encoding validation is performed in
 # this phase (badencoding is reserved for future use when a text
 # reader validates UTF-8 during iteration).
-read_text: function {path: stringview} out (result t: string e: ioerror) is native
+readText: function {path: StringView} out (Result t: String e: IoError) is native
 
 # write_text -- create (or truncate) the file at `path` and write
 # `content`. Returns `ok null` on success or `err ioerror` on failure
 # (permission denied, out of space, etc.). Creates intermediate
 # directories: NO — the parent directory must already exist.
-write_text: function {path: stringview content: stringview} out (result t: null e: ioerror) is native
+writeText: function {path: StringView content: StringView} out (Result t: null e: IoError) is native
 
 # append_text -- open (or create) the file at `path` and append
 # `content` to the end. Atomicity is not guaranteed across multiple
 # processes; use OS-level locks for that.
-append_text: function {path: stringview content: stringview} out (result t: null e: ioerror) is native
+appendText: function {path: StringView content: StringView} out (Result t: null e: IoError) is native
 
 # exists -- returns true if something exists at `path` (file, directory,
 # anything the OS can `stat`). No ioerror: a permission-denied on the
 # parent also surfaces as false. If you need to distinguish missing
 # from permission-denied, use `stat` (phase 5e).
-exists: function {path: stringview} out bool is native
+exists: function {path: StringView} out bool is native
 
 # mkdir -- create a directory at `path` with default permissions (0755).
 # Fails with ioerror.exists if the target already exists, and with
 # ioerror.notfound if the parent directory is missing. To create
 # intermediates (mkdir -p), use io.mkdirp below.
-mkdir: function {path: stringview} out (result t: null e: ioerror) is native
+mkdir: function {path: StringView} out (Result t: null e: IoError) is native
 
 # mkdirp -- create `path` and every missing parent directory along
 # the way (like `mkdir -p`). Permissions 0755 on each new directory.
 # Succeeds silently if `path` already exists as a directory; fails
 # with ioerror.exists if it exists as a file.
-mkdirp: function {path: stringview} out (result t: null e: ioerror) is native
+mkdirp: function {path: StringView} out (Result t: null e: IoError) is native
 
 # remove -- delete a file or an empty directory at `path`. For
 # non-empty directories this fails with ioerror.other (ENOTEMPTY).
-remove: function {path: stringview} out (result t: null e: ioerror) is native
+remove: function {path: StringView} out (Result t: null e: IoError) is native
 
 # rename -- move the entity at `from` to `to`. If `to` already exists,
 # POSIX replaces it (file overwrites file, directory overwrites empty
 # directory, otherwise ioerror). Atomic on the same filesystem.
-rename: function {from: stringview to: stringview} out (result t: null e: ioerror) is native
+rename: function {from: StringView to: StringView} out (Result t: null e: IoError) is native
 
 # filekind -- coarse classification reported by `io.stat`. Symlinks
 # are distinguished only when the underlying call was `lstat`-like;
@@ -107,9 +107,9 @@ filekind: variant {
 filestat: record {
     kind:          filekind
     size:          u64
-    mtime_seconds: u64
-    atime_seconds: u64
-    ctime_seconds: u64
+    mtimeSeconds: u64
+    atimeSeconds: u64
+    ctimeSeconds: u64
     mode:          u32
     device:        u64
     inode:         u64
@@ -119,24 +119,24 @@ filestat: record {
 # stat -- return metadata for `path`. Follows symlinks; use
 # `io.lstat` to inspect the link itself. Errors surface in the
 # standard ioerror shape (notfound, permissiondenied, ...).
-stat: function {path: stringview} out (result t: filestat e: ioerror) is native
+stat: function {path: StringView} out (Result t: filestat e: IoError) is native
 
 # lstat -- like `stat`, but does not follow symlinks. On a symbolic
 # link, `kind` is `symlink` and `size` / `mtime_seconds` / `mode`
 # describe the link itself rather than its target.
-lstat: function {path: stringview} out (result t: filestat e: ioerror) is native
+lstat: function {path: StringView} out (Result t: filestat e: IoError) is native
 
 # readlink -- return the target path a symbolic link points at.
 # Does not follow the link; errors with `notfound` when `path` does
 # not exist, `invalidpath` when it exists but is not a symlink, and
 # the usual permission / I/O arms otherwise.
-readlink: function {path: stringview} out (result t: string e: ioerror) is native
+readlink: function {path: StringView} out (Result t: String e: IoError) is native
 
 # symlink -- create a symbolic link at `link` whose target is
 # `target`. The target is stored verbatim; it is not resolved,
 # validated, or made absolute. Fails with `exists` if `link` already
 # refers to anything (file, directory, or another symlink).
-symlink: function {target: stringview link: stringview} out (result t: null e: ioerror) is native
+symlink: function {target: StringView link: StringView} out (Result t: null e: IoError) is native
 
 # list_dir -- enumerate the entries of directory `path`. Returns the
 # bare entry names (not full paths), excluding `.` and `..`, in the
@@ -144,7 +144,7 @@ symlink: function {target: stringview link: stringview} out (result t: null e: i
 # Errors surface in the standard ioerror shape: `notfound` when the
 # path doesn't exist, `notdir` when it exists but isn't a directory,
 # `permissiondenied` when the process can't read it, etc.
-list_dir: function {path: stringview} out (result t: (list of: string) e: ioerror) is native
+listDir: function {path: StringView} out (Result t: (List of: String) e: IoError) is native
 
 # seekorigin -- where a `seek` operation interprets its offset.
 # `start`: from byte 0. `current`: from current position. `end`: from
@@ -161,8 +161,8 @@ seekorigin: variant {
 # `reader.read into: buf max: n`
 #   Reads up to `n` bytes into `buf`. Returns the number of bytes
 #   actually read (0 indicates EOF) or an ioerror.
-reader: protocol {
-    read: function {:this into: bytes max: u64} out (result t: u64 e: ioerror)
+Reader: protocol {
+    read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError)
 }
 
 # `writer.write from: bv`
@@ -170,9 +170,9 @@ reader: protocol {
 #   (may be less than the input length) or an ioerror.
 # `writer.flush`
 #   Forces buffered output to its final destination.
-writer: protocol {
-    write: function {:this from: byteview} out (result t: u64 e: ioerror)
-    flush: function {:this} out (result t: null e: ioerror)
+Writer: protocol {
+    write: function {:this from: ByteView} out (Result t: u64 e: IoError)
+    flush: function {:this} out (Result t: null e: IoError)
 }
 
 # `closer.close`
@@ -180,15 +180,15 @@ writer: protocol {
 #   typically indicate a delayed write failure (the kernel buffered
 #   data couldn't be flushed). Calling close more than once is a
 #   compile-time error per the standard ownership rules.
-closer: protocol {
-    close: function {:this} out (result t: null e: ioerror)
+Closer: protocol {
+    close: function {:this} out (Result t: null e: IoError)
 }
 
 # `seeker.seek to: offset from: origin`
 #   Reposition the read/write head. Returns the new absolute position
 #   from the start of the resource, or an ioerror.
-seeker: protocol {
-    seek: function {:this to: i64 from: seekorigin} out (result t: u64 e: ioerror)
+Seeker: protocol {
+    seek: function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError)
 }
 
 # `file` -- an open OS file handle. Wraps a POSIX-style file
@@ -205,31 +205,31 @@ seeker: protocol {
 # write fails only on close). Calling close twice is not a type
 # error: the second call returns `ok null` because the destructor
 # observes `closed = true` and does nothing.
-file: class {
+File: class {
     fd: i32
     closed: bool
-    close: function {:this} out (result t: null e: ioerror) is native
+    close: function {:this} out (Result t: null e: IoError) is native
     # read up to `max` bytes, appending them to `buf`. Returns the
     # actual count read; 0 indicates EOF. The caller owns `buf` and
     # sees the new bytes in place on return. Signature matches the
     # `reader` protocol.
-    read: function {:this into: bytes max: u64} out (result t: u64 e: ioerror) is native
+    read: function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
     # write all bytes from `src` to the file. Returns the count
     # actually written (may be less than src.length on short write).
-    write: function {:this from: byteview} out (result t: u64 e: ioerror) is native
+    write: function {:this from: ByteView} out (Result t: u64 e: IoError) is native
     # flush buffered writes — a no-op on raw POSIX file descriptors
     # (each `write` syscall already goes to the kernel), kept so the
     # `writer` protocol signature is satisfied.
-    flush: function {:this} out (result t: null e: ioerror) is native
+    flush: function {:this} out (Result t: null e: IoError) is native
     # reposition the read/write head. `to` is a byte offset
     # interpreted relative to `from` (start / current / end). Returns
     # the new absolute position measured from the start.
-    seek: function {:this to: i64 from: seekorigin} out (result t: u64 e: ioerror) is native
+    seek: function {:this to: i64 from: seekorigin} out (Result t: u64 e: IoError) is native
 } as {
-    :reader
-    :writer
-    :closer
-    :seeker
+    :Reader
+    :Writer
+    :Closer
+    :Seeker
 }
 
 # openmode -- how `io.open` should acquire the underlying fd.
@@ -246,7 +246,7 @@ openmode: variant {
 # The returned file owns its fd: it is closed by the destructor on
 # scope exit, or explicitly via `file.close` to surface a delayed
 # write error.
-open: function {path: stringview mode: openmode} out (result t: file e: ioerror) is native
+open: function {path: StringView mode: openmode} out (Result t: File e: IoError) is native
 
 # Standard streams. Each returns a protocol handle over a static
 # file pinned to the matching POSIX file descriptor (0 stdin,
@@ -255,9 +255,9 @@ open: function {path: stringview mode: openmode} out (result t: file e: ioerror)
 # Usage:
 #   w: io.stdout
 #   w.write from: bv
-stdin:  function out reader is native
-stdout: function out writer is native
-stderr: function out writer is native
+stdin:  function out Reader is native
+stdout: function out Writer is native
+stderr: function out Writer is native
 
 # `bufwriter` -- buffered adapter over any `writer`. Accumulates up
 # to `cap` bytes in `buf`, flushing to the underlying sink when the
@@ -268,15 +268,15 @@ stderr: function out writer is native
 # Owns a borrow on `sink` via `writer.lock`. While the bufwriter is
 # alive, the original writer cannot be mutated, borrowed again, or
 # locked -- path-scoped locking rejects such access at the source.
-bufwriter: class {
-    sink: writer.lock
-    buf:  bytes
+BufWriter: class {
+    sink: Writer.lock
+    buf:  Bytes
     cap:  u64
 } as {
-    :writer
-    create: function {to: writer.lock capacity: u64} out this is native
-    write:  function {:this from: byteview} out (result t: u64 e: ioerror) is native
-    flush:  function {:this} out (result t: null e: ioerror) is native
+    :Writer
+    create: function {to: Writer.lock capacity: u64} out this is native
+    write:  function {:this from: ByteView} out (Result t: u64 e: IoError) is native
+    flush:  function {:this} out (Result t: null e: IoError) is native
 }
 
 # `bufreader` -- buffered adapter over any `reader`. Issues exactly
@@ -292,15 +292,15 @@ bufwriter: class {
 #
 # Holds a borrow on `source` via `reader.lock` so the original reader
 # is locked for the wrapper's lifetime.
-bufreader: class {
-    source: reader.lock
-    buf:    bytes
+BufReader: class {
+    source: Reader.lock
+    buf:    Bytes
     head:   u64
     cap:    u64
 } as {
-    :reader
-    create: function {from: reader.lock capacity: u64} out this is native
-    read:   function {:this into: bytes max: u64} out (result t: u64 e: ioerror) is native
+    :Reader
+    create: function {from: Reader.lock capacity: u64} out this is native
+    read:   function {:this into: Bytes max: u64} out (Result t: u64 e: IoError) is native
 }
 
 # `textwriter` -- string-oriented adapter over a `bufwriter`. Writes
@@ -317,13 +317,13 @@ bufreader: class {
 # on scope exit -- call it before the textwriter scope ends if you
 # need a delayed-write error surfaced, or rely on the underlying
 # bufwriter's own flush once the textwriter has been dropped.
-textwriter: class {
-    sink: bufwriter.lock
+TextWriter: class {
+    sink: BufWriter.lock
 } as {
-    create:     function {to: bufwriter.lock} out this is native
-    write:      function {:this from: stringview} out (result t: u64 e: ioerror) is native
-    write_line: function {:this from: stringview} out (result t: u64 e: ioerror) is native
-    flush:      function {:this} out (result t: null e: ioerror) is native
+    create:     function {to: BufWriter.lock} out this is native
+    write:      function {:this from: StringView} out (Result t: u64 e: IoError) is native
+    writeLine: function {:this from: StringView} out (Result t: u64 e: IoError) is native
+    flush:      function {:this} out (Result t: null e: IoError) is native
 }
 
 # `textreader` -- string-oriented adapter over a `bufreader`. Reads
@@ -346,17 +346,17 @@ textwriter: class {
 #   - err(eof)    -- nothing left to read.
 #   - err(badencoding) -- the completed line was not valid UTF-8.
 #   - err(other)  -- underlying reader surfaced an I/O failure.
-textreader: class {
-    source: bufreader.lock
-    buf:    bytes
+TextReader: class {
+    source: BufReader.lock
+    buf:    Bytes
 } as {
-    create:    function {from: bufreader.lock} out this is native
-    read_line: function {:this} out (result t: string e: ioerror) is native
+    create:    function {from: BufReader.lock} out this is native
+    readLine: function {:this} out (Result t: String e: IoError) is native
     # `call` makes textreader directly iterable: `for line: tr loop { ... }`
     # yields each line (LF stripped) until the stream drains. Every
     # non-ok `read_line` result -- including `badencoding` and any I/O
     # failure -- collapses to `option.none` and terminates the loop
     # silently; callers who need to distinguish the error cause must
     # call `read_line` directly rather than iterate.
-    call:      function {:this} out (option t: string) is native
+    call:      function {:this} out (Option t: String) is native
 }
