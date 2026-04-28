@@ -71,7 +71,6 @@ class ObjectBody:
     items: Dict[str, zast.Path]  # generic and normal (???)
     islist: List[zast.Path]  # 'is' interfaces implimented/included by this record
     functions: Dict[str, zast.Function]
-    tag: Optional[zast.Path]
     extern: Dict[str, zast.AtomId]
     # field name -> ownership annotation stripped from the field's type path
     # (currently only .lock is permitted on fields)
@@ -1258,8 +1257,9 @@ class Parser:
 
             item: keyword [ "is" ] ( "{" ... "}" | "native" ) [ "as" "{" ... "}" ]
 
-        Builds a unified `ObjectDef` node with `nodetype=kind`. Variant/
-        Union populate `tag`; Record/Class leave it as None. All four
+        Builds a unified `ObjectDef` node with `nodetype=kind`. Tag
+        discriminator info (for variant/union/enum) lives in
+        `as_items` and is recognised by the type checker. All four
         populate `field_ownership` (variant arms reject .lock in the
         type checker but the field is carried for diagnostics).
         """
@@ -1279,7 +1279,6 @@ class Parser:
             implements=is_body.islist if is_body else [],
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
-            tag=is_body.tag if is_body else None,
             is_native=native,
             field_ownership=is_body.field_ownership if is_body else {},
             start=start,
@@ -1487,11 +1486,10 @@ class Parser:
             msg = "Expected open brace '{' for 'is' argument"
             return zast.Error(start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg)
 
-        # items=items, islist=islist, functions=functions, tag=tag, extern=extern
+        # items=items, islist=islist, functions=functions, extern=extern
         items: Dict[str, zast.Path] = {}  # generic and normal fields
         islist: List[zast.Path] = []  # protocols that this object satisfies
         functions: Dict[str, zast.Function] = {}
-        tag: Optional[zast.Path] = None
         extern: Dict[str, zast.AtomId] = {}
         field_ownership: Dict[str, ZParamOwnership] = {}
 
@@ -1616,7 +1614,6 @@ class Parser:
             items=items,
             islist=islist,
             functions=functions,
-            tag=tag,
             extern=extern,
             field_ownership=field_ownership,
         )

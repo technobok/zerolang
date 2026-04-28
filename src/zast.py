@@ -417,17 +417,16 @@ class ObjectDef(Node):
     Unified type-definition node. `nodetype` discriminates which
     kind of object this is:
 
-    - RECORD / CLASS: struct-like; `items` are fields, `tag` unused
-    - VARIANT / UNION: sum types; `items` are arms, `tag` is the
-      optional discriminator type
-    - ENUM: `items` are values, `tag` is the numeric backing type
+    - RECORD / CLASS: struct-like; `items` are fields
+    - VARIANT / UNION: sum types; `items` are arms (tag discriminator
+      type, when supplied, lives in `as_items` as a `.tag` reference)
+    - ENUM: `items` are values
     - PROTOCOL / FACET: interfaces; `items` are generic params,
       `functions` are specs to implement
 
-    Some fields are only meaningful for some kinds (e.g. `tag` is
-    None for RECORD/CLASS/PROTOCOL/FACET; ENUM ignores `is_native`
-    and `field_ownership`). Consumers dispatch by `nodetype` and
-    only read fields that are valid for that kind.
+    Some fields are only meaningful for some kinds (e.g. ENUM ignores
+    `is_native` and `field_ownership`). Consumers dispatch by
+    `nodetype` and only read fields that are valid for that kind.
     """
 
     items: Dict[str, "Path"] = field(default_factory=dict)
@@ -435,7 +434,6 @@ class ObjectDef(Node):
     implements: typing.List["Path"] = field(default_factory=list)
     as_items: Dict[str, "Path"] = field(default_factory=dict)
     as_functions: Dict[str, "Function"] = field(default_factory=dict)
-    tag: Optional["Path"] = None
     is_native: bool = False
     field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
 
@@ -877,8 +875,6 @@ def node_children(node: "Node") -> "typing.List[Node]":
         out.extend(od.items.values())
         out.extend(od.functions.values())
         out.extend(od.implements)
-        if od.tag is not None:
-            out.append(od.tag)
         out.extend(od.as_items.values())
         out.extend(od.as_functions.values())
         return out
