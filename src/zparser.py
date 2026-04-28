@@ -1692,14 +1692,27 @@ class Parser:
 
         extern: Dict[str, zast.AtomId] = {}
 
-        first = True  # first is allowed to not have a label/"when"
         whenindex = 0  # counter for 'fake' binding names (for 'when' clauses)
+
+        # First condition is mandatory and omits the 'when' keyword;
+        # subsequent conditions in the same clause are introduced by 'when'.
+        op = self._accept_operation(lex)
+        if op is not None and op.is_error:
+            return cast(zast.Error, op)
+        if not op:
+            msg = "Expected operation (condition) for 'if'"
+            return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
+        op = cast(NodeX[zast.Operation], op)
+        # note leading space - cannot collide with real bindings
+        conditions[f" *{whenindex}"] = op.node
+        whenindex += 1
+        promoteexterns(addto=extern, addfrom=op.extern, local=local)
+
         while True:
             t = lex.peek()
-            if first or t.toktype == TT.WHEN:
-                if t.toktype == TT.WHEN:
-                    lex.acceptany()  # 'when'
-                    lex.accept(TT.EOL)  # optional EOL
+            if t.toktype == TT.WHEN:
+                lex.acceptany()  # 'when'
+                lex.accept(TT.EOL)  # optional EOL
 
                 op = self._accept_operation(lex)
                 if op is not None and op.is_error:
@@ -1711,12 +1724,10 @@ class Parser:
                     )
                 op = cast(NodeX[zast.Operation], op)
 
-                # note leading space - cannot collide with real bindings
                 conditions[f" *{whenindex}"] = op.node
                 whenindex += 1
                 # nb: local - can refer to prior bindings...
                 promoteexterns(addto=extern, addfrom=op.extern, local=local)
-                first = False
 
             elif t.toktype == TT.THEN:
                 if not conditions:
@@ -1946,19 +1957,35 @@ class Parser:
         local: Set[str] = set()
         extern: Dict[str, zast.AtomId] = {}
 
-        first = True  # first condition may omit the 'while' keyword
         bound = False  # whether a binding label has been consumed
         whileindex = 0  # counter for anonymous 'while' clause names
 
+        # The first clause may be a condition with the 'while' keyword
+        # omitted, but only when the next token is neither a binding
+        # label nor 'loop'. Subsequent conditions in the loop below
+        # require an explicit 'while'.
+        t = lex.peek()
+        if t.toktype not in (TT.LABEL, TT.LOOP):
+            if t.toktype == TT.WHILE:
+                lex.acceptany()
+                lex.accept(TT.EOL)
+            op = self._accept_operation(lex)
+            if op is not None and op.is_error:
+                return cast(zast.Error, op)
+            if not op:
+                msg = "Expected operation (condition) for 'for'"
+                return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
+            op = cast(NodeX[zast.Operation], op)
+            # loop is still None here, so this is always a precondition
+            conditions[f" *{whileindex}"] = op.node
+            whileindex += 1
+            promoteexterns(addto=extern, addfrom=op.extern, local=local)
+
         while True:
             t = lex.peek()
-            if (first or t.toktype == TT.WHILE) and t.toktype not in (
-                TT.LABEL,
-                TT.LOOP,
-            ):
-                if t.toktype == TT.WHILE:
-                    lex.acceptany()
-                    lex.accept(TT.EOL)
+            if t.toktype == TT.WHILE:
+                lex.acceptany()
+                lex.accept(TT.EOL)
 
                 op = self._accept_operation(lex)
                 if op is not None and op.is_error:
@@ -1977,7 +2004,6 @@ class Parser:
                     whileindex += 1
 
                 promoteexterns(addto=extern, addfrom=op.extern, local=local)
-                first = False
 
             elif t.toktype == TT.LABEL:
                 if loop:
@@ -2009,7 +2035,6 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=op.extern, local=local)
                 local.add(name)
                 bound = True
-                first = False
 
             elif t.toktype == TT.LOOP:
                 if loop:
@@ -2030,7 +2055,6 @@ class Parser:
                 statementx = cast(NodeX[zast.Statement], statementx)
                 promoteexterns(addto=extern, addfrom=statementx.extern, local=local)
                 loop = statementx.node
-                first = False
 
             else:
                 break  # nothing matched, end of 'for'
