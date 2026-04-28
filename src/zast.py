@@ -16,7 +16,7 @@ from itertools import count
 import zvfs
 from zvfs import DEntryID
 from zlexer import Token, TT
-from ztypes import ZType, ZParamOwnership, ZOwnership
+from ztypes import ZType, ZOwnership
 from zsymtab_proto import SymbolTableProto
 
 
@@ -302,33 +302,6 @@ def clone_function(func: "Function") -> "Function":
     return copy.deepcopy(func)
 
 
-# Ownership annotations recognised as the leaf of a DottedPath in
-# field-type / parameter-type / return-type position.
-_OWNERSHIP_SUFFIXES = {
-    "take": ZParamOwnership.TAKE,
-    "borrow": ZParamOwnership.BORROW,
-    "lock": ZParamOwnership.LOCK,
-}
-
-
-def strip_path_ownership(
-    path: "Operation",
-) -> "tuple[Operation, Optional[ZParamOwnership]]":
-    """If `path` is a DottedPath whose leaf is `.take`/`.borrow`/`.lock`,
-    return `(parent_path, ownership)`. Otherwise return `(path, None)`.
-
-    Only Path-shaped operations have a leaf to inspect; non-Path
-    operation forms (BinOp constants, unit references) pass through
-    unchanged with no ownership.
-    """
-    if path.nodetype == NodeType.DOTTEDPATH:
-        dp = cast("DottedPath", path)
-        own = _OWNERSHIP_SUFFIXES.get(dp.child.name)
-        if own is not None:
-            return dp.parent, own
-    return path, None
-
-
 # a typesafe node id
 NodeID = NewType("NodeID", int)
 
@@ -424,7 +397,7 @@ class Function(Node):
     returntype: Optional["Path"]  # really a Typeref
     # parameters - normal (non-generic) parameters. Each path may
     # carry a `.take` / `.borrow` / `.lock` suffix (recognised by
-    # the type checker via `strip_path_ownership`).
+    # the type checker during resolution).
     parameters: Dict[
         str, "Path"
     ]  # really, a TyperefOrNum            # xxTypeDefinition?

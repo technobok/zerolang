@@ -11,7 +11,6 @@ from zlexer import Lexer, Tokenizer, Token, isvalidunitname
 from ztokentype import TT
 import zast
 from zast import ERR, NodeType, _ERROR_TOKEN
-from ztypes import ZParamOwnership
 
 
 # A Node type.
@@ -1040,7 +1039,7 @@ class Parser:
             promoteexterns(addto=block.externparam, addfrom=val.extern)
             # store the parameter type path as-is. Ownership annotations
             # (.take/.borrow/.lock) are recognised by the type checker
-            # via zast.strip_path_ownership.
+            # during resolution.
             block.parameters[paramname] = val.node
             block.localparam.add(paramname)
 
@@ -1120,7 +1119,7 @@ class Parser:
 
                 # store the return type path as-is. Ownership annotations
                 # (.take/.borrow/.lock) are recognised by the type
-                # checker via zast.strip_path_ownership.
+                # checker during resolution.
                 returntype = typeref.node
 
             elif lex.accept(TT.IS):
@@ -1774,18 +1773,8 @@ class Parser:
             return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
         op = cast(NodeX[zast.Operation], op)
 
-        # Reject `.take` on the match subject. Narrowing requires the
-        # subject to remain addressable across arms; taking ownership
-        # into an arm would invalidate later arms. A subject carrying a
-        # `.take` suffix is a DottedPath whose leaf AtomId is `take`.
-        _stripped, subj_own = zast.strip_path_ownership(op.node)
-        if subj_own is ZParamOwnership.TAKE:
-            msg = (
-                "cannot '.take' the subject of 'match'; the subject is "
-                "borrowed for arm narrowing"
-            )
-            return zast.Error(start=op.node.start, err=ERR.BADCASE, msg=msg)
-
+        # Note: `.take` on the match subject is rejected by the type
+        # checker (it's a semantic concern — see `_check_case`).
         subject = op.node
         promoteexterns(addto=extern, addfrom=op.extern)
 

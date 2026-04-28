@@ -10678,6 +10678,25 @@ class TestMatchTake:
         )
         assert errors != []
 
+    def test_match_subject_take_rejected(self):
+        """`.take` directly on a match subject is rejected at type-check
+        time. Narrowing requires the subject to remain addressable across
+        arms; taking ownership at match time would invalidate later arms."""
+        errors = check_errors(
+            "r: union { ok: i64  err: i64 }\n"
+            "main: function is {\n"
+            "  u: r.ok 42\n"
+            "  match (u.take) case ok then {\n"
+            '    print "ok"\n'
+            "  } case err then {\n"
+            '    print "err"\n'
+            "  }\n"
+            "}"
+        )
+        assert any("'.take' the subject of 'match'" in e.msg for e in errors), (
+            f"expected match-take rejection; got: {[e.msg for e in errors]}"
+        )
+
     def test_union_no_take_subject_still_valid(self):
         """Match without take — subject still valid after match. Under
         shadow narrowing, `u` inside each arm IS the narrowed payload
