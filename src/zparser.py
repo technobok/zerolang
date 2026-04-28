@@ -4,7 +4,6 @@ ZeroLang parser
 """
 
 # pylint: disable=too-many-lines
-from enum import IntEnum, auto
 from typing import List, Dict, Optional, Union, TypeVar, Generic, Set, cast
 from dataclasses import dataclass, field
 from zvfs import ZVfs, DEntryID, DEntryType, ZVfsOpenFile
@@ -20,20 +19,6 @@ _OWNERSHIP_SUFFIXES = {
     "borrow": ZParamOwnership.BORROW,
     "lock": ZParamOwnership.LOCK,
 }
-
-
-class ObjectBodyKind(IntEnum):
-    """
-    Discriminator for `_ITEM_TYPEDEF_MAP` and the variant/union vs
-    record/class branch in `_accept_item_definition`. Protocol /
-    facet / function-as bodies share the same parser machinery but
-    no longer need to be tagged.
-    """
-
-    RECORD = auto()
-    CLASS = auto()
-    VARIANT = auto()
-    UNION = auto()
 
 
 # A Node type.
@@ -1253,23 +1238,19 @@ class Parser:
         )
         return NodeX(node=func, extern=extern)
 
-    # kind → (opening token, AST class). Record/Class carry
-    # field_ownership; Variant/Union carry tag.
-    # Maps each item kind to (opening token, target).
-    # For RECORD/CLASS, target is a NodeType — the parser builds an
-    # ObjectDef with that nodetype. For VARIANT/UNION, target is the
-    # legacy AST class (will be migrated to NodeType in PR 2).
-    _ITEM_TYPEDEF_MAP: Dict[ObjectBodyKind, tuple] = {
-        ObjectBodyKind.RECORD: (TT.RECORD, NodeType.RECORD),
-        ObjectBodyKind.CLASS: (TT.CLASS, NodeType.CLASS),
-        ObjectBodyKind.VARIANT: (TT.VARIANT, zast.Variant),
-        ObjectBodyKind.UNION: (TT.UNION, zast.Union),
+    # NodeType → opening token. All item-definition kinds produce an
+    # `ObjectDef` discriminated by the NodeType.
+    _ITEM_TYPEDEF_MAP: Dict[NodeType, TT] = {
+        NodeType.RECORD: TT.RECORD,
+        NodeType.CLASS: TT.CLASS,
+        NodeType.VARIANT: TT.VARIANT,
+        NodeType.UNION: TT.UNION,
     }
 
     def _accept_item_definition(
         self,
         lex: Lexer,
-        kind: ObjectBodyKind,
+        kind: NodeType,
     ) -> Union[NodeX[zast.TypeDefinition], zast.Error, None]:
         """
         Parse any of record / class / variant / union per the shared
@@ -1277,11 +1258,12 @@ class Parser:
 
             item: keyword [ "is" ] ( "{" ... "}" | "native" ) [ "as" "{" ... "}" ]
 
-        Record/Class produce a unified `ObjectDef` node discriminated
-        by `nodetype`; Variant/Union still produce their legacy
-        per-kind classes (migrated in PR 2).
+        Builds a unified `ObjectDef` node with `nodetype=kind`. Variant/
+        Union populate `tag`; Record/Class leave it as None. All four
+        populate `field_ownership` (variant arms reject .lock in the
+        type checker but the field is carried for diagnostics).
         """
-        tt, target = self._ITEM_TYPEDEF_MAP[kind]
+        tt = self._ITEM_TYPEDEF_MAP[kind]
         start = lex.peek()
         if not lex.accept(tt):
             return None
@@ -1290,38 +1272,18 @@ class Parser:
         if err:
             return err
 
-        items = is_body.items if is_body else {}
-        implements = is_body.islist if is_body else []
-        functions = is_body.functions if is_body else {}
-        as_items = as_body.items if as_body else {}
-        as_functions = as_body.functions if as_body else {}
-
-        node: zast.TypeDefinition
-        if kind in (ObjectBodyKind.RECORD, ObjectBodyKind.CLASS):
-            node = zast.ObjectDef(
-                nodetype=cast(NodeType, target),
-                items=items,
-                functions=functions,
-                implements=implements,
-                as_items=as_items,
-                as_functions=as_functions,
-                is_native=native,
-                field_ownership=is_body.field_ownership if is_body else {},
-                start=start,
-            )
-        elif kind in (ObjectBodyKind.VARIANT, ObjectBodyKind.UNION):
-            ast_cls = cast(type, target)
-            node = ast_cls(
-                items=items,
-                implements=implements,
-                functions=functions,
-                tag=is_body.tag if is_body else None,
-                as_items=as_items,
-                as_functions=as_functions,
-                start=start,
-                is_native=native,
-                field_ownership=is_body.field_ownership if is_body else {},
-            )
+        node = zast.ObjectDef(
+            nodetype=kind,
+            items=is_body.items if is_body else {},
+            functions=is_body.functions if is_body else {},
+            implements=is_body.islist if is_body else [],
+            as_items=as_body.items if as_body else {},
+            as_functions=as_body.functions if as_body else {},
+            tag=is_body.tag if is_body else None,
+            is_native=native,
+            field_ownership=is_body.field_ownership if is_body else {},
+            start=start,
+        )
         return NodeX(node=node, extern=extern)
 
     def _accept_record(
@@ -1329,7 +1291,7 @@ class Parser:
     ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         return cast(
             Union[NodeX[zast.ObjectDef], zast.Error, None],
-            self._accept_item_definition(lex, ObjectBodyKind.RECORD),
+            self._accept_item_definition(lex, NodeType.RECORD),
         )
 
     def _accept_class(
@@ -1337,26 +1299,28 @@ class Parser:
     ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         return cast(
             Union[NodeX[zast.ObjectDef], zast.Error, None],
-            self._accept_item_definition(lex, ObjectBodyKind.CLASS),
+            self._accept_item_definition(lex, NodeType.CLASS),
         )
 
     def _accept_variant(
         self, lex: Lexer
-    ) -> Union[NodeX[zast.Variant], zast.Error, None]:
+    ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         return cast(
-            Union[NodeX[zast.Variant], zast.Error, None],
-            self._accept_item_definition(lex, ObjectBodyKind.VARIANT),
+            Union[NodeX[zast.ObjectDef], zast.Error, None],
+            self._accept_item_definition(lex, NodeType.VARIANT),
         )
 
-    def _accept_union(self, lex: Lexer) -> Union[NodeX[zast.Union], zast.Error, None]:
+    def _accept_union(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         return cast(
-            Union[NodeX[zast.Union], zast.Error, None],
-            self._accept_item_definition(lex, ObjectBodyKind.UNION),
+            Union[NodeX[zast.ObjectDef], zast.Error, None],
+            self._accept_item_definition(lex, NodeType.UNION),
         )
 
     def _accept_protocol(
         self, lex: Lexer
-    ) -> Union[NodeX[zast.Protocol], zast.Error, None]:
+    ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         """
         Accept a protocol per grammar's item_definition:
 
@@ -1373,18 +1337,21 @@ class Parser:
         if err:
             return err
 
-        protocol = zast.Protocol(
-            parameters=is_body.items if is_body else {},
-            specs=is_body.functions if is_body else {},
-            includes=is_body.islist if is_body else [],
+        node = zast.ObjectDef(
+            nodetype=NodeType.PROTOCOL,
+            items=is_body.items if is_body else {},
+            functions=is_body.functions if is_body else {},
+            implements=is_body.islist if is_body else [],
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
-            start=start,
             is_native=native,
+            start=start,
         )
-        return NodeX(node=protocol, extern=extern)
+        return NodeX(node=node, extern=extern)
 
-    def _accept_facet(self, lex: Lexer) -> Union[NodeX[zast.Facet], zast.Error, None]:
+    def _accept_facet(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.ObjectDef], zast.Error, None]:
         """
         Accept a facet (value-type interface). Same grammar shape as
         protocol; routed through `_accept_item_bodies` for `is`/`as`
@@ -1398,16 +1365,17 @@ class Parser:
         if err:
             return err
 
-        facet = zast.Facet(
-            parameters=is_body.items if is_body else {},
-            specs=is_body.functions if is_body else {},
-            includes=is_body.islist if is_body else [],
+        node = zast.ObjectDef(
+            nodetype=NodeType.FACET,
+            items=is_body.items if is_body else {},
+            functions=is_body.functions if is_body else {},
+            implements=is_body.islist if is_body else [],
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
-            start=start,
             is_native=native,
+            start=start,
         )
-        return NodeX(node=facet, extern=extern)
+        return NodeX(node=node, extern=extern)
 
     def _accept_item_bodies(
         self,

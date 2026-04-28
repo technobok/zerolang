@@ -168,7 +168,7 @@ class TestFinding1TypeAnnotations:
         )
         mainunit = program.units[program.mainunitname]
         result = mainunit.body["Result"]
-        assert isinstance(result, zast.Union)
+        assert result.nodetype == zast.NodeType.UNION
         for sname, spath in result.items.items():
             assert spath.type is not None, f"Subtype '{sname}' has no .type"
 

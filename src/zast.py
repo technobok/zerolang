@@ -369,11 +369,6 @@ TypeDefinition = typing.Union[
     "Unit",
     "Function",
     "ObjectDef",
-    "Variant",
-    "Union",
-    "Enum",
-    "Protocol",
-    "Facet",
     "Expression",
     "Operation",
     "LabelValue",
@@ -443,101 +438,6 @@ class ObjectDef(Node):
     tag: Optional["Path"] = None
     is_native: bool = False
     field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
-
-
-@dataclass
-class Union(Node):
-    """
-    Union Definition Node
-    NB: name clash with typing.Union
-    """
-
-    nodetype: NodeType = field(default=NodeType.UNION, init=False)
-    items: Dict[str, "Path"]  # generic and normal (???) a TyperefOrNum
-    implements: typing.List[
-        "Path"
-    ]  # 'is' interfaces satisfied by this record, a Typeref
-    functions: Dict[str, "Function"]
-    tag: Optional["Path"]  # a Typeref
-    as_items: Dict[str, "Path"]
-    as_functions: Dict[str, "Function"]
-    is_native: bool = False  # native type: instance state is compiler-provided
-    # arm name -> ZParamOwnership (only LOCK currently allowed on union arms;
-    # marks the arm as holding a locked reference into a parent rather than
-    # owning its payload)
-    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
-
-
-@dataclass
-class Variant(Node):
-    """
-    Variant Definition Node
-    """
-
-    nodetype: NodeType = field(default=NodeType.VARIANT, init=False)
-    items: Dict[str, "Path"]  # generic and normal (???) as TyperefOrNum
-    implements: typing.List[
-        "Path"
-    ]  # 'is' interfaces satisfied by this record, a Typeref
-    functions: Dict[str, "Function"]
-    tag: Optional["Path"]  # a Typeref
-    as_items: Dict[str, "Path"]
-    as_functions: Dict[str, "Function"]
-    is_native: bool = False  # native type: instance state is compiler-provided
-    # arm name -> ZParamOwnership (variant arms are valtype-only; .lock is
-    # rejected by the type checker but the field is carried for diagnostics)
-    field_ownership: Dict[str, "ZParamOwnership"] = field(default_factory=dict)
-
-
-@dataclass
-class Enum(Node):
-    """
-    Enum Definition Node
-    """
-
-    nodetype: NodeType = field(default=NodeType.ENUM, init=False)
-    # if Path provided, must evaluate to num type that matches tag
-    # otherwise, Path will just refer to itself...:
-    # value is AtomId and AtomId.name == same as str)
-    items: Dict[str, "Path"]
-    implements: typing.List[
-        "Path"
-    ]  # 'is' interfaces satisfied by this record, a Typeref
-    functions: Dict[str, "Function"]
-    tag: Optional["Path"]  # must be a simple numeric type (including char), a Typeref
-    as_items: Dict[str, "Path"]
-    as_functions: Dict[str, "Function"]
-
-
-@dataclass
-class Protocol(Node):
-    """
-    Protocol Definition Node
-    """
-
-    nodetype: NodeType = field(default=NodeType.PROTOCOL, init=False)
-    parameters: Dict[str, "Path"]  # generic only, a TyperefOrNum
-    # specs (to be implimented by target) and self contained functions
-    specs: Dict[str, "Function"]
-    includes: typing.List["Path"]  # interfaces satisfied by this record, a Typeref
-    as_items: Dict[str, "Path"] = field(default_factory=dict)
-    as_functions: Dict[str, "Function"] = field(default_factory=dict)
-    is_native: bool = False
-
-
-@dataclass
-class Facet(Node):
-    """
-    Facet Definition Node - value-type interface (like Protocol but valtype)
-    """
-
-    nodetype: NodeType = field(default=NodeType.FACET, init=False)
-    parameters: Dict[str, "Path"]  # generic only, a TyperefOrNum
-    specs: Dict[str, "Function"]  # specs (to be implemented by conforming valtypes)
-    includes: typing.List["Path"]  # interfaces satisfied by this facet
-    as_items: Dict[str, "Path"] = field(default_factory=dict)
-    as_functions: Dict[str, "Function"] = field(default_factory=dict)
-    is_native: bool = False
 
 
 ExpressionSubTypes = typing.Union[
@@ -964,41 +864,23 @@ def node_children(node: "Node") -> "typing.List[Node]":
         out.extend(fn.as_items.values())
         out.extend(fn.as_functions.values())
         return out
-    if nt in (NodeType.RECORD, NodeType.CLASS):
-        rc = cast(ObjectDef, node)
-        out.extend(rc.items.values())
-        out.extend(rc.implements)
-        out.extend(rc.functions.values())
-        out.extend(rc.as_items.values())
-        out.extend(rc.as_functions.values())
-        return out
-    if nt in (NodeType.UNION, NodeType.VARIANT):
-        uv = cast(Union, node)
-        out.extend(uv.items.values())
-        out.extend(uv.implements)
-        out.extend(uv.functions.values())
-        if uv.tag is not None:
-            out.append(uv.tag)
-        out.extend(uv.as_items.values())
-        out.extend(uv.as_functions.values())
-        return out
-    if nt == NodeType.ENUM:
-        en = cast(Enum, node)
-        out.extend(en.items.values())
-        out.extend(en.implements)
-        out.extend(en.functions.values())
-        if en.tag is not None:
-            out.append(en.tag)
-        out.extend(en.as_items.values())
-        out.extend(en.as_functions.values())
-        return out
-    if nt in (NodeType.PROTOCOL, NodeType.FACET):
-        pf = cast(Protocol, node)
-        out.extend(pf.parameters.values())
-        out.extend(pf.specs.values())
-        out.extend(pf.includes)
-        out.extend(pf.as_items.values())
-        out.extend(pf.as_functions.values())
+    if nt in (
+        NodeType.RECORD,
+        NodeType.CLASS,
+        NodeType.UNION,
+        NodeType.VARIANT,
+        NodeType.ENUM,
+        NodeType.PROTOCOL,
+        NodeType.FACET,
+    ):
+        od = cast(ObjectDef, node)
+        out.extend(od.items.values())
+        out.extend(od.functions.values())
+        out.extend(od.implements)
+        if od.tag is not None:
+            out.append(od.tag)
+        out.extend(od.as_items.values())
+        out.extend(od.as_functions.values())
         return out
     if nt == NodeType.EXPRESSION:
         out.append(cast(Expression, node).expression)

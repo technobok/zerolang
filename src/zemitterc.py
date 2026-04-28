@@ -381,12 +381,12 @@ class CEmitter:
         self.source_map: List[Optional[int]] = []
         # track numeric constant names (no distinct ZTypeType for these)
         self._const_names: set[str] = set()
-        self._protocol_defs: dict[str, zast.Protocol] = {}  # name -> AST node
+        self._protocol_defs: dict[str, zast.ObjectDef] = {}  # name -> AST node
         # Separate slot for the io stream protocols so io.file's
         # wrapper emission can find them even when user code shadows
         # the short name (e.g. a user-declared `reader` protocol).
-        self._io_protocol_defs: dict[str, zast.Protocol] = {}
-        self._facet_defs: dict[str, zast.Facet] = {}  # name -> AST node
+        self._io_protocol_defs: dict[str, zast.ObjectDef] = {}
+        self._facet_defs: dict[str, zast.ObjectDef] = {}  # name -> AST node
         self._facet_conformers: dict[
             str, list
         ] = {}  # facet name -> list of impl type names
@@ -823,7 +823,7 @@ class CEmitter:
             func = cast(zast.Function, defn)
             items = func.as_items if func.as_items else func.parameters
         elif defn.nodetype == NodeType.PROTOCOL:
-            items = cast(zast.Protocol, defn).parameters
+            items = cast(zast.ObjectDef, defn).items
         elif defn.nodetype == NodeType.UNIT:
             items = cast(zast.Unit, defn).body
         if items is None:
@@ -855,9 +855,7 @@ class CEmitter:
                         return True
         return False
 
-    def _is_typedef_defn(
-        self, defn: "zast.ObjectDef | zast.Union | zast.Variant"
-    ) -> bool:
+    def _is_typedef_defn(self, defn: "zast.ObjectDef") -> bool:
         """Check if a type definition is a typedef (single .typedef item)."""
         items = defn.items
         if len(items) != 1:
@@ -869,9 +867,7 @@ class CEmitter:
             and cast(zast.DottedPath, fpath).child.name == "typedef"
         )
 
-    def _typedef_base_name(
-        self, defn: "zast.ObjectDef | zast.Union | zast.Variant"
-    ) -> str:
+    def _typedef_base_name(self, defn: "zast.ObjectDef") -> str:
         """Extract the base type name from a typedef definition."""
         fpath = next(iter(defn.items.values()))
         assert fpath.nodetype == NodeType.DOTTEDPATH
@@ -1114,7 +1110,7 @@ class CEmitter:
                 if self._resolved_type(pname) is None:
                     continue
                 self._current_node_id = defn.nodeid
-                self._emit_protocol(pname, cast(zast.Protocol, defn))
+                self._emit_protocol(pname, cast(zast.ObjectDef, defn))
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -1320,9 +1316,9 @@ class CEmitter:
                 self._current_node_id = defn.nodeid
                 defn_type = defn.nodetype
                 if defn_type == NodeType.UNION and not cli_classes_only:
-                    self._emit_union(name, cast(zast.Union, defn))
+                    self._emit_union(name, cast(zast.ObjectDef, defn))
                 elif defn_type == NodeType.VARIANT and not cli_classes_only:
-                    self._emit_variant(name, cast(zast.Variant, defn))
+                    self._emit_variant(name, cast(zast.ObjectDef, defn))
                 elif defn_type == NodeType.RECORD and (
                     (
                         unitname == "cli"
@@ -2061,7 +2057,7 @@ class CEmitter:
         else:
             self.data_defs.append(f"static const {ctype} {cname} = {int(value)};\n")
 
-    def _emit_protocol(self, name: str, proto: zast.Protocol) -> None:
+    def _emit_protocol(self, name: str, proto: zast.ObjectDef) -> None:
         """Emit vtable struct, instance struct, and destroy function for a protocol."""
         self.needs_stdint = True
         self.needs_stdlib = True
@@ -2076,7 +2072,7 @@ class CEmitter:
 
         # vtable struct — function pointers with void* as first param
         lines.append("typedef struct {\n")
-        for sname, sfunc in proto.specs.items():
+        for sname, sfunc in proto.functions.items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             spec_type = proto_type.children.get(sname) if proto_type else None
@@ -2113,7 +2109,7 @@ class CEmitter:
         label: str,
         proto_name: str,
         impl_defn: "zast.ObjectDef",
-        proto: "Optional[zast.Protocol]" = None,
+        proto: "Optional[zast.ObjectDef]" = None,
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a protocol implementation."""
         if proto is None:
@@ -2129,7 +2125,7 @@ class CEmitter:
         all_methods = dict(impl_defn.as_functions)
         all_methods.update(impl_defn.functions)
         impl_type = self._resolved_type(impl_name)
-        for sname in proto.specs:
+        for sname in proto.functions:
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
                 ret_ctype = self._return_ctype(mfunc)
@@ -2152,7 +2148,7 @@ class CEmitter:
 
         # wrapper functions for each spec
         proto_type = self._resolved_type(proto_name)
-        for sname, sfunc in proto.specs.items():
+        for sname, sfunc in proto.functions.items():
             ret_ctype = self._return_ctype(sfunc)
             # wrapper params: void* _data, then remaining non-this params.
             # Collection types travel through the vtable as pointers
@@ -2193,7 +2189,7 @@ class CEmitter:
         # static vtable instance
         vtable_name = f"z_{impl_name}_{label}_vtable"
         lines.append(f"static z_{proto_name}_vtable_t {vtable_name} = {{\n")
-        for sname in proto.specs:
+        for sname in proto.functions:
             wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
             lines.append(f"    .{sname} = {wrapper_name},\n")
         lines.append("};\n\n")
@@ -2269,14 +2265,14 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
-    def _emit_facet(self, name: str, facet: zast.Facet) -> None:
+    def _emit_facet(self, name: str, facet: zast.ObjectDef) -> None:
         """Emit vtable struct, data union, and instance struct for a facet."""
         self.needs_stdint = True
         lines: List[str] = []
 
         # vtable struct — function pointers with void* as first param (same as protocol)
         lines.append("typedef struct {\n")
-        for sname, sfunc in facet.specs.items():
+        for sname, sfunc in facet.functions.items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             for pname, ppath in sfunc.parameters.items():
@@ -2310,7 +2306,7 @@ class CEmitter:
         impl_name: str,
         label: str,
         facet_name: str,
-        impl_defn: "zast.ObjectDef | zast.Variant",
+        impl_defn: "zast.ObjectDef",
     ) -> None:
         """Emit wrapper functions, static vtable, and create function for a facet implementation."""
         facet = self._facet_defs.get(facet_name)
@@ -2323,7 +2319,7 @@ class CEmitter:
         # forward declarations for methods called by wrappers
         all_methods = dict(impl_defn.as_functions)
         all_methods.update(impl_defn.functions)
-        for sname in facet.specs:
+        for sname in facet.functions:
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
                 ret_ctype = self._return_ctype(mfunc)
@@ -2337,7 +2333,7 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
-        for sname, sfunc in facet.specs.items():
+        for sname, sfunc in facet.functions.items():
             ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
@@ -2365,7 +2361,7 @@ class CEmitter:
         # static vtable instance
         vtable_name = f"z_{impl_name}_{label}_vtable"
         lines.append(f"static z_{facet_name}_vtable_t {vtable_name} = {{\n")
-        for sname in facet.specs:
+        for sname in facet.functions:
             wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
             lines.append(f"    .{sname} = {wrapper_name},\n")
         lines.append("};\n\n")
@@ -2910,7 +2906,7 @@ class CEmitter:
         self._emit_as_constants(name, cls.as_items)
 
     def _resolve_tag_values(
-        self, union_defn: "zast.Union | zast.Variant"
+        self, union_defn: "zast.ObjectDef"
     ) -> Optional[Dict[str, int]]:
         """Resolve custom tag values from as_items if a .tag reference exists."""
         for as_name, as_path in union_defn.as_items.items():
@@ -2960,7 +2956,7 @@ class CEmitter:
                         return values
         return None
 
-    def _union_lock_arm_names(self, union_defn: zast.Union) -> set:
+    def _union_lock_arm_names(self, union_defn: zast.ObjectDef) -> set:
         """Return the set of arm names declared as `name: t.lock` on a union.
 
         Mirrors the type-checker's `lock_arm_names` on the resolved ZType,
@@ -2973,7 +2969,7 @@ class CEmitter:
                 out.add(sname)
         return out
 
-    def _emit_union(self, name: str, union_defn: zast.Union) -> None:
+    def _emit_union(self, name: str, union_defn: zast.ObjectDef) -> None:
         self.needs_stdint = True
         self.needs_stdlib = True
         lines: List[str] = []
@@ -4444,7 +4440,7 @@ class CEmitter:
 
         self.struct_defs.append("".join(lines))
 
-    def _emit_variant(self, name: str, variant_defn: zast.Variant) -> None:
+    def _emit_variant(self, name: str, variant_defn: zast.ObjectDef) -> None:
         self.needs_stdint = True
         lines: List[str] = []
 
@@ -8020,7 +8016,7 @@ class CEmitter:
                         break
             subtype_path = None
             if union_defn is not None and union_defn.nodetype == NodeType.UNION:
-                subtype_path = cast(zast.Union, union_defn).items.get(subtype_name)
+                subtype_path = cast(zast.ObjectDef, union_defn).items.get(subtype_name)
             is_null = (
                 subtype_path is not None
                 and subtype_path.nodetype == NodeType.ATOMID
@@ -8299,7 +8295,9 @@ class CEmitter:
             variant_defn = mainunit.body.get(variant_name) if mainunit else None
             subtype_path = None
             if variant_defn is not None and variant_defn.nodetype == NodeType.VARIANT:
-                subtype_path = cast(zast.Variant, variant_defn).items.get(subtype_name)
+                subtype_path = cast(zast.ObjectDef, variant_defn).items.get(
+                    subtype_name
+                )
             is_null = (
                 subtype_path is not None
                 and subtype_path.nodetype == NodeType.ATOMID

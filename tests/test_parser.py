@@ -492,15 +492,15 @@ class TestFacetDefinition:
         result = parse_unit("f: facet { show: function {:this} out i64 }")
         body = get_unit_body(result)
         assert "f" in body
-        assert isinstance(body["f"], zast.Facet)
-        assert "show" in body["f"].specs
+        assert body["f"].nodetype == zast.NodeType.FACET
+        assert "show" in body["f"].functions
 
     def test_facet_with_is(self):
         """facet with explicit is keyword"""
         result = parse_unit("f: facet is { show: function {:this} out i64 }")
         body = get_unit_body(result)
-        assert isinstance(body["f"], zast.Facet)
-        assert "show" in body["f"].specs
+        assert body["f"].nodetype == zast.NodeType.FACET
+        assert "show" in body["f"].functions
 
     def test_facet_with_generic_param(self):
         """facet with generic parameter"""
@@ -509,9 +509,9 @@ class TestFacetDefinition:
         )
         body = get_unit_body(result)
         fac = body["f"]
-        assert isinstance(fac, zast.Facet)
-        assert "t" in fac.parameters
-        assert "show" in fac.specs
+        assert fac.nodetype == zast.NodeType.FACET
+        assert "t" in fac.items
+        assert "show" in fac.functions
 
 
 class TestAsClause:
@@ -570,7 +570,7 @@ class TestAsClause:
         result = parse_unit("v: variant { x: f64 } as { y: f64 }")
         body = get_unit_body(result)
         v = body["v"]
-        assert isinstance(v, zast.Variant)
+        assert v.nodetype == zast.NodeType.VARIANT
         assert "x" in v.items
         assert "y" in v.as_items
 
@@ -579,7 +579,7 @@ class TestAsClause:
         result = parse_unit("u: union { x: f64 } as { y: f64 }")
         body = get_unit_body(result)
         u = body["u"]
-        assert isinstance(u, zast.Union)
+        assert u.nodetype == zast.NodeType.UNION
         assert "x" in u.items
         assert "y" in u.as_items
 
@@ -639,7 +639,7 @@ class TestDataAsTagParsing:
         )
         body = get_unit_body(result)
         u = body["u"]
-        assert isinstance(u, zast.Union)
+        assert u.nodetype == zast.NodeType.UNION
         assert "tag" in u.as_items
         as_tag = u.as_items["tag"]
         assert isinstance(as_tag, zast.DottedPath)
@@ -683,7 +683,7 @@ class TestLabelValueShorthand:
         result = parse_unit("u: union { :u8\n :u16\n :u32 }")
         body = get_unit_body(result)
         u = body["u"]
-        assert isinstance(u, zast.Union)
+        assert u.nodetype == zast.NodeType.UNION
         assert "u8" in u.items
         assert "u16" in u.items
         assert "u32" in u.items
@@ -824,7 +824,7 @@ class TestNativeKeyword:
         result = parse_unit("u: union is native")
         body = get_unit_body(result)
         u = body["u"]
-        assert isinstance(u, zast.Union)
+        assert u.nodetype == zast.NodeType.UNION
         assert u.is_native is True
 
     def test_native_variant(self):
@@ -832,7 +832,7 @@ class TestNativeKeyword:
         result = parse_unit("v: variant is native")
         body = get_unit_body(result)
         v = body["v"]
-        assert isinstance(v, zast.Variant)
+        assert v.nodetype == zast.NodeType.VARIANT
         assert v.is_native is True
 
     def test_native_keyword_as_ref(self):

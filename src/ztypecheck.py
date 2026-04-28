@@ -1602,7 +1602,7 @@ class TypeChecker:
             ztype.children["tag"] = gen_data
 
     def _resolve_union_type(
-        self, unitname: str, name: str, union_defn: zast.Union
+        self, unitname: str, name: str, union_defn: zast.ObjectDef
     ) -> ZType:
         key = f"{unitname}.{name}"
         utype = _make_type(name, ZTypeType.UNION)
@@ -1809,7 +1809,7 @@ class TypeChecker:
             self._pending_borrow_lock = src_path
 
     def _maybe_elide_union_destructor(
-        self, utype: ZType, union_defn: zast.Union
+        self, utype: ZType, union_defn: zast.ObjectDef
     ) -> None:
         """Mark a union's destructor as not-needed when no arm requires
         runtime cleanup (every arm is `null` or a `.lock` reference)."""
@@ -1825,7 +1825,7 @@ class TypeChecker:
         utype.destructor_name = None
 
     def _resolve_variant_type(
-        self, unitname: str, name: str, variant_defn: zast.Variant
+        self, unitname: str, name: str, variant_defn: zast.ObjectDef
     ) -> ZType:
         """Resolve a variant definition into a VARIANT ZType.
 
@@ -2799,7 +2799,7 @@ class TypeChecker:
             )
 
     def _resolve_protocol_type(
-        self, unitname: str, name: str, proto: zast.Protocol
+        self, unitname: str, name: str, proto: zast.ObjectDef
     ) -> ZType:
         key = f"{unitname}.{name}"
         ptype = _make_type(name, ZTypeType.PROTOCOL)
@@ -2811,7 +2811,7 @@ class TypeChecker:
 
         # pass 1: detect generic params from protocol parameters
         generic_ctx: dict[str, ZType] = {}
-        for pname, ppath in proto.parameters.items():
+        for pname, ppath in proto.items.items():
             pt = self._resolve_typeref(ppath)
             if (
                 pt
@@ -2828,7 +2828,7 @@ class TypeChecker:
         # pass 2: resolve specs with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        for sname, sfunc in proto.specs.items():
+        for sname, sfunc in proto.functions.items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ptype.children[sname] = st
         if generic_ctx:
@@ -2855,7 +2855,9 @@ class TypeChecker:
         self._resolving.pop()
         return ptype
 
-    def _resolve_facet_type(self, unitname: str, name: str, facet: zast.Facet) -> ZType:
+    def _resolve_facet_type(
+        self, unitname: str, name: str, facet: zast.ObjectDef
+    ) -> ZType:
         key = f"{unitname}.{name}"
         ftype = _make_type(name, ZTypeType.FACET)
         self._resolved[key] = ftype
@@ -2866,7 +2868,7 @@ class TypeChecker:
 
         # pass 1: detect generic params from facet parameters
         generic_ctx: dict[str, ZType] = {}
-        for pname, ppath in facet.parameters.items():
+        for pname, ppath in facet.items.items():
             pt = self._resolve_typeref(ppath)
             if (
                 pt
@@ -2883,7 +2885,7 @@ class TypeChecker:
         # pass 2: resolve specs with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        for sname, sfunc in facet.specs.items():
+        for sname, sfunc in facet.functions.items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ftype.children[sname] = st
         if generic_ctx:
