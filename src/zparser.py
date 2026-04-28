@@ -1962,20 +1962,20 @@ class Parser:
 
         # The first clause may be a naked condition — no `while`, no
         # binding label, no `loop`. All keyword-prefixed clauses
-        # (including `while COND`) are handled by the loop below.
+        # (including `while COND`) are handled by the loop below. If
+        # nothing parses, the post-loop "require at least one condition
+        # or 'loop'" check produces the accurate error.
         t = lex.peek()
         if t.toktype not in (TT.LABEL, TT.LOOP, TT.WHILE):
             op = self._accept_operation(lex)
-            if op is not None and op.is_error:
-                return cast(zast.Error, op)
-            if not op:
-                msg = "Expected operation (condition) for 'for'"
-                return zast.Error(start=lex.acceptany(), err=ERR.EXPECTEDOP, msg=msg)
-            op = cast(NodeX[zast.Operation], op)
-            # loop is still None here, so this is always a precondition
-            conditions[f" *{whileindex}"] = op.node
-            whileindex += 1
-            promoteexterns(addto=extern, addfrom=op.extern, local=local)
+            if op is not None:
+                if op.is_error:
+                    return cast(zast.Error, op)
+                op = cast(NodeX[zast.Operation], op)
+                # loop is still None here, so this is always a precondition
+                conditions[f" *{whileindex}"] = op.node
+                whileindex += 1
+                promoteexterns(addto=extern, addfrom=op.extern, local=local)
 
         while True:
             t = lex.peek()
