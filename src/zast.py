@@ -17,6 +17,7 @@ import zvfs
 from zvfs import DEntryID
 from zlexer import Token, TT
 from ztypes import ZType, ZParamOwnership, ZOwnership
+from zsymtab_proto import SymbolTableProto
 
 
 @unique
@@ -286,9 +287,9 @@ class Program:
     resolved: Dict[str, "ZType"] = field(default_factory=dict)
 
     # Phase 7c: SymbolTable attached by typecheck() so the SQL dumper can
-    # emit scope/entry/variable rows. Typed as Optional[object] to avoid a
-    # zast <-> zenv import cycle; the dumper uses getattr / duck-typing.
-    symbol_table: "Optional[object]" = field(default=None, init=False)
+    # emit scope/entry/variable rows. Typed via SymbolTableProto (defined
+    # in zsymtab_proto.py) so zast does not need to import zenv.
+    symbol_table: "Optional[SymbolTableProto]" = field(default=None, init=False)
 
     # Phase 7d: Unit AST nodeid → resolved unit ZType. Attached by
     # typecheck() as a snapshot of TypeChecker.unit_types_by_id. Used by
@@ -709,6 +710,12 @@ class For(Node):
     # set by type checker: named bindings whose operation returns option
     # (re-evaluated each iteration, auto-unwrapped, terminates on none)
     iterator_bindings: typing.Set[str] = field(default_factory=set, init=False)
+
+    # set by emitter when this For is used as a list comprehension
+    # (`[for x: xs do x*2]`): the C temp the result list lives in,
+    # and the mangled C list-type name (e.g. `list__i64`).
+    _comprehension_list_var: Optional[str] = field(default=None, init=False)
+    _comprehension_list_name: Optional[str] = field(default=None, init=False)
 
 
 @dataclass

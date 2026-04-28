@@ -5,7 +5,7 @@ Starts at main function, resolves names on demand, detects cycles.
 Includes ownership checking (Phase 4c).
 """
 
-from typing import Optional, List, Tuple, cast
+from typing import Callable, Optional, List, Tuple, cast
 
 import zast
 from zast import ERR, NodeType, clone_function
@@ -458,6 +458,20 @@ class TypeChecker:
         self._optionval_template_id: int = -1
         self._optionview_template_id: int = -1
 
+        # _type_of_definition dispatch table: AST class -> bound resolver
+        # method. Keyed by type(defn) so the lookup is O(1) and avoids
+        # a getattr-by-name call.
+        self._definition_resolvers: "dict[type, Callable]" = {
+            zast.Function: self._resolve_function_type,
+            zast.Record: self._resolve_record_type,
+            zast.Class: self._resolve_class_type,
+            zast.Union: self._resolve_union_type,
+            zast.Variant: self._resolve_variant_type,
+            zast.Protocol: self._resolve_protocol_type,
+            zast.Facet: self._resolve_facet_type,
+            zast.Unit: self._resolve_inline_unit_type,
+        }
+
     # Keywords used to auto-categorise errors when no explicit code is given
     _OWNERSHIP_KEYWORDS = (
         "take",
@@ -791,26 +805,15 @@ class TypeChecker:
                 self.unit_types[unitname].children[name] = t
         return t
 
-    # dispatch table for _type_of_definition: AST type -> resolver method name
-    _DEFINITION_RESOLVERS: dict = {
-        zast.Function: "_resolve_function_type",
-        zast.Record: "_resolve_record_type",
-        zast.Class: "_resolve_class_type",
-        zast.Union: "_resolve_union_type",
-        zast.Variant: "_resolve_variant_type",
-        zast.Protocol: "_resolve_protocol_type",
-        zast.Facet: "_resolve_facet_type",
-        zast.Unit: "_resolve_inline_unit_type",
-    }
-
     def _type_of_definition(
         self, unitname: str, name: str, defn: zast.TypeDefinition
     ) -> Optional[ZType]:
         """Type-check a definition, pushing/popping the resolving stack."""
-        # dispatch structured types via table
-        resolver_name = self._DEFINITION_RESOLVERS.get(type(defn))
-        if resolver_name:
-            return getattr(self, resolver_name)(unitname, name, defn)
+        # dispatch structured types via table (built in __init__ so each
+        # entry binds to the per-instance bound method — no getattr).
+        resolver = self._definition_resolvers.get(type(defn))
+        if resolver is not None:
+            return resolver(unitname, name, defn)
         # alias: DottedPath reference
         if defn.nodetype == NodeType.DOTTEDPATH:
             key = f"{unitname}.{name}"

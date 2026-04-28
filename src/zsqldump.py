@@ -339,11 +339,9 @@ def dump_sql(
     # Walks the archived history plus any remaining live scopes. The
     # dumper tolerates a missing symbol_table (e.g. when called without
     # running typecheck): simply emits no rows for the symtab tables.
-    symtab = getattr(program, "symbol_table", None)
+    symtab = program.symbol_table
     if symtab is not None:
-        scopes_iter = list(getattr(symtab, "_history", [])) + list(
-            getattr(symtab, "_scopes", [])
-        )
+        scopes_iter = list(symtab._history) + list(symtab._scopes)
         seen_scopes: set[int] = set()
         seen_vars: dict[int, object] = {}
         for depth, scope in enumerate(scopes_iter):

@@ -366,6 +366,12 @@ class CEmitter:
         self.func_defs: "TrackedList" = TrackedList(self)
         self.data_defs: "TrackedList" = TrackedList(self)
         self.func_aliases: List[str] = []  # #define aliases for deduped functions
+        # Per-call scratch: each `_emit_call` resets this list and
+        # appends one entry per emitted argument so callers can read
+        # back the last-emitted arg expressions (used by implicit-take
+        # post-processing). Pre-initialised here so accesses don't have
+        # to defend with getattr.
+        self._last_emitted_arg_vals: List[str] = []
         # current AST node ID being emitted (set before emission blocks)
         self._current_node_id: Optional[int] = None
         # current enclosing type name (set in _emit_function when record_name
@@ -5510,7 +5516,7 @@ class CEmitter:
 
         # implicit take: invalidate args passed to .take parameters
         ftype = call.callable.type
-        emitted_vals = getattr(self, "_last_emitted_arg_vals", [])
+        emitted_vals = self._last_emitted_arg_vals
         if ftype and ftype.param_ownership:
             params = list(ftype.children.items())
             # Method calls: `this` is the receiver, prepended at the
@@ -7838,7 +7844,7 @@ class CEmitter:
             transferred when the param is annotated ``.take`` — default for
             these is BORROW and the caller retains ownership.
         """
-        emitted_vals = getattr(self, "_last_emitted_arg_vals", [])
+        emitted_vals = self._last_emitted_arg_vals
         ftype = call.callable.type
         for i, arg in enumerate(call.arguments):
             if i >= len(emitted_vals) or not emitted_vals[i]:
@@ -9063,10 +9069,10 @@ class CEmitter:
         """Emit for-loop body, with optional list comprehension append."""
         if not fornode.loop:
             return ""
-        list_var = getattr(fornode, "_comprehension_list_var", None)
+        list_var = fornode._comprehension_list_var
         if not list_var:
             return self._emit_statement(fornode.loop)
-        list_name = fornode._comprehension_list_name  # type: ignore[attr-defined]
+        list_name = fornode._comprehension_list_name
         parts: List[str] = []
         stmts = fornode.loop.statements
         for sl in stmts[:-1]:
@@ -9094,8 +9100,8 @@ class CEmitter:
         self._temp.frees.append(tmp)
         if list_name not in self._temp.class_set:
             self._temp.class_set[tmp] = list_name
-        fornode._comprehension_list_var = tmp  # type: ignore[attr-defined]
-        fornode._comprehension_list_name = list_name  # type: ignore[attr-defined]
+        fornode._comprehension_list_var = tmp
+        fornode._comprehension_list_name = list_name
         self._temp.decls.append(self._emit_for(fornode))
         if tmp in self._temp.frees:
             self._temp.frees.remove(tmp)

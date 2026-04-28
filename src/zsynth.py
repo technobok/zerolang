@@ -14,13 +14,14 @@ distinguish compiler-synthesised state from user source.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional
+from typing import Callable, Dict, List, Optional
 
 import zast
 from zast import (
     Assignment,
     AtomId,
     Expression,
+    NodeType,
     Operation,
     StatementLine,
 )
@@ -101,6 +102,12 @@ class Rewriter:
     """
 
     preamble: List[StatementLine] = field(default_factory=list)
+    # Subclasses populate `handlers` (typically in `__post_init__` or
+    # `__init__`) with `{NodeType.X: self.visit_x}` mappings. The base
+    # `visit` method dispatches via this dict — no `getattr`-by-name.
+    handlers: "Dict[NodeType, Callable[[zast.Node], Optional[zast.Node]]]" = field(
+        default_factory=dict
+    )
 
     def emit_preamble(self, line: StatementLine) -> None:
         self.preamble.append(line)
@@ -111,13 +118,11 @@ class Rewriter:
         return out
 
     def visit(self, node: Optional[zast.Node]) -> Optional[zast.Node]:
-        """Dispatch to a `visit_<NodeType.name>` handler if present;
-        otherwise return the node unchanged. Subclasses normally
-        override the typed handlers, not this method."""
+        """Dispatch to the `handlers[node.nodetype]` callable if
+        registered; otherwise return the node unchanged."""
         if node is None:
             return None
-        handler_name = f"visit_{node.nodetype.name}"
-        handler = getattr(self, handler_name, None)
+        handler = self.handlers.get(node.nodetype)
         if handler is not None:
             return handler(node)
         return node
