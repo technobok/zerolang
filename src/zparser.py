@@ -1134,7 +1134,7 @@ class Parser:
         externparam: Dict[str, zast.AtomId] = {}
         # parameter names - local definitions for determining externs
         localparam: Set[str] = set()
-        gotaccept = False  # parameter block has been parsed (possibly empty)
+        got_in = False  # 'in' parameter block has been parsed (possibly empty)
         body: Optional[zast.Statement] = None  # None for spec
         is_native: bool = False  # True for native (compiler-provided) functions
         externbody: Dict[str, zast.AtomId] = {}  # externs from 'is' function body
@@ -1152,7 +1152,7 @@ class Parser:
             externparam = block.externparam
             param_ownership = block.param_ownership
             localparam = block.localparam
-            gotaccept = True
+            got_in = True
 
         while True:
             tok = lex.peek()
@@ -1216,7 +1216,7 @@ class Parser:
                 as_body = b
 
             elif lex.accept(TT.IN):
-                if gotaccept:
+                if got_in:
                     msg = "Duplicate 'in'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
@@ -1228,7 +1228,7 @@ class Parser:
                 externparam = block.externparam
                 param_ownership = block.param_ownership
                 localparam = block.localparam
-                gotaccept = True
+                got_in = True
 
             else:
                 break  # nothing matched, end of function def
