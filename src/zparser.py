@@ -24,19 +24,12 @@ _OWNERSHIP_SUFFIXES = {
 
 class ObjectBodyKind(IntEnum):
     """
-    What kind of item is having its body parsed. All bodies use
-    label-prefixed entries (`name: type`, `:type` shorthand, function
-    definitions, `is` clauses).
-
-    - FUNCTION_AS: generic params for a function's `as` clause
-    - PROTOCOL / FACET: interface / value-type interface bodies
-    - RECORD / CLASS: struct-like items
-    - VARIANT / UNION: struct-like with an optional `tag:` declaration
+    Discriminator for `_ITEM_TYPEDEF_MAP` and the variant/union vs
+    record/class branch in `_accept_item_definition`. Protocol /
+    facet / function-as bodies share the same parser machinery but
+    no longer need to be tagged.
     """
 
-    FUNCTION_AS = auto()
-    PROTOCOL = auto()
-    FACET = auto()
     RECORD = auto()
     CLASS = auto()
     VARIANT = auto()
@@ -1208,7 +1201,7 @@ class Parser:
                     msg = "Duplicate 'as'"
                     return zast.Error(start=tok, err=ERR.BADARGUMENT, msg=msg)
 
-                b = self._get_object_body(lex, ObjectBodyKind.FUNCTION_AS)
+                b = self._get_object_body(lex)
                 if b.is_error:
                     return cast(zast.Error, b)
                 b = cast(ObjectBody, b)
@@ -1289,7 +1282,7 @@ class Parser:
         if not lex.accept(tt):
             return None
 
-        is_body, as_body, extern, err, native = self._accept_item_bodies(lex, kind)
+        is_body, as_body, extern, err, native = self._accept_item_bodies(lex)
         if err:
             return err
 
@@ -1365,9 +1358,7 @@ class Parser:
         if not lex.accept(TT.PROTOCOL):
             return None
 
-        is_body, as_body, extern, err, native = self._accept_item_bodies(
-            lex, ObjectBodyKind.PROTOCOL
-        )
+        is_body, as_body, extern, err, native = self._accept_item_bodies(lex)
         if err:
             return err
 
@@ -1392,9 +1383,7 @@ class Parser:
         if not lex.accept(TT.FACET):
             return None
 
-        is_body, as_body, extern, err, native = self._accept_item_bodies(
-            lex, ObjectBodyKind.FACET
-        )
+        is_body, as_body, extern, err, native = self._accept_item_bodies(lex)
         if err:
             return err
 
@@ -1412,7 +1401,6 @@ class Parser:
     def _accept_item_bodies(
         self,
         lex: Lexer,
-        kind: ObjectBodyKind,
     ) -> tuple:
         """
         Parse `is` and `as` bodies for item definitions.
@@ -1445,7 +1433,7 @@ class Parser:
                 if lex.accept(TT.NATIVE):
                     is_native = True
                 else:
-                    b = self._get_object_body(lex, kind)
+                    b = self._get_object_body(lex)
                     if b.is_error:
                         return None, None, None, cast(zast.Error, b), False
                     b = cast(ObjectBody, b)
@@ -1466,7 +1454,7 @@ class Parser:
                         False,
                     )
                 lex.acceptany()
-                b = self._get_object_body(lex, kind)
+                b = self._get_object_body(lex)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1474,7 +1462,7 @@ class Parser:
                 promoteexterns(addto=extern, addfrom=b.extern)
             elif t.toktype == TT.BRACEOPEN and is_body is None and not is_native:
                 # unnamed first arg defaults to 'is'
-                b = self._get_object_body(lex, kind)
+                b = self._get_object_body(lex)
                 if b.is_error:
                     return None, None, None, cast(zast.Error, b), False
                 b = cast(ObjectBody, b)
@@ -1505,15 +1493,13 @@ class Parser:
     def _get_object_body(
         self,
         lex: Lexer,
-        kind: ObjectBodyKind,
     ) -> Union[ObjectBody, zast.Error]:
         """
         Parse an object body (after `is` or `as`) for any item kind.
 
-        `kind` is the item being parsed (RECORD / CLASS / VARIANT / UNION /
-        PROTOCOL / FACET / FUNCTION_AS). All entries are label-prefixed:
-        `name: type` (TT.LABEL) or `:name` shorthand (TT.LABELPRE), plus
-        `is type` clauses for protocol membership.
+        All entries are label-prefixed: `name: type` (TT.LABEL) or
+        `:name` shorthand (TT.LABELPRE), plus `is type` clauses for
+        protocol membership.
 
         Return an Error or the body components in an ObjectBody.
         """
