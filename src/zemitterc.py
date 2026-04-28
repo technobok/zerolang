@@ -1415,10 +1415,7 @@ class CEmitter:
         fields because its children haven't been type-checked.
         """
         key = f"{unitname}.{name}"
-        resolved = getattr(self.program, "resolved", None)
-        if resolved is None:
-            return False
-        t = resolved.get(key)
+        t = self.program.resolved.get(key)
         if t is None:
             return False
         # A resolved record/class has its fields registered as
@@ -1511,7 +1508,7 @@ class CEmitter:
         """True when a system io record is used by the program (e.g.
         as the ok-arm payload of a monomorphized result). Avoids
         emitting dead struct definitions for unused types."""
-        for mono, _ in getattr(self.program, "mono_types", []):
+        for mono, _ in self.program.mono_types:
             for child in mono.children.values():
                 if child.typetype == ZTypeType.RECORD and child.name == name:
                     return True
@@ -1524,7 +1521,7 @@ class CEmitter:
         static backing store for io.stdin / io.stdout / io.stderr)."""
         if self.needs_io_natives & {"stdin", "stdout", "stderr"}:
             return True
-        for mono, _ in getattr(self.program, "mono_types", []):
+        for mono, _ in self.program.mono_types:
             for child in mono.children.values():
                 if child.typetype == ZTypeType.CLASS and child.name == "File":
                     return True
@@ -1703,7 +1700,7 @@ class CEmitter:
         self._collect_pre_emission("", mainunit.body)
 
         # register monomorphized type names before emission
-        for mono_type, _ in getattr(self.program, "mono_types", []):
+        for mono_type, _ in self.program.mono_types:
             # register in resolved dict so _typetype_of() works for mono types
             self.program.resolved[mono_type.name] = mono_type
             if _is_array_type(mono_type):
@@ -1764,7 +1761,7 @@ class CEmitter:
                 pass
 
         # emit str mono types early (before regular definitions that may reference them)
-        for mono_type, template_defn in getattr(self.program, "mono_types", []):
+        for mono_type, template_defn in self.program.mono_types:
             if _is_str_type(mono_type):
                 self._emit_mono_str(mono_type)
 
@@ -1793,7 +1790,7 @@ class CEmitter:
         # We split mono emission into "depends only on system types"
         # (pass 1) vs "depends on user types" (pass 3), with user
         # defs between.
-        mono_types_all = list(getattr(self.program, "mono_types", []))
+        mono_types_all = list(self.program.mono_types)
         user_type_names = self._collect_user_type_names(mainunit.body)
         early_monos: list = []
         late_monos: list = []
@@ -1831,7 +1828,7 @@ class CEmitter:
             self._emit_mono_type(mono_type, template_defn)
 
         # emit monomorphized generic functions
-        for mono_ftype, cloned_func in getattr(self.program, "mono_functions", []):
+        for mono_ftype, cloned_func in self.program.mono_functions:
             if cloned_func.body:
                 self._current_node_id = cloned_func.nodeid
                 self._emit_function(mono_ftype.name, cloned_func)
@@ -3142,7 +3139,7 @@ class CEmitter:
     ) -> None:
         """Emit a monomorphized unit: emit its function definitions."""
         mangled = mono_type.name
-        cloned_methods = getattr(self.program, "cloned_methods", {}).get(mangled, {})
+        cloned_methods = self.program.cloned_methods.get(mangled, {})
         if template_defn.nodetype != NodeType.UNIT:
             return
         unit_defn = cast(zast.Unit, template_defn)
@@ -3154,7 +3151,7 @@ class CEmitter:
                 func = cloned_methods[dname]
                 qualified = f"{mangled}.{dname}"
                 # check for func alias (deduplication)
-                aliases = getattr(self.program, "func_aliases", {})
+                aliases = self.program.func_aliases
                 if qualified in aliases:
                     # already emitted via canonical name; emit typedef alias
                     canonical = aliases[qualified]
@@ -4337,8 +4334,8 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
         # emit methods from cloned or template defn with mangled names
-        cloned_methods = getattr(self.program, "cloned_methods", {}).get(name)
-        func_aliases = getattr(self.program, "func_aliases", {})
+        cloned_methods = self.program.cloned_methods.get(name)
+        func_aliases = self.program.func_aliases
         if template_defn.nodetype == NodeType.CLASS:
             for mname, mfunc in cast(zast.Class, template_defn).as_functions.items():
                 if mfunc.body:

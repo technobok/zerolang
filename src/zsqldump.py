@@ -341,7 +341,7 @@ def dump_sql(
     # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
     # unit_type_id is filled from the id-keyed unit_types snapshot; NULL
     # when a unit was never materialized by typecheck.
-    unit_types_map = getattr(program, "unit_types_by_id", {}) or {}
+    unit_types_map = program.unit_types_by_id
     for unitname, unit_ast in program.units.items():
         utype = unit_types_map.get(unit_ast.nodeid)
         unit_type_id = _sql_int(utype.nodeid) if utype is not None else "NULL"
