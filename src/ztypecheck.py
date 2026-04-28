@@ -332,32 +332,6 @@ def _check_private_redefinition(as_items: dict) -> Optional[zast.Unit]:
 # Names in 'as' that are structural, not user-defined members
 _AS_SPECIAL_NAMES = frozenset({"public", "private", "tag"})
 
-# Ownership annotations recognised as the leaf of a DottedPath in
-# field-type / parameter-type / return-type position.
-_OWNERSHIP_SUFFIXES = {
-    "take": ZParamOwnership.TAKE,
-    "borrow": ZParamOwnership.BORROW,
-    "lock": ZParamOwnership.LOCK,
-}
-
-
-def _strip_field_ownership(
-    path: zast.Operation,
-) -> tuple[zast.Operation, Optional[ZParamOwnership]]:
-    """If `path` is a DottedPath whose leaf is `.take`/`.borrow`/`.lock`,
-    return `(parent_path, ownership)`. Otherwise return `(path, None)`.
-
-    Only Path-shaped items have a leaf to inspect; non-Path operation
-    forms (BinOp constants, unit references) pass through unchanged
-    with no ownership.
-    """
-    if path.nodetype == NodeType.DOTTEDPATH:
-        dp = cast(zast.DottedPath, path)
-        own = _OWNERSHIP_SUFFIXES.get(dp.child.name)
-        if own is not None:
-            return dp.parent, own
-    return path, None
-
 
 class TypeChecker:
     """
@@ -1105,7 +1079,13 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         if func.returntype:
-            rt = self._resolve_typeref(func.returntype)
+            stripped_ret, ret_own = zast.strip_path_ownership(func.returntype)
+            rt = self._resolve_typeref(cast(zast.Path, stripped_ret))
+            # mirror the resolved type onto the unstripped path so AST
+            # consumers (emitter) reading `func.returntype.type` still
+            # see the right ZType when the path carried a `.borrow`
+            # / `.lock` / `.take` suffix.
+            func.returntype.type = rt
             if rt:
                 if not func.is_native and self._check_non_runtime_type(
                     rt,
@@ -1117,8 +1097,14 @@ class TypeChecker:
                     pass
                 else:
                     ftype.return_type = rt
+            if ret_own is not None:
+                ftype.return_ownership = ret_own
         for pname, ppath in func.parameters.items():
-            pt = self._resolve_typeref(ppath)
+            stripped_ppath, p_own = zast.strip_path_ownership(ppath)
+            pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
+            ppath.type = pt
+            if p_own is not None:
+                ftype.param_ownership[pname] = p_own
             if (
                 pt
                 and pt.typetype == ZTypeType.GENERIC_PARAM
@@ -1137,16 +1123,21 @@ class TypeChecker:
                 continue
             if pt:
                 ftype.children[pname] = pt
-                # detect defaults
-                if ppath.nodetype in (
+                # detect defaults — read from the post-ownership-strip
+                # path so `u8.5.lock` style still resolves the numeric
+                # default while a `.lock`/`.borrow`/`.take` suffix is
+                # off the table.
+                if stripped_ppath.nodetype in (
                     NodeType.ATOMID,
                     NodeType.LABELVALUE,
-                ) and _is_numeric_id(cast(zast.AtomId, ppath).name):
-                    _, val, err = parse_number(cast(zast.AtomId, ppath).name)
+                ) and _is_numeric_id(cast(zast.AtomId, stripped_ppath).name):
+                    _, val, err = parse_number(
+                        cast(zast.AtomId, stripped_ppath).name
+                    )
                     if not err:
                         ftype.param_defaults[pname] = str(int(val))
-                elif ppath.nodetype == NodeType.DOTTEDPATH:
-                    ppath_dp = cast(zast.DottedPath, ppath)
+                elif stripped_ppath.nodetype == NodeType.DOTTEDPATH:
+                    ppath_dp = cast(zast.DottedPath, stripped_ppath)
                     if ppath_dp.parent.nodetype in (
                         NodeType.ATOMID,
                         NodeType.LABELVALUE,
@@ -1157,22 +1148,25 @@ class TypeChecker:
                         )
                         if not err:
                             ftype.param_defaults[pname] = str(int(val))
-                elif ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                    defn = self._lookup_definition(cast(zast.AtomId, ppath).name)
+                elif stripped_ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+                    defn = self._lookup_definition(
+                        cast(zast.AtomId, stripped_ppath).name
+                    )
                     if (
                         defn is not None
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        ftype.param_defaults[pname] = cast(zast.AtomId, ppath).name
+                        ftype.param_defaults[pname] = cast(
+                            zast.AtomId, stripped_ppath
+                        ).name
         if generic_ctx:
             self._generic_context.pop()
 
-        # propagate ownership annotations from AST to ZType
-        if func.param_ownership:
-            ftype.param_ownership = dict(func.param_ownership)
-        if func.return_ownership is not None:
-            ftype.return_ownership = func.return_ownership
+        # ownership annotations were filled per-parameter / for the
+        # return type during resolution above, by stripping `.take` /
+        # `.borrow` / `.lock` suffixes off the path and recording the
+        # ownership on `ftype`.
 
         # Record which parameter (if any) is bound to the receiver — i.e.
         # whose declared TYPE was the `this` keyword. Both surface forms
@@ -1181,10 +1175,13 @@ class TypeChecker:
         # code (missing-arg check, rvalue method-as-value access) reads
         # this field instead of hardcoding the literal "this" so the
         # named-binding form behaves equivalently to the shorthand.
+        # Strip ownership first so `t: this.lock` is recognised as a
+        # this-receiver too.
         for pname, ppath in func.parameters.items():
+            stripped_p, _ = zast.strip_path_ownership(ppath)
             value_name: Optional[str] = None
-            if ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                value_name = cast(zast.AtomId, ppath).name
+            if stripped_p.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+                value_name = cast(zast.AtomId, stripped_p).name
             if value_name == "this":
                 ftype.this_param_name = pname
                 break
@@ -1211,7 +1208,6 @@ class TypeChecker:
                 and pt.needs_destructor
             ):
                 ftype.param_ownership[pname] = ZParamOwnership.BORROW
-                func.param_ownership[pname] = ZParamOwnership.BORROW
 
         # validate function signature ownership rules
         self._validate_function_ownership(ftype, func)
@@ -1367,7 +1363,7 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         for fname, fpath in cls.items.items():
-            stripped_fpath, f_own = _strip_field_ownership(fpath)
+            stripped_fpath, f_own = zast.strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
             if (
                 ft
@@ -1687,7 +1683,7 @@ class TypeChecker:
             self._generic_context.append(generic_ctx)
         subtype_names = list(union_defn.items.keys())
         for sname, spath in union_defn.items.items():
-            stripped_spath, arm_own = _strip_field_ownership(spath)
+            stripped_spath, arm_own = zast.strip_path_ownership(spath)
             stripped_path_typed = cast(zast.Path, stripped_spath)
             st_check = self._resolve_typeref(stripped_path_typed)
             if (
@@ -1915,7 +1911,7 @@ class TypeChecker:
             self._generic_context.append(generic_ctx)
         subtype_names = list(variant_defn.items.keys())
         for sname, spath in variant_defn.items.items():
-            stripped_spath, arm_own = _strip_field_ownership(spath)
+            stripped_spath, arm_own = zast.strip_path_ownership(spath)
             if (
                 stripped_spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 and cast(zast.AtomId, stripped_spath).name == "null"
@@ -2185,7 +2181,7 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.append(generic_ctx)
         for fname, fpath in rec.items.items():
-            stripped_fpath, f_own = _strip_field_ownership(fpath)
+            stripped_fpath, f_own = zast.strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
             if (
                 ft
@@ -2311,13 +2307,23 @@ class TypeChecker:
         return rtype
 
     def _is_this_return(self, func: zast.Function) -> bool:
-        """Check if a function's return type is the bare 'this' identifier."""
+        """Check if a function's return type resolves to 'this' (with or
+        without an ownership suffix like `.borrow` / `.lock`)."""
         rt = func.returntype
         if rt is None:
             return False
-        if rt.nodetype == NodeType.ATOMID:
-            return cast(zast.AtomId, rt).name == "this"
+        stripped_rt, _ = zast.strip_path_ownership(rt)
+        if stripped_rt.nodetype == NodeType.ATOMID:
+            return cast(zast.AtomId, stripped_rt).name == "this"
         return False
+
+    @staticmethod
+    def _func_return_ownership(func: zast.Function) -> Optional[ZParamOwnership]:
+        """Pull the ownership suffix off a function's return type path."""
+        if func.returntype is None:
+            return None
+        _, own = zast.strip_path_ownership(func.returntype)
+        return own
 
     def _reject_record_lock_features(
         self, name: str, rec: zast.ObjectDef, rtype: ZType
@@ -2342,13 +2348,13 @@ class TypeChecker:
         for mname, mfunc in rec.functions.items():
             if (
                 self._is_this_return(mfunc)
-                and mfunc.return_ownership == ZParamOwnership.BORROW
+                and self._func_return_ownership(mfunc) == ZParamOwnership.BORROW
             ):
                 offending.append(mname)
         for mname, mfunc in rec.as_functions.items():
             if (
                 self._is_this_return(mfunc)
-                and mfunc.return_ownership == ZParamOwnership.BORROW
+                and self._func_return_ownership(mfunc) == ZParamOwnership.BORROW
             ):
                 offending.append(mname)
 
@@ -2979,8 +2985,9 @@ class TypeChecker:
                     break
         if ast_func is None:
             return
-        if ast_func.return_ownership is not None:
-            synth.return_ownership = ast_func.return_ownership
+        ast_ret_own = self._func_return_ownership(ast_func)
+        if ast_ret_own is not None:
+            synth.return_ownership = ast_ret_own
         if ast_func.is_native:
             synth.is_native = True
 
@@ -5453,15 +5460,25 @@ class TypeChecker:
         # save/restore ownership context
         prev_func_ownership = self._current_func_ownership
         prev_func_return_ownership = self._current_func_return_ownership
-        # narrowing state is scoped — function push/pop handles save/restore
-        self._current_func_ownership = dict(func.param_ownership)
-        self._current_func_return_ownership = func.return_ownership
+        # Read ownership from the resolved ZType — it carries both the
+        # syntactic annotations AND the inferred BORROW-default for
+        # stack-reftype parameters (set during _resolve_function_type).
+        ftype = self._resolved.get(name) or self._resolved.get(
+            f"{self.program.mainunitname}.{name}"
+        )
+        if ftype is not None and ftype.typetype == ZTypeType.FUNCTION:
+            self._current_func_ownership = dict(ftype.param_ownership)
+            self._current_func_return_ownership = ftype.return_ownership
+        else:
+            self._current_func_ownership = {}
+            self._current_func_return_ownership = None
 
         for pname, ppath in func.parameters.items():
-            pt = self._resolve_typeref(ppath)
+            stripped_ppath, _ = zast.strip_path_ownership(ppath)
+            pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
             if pt:
                 # determine parameter ownership from annotations
-                param_own = func.param_ownership.get(pname)
+                param_own = self._current_func_ownership.get(pname)
                 if param_own == ZParamOwnership.TAKE:
                     ownership = ZOwnership.OWNED
                 elif param_own in (
@@ -5480,7 +5497,10 @@ class TypeChecker:
         # set expected return type for return statement checking
         prev_return_type = self._current_return_type
         if func.returntype:
-            self._current_return_type = self._resolve_typeref(func.returntype)
+            stripped_rt, _ = zast.strip_path_ownership(func.returntype)
+            self._current_return_type = self._resolve_typeref(
+                cast(zast.Path, stripped_rt)
+            )
         else:
             self._current_return_type = None
         self._check_statement(func.body)

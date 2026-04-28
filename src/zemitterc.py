@@ -4585,6 +4585,11 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         record_type = self._resolved_type(record_name) if record_name else None
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
+        # Ownership annotations live on the resolved ZType (which carries
+        # both syntactic suffixes and the inferred BORROW-default for
+        # stack-reftype params); read them from there.
+        ftype = self._resolved_type(name)
+        param_own = ftype.param_ownership if ftype else {}
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(ppath.type)
@@ -4601,7 +4606,7 @@ class CEmitter:
                 and ppath.type.typetype == ZTypeType.CLASS
                 and not ppath.type.is_heap_allocated
                 and not ptype_str.endswith("*")
-                and func.param_ownership.get(pname)
+                and param_own.get(pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
@@ -4622,6 +4627,11 @@ class CEmitter:
         record_type = self._resolved_type(record_name) if record_name else None
         is_class_method = bool(record_type and record_type.typetype == ZTypeType.CLASS)
 
+        # Ownership annotations live on the resolved ZType (carries
+        # both syntactic suffixes and inferred BORROW-default).
+        ftype = self._resolved_type(name)
+        param_own = ftype.param_ownership if ftype else {}
+
         params: List[str] = []
         pointer_params: List[str] = []
         for pname, ppath in func.parameters.items():
@@ -4640,7 +4650,7 @@ class CEmitter:
                 and ppath.type.typetype == ZTypeType.CLASS
                 and not ppath.type.is_heap_allocated
                 and not ptype_str.endswith("*")
-                and func.param_ownership.get(pname)
+                and param_own.get(pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
@@ -4680,7 +4690,7 @@ class CEmitter:
                 ppath.type
                 and ppath.type.needs_destructor
                 and ppath.type.destructor_name
-                and func.param_ownership.get(pname) == ZParamOwnership.TAKE
+                and param_own.get(pname) == ZParamOwnership.TAKE
             ):
                 self._scope.cleanup_vars.append((_mangle_var(pname), ppath.type))
 

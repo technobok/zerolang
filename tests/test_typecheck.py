@@ -785,17 +785,14 @@ class TestOwnershipParsing:
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.borrow} is {}\nmain: function is {}"
         )
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert "a" in func.param_ownership
-        assert func.param_ownership["a"] == ZParamOwnership.BORROW
+        ftype = program.resolved["test.f"]
+        assert ftype.param_ownership["a"] == ZParamOwnership.BORROW
 
     def test_param_take(self):
         """Parameter with .take annotation."""
         program = check_ok("f: function {a: i64.take} is {}\nmain: function is {}")
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert func.param_ownership["a"] == ZParamOwnership.TAKE
+        ftype = program.resolved["test.f"]
+        assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
 
     def test_param_lock(self):
         """Parameter with .lock annotation (requires return value)."""
@@ -804,16 +801,14 @@ class TestOwnershipParsing:
             "f: function {a: myclass.lock} out myclass is { return a }\n"
             "main: function is {}"
         )
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert func.param_ownership["a"] == ZParamOwnership.LOCK
+        ftype = program.resolved["test.f"]
+        assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
 
     def test_param_no_ownership(self):
         """Parameter without annotation should have empty param_ownership."""
         program = check_ok("f: function {a: i64} is {}\nmain: function is {}")
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert "a" not in func.param_ownership
+        ftype = program.resolved["test.f"]
+        assert "a" not in ftype.param_ownership
 
     def test_mixed_params(self):
         """Mix of annotated and unannotated parameters."""
@@ -822,11 +817,10 @@ class TestOwnershipParsing:
             "f: function {a: myclass.take b: myclass c: myclass.borrow} is {}\n"
             "main: function is {}"
         )
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert func.param_ownership["a"] == ZParamOwnership.TAKE
-        assert "b" not in func.param_ownership
-        assert func.param_ownership["c"] == ZParamOwnership.BORROW
+        ftype = program.resolved["test.f"]
+        assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
+        assert "b" not in ftype.param_ownership
+        assert ftype.param_ownership["c"] == ZParamOwnership.BORROW
 
     def test_return_type_borrow(self):
         """Return type with .borrow annotation."""
@@ -835,17 +829,15 @@ class TestOwnershipParsing:
             "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
             "main: function is {}"
         )
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert func.return_ownership == ZParamOwnership.BORROW
-        assert func.param_ownership["a"] == ZParamOwnership.LOCK
+        ftype = program.resolved["test.f"]
+        assert ftype.return_ownership == ZParamOwnership.BORROW
+        assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
 
     def test_return_type_no_ownership(self):
         """Return type without annotation should not have return_ownership set."""
         program = check_ok("f: function out i64 is { return 42 }\nmain: function is {}")
-        func = program.units["test"].body["f"]
-        assert isinstance(func, zast.Function)
-        assert func.return_ownership is None
+        ftype = program.resolved["test.f"]
+        assert ftype.return_ownership is None
 
 
 class TestOwnershipInZType:

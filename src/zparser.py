@@ -13,13 +13,6 @@ import zast
 from zast import ERR, NodeType, _ERROR_TOKEN
 from ztypes import ZParamOwnership
 
-# ownership annotation suffixes recognized on dotted type paths
-_OWNERSHIP_SUFFIXES = {
-    "take": ZParamOwnership.TAKE,
-    "borrow": ZParamOwnership.BORROW,
-    "lock": ZParamOwnership.LOCK,
-}
-
 
 # A Node type.
 TN = TypeVar("TN", bound=zast.Node, covariant=True)
@@ -84,7 +77,6 @@ class ParamBlock:
 
     parameters: Dict[str, zast.Path] = field(default_factory=dict)
     externparam: Dict[str, zast.AtomId] = field(default_factory=dict)
-    param_ownership: Dict[str, ZParamOwnership] = field(default_factory=dict)
     localparam: Set[str] = field(default_factory=set)
     is_error: bool = field(default=False, init=False)
 
@@ -993,24 +985,6 @@ class Parser:
         )
         return NodeX(node=call, extern=extern)
 
-    @staticmethod
-    def _strip_ownership(
-        path: zast.Path,
-    ) -> tuple[zast.Path, Optional[ZParamOwnership]]:
-        """Check if a type path ends with an ownership annotation (.take/.borrow/.lock).
-
-        Returns (stripped_path, ownership) where ownership is None if no annotation found.
-        If the path is e.g. DottedPath(parent=AtomId("point"), child=AtomId("borrow")),
-        returns (AtomId("point"), ZParamOwnership.BORROW).
-        """
-        if path.nodetype == NodeType.DOTTEDPATH:
-            path = cast(zast.DottedPath, path)
-            suffix = path.child.name
-            own = _OWNERSHIP_SUFFIXES.get(suffix)
-            if own is not None:
-                return path.parent, own
-        return path, None
-
     def _accept_param_block(self, lex: Lexer) -> Union[ParamBlock, zast.Error]:
         """
         Parse a `{ param param ... }` parameter block. Each entry is
@@ -1064,10 +1038,10 @@ class Parser:
 
             # params can refer to other params; locality is enforced after the loop
             promoteexterns(addto=block.externparam, addfrom=val.extern)
-            stripped, own = self._strip_ownership(val.node)
-            block.parameters[paramname] = stripped
-            if own is not None:
-                block.param_ownership[paramname] = own
+            # store the parameter type path as-is. Ownership annotations
+            # (.take/.borrow/.lock) are recognised by the type checker
+            # via zast.strip_path_ownership.
+            block.parameters[paramname] = val.node
             block.localparam.add(paramname)
 
         if not lex.accept(TT.BRACECLOSE):
@@ -1102,8 +1076,6 @@ class Parser:
 
         returntype: Optional[zast.Path] = None
         parameters: Dict[str, zast.Path] = {}
-        param_ownership: Dict[str, ZParamOwnership] = {}
-        return_ownership: Optional[ZParamOwnership] = None
         # externs from 'accept' function parameters
         externparam: Dict[str, zast.AtomId] = {}
         # parameter names - local definitions for determining externs
@@ -1124,7 +1096,6 @@ class Parser:
             block = cast(ParamBlock, block)
             parameters = block.parameters
             externparam = block.externparam
-            param_ownership = block.param_ownership
             localparam = block.localparam
             got_in = True
 
@@ -1147,11 +1118,10 @@ class Parser:
                     return cast(zast.Error, typeref)  # propagate any other error
                 typeref = cast(NodeX[zast.Path], typeref)
 
-                # check for ownership annotation on the return type path
-                stripped_ret, ret_own = self._strip_ownership(typeref.node)
-                returntype = stripped_ret
-                if ret_own is not None:
-                    return_ownership = ret_own
+                # store the return type path as-is. Ownership annotations
+                # (.take/.borrow/.lock) are recognised by the type
+                # checker via zast.strip_path_ownership.
+                returntype = typeref.node
 
             elif lex.accept(TT.IS):
                 if body or is_native:
@@ -1200,7 +1170,6 @@ class Parser:
                 block = cast(ParamBlock, block)
                 parameters = block.parameters
                 externparam = block.externparam
-                param_ownership = block.param_ownership
                 localparam = block.localparam
                 got_in = True
 
@@ -1226,8 +1195,6 @@ class Parser:
             parameters=parameters,
             body=body,
             start=start,
-            param_ownership=param_ownership,
-            return_ownership=return_ownership,
             is_native=is_native,
             as_items=as_body.items if as_body else {},
             as_functions=as_body.functions if as_body else {},
@@ -1811,14 +1778,13 @@ class Parser:
         # subject to remain addressable across arms; taking ownership
         # into an arm would invalidate later arms. A subject carrying a
         # `.take` suffix is a DottedPath whose leaf AtomId is `take`.
-        if op.node.nodetype in (NodeType.DOTTEDPATH, NodeType.ATOMID):
-            _stripped, subj_own = self._strip_ownership(cast(zast.Path, op.node))
-            if subj_own is ZParamOwnership.TAKE:
-                msg = (
-                    "cannot '.take' the subject of 'match'; the subject is "
-                    "borrowed for arm narrowing"
-                )
-                return zast.Error(start=op.node.start, err=ERR.BADCASE, msg=msg)
+        _stripped, subj_own = zast.strip_path_ownership(op.node)
+        if subj_own is ZParamOwnership.TAKE:
+            msg = (
+                "cannot '.take' the subject of 'match'; the subject is "
+                "borrowed for arm narrowing"
+            )
+            return zast.Error(start=op.node.start, err=ERR.BADCASE, msg=msg)
 
         subject = op.node
         promoteexterns(addto=extern, addfrom=op.extern)
