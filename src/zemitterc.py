@@ -1196,47 +1196,11 @@ class CEmitter:
             # method) because once the wrapper's struct is emitted its
             # protocol vtable already references every method body via
             # the auto-generated wrapper — emitting a subset would leave
-            # undefined references.
+            # undefined references. Cross-class dependencies (textwriter
+            # -> bufwriter, textreader -> bufreader) are encoded in
+            # _IO_WRAPPER_REQUIRES.
             self.needs_io = True
-            if name == "BufWriter":
-                self.needs_io_natives.update(
-                    {"bufwriter_create", "bufwriter_write", "bufwriter_flush"}
-                )
-            elif name == "BufReader":
-                self.needs_io_natives.update({"bufreader_create", "bufreader_read"})
-            elif name == "TextWriter":
-                # textwriter forwards to bufwriter; the bufwriter
-                # runtime bodies are needed too. bufwriter's struct
-                # is emitted earlier in this loop because it appears
-                # before textwriter in _IO_WRAPPER_NAMES and the user
-                # program must reference io.bufwriter to obtain a
-                # bufwriter instance to pass into textwriter.create.
-                self.needs_io_natives.update(
-                    {
-                        "textwriter_create",
-                        "textwriter_write",
-                        "textwriter_write_line",
-                        "textwriter_flush",
-                        "bufwriter_create",
-                        "bufwriter_write",
-                        "bufwriter_flush",
-                    }
-                )
-            elif name == "TextReader":
-                # textreader forwards to bufreader; same ordering
-                # constraint as textwriter -> bufwriter. `textreader_call`
-                # is the iterator hook used by `for line: tr loop`;
-                # emitted unconditionally here so the class's protocol
-                # vtable always has it, in line with the other methods.
-                self.needs_io_natives.update(
-                    {
-                        "textreader_create",
-                        "textreader_read_line",
-                        "textreader_call",
-                        "bufreader_create",
-                        "bufreader_read",
-                    }
-                )
+            self.needs_io_natives.update(self._io_wrapper_required_natives(name))
         out = "".join(self.struct_defs)
         self.struct_defs = saved
         return out
@@ -1576,6 +1540,60 @@ class CEmitter:
     # Emission order matters: textwriter wraps bufwriter, so
     # bufwriter's struct must be declared before textwriter's.
     _IO_WRAPPER_NAMES = ("BufWriter", "BufReader", "TextWriter", "TextReader")
+
+    # Runtime-native symbols each wrapper class directly needs. Used by
+    # _emit_io_wrapper_classes to populate needs_io_natives. Keeping
+    # this as data (rather than an if/elif chain) makes the
+    # cross-class dependencies in _IO_WRAPPER_REQUIRES explicit.
+    _IO_WRAPPER_NATIVES: dict[str, frozenset[str]] = {
+        "BufWriter": frozenset(
+            {"bufwriter_create", "bufwriter_write", "bufwriter_flush"}
+        ),
+        "BufReader": frozenset({"bufreader_create", "bufreader_read"}),
+        "TextWriter": frozenset(
+            {
+                "textwriter_create",
+                "textwriter_write",
+                "textwriter_write_line",
+                "textwriter_flush",
+            }
+        ),
+        # textreader_call is the iterator hook used by `for line: tr loop`;
+        # always emitted so the protocol vtable has it.
+        "TextReader": frozenset(
+            {"textreader_create", "textreader_read_line", "textreader_call"}
+        ),
+    }
+
+    # Wrapper-class -> wrapper-class native dependencies. TextWriter
+    # forwards to BufWriter, TextReader to BufReader; the upstream's
+    # runtime bodies are needed too. Struct emission order is
+    # controlled by _IO_WRAPPER_NAMES (upstream first); this table
+    # only governs native-symbol selection.
+    _IO_WRAPPER_REQUIRES: dict[str, tuple[str, ...]] = {
+        "TextWriter": ("BufWriter",),
+        "TextReader": ("BufReader",),
+    }
+
+    def _io_wrapper_required_natives(self, name: str) -> set[str]:
+        """All runtime natives needed when wrapper class `name` is
+        referenced, including transitive dependencies via
+        _IO_WRAPPER_REQUIRES. The dependency graph is a DAG of depth 1
+        today; the loop is defensive."""
+        natives: set[str] = set()
+        pending = [name]
+        seen: set[str] = set()
+        while pending:
+            n = pending.pop()
+            if n in seen:
+                continue
+            seen.add(n)
+            spec = self._IO_WRAPPER_NATIVES.get(n)
+            if spec is None:
+                continue
+            natives.update(spec)
+            pending.extend(self._IO_WRAPPER_REQUIRES.get(n, ()))
+        return natives
 
     def _ast_uses_std_streams(self, body: dict) -> bool:
         return self._ast_uses_io_names(body, self._STD_STREAM_NAMES)
