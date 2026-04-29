@@ -245,14 +245,13 @@ class Parser:
     Parser
 
     Parse source into an AST, starting from mainunit but potentially from
-    several files as referenced.
+    several files as referenced. `parse()` returns a `zast.Program` of
+    parsed (untyped) nodes; the type checker is a separate pass in
+    `ztypecheck.typecheck()` and was extracted out of this module long
+    ago.
 
-    pass1 is self.parse
-    pass2 is self.typecheck TODO: pass2 in a separate class
-        (somehow have to transfer state). TODO: have a seprate class for typecheck
-
-    resulting program is in self.program (zast.Program)
-    errors in self.numerrors and self.state.errors (expose these?)
+    Errors collected on the parser's internal state are surfaced via
+    the returned `Program` (`is_error`, embedded `Error` nodes).
     """
 
     # pylint: disable=R0903
@@ -518,9 +517,16 @@ class Parser:
         """
         definitions: Dict[str, zast.TypeDefinition] = {}
         extern: Dict[str, zast.AtomId] = {}
-        # TODO: this and type are predefined for units (?)
-        # meta is also predefined — it is the compiler's internal allocator
-        # (meta.create) available inside type method bodies.
+        # Names predefined at unit scope so user code cannot shadow them:
+        #   `this` — receiver name in method bodies
+        #     (ztypecheck.py:1214–1336 enforces method dispatch semantics
+        #     against this name).
+        #   `type` — reserved for type-of expressions
+        #     (ztypecheck.py:3413).
+        #   `meta` — the compiler's internal allocator
+        #     (`meta.create` inside type method bodies; ztypecheck.py:3591).
+        # Seeding `localdefs` makes the parser reject `this:`, `type:`,
+        # `meta:` definitions in any unit body.
         localdefs: Set[str] = set(("this", "type", "meta"))
 
         start = lex.peek()

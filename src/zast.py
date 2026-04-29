@@ -261,9 +261,12 @@ class Program:
 
     is_error: bool = field(default=False, init=False)
     vfs: zvfs.ZVfs  # vfs for reading source files. Needed to report errors
-    units: Dict[
-        str, "Unit"
-    ]  # TODO: change this into a single top level unit (not a dict)
+    # File-level units, keyed by unit name. `mainunitname` points at the
+    # entry. A future simplification could collapse this into a single
+    # entry unit with submodules nested in its body — flagged in
+    # doc/codereview20260428.md (F12 / docs sweep). For now keep the
+    # dict shape: it's how the parser materialises imports today.
+    units: Dict[str, "Unit"]
     mainunitname: str
 
     # monomorphized generic types: list of (mono_ztype, original_ast_node) tuples
@@ -605,11 +608,6 @@ class Node:
         init=False,
     )
     nodetype: NodeType
-    # symbol holding the specific instance where this reference is defined
-    # filled in typechecking pass... what is this for?
-    # definition: Optional[ZSymbol] = field(default=None, init=False)
-    # type of this Node, filled in typechecking pass
-    # TODO: maybe Union(None, ZType, ZTypeCheckInProgress)
     # `type` used to live here as an `init=False` typecheck-set field.
     # After Step 6.9.b it lives on `TypedExpression.ztype` (for typed
     # mirrors) and on `TypeChecker._node_type` / `TypedProgram.node_types`

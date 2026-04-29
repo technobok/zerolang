@@ -476,17 +476,26 @@ Action items:
       no separate cleanup commit needed.)*
 - [x] `bootstrap-lint` baseline already at `isinstance:0`.
 
-### F10. Stale TODO comments — Low (goal 6)
+### F10. Stale TODO comments — Low (goal 6) \[RESOLVED\]
 
-- [ ] `src/zast.py:266` — "TODO: change this into a single top level
-      unit (not a dict)" — resolve or convert to issue.
-- [ ] `src/zast.py:324` — "TODO: maybe Union(None, ZType,
-      ZTypeCheckInProgress)" — decide and apply.
-- [ ] `src/zparser.py:271-272` — docstring "pass2 is self.typecheck
-      TODO: pass2 in a separate class" — `typecheck` is now in
-      `ztypecheck.py`; update the docstring (links to F12).
-- [ ] `src/zparser.py:541` — "TODO: this and type are predefined for
-      units (?)" — investigate; remove the question mark either way.
+- [x] `src/zast.py:266` — converted into a normal comment that
+      documents the design choice and points at the codereview for
+      the future-simplification idea (single top-level unit with
+      submodules in the body).
+- [x] `src/zast.py:324` — TODO removed; the field it referenced
+      (`Node.type` with `ZTypeCheckInProgress` sentinel) was
+      stripped in Step 6.9.b. Surrounding stale commentary
+      (uninstantiated `definition: ZSymbol` placeholder, "filled in
+      typechecking pass" note) cleaned up too.
+- [x] `src/zparser.py:271-272` — Parser docstring rewritten;
+      typecheck has been a separate module (`ztypecheck.py`) for
+      a long time, so the "TODO: pass2 in a separate class" line
+      no longer applies.
+- [x] `src/zparser.py:541` — comment expanded with concrete
+      citations: `this` is the method receiver
+      (`ztypecheck.py:1214–1336`); `type` is reserved for type-of
+      expressions (`ztypecheck.py:3413`); `meta.create` is the
+      compiler's allocator (`ztypecheck.py:3591`).
 
 ### F11. `getattr`-driven visitor dispatch in `zsynth.py` — Low (goal 3) \[RESOLVED\]
 
