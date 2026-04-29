@@ -37,7 +37,8 @@ plan). This file is the running implementation log.
 | 3d. `TypedBinOp` + `TypedCall` + `TypedNamedOperation` mirrors | ✅ done | `faa5841` | wrapper pattern around `_check_binop` and `_check_call`; `_typed_operation_for` resolves typed counterpart of any Operation-shaped parsed node. Numeric-cast shortcut now builds a TypedAtomId for the literal parent. Synth atoms produced by atomic-call hoisting also get a TypedAtomId via `_build_typed_atomid` at the assignment site. |
 | 3e. Statement-shape mirrors (`TypedStatement`, `TypedStatementLine`, `TypedAssignment`, `TypedReassignment`, `TypedSwap`) | ✅ done | `06efff9` | wrapper pattern around `_check_statement`, `_check_statement_line`, `_check_assignment`, `_check_reassignment`, `_check_swap`. `_typed_expression_for` descends into `Expression.expression` to find the typed counterpart. `TypedStatement` skipped if any line has no mirror; same for the others. |
 | 3f. Control-flow mirrors (`TypedIf`/`TypedIfClause`, `TypedCase`/`TypedCaseClause`, `TypedFor`, `TypedDo`, `TypedWith`) | ✅ done | `011ea16` | wrapper pattern around `_check_if`, `_check_case`, `_check_for`, `_check_with`. `_check_do` is inlined in `_check_expression`; mirror call added at the end of the DO branch. IfClauses + CaseClauses are built inline and registered. CaseClause.match is a fresh TypedAtomId (the parsed AtomId is structural). |
-| 3g. Top-level mirrors (`TypedFunction`, `TypedObjectDef`, `TypedUnit`, `TypedProgram.units`) | ✅ done | `7b114d9` | `_check_function_body` wrapped to build `TypedFunction` for body-checked functions. Final post-pass `_build_typed_program_units` walks `Program.units`, constructs typed mirrors for every Unit / Function / ObjectDef using `_typed_path_from_parsed` for typeref-position paths (parameter / returntype / field types — these are resolved via `_resolve_typeref`, never through the wrapper paths). `TypedProgram.units` populated end-to-end; `resolved`, `mono_types`, `func_aliases`, `unit_types_by_id`, `symbol_table` copied across. `mono_functions` / `cloned_methods` still carry parsed Functions today (typed mirrors live in `by_parsed_id`); migration to typed-side comes with the emitter swap (Step 4). | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 3g. Top-level mirrors (`TypedFunction`, `TypedObjectDef`, `TypedUnit`, `TypedProgram.units`) | ✅ done | `7b114d9` | `_check_function_body` wrapped to build `TypedFunction` for body-checked functions. Final post-pass `_build_typed_program_units` walks `Program.units`, constructs typed mirrors for every Unit / Function / ObjectDef using `_typed_path_from_parsed` for typeref-position paths (parameter / returntype / field types — these are resolved via `_resolve_typeref`, never through the wrapper paths). `TypedProgram.units` populated end-to-end; `resolved`, `mono_types`, `func_aliases`, `unit_types_by_id`, `symbol_table` copied across. `mono_functions` / `cloned_methods` still carry parsed Functions today (typed mirrors live in `by_parsed_id`); migration to typed-side comes with the emitter swap (Step 4). |
+| 4. Switch the emitter to consume the typed tree | ✅ done | `09f6aee`-`fad8ee9` | Threaded `TypedProgram` into `CEmitter` (4a `09f6aee`); per-family migrations of decoration reads — AtomId (4b `47d3ad2`), DottedPath (4c `50f0648`), Call/BinOp/NamedOp (4d `e315b84`), Statement-shape (4e `6ed23bf`), control-flow (4f `ecd82b3`), top-level + generic helpers (4g `fad8ee9`). All decoration reads on mirrored node families route through `_typed_*_for` helpers. Outstanding: `Expression`-wrapper `.call_kind` / `.type` (no typed mirror per design) — addressed in Step 6 / 7 alongside parsed-AST cleanup. `make test` 1962 passing throughout. | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
 | 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
@@ -229,15 +230,61 @@ still carry parsed Functions today (the typed mirrors are in
 `by_parsed_id` keyed by the cloned nodeid). Migrating these to
 typed-side carriers happens with Step 4 (emitter swap).
 
-## Step 4 — next
+## Step 4 — what landed
 
-Switch the emitter (`src/zemitterc.py`) to consume the typed tree.
-Per the design plan: every `path.type` / `node.const_value` /
-`call.call_kind` read becomes attribute access on the typed node
-(`tpath.ztype`, `texpr.const_value`, `tcall.call_kind`). The emitter
-receives a `TypedProgram` and walks it, reading from `parsed.start`
-only for source-location reporting. Test suite asserts identical C
-output before/after.
+Per-family migration of every decoration read in `src/zemitterc.py`
+to route through the typed mirror, falling back to parsed-node
+fields when the typed mirror is missing (synthesized nodes / tests
+without typecheck):
+
+- 4a `09f6aee` — `Program.typed_program` field, `typecheck()` wires
+  it, `CEmitter.__init__` reads it, lookup helpers (`_typed_for`,
+  `_typed_atomid_for`, `_typed_dotted_path_for`).
+- 4b `47d3ad2` — AtomId (`narrowed_subtype`, `original_ztype`,
+  `child_id`, `type`).
+- 4c `50f0648` — DottedPath (`type`, `const_value`, `child_id`).
+- 4d `e315b84` — Call (`call_kind`, `callable_type_name`, `type`),
+  BinOp (`const_value`), NamedOperation (`projected_*`). Also added
+  a sync in `_build_typed_call` so `_check_call_inner`'s post-build
+  mutations to `call.callable.type` (generic mono / dotted-callable /
+  union-variant subtype) propagate to the typed callable's `ztype`.
+- 4e `6ed23bf` — Assignment (`alias_of`), Reassignment / Swap
+  (path-ztype via `_path_ztype` helper).
+- 4f `ecd82b3` — If (`taken_vars`), Case (`taken_vars`,
+  `subject_taken`), For (`iterator_bindings`), Do (`has_break`,
+  `type`), With (`ownership`, `alias_of`).
+- 4g `fad8ee9` — generic helpers `_node_const_value` /
+  `_node_ztype` (Expression-unwrapping); `_emit_const_value`,
+  `_emit_folded_constant`, `_emit_as_constants`, pre-emission
+  collection walks, `_emit_if`/`_emit_for` constant-fold checks,
+  and the cross-unit native lookup in `_emit_dotted_path_value`.
+
+Identical-output invariant held throughout (1962 tests pass each
+sub-step).
+
+Outstanding for Step 6 / 7:
+
+- The parsed `zast.Expression` wrapper has no typed mirror per the
+  ztypedast.py design (the typed tree references the inner subtype's
+  typed counterpart directly). Four read sites remain on the
+  Expression wrapper itself (`expr.call_kind`, `last_expr.call_kind`,
+  `expr.type`). These are deferred — resolving them requires either
+  a `TypedExpression`-wrapper class or inlining control-flow detection
+  at each site. Doesn't block the typed-mirror coverage of the rest
+  of the AST families.
+- `mono_functions` / `cloned_methods` on `TypedProgram` carry parsed
+  Functions today (typed mirrors are in `by_parsed_id` keyed by the
+  cloned nodeid). The emitter still reads `program.mono_*` /
+  `program.cloned_methods` directly. Migrate alongside Step 5
+  (SQL-dump split) when those tables also need the typed-side data.
+
+## Step 5 — next
+
+Split `zsqldump.py` into two table families: `parsed_*` (one row per
+parser node kind, written from `Program.units`) and `typed_*` (one
+row per typed node kind, written from `TypedProgram.by_parsed_id`).
+Joined by FK on parsed `nodeid`. After Step 5 lands, the path to
+Step 6 (strip `init=False` decorations from `zast.py`) is open.
 
 ### Subtle places to remember
 
