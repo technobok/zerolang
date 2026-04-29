@@ -502,6 +502,10 @@ class TypeChecker:
         # `_build_typed_with`.
         self._with_ownership: dict[int, ZOwnership] = {}
         self._with_alias_of: dict[int, Optional[str]] = {}
+        # Per-Do break flag (was `zast.Do.has_break`). Read by
+        # `_check_expression`'s DO branch (to widen the result type
+        # to `option`) and by `_build_typed_do`.
+        self._do_has_break: dict[int, bool] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -6082,7 +6086,7 @@ class TypeChecker:
             self._check_statement(inner_do.statement)
             self._break_targets.pop()
             last_type = self._last_statement_type(inner_do.statement)
-            if inner_do.has_break:
+            if self._do_has_break.get(inner_do.nodeid, False):
                 # break makes the do expression type optional
                 if (
                     last_type is not None
@@ -6186,7 +6190,7 @@ class TypeChecker:
                 if t.control_kind == ControlKind.BREAK and self._break_targets:
                     target = self._break_targets[-1]
                     if target is not None:
-                        target.has_break = True
+                        self._do_has_break[target.nodeid] = True
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
                 expr.call_kind = cast(zast.Call, inner).call_kind
@@ -6823,16 +6827,20 @@ class TypeChecker:
         self._register_typed(fornode, typed)
 
     def _build_typed_do(self, donode: zast.Do) -> None:
-        """Construct typed mirror of a `Do` block (bare-block expression)."""
+        """Construct typed mirror of a `Do` block (bare-block expression).
+        Always emits a typed mirror — the post-Step-6 pattern requires
+        consumers (emitter, SQL dump) to read decoration fields like
+        `has_break` exclusively via the typed mirror, so a missing
+        mirror loses the decoration. `statement` is left None when
+        the body's typed mirror hasn't been built yet (parser-only
+        sub-shapes still in flight)."""
         stmt_typed = self.typed_program.by_parsed_id.get(donode.statement.nodeid)
-        if stmt_typed is None:
-            return
         typed = ztypedast.TypedDo(
             parsed=donode,
             ztype=cast(ZType, donode.type),
             const_value=donode.const_value,
             statement=cast(ztypedast.TypedStatement, stmt_typed),
-            has_break=donode.has_break,
+            has_break=self._do_has_break.get(donode.nodeid, False),
         )
         self._register_typed(donode, typed)
 
@@ -7440,7 +7448,7 @@ class TypeChecker:
             if self._break_targets:
                 target = self._break_targets[-1]
                 if target is not None:
-                    target.has_break = True
+                    self._do_has_break[target.nodeid] = True
             return callee_type
         if callee_type.control_kind == ControlKind.CONTINUE:
             call.call_kind = zast.CallKind.CONTINUE

@@ -9439,7 +9439,7 @@ class CEmitter:
     def _emit_do(self, donode: zast.Do) -> str:
         # Step 4f: Do decoration reads via typed mirror.
         typed_do = self._typed_do_for(donode)
-        _do_has_break = typed_do.has_break if typed_do else donode.has_break
+        _do_has_break = typed_do.has_break if typed_do else False
         if _do_has_break:
             indent = self._indent()
             parts = [f"{indent}do {{\n"]
@@ -9454,7 +9454,7 @@ class CEmitter:
         """Emit a bare block as an expression, returning the last expression's value."""
         # Step 4f: Do decoration reads via typed mirror.
         typed_do = self._typed_do_for(donode)
-        _do_has_break = typed_do.has_break if typed_do else donode.has_break
+        _do_has_break = typed_do.has_break if typed_do else False
         _do_ztype = typed_do.ztype if typed_do else donode.type
         ctype = _ctype(_do_ztype)
         tmp = self._temp_name("do")

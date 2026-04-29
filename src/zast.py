@@ -679,8 +679,11 @@ class Do(Node):
     nodetype: NodeType = field(default=NodeType.DO, init=False)
     statement: "Statement"
 
-    # set by type checker: True if the block contains a break expression
-    has_break: bool = field(default=False, init=False)
+    # `has_break` used to live here as an `init=False` field set by
+    # the type checker when a break inside the block targets this Do.
+    # After Step 6 it lives on `TypedDo` only; the typechecker records
+    # it via `TypeChecker._do_has_break` (side-table keyed by parsed
+    # `nodeid`) and `_build_typed_do` reads it.
 
 
 @dataclass

@@ -364,7 +364,9 @@ class TestTypedControlFlowInvariants:
         assert typed is not None
         assert isinstance(typed, ztypedast.TypedDo)
         assert typed.statement is not None
-        assert typed.has_break == dn.has_break
+        # `has_break` used to live on the parsed Do; after Step 6.3
+        # it lives on TypedDo only.
+        assert typed.has_break is False
 
 
 class TestTypedTopLevelInvariants:
