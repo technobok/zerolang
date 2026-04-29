@@ -426,21 +426,6 @@ class Tokenizer(ITokenizer):
         token = Token(TT.ERR, chr(c), self.fsno, lineno, colno)
         return (token, delimtok)
 
-    # def acceptstringfrag(self, charflag: Charflag) -> str:
-    #     """
-    #     returns the string fragment
-    #     charflag should be Charflag.RAWC or Charflag.STRC
-    #     """
-    #     # *UTF8* is allowed in strings...
-    #     stringparts = []
-    #     c = self.atchar
-    #     while c > zchar.DEL or (CHARFLAGS[c] & charflag != 0):
-    #         stringparts.append(chr(c))
-    #         c = self._accept()
-
-    #     tstr = "".join(stringparts)
-    #     return tstr
-
     def acceptcharescape(self) -> Token:
         """
         returns the token (which could be an error token)
@@ -588,131 +573,6 @@ class Lexer:
         self._thistoken = token
         return
 
-    # class BlockType(Enum):
-    #     """
-    #     BlockType - type of block that the parser is currently inside. Used for "sep"
-    #         token and eol handling
-    #     """
-    #
-    #     NORMAL = 0  # handle eol's 'normally': pass first one then coalesce
-    #     PAREN = 1  # an expression within parens (including STRVAR)
-    #     STRING = 2  # a string literal
-    #     EOLS = 3  # coalesced eols (after returning the first one
-    # def _read(self) -> Token:
-    #     """
-    #     read and return next token
-    #     caller MUST put it in self.buffer
-    #
-    #     do some filtering and coalescing when reading to help the parser:
-    #     - skip all ws or comments
-    #     - coalesce eol[s] into a single sep token as appropriate for the
-    #         current block structure.
-    #         - EOL's in strings are passed unchanged.
-    #         - EOL's in parens () are filtered
-    #         - All others are coalesced into a single EOL (all after first are filetered)
-    #
-    #     Note that unbalanced parens or braces can mess up the ws/comment/eol
-    #     coalescing.
-    #     """
-    #     if self.nexttoken:
-    #         t = self.nexttoken
-    #         self.nexttoken = None
-    #         return t
-    #
-    #     while True:
-    #         token = self.lexer.token()
-    #         tt = token.toktype
-    #
-    #         # print(f"TOKEN={token.toktype.name}:[{token.tokstr}]")
-    #         if tt in (TT.WS, TT.COMMENT):
-    #             # always skip all whitespace and comments
-    #             continue
-    #
-    #         blocktype: BlockType = self._blockcurrent()
-    #
-    #         if tt == TT.EOL:
-    #             if blocktype in (BlockType.EOLS, BlockType.PAREN):
-    #                 # always skip eol after coalescing, in Parens (inc stringvar)
-    #                 continue
-    #             if blocktype == BlockType.NORMAL:
-    #                 self._blockpush(BlockType.EOLS)  # coalesce now
-    #                 return token  # allow first eol through
-    #             if blocktype == BlockType.STRING:
-    #                 return token  # allow the EOL literal to pass though in strings
-    #             # there should be no other cases
-    #             raise Exception(
-    #                 f"Error in tokenizer, not all blocktypes handled: {blocktype.name}"
-    #             )
-    #
-    #         # no more ws/comments/eol from here down
-    #         # error to have more than one EOLS on the blockstack?
-    #         if blocktype == BlockType.EOLS:
-    #             self._blockpop()
-    #             blocktype = self._blockcurrent()
-    #
-    #         if tt == TT.COLON:
-    #             continue  # filter all colons
-    #
-    #         if tt == TT.LABELPRE:
-    #             # unpack a LABELPRE -> LABEL: REFID
-    #             # REFID could be a number literal
-    #             c = ord(token.tokstr[0])
-    #             tt2 = TT.REFID
-    #             if c < zchar.DEL and ((CHARFLAGS[c] & Charflag.DECD) != 0):
-    #                 tt2 = TT.NUMBER
-    #             self.nexttoken = Token(
-    #                 tt2, token.tokstr, token.fsno, token.lineno, token.colno
-    #             )
-    #             return Token(
-    #                 TT.LABEL, token.tokstr, token.fsno, token.lineno, token.colno
-    #             )
-    #
-    #         if tt == TT.PARENOPEN:
-    #             # skip all eols inside parens
-    #             # PARENOPEN in STRVARBEG is handled here as well
-    #             self._blockpush(BlockType.PAREN)
-    #         elif tt == TT.PARENCLOSE and blocktype == BlockType.PAREN:
-    #             # may have unbalanced paren, only pop if in PAREN - don't
-    #             # mess things up further
-    #             # PARENCLOSE in STRVAREND is handled here as well
-    #             self._blockpop()
-    #         elif tt == TT.BRACEOPEN:
-    #             # 'normal' processing within braces
-    #             self._blockpush(BlockType.NORMAL)
-    #         elif tt == TT.BRACECLOSE and blocktype == BlockType.NORMAL:
-    #             # may have unbalanced paren, only pop if in NORMAL - don't
-    #             # mess things up further
-    #             self._blockpop()
-    #         break
-    #
-    #     return token
-
-    # def _blockcurrent(self) -> BlockType:
-    #     """
-    #     return the current block type (safely)
-    #     """
-    #     # in case blockstack is messed up from unbalanced input
-    #     blocktype: BlockType = BlockType.NORMAL
-    #     if self.blockstack:
-    #         blocktype = self.blockstack[-1]
-    #     return blocktype
-    #
-    # def _blockpop(self) -> BlockType:
-    #     """
-    #     pop and return the current block type (safely)
-    #     """
-    #     # in case blockstack is messed up from unbalanced input
-    #     blocktype: BlockType = BlockType.NORMAL
-    #     if self.blockstack:
-    #         blocktype = self.blockstack.pop()
-    #     return blocktype
-    #
-    # def _blockpush(self, blocktype: BlockType) -> None:
-    #     """
-    #     push a new block type on the stack
-    #     """
-    #     self.blockstack.append(blocktype)
-
     def filtereol(self, filtereol: bool) -> None:
         """
         Set the EOL filtering status
@@ -769,14 +629,6 @@ class Lexer:
         return t
 
 
-# def makelexer(filehandle: IO[str], fsno: DEntryID) -> Lexer:
-#     """
-#     makelexer - utility function to make a Lexer connected to a Tokenizer
-#     """
-#     lf = Tokenizer(filehandle, fsno)
-#     return Lexer(lf)
-
-
 def isvalidunitname(name: str) -> bool:
     """
     isvalidunitname - return true if name is a valid unit name
@@ -800,17 +652,3 @@ def isvalidunitname(name: str) -> bool:
 
     return True
 
-
-# def _test() -> None:
-#     # test the lexer
-#     with open("example0.zero", encoding="utf8") as f:
-#         lex = makelexer(f, DEntryID(0))
-#         while True:
-#             t = lex.acceptany()
-#             print(t)
-#             if t.toktype == TT.EOF:
-#                 break
-
-
-# if __name__ == "__main__":
-#     _test()
