@@ -745,6 +745,10 @@ class TypeChecker:
                         if not (ftype and ftype.isgeneric):
                             self._check_function_body(name, cast(zast.Function, defn))
 
+        # Final post-pass: assemble TypedProgram.units from the typed
+        # nodes accumulated during checking. After this, the typed tree
+        # mirrors the parsed tree end-to-end.
+        self._build_typed_program_units()
         return self.errors
 
     def _check_native_in_user_code(self, unit: zast.Unit) -> None:
@@ -5539,6 +5543,12 @@ class TypeChecker:
     # ---- Function body type checking ----
 
     def _check_function_body(self, name: str, func: zast.Function) -> None:
+        """Type-check a function body. Thin wrapper that builds the
+        typed mirror after the inner walks the body."""
+        self._check_function_body_inner(name, func)
+        self._build_typed_function(func, name)
+
+    def _check_function_body_inner(self, name: str, func: zast.Function) -> None:
         if not func.body:
             return
         self.symtab.push(f"function:{name}")
@@ -6292,6 +6302,17 @@ class TypeChecker:
         )
         self._register_typed(path, typed)
 
+    # node-types that materialise an ObjectDef in the parser AST.
+    _OBJECTDEF_NODETYPES = (
+        NodeType.RECORD,
+        NodeType.CLASS,
+        NodeType.UNION,
+        NodeType.VARIANT,
+        NodeType.ENUM,
+        NodeType.PROTOCOL,
+        NodeType.FACET,
+    )
+
     # node-types accepted as `Operation` values in the typed tree
     # (anything that produces a value the typechecker has typed).
     _OPERATION_NODETYPES = (
@@ -6459,6 +6480,187 @@ class TypeChecker:
             statements=lines,
         )
         self._register_typed(stmt, typed)
+
+    def _typed_path_from_parsed(self, path: zast.Node) -> Optional[ztypedast.TypedPath]:
+        """Build a fresh TypedPath mirroring a parsed Path used in
+        typeref position (parameter type, return type, field type).
+        Typerefs are resolved via `_resolve_typeref`, which sets
+        `path.type` directly without going through `_check_path`, so
+        their typed mirror is constructed ad-hoc here rather than via
+        `by_parsed_id` lookup."""
+        while path.nodetype == NodeType.EXPRESSION:
+            path = cast(zast.Expression, path).expression
+        if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            atom = cast(zast.AtomId, path)
+            return ztypedast.TypedAtomId(
+                parsed=atom,
+                ztype=cast(ZType, atom.type),
+                const_value=atom.const_value,
+                name=atom.name,
+                is_label_value=(atom.nodetype == NodeType.LABELVALUE),
+                narrowed_subtype=atom.narrowed_subtype,
+                original_ztype=atom.original_ztype,
+                child_id=atom.child_id,
+            )
+        if path.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, path)
+            parent_typed = self._typed_path_from_parsed(dp.parent)
+            if parent_typed is None:
+                return None
+            child_typed = ztypedast.TypedAtomId(
+                parsed=dp.child,
+                ztype=cast(ZType, None),
+                name=dp.child.name,
+            )
+            return ztypedast.TypedDottedPath(
+                parsed=dp,
+                ztype=cast(ZType, dp.type),
+                const_value=dp.const_value,
+                parent=parent_typed,
+                child=child_typed,
+                parent_tagged_type=dp.parent_tagged_type,
+                narrowed_subtype=dp.narrowed_subtype,
+                child_id=dp.child_id,
+            )
+        if path.nodetype == NodeType.ATOMSTRING:
+            atom_str = cast(zast.AtomString, path)
+            return ztypedast.TypedAtomString(
+                parsed=atom_str,
+                ztype=cast(ZType, atom_str.type),
+                parts=[],
+            )
+        return None
+
+    def _build_typed_function(
+        self, func: zast.Function, qualified_name: str = ""
+    ) -> None:
+        """Construct typed mirror of a parsed `Function` and register
+        it. `qualified_name` is used to look up the function's resolved
+        ZType in `_resolved`; pass `""` when the caller doesn't have
+        the qualified name (the ztype field stays None in that case)."""
+        params_typed: dict = {}
+        for pname, ppath in func.parameters.items():
+            ptyped = self._typed_path_from_parsed(ppath)
+            if ptyped is None:
+                continue
+            params_typed[pname] = ptyped
+        ret_typed: Optional[ztypedast.TypedPath] = None
+        if func.returntype is not None:
+            ret_typed = self._typed_path_from_parsed(func.returntype)
+        body_typed: Optional[ztypedast.TypedStatement] = None
+        if func.body is not None:
+            body_lookup = self.typed_program.by_parsed_id.get(func.body.nodeid)
+            if body_lookup is not None:
+                body_typed = cast(ztypedast.TypedStatement, body_lookup)
+        as_items_typed: dict = {}
+        for ak, av in func.as_items.items():
+            av_lookup = self.typed_program.by_parsed_id.get(av.nodeid)
+            if av_lookup is not None:
+                as_items_typed[ak] = av_lookup
+        ztype = self._resolved.get(qualified_name) if qualified_name else None
+        typed = ztypedast.TypedFunction(
+            parsed=func,
+            parameters=params_typed,
+            returntype=ret_typed,
+            body=body_typed,
+            is_native=func.is_native,
+            as_items=as_items_typed,
+            ztype=ztype,
+        )
+        self._register_typed(func, typed)
+
+    def _build_typed_objectdef(self, objdef: zast.ObjectDef) -> None:
+        """Construct typed mirror of a parsed `ObjectDef` (record /
+        class / union / variant / enum / protocol / facet). Items are
+        looked up in `by_parsed_id` when present (e.g. method bodies);
+        otherwise constructed ad-hoc via `_typed_path_from_parsed` for
+        typerefs."""
+        is_items_typed: dict = {}
+        for ik, iv in objdef.is_items.items():
+            iv_lookup = self.typed_program.by_parsed_id.get(iv.nodeid)
+            if iv_lookup is not None:
+                is_items_typed[ik] = iv_lookup
+                continue
+            # fall back to constructing a fresh typed path for typeref
+            # entries (field types) — these are resolved via
+            # `_resolve_typeref` which doesn't build a typed mirror.
+            iv_path = self._typed_path_from_parsed(iv)
+            if iv_path is not None:
+                is_items_typed[ik] = iv_path
+        as_items_typed: dict = {}
+        for ak, av in objdef.as_items.items():
+            av_lookup = self.typed_program.by_parsed_id.get(av.nodeid)
+            if av_lookup is not None:
+                as_items_typed[ak] = av_lookup
+        ztype = self._resolved.get(objdef.start.tokstr) if objdef.start else None
+        typed = ztypedast.TypedObjectDef(
+            parsed=objdef,
+            kind=objdef.nodetype,
+            is_items=is_items_typed,
+            as_items=as_items_typed,
+            is_native=objdef.is_native,
+            ztype=ztype,
+        )
+        self._register_typed(objdef, typed)
+
+    def _build_typed_unit(
+        self, unit: zast.Unit, qualified_prefix: str = ""
+    ) -> ztypedast.TypedUnit:
+        """Construct typed mirror of a parsed `Unit`. Walks the unit
+        body; for each function / objectdef / nested unit, builds a
+        typed mirror in place (so `by_parsed_id` is populated for any
+        consumer keying off parsed nodeids). For value-level
+        definitions (label values, expressions), the existing
+        `by_parsed_id` entry from the body checker is reused."""
+        body_typed: dict = {}
+        for name, defn in unit.body.items():
+            qname = f"{qualified_prefix}{name}" if qualified_prefix else name
+            if defn.nodetype == NodeType.UNIT:
+                inner = self._build_typed_unit(
+                    cast(zast.Unit, defn), qualified_prefix=f"{qname}."
+                )
+                body_typed[name] = inner
+            elif defn.nodetype == NodeType.FUNCTION:
+                self._build_typed_function(cast(zast.Function, defn), qname)
+                fn_typed = self.typed_program.by_parsed_id.get(defn.nodeid)
+                if fn_typed is not None:
+                    body_typed[name] = fn_typed
+            elif defn.nodetype in self._OBJECTDEF_NODETYPES:
+                self._build_typed_objectdef(cast(zast.ObjectDef, defn))
+                od_typed = self.typed_program.by_parsed_id.get(defn.nodeid)
+                if od_typed is not None:
+                    body_typed[name] = od_typed
+            else:
+                # value-level definition (label value, expression, etc.)
+                lookup = self.typed_program.by_parsed_id.get(defn.nodeid)
+                if lookup is not None:
+                    body_typed[name] = lookup
+        ztype = self.unit_types_by_id.get(unit.nodeid)
+        typed = ztypedast.TypedUnit(parsed=unit, body=body_typed, ztype=ztype)
+        self._register_typed(unit, typed)
+        return typed
+
+    def _build_typed_program_units(self) -> None:
+        """Final post-pass: walk `Program.units` and construct the
+        typed-tree mirror for every unit and its definitions. Populates
+        `typed_program.units` end-to-end. Side-tables already on the
+        TypeChecker (`_resolved`, `_mono_types`, `_mono_functions`,
+        `_func_aliases`, `_cloned_methods`, `unit_types_by_id`) are
+        copied onto `typed_program` for downstream consumers."""
+        for unitname, unit in self.program.units.items():
+            unit_typed = self._build_typed_unit(unit, qualified_prefix=f"{unitname}.")
+            self.typed_program.units[unitname] = unit_typed
+        self.typed_program.resolved = dict(self._resolved)
+        self.typed_program.mono_types = list(self._mono_types)
+        self.typed_program.func_aliases = dict(self._func_aliases)
+        self.typed_program.unit_types_by_id = dict(self.unit_types_by_id)
+        # mono_functions / cloned_methods still carry parsed Functions
+        # today; their typed mirrors live in `by_parsed_id` keyed by
+        # the cloned nodeid. TypedProgram declares these as
+        # `Dict[str, Dict[str, TypedFunction]]`, so a direct copy
+        # would mismatch the static types — left for Step 4+ when
+        # emitter consumers swap to typed access via parsed-id lookup.
+        self.typed_program.symbol_table = self.symtab
 
     def _build_typed_if(self, ifnode: zast.If) -> None:
         """Construct typed mirror of an `If`. Each `IfClause` is built

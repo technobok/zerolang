@@ -355,13 +355,7 @@ class TestTypedControlFlowInvariants:
         assert names == {"true", "false"}
 
     def test_do_block_mirror(self):
-        tc = _typecheck(
-            "main: function is {\n"
-            "    x: {\n"
-            "        7\n"
-            "    }\n"
-            "}"
-        )
+        tc = _typecheck("main: function is {\n    x: {\n        7\n    }\n}")
         mainunit = tc.program.units[tc.program.mainunitname]
         dos = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.DO]
         assert len(dos) == 1
@@ -371,6 +365,69 @@ class TestTypedControlFlowInvariants:
         assert isinstance(typed, ztypedast.TypedDo)
         assert typed.statement is not None
         assert typed.has_break == dn.has_break
+
+
+class TestTypedTopLevelInvariants:
+    """`TypedProgram.units` must mirror `Program.units` at end of
+    `check()`. Each unit body has typed Function / ObjectDef / Unit
+    counterparts."""
+
+    def test_main_unit_populated(self):
+        tc = _typecheck(
+            "main: function is {\n"
+            "    x: 7\n"
+            "}"
+        )
+        units = tc.typed_program.units
+        assert "test" in units
+        unit = units["test"]
+        assert isinstance(unit, ztypedast.TypedUnit)
+        assert unit.parsed is tc.program.units["test"]
+        assert "main" in unit.body
+        main_typed = unit.body["main"]
+        assert isinstance(main_typed, ztypedast.TypedFunction)
+        assert main_typed.body is not None
+        # ztype resolved for the main function
+        assert main_typed.ztype is tc._resolved.get("test.main")
+
+    def test_function_with_parameters_and_returntype(self):
+        tc = _typecheck(
+            "double: function {x: i64} out i64 is {\n"
+            "    return x + x\n"
+            "}\n"
+            "main: function is {\n"
+            "    y: double x: 21.i64\n"
+            "}"
+        )
+        unit = tc.typed_program.units["test"]
+        double_typed = unit.body["double"]
+        assert isinstance(double_typed, ztypedast.TypedFunction)
+        # parameters: TypedAtomId for the i64 typeref
+        assert "x" in double_typed.parameters
+        assert isinstance(double_typed.parameters["x"], ztypedast.TypedAtomId)
+        # returntype mirror present
+        assert double_typed.returntype is not None
+        assert isinstance(double_typed.returntype, ztypedast.TypedAtomId)
+
+    def test_record_objectdef_mirror(self):
+        tc = _typecheck(
+            "Point: record { x: i64 y: i64 } as {\n"
+            "    create: function {x: i64 y: i64} out this is {\n"
+            "        return meta.create x: x y: y\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: Point x: 1.i64 y: 2.i64\n"
+            "}"
+        )
+        unit = tc.typed_program.units["test"]
+        assert "Point" in unit.body
+        point_typed = unit.body["Point"]
+        assert isinstance(point_typed, ztypedast.TypedObjectDef)
+        assert point_typed.kind == NodeType.RECORD
+        # is_items has the field typerefs
+        assert "x" in point_typed.is_items
+        assert "y" in point_typed.is_items
 
 
 class TestTypedDottedPathInvariants:
