@@ -11,7 +11,6 @@ from typing import cast
 
 import zast
 from zast import NodeType
-from zlexer import Token
 from ztypes import ZType, ZTypeType
 
 
@@ -297,11 +296,10 @@ def _hash_atomstring(node: zast.AtomString) -> str:
     h = hashlib.sha256()
     h.update(b"ATOMSTR")
     for part in node.stringparts:
-        if part.is_node:
-            h.update(_hash_expression(cast(zast.Expression, part)).encode())
+        if part.nodetype == NodeType.STRINGCHUNK:
+            h.update(cast(zast.StringChunk, part).text.encode())
         else:
-            # Token — hash its string content
-            h.update(cast(Token, part).tokstr.encode())
+            h.update(_hash_expression(cast(zast.Expression, part)).encode())
     return h.hexdigest()
 
 

@@ -33,7 +33,6 @@ class Token:
     """
 
     is_token: bool = field(default=True, init=False)
-    is_node: bool = field(default=False, init=False)
     is_expression: bool = field(default=False, init=False)
 
     toktype: TT

@@ -1605,7 +1605,7 @@ class CEmitter:
         try-except) so it stays inside the bootstrap-lint baseline."""
         stack: List = []
         for defn in body.values():
-            if defn is not None and defn.is_node:
+            if defn is not None:
                 stack.append(defn)
         while stack:
             n = stack.pop()
@@ -6405,7 +6405,8 @@ class CEmitter:
                     if inner.nodetype == NodeType.EXPRESSION:
                         inner = cast(zast.Expression, inner).expression
                     if inner.nodetype == NodeType.ATOMSTRING and not any(
-                        p.is_node for p in cast(zast.AtomString, inner).stringparts
+                        p.nodetype != zast.NodeType.STRINGCHUNK
+                        for p in cast(zast.AtomString, inner).stringparts
                     ):
                         cap = _str_capacity(target_type)
                         literal = self._collect_string_literal(
@@ -7211,7 +7212,8 @@ class CEmitter:
             child == "string"
             and path.parent.nodetype == NodeType.ATOMSTRING
             and not any(
-                p.is_node for p in cast(zast.AtomString, path.parent).stringparts
+                p.nodetype != zast.NodeType.STRINGCHUNK
+                for p in cast(zast.AtomString, path.parent).stringparts
             )
         ):
             self.needs_stringview = True
@@ -8353,7 +8355,9 @@ class CEmitter:
         return tmp
 
     def _emit_string_value(self, atom: zast.AtomString) -> str:
-        has_interp = any(p.is_node for p in atom.stringparts)
+        has_interp = any(
+            p.nodetype != zast.NodeType.STRINGCHUNK for p in atom.stringparts
+        )
 
         if not has_interp:
             self.needs_stringview = True
@@ -8370,10 +8374,10 @@ class CEmitter:
         # estimate capacity: literal lengths + 16 per expression
         est_cap = 0
         for p in atom.stringparts:
-            if p.is_node:
+            if p.nodetype != NodeType.STRINGCHUNK:
                 est_cap += 16
             else:
-                est_cap += len(p.tokstr)  # type: ignore[union-attr]
+                est_cap += len(cast(zast.StringChunk, p).text)
         self._temp.decls.append(
             f"{indent}z_String_t {result} = z_String_create((uint64_t){est_cap});\n"
         )
@@ -8381,7 +8385,7 @@ class CEmitter:
         self._temp.string_set.add(result)
 
         for p in atom.stringparts:
-            if p.is_node:
+            if p.nodetype != NodeType.STRINGCHUNK:
                 val = self._emit_expression_value(cast(zast.Expression, p))
                 val_type = self._get_expression_type(cast(zast.Expression, p))
                 if val_type and val_type.name in (
@@ -8438,7 +8442,7 @@ class CEmitter:
                         f" {buf}, (uint64_t){buf}_n);\n"
                     )
             else:
-                literal = self._escape_c_string(p.tokstr)  # type: ignore[union-attr]
+                literal = self._escape_c_string(cast(zast.StringChunk, p).text)
                 if literal:
                     self._temp.decls.append(
                         f"{indent}z_String_append(&{result},"
@@ -8450,8 +8454,8 @@ class CEmitter:
     def _collect_string_literal(self, parts: list) -> str:
         result: List[str] = []
         for p in parts:
-            if not p.is_node:
-                result.append(self._escape_c_string(p.tokstr))
+            if p.nodetype == NodeType.STRINGCHUNK:
+                result.append(self._escape_c_string(cast(zast.StringChunk, p).text))
         return "".join(result)
 
     def _escape_c_string(self, s: str) -> str:

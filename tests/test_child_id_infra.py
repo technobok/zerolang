@@ -70,22 +70,22 @@ def _parse_check(source: str, unitname: str = "test"):
 
 
 def _walk(node):
-    if getattr(node, "is_node", False):
+    if hasattr(node, "nodetype"):
         yield node
     if hasattr(node, "__dataclass_fields__"):
         for fname in node.__dataclass_fields__:
             val = getattr(node, fname, None)
             if val is None:
                 continue
-            if getattr(val, "is_node", False):
+            if hasattr(val, "nodetype"):
                 yield from _walk(val)
             elif type(val) is list:
                 for v in val:
-                    if getattr(v, "is_node", False):
+                    if hasattr(v, "nodetype"):
                         yield from _walk(v)
             elif type(val) is dict:
                 for v in val.values():
-                    if getattr(v, "is_node", False):
+                    if hasattr(v, "nodetype"):
                         yield from _walk(v)
 
 

@@ -2703,8 +2703,7 @@ class TypeChecker:
                 apath_str = cast(zast.AtomString, apath)
                 # only allow pure literals (no interpolated expressions)
                 has_interpolation = any(
-                    p.is_node and cast(zast.Node, p).nodetype == NodeType.EXPRESSION
-                    for p in apath_str.stringparts
+                    p.nodetype == NodeType.EXPRESSION for p in apath_str.stringparts
                 )
                 if has_interpolation:
                     self._error(
@@ -2717,9 +2716,9 @@ class TypeChecker:
                     if sv_type:
                         # collect the raw string content from token parts
                         raw = "".join(
-                            cast(Token, p).tokstr
+                            cast(zast.StringChunk, p).text
                             for p in apath_str.stringparts
-                            if not p.is_node
+                            if p.nodetype == NodeType.STRINGCHUNK
                         )
                         ct = _make_type(sv_type.name, sv_type.typetype)
                         ct.children = sv_type.children
@@ -3539,7 +3538,9 @@ class TypeChecker:
                 parent_type = self._resolve_typeref(path.parent)
         elif path.parent.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path.parent)
-            has_interp = any(p.is_node for p in atom_str.stringparts)
+            has_interp = any(
+                p.nodetype != NodeType.STRINGCHUNK for p in atom_str.stringparts
+            )
             parent_type = self._resolve_name("String" if has_interp else "StringView")
         if not parent_type:
             return None
@@ -6146,7 +6147,9 @@ class TypeChecker:
         if path.nodetype == NodeType.ATOMSTRING:
             path_str = cast(zast.AtomString, path)
             self._check_string_interpolation(path_str)
-            has_interp = any(p.is_node for p in path_str.stringparts)
+            has_interp = any(
+                p.nodetype != NodeType.STRINGCHUNK for p in path_str.stringparts
+            )
             path_str.type = self._resolve_name("String" if has_interp else "StringView")
             return path_str.type
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
@@ -6454,7 +6457,9 @@ class TypeChecker:
         elif path.parent.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path.parent)
             self._check_string_interpolation(atom_str)
-            has_interp = any(p.is_node for p in atom_str.stringparts)
+            has_interp = any(
+                p.nodetype != NodeType.STRINGCHUNK for p in atom_str.stringparts
+            )
             atom_str.type = self._resolve_name("String" if has_interp else "StringView")
         elif path.parent.nodetype == NodeType.EXPRESSION:
             self._check_expression(cast(zast.Expression, path.parent))
@@ -6553,7 +6558,7 @@ class TypeChecker:
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
         for part in atom.stringparts:
-            if part.is_expression:
+            if part.nodetype != NodeType.STRINGCHUNK:
                 part_expr = cast(zast.Expression, part)
                 self._check_expression(part_expr)
                 self._check_exhaustive_if(part_expr)
@@ -7288,7 +7293,9 @@ class TypeChecker:
             return True
         if op.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, op)
-            has_interp = any(p.is_node for p in atom_str.stringparts)
+            has_interp = any(
+                p.nodetype != NodeType.STRINGCHUNK for p in atom_str.stringparts
+            )
             return not has_interp
         if op.nodetype == NodeType.EXPRESSION:
             inner = cast(zast.Expression, op).expression
@@ -8595,8 +8602,8 @@ class TypeChecker:
             atom_str = cast(zast.AtomString, msg_op)
             parts: list[str] = []
             for part in atom_str.stringparts:
-                if not part.is_node:
-                    parts.append(cast(Token, part).tokstr)
+                if part.nodetype == NodeType.STRINGCHUNK:
+                    parts.append(cast(zast.StringChunk, part).text)
                 else:
                     return "compile-time error"
             return "".join(parts)

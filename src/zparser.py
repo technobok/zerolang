@@ -2577,5 +2577,19 @@ class Parser:
                 return zast.Error(start=t, err=ERR.BADSTRING, msg=msg)
 
         stringparts = _strip_string_whitespace(stringparts)
-        atomstring = zast.AtomString(stringparts=stringparts, start=firsttoken)
+        # Wrap each literal Token as a StringChunk node so the AST
+        # is uniformly Node-typed (Expression interpolations were
+        # already Nodes). The parser-internal `is_expression`
+        # discriminator stays useful inside `_strip_string_whitespace`
+        # which still operates on the raw Token form.
+        wrapped: List[zast.Node] = []
+        for p in stringparts:
+            if p.is_expression:
+                wrapped.append(cast(zast.Expression, p))
+            else:
+                tok = cast(Token, p)
+                wrapped.append(
+                    zast.StringChunk(text=tok.tokstr, chunk_kind=tok.toktype, start=tok)
+                )
+        atomstring = zast.AtomString(stringparts=wrapped, start=firsttoken)
         return NodeX(node=atomstring, extern=extern)

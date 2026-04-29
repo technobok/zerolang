@@ -225,6 +225,7 @@ class NodeType(IntEnum):
     LABELVALUE = 83  # label value (:x)
 
     ATOMSTRING = 84
+    STRINGCHUNK = 85  # literal text segment inside an interpolated string
 
     ERROR = 99
 
@@ -313,7 +314,6 @@ class Node:
     directly
     """
 
-    is_node: bool = field(default=True, init=False)
     nodeid: NodeID = field(
         default_factory=cast(Callable[[], NodeID], count().__next__), init=False
     )
@@ -892,16 +892,36 @@ class LabelValue(AtomId):
 
 
 @dataclass
+class StringChunk(Node):
+    """
+    A literal text segment of an interpolated string. Carries the
+    chunk's text plus its source position (`start: Token`, inherited
+    from Node). `chunk_kind` is the lexer token type that produced
+    the chunk (TT.STRMID for plain text, TT.STRCHR for an escape
+    like `\\n`, TT.EOL for a literal newline) — preserved so the
+    emitter can decide how to format each chunk.
+    """
+
+    nodetype: NodeType = field(default=NodeType.STRINGCHUNK, init=False)
+    text: str
+    chunk_kind: TT
+
+
+@dataclass
 class AtomString(Atom):
     """
-    AtomString Node
-    An Atom comprising a sequence of string part tokens
-    atomstring and atomstringraw
+    AtomString Node — an Atom comprising the ordered parts of an
+    interpolated string literal. Each part is either:
+
+    - `StringChunk` — a literal text segment
+    - `Expression` — an embedded `\\{...}` interpolation
+
+    Parts are stored in source order so downstream consumers can
+    walk them sequentially.
     """
 
     nodetype: NodeType = field(default=NodeType.ATOMSTRING, init=False)
-    # bit messy... Token for literal parts, Expression for strexpr
-    stringparts: typing.List[typing.Union["Token", "Expression"]]
+    stringparts: typing.List["Node"]
 
 
 def node_children(node: "Node") -> "typing.List[Node]":
@@ -1022,11 +1042,9 @@ def node_children(node: "Node") -> "typing.List[Node]":
         out.append(dp.child)
         return out
     if nt == NodeType.ATOMSTRING:
-        for p in cast(AtomString, node).stringparts:
-            if p.is_node:
-                out.append(cast(Expression, p))
+        out.extend(cast(AtomString, node).stringparts)
         return out
-    # ATOMID / LABELVALUE / ERROR have no Node children
+    # ATOMID / LABELVALUE / STRINGCHUNK / ERROR have no Node children
     return out
 
 
@@ -1034,14 +1052,10 @@ def node_tokens(node: "Node") -> "typing.List[Token]":
     """Return Tokens directly embedded in `node` (other than `node.start`,
     which every Node has and callers should collect separately).
 
-    Currently only AtomString.stringparts contains embedded Tokens.
+    No Node currently embeds Tokens directly — kept as a stable hook
+    for future cases.
     """
-    out: "typing.List[Token]" = []
-    if node.nodetype == NodeType.ATOMSTRING:
-        for p in cast(AtomString, node).stringparts:
-            if not p.is_node:
-                out.append(cast(Token, p))
-    return out
+    return []
 
 
 # class NodeTable:

@@ -7,7 +7,6 @@ from typing import List, Dict, cast
 
 import zast
 from zast import Node, NodeType
-from zlexer import Token
 
 
 def pprintprogram(program: zast.Program) -> None:
@@ -421,8 +420,8 @@ def _pprintatomstring(node: Node, depth: int) -> str:
     del sepinner
     # output.append(sepinner)
     for s in node.stringparts:
-        if not s.is_node:
-            o.append(f'"{cast(Token, s).tokstr}"')
+        if s.nodetype == zast.NodeType.STRINGCHUNK:
+            o.append(f'"{cast(zast.StringChunk, s).text}"')
         else:
             o.append("(")
             o.append(pprintnode(cast(zast.Expression, s), depth))
