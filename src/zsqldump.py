@@ -116,9 +116,6 @@ CREATE TABLE IF NOT EXISTS ast_nodes (
     file_id         INTEGER REFERENCES files(file_id),
     start_line      INTEGER,
     start_col       INTEGER,
-    cname           TEXT,
-    is_const        BOOLEAN,
-    const_value     TEXT,
     synth_origin    TEXT
 );
 
@@ -146,9 +143,17 @@ CREATE TABLE IF NOT EXISTS type_children (
     PRIMARY KEY (type_id, child_name)
 );
 
+-- typed_nodes carries the typechecker-derived per-node data
+-- (resolved ZType, constant-fold result, mangled C name). One row
+-- per parsed AST node that the typechecker typed; FK to ast_nodes
+-- via node_id. Step 5b of the typed-tree migration: parser-set and
+-- typecheck-set fields are now in disjoint tables.
 CREATE TABLE IF NOT EXISTS typed_nodes (
-    node_id     INTEGER PRIMARY KEY REFERENCES ast_nodes(node_id),
-    type_id     INTEGER REFERENCES types(type_id)
+    node_id      INTEGER PRIMARY KEY REFERENCES ast_nodes(node_id),
+    type_id      INTEGER REFERENCES types(type_id),
+    cname        TEXT,
+    is_const     BOOLEAN,
+    const_value  TEXT
 );
 
 CREATE TABLE IF NOT EXISTS emitted_lines (
@@ -292,7 +297,7 @@ def dump_sql(
             f"{_sql_str(tok.toktype.name)}, {_sql_str(tok.tokstr)});"
         )
 
-    # Stage 3: AST nodes
+    # Stage 3: AST nodes (parser-set fields only — Step 5b)
     ast_nodes = _collect_ast_nodes(program)
     typed_program = cast(Optional[ztypedast.TypedProgram], program.typed_program)
     for node, name in ast_nodes:
@@ -301,18 +306,12 @@ def dump_sql(
         file_id = _sql_int(node.start.fsno) if node.start else "NULL"
         start_line = _sql_int(node.start.lineno) if node.start else "NULL"
         start_col = _sql_int(node.start.colno) if node.start else "NULL"
-        # Step 5a: route decoration reads through the typed mirror.
-        n_ztype = _node_ztype(typed_program, node)
-        n_const = _node_const_value(typed_program, node)
-        cname = _sql_str(n_ztype.cname) if n_ztype and n_ztype.cname else "NULL"
-        is_const = _sql_bool(n_const is not None)
-        const_val = _sql_str(str(n_const)) if n_const is not None else "NULL"
         synth_origin = _sql_str(node.synth_origin)
         lines.append(
             f"INSERT INTO ast_nodes VALUES ("
             f"{node.nodeid}, {_sql_str(kind)}, {token_id}, "
-            f"{_sql_str(name)}, {file_id}, {start_line}, {start_col}, {cname}, "
-            f"{is_const}, {const_val}, {synth_origin});"
+            f"{_sql_str(name)}, {file_id}, {start_line}, {start_col}, "
+            f"{synth_origin});"
         )
 
     # Stage 4: types — collect all reachable types
@@ -375,14 +374,26 @@ def dump_sql(
                 f"{ztype.nodeid}, {_sql_str(cname)}, {ctype.nodeid}, {i}, {cid_sql});"
             )
 
-    # Stage 5: typed nodes (AST nodes with type annotations)
+    # Stage 5: typed nodes — typecheck-set per-node data. Step 5b
+    # consolidated the cname / is_const / const_value columns out of
+    # ast_nodes so the parser-side and typecheck-side rows are
+    # disjoint.
     for node, name in ast_nodes:
         n_ztype = _node_ztype(typed_program, node)
-        if n_ztype is not None:
-            lines.append(
-                f"INSERT OR IGNORE INTO typed_nodes VALUES ("
-                f"{node.nodeid}, {n_ztype.nodeid});"
-            )
+        n_const = _node_const_value(typed_program, node)
+        # Skip rows where the node carries no typecheck-set data at
+        # all — reflects a parser-only node (e.g. a structural child
+        # selector, error sentinel) untouched by typecheck.
+        if n_ztype is None and n_const is None:
+            continue
+        type_id = _sql_int(n_ztype.nodeid) if n_ztype is not None else "NULL"
+        cname = _sql_str(n_ztype.cname) if n_ztype and n_ztype.cname else "NULL"
+        is_const = _sql_bool(n_const is not None)
+        const_val = _sql_str(str(n_const)) if n_const is not None else "NULL"
+        lines.append(
+            f"INSERT OR IGNORE INTO typed_nodes VALUES ("
+            f"{node.nodeid}, {type_id}, {cname}, {is_const}, {const_val});"
+        )
 
     # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
     # unit_type_id is filled from the id-keyed unit_types snapshot; NULL

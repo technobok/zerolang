@@ -1154,8 +1154,13 @@ class TestCname:
         assert row[0] == "z_point_t"
         conn.close()
 
-    def test_cname_in_ast_nodes_dump(self):
-        """SQL dump should include cname column in ast_nodes table."""
+    def test_cname_in_typed_nodes_dump(self):
+        """SQL dump should include cname column in typed_nodes table.
+
+        Step 5b of the typed-tree migration moved typecheck-set
+        per-node columns (cname, is_const, const_value) out of
+        `ast_nodes` into `typed_nodes` so the parser-side and
+        typechecker-side rows are disjoint."""
         program = parse_and_check(
             "point: record is { x: f64  y: f64 }\n"
             "main: function is {\n"
@@ -1167,7 +1172,7 @@ class TestCname:
         conn = _load_sql(sql)
         # expression nodes referencing point should have its cname
         row = conn.execute(
-            "SELECT cname FROM ast_nodes WHERE cname = 'z_point_t'"
+            "SELECT cname FROM typed_nodes WHERE cname = 'z_point_t'"
         ).fetchone()
         assert row is not None
         conn.close()
