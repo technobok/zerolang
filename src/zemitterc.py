@@ -8807,7 +8807,7 @@ class CEmitter:
     def _emit_if(self, ifnode: zast.If) -> str:
         # Step 4f: route If decoration reads through the typed mirror.
         typed_if = self._typed_if_for(ifnode)
-        _if_taken_vars = typed_if.taken_vars if typed_if else ifnode.taken_vars
+        _if_taken_vars = typed_if.taken_vars if typed_if else []
         indent = self._indent()
         parts: List[str] = []
 
@@ -9596,12 +9596,8 @@ class CEmitter:
     def _emit_case(self, casenode: zast.Case) -> str:
         # Step 4f: Case decoration reads via typed mirror.
         _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = (
-            _typed_case.taken_vars if _typed_case else casenode.taken_vars
-        )
-        _case_subject_taken = (
-            _typed_case.subject_taken if _typed_case else casenode.subject_taken
-        )
+        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
+        _case_subject_taken = _typed_case.subject_taken if _typed_case else False
         # Step 4f: Case decoration reads via typed mirror.
         typed_case = self._typed_case_for(casenode)
         _case_taken_vars = typed_case.taken_vars if typed_case else _case_taken_vars
@@ -9677,12 +9673,8 @@ class CEmitter:
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
         # Step 4f: Case decoration reads via typed mirror.
         _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = (
-            _typed_case.taken_vars if _typed_case else casenode.taken_vars
-        )
-        _case_subject_taken = (
-            _typed_case.subject_taken if _typed_case else casenode.subject_taken
-        )
+        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
+        _case_subject_taken = _typed_case.subject_taken if _typed_case else False
         # nullable-ptr option: if (ptr != NULL) / else
         if union_type.is_nullable_ptr:
             return self._emit_nullable_ptr_case(casenode, union_type)
@@ -9746,12 +9738,8 @@ class CEmitter:
         """Emit case matching for nullable-ptr option: if (ptr != NULL) / else."""
         # Step 4f: Case decoration reads via typed mirror.
         _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = (
-            _typed_case.taken_vars if _typed_case else casenode.taken_vars
-        )
-        _case_subject_taken = (
-            _typed_case.subject_taken if _typed_case else casenode.subject_taken
-        )
+        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
+        _case_subject_taken = _typed_case.subject_taken if _typed_case else False
         indent = self._indent()
         parts: List[str] = []
         subject = self._emit_operation_value(casenode.subject)
@@ -9828,9 +9816,7 @@ class CEmitter:
     def _emit_variant_case(self, casenode: zast.Case, variant_type: ZType) -> str:
         # Step 4f: Case decoration reads via typed mirror.
         _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = (
-            _typed_case.taken_vars if _typed_case else casenode.taken_vars
-        )
+        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
         indent = self._indent()
         parts: List[str] = []
         variant_name = variant_type.name

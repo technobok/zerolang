@@ -583,10 +583,11 @@ class If(Node):
     nodetype: NodeType = field(default=NodeType.IF, init=False)
     clauses: typing.List["IfClause"]
     elseclause: Optional["Statement"]
-    # set by type checker: variables taken in some arm (name, type) for post-block cleanup
-    taken_vars: typing.List[typing.Tuple[str, "Optional[ZType]"]] = field(
-        default_factory=list, init=False
-    )
+    # `taken_vars` used to live here as an `init=False` field populated
+    # by `_check_if_inner` (variables consumed in some arm so the
+    # emitter can destruct on the merge path). After Step 6 it lives on
+    # `TypedIf` only; the typechecker records it via
+    # `TypeChecker._if_taken_vars` and `_build_typed_if` reads it.
 
 
 @dataclass
@@ -628,12 +629,11 @@ class Case(Node):
     subject: "Operation"
     clauses: typing.List["CaseClause"]
     elseclause: Optional["Statement"]
-    # set by type checker: subject was .take'd in at least one arm
-    subject_taken: bool = field(default=False, init=False)
-    # set by type checker: variables taken in some arm (name, type) for post-block cleanup
-    taken_vars: typing.List[typing.Tuple[str, "Optional[ZType]"]] = field(
-        default_factory=list, init=False
-    )
+    # `subject_taken` and `taken_vars` used to live here as `init=False`
+    # fields populated by `_check_case_inner`. After Step 6 they live on
+    # `TypedCase` only; the typechecker records them via
+    # `TypeChecker._case_subject_taken` / `_case_taken_vars` and
+    # `_build_typed_case` reads them.
 
 
 @dataclass

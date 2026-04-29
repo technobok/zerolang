@@ -511,6 +511,14 @@ class TypeChecker:
         # whose operation auto-unwraps an `option` value at each
         # iteration. Read by `_build_typed_for`.
         self._for_iter_bindings: dict[int, set[str]] = {}
+        # Per-If / per-Case post-block ownership cleanup (was
+        # `zast.If.taken_vars` / `zast.Case.taken_vars`). `(name, ZType)`
+        # tuples for variables consumed in some arm so the emitter knows
+        # which to destruct on the merge path.
+        self._if_taken_vars: dict[int, list[tuple[str, Optional[ZType]]]] = {}
+        self._case_taken_vars: dict[int, list[tuple[str, Optional[ZType]]]] = {}
+        # Per-Case subject-taken flag (was `zast.Case.subject_taken`).
+        self._case_subject_taken: dict[int, bool] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -6718,19 +6726,16 @@ class TypeChecker:
 
     def _build_typed_if(self, ifnode: zast.If) -> None:
         """Construct typed mirror of an `If`. Each `IfClause` is built
-        inline (no separate `_check_if_clause` exists). Skipped when
-        any condition / statement / else branch lacks a typed mirror."""
+        inline. Always emits a typed mirror — post-Step-6 the typed
+        mirror is the only carrier of `taken_vars`, so a missing mirror
+        would lose the data. Subcomponents missing typed mirrors are
+        left as None placeholders in their slots."""
         clauses_typed: List[ztypedast.TypedIfClause] = []
         for clause in ifnode.clauses:
             conds_typed: dict = {}
             for cname, cond_op in clause.conditions.items():
-                op_typed = self._typed_operation_for(cond_op)
-                if op_typed is None:
-                    return
-                conds_typed[cname] = op_typed
+                conds_typed[cname] = self._typed_operation_for(cond_op)
             stmt_typed = self.typed_program.by_parsed_id.get(clause.statement.nodeid)
-            if stmt_typed is None:
-                return
             clause_typed = ztypedast.TypedIfClause(
                 parsed=clause,
                 conditions=conds_typed,
@@ -6741,16 +6746,14 @@ class TypeChecker:
         else_typed: Optional[ztypedast.TypedStatement] = None
         if ifnode.elseclause is not None:
             else_lookup = self.typed_program.by_parsed_id.get(ifnode.elseclause.nodeid)
-            if else_lookup is None:
-                return
-            else_typed = cast(ztypedast.TypedStatement, else_lookup)
+            else_typed = cast(Optional[ztypedast.TypedStatement], else_lookup)
         typed = ztypedast.TypedIf(
             parsed=ifnode,
             ztype=cast(ZType, ifnode.type),
             const_value=ifnode.const_value,
             clauses=clauses_typed,
             elseclause=else_typed,
-            taken_vars=list(ifnode.taken_vars),
+            taken_vars=list(self._if_taken_vars.get(ifnode.nodeid, ())),
         )
         self._register_typed(ifnode, typed)
 
@@ -6758,15 +6761,14 @@ class TypeChecker:
         """Construct typed mirror of a `Case` (match) expression. Each
         `CaseClause` is built inline; the parsed `match` AtomId is
         structural (a tag selector), so the typed match is a fresh
-        TypedAtomId carrying only the tag name."""
+        TypedAtomId carrying only the tag name. Always emits a typed
+        mirror — post-Step-6 the typed mirror is the only carrier of
+        `subject_taken` / `taken_vars`. Subcomponents lacking typed
+        mirrors are left as None placeholders."""
         subject_typed = self._typed_operation_for(casenode.subject)
-        if subject_typed is None:
-            return
         clauses_typed: List[ztypedast.TypedCaseClause] = []
         for clause in casenode.clauses:
             stmt_typed = self.typed_program.by_parsed_id.get(clause.statement.nodeid)
-            if stmt_typed is None:
-                return
             match_typed = ztypedast.TypedAtomId(
                 parsed=clause.match,
                 ztype=cast(ZType, None),
@@ -6785,18 +6787,16 @@ class TypeChecker:
             else_lookup = self.typed_program.by_parsed_id.get(
                 casenode.elseclause.nodeid
             )
-            if else_lookup is None:
-                return
-            else_typed = cast(ztypedast.TypedStatement, else_lookup)
+            else_typed = cast(Optional[ztypedast.TypedStatement], else_lookup)
         typed = ztypedast.TypedCase(
             parsed=casenode,
             ztype=cast(ZType, casenode.type),
             const_value=casenode.const_value,
-            subject=subject_typed,
+            subject=cast(ztypedast.TypedOperation, subject_typed),
             clauses=clauses_typed,
             elseclause=else_typed,
-            subject_taken=casenode.subject_taken,
-            taken_vars=list(casenode.taken_vars),
+            subject_taken=self._case_subject_taken.get(casenode.nodeid, False),
+            taken_vars=list(self._case_taken_vars.get(casenode.nodeid, ())),
         )
         self._register_typed(casenode, typed)
 
@@ -9590,7 +9590,7 @@ class TypeChecker:
         if taken_in_any_arm:
             for vname in taken_in_any_arm:
                 _, vtype = saved_vars[vname]
-                ifnode.taken_vars.append((vname, vtype))
+                self._if_taken_vars.setdefault(ifnode.nodeid, []).append((vname, vtype))
                 take_loc = ifnode.start
                 loc_tuple = (
                     (take_loc.lineno, take_loc.colno, take_loc.fsno)
@@ -10396,7 +10396,7 @@ class TypeChecker:
 
         # post-match ownership: if subject was taken in any arm, invalidate it
         if subject_taken_in_arm and subject_name:
-            casenode.subject_taken = True
+            self._case_subject_taken[casenode.nodeid] = True
             take_loc = casenode.subject.start
             loc_tuple = (
                 (take_loc.lineno, take_loc.colno, take_loc.fsno) if take_loc else None
@@ -10413,7 +10413,9 @@ class TypeChecker:
         if taken_in_any_match_arm:
             for vname in taken_in_any_match_arm:
                 _, vtype = saved_match_vars[vname]
-                casenode.taken_vars.append((vname, vtype))
+                self._case_taken_vars.setdefault(casenode.nodeid, []).append(
+                    (vname, vtype)
+                )
                 take_loc = casenode.start
                 loc_tuple = (
                     (take_loc.lineno, take_loc.colno, take_loc.fsno)
