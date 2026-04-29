@@ -741,8 +741,8 @@ class TypeChecker:
                         err=ERR.TYPEERROR,
                         hint="remove 'is native' and declare fields normally",
                     )
-                # also check methods inside the type
-                for mname, mfunc in defn_typed.as_functions.items():
+                # also check methods inside the type (both is and as)
+                for mname, mfunc in defn_typed.as_functions().items():
                     if mfunc.is_native:
                         self._error(
                             f"'native' is reserved for system library definitions: '{name}.{mname}'",
@@ -750,16 +750,14 @@ class TypeChecker:
                             err=ERR.TYPEERROR,
                             hint="remove 'is native' and provide a function body",
                         )
-                # check functions in the 'is' section too
-                if hasattr(defn_typed, "functions"):
-                    for mname, mfunc in defn_typed.functions.items():
-                        if mfunc.is_native:
-                            self._error(
-                                f"'native' is reserved for system library definitions: '{name}.{mname}'",
-                                loc=mfunc.start,
-                                err=ERR.TYPEERROR,
-                                hint="remove 'is native' and provide a function body",
-                            )
+                for mname, mfunc in defn_typed.functions().items():
+                    if mfunc.is_native:
+                        self._error(
+                            f"'native' is reserved for system library definitions: '{name}.{mname}'",
+                            loc=mfunc.start,
+                            err=ERR.TYPEERROR,
+                            hint="remove 'is native' and provide a function body",
+                        )
 
     # ---- Demand-driven name resolution ----
 
@@ -1056,7 +1054,7 @@ class TypeChecker:
 
         # pass 1: detect generic params from 'as' clause
         generic_ctx: dict[str, ZType] = {}
-        for pname, ppath in func.as_items.items():
+        for pname, ppath in func.as_paths().items():
             pt, default_type = self._detect_generic_param(ppath)
             if (
                 pt
@@ -1097,7 +1095,7 @@ class TypeChecker:
                 )
 
         # resolve as_functions (static functions in function's 'as' block)
-        for mname, mfunc in func.as_functions.items():
+        for mname, mfunc in func.as_functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             ftype.children[mname] = mt
 
@@ -1346,7 +1344,7 @@ class TypeChecker:
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for fname, fpath in cls.as_items.items():
+        for fname, fpath in cls.as_paths().items():
             ft, default_type = self._detect_generic_param(fpath)
             if (
                 ft
@@ -1363,7 +1361,9 @@ class TypeChecker:
                     ctype.generic_defaults[fname] = default_type
 
         # typedef detection: single item with .typedef type
-        typedef_base_type, typedef_field = self._detect_typedef(cls.items, cls.start)
+        typedef_base_type, typedef_field = self._detect_typedef(
+            cls.is_paths(), cls.start
+        )
         if typedef_base_type is not None:
             if typedef_base_type.typetype not in (ZTypeType.CLASS, ZTypeType.PROTOCOL):
                 self._error(
@@ -1377,8 +1377,8 @@ class TypeChecker:
                 typedef_base_type,
                 typedef_field,
                 cls.as_items,
-                cls.as_functions,
-                cls.functions,
+                cls.as_functions(),
+                cls.functions(),
                 cls.start,
                 generic_ctx,
             )
@@ -1386,7 +1386,7 @@ class TypeChecker:
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        for fname, fpath in cls.items.items():
+        for fname, fpath in cls.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
             if (
@@ -1453,16 +1453,21 @@ class TypeChecker:
             self._generic_context.pop()
 
         self._check_is_as_name_collision(
-            name, cls.items, cls.as_items, cls.functions, cls.as_functions, cls.start
+            name,
+            cls.is_paths(),
+            cls.as_items,
+            cls.functions(),
+            cls.as_functions(),
+            cls.start,
         )
 
         # for generic classes, defer method resolution and meta.create to monomorphization
         if not ctype.isgeneric:
-            for mname, mfunc in cls.functions.items():
+            for mname, mfunc in cls.functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 ctype.children[mname] = mt
             # as_functions (methods defined in 'as' block)
-            for mname, mfunc in cls.as_functions.items():
+            for mname, mfunc in cls.as_functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 ctype.children[mname] = mt
 
@@ -1473,8 +1478,8 @@ class TypeChecker:
             # generate meta.create constructor type — must be available before
             # method bodies are checked so `meta.create` inside a body can
             # resolve to this class's raw allocator.
-            is_func_names = set(cls.functions.keys())
-            field_names = set(cls.items.keys()) | is_func_names
+            is_func_names = set(cls.functions().keys())
+            field_names = set(cls.is_paths().keys()) | is_func_names
             create_type = self._make_meta_create_type(
                 name, ctype, is_func_names, field_names
             )
@@ -1486,12 +1491,12 @@ class TypeChecker:
 
             # typecheck method bodies
             self._enclosing_type_stack.append(ctype)
-            for mname, mfunc in cls.functions.items():
+            for mname, mfunc in cls.functions().items():
                 if mfunc.body:
                     self._function_body_stack.append(ctype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
                     self._function_body_stack.pop()
-            for mname, mfunc in cls.as_functions.items():
+            for mname, mfunc in cls.as_functions().items():
                 if mfunc.body:
                     self._function_body_stack.append(ctype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
@@ -1662,7 +1667,7 @@ class TypeChecker:
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for sname, spath in union_defn.as_items.items():
+        for sname, spath in union_defn.as_paths().items():
             st, default_type = self._detect_generic_param(spath)
             if (
                 st
@@ -1681,7 +1686,7 @@ class TypeChecker:
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
-            union_defn.items, union_defn.start
+            union_defn.is_paths(), union_defn.start
         )
         if typedef_base_type is not None:
             if typedef_base_type.typetype != ZTypeType.UNION:
@@ -1696,8 +1701,8 @@ class TypeChecker:
                 typedef_base_type,
                 typedef_field,
                 union_defn.as_items,
-                union_defn.as_functions,
-                union_defn.functions,
+                union_defn.as_functions(),
+                union_defn.functions(),
                 union_defn.start,
                 generic_ctx,
             )
@@ -1705,8 +1710,8 @@ class TypeChecker:
         # pass 2: resolve subtype items with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        subtype_names = list(union_defn.items.keys())
-        for sname, spath in union_defn.items.items():
+        subtype_names = list(union_defn.is_paths().keys())
+        for sname, spath in union_defn.is_paths().items():
             stripped_spath, arm_own = _strip_path_ownership(spath)
             stripped_path_typed = cast(zast.Path, stripped_spath)
             st_check = self._resolve_typeref(stripped_path_typed)
@@ -1746,20 +1751,20 @@ class TypeChecker:
 
         self._check_is_as_name_collision(
             name,
-            union_defn.items,
+            union_defn.is_paths(),
             union_defn.as_items,
-            union_defn.functions,
-            union_defn.as_functions,
+            union_defn.functions(),
+            union_defn.as_functions(),
             union_defn.start,
         )
 
         # for generic unions, skip tag generation (done at monomorphization time)
         if utype.isgeneric:
             # resolve methods
-            for mname, mfunc in union_defn.functions.items():
+            for mname, mfunc in union_defn.functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 utype.children[mname] = mt
-            for mname, mfunc in union_defn.as_functions.items():
+            for mname, mfunc in union_defn.as_functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 utype.children[mname] = mt
             utype.public_members = _extract_public_members(union_defn.as_items)
@@ -1776,21 +1781,21 @@ class TypeChecker:
         )
 
         # resolve methods
-        for mname, mfunc in union_defn.functions.items():
+        for mname, mfunc in union_defn.functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             utype.children[mname] = mt
-        for mname, mfunc in union_defn.as_functions.items():
+        for mname, mfunc in union_defn.as_functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             utype.children[mname] = mt
 
         # typecheck method bodies (non-generic only)
         self._enclosing_type_stack.append(utype)
-        for mname, mfunc in union_defn.functions.items():
+        for mname, mfunc in union_defn.functions().items():
             if mfunc.body:
                 self._function_body_stack.append(utype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
                 self._function_body_stack.pop()
-        for mname, mfunc in union_defn.as_functions.items():
+        for mname, mfunc in union_defn.as_functions().items():
             if mfunc.body:
                 self._function_body_stack.append(utype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
@@ -1861,7 +1866,7 @@ class TypeChecker:
     ) -> None:
         """Mark a union's destructor as not-needed when no arm requires
         runtime cleanup (every arm is `null` or a `.lock` reference)."""
-        for sname, spath in union_defn.items.items():
+        for sname, spath in union_defn.is_paths().items():
             is_null = (
                 spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 and cast(zast.AtomId, spath).name == "null"
@@ -1891,7 +1896,7 @@ class TypeChecker:
 
         # pass 1: detect generic params (in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for sname, spath in variant_defn.as_items.items():
+        for sname, spath in variant_defn.as_paths().items():
             st, default_type = self._detect_generic_param(spath)
             if (
                 st
@@ -1909,7 +1914,7 @@ class TypeChecker:
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
-            variant_defn.items, variant_defn.start
+            variant_defn.is_paths(), variant_defn.start
         )
         if typedef_base_type is not None:
             if typedef_base_type.typetype != ZTypeType.VARIANT:
@@ -1924,8 +1929,8 @@ class TypeChecker:
                 typedef_base_type,
                 typedef_field,
                 variant_defn.as_items,
-                variant_defn.as_functions,
-                variant_defn.functions,
+                variant_defn.as_functions(),
+                variant_defn.functions(),
                 variant_defn.start,
                 {},
             )
@@ -1933,8 +1938,8 @@ class TypeChecker:
         # resolve each subtype item (with generic context if applicable)
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        subtype_names = list(variant_defn.items.keys())
-        for sname, spath in variant_defn.items.items():
+        subtype_names = list(variant_defn.is_paths().keys())
+        for sname, spath in variant_defn.is_paths().items():
             stripped_spath, arm_own = _strip_path_ownership(spath)
             if (
                 stripped_spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
@@ -1986,19 +1991,19 @@ class TypeChecker:
 
         self._check_is_as_name_collision(
             name,
-            variant_defn.items,
+            variant_defn.is_paths(),
             variant_defn.as_items,
-            variant_defn.functions,
-            variant_defn.as_functions,
+            variant_defn.functions(),
+            variant_defn.as_functions(),
             variant_defn.start,
         )
 
         # for generic variants, skip tag generation (done at monomorphization time)
         if vtype.isgeneric:
-            for mname, mfunc in variant_defn.functions.items():
+            for mname, mfunc in variant_defn.functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 vtype.children[mname] = mt
-            for mname, mfunc in variant_defn.as_functions.items():
+            for mname, mfunc in variant_defn.as_functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 vtype.children[mname] = mt
             vtype.public_members = _extract_public_members(variant_defn.as_items)
@@ -2013,7 +2018,7 @@ class TypeChecker:
             self._reject_valtype_reftype_fields(
                 name,
                 vtype,
-                set(variant_defn.items.keys()),
+                set(variant_defn.is_paths().keys()),
                 "variant",
                 variant_defn.start,
             )
@@ -2031,21 +2036,21 @@ class TypeChecker:
         )
 
         # resolve methods
-        for mname, mfunc in variant_defn.functions.items():
+        for mname, mfunc in variant_defn.functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             vtype.children[mname] = mt
-        for mname, mfunc in variant_defn.as_functions.items():
+        for mname, mfunc in variant_defn.as_functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             vtype.children[mname] = mt
 
         # typecheck method bodies (non-generic only — variants don't support generics yet)
         self._enclosing_type_stack.append(vtype)
-        for mname, mfunc in variant_defn.functions.items():
+        for mname, mfunc in variant_defn.functions().items():
             if mfunc.body:
                 self._function_body_stack.append(vtype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
                 self._function_body_stack.pop()
-        for mname, mfunc in variant_defn.as_functions.items():
+        for mname, mfunc in variant_defn.as_functions().items():
             if mfunc.body:
                 self._function_body_stack.append(vtype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
@@ -2069,7 +2074,7 @@ class TypeChecker:
         self._reject_valtype_reftype_fields(
             name,
             vtype,
-            set(variant_defn.items.keys()),
+            set(variant_defn.is_paths().keys()),
             "variant",
             variant_defn.start,
         )
@@ -2164,7 +2169,7 @@ class TypeChecker:
 
         # pass 1: detect generic params (now in as_items)
         generic_ctx: dict[str, ZType] = {}
-        for fname, fpath in rec.as_items.items():
+        for fname, fpath in rec.as_paths().items():
             ft, default_type = self._detect_generic_param(fpath)
             if (
                 ft
@@ -2181,7 +2186,9 @@ class TypeChecker:
                     rtype.generic_defaults[fname] = default_type
 
         # typedef detection: single item with .typedef type
-        typedef_base_type, typedef_field = self._detect_typedef(rec.items, rec.start)
+        typedef_base_type, typedef_field = self._detect_typedef(
+            rec.is_paths(), rec.start
+        )
         if typedef_base_type is not None:
             if typedef_base_type.typetype not in (ZTypeType.RECORD, ZTypeType.FACET):
                 self._error(
@@ -2195,8 +2202,8 @@ class TypeChecker:
                 typedef_base_type,
                 typedef_field,
                 rec.as_items,
-                rec.as_functions,
-                rec.functions,
+                rec.as_functions(),
+                rec.functions(),
                 rec.start,
                 generic_ctx,
             )
@@ -2204,7 +2211,7 @@ class TypeChecker:
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        for fname, fpath in rec.items.items():
+        for fname, fpath in rec.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
             if (
@@ -2268,13 +2275,18 @@ class TypeChecker:
         if generic_ctx:
             self._generic_context.pop()
         self._check_is_as_name_collision(
-            name, rec.items, rec.as_items, rec.functions, rec.as_functions, rec.start
+            name,
+            rec.is_paths(),
+            rec.as_items,
+            rec.functions(),
+            rec.as_functions(),
+            rec.start,
         )
-        for mname, mfunc in rec.functions.items():
+        for mname, mfunc in rec.functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
         # as_functions (methods defined in 'as' block)
-        for mname, mfunc in rec.as_functions.items():
+        for mname, mfunc in rec.as_functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
 
@@ -2289,8 +2301,8 @@ class TypeChecker:
         # generate meta.create constructor type — must be available before
         # method bodies are checked so `meta.create` inside a body can
         # resolve to this record's raw allocator.
-        is_func_names = set(rec.functions.keys())
-        field_names = set(rec.items.keys()) | is_func_names
+        is_func_names = set(rec.functions().keys())
+        field_names = set(rec.is_paths().keys()) | is_func_names
         create_type = self._make_meta_create_type(
             name, rtype, is_func_names, field_names
         )
@@ -2303,12 +2315,12 @@ class TypeChecker:
         # typecheck method bodies (non-generic only)
         if not rtype.isgeneric:
             self._enclosing_type_stack.append(rtype)
-            for mname, mfunc in rec.functions.items():
+            for mname, mfunc in rec.functions().items():
                 if mfunc.body:
                     self._function_body_stack.append(rtype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
                     self._function_body_stack.pop()
-            for mname, mfunc in rec.as_functions.items():
+            for mname, mfunc in rec.as_functions().items():
                 if mfunc.body:
                     self._function_body_stack.append(rtype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
@@ -2325,7 +2337,7 @@ class TypeChecker:
             self._error("'private' cannot be redefined", loc=priv.start)
         _set_field_cleanup_metadata(rtype)
         self._reject_valtype_reftype_fields(
-            name, rtype, set(rec.items.keys()), "record", rec.start
+            name, rtype, set(rec.is_paths().keys()), "record", rec.start
         )
         self._resolving.pop()
         return rtype
@@ -2369,13 +2381,13 @@ class TypeChecker:
             )
 
         offending: list[str] = []
-        for mname, mfunc in rec.functions.items():
+        for mname, mfunc in rec.functions().items():
             if (
                 self._is_this_return(mfunc)
                 and self._func_return_ownership(mfunc) == ZParamOwnership.BORROW
             ):
                 offending.append(mname)
-        for mname, mfunc in rec.as_functions.items():
+        for mname, mfunc in rec.as_functions().items():
             if (
                 self._is_this_return(mfunc)
                 and self._func_return_ownership(mfunc) == ZParamOwnership.BORROW
@@ -2454,8 +2466,8 @@ class TypeChecker:
 
         `is_field_names` is the set of child keys that correspond to
         data fields (not function methods, not as-items). For records
-        this is `rec.items.keys()`; for variants,
-        `variant_defn.items.keys()`.
+        this is `rec.is_paths().keys()`; for variants,
+        `variant_defn.is_paths().keys()`.
         """
         if ztype.is_native:
             return  # native system records (bool, i64, ...) opt out
@@ -2870,7 +2882,7 @@ class TypeChecker:
 
         # pass 1: detect generic params from protocol parameters
         generic_ctx: dict[str, ZType] = {}
-        for pname, ppath in proto.items.items():
+        for pname, ppath in proto.is_paths().items():
             pt = self._resolve_typeref(ppath)
             if (
                 pt
@@ -2887,7 +2899,7 @@ class TypeChecker:
         # pass 2: resolve specs with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        for sname, sfunc in proto.functions.items():
+        for sname, sfunc in proto.functions().items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ptype.children[sname] = st
         if generic_ctx:
@@ -2927,7 +2939,7 @@ class TypeChecker:
 
         # pass 1: detect generic params from facet parameters
         generic_ctx: dict[str, ZType] = {}
-        for pname, ppath in facet.items.items():
+        for pname, ppath in facet.is_paths().items():
             pt = self._resolve_typeref(ppath)
             if (
                 pt
@@ -2944,7 +2956,7 @@ class TypeChecker:
         # pass 2: resolve specs with generic context
         if generic_ctx:
             self._generic_context.append(generic_ctx)
-        for sname, sfunc in facet.functions.items():
+        for sname, sfunc in facet.functions().items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ftype.children[sname] = st
         if generic_ctx:
@@ -2983,7 +2995,7 @@ class TypeChecker:
         natively-declared method's AST to a synthesised mono method. Reads
         from the AST because generic templates don't have their methods
         resolved into ZType.children until monomorphisation (see comment
-        near `for mname, mfunc in cls.functions.items()` in class
+        near `for mname, mfunc in cls.functions().items()` in class
         resolution).
 
         `is_native` is also propagated uniformly to every FUNCTION child
@@ -2996,17 +3008,30 @@ class TypeChecker:
         orders); fall back to scanning unit bodies for a real
         TypeDefinition node carrying `functions`.
         """
+        _OBJECT_DEF_KINDS = {
+            NodeType.RECORD,
+            NodeType.CLASS,
+            NodeType.UNION,
+            NodeType.VARIANT,
+            NodeType.ENUM,
+            NodeType.PROTOCOL,
+            NodeType.FACET,
+        }
         ast_func = None
-        functions = getattr(defn, "functions", None)
-        if functions and meth_name in functions:
-            ast_func = functions[meth_name]
-        else:
+        defn_nt = getattr(defn, "nodetype", None)
+        if defn_nt in _OBJECT_DEF_KINDS:
+            functions = cast(zast.ObjectDef, defn).functions()
+            if meth_name in functions:
+                ast_func = functions[meth_name]
+        if ast_func is None:
             for _unitname, unit in self.program.units.items():
                 candidate = unit.body.get(template_type.name)
-                cand_funcs = getattr(candidate, "functions", None)
-                if cand_funcs and meth_name in cand_funcs:
-                    ast_func = cand_funcs[meth_name]
-                    break
+                cand_nt = getattr(candidate, "nodetype", None)
+                if cand_nt in _OBJECT_DEF_KINDS:
+                    cand_funcs = cast(zast.ObjectDef, candidate).functions()
+                    if meth_name in cand_funcs:
+                        ast_func = cand_funcs[meth_name]
+                        break
         if ast_func is None:
             return
         ast_ret_own = self._func_return_ownership(ast_func)
@@ -4589,10 +4614,8 @@ class TypeChecker:
             is_func_names: set = set()
             field_names: Optional[set] = None
             if defn.nodetype == NodeType.CLASS:
-                is_func_names = set(cast(zast.ObjectDef, defn).functions.keys())
-                field_names = (
-                    set(cast(zast.ObjectDef, defn).items.keys()) | is_func_names
-                )
+                is_func_names = set(cast(zast.ObjectDef, defn).functions().keys())
+                field_names = set(cast(zast.ObjectDef, defn).is_items.keys())
             create_type = self._make_meta_create_type(
                 mangled, mono, is_func_names, field_names
             )
@@ -4624,10 +4647,10 @@ class TypeChecker:
             # collect method sources from the template definition
             defn_typed2 = cast(zast.ObjectDef, defn)
             method_sources: list[tuple[str, zast.Function, str]] = []
-            for mname, mfunc in defn_typed2.as_functions.items():
+            for mname, mfunc in defn_typed2.as_functions().items():
                 if mfunc.body:
                     method_sources.append((mname, mfunc, "as_functions"))
-            for mname, mfunc in defn_typed2.functions.items():
+            for mname, mfunc in defn_typed2.functions().items():
                 if mfunc.body:
                     method_sources.append((mname, mfunc, "functions"))
 

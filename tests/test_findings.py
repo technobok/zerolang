@@ -120,7 +120,7 @@ class TestFinding1TypeAnnotations:
         mainunit = program.units[program.mainunitname]
         point = mainunit.body["point"]
         assert point.nodetype == zast.NodeType.RECORD
-        for fname, fpath in point.items.items():
+        for fname, fpath in point.is_items.items():
             assert fpath.type is not None, f"Field '{fname}' has no .type"
             assert fpath.type.name in ("f64",), (
                 f"Field '{fname}' type is {fpath.type.name}"
@@ -158,7 +158,7 @@ class TestFinding1TypeAnnotations:
         mainunit = program.units[program.mainunitname]
         box = mainunit.body["Box"]
         assert box.nodetype == zast.NodeType.CLASS
-        for fname, fpath in box.items.items():
+        for fname, fpath in box.is_items.items():
             assert fpath.type is not None, f"Field '{fname}' has no .type"
 
     def test_union_subtype_annotated(self):
@@ -169,7 +169,7 @@ class TestFinding1TypeAnnotations:
         mainunit = program.units[program.mainunitname]
         result = mainunit.body["Result"]
         assert result.nodetype == zast.NodeType.UNION
-        for sname, spath in result.items.items():
+        for sname, spath in result.is_items.items():
             assert spath.type is not None, f"Subtype '{sname}' has no .type"
 
 
@@ -191,7 +191,7 @@ class TestFinding3DestructorMetadata:
         )
         mainunit = program2.units[program2.mainunitname]
         box = mainunit.body["Box"]
-        name_type = box.items["name"].type
+        name_type = box.is_items["name"].type
         assert name_type is not None
         assert name_type.name == "String"
         assert name_type.needs_destructor is True

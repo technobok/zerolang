@@ -60,9 +60,11 @@ class ObjectBody:
     Object body components for a record, class, variant or union
     """
 
-    items: Dict[str, zast.Path]  # generic and normal (???)
-    islist: List[zast.Path]  # 'is' interfaces implimented/included by this record
-    functions: Dict[str, zast.Function]
+    # `items` holds every labelled member parsed from a `{ ... }`
+    # body block — heterogeneous Dict[str, Node] (Path, Function,
+    # Unit, LabelValue). Used for both is and as bodies; the two
+    # are merged into ObjectDef.is_items / ObjectDef.as_items.
+    items: Dict[str, zast.Node]
     extern: Dict[str, zast.AtomId]
     is_error: bool = field(default=False, init=False)
 
@@ -1196,7 +1198,6 @@ class Parser:
             start=start,
             is_native=is_native,
             as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
         )
         return NodeX(node=func, extern=extern)
 
@@ -1237,11 +1238,8 @@ class Parser:
 
         node = zast.ObjectDef(
             nodetype=kind,
-            items=is_body.items if is_body else {},
-            functions=is_body.functions if is_body else {},
-            implements=is_body.islist if is_body else [],
+            is_items=is_body.items if is_body else {},
             as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
             is_native=native,
             start=start,
         )
@@ -1300,11 +1298,8 @@ class Parser:
 
         node = zast.ObjectDef(
             nodetype=NodeType.PROTOCOL,
-            items=is_body.items if is_body else {},
-            functions=is_body.functions if is_body else {},
-            implements=is_body.islist if is_body else [],
+            is_items=is_body.items if is_body else {},
             as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
             is_native=native,
             start=start,
         )
@@ -1328,11 +1323,8 @@ class Parser:
 
         node = zast.ObjectDef(
             nodetype=NodeType.FACET,
-            items=is_body.items if is_body else {},
-            functions=is_body.functions if is_body else {},
-            implements=is_body.islist if is_body else [],
+            is_items=is_body.items if is_body else {},
             as_items=as_body.items if as_body else {},
-            as_functions=as_body.functions if as_body else {},
             is_native=native,
             start=start,
         )
@@ -1448,10 +1440,10 @@ class Parser:
             msg = "Expected open brace '{' for 'is' argument"
             return zast.Error(start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg)
 
-        # items=items, islist=islist, functions=functions, extern=extern
-        items: Dict[str, zast.Path] = {}  # generic and normal fields
-        islist: List[zast.Path] = []  # protocols that this object satisfies
-        functions: Dict[str, zast.Function] = {}
+        # items=items, extern=extern. `items` holds every labelled
+        # entry of this body (fields, methods, units, label-values)
+        # keyed by name — heterogeneous Dict[str, Node].
+        items: Dict[str, zast.Node] = {}
         extern: Dict[str, zast.AtomId] = {}
 
         # externs from each item typedefinition
@@ -1468,28 +1460,10 @@ class Parser:
 
             t = lex.peek()
             tt = t.toktype
-            if tt == TT.IS:
-                # type being implemented (or included for protocols)
-                lex.acceptany()
-                typerefx = self._accept_path(lex)
-                if typerefx is None:
-                    msg = "Expected type reference for 'is'"
-                    return zast.Error(
-                        start=lex.acceptany(), err=ERR.BADARGUMENT, msg=msg
-                    )
-
-                if typerefx.is_error:
-                    return cast(zast.Error, typerefx)  # propagate any other error
-                typerefx = cast(NodeX[zast.Path], typerefx)
-
-                islist.append(typerefx.node)
-                # add directly to extern.. these cannot refer locally
-                promoteexterns(addto=extern, addfrom=typerefx.extern)
-
-            elif tt in (TT.LABEL, TT.LABELPRE):
+            if tt in (TT.LABEL, TT.LABELPRE):
                 label = lex.acceptany()
                 if tt == TT.LABELPRE:
-                    if label.tokstr in items or label.tokstr in functions:
+                    if label.tokstr in items:
                         msg = f"Duplicate item name: {label.tokstr}"
                         return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                     lvx = self._make_label_value(label)
@@ -1504,10 +1478,10 @@ class Parser:
                         return cast(zast.Error, funcx)  # propagate error
                     funcx = cast(Optional[NodeX[zast.Function]], funcx)
                     if funcx:
-                        if label.tokstr in items or label.tokstr in functions:
+                        if label.tokstr in items:
                             msg = f"Duplicate item name: {label.tokstr}"
                             return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
-                        functions[label.tokstr] = funcx.node
+                        items[label.tokstr] = funcx.node
                         # add directly to extern.. these cannot refer locally, except via 'this'
                         promoteexterns(
                             addto=extern, addfrom=funcx.extern, local=localthis
@@ -1519,11 +1493,11 @@ class Parser:
                             return cast(zast.Error, unitx)
                         unitx = cast(Optional[NodeX[zast.Unit]], unitx)
                         if unitx:
-                            if label.tokstr in items or label.tokstr in functions:
+                            if label.tokstr in items:
                                 msg = f"Duplicate item name: {label.tokstr}"
                                 return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
-                            items[label.tokstr] = unitx.node  # type: ignore[assignment]
+                            items[label.tokstr] = unitx.node
                             # don't promote externs — unit references parent type members
                             # which are resolved by the type checker, not the parser
                     else:
@@ -1533,7 +1507,7 @@ class Parser:
                             return cast(zast.Error, opx)  # propagate error
                         opx = cast(Optional[NodeX[zast.Operation]], opx)
                         if opx:
-                            if label.tokstr in items or label.tokstr in functions:
+                            if label.tokstr in items:
                                 msg = f"Duplicate item name: {label.tokstr}"
                                 return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
                             local.add(label.tokstr)
@@ -1541,7 +1515,7 @@ class Parser:
                             # annotations (.lock for fields, rejection of
                             # .take/.borrow) are recognised by the type
                             # checker via _strip_field_ownership.
-                            items[label.tokstr] = opx.node  # type: ignore[assignment]
+                            items[label.tokstr] = opx.node
                             # promote to externitems (will be promoted to extern below, after locals)
                             promoteexterns(addto=externitems, addfrom=opx.extern)
                         else:
@@ -1562,8 +1536,6 @@ class Parser:
 
         return ObjectBody(
             items=items,
-            islist=islist,
-            functions=functions,
             extern=extern,
         )
 

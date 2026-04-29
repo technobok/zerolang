@@ -404,9 +404,26 @@ class Function(Node):
     body: Optional["Statement"]  # None for Spec
     # native function: body is compiler-provided (not a spec)
     is_native: bool = False
-    # 'as' clause: generic parameters and static functions
-    as_items: Dict[str, "Path"] = field(default_factory=dict)
-    as_functions: Dict[str, "Function"] = field(default_factory=dict)
+    # 'as' clause: generic parameters and static functions —
+    # heterogeneous Dict[str, Node] (Path, Function, etc.)
+    as_items: Dict[str, "Node"] = field(default_factory=dict)
+
+    def as_functions(self) -> Dict[str, "Function"]:
+        """Static functions in the function's `as` block."""
+        return {
+            n: cast("Function", v)
+            for n, v in self.as_items.items()
+            if v.nodetype == NodeType.FUNCTION
+        }
+
+    def as_paths(self) -> Dict[str, "Path"]:
+        """`as`-block members that are paths (typically generic
+        parameter declarations)."""
+        return {
+            n: cast("Path", v)
+            for n, v in self.as_items.items()
+            if v.nodetype != NodeType.FUNCTION
+        }
 
 
 @dataclass
@@ -415,28 +432,75 @@ class ObjectDef(Node):
     Unified type-definition node. `nodetype` discriminates which
     kind of object this is:
 
-    - RECORD / CLASS: struct-like; `items` are fields
-    - VARIANT / UNION: sum types; `items` are arms (tag discriminator
-      type, when supplied, lives in `as_items` as a `.tag` reference)
-    - ENUM: `items` are values
-    - PROTOCOL / FACET: interfaces; `items` are generic params,
-      `functions` are specs to implement
+    Shape mirrors the grammar:
 
-    Some fields are only meaningful for some kinds (e.g. ENUM ignores
-    `is_native`). Consumers dispatch by `nodetype` and only read
-    fields that are valid for that kind.
+        item: keyword [ "is" ] "{" is_items "}" [ "as" "{" as_items "}" ]
 
-    Field-type ownership annotations (e.g. `x: Foo.lock`) ride on the
-    path stored in `items` and are recognised by the type checker via
-    `_strip_field_ownership`.
+    Both `is_items` and `as_items` are heterogeneous dicts holding
+    the labelled members of each block. Each value is one of:
+
+    - `Path` (typeref / generic param / `:LabelValue`)
+    - `Function` (instance or static method)
+    - `Unit` (inline subunit, e.g. `public: unit { ... }`)
+
+    Per nodetype:
+    - RECORD / CLASS: `is_items` are fields + methods;
+      `as_items` are static members + protocol conformances
+    - VARIANT / UNION: `is_items` are arms + methods;
+      `as_items` adds the optional `.tag` discriminator
+    - ENUM: `is_items` are values
+    - PROTOCOL / FACET: `is_items` are generic params + spec
+      methods; `as_items` static members
+
+    Field-type ownership annotations (e.g. `x: Foo.lock`) ride on
+    the path stored in `is_items` and are recognised by the type
+    checker via `_strip_path_ownership` in ztypecheck.py.
+
+    `is_native` flags compiler-provided implementations.
     """
 
-    items: Dict[str, "Path"] = field(default_factory=dict)
-    functions: Dict[str, "Function"] = field(default_factory=dict)
-    implements: typing.List["Path"] = field(default_factory=list)
-    as_items: Dict[str, "Path"] = field(default_factory=dict)
-    as_functions: Dict[str, "Function"] = field(default_factory=dict)
+    is_items: Dict[str, "Node"] = field(default_factory=dict)
+    as_items: Dict[str, "Node"] = field(default_factory=dict)
     is_native: bool = False
+
+    # ---- Filtered accessors (helpers for kind-specific iteration) ----
+    # These return derived dicts filtered by nodetype — call them
+    # when you want only methods or only paths; iterate `is_items`
+    # / `as_items` directly when you want everything.
+
+    def functions(self) -> Dict[str, "Function"]:
+        """Methods declared in the `is` block."""
+        return {
+            n: cast("Function", v)
+            for n, v in self.is_items.items()
+            if v.nodetype == NodeType.FUNCTION
+        }
+
+    def as_functions(self) -> Dict[str, "Function"]:
+        """Static methods declared in the `as` block."""
+        return {
+            n: cast("Function", v)
+            for n, v in self.as_items.items()
+            if v.nodetype == NodeType.FUNCTION
+        }
+
+    def is_paths(self) -> Dict[str, "Path"]:
+        """`is`-block members that are paths (fields/arms/values) —
+        every entry except methods."""
+        return {
+            n: cast("Path", v)
+            for n, v in self.is_items.items()
+            if v.nodetype != NodeType.FUNCTION
+        }
+
+    def as_paths(self) -> Dict[str, "Path"]:
+        """`as`-block members that are paths (statics/conformances/
+        the optional `.tag`) — every entry except static methods."""
+        return {
+            n: cast("Path", v)
+            for n, v in self.as_items.items()
+            if v.nodetype != NodeType.FUNCTION
+        }
 
 
 ExpressionSubTypes = typing.Union[
@@ -861,7 +925,6 @@ def node_children(node: "Node") -> "typing.List[Node]":
         if fn.body is not None:
             out.append(fn.body)
         out.extend(fn.as_items.values())
-        out.extend(fn.as_functions.values())
         return out
     if nt in (
         NodeType.RECORD,
@@ -873,11 +936,8 @@ def node_children(node: "Node") -> "typing.List[Node]":
         NodeType.FACET,
     ):
         od = cast(ObjectDef, node)
-        out.extend(od.items.values())
-        out.extend(od.functions.values())
-        out.extend(od.implements)
+        out.extend(od.is_items.values())
         out.extend(od.as_items.values())
-        out.extend(od.as_functions.values())
         return out
     if nt == NodeType.EXPRESSION:
         out.append(cast(Expression, node).expression)

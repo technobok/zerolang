@@ -85,19 +85,9 @@ def _pprintrecord(node: Node, depth: int) -> str:
     o.append("*RECORD {")
     sepinner = (depth + 1) * "  "
 
-    # output.append(sepinner)
-    for name, path in node.items.items():
+    # output.append(sepinner) — is_items already includes any methods
+    for name, path in node.is_items.items():
         s = f"{sepinner}{name}: "
-        s += pprintnode(path, depth + 1)
-        o.append(s)
-
-    for name, f in node.functions.items():
-        s = f"{sepinner}{name}: "
-        s += pprintnode(f, depth + 1)
-        o.append(s)
-
-    for path in node.implements:
-        s = f"{sepinner}IMPLEMENTS: "
         s += pprintnode(path, depth + 1)
         o.append(s)
 

@@ -823,7 +823,7 @@ class CEmitter:
             func = cast(zast.Function, defn)
             items = func.as_items if func.as_items else func.parameters
         elif defn.nodetype == NodeType.PROTOCOL:
-            items = cast(zast.ObjectDef, defn).items
+            items = cast(zast.ObjectDef, defn).is_items
         elif defn.nodetype == NodeType.UNIT:
             items = cast(zast.Unit, defn).body
         if items is None:
@@ -857,7 +857,7 @@ class CEmitter:
 
     def _is_typedef_defn(self, defn: "zast.ObjectDef") -> bool:
         """Check if a type definition is a typedef (single .typedef item)."""
-        items = defn.items
+        items = defn.is_items
         if len(items) != 1:
             return False
         fpath = next(iter(items.values()))
@@ -869,7 +869,7 @@ class CEmitter:
 
     def _typedef_base_name(self, defn: "zast.ObjectDef") -> str:
         """Extract the base type name from a typedef definition."""
-        fpath = next(iter(defn.items.values()))
+        fpath = next(iter(defn.is_items.values()))
         assert fpath.nodetype == NodeType.DOTTEDPATH
         parent = cast(zast.DottedPath, fpath).parent
         if parent.nodetype == NodeType.ATOMID:
@@ -889,7 +889,7 @@ class CEmitter:
                 self._collect_pre_emission(qname, defn.body)
             elif defn_type in (NodeType.RECORD, NodeType.CLASS):
                 if not self._is_generic_template(defn):
-                    for mname in defn.functions:
+                    for mname in defn.functions():
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
                         # `:foo` parses as LABELVALUE, `foo: bar` parses as
@@ -918,7 +918,7 @@ class CEmitter:
                             self._const_names.add(f"{qname}.{label}")
             elif defn_type in (NodeType.UNION, NodeType.VARIANT):
                 if not self._is_generic_template(defn):
-                    for mname in defn.functions:
+                    for mname in defn.functions():
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
                         if apath.const_value is not None:
@@ -964,12 +964,12 @@ class CEmitter:
                     if self._is_typedef_defn(defn):
                         continue
                     _, field_names, field_ctypes = self._collect_field_params(
-                        qname, defn.items, defn.functions
+                        qname, defn.is_items, defn.functions()
                     )
                     self._type_field_names[qname] = field_names
                     self._type_field_ctypes[qname] = field_ctypes
                     self._type_field_defaults[qname] = self._extract_field_defaults(
-                        qname, defn.items, defn.functions
+                        qname, defn.is_items, defn.functions()
                     )
 
     def _emit_unit_definitions(self, prefix: str, body: dict) -> None:
@@ -1391,7 +1391,7 @@ class CEmitter:
         cli aggregator classes (spec / parsed) that use those lists
         emit after the monos.
         """
-        for _fname, fpath in defn.items.items():
+        for _fname, fpath in defn.is_items.items():
             ftype = fpath.type
             if ftype is None:
                 return False
@@ -2072,7 +2072,7 @@ class CEmitter:
 
         # vtable struct — function pointers with void* as first param
         lines.append("typedef struct {\n")
-        for sname, sfunc in proto.functions.items():
+        for sname, sfunc in proto.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             spec_type = proto_type.children.get(sname) if proto_type else None
@@ -2122,10 +2122,10 @@ class CEmitter:
         lines: List[str] = []
 
         # forward declarations for methods called by wrappers
-        all_methods = dict(impl_defn.as_functions)
-        all_methods.update(impl_defn.functions)
+        all_methods = dict(impl_defn.as_functions())
+        all_methods.update(impl_defn.functions())
         impl_type = self._resolved_type(impl_name)
-        for sname in proto.functions:
+        for sname in proto.functions():
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
                 ret_ctype = self._return_ctype(mfunc)
@@ -2148,7 +2148,7 @@ class CEmitter:
 
         # wrapper functions for each spec
         proto_type = self._resolved_type(proto_name)
-        for sname, sfunc in proto.functions.items():
+        for sname, sfunc in proto.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             # wrapper params: void* _data, then remaining non-this params.
             # Collection types travel through the vtable as pointers
@@ -2189,7 +2189,7 @@ class CEmitter:
         # static vtable instance
         vtable_name = f"z_{impl_name}_{label}_vtable"
         lines.append(f"static z_{proto_name}_vtable_t {vtable_name} = {{\n")
-        for sname in proto.functions:
+        for sname in proto.functions():
             wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
             lines.append(f"    .{sname} = {wrapper_name},\n")
         lines.append("};\n\n")
@@ -2241,7 +2241,7 @@ class CEmitter:
             lines.append(f"static void {destroy_name}(void* p) {{\n")
             lines.append(f"    {impl_ctype}* r = ({impl_ctype}*)p;\n")
             # cleanup reftype fields
-            for fname, fpath in impl_defn.items.items():
+            for fname, fpath in impl_defn.is_paths().items():
                 if fpath.type:
                     lines.append(self._emit_field_cleanup(f"r->{fname}", fpath.type))
             lines.append("    free(r);\n")
@@ -2272,7 +2272,7 @@ class CEmitter:
 
         # vtable struct — function pointers with void* as first param (same as protocol)
         lines.append("typedef struct {\n")
-        for sname, sfunc in facet.functions.items():
+        for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
             for pname, ppath in sfunc.parameters.items():
@@ -2317,9 +2317,9 @@ class CEmitter:
         lines: List[str] = []
 
         # forward declarations for methods called by wrappers
-        all_methods = dict(impl_defn.as_functions)
-        all_methods.update(impl_defn.functions)
-        for sname in facet.functions:
+        all_methods = dict(impl_defn.as_functions())
+        all_methods.update(impl_defn.functions())
+        for sname in facet.functions():
             mfunc = all_methods.get(sname)
             if mfunc and mfunc.body:
                 ret_ctype = self._return_ctype(mfunc)
@@ -2333,7 +2333,7 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
-        for sname, sfunc in facet.functions.items():
+        for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
@@ -2361,7 +2361,7 @@ class CEmitter:
         # static vtable instance
         vtable_name = f"z_{impl_name}_{label}_vtable"
         lines.append(f"static z_{facet_name}_vtable_t {vtable_name} = {{\n")
-        for sname in facet.functions:
+        for sname in facet.functions():
             wrapper_name = f"z_{impl_name}_{label}_{sname}_wrapper"
             lines.append(f"    .{sname} = {wrapper_name},\n")
         lines.append("};\n\n")
@@ -2381,7 +2381,7 @@ class CEmitter:
     def _emit_record(self, name: str, rec: zast.ObjectDef) -> None:
         if self._is_typedef(name):
             # Typedef: no struct, no meta.create — just emit as/is functions
-            for mname, mfunc in rec.as_functions.items():
+            for mname, mfunc in rec.as_functions().items():
                 if mfunc.body:
                     self._emit_func_typedef(f"{name}.{mname}", mfunc)
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
@@ -2400,7 +2400,7 @@ class CEmitter:
         lock_fields = ztype.lock_field_names if ztype else set()
         lines: List[str] = []
         lines.append("typedef struct {\n")
-        for fname, fpath in rec.items.items():
+        for fname, fpath in rec.is_paths().items():
             # System-unit records may reach the emitter before the
             # typechecker has attached types to AST paths; fall back
             # to the resolved ZType's children for a concrete type.
@@ -2419,7 +2419,7 @@ class CEmitter:
                 ftype = f"{ftype}*"
             lines.append(f"    {ftype} {fname};\n")
         # emit function pointer fields from 'is' section
-        for mname, mfunc in rec.functions.items():
+        for mname, mfunc in rec.functions().items():
             decl = self._func_pointer_field_decl(name, mname, mfunc)
             lines.append(f"    {decl};\n")
         lines.append(f"}} z_{name}_t;\n\n")
@@ -2430,14 +2430,14 @@ class CEmitter:
         self._emit_meta_create(name, rec)
 
         # emit auto-generated equality function
-        self._emit_autogen_eq(name, rec.items, rec.functions)
+        self._emit_autogen_eq(name, rec.is_paths(), rec.functions())
 
         # emit 'is' functions with body as regular C functions (for default values)
-        for mname, mfunc in rec.functions.items():
+        for mname, mfunc in rec.functions().items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit 'as' functions as methods
-        for mname, mfunc in rec.as_functions.items():
+        for mname, mfunc in rec.as_functions().items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit protocol implementations
@@ -2797,15 +2797,15 @@ class CEmitter:
         is_heap = ztype.is_heap_allocated if ztype else False
         ctype = f"z_{name}_t"
         params, field_names, field_ctypes = self._collect_field_params(
-            name, rc_defn.items, rc_defn.functions
+            name, rc_defn.is_paths(), rc_defn.functions()
         )
         self._type_field_ctypes[name] = field_ctypes
         self._type_field_names[name] = field_names
         self._type_field_defaults[name] = self._extract_field_defaults(
-            name, rc_defn.items, rc_defn.functions
+            name, rc_defn.is_paths(), rc_defn.functions()
         )
         has_user_create = (
-            "create" in rc_defn.functions or "create" in rc_defn.as_functions
+            "create" in rc_defn.functions() or "create" in rc_defn.as_functions()
         )
         target: List[str] = lines if lines is not None else []
         self._emit_create_functions(
@@ -2825,7 +2825,7 @@ class CEmitter:
     ) -> None:
         if self._is_typedef(name):
             # Typedef: no struct, no destructor, no meta.create — just emit as/is functions
-            for mname, mfunc in cls.as_functions.items():
+            for mname, mfunc in cls.as_functions().items():
                 if mfunc.body:
                     self._emit_func_typedef(f"{name}.{mname}", mfunc)
                     self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
@@ -2849,7 +2849,7 @@ class CEmitter:
         lock_fields = ztype.lock_field_names if ztype else set()
         lines: List[str] = []
         lines.append("typedef struct {\n")
-        for fname, fpath in cls.items.items():
+        for fname, fpath in cls.is_paths().items():
             ftype = _ctype(fpath.type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
@@ -2862,7 +2862,7 @@ class CEmitter:
                 ftype = f"{ftype}*"
             lines.append(f"    {ftype} {fname};\n")
         # emit function pointer fields from 'is' section
-        for mname, mfunc in cls.functions.items():
+        for mname, mfunc in cls.functions().items():
             decl = self._func_pointer_field_decl(name, mname, mfunc)
             lines.append(f"    {decl};\n")
         lines.append(f"}} z_{name}_t;\n\n")
@@ -2871,7 +2871,7 @@ class CEmitter:
         if ztype and ztype.needs_field_cleanup:
             lines.append(f"static void z_{name}_destroy(z_{name}_t* p) {{\n")
             lines.append("    if (!p) return;\n")
-            for fname, fpath in cls.items.items():
+            for fname, fpath in cls.is_paths().items():
                 # .lock fields are borrowed references, don't own data
                 if fname in lock_fields:
                     continue
@@ -2885,11 +2885,11 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
         # emit 'is' functions with body as regular C functions (for default values)
-        for mname, mfunc in cls.functions.items():
+        for mname, mfunc in cls.functions().items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit 'as' functions as methods
-        for mname, mfunc in cls.as_functions.items():
+        for mname, mfunc in cls.as_functions().items():
             if mfunc.body:
                 self._emit_function(f"{name}.{mname}", mfunc, record_name=name)
         # emit protocol implementations
@@ -2965,7 +2965,7 @@ class CEmitter:
         rides on the item's path (DottedPath whose leaf is `lock`).
         """
         out: set = set()
-        for sname, spath in union_defn.items.items():
+        for sname, spath in union_defn.is_paths().items():
             if (
                 spath.nodetype == NodeType.DOTTEDPATH
                 and cast(zast.DottedPath, spath).child.name == "lock"
@@ -2984,7 +2984,7 @@ class CEmitter:
         # emit tag enum
         lines.append("typedef enum {\n")
         tag_names = []
-        for sname in union_defn.items.keys():
+        for sname in union_defn.is_paths().keys():
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
             tag_names.append(tag)
             if custom_tag_values and sname in custom_tag_values:
@@ -3015,7 +3015,8 @@ class CEmitter:
             return sname in lock_arms
 
         all_no_cleanup = all(
-            _is_no_cleanup(sname, spath) for sname, spath in union_defn.items.items()
+            _is_no_cleanup(sname, spath)
+            for sname, spath in union_defn.is_paths().items()
         )
         if all_no_cleanup:
             lines.append(
@@ -3030,7 +3031,7 @@ class CEmitter:
         # not own.
         non_null_items = [
             (sname, spath)
-            for sname, spath in union_defn.items.items()
+            for sname, spath in union_defn.is_paths().items()
             if not _is_no_cleanup(sname, spath)
         ]
 
@@ -3076,8 +3077,8 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
         # emit methods
-        all_funcs = list(union_defn.functions.items()) + list(
-            union_defn.as_functions.items()
+        all_funcs = list(union_defn.functions().items()) + list(
+            union_defn.as_functions().items()
         )
         for mname, mfunc in all_funcs:
             if mfunc.body:
@@ -4343,9 +4344,9 @@ class CEmitter:
         cloned_methods = self.program.cloned_methods.get(name)
         func_aliases = self.program.func_aliases
         if template_defn.nodetype == NodeType.CLASS:
-            for mname, mfunc in cast(
-                zast.ObjectDef, template_defn
-            ).as_functions.items():
+            for mname, mfunc in (
+                cast(zast.ObjectDef, template_defn).as_functions().items()
+            ):
                 if mfunc.body:
                     qualified = f"{name}.{mname}"
                     if qualified in func_aliases:
@@ -4453,7 +4454,7 @@ class CEmitter:
 
         # emit tag enum
         lines.append("typedef enum {\n")
-        for sname in variant_defn.items.keys():
+        for sname in variant_defn.is_paths().keys():
             tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
             if custom_tag_values and sname in custom_tag_values:
                 lines.append(f"    {tag} = {custom_tag_values[sname]},\n")
@@ -4465,7 +4466,7 @@ class CEmitter:
         all_null = all(
             spath.nodetype == NodeType.ATOMID
             and cast(zast.AtomId, spath).name == "null"
-            for spath in variant_defn.items.values()
+            for spath in variant_defn.is_paths().values()
         )
 
         # emit variant struct with inline union
@@ -4473,7 +4474,7 @@ class CEmitter:
         lines.append(f"    z_{name}_tag_t tag;\n")
         if not all_null:
             lines.append("    union {\n")
-            for sname, spath in variant_defn.items.items():
+            for sname, spath in variant_defn.is_paths().items():
                 is_null = (
                     spath.nodetype == NodeType.ATOMID
                     and cast(zast.AtomId, spath).name == "null"
@@ -4499,7 +4500,7 @@ class CEmitter:
             else:
                 lines.append("    if (a.tag != b.tag) return false;\n")
                 lines.append("    switch (a.tag) {\n")
-                for sname, spath in variant_defn.items.items():
+                for sname, spath in variant_defn.is_paths().items():
                     tag = f"Z_{name.upper()}_TAG_{sname.upper()}"
                     is_null = (
                         spath.nodetype == NodeType.ATOMID
@@ -4535,8 +4536,8 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
         # emit methods
-        all_funcs = list(variant_defn.functions.items()) + list(
-            variant_defn.as_functions.items()
+        all_funcs = list(variant_defn.functions().items()) + list(
+            variant_defn.as_functions().items()
         )
         for mname, mfunc in all_funcs:
             if mfunc.body:
@@ -8030,7 +8031,9 @@ class CEmitter:
                         break
             subtype_path = None
             if union_defn is not None and union_defn.nodetype == NodeType.UNION:
-                subtype_path = cast(zast.ObjectDef, union_defn).items.get(subtype_name)
+                subtype_path = (
+                    cast(zast.ObjectDef, union_defn).is_paths().get(subtype_name)
+                )
             is_null = (
                 subtype_path is not None
                 and subtype_path.nodetype == NodeType.ATOMID
@@ -8309,8 +8312,8 @@ class CEmitter:
             variant_defn = mainunit.body.get(variant_name) if mainunit else None
             subtype_path = None
             if variant_defn is not None and variant_defn.nodetype == NodeType.VARIANT:
-                subtype_path = cast(zast.ObjectDef, variant_defn).items.get(
-                    subtype_name
+                subtype_path = (
+                    cast(zast.ObjectDef, variant_defn).is_paths().get(subtype_name)
                 )
             is_null = (
                 subtype_path is not None

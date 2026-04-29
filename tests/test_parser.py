@@ -373,7 +373,7 @@ class TestFunctionAsClause:
         func = body["f"]
         assert isinstance(func, zast.Function)
         assert func.as_items == {}
-        assert func.as_functions == {}
+        assert func.as_functions() == {}
 
     def test_function_as_with_static_function(self):
         """'as' clause can contain static functions"""
@@ -384,7 +384,7 @@ class TestFunctionAsClause:
         func = body["f"]
         assert isinstance(func, zast.Function)
         assert "t" in func.as_items
-        assert "helper" in func.as_functions
+        assert "helper" in func.as_functions()
 
     def test_function_as_requires_explicit_in(self):
         """When 'as' is first, unnamed brace block is not 'in'"""
@@ -493,14 +493,14 @@ class TestFacetDefinition:
         body = get_unit_body(result)
         assert "f" in body
         assert body["f"].nodetype == zast.NodeType.FACET
-        assert "show" in body["f"].functions
+        assert "show" in body["f"].functions()
 
     def test_facet_with_is(self):
         """facet with explicit is keyword"""
         result = parse_unit("f: facet is { show: function {:this} out i64 }")
         body = get_unit_body(result)
         assert body["f"].nodetype == zast.NodeType.FACET
-        assert "show" in body["f"].functions
+        assert "show" in body["f"].functions()
 
     def test_facet_with_generic_param(self):
         """facet with generic parameter"""
@@ -510,8 +510,8 @@ class TestFacetDefinition:
         body = get_unit_body(result)
         fac = body["f"]
         assert fac.nodetype == zast.NodeType.FACET
-        assert "t" in fac.items
-        assert "show" in fac.functions
+        assert "t" in fac.is_items
+        assert "show" in fac.functions()
 
 
 class TestAsClause:
@@ -521,7 +521,7 @@ class TestAsClause:
         body = get_unit_body(result)
         rec = body["p"]
         assert rec.nodetype == zast.NodeType.RECORD
-        assert "x" in rec.items
+        assert "x" in rec.is_items
         assert "y" in rec.as_items
 
     def test_record_without_as(self):
@@ -531,7 +531,7 @@ class TestAsClause:
         rec = body["p"]
         assert rec.nodetype == zast.NodeType.RECORD
         assert rec.as_items == {}
-        assert rec.as_functions == {}
+        assert rec.as_functions() == {}
 
     def test_record_is_as_named(self):
         """record with explicitly named is and as"""
@@ -539,7 +539,7 @@ class TestAsClause:
         body = get_unit_body(result)
         rec = body["p"]
         assert rec.nodetype == zast.NodeType.RECORD
-        assert "x" in rec.items
+        assert "x" in rec.is_items
         assert "y" in rec.as_items
 
     def test_record_as_is_reversed(self):
@@ -548,7 +548,7 @@ class TestAsClause:
         body = get_unit_body(result)
         rec = body["p"]
         assert rec.nodetype == zast.NodeType.RECORD
-        assert "x" in rec.items
+        assert "x" in rec.is_items
         assert "y" in rec.as_items
 
     def test_class_with_as(self):
@@ -557,7 +557,7 @@ class TestAsClause:
         body = get_unit_body(result)
         cls = body["c"]
         assert cls.nodetype == zast.NodeType.CLASS
-        assert "x" in cls.items
+        assert "x" in cls.is_items
         assert "y" in cls.as_items
 
     def test_enum_with_as_is_reserved(self):
@@ -571,7 +571,7 @@ class TestAsClause:
         body = get_unit_body(result)
         v = body["v"]
         assert v.nodetype == zast.NodeType.VARIANT
-        assert "x" in v.items
+        assert "x" in v.is_items
         assert "y" in v.as_items
 
     def test_union_with_as(self):
@@ -580,7 +580,7 @@ class TestAsClause:
         body = get_unit_body(result)
         u = body["u"]
         assert u.nodetype == zast.NodeType.UNION
-        assert "x" in u.items
+        assert "x" in u.is_items
         assert "y" in u.as_items
 
 
@@ -675,8 +675,8 @@ class TestLabelValueShorthand:
         body = get_unit_body(result)
         rec = body["r"]
         assert rec.nodetype == zast.NodeType.RECORD
-        assert "i64" in rec.items
-        assert "String" in rec.items
+        assert "i64" in rec.is_items
+        assert "String" in rec.is_items
 
     def test_union_field_label_value(self):
         """:x in union subtypes."""
@@ -684,9 +684,9 @@ class TestLabelValueShorthand:
         body = get_unit_body(result)
         u = body["u"]
         assert u.nodetype == zast.NodeType.UNION
-        assert "u8" in u.items
-        assert "u16" in u.items
-        assert "u32" in u.items
+        assert "u8" in u.is_items
+        assert "u16" in u.is_items
+        assert "u32" in u.is_items
 
     def test_function_param_label_value(self):
         """:x in function parameters."""
@@ -791,7 +791,7 @@ class TestNativeKeyword:
         rec = body["r"]
         assert rec.nodetype == zast.NodeType.RECORD
         assert rec.is_native is True
-        assert rec.items == {}
+        assert rec.is_items == {}
 
     def test_native_record_elided_is(self):
         """record native (elided is) parses as a native record."""
@@ -816,8 +816,8 @@ class TestNativeKeyword:
         cls = body["c"]
         assert cls.nodetype == zast.NodeType.CLASS
         assert cls.is_native is True
-        assert "m" in cls.as_functions
-        assert cls.as_functions["m"].is_native is True
+        assert "m" in cls.as_functions()
+        assert cls.as_functions()["m"].is_native is True
 
     def test_native_union(self):
         """union is native parses as a native union."""
