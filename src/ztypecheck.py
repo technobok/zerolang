@@ -6066,6 +6066,7 @@ class TypeChecker:
             else:
                 t = self.t_null
             self.symtab.pop()
+            self._build_typed_do(inner_do)
         elif inner.nodetype == NodeType.WITH:
             t = self._check_with(cast(zast.With, inner))
         elif inner.nodetype == NodeType.CASE:
@@ -6458,6 +6459,154 @@ class TypeChecker:
             statements=lines,
         )
         self._register_typed(stmt, typed)
+
+    def _build_typed_if(self, ifnode: zast.If) -> None:
+        """Construct typed mirror of an `If`. Each `IfClause` is built
+        inline (no separate `_check_if_clause` exists). Skipped when
+        any condition / statement / else branch lacks a typed mirror."""
+        clauses_typed: List[ztypedast.TypedIfClause] = []
+        for clause in ifnode.clauses:
+            conds_typed: dict = {}
+            for cname, cond_op in clause.conditions.items():
+                op_typed = self._typed_operation_for(cond_op)
+                if op_typed is None:
+                    return
+                conds_typed[cname] = op_typed
+            stmt_typed = self.typed_program.by_parsed_id.get(clause.statement.nodeid)
+            if stmt_typed is None:
+                return
+            clause_typed = ztypedast.TypedIfClause(
+                parsed=clause,
+                conditions=conds_typed,
+                statement=cast(ztypedast.TypedStatement, stmt_typed),
+            )
+            self._register_typed(clause, clause_typed)
+            clauses_typed.append(clause_typed)
+        else_typed: Optional[ztypedast.TypedStatement] = None
+        if ifnode.elseclause is not None:
+            else_lookup = self.typed_program.by_parsed_id.get(ifnode.elseclause.nodeid)
+            if else_lookup is None:
+                return
+            else_typed = cast(ztypedast.TypedStatement, else_lookup)
+        typed = ztypedast.TypedIf(
+            parsed=ifnode,
+            ztype=cast(ZType, ifnode.type),
+            const_value=ifnode.const_value,
+            clauses=clauses_typed,
+            elseclause=else_typed,
+            taken_vars=list(ifnode.taken_vars),
+        )
+        self._register_typed(ifnode, typed)
+
+    def _build_typed_case(self, casenode: zast.Case) -> None:
+        """Construct typed mirror of a `Case` (match) expression. Each
+        `CaseClause` is built inline; the parsed `match` AtomId is
+        structural (a tag selector), so the typed match is a fresh
+        TypedAtomId carrying only the tag name."""
+        subject_typed = self._typed_operation_for(casenode.subject)
+        if subject_typed is None:
+            return
+        clauses_typed: List[ztypedast.TypedCaseClause] = []
+        for clause in casenode.clauses:
+            stmt_typed = self.typed_program.by_parsed_id.get(clause.statement.nodeid)
+            if stmt_typed is None:
+                return
+            match_typed = ztypedast.TypedAtomId(
+                parsed=clause.match,
+                ztype=cast(ZType, None),
+                name=clause.match.name,
+            )
+            clause_typed = ztypedast.TypedCaseClause(
+                parsed=clause,
+                name=clause.name,
+                match=match_typed,
+                statement=cast(ztypedast.TypedStatement, stmt_typed),
+            )
+            self._register_typed(clause, clause_typed)
+            clauses_typed.append(clause_typed)
+        else_typed: Optional[ztypedast.TypedStatement] = None
+        if casenode.elseclause is not None:
+            else_lookup = self.typed_program.by_parsed_id.get(
+                casenode.elseclause.nodeid
+            )
+            if else_lookup is None:
+                return
+            else_typed = cast(ztypedast.TypedStatement, else_lookup)
+        typed = ztypedast.TypedCase(
+            parsed=casenode,
+            ztype=cast(ZType, casenode.type),
+            const_value=casenode.const_value,
+            subject=subject_typed,
+            clauses=clauses_typed,
+            elseclause=else_typed,
+            subject_taken=casenode.subject_taken,
+            taken_vars=list(casenode.taken_vars),
+        )
+        self._register_typed(casenode, typed)
+
+    def _build_typed_for(self, fornode: zast.For) -> None:
+        """Construct typed mirror of a `For` loop."""
+        conds_typed: dict = {}
+        for cname, cond_op in fornode.conditions.items():
+            op_typed = self._typed_operation_for(cond_op)
+            if op_typed is None:
+                return
+            conds_typed[cname] = op_typed
+        loop_typed: Optional[ztypedast.TypedStatement] = None
+        if fornode.loop is not None:
+            loop_lookup = self.typed_program.by_parsed_id.get(fornode.loop.nodeid)
+            if loop_lookup is None:
+                return
+            loop_typed = cast(ztypedast.TypedStatement, loop_lookup)
+        post_typed: List[ztypedast.TypedOperation] = []
+        for post_op in fornode.postconditions:
+            op_typed = self._typed_operation_for(post_op)
+            if op_typed is None:
+                return
+            post_typed.append(op_typed)
+        typed = ztypedast.TypedFor(
+            parsed=fornode,
+            ztype=cast(ZType, fornode.type),
+            const_value=fornode.const_value,
+            conditions=conds_typed,
+            loop=loop_typed,
+            postconditions=post_typed,
+            iterator_bindings=set(fornode.iterator_bindings),
+        )
+        self._register_typed(fornode, typed)
+
+    def _build_typed_do(self, donode: zast.Do) -> None:
+        """Construct typed mirror of a `Do` block (bare-block expression)."""
+        stmt_typed = self.typed_program.by_parsed_id.get(donode.statement.nodeid)
+        if stmt_typed is None:
+            return
+        typed = ztypedast.TypedDo(
+            parsed=donode,
+            ztype=cast(ZType, donode.type),
+            const_value=donode.const_value,
+            statement=cast(ztypedast.TypedStatement, stmt_typed),
+            has_break=donode.has_break,
+        )
+        self._register_typed(donode, typed)
+
+    def _build_typed_with(self, withnode: zast.With) -> None:
+        """Construct typed mirror of a `with name: value do doexpr`
+        expression."""
+        value_typed = self._typed_expression_for(withnode.value)
+        doexpr_typed = self._typed_expression_for(withnode.doexpr)
+        if value_typed is None or doexpr_typed is None:
+            return
+        typed = ztypedast.TypedWith(
+            parsed=withnode,
+            ztype=cast(ZType, withnode.type),
+            const_value=withnode.const_value,
+            name=withnode.name,
+            value=value_typed,
+            doexpr=doexpr_typed,
+            ownership=withnode.ownership,
+            alias_of=withnode.alias_of,
+        )
+        self._register_typed(withnode, typed)
 
     def _typed_expression_for(
         self, expr: zast.Expression
@@ -9046,6 +9195,13 @@ class TypeChecker:
             )
 
     def _check_if(self, ifnode: zast.If) -> Optional[ZType]:
+        """Type-check an if-expression. Thin wrapper that builds the
+        typed mirror after the inner walks the clauses + else branch."""
+        t = self._check_if_inner(ifnode)
+        self._build_typed_if(ifnode)
+        return t
+
+    def _check_if_inner(self, ifnode: zast.If) -> Optional[ZType]:
         if_marker = self.symtab.push_block("if")
         all_branches_diverge = True
         const_true_taken = False
@@ -9417,6 +9573,13 @@ class TypeChecker:
         )
 
     def _check_for(self, fornode: zast.For) -> Optional[ZType]:
+        """Type-check a for-expression. Thin wrapper that builds the
+        typed mirror after the inner walks conditions / loop / post."""
+        t = self._check_for_inner(fornode)
+        self._build_typed_for(fornode)
+        return t
+
+    def _check_for_inner(self, fornode: zast.For) -> Optional[ZType]:
         self.symtab.push("for")
         # introduce break and continue bindings for this loop
         t_never = self._resolve_name("never")
@@ -9539,6 +9702,13 @@ class TypeChecker:
         return None
 
     def _check_with(self, withnode: zast.With) -> Optional[ZType]:
+        """Type-check a with-expression. Thin wrapper that builds the
+        typed mirror after the inner runs."""
+        t = self._check_with_inner(withnode)
+        self._build_typed_with(withnode)
+        return t
+
+    def _check_with_inner(self, withnode: zast.With) -> Optional[ZType]:
         """Type-check `with name: value do doexpr`.
 
         Ownership follows function-argument rules:
@@ -9697,6 +9867,13 @@ class TypeChecker:
         return result_type
 
     def _check_case(self, casenode: zast.Case) -> Optional[ZType]:
+        """Type-check a match expression. Thin wrapper that builds the
+        typed mirror after the inner walks subject + clauses."""
+        t = self._check_case_inner(casenode)
+        self._build_typed_case(casenode)
+        return t
+
+    def _check_case_inner(self, casenode: zast.Case) -> Optional[ZType]:
         self.symtab.push("match")
 
         # Reject `.take` on the match subject. Narrowing requires the

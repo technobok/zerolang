@@ -287,14 +287,10 @@ class TestTypedStatementInvariants:
             assert isinstance(inner_typed, ztypedast.TypedAssignment)
             assert inner_typed.name == _cast(zast.Assignment, inner_parsed).name
             # the assignment is registered in by_parsed_id
-            assert (
-                tc.typed_program.by_parsed_id.get(inner_parsed.nodeid) is inner_typed
-            )
+            assert tc.typed_program.by_parsed_id.get(inner_parsed.nodeid) is inner_typed
 
     def test_reassignment_mirror(self):
-        tc = _typecheck(
-            "main: function is {\n    x: 7\n    x = 11\n}"
-        )
+        tc = _typecheck("main: function is {\n    x: 7\n    x = 11\n}")
         mainunit = tc.program.units[tc.program.mainunitname]
         reassigns = [
             n for n in _walk_main(mainunit) if n.nodetype == NodeType.REASSIGNMENT
@@ -307,6 +303,74 @@ class TestTypedStatementInvariants:
             assert typed.parsed is r
             assert typed.topath is not None
             assert typed.value is not None
+
+
+class TestTypedControlFlowInvariants:
+    """If/Case/For/Do/With produce typed mirrors via the wrapper
+    pattern; clauses (IfClause, CaseClause) are built inline and also
+    registered."""
+
+    def test_if_else_mirror(self):
+        tc = _typecheck(
+            "main: function is {\n"
+            "    x: 1\n"
+            '    if x > 0 then print "pos" else print "nonpos"\n'
+            "}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        ifs = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.IF]
+        assert len(ifs) == 1
+        ifn = _cast(zast.If, ifs[0])
+        typed = tc.typed_program.by_parsed_id.get(ifn.nodeid)
+        assert typed is not None
+        assert isinstance(typed, ztypedast.TypedIf)
+        assert len(typed.clauses) == len(ifn.clauses)
+        for ct, cp in zip(typed.clauses, ifn.clauses):
+            assert isinstance(ct, ztypedast.TypedIfClause)
+            assert ct.parsed is cp
+            assert tc.typed_program.by_parsed_id.get(cp.nodeid) is ct
+        assert typed.elseclause is not None
+
+    def test_case_match_mirror(self):
+        tc = _typecheck(
+            "main: function is {\n"
+            "    b: bool.true\n"
+            "    match (b) case true then {\n"
+            "        x: 1\n"
+            "    } case false then {\n"
+            "        x: 2\n"
+            "    }\n"
+            "}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        cases = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.CASE]
+        assert len(cases) == 1
+        cn = _cast(zast.Case, cases[0])
+        typed = tc.typed_program.by_parsed_id.get(cn.nodeid)
+        assert typed is not None
+        assert isinstance(typed, ztypedast.TypedCase)
+        assert typed.subject is not None
+        assert len(typed.clauses) == 2
+        names = {c.name for c in typed.clauses}
+        assert names == {"true", "false"}
+
+    def test_do_block_mirror(self):
+        tc = _typecheck(
+            "main: function is {\n"
+            "    x: {\n"
+            "        7\n"
+            "    }\n"
+            "}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        dos = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.DO]
+        assert len(dos) == 1
+        dn = _cast(zast.Do, dos[0])
+        typed = tc.typed_program.by_parsed_id.get(dn.nodeid)
+        assert typed is not None
+        assert isinstance(typed, ztypedast.TypedDo)
+        assert typed.statement is not None
+        assert typed.has_break == dn.has_break
 
 
 class TestTypedDottedPathInvariants:
