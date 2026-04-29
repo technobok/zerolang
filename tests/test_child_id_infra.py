@@ -9,7 +9,6 @@ import pytest
 from conftest import make_parser
 from ztypecheck import typecheck
 from ztypes import ZType, ZTypeType
-from zast import NodeType
 import zast
 
 pytestmark = pytest.mark.infra
