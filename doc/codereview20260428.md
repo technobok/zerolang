@@ -35,7 +35,7 @@ The remaining gaps are concentrated in the **back-end** and in the
 5. A handful of low-cost portability and hygiene items remain:
    `copy.deepcopy(func)` for monomorphization (resolved 7bb5020),
    the last `isinstance` (resolved 32c779a), stale TODOs, the
-   `getattr`-driven visitor in `zsynth.py`.
+   `getattr`-driven visitor in `zsynth.py` (resolved 366d0d6).
 6. Several findings from `codereview20260322.md` were left in unclear
    status; the audit at the end of this review closes them out.
 
@@ -488,27 +488,22 @@ Action items:
 - [ ] `src/zparser.py:541` — "TODO: this and type are predefined for
       units (?)" — investigate; remove the question mark either way.
 
-### F11. `getattr`-driven visitor dispatch in `zsynth.py` — Low (goal 3)
+### F11. `getattr`-driven visitor dispatch in `zsynth.py` — Low (goal 3) \[RESOLVED\]
 
-`src/zsynth.py:120`: `handler = getattr(self, handler_name, None)` —
-visitor name lookup by string. Replace with an explicit dispatch
-table registered at class init:
+`src/zsynth.py:120` previously held `handler = getattr(self,
+handler_name, None)` for visitor-name lookup by string. The
+recommended replacement was an explicit
+`Dict[NodeType, Callable]` mirroring the shape in `zasthash.py`.
 
-```python
-self._handlers: Dict[NodeType, Callable] = {
-    NodeType.X: self._visit_x,
-    NodeType.Y: self._visit_y,
-    ...
-}
-```
-
-This is the shape used in `zasthash.py` (`:72`); making `zsynth.py`
-match removes one `getattr` and lines the file up with the rest of
-the front-end.
+Resolved incidentally in `366d0d6` (F2/D state pre-init).
+`Rewriter.handlers: Dict[NodeType, Callable]` is now declared as
+a `field(default_factory=dict)` populated by subclasses; `visit`
+dispatches via `self.handlers.get(node.nodetype)`. Zero `getattr`
+calls remain in `zsynth.py`.
 
 Action items:
-- [ ] Replace the `getattr` lookup in `zsynth.py` with an explicit
-      `Dict[NodeType, Callable]`.
+- [x] Replaced the `getattr` lookup in `zsynth.py` with an explicit
+      `Dict[NodeType, Callable]`. *(Resolved `366d0d6`.)*
 
 ### F12. Documentation drift — Med (goal 6)
 
@@ -582,7 +577,7 @@ Independent, low-risk; can be done in any order or in parallel.
 - [x] F8 — replace `copy.deepcopy(func)` with explicit clone visitor. *(Resolved 7bb5020.)*
 - [x] F9 — replace last `isinstance`; drop lint baseline 1 → 0. *(Resolved incidentally in `32c779a`.)*
 - [ ] F10 — close out the four `TODO` comments.
-- [ ] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`.
+- [x] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`. *(Resolved incidentally in `366d0d6`.)*
 - [ ] F13 — `_filtereol` accessor, "undercores" typo,
       `zip(..., strict=True)` in `zsqldump.py`.
 
