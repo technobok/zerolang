@@ -665,14 +665,17 @@ class CEmitter:
 
     def _node_ztype(self, node: zast.Node) -> Optional[ZType]:
         """Read `ztype` from the typed mirror of `node`. Unwraps
-        `zast.Expression` to its inner subtype. Falls back to
-        `node.type` when no typed mirror exists."""
+        `zast.Expression` to its inner subtype. Falls back to the
+        TypedProgram's `node_types` side-table when no typed mirror
+        exists — after Step 6.9.b stripped `self._node_ztype(Node)`, this
+        side-table replaces direct parsed-node reads."""
+        node_types = self.typed_program.node_types if self.typed_program else {}
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression
         typed = self._typed_for(target)
         if typed is None:
-            return node.type
+            return node_types.get(node.nodeid)
         if typed.parsed.nodetype not in (
             NodeType.ATOMID,
             NodeType.LABELVALUE,
@@ -686,7 +689,7 @@ class CEmitter:
             NodeType.DO,
             NodeType.WITH,
         ):
-            return node.type
+            return node_types.get(node.nodeid)
         return cast(ztypedast.TypedExpression, typed).ztype
 
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
@@ -701,20 +704,23 @@ class CEmitter:
 
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
         """Resolve the ZType of a parser-AST `Path`-shaped node via
-        its typed mirror. Falls back to `path.type` when no typed
-        mirror exists. All Path-shaped typed mirrors (TypedAtomId,
-        TypedDottedPath, TypedAtomString) inherit `ztype` from
-        TypedExpression."""
+        its typed mirror. Falls back to the TypedProgram's
+        `node_types` side-table when no typed mirror exists — after
+        Step 6.9.b stripped `self._node_ztype(Node)`, this is the replacement for
+        direct parsed-node reads. All Path-shaped typed mirrors
+        (TypedAtomId, TypedDottedPath, TypedAtomString) inherit
+        `ztype` from TypedExpression."""
+        node_types = self.typed_program.node_types if self.typed_program else {}
         typed = self._typed_for(path)
         if typed is None:
-            return path.type
+            return node_types.get(path.nodeid)
         if typed.parsed.nodetype not in (
             NodeType.ATOMID,
             NodeType.LABELVALUE,
             NodeType.DOTTEDPATH,
             NodeType.ATOMSTRING,
         ):
-            return path.type
+            return node_types.get(path.nodeid)
         return cast(ztypedast.TypedExpression, typed).ztype
 
     def _emit_bounds_check(
@@ -999,7 +1005,9 @@ class CEmitter:
         """
         typed_call = self._typed_call_for(call)
         # monomorphized generic function call: use the mangled name
-        ftype = typed_call.callable.ztype if typed_call else call.callable.type
+        ftype = (
+            typed_call.callable.ztype if typed_call else self._node_ztype(call.callable)
+        )
         if (
             ftype
             and ftype.typetype == ZTypeType.FUNCTION
@@ -1010,11 +1018,7 @@ class CEmitter:
         # check if this is a function pointer field call (e.g. c.op)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             typed_dp = self._typed_dotted_path_for(cast(zast.DottedPath, call.callable))
-            ftype = (
-                typed_dp.ztype
-                if typed_dp
-                else cast(zast.DottedPath, call.callable).type
-            )
+            ftype = typed_dp.ztype if typed_dp else self._node_ztype(call.callable)
             if ftype and ftype.typetype == ZTypeType.FUNCTION:
                 func_name = ftype.name
                 if func_name in self._is_func_fields:
@@ -1620,7 +1624,7 @@ class CEmitter:
         emit after the monos.
         """
         for _fname, fpath in defn.is_items.items():
-            ftype = fpath.type
+            ftype = self._node_ztype(fpath)
             if ftype is None:
                 return False
             if ftype.generic_origin is not None and not is_tag_origin(
@@ -2251,7 +2255,7 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
-            ptype_str = _ctype(ppath.type)
+            ptype_str = _ctype(self._node_ztype(ppath))
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         cname = name.replace(".", "_")
@@ -2265,7 +2269,7 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         params: List[str] = []
         for pname, ppath in func.parameters.items():
-            ptype_str = _ctype(ppath.type)
+            ptype_str = _ctype(self._node_ztype(ppath))
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         cname = name.replace(".", "_")
@@ -2292,7 +2296,7 @@ class CEmitter:
         lines: List[str] = []
 
         # Prefer the resolved ZType for param types — the AST's
-        # `ppath.type` can remain None for system-library protocols
+        # `self._node_ztype(ppath)` can remain None for system-library protocols
         # until they're explicitly instantiated. The resolved type's
         # children hold function ZTypes whose own children hold
         # fully-resolved parameter types.
@@ -2307,7 +2311,7 @@ class CEmitter:
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                ptype: Optional[ZType] = ppath.type
+                ptype: Optional[ZType] = self._node_ztype(ppath)
                 if ptype is None and spec_type is not None:
                     ptype = spec_type.children.get(pname)
                 params.append(_proto_param_ctype(ptype))
@@ -2359,11 +2363,11 @@ class CEmitter:
                 ret_ctype = self._return_ctype(mfunc)
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
-                    ptype_str = _ctype(ppath.type)
+                    ptype_str = _ctype(self._node_ztype(ppath))
                     # 'this' parameter: add * for class methods
                     if (
                         impl_type
-                        and ppath.type is impl_type
+                        and self._node_ztype(ppath) is impl_type
                         and not ptype_str.endswith("*")
                         and impl_type.typetype == ZTypeType.CLASS
                     ):
@@ -2388,7 +2392,7 @@ class CEmitter:
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                ptype: Optional[ZType] = ppath.type
+                ptype: Optional[ZType] = self._node_ztype(ppath)
                 if ptype is None and spec_type is not None:
                     ptype = spec_type.children.get(pname)
                 pctype = _proto_param_ctype(ptype)
@@ -2470,8 +2474,9 @@ class CEmitter:
             lines.append(f"    {impl_ctype}* r = ({impl_ctype}*)p;\n")
             # cleanup reftype fields
             for fname, fpath in impl_defn.is_paths().items():
-                if fpath.type:
-                    lines.append(self._emit_field_cleanup(f"r->{fname}", fpath.type))
+                fpath_t = self._node_ztype(fpath)
+                if fpath_t:
+                    lines.append(self._emit_field_cleanup(f"r->{fname}", fpath_t))
             lines.append("    free(r);\n")
             lines.append("}\n\n")
 
@@ -2506,7 +2511,7 @@ class CEmitter:
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                params.append(_ctype(ppath.type))
+                params.append(_ctype(self._node_ztype(ppath)))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
         lines.append(f"}} z_{name}_vtable_t;\n\n")
@@ -2553,7 +2558,7 @@ class CEmitter:
                 ret_ctype = self._return_ctype(mfunc)
                 params: List[str] = []
                 for pname, ppath in mfunc.parameters.items():
-                    ptype_str = _ctype(ppath.type)
+                    ptype_str = _ctype(self._node_ztype(ppath))
                     params.append(f"{ptype_str} {_mangle_var(pname)}")
                 param_str = ", ".join(params) if params else "void"
                 method_cname = _mangle_func(f"{impl_name}.{sname}")
@@ -2568,7 +2573,7 @@ class CEmitter:
             for pname, ppath in sfunc.parameters.items():
                 if pname == "this":
                     continue
-                pctype = _ctype(ppath.type)
+                pctype = _ctype(self._node_ztype(ppath))
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
 
@@ -2632,7 +2637,7 @@ class CEmitter:
             # System-unit records may reach the emitter before the
             # typechecker has attached types to AST paths; fall back
             # to the resolved ZType's children for a concrete type.
-            field_type = fpath.type
+            field_type = self._node_ztype(fpath)
             if field_type is None and ztype is not None:
                 field_type = ztype.children.get(fname)
             ftype = _ctype(field_type)
@@ -2706,7 +2711,7 @@ class CEmitter:
             comparisons: List[str] = []
             # data fields
             for fname, fpath in items.items():
-                ft = fpath.type
+                ft = self._node_ztype(fpath)
                 if ft and self._needs_eq_call(ft):
                     tname = ft.name.replace(".", "_")
                     # string/stringview eq functions take pointers
@@ -2881,7 +2886,7 @@ class CEmitter:
         ret_ctype = self._return_ctype(mfunc)
         params: List[str] = []
         for pname, ppath in mfunc.parameters.items():
-            ptype_str = _ctype(ppath.type)
+            ptype_str = _ctype(self._node_ztype(ppath))
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         return f"{ret_ctype} (*{mname})({param_str})"
@@ -2901,9 +2906,9 @@ class CEmitter:
         field_ctypes: List[str] = []
         for fname, fpath in items.items():
             # System-unit records may reach this path with unresolved
-            # AST fpath.type; fall back to the resolved ZType's
+            # AST self._node_ztype(fpath); fall back to the resolved ZType's
             # child for a concrete C type.
-            field_type = fpath.type
+            field_type = self._node_ztype(fpath)
             if field_type is None and ztype is not None:
                 field_type = ztype.children.get(fname)
             fct = _ctype(field_type)
@@ -2923,7 +2928,7 @@ class CEmitter:
             ret_ctype = self._return_ctype(mfunc)
             fp_params: List[str] = []
             for pname, ppath in mfunc.parameters.items():
-                fp_params.append(_ctype(ppath.type))
+                fp_params.append(_ctype(self._node_ztype(ppath)))
             fp_param_str = ", ".join(fp_params) if fp_params else "void"
             fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
             params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
@@ -3078,13 +3083,13 @@ class CEmitter:
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in cls.is_paths().items():
-            ftype = _ctype(fpath.type)
+            ftype = _ctype(self._node_ztype(fpath))
             # .lock fields of stack-allocated class type: store as pointer
             if (
                 fname in lock_fields
-                and fpath.type
-                and fpath.type.typetype == ZTypeType.CLASS
-                and not fpath.type.is_heap_allocated
+                and self._node_ztype(fpath)
+                and cast(ZType, self._node_ztype(fpath)).typetype == ZTypeType.CLASS
+                and not cast(ZType, self._node_ztype(fpath)).is_heap_allocated
                 and not ftype.endswith("*")
             ):
                 ftype = f"{ftype}*"
@@ -3103,8 +3108,9 @@ class CEmitter:
                 # .lock fields are borrowed references, don't own data
                 if fname in lock_fields:
                     continue
-                if fpath.type:
-                    lines.append(self._emit_field_cleanup(f"p->{fname}", fpath.type))
+                fpath_t = self._node_ztype(fpath)
+                if fpath_t:
+                    lines.append(self._emit_field_cleanup(f"p->{fname}", fpath_t))
             lines.append("}\n\n")
 
         # emit meta.create constructor
@@ -3264,7 +3270,7 @@ class CEmitter:
         ]
 
         def _arm_body(spath: zast.Path) -> tuple[str, ...]:
-            stype = spath.type
+            stype = self._node_ztype(spath)
             if stype and stype.needs_destructor and stype.destructor_name:
                 if stype.is_heap_allocated:
                     cast_expr = f"({_ctype(stype)})u->data"
@@ -4739,7 +4745,7 @@ class CEmitter:
                         lines.append(" return true;\n")
                     else:
                         sub_ctype = self._get_subtype_ctype(spath)
-                        sub_type = spath.type
+                        sub_type = self._node_ztype(spath)
                         if sub_type and self._needs_eq_call(sub_type):
                             tname = sub_type.name.replace(".", "_")
                             lines.append(
@@ -4797,7 +4803,7 @@ class CEmitter:
     def _return_ctype(self, func: zast.Function) -> str:
         if not func.returntype:
             return "void"
-        ct = _ctype(func.returntype.type)
+        ct = _ctype(self._node_ztype(func.returntype))
         if ct == "z_String_t":
             self.needs_string = True
             self.needs_stdlib = True
@@ -4821,19 +4827,19 @@ class CEmitter:
         param_own = ftype.param_ownership if ftype else {}
         params: List[str] = []
         for pname, ppath in func.parameters.items():
-            ptype_str = _ctype(ppath.type)
+            ptype_str = _ctype(self._node_ztype(ppath))
             # this-receiver: pass by pointer
             if (
                 is_class_method
-                and ppath.type is record_type
+                and self._node_ztype(ppath) is record_type
                 and not ptype_str.endswith("*")
             ):
                 ptype_str = f"{ptype_str}*"
             # stack-allocated class borrow/lock params
             elif (
-                ppath.type
-                and ppath.type.typetype == ZTypeType.CLASS
-                and not ppath.type.is_heap_allocated
+                self._node_ztype(ppath)
+                and cast(ZType, self._node_ztype(ppath)).typetype == ZTypeType.CLASS
+                and not cast(ZType, self._node_ztype(ppath)).is_heap_allocated
                 and not ptype_str.endswith("*")
                 and param_own.get(pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
@@ -4864,20 +4870,20 @@ class CEmitter:
         params: List[str] = []
         pointer_params: List[str] = []
         for pname, ppath in func.parameters.items():
-            ptype_str = _ctype(ppath.type)
+            ptype_str = _ctype(self._node_ztype(ppath))
             # class this-receiver: pass by pointer
             if (
                 is_class_method
-                and ppath.type is record_type
+                and self._node_ztype(ppath) is record_type
                 and not ptype_str.endswith("*")
             ):
                 ptype_str = f"{ptype_str}*"
                 pointer_params.append(_mangle_var(pname))
             # stack-allocated class borrow/lock params: pass by pointer
             elif (
-                ppath.type
-                and ppath.type.typetype == ZTypeType.CLASS
-                and not ppath.type.is_heap_allocated
+                self._node_ztype(ppath)
+                and cast(ZType, self._node_ztype(ppath)).typetype == ZTypeType.CLASS
+                and not cast(ZType, self._node_ztype(ppath)).is_heap_allocated
                 and not ptype_str.endswith("*")
                 and param_own.get(pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
@@ -4907,7 +4913,7 @@ class CEmitter:
             self._scope.class_params.add(pp)
         # also track other parameters that are already pointer types (unions, etc.)
         for pname, ppath in func.parameters.items():
-            ptype_str = _ctype(ppath.type)
+            ptype_str = _ctype(self._node_ztype(ppath))
             if ptype_str.endswith("*") and ptype_str.startswith("z_"):
                 self._scope.class_params.add(_mangle_var(pname))
 
@@ -4916,12 +4922,14 @@ class CEmitter:
         # heap data and must free it at function exit (or early return).
         for pname, ppath in func.parameters.items():
             if (
-                ppath.type
-                and ppath.type.needs_destructor
-                and ppath.type.destructor_name
+                self._node_ztype(ppath)
+                and cast(ZType, self._node_ztype(ppath)).needs_destructor
+                and cast(ZType, self._node_ztype(ppath)).destructor_name
                 and param_own.get(pname) == ZParamOwnership.TAKE
             ):
-                self._scope.cleanup_vars.append((_mangle_var(pname), ppath.type))
+                self._scope.cleanup_vars.append(
+                    (_mangle_var(pname), self._node_ztype(ppath))
+                )
 
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
@@ -4969,7 +4977,10 @@ class CEmitter:
         ):
             return False
         # never type means all paths already return explicitly
-        if last_expr.type and last_expr.type.typetype == ZTypeType.NEVER:
+        if (
+            self._node_ztype(last_expr)
+            and cast(ZType, self._node_ztype(last_expr)).typetype == ZTypeType.NEVER
+        ):
             return False
         return True
 
@@ -5054,7 +5065,9 @@ class CEmitter:
         # Step 4e: Assignment decoration reads via typed mirror.
         typed_assign = self._typed_assignment_for(assign)
         _alias_of = typed_assign.alias_of if typed_assign else None
-        _assign_ztype = typed_assign.value.ztype if typed_assign else assign.type
+        _assign_ztype = (
+            typed_assign.value.ztype if typed_assign else self._node_ztype(assign)
+        )
         # Phase B alias optimization: inline `x: y.take` or `x: y.borrow`
         # (or similar on a valtype dotted path) becomes a C-level alias —
         # no local declaration, no destructor, substitute at reference
@@ -5083,7 +5096,9 @@ class CEmitter:
                 and _assign_ztype.return_type
                 and assign.value.expression.nodetype == NodeType.DOTTEDPATH
             ):
-                _pt = cast(zast.DottedPath, assign.value.expression).parent.type
+                _pt = self._node_ztype(
+                    cast(zast.DottedPath, assign.value.expression).parent
+                )
                 _is_typedef_call = _pt is not None and _pt.typedef_base is not None
             if _is_typedef_call:
                 ctype = _ctype(_assign_ztype.return_type)
@@ -5125,7 +5140,9 @@ class CEmitter:
         # invalidate source on .take for reftypes
         take_var = self._get_take_var_from_expr(assign.value)
         if take_var:
-            result += self._emit_take_invalidation(take_var, assign.value.type, indent)
+            result += self._emit_take_invalidation(
+                take_var, self._node_ztype(assign.value), indent
+            )
         return result
 
     def _emit_reassignment(self, reassign: zast.Reassignment) -> str:
@@ -5220,7 +5237,7 @@ class CEmitter:
         # string.shrink as zero-arg method statement (parsed as dotted path, not call)
         if inner.nodetype == zast.NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, inner)
-            dp_parent_type = dp.parent.type
+            dp_parent_type = self._node_ztype(dp.parent)
             if (
                 dp_parent_type
                 and dp_parent_type.subtype == ZSubType.STRING
@@ -5244,7 +5261,7 @@ class CEmitter:
             ):
                 return ""
             var = self._emit_path_value(dp.parent)
-            var_type = dp.type
+            var_type = self._node_ztype(dp)
             result = ""
             if var_type and var_type.needs_destructor and var_type.destructor_name:
                 if var_type.is_heap_allocated:
@@ -5259,7 +5276,7 @@ class CEmitter:
         ):
             dp = cast(zast.DottedPath, inner)
             var = self._emit_path_value(dp.parent)
-            var_type = dp.type
+            var_type = self._node_ztype(dp)
             result = ""
             # Borrowed locals (assigned from an `out T.borrow` call) hold
             # a borrow into someone else's heap data; freeing or zeroing
@@ -5320,7 +5337,7 @@ class CEmitter:
         dp = cast(zast.DottedPath, call.callable)
         if dp.child.name not in ("create", "take"):
             return False
-        parent_type = dp.parent.type
+        parent_type = self._node_ztype(dp.parent)
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
 
     def _is_protocol_borrow(self, call: zast.Call) -> bool:
@@ -5330,13 +5347,13 @@ class CEmitter:
         dp = cast(zast.DottedPath, call.callable)
         if dp.child.name != "borrow":
             return False
-        parent_type = dp.parent.type
+        parent_type = self._node_ztype(dp.parent)
         return parent_type is not None and parent_type.typetype == ZTypeType.PROTOCOL
 
     def _emit_protocol_create_call(self, call: zast.Call) -> str:
         """Emit owned protocol create: protocol.create from: expr."""
         assert call.callable.nodetype == NodeType.DOTTEDPATH
-        proto_type = cast(zast.DottedPath, call.callable).parent.type
+        proto_type = self._node_ztype(cast(zast.DottedPath, call.callable).parent)
         assert proto_type is not None
         proto_name = proto_type.name
 
@@ -5352,11 +5369,13 @@ class CEmitter:
         arg_val = self._emit_operation_value(from_arg.valtype)
 
         # get impl type name from the argument's resolved type
-        arg_type = from_arg.valtype.type
+        arg_type = self._node_ztype(from_arg.valtype)
         if not arg_type:
             # try parent for dotted paths like f.take
             if from_arg.valtype.nodetype == NodeType.DOTTEDPATH:
-                arg_type = cast(zast.DottedPath, from_arg.valtype).parent.type
+                arg_type = self._node_ztype(
+                    cast(zast.DottedPath, from_arg.valtype).parent
+                )
         impl_name = arg_type.name if arg_type else ""
 
         # look up label
@@ -5393,7 +5412,7 @@ class CEmitter:
     def _emit_protocol_borrow_call(self, call: zast.Call) -> str:
         """Emit borrowed protocol create: protocol.borrow from: expr."""
         assert call.callable.nodetype == NodeType.DOTTEDPATH
-        proto_type = cast(zast.DottedPath, call.callable).parent.type
+        proto_type = self._node_ztype(cast(zast.DottedPath, call.callable).parent)
         assert proto_type is not None
         proto_name = proto_type.name
 
@@ -5409,10 +5428,12 @@ class CEmitter:
         arg_val = self._emit_operation_value(from_arg.valtype)
 
         # get impl type name from the argument's resolved type
-        arg_type = from_arg.valtype.type
+        arg_type = self._node_ztype(from_arg.valtype)
         if not arg_type:
             if from_arg.valtype.nodetype == NodeType.DOTTEDPATH:
-                arg_type = cast(zast.DottedPath, from_arg.valtype).parent.type
+                arg_type = self._node_ztype(
+                    cast(zast.DottedPath, from_arg.valtype).parent
+                )
         impl_name = arg_type.name if arg_type else ""
 
         # look up label
@@ -5449,7 +5470,7 @@ class CEmitter:
         dp = cast(zast.DottedPath, call.callable)
         if dp.child.name not in ("create", "take"):
             return False
-        parent_type = dp.parent.type
+        parent_type = self._node_ztype(dp.parent)
         return parent_type is not None and parent_type.typetype == ZTypeType.FACET
 
     def _is_facet_borrow(self, call: zast.Call) -> bool:
@@ -5459,13 +5480,13 @@ class CEmitter:
         dp = cast(zast.DottedPath, call.callable)
         if dp.child.name != "borrow":
             return False
-        parent_type = dp.parent.type
+        parent_type = self._node_ztype(dp.parent)
         return parent_type is not None and parent_type.typetype == ZTypeType.FACET
 
     def _emit_facet_create_call(self, call: zast.Call) -> str:
         """Emit facet.create/take from: expr — returns a value (not pointer)."""
         assert call.callable.nodetype == NodeType.DOTTEDPATH
-        facet_type = cast(zast.DottedPath, call.callable).parent.type
+        facet_type = self._node_ztype(cast(zast.DottedPath, call.callable).parent)
         assert facet_type is not None
         facet_name = facet_type.name
 
@@ -5477,10 +5498,12 @@ class CEmitter:
         assert from_arg is not None
 
         arg_val = self._emit_operation_value(from_arg.valtype)
-        arg_type = from_arg.valtype.type
+        arg_type = self._node_ztype(from_arg.valtype)
         if not arg_type:
             if from_arg.valtype.nodetype == NodeType.DOTTEDPATH:
-                arg_type = cast(zast.DottedPath, from_arg.valtype).parent.type
+                arg_type = self._node_ztype(
+                    cast(zast.DottedPath, from_arg.valtype).parent
+                )
         impl_name = arg_type.name if arg_type else ""
 
         label = self._proto_conformance.get((impl_name, facet_name), "")
@@ -5496,7 +5519,7 @@ class CEmitter:
         if call.callable.nodetype != NodeType.DOTTEDPATH:
             return None
         dp = cast(zast.DottedPath, call.callable)
-        parent_type = dp.parent.type
+        parent_type = self._node_ztype(dp.parent)
         if not parent_type or parent_type.typetype != ZTypeType.FACET:
             return None
         parent_val = self._emit_path_value(dp.parent)
@@ -5511,7 +5534,7 @@ class CEmitter:
         if call.callable.nodetype != NodeType.DOTTEDPATH:
             return None
         dp = cast(zast.DottedPath, call.callable)
-        parent_type = dp.parent.type
+        parent_type = self._node_ztype(dp.parent)
         if not parent_type or parent_type.typetype != ZTypeType.PROTOCOL:
             return None
         parent_val = self._emit_path_value(dp.parent)
@@ -5662,8 +5685,8 @@ class CEmitter:
 
         # check call_kind first, then fallback to callable type's control_kind
         _ck = _call_kind
-        if _ck == zast.CallKind.UNKNOWN and call.callable.type:
-            _ctrl = call.callable.type.control_kind
+        if _ck == zast.CallKind.UNKNOWN and self._node_ztype(call.callable):
+            _ctrl = cast(ZType, self._node_ztype(call.callable)).control_kind
             if _ctrl == ControlKind.RETURN:
                 _ck = zast.CallKind.RETURN
             elif _ctrl == ControlKind.BREAK:
@@ -5698,7 +5721,9 @@ class CEmitter:
 
         # array method calls as statements
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_array_type(dp_parent_type):
                 val = self._emit_call_value(call)
                 return f"{indent}{val};\n"
@@ -5730,7 +5755,7 @@ class CEmitter:
         # string class mutating methods: .append, .reserve, .shrink
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             dp_parent = cast(zast.DottedPath, call.callable).parent
-            dp_parent_type = dp_parent.type
+            dp_parent_type = self._node_ztype(dp_parent)
             if dp_parent_type and dp_parent_type.subtype == ZSubType.STRING:
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(dp_parent)
@@ -5769,7 +5794,7 @@ class CEmitter:
                 code += self._emit_take_invalidation(take_var, arg_t, indent)
 
         # implicit take: invalidate args passed to .take parameters
-        ftype = call.callable.type
+        ftype = self._node_ztype(call.callable)
         emitted_vals = self._last_emitted_arg_vals
         if ftype and ftype.param_ownership:
             params = list(ftype.children.items())
@@ -5843,8 +5868,8 @@ class CEmitter:
                 val = tmp
             elif (
                 first_arg.nodetype == NodeType.ATOMID
-                and first_arg.type
-                and first_arg.type.typetype == ZTypeType.CLASS
+                and self._node_ztype(first_arg)
+                and cast(ZType, self._node_ztype(first_arg)).typetype == ZTypeType.CLASS
                 and len(call.arguments) > 1
             ):
                 # emit as create call
@@ -5852,7 +5877,7 @@ class CEmitter:
                 fa_name = cast(zast.AtomId, first_arg).name
                 # use _build_create_args to respect user-defined create param order
                 args_str, take_vars = self._build_create_args(
-                    fa_name, first_arg.type, call.arguments, skip_first=1
+                    fa_name, self._node_ztype(first_arg), call.arguments, skip_first=1
                 )
                 result_expr = f"z_{fa_name}_create({args_str})"
                 ctype = f"z_{fa_name}_t"
@@ -5868,15 +5893,16 @@ class CEmitter:
                 val = tmp
             elif (
                 first_arg.nodetype == NodeType.ATOMID
-                and first_arg.type
-                and first_arg.type.typetype == ZTypeType.RECORD
+                and self._node_ztype(first_arg)
+                and cast(ZType, self._node_ztype(first_arg)).typetype
+                == ZTypeType.RECORD
                 and len(call.arguments) > 1
             ):
                 # emit as `z_<type>_create(args)` using the order of the
                 # type's children["create"] parameters (which is either
                 # user-defined or the default meta-create wrapper).
                 fa_name = cast(zast.AtomId, first_arg).name
-                rec_t = first_arg.type
+                rec_t = self._node_ztype(first_arg)
                 args_str, take_vars = self._build_create_args(
                     fa_name, rec_t, call.arguments, skip_first=1
                 )
@@ -6060,14 +6086,14 @@ class CEmitter:
         """
         if call.callable.nodetype != NodeType.DOTTEDPATH:
             return args
-        ftype = cast(zast.DottedPath, call.callable).type
+        ftype = self._node_ztype(call.callable)
         if not (ftype and ftype.typetype == ZTypeType.FUNCTION):
             return args
         if "this" not in ftype.children:
             return args
         parent_path = cast(zast.DottedPath, call.callable).parent
         receiver = self._emit_path_value(parent_path)
-        parent_type = parent_path.type
+        parent_type = self._node_ztype(parent_path)
         if (
             parent_type
             and not parent_type.is_heap_allocated
@@ -6083,7 +6109,7 @@ class CEmitter:
 
         # determine which arg names are generic type args (to skip in emission)
         generic_param_names: set = set()
-        ftype = call.callable.type
+        ftype = self._node_ztype(call.callable)
         if (
             ftype is not None
             and ftype.generic_origin is not None
@@ -6170,7 +6196,7 @@ class CEmitter:
             ctype_idx += 1
 
         # fill defaults for missing trailing params
-        ftype = call.callable.type
+        ftype = self._node_ztype(call.callable)
         if ftype and ftype.param_defaults:
             params = list(ftype.children.items())
             for i in range(len(call.arguments), len(params)):
@@ -6369,7 +6395,7 @@ class CEmitter:
             ):
                 atom = cast(zast.AtomId, inner)
                 typed_atom = self._typed_atomid_for(atom)
-                ftype = typed_atom.ztype if typed_atom else atom.type
+                ftype = typed_atom.ztype if typed_atom else self._node_ztype(atom)
                 if ftype and ftype.param_defaults:
                     # only emit bare call when ALL params have defaults
                     real_params = list(ftype.children.items())
@@ -6388,13 +6414,13 @@ class CEmitter:
             return self._emit_operation_value(cast(zast.Operation, inner))
         if inner.nodetype == zast.NodeType.WITH:
             return self._emit_expression_value(cast(zast.With, inner).doexpr)
-        if inner.nodetype == zast.NodeType.DO and inner.type:
+        if inner.nodetype == zast.NodeType.DO and self._node_ztype(inner):
             return self._emit_do_expression_value(cast(zast.Do, inner))
         if inner.nodetype == zast.NodeType.IF:
             return self._emit_if_expression_value(cast(zast.If, inner))
-        if inner.nodetype == zast.NodeType.FOR and inner.type:
+        if inner.nodetype == zast.NodeType.FOR and self._node_ztype(inner):
             return self._emit_for_expression_value(cast(zast.For, inner))
-        if inner.nodetype == zast.NodeType.CASE and inner.type:
+        if inner.nodetype == zast.NodeType.CASE and self._node_ztype(inner):
             return self._emit_case_expression_value(cast(zast.Case, inner))
         return "0"
 
@@ -6402,7 +6428,7 @@ class CEmitter:
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
         _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
-        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
         # callable object dispatch: obj(args) -> z_type_call(obj, args)
         if _call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
@@ -6480,12 +6506,16 @@ class CEmitter:
             return "0"
 
         # array construction: zero-initialized, no field args
-        if call.callable.type and _is_array_type(call.callable.type):
-            return f"z_{call.callable.type.name}_create()"
+        if self._node_ztype(call.callable) and _is_array_type(
+            self._node_ztype(call.callable)
+        ):
+            return f"z_{cast(ZType, self._node_ztype(call.callable)).name}_create()"
 
         # stringview method calls: .string, .length
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_stringview_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6508,7 +6538,7 @@ class CEmitter:
         # string and str method calls: .stringview (both), .length / .capacity (string)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, call.callable)
-            dp_parent_type = dp.parent.type
+            dp_parent_type = self._node_ztype(dp.parent)
             is_string = dp_parent_type is not None and (
                 dp_parent_type.subtype == ZSubType.STRING
             )
@@ -6551,7 +6581,10 @@ class CEmitter:
                     return self._alloc_temp(f"z_String_copy({arg})")
 
         # string construction: string or string capacity: N
-        if call.callable.type and call.callable.type.subtype == ZSubType.STRING:
+        if (
+            self._node_ztype(call.callable)
+            and cast(ZType, self._node_ztype(call.callable)).subtype == ZSubType.STRING
+        ):
             self.needs_string = True
             self.needs_stdlib = True
             cap = "0"
@@ -6562,13 +6595,17 @@ class CEmitter:
             return self._alloc_temp(f"z_String_create((uint64_t){cap})")
 
         # str construction: (str to: N) — always empty
-        if call.callable.type and _is_str_type(call.callable.type):
-            str_name = _mono_name(call.callable.type)
+        if self._node_ztype(call.callable) and _is_str_type(
+            self._node_ztype(call.callable)
+        ):
+            str_name = _mono_name(self._node_ztype(call.callable))
             return f"z_{str_name}_create()"
 
         # list construction: (list of: T) or (list of: T) capacity: N
-        if call.callable.type and _is_list_type(call.callable.type):
-            list_name = _mono_name(call.callable.type)
+        if self._node_ztype(call.callable) and _is_list_type(
+            self._node_ztype(call.callable)
+        ):
+            list_name = _mono_name(self._node_ztype(call.callable))
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":
@@ -6580,8 +6617,10 @@ class CEmitter:
             return f"z_{list_name}_create(0)"
 
         # map construction: (map key: K value: V) or with capacity:
-        if call.callable.type and _is_map_type(call.callable.type):
-            map_name = _mono_name(call.callable.type)
+        if self._node_ztype(call.callable) and _is_map_type(
+            self._node_ztype(call.callable)
+        ):
+            map_name = _mono_name(self._node_ztype(call.callable))
             cap_arg = None
             for arg in call.arguments:
                 if arg.name == "capacity":
@@ -6594,7 +6633,9 @@ class CEmitter:
 
         # array method calls: .get and .set
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_array_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6611,7 +6652,9 @@ class CEmitter:
 
         # str method calls: .string
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_str_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6624,7 +6667,9 @@ class CEmitter:
 
         # stringview method calls: .string
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_stringview_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6639,7 +6684,7 @@ class CEmitter:
         # .str conversion method on string, str, and stringview types
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, call.callable)
-            dp_parent_type = dp.parent.type
+            dp_parent_type = self._node_ztype(dp.parent)
             method_name = dp.child.name
             if (
                 method_name == "str"
@@ -6759,7 +6804,9 @@ class CEmitter:
 
         # list method calls: .append, .insert, .extend, .get, .set, .pop
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_list_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6839,7 +6886,9 @@ class CEmitter:
 
         # listview method calls: .get
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_listview_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6857,7 +6906,9 @@ class CEmitter:
 
         # map method calls: .set, .get, .delete, .has
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_parent_type = cast(zast.DottedPath, call.callable).parent.type
+            dp_parent_type = self._node_ztype(
+                cast(zast.DottedPath, call.callable).parent
+            )
             if dp_parent_type and _is_map_type(dp_parent_type):
                 method_name = cast(zast.DottedPath, call.callable).child.name
                 parent_val = self._emit_path_value(
@@ -6918,8 +6969,12 @@ class CEmitter:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{map_type_name}_has({parent_val}, {key_val})"
 
-        if call.callable.type and call.callable.type.typetype == ZTypeType.RECORD:
-            rec_type = call.callable.type
+        if (
+            self._node_ztype(call.callable)
+            and cast(ZType, self._node_ztype(call.callable)).typetype
+            == ZTypeType.RECORD
+        ):
+            rec_type = cast(ZType, self._node_ztype(call.callable))
             args_str, take_vars = self._build_create_args(
                 rec_type.name, rec_type, call.arguments
             )
@@ -6945,8 +7000,11 @@ class CEmitter:
         if self._is_variant_construction(call):
             return self._emit_variant_construction(call)
 
-        if call.callable.type and call.callable.type.typetype == ZTypeType.CLASS:
-            cls_type = call.callable.type
+        if (
+            self._node_ztype(call.callable)
+            and cast(ZType, self._node_ztype(call.callable)).typetype == ZTypeType.CLASS
+        ):
+            cls_type = cast(ZType, self._node_ztype(call.callable))
             ctype = f"z_{cls_type.name}_t"
             self.needs_stdlib = True
             args_str, take_vars = self._build_create_args(
@@ -6981,7 +7039,7 @@ class CEmitter:
             if _call_ztype.subtype == ZSubType.STRING:
                 # A callee declared `out string.borrow` returns a borrowed
                 # view — caller does NOT own it and must not free it.
-                ftype = call.callable.type
+                ftype = self._node_ztype(call.callable)
                 if ftype and ftype.return_ownership == ZParamOwnership.BORROW:
                     tmp = self._temp_name("t")
                     self._temp.decls.append(f"{indent}z_String_t {tmp} = {result};\n")
@@ -7075,34 +7133,34 @@ class CEmitter:
         # auto-deref boxed valtypes in binary operations
         if (
             binop.lhs.nodetype == NodeType.ATOMID
-            and binop.lhs.type
-            and binop.lhs.type.is_box
+            and self._node_ztype(binop.lhs)
+            and cast(ZType, self._node_ztype(binop.lhs)).is_box
         ):
             lhs = f"(*{lhs})"
         if (
             binop.rhs.nodetype == NodeType.ATOMID
-            and binop.rhs.type
-            and binop.rhs.type.is_box
+            and self._node_ztype(binop.rhs)
+            and cast(ZType, self._node_ztype(binop.rhs)).is_box
         ):
             rhs = f"(*{rhs})"
         op = binop.operator.name
         # route == and != through z_{name}_eq() for autogen equality types
-        if op in ("==", "!=") and binop.lhs.type:
-            eq_method = binop.lhs.type.children.get("==")
+        if op in ("==", "!=") and self._node_ztype(binop.lhs):
+            eq_method = cast(ZType, self._node_ztype(binop.lhs)).children.get("==")
             if eq_method and eq_method.is_autogen_eq:
-                tname = binop.lhs.type.name.replace(".", "_")
+                tname = cast(ZType, self._node_ztype(binop.lhs)).name.replace(".", "_")
                 call = f"z_{tname}_eq({lhs}, {rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
             # string content comparison (native == on string class)
-            if binop.lhs.type.subtype == ZSubType.STRING:
+            if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRING:
                 call = f"z_String_eq(&{lhs}, &{rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
             # stringview content comparison
-            if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
+            if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRINGVIEW:
                 self.needs_stringview = True
                 call = f"z_StringView_eq({lhs}, {rhs})"
                 if op == "!=":
@@ -7111,12 +7169,12 @@ class CEmitter:
         # Ordering comparisons on string / stringview: route through the
         # shared cmp primitive. `z_{type}_cmp` returns -1 / 0 / 1 so the
         # four operators map to plain C comparisons against zero.
-        if op in ("<", "<=", ">", ">=") and binop.lhs.type:
-            if binop.lhs.type.subtype == ZSubType.STRING:
+        if op in ("<", "<=", ">", ">=") and self._node_ztype(binop.lhs):
+            if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRING:
                 self.needs_stdint = True
                 cop = C_OPS.get(op, op)
                 return f"(z_String_cmp(&{lhs}, &{rhs}) {cop} 0)"
-            if binop.lhs.type.subtype == ZSubType.STRINGVIEW:
+            if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRINGVIEW:
                 self.needs_stdint = True
                 self.needs_stringview = True
                 cop = C_OPS.get(op, op)
@@ -7218,7 +7276,7 @@ class CEmitter:
         narrowed_subtype = typed.narrowed_subtype if typed else None
         original_ztype = typed.original_ztype if typed else None
         child_id = typed.child_id if typed else -1
-        atom_ztype = typed.ztype if typed else atom.type
+        atom_ztype = typed.ztype if typed else self._node_ztype(atom)
         # binding alias: substitute the source expression at the reference site
         # (set by alias-optimized `with`, inline .take/.borrow bindings, and
         # match-arm narrowed subjects). Chain lookups so a hoisted-arg synth
@@ -7345,7 +7403,7 @@ class CEmitter:
         # synthesized by the emitter or a test program built without
         # the full typecheck).
         _typed_path = self._typed_dotted_path_for(path)
-        _pt_ztype = _typed_path.ztype if _typed_path else path.type
+        _pt_ztype = _typed_path.ztype if _typed_path else self._node_ztype(path)
         _pt_const = _typed_path.const_value if _typed_path else None
         _pt_child_id = _typed_path.child_id if _typed_path else -1
         child = path.child.name
@@ -7409,7 +7467,9 @@ class CEmitter:
                     and child_defn.nodetype == NodeType.FUNCTION
                     and child_is_native
                 ):
-                    fn_type = self._node_ztype(child_defn) or child_defn.type
+                    fn_type = self._node_ztype(child_defn) or self._node_ztype(
+                        child_defn
+                    )
                     has_runtime_params = False
                     if fn_type is not None:
                         for p in fn_type.children:
@@ -7465,7 +7525,7 @@ class CEmitter:
             return _mangle_func(f"{unit_path}.{child}")
 
         # array: numeric index access (a.0 → a.data[0])
-        parent_type_dp = path.parent.type
+        parent_type_dp = self._node_ztype(path.parent)
         if parent_type_dp and _is_array_type(parent_type_dp) and child.isdigit():
             parent = self._emit_path_value(path.parent)
             return f"{parent}.data[{child}]"
@@ -7582,7 +7642,7 @@ class CEmitter:
         #
         # Parent may be either a direct class local or a union subtype
         # selection `r.ok` whose resolved subtype is the class — in
-        # the latter case `path.parent.type` is the enclosing union,
+        # the latter case `self._node_ztype(path.parent)` is the enclosing union,
         # handled below via _effective_class_zero_arg_method.
         cls_name, method_fn = self._effective_class_zero_arg_method(path)
         if cls_name is not None and method_fn is not None:
@@ -7693,7 +7753,7 @@ class CEmitter:
                 return tmp
         # check if the dotted path resolves to a constant (from 'as' section)
         if _pt_ztype and _pt_ztype.const_value is not None:
-            parent_type_dp = path.parent.type
+            parent_type_dp = self._node_ztype(path.parent)
             if parent_type_dp:
                 const_qname = f"{parent_type_dp.name}.{child}"
                 if const_qname in self._const_names:
@@ -7709,8 +7769,12 @@ class CEmitter:
         # branch below, which would otherwise emit a function name
         # like `z_Closer_close` (no such free function exists — the
         # dispatch is vtable-based).
-        if path.parent.type and path.parent.type.typetype == ZTypeType.PROTOCOL:
-            parent_type_p = path.parent.type
+        if (
+            self._node_ztype(path.parent)
+            and cast(ZType, self._node_ztype(path.parent)).typetype
+            == ZTypeType.PROTOCOL
+        ):
+            parent_type_p = cast(ZType, self._node_ztype(path.parent))
             # Id-only child lookup — PROTOCOL parent is always stamped.
             spec = parent_type_p.resolve_child_by_id(_pt_child_id)
             if spec is not None and spec.typetype == ZTypeType.FUNCTION:
@@ -7737,8 +7801,8 @@ class CEmitter:
         if _pt_ztype and _pt_ztype.typetype == ZTypeType.FUNCTION:
             method_type = _pt_ztype
         elif (
-            path.parent.type
-            and path.parent.type.typetype
+            self._node_ztype(path.parent)
+            and cast(ZType, self._node_ztype(path.parent)).typetype
             in (ZTypeType.CLASS, ZTypeType.RECORD, ZTypeType.UNION)
             # Numeric casts (`x.u32`) lower to a C cast, not a method
             # call, even though the typechecker now coerces the dotted
@@ -7752,9 +7816,9 @@ class CEmitter:
             # method-call dispatch for them — the same reason
             # `_effective_class_zero_arg_method` returns None for
             # `is_native` classes.
-            and not path.parent.type.is_native
+            and not cast(ZType, self._node_ztype(path.parent)).is_native
         ):
-            cand = path.parent.type.children.get(child)
+            cand = cast(ZType, self._node_ztype(path.parent)).children.get(child)
             if (
                 cand is not None
                 and cand.typetype == ZTypeType.FUNCTION
@@ -7772,7 +7836,7 @@ class CEmitter:
             # regular methods (from 'as' section) → method call
             parent = self._emit_path_value(path.parent)
             # stack-allocated class: wrap with & for this pointer
-            parent_type_m = path.parent.type
+            parent_type_m = self._node_ztype(path.parent)
             if (
                 parent_type_m
                 and not parent_type_m.is_heap_allocated
@@ -7790,7 +7854,7 @@ class CEmitter:
         # reader.lock` on a class) — those need a plain struct-field
         # access which falls through to the general path below.
         if _pt_ztype and _pt_ztype.typetype == ZTypeType.PROTOCOL:
-            parent_type = path.parent.type
+            parent_type = self._node_ztype(path.parent)
             if (
                 parent_type
                 and parent_type.typetype in (ZTypeType.RECORD, ZTypeType.CLASS)
@@ -7818,7 +7882,7 @@ class CEmitter:
 
         # runtime numeric cast: x.u32 where x is a numeric variable
         if child in NUMERIC_CAST_TYPES:
-            parent_type = path.parent.type
+            parent_type = self._node_ztype(path.parent)
             if parent_type and parent_type.name in TYPEMAP:
                 parent_val = self._emit_path_value(path.parent)
                 return self._emit_numeric_cast(parent_val, parent_type.name, child)
@@ -7834,7 +7898,7 @@ class CEmitter:
         if self._is_class_pointer_path(path.parent):
             return f"{parent}->{child}"
         # variant payload access: v.subname → v.data.subname
-        parent_type = path.parent.type
+        parent_type = self._node_ztype(path.parent)
         if parent_type and parent_type.typetype == ZTypeType.VARIANT:
             # Id-only lookup — typecheck stamps child_id on every DottedPath
             # with a known parent_type, so we should never see -1 here.
@@ -7861,14 +7925,14 @@ class CEmitter:
         """True if `path` resolves (semantically) to an io.file value.
 
         A file can appear in two AST shapes:
-          * Direct path (local of class type) — `path.type` is the
+          * Direct path (local of class type) — `self._node_ztype(path)` is the
             file class.
-          * Union subtype selection — `path.type` is the enclosing
+          * Union subtype selection — `self._node_ztype(path)` is the enclosing
             union (per the typechecker's parent_tagged_type rule); the
             selected child is the real file. E.g. `r.ok` where
             `r: result(file, ioerror)`.
         """
-        pt = path.type
+        pt = self._node_ztype(path)
         if pt and pt.typetype == ZTypeType.CLASS and pt.name == "File":
             return True
         if (
@@ -7891,7 +7955,7 @@ class CEmitter:
 
         If `class_name` is given, only return a match for that class.
         """
-        pt = path.type
+        pt = self._node_ztype(path)
         if pt and pt.typetype == ZTypeType.CLASS:
             if class_name is None or pt.name == class_name:
                 return pt
@@ -7971,7 +8035,7 @@ class CEmitter:
         Stack-allocated class locals use '.' — only 'this' in methods uses '->'.
         """
         # type annotation from type checker — only heap-allocated types are pointers
-        parent_type = path.type
+        parent_type = self._node_ztype(path)
         # heap-allocated types (string, box) are always pointers
         if parent_type and parent_type.is_heap_allocated:
             return True
@@ -7983,7 +8047,7 @@ class CEmitter:
             and not parent_type.is_heap_allocated
         ):
             dp = cast(zast.DottedPath, path)
-            grandparent_type = dp.parent.type
+            grandparent_type = self._node_ztype(dp.parent)
             if grandparent_type and grandparent_type.lock_field_names:
                 if dp.child.name in grandparent_type.lock_field_names:
                     return True
@@ -8153,7 +8217,7 @@ class CEmitter:
             these is BORROW and the caller retains ownership.
         """
         emitted_vals = self._last_emitted_arg_vals
-        ftype = call.callable.type
+        ftype = self._node_ztype(call.callable)
         for i, arg in enumerate(call.arguments):
             if i >= len(emitted_vals) or not emitted_vals[i]:
                 continue
@@ -8180,7 +8244,7 @@ class CEmitter:
         if inner.nodetype != NodeType.CALL:
             return False
         call = cast(zast.Call, inner)
-        ftype = call.callable.type
+        ftype = self._node_ztype(call.callable)
         return bool(ftype and ftype.return_ownership == ZParamOwnership.BORROW)
 
     def _call_has_string_arg(self, call: zast.Call) -> bool:
@@ -8229,7 +8293,7 @@ class CEmitter:
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
         _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
-        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
         # a regular function call that happens to return a union is NOT a
         # union construction; defer to the standard call emission path.
         if _call_kind == zast.CallKind.REGULAR:
@@ -8265,7 +8329,7 @@ class CEmitter:
         """Emit C code for union construction."""
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
         call_type = _call_ztype
 
         # nullable-ptr option: .some val → val, .none → NULL
@@ -8447,7 +8511,7 @@ class CEmitter:
         """Emit box from: val for valtype — malloc + copy."""
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
         self.needs_stdlib = True
         indent = self._indent()
         call_type = _call_ztype
@@ -8521,7 +8585,7 @@ class CEmitter:
         """Get the C type for a union subtype path."""
         if not subtype_path:
             return None
-        ct = _ctype(subtype_path.type)
+        ct = _ctype(self._node_ztype(subtype_path))
         return ct if ct != "void" else None
 
     def _emit_union_null_construction(self, union_name: str, subtype_name: str) -> str:
@@ -8543,7 +8607,7 @@ class CEmitter:
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
         _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
-        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
         # A regular function call whose return type happens to be a
         # variant is NOT a construction — defer to the standard call
         # emission path (same guard as _is_union_construction).
@@ -8580,7 +8644,7 @@ class CEmitter:
         """Emit C code for variant construction (stack-allocated, no malloc)."""
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
         indent = self._indent()
         tmp = self._temp_name("c")
 
@@ -8778,16 +8842,16 @@ class CEmitter:
         )
 
     def _get_expression_type(self, expr: zast.Expression) -> Optional[ZType]:
-        if expr.type:
-            return expr.type
+        if self._node_ztype(expr):
+            return self._node_ztype(expr)
         inner = expr.expression
-        if inner.type:
-            return inner.type
+        if self._node_ztype(inner):
+            return self._node_ztype(inner)
         return None
 
     def _get_operation_type(self, op: zast.Operation) -> Optional[ZType]:
-        if op.type:
-            return op.type
+        if self._node_ztype(op):
+            return self._node_ztype(op)
         # look inside Expression wrapper
         if op.nodetype == NodeType.EXPRESSION:
             return self._get_expression_type(cast(zast.Expression, op))
@@ -8970,8 +9034,8 @@ class CEmitter:
     def _emit_if_expression_value(self, ifnode: zast.If) -> str:
         """Emit if-as-expression using temp variable pattern."""
         ctype = "int64_t"
-        if ifnode.type:
-            ctype = _ctype(ifnode.type)
+        if self._node_ztype(ifnode):
+            ctype = _ctype(self._node_ztype(ifnode))
 
         tmp = self._temp_name("if")
         indent = self._indent()
@@ -9042,7 +9106,10 @@ class CEmitter:
         self._temp.decls.append("".join(parts))
 
         # track reftype ownership
-        if ifnode.type and ifnode.type.needs_destructor:
+        if (
+            self._node_ztype(ifnode)
+            and cast(ZType, self._node_ztype(ifnode)).needs_destructor
+        ):
             self._temp.frees.append(tmp)
             if ctype == "z_String_t":
                 self._temp.string_set.add(tmp)
@@ -9132,7 +9199,7 @@ class CEmitter:
                             if arg.name == "from" or arg.name is None:
                                 from_val = self._emit_operation_value(arg.valtype)
                     if each_path:
-                        parent_type = each_path.parent.type
+                        parent_type = self._node_ztype(each_path.parent)
                         if parent_type and parent_type.name in {
                             "i8",
                             "i16",
@@ -9427,7 +9494,7 @@ class CEmitter:
 
     def _emit_for_expression_value(self, fornode: zast.For) -> str:
         """Emit for-as-expression (list comprehension): returns a list."""
-        list_type = fornode.type
+        list_type = self._node_ztype(fornode)
         assert list_type is not None
         list_ctype = _ctype(list_type)
         list_name = list_type.name
@@ -9465,7 +9532,7 @@ class CEmitter:
         # Step 4f: Do decoration reads via typed mirror.
         typed_do = self._typed_do_for(donode)
         _do_has_break = typed_do.has_break if typed_do else False
-        _do_ztype = typed_do.ztype if typed_do else donode.type
+        _do_ztype = typed_do.ztype if typed_do else self._node_ztype(donode)
         ctype = _ctype(_do_ztype)
         tmp = self._temp_name("do")
         indent = self._indent()
@@ -9567,7 +9634,7 @@ class CEmitter:
             if take_var:
                 parts.append(
                     self._emit_take_invalidation(
-                        take_var, withnode.value.type, inner_indent
+                        take_var, self._node_ztype(withnode.value), inner_indent
                     )
                 )
 
@@ -9908,8 +9975,8 @@ class CEmitter:
     def _emit_case_expression_value(self, casenode: zast.Case) -> str:
         """Emit match-as-expression using temp variable pattern."""
         ctype = "int64_t"
-        if casenode.type:
-            ctype = _ctype(casenode.type)
+        if self._node_ztype(casenode):
+            ctype = _ctype(self._node_ztype(casenode))
 
         tmp = self._temp_name("match")
         indent = self._indent()
@@ -9929,7 +9996,10 @@ class CEmitter:
         self._temp.decls.append(code)
 
         # track reftype ownership
-        if casenode.type and casenode.type.needs_destructor:
+        if (
+            self._node_ztype(casenode)
+            and cast(ZType, self._node_ztype(casenode)).needs_destructor
+        ):
             self._temp.frees.append(tmp)
             if ctype == "z_String_t":
                 self._temp.string_set.add(tmp)

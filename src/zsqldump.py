@@ -48,14 +48,17 @@ def _node_ztype(
 ) -> Optional[ZType]:
     """Read `ztype` from the typed mirror of `node`, descending into
     `Expression.expression` (the wrapper has no typed mirror per
-    ztypedast.py design). Falls back to parsed `node.type` when no
+    ztypedast.py design). After Step 6.9.b stripped `Node.type`,
+    falls back to the TypedProgram's `node_types` side-table when no
     typed mirror exists for the inner subtype."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
     typed = _typed_for(typed_program, target)
     if typed is None or typed.parsed.nodetype not in _OP_NODETYPES:
-        return node.type
+        if typed_program is None:
+            return None
+        return typed_program.node_types.get(node.nodeid)
     return cast(ztypedast.TypedExpression, typed).ztype
 
 

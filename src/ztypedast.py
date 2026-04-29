@@ -408,6 +408,18 @@ class TypedProgram:
     cloned_methods: Dict[str, Dict[str, TypedFunction]] = field(default_factory=dict)
     # Unit AST nodeid → resolved unit ZType.
     unit_types_by_id: Dict[int, ZType] = field(default_factory=dict)
+    # Parsed nodeid → resolved ZType. Populated for every node the
+    # typechecker resolves a type for (atoms, paths, calls, binops,
+    # statements, control flow, function params / returntypes / field
+    # paths, etc.). Used by emitter / SQL-dump as the fallback for
+    # `_node_ztype` / `_path_ztype` after Step 6.9.b stripped
+    # `zast.Node.type`. The typed-mirror tree remains the primary
+    # source of truth for value-yielding expressions; this dict
+    # covers nodes whose typed mirror isn't independently registered
+    # (e.g. typeref Path nodes inside Function parameters / field
+    # types are reachable through TypedFunction / TypedObjectDef but
+    # the emitter often holds the parsed Path directly).
+    node_types: Dict[int, Optional[ZType]] = field(default_factory=dict)
     symbol_table: Optional[SymbolTableProto] = None
 
 

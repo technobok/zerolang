@@ -26,6 +26,13 @@ def parse_and_check(source: str, unitname: str = "test"):
     return program
 
 
+def _node_types(program):
+    """Helper: pull the per-Node resolved-type side-table from the
+    typed program. After Step 6.9.b `hash_function` takes this dict
+    rather than reading `Node.type` directly."""
+    return program.typed_program.node_types
+
+
 class TestAstHash:
     def test_identical_bodies_same_hash(self):
         """Two functions with identical bodies and types produce the same hash."""
@@ -39,8 +46,8 @@ class TestAstHash:
         f2 = unit.body["f2"]
         assert isinstance(f1, zast.Function)
         assert isinstance(f2, zast.Function)
-        h1 = zasthash.hash_function(f1)
-        h2 = zasthash.hash_function(f2)
+        h1 = zasthash.hash_function(f1, _node_types(program))
+        h2 = zasthash.hash_function(f2, _node_types(program))
         assert h1 == h2
 
     def test_different_bodies_different_hash(self):
@@ -53,8 +60,8 @@ class TestAstHash:
         unit = program.units["test"]
         f1 = unit.body["f1"]
         f2 = unit.body["f2"]
-        h1 = zasthash.hash_function(f1)
-        h2 = zasthash.hash_function(f2)
+        h1 = zasthash.hash_function(f1, _node_types(program))
+        h2 = zasthash.hash_function(f2, _node_types(program))
         assert h1 != h2
 
     def test_function_name_excluded(self):
@@ -65,8 +72,8 @@ class TestAstHash:
             "main: function is { alpha 1\n beta 1 }"
         )
         unit = program.units["test"]
-        h1 = zasthash.hash_function(unit.body["alpha"])
-        h2 = zasthash.hash_function(unit.body["beta"])
+        h1 = zasthash.hash_function(unit.body["alpha"], _node_types(program))
+        h2 = zasthash.hash_function(unit.body["beta"], _node_types(program))
         assert h1 == h2
 
     def test_different_param_types_different_hash(self):
@@ -77,8 +84,8 @@ class TestAstHash:
             "main: function is { f1 1\n f2 1i32 }"
         )
         unit = program.units["test"]
-        h1 = zasthash.hash_function(unit.body["f1"])
-        h2 = zasthash.hash_function(unit.body["f2"])
+        h1 = zasthash.hash_function(unit.body["f1"], _node_types(program))
+        h2 = zasthash.hash_function(unit.body["f2"], _node_types(program))
         assert h1 != h2
 
     def test_deterministic(self):
@@ -89,8 +96,8 @@ class TestAstHash:
         )
         unit = program.units["test"]
         f = unit.body["f1"]
-        h1 = zasthash.hash_function(f)
-        h2 = zasthash.hash_function(f)
+        h1 = zasthash.hash_function(f, _node_types(program))
+        h2 = zasthash.hash_function(f, _node_types(program))
         assert h1 == h2
 
     def test_different_local_var_names_different_hash(self):
@@ -101,8 +108,8 @@ class TestAstHash:
             "main: function is { f1 1\n f2 1 }"
         )
         unit = program.units["test"]
-        h1 = zasthash.hash_function(unit.body["f1"])
-        h2 = zasthash.hash_function(unit.body["f2"])
+        h1 = zasthash.hash_function(unit.body["f1"], _node_types(program))
+        h2 = zasthash.hash_function(unit.body["f2"], _node_types(program))
         assert h1 != h2
 
     def test_different_return_type_different_hash(self):
@@ -113,6 +120,6 @@ class TestAstHash:
             "main: function is { f1 1\n f2 1 }"
         )
         unit = program.units["test"]
-        h1 = zasthash.hash_function(unit.body["f1"])
-        h2 = zasthash.hash_function(unit.body["f2"])
+        h1 = zasthash.hash_function(unit.body["f1"], _node_types(program))
+        h2 = zasthash.hash_function(unit.body["f2"], _node_types(program))
         assert h1 != h2

@@ -42,6 +42,14 @@ def _typecheck(source: str, unitname: str = "test") -> TypeChecker:
     return tc
 
 
+def _ztype_of(tc: TypeChecker, node: zast.Node):
+    """Look up a parsed node's resolved ZType via the typed-program
+    side-table snapshot. After Step 6.9.b stripped `Node.type`, this
+    is the way to read per-node resolved types from outside the
+    TypeChecker."""
+    return tc.typed_program.node_types.get(node.nodeid)
+
+
 def _walk_main(unit: zast.Unit):
     """Yield every parsed Node reachable from the main unit's body."""
     seen: set[int] = set()
@@ -84,7 +92,7 @@ class TestTypedProgramScaffold:
         assert isinstance(typed, ztypedast.TypedAtomId)
         assert typed.parsed is atom
         assert typed.name == atom.name
-        assert typed.ztype is atom.type
+        assert typed.ztype is _ztype_of(tc, atom)
         # `const_value` was stripped from parsed Node in Step 6.9.a; the
         # atom is the integer literal "42", so the typed mirror carries
         # the resolved integer value.
@@ -130,7 +138,7 @@ class TestTypedAtomStringInvariants:
         assert typed is not None
         assert isinstance(typed, ztypedast.TypedAtomString)
         assert typed.parsed is atom_str
-        assert typed.ztype is atom_str.type
+        assert typed.ztype is _ztype_of(tc, atom_str)
         # parts are inert StringChunks for a plain literal
         assert len(typed.parts) == len(atom_str.stringparts)
         for tp, sp in zip(typed.parts, atom_str.stringparts):
@@ -179,7 +187,7 @@ class TestTypedBinOpInvariants:
             typed = tc.typed_program.by_parsed_id.get(pb.nodeid)
             assert typed is not None
             assert isinstance(typed, ztypedast.TypedBinOp)
-            assert typed.ztype is pb.type
+            assert typed.ztype is _ztype_of(tc, pb)
             # `const_value` lived on parsed BinOp until Step 6.9.a;
             # afterwards it lives on TypedBinOp only. The numeric-cast
             # form `21.i64` doesn't propagate const_value to the parent
@@ -223,7 +231,7 @@ class TestTypedCallInvariants:
         assert typed is not None
         assert isinstance(typed, ztypedast.TypedCall)
         assert typed.parsed is target
-        assert typed.ztype is target.type
+        assert typed.ztype is _ztype_of(tc, target)
         # `call_kind` and `callable_type_name` used to live on
         # parsed Call; after Step 6.8 they live on TypedCall only.
         assert isinstance(typed.call_kind, zast.CallKind)
@@ -471,7 +479,7 @@ class TestTypedDottedPathInvariants:
         assert typed is not None, "TypedDottedPath should be registered"
         assert isinstance(typed, ztypedast.TypedDottedPath)
         assert typed.parsed is target
-        assert typed.ztype is target.type
+        assert typed.ztype is _ztype_of(tc, target)
         # `parent_tagged_type` / `narrowed_subtype` / `child_id` used
         # to live on parsed DottedPath; after Step 6.7 they live on
         # TypedDottedPath only.
@@ -508,7 +516,7 @@ class TestTypedDottedPathInvariants:
             assert parsed.nodeid == parsed_id
             assert parsed.nodetype == NodeType.DOTTEDPATH
             pdp = _cast(zast.DottedPath, parsed)
-            assert typed.ztype is pdp.type
+            assert typed.ztype is _ztype_of(tc, pdp)
             # `const_value` lived on parsed DottedPath until Step 6.9.a;
             # afterwards it lives on TypedDottedPath only.
             # `parent_tagged_type` / `narrowed_subtype` / `child_id`
@@ -544,7 +552,7 @@ class TestTypedAtomIdInvariants:
             assert parsed.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
             patom = _cast(zast.AtomId, parsed)
             assert typed.name == patom.name
-            assert typed.ztype is patom.type
+            assert typed.ztype is _ztype_of(tc, patom)
             # `const_value` lived on parsed AtomId until Step 6.9.a;
             # afterwards it lives on TypedAtomId only.
             # `narrowed_subtype` / `original_ztype` / `child_id` used

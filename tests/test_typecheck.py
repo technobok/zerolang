@@ -47,6 +47,14 @@ def check_ok(source: str, unitname: str = "test"):
     return program
 
 
+def _node_ztype(program, node):
+    """Look up a parsed node's resolved ZType via the typed-program
+    side-table. After Step 6.9.b stripped `Node.type`, the per-node
+    type lives on `program.typed_program.node_types` keyed by parsed
+    `nodeid`."""
+    return program.typed_program.node_types.get(node.nodeid)
+
+
 def check_errors(source: str, unitname: str = "test"):
     """Parse and type-check, assert errors, return error List."""
     program, errors = parse_and_check(source, unitname)
@@ -1060,11 +1068,12 @@ class TestOwnershipReturnChecking:
         # return is a Call whose arguments[1].valtype is `s.copy`
         s_copy = return_call.arguments[1].valtype
         assert s_copy.nodetype == zast.NodeType.DOTTEDPATH, s_copy.nodetype
-        assert s_copy.parent.type is not None, (
+        s_copy_parent_t = _node_ztype(program, s_copy.parent)
+        assert s_copy_parent_t is not None, (
             "s.copy parent.type unstamped — _check_return_call's "
             "field-arg visit is missing"
         )
-        assert s_copy.parent.type.subtype == ZSubType.STRING
+        assert s_copy_parent_t.subtype == ZSubType.STRING
 
     def test_store_borrowed_param_in_aggregate_field_rejected(self):
         """Storing a default-borrowed param into an owned aggregate
@@ -1381,9 +1390,9 @@ class TestReturnLockPropagation:
             if (
                 sline.nodetype == NodeType.ASSIGNMENT
                 and getattr(sline, "value", None) is not None
-                and getattr(sline.value, "type", None) is not None
+                and _node_ztype(program, sline.value) is not None
             ):
-                bindings[sline.name] = sline.value.type
+                bindings[sline.name] = _node_ztype(program, sline.value)
         assert "v1" in bindings, list(bindings.keys())
         assert "v2" in bindings, list(bindings.keys())
         assert bindings["v1"].name == "cview", bindings["v1"].name
@@ -1564,9 +1573,10 @@ class TestPhaseC3Pins:
         temp_assn = synth_assigns[0]
         # The temp's bound type is `string`, a reftype with
         # needs_destructor == True. Pin it.
-        assert temp_assn.type is not None
-        assert temp_assn.type.needs_destructor is True, (
-            f"temp type {temp_assn.type.name} should need a destructor"
+        temp_t = _node_ztype(program, temp_assn)
+        assert temp_t is not None
+        assert temp_t.needs_destructor is True, (
+            f"temp type {temp_t.name} should need a destructor"
         )
 
 
@@ -9526,8 +9536,9 @@ class TestIfExpression:
         main = program.units[program.mainunitname].body["main"]
         assign = main.body.statements[0].statementline
         assert isinstance(assign, zast.Assignment)
-        assert assign.type is not None
-        assert assign.type.name == "i64"
+        assign_t = _node_ztype(program, assign)
+        assert assign_t is not None
+        assert assign_t.name == "i64"
 
     def test_if_expression_sets_ifnode_type(self):
         """If with else should set ifnode.type to common branch type."""
@@ -9537,8 +9548,9 @@ class TestIfExpression:
         expr = assign.value
         inner = expr.expression
         assert isinstance(inner, zast.If)
-        assert inner.type is not None
-        assert inner.type.name == "i64"
+        inner_t = _node_ztype(program, inner)
+        assert inner_t is not None
+        assert inner_t.name == "i64"
 
     def test_if_expression_type_mismatch(self):
         """Incompatible branch types should produce an error."""

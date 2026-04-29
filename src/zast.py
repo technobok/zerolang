@@ -334,7 +334,13 @@ class Node:
     # definition: Optional[ZSymbol] = field(default=None, init=False)
     # type of this Node, filled in typechecking pass
     # TODO: maybe Union(None, ZType, ZTypeCheckInProgress)
-    type: Optional[ZType] = field(default=None, init=False)
+    # `type` used to live here as an `init=False` typecheck-set field.
+    # After Step 6.9.b it lives on `TypedExpression.ztype` (for typed
+    # mirrors) and on `TypeChecker._node_type` / `TypedProgram.node_types`
+    # (for parsed-node-keyed lookup, including typeref Path nodes inside
+    # parameters / returntypes / field declarations whose typed mirror
+    # is reachable through TypedFunction / TypedObjectDef but the
+    # emitter and SQL-dump often hold the parsed Path directly).
     # `const_value` used to live here as an `init=False` typecheck-set
     # field. After Step 6.9.a it lives on `TypedExpression.const_value`
     # only; the typechecker records compile-time constants via

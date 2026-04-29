@@ -108,6 +108,14 @@ def _walk_path_nodes(node, visited=None):
     return paths
 
 
+def _node_ztype(program, node):
+    """Look up a parsed node's resolved ZType via the typed-program
+    side-table. After Step 6.9.b stripped `Node.type`, the per-node
+    type lives on `program.typed_program.node_types` keyed by parsed
+    `nodeid`."""
+    return program.typed_program.node_types.get(node.nodeid)
+
+
 class TestFinding1TypeAnnotations:
     """Finding 1: type checker should annotate every Path node."""
 
@@ -121,10 +129,9 @@ class TestFinding1TypeAnnotations:
         point = mainunit.body["point"]
         assert point.nodetype == zast.NodeType.RECORD
         for fname, fpath in point.is_items.items():
-            assert fpath.type is not None, f"Field '{fname}' has no .type"
-            assert fpath.type.name in ("f64",), (
-                f"Field '{fname}' type is {fpath.type.name}"
-            )
+            ft = _node_ztype(program, fpath)
+            assert ft is not None, f"Field '{fname}' has no .type"
+            assert ft.name in ("f64",), f"Field '{fname}' type is {ft.name}"
 
     def test_function_param_types_annotated(self):
         program = parse_and_check(
@@ -137,7 +144,9 @@ class TestFinding1TypeAnnotations:
         for pname, ppath in add.parameters.items():
             if pname.startswith(":"):
                 continue
-            assert ppath.type is not None, f"Param '{pname}' has no .type"
+            assert _node_ztype(program, ppath) is not None, (
+                f"Param '{pname}' has no .type"
+            )
 
     def test_function_return_type_annotated(self):
         program = parse_and_check(
@@ -147,8 +156,9 @@ class TestFinding1TypeAnnotations:
         mainunit = program.units[program.mainunitname]
         add = mainunit.body["add"]
         assert add.returntype is not None
-        assert add.returntype.type is not None, "Return type has no .type"
-        assert add.returntype.type.name == "i64"
+        rt = _node_ztype(program, add.returntype)
+        assert rt is not None, "Return type has no .type"
+        assert rt.name == "i64"
 
     def test_class_field_types_annotated(self):
         program = parse_and_check(
@@ -159,7 +169,9 @@ class TestFinding1TypeAnnotations:
         box = mainunit.body["Box"]
         assert box.nodetype == zast.NodeType.CLASS
         for fname, fpath in box.is_items.items():
-            assert fpath.type is not None, f"Field '{fname}' has no .type"
+            assert _node_ztype(program, fpath) is not None, (
+                f"Field '{fname}' has no .type"
+            )
 
     def test_union_subtype_annotated(self):
         program = parse_and_check(
@@ -170,7 +182,9 @@ class TestFinding1TypeAnnotations:
         result = mainunit.body["Result"]
         assert result.nodetype == zast.NodeType.UNION
         for sname, spath in result.is_items.items():
-            assert spath.type is not None, f"Subtype '{sname}' has no .type"
+            assert _node_ztype(program, spath) is not None, (
+                f"Subtype '{sname}' has no .type"
+            )
 
 
 # ---- Finding 3: Destructor metadata ----
@@ -191,7 +205,7 @@ class TestFinding3DestructorMetadata:
         )
         mainunit = program2.units[program2.mainunitname]
         box = mainunit.body["Box"]
-        name_type = box.is_items["name"].type
+        name_type = _node_ztype(program2, box.is_items["name"])
         assert name_type is not None
         assert name_type.name == "String"
         assert name_type.needs_destructor is True
