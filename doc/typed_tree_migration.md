@@ -33,7 +33,7 @@ plan). This file is the running implementation log.
 | 2. Define `src/ztypedast.py` | ✅ done | `43ec658` | data-only, no callers |
 | 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | `2033378` | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
 | 3b. `TypedDottedPath` mirror | ✅ done | `2428531` | `_check_dotted_path` becomes a thin wrapper; resolution moves to `_check_dotted_path_inner`; `_build_typed_dotted_path` runs on exit and looks up parent via `_typed_path_for_parent` (Expression-unwrapping). Inline parent-ATOMID branch in the inner builds a `TypedAtomId` for the parent so the wrapper finds it. |
-| 3c. `TypedAtomString` mirror | ✅ done | _pending_ | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 3c. `TypedAtomString` mirror | ✅ done | `83e810d` | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
 | 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
