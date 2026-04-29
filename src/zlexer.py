@@ -651,4 +651,3 @@ def isvalidunitname(name: str) -> bool:
         return False
 
     return True
-

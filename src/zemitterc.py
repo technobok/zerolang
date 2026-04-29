@@ -415,6 +415,10 @@ class CEmitter:
         # static string literal deduplication
         self._string_literals: Dict[str, str] = {}  # escaped C string → static var name
         self._string_literal_counter: int = 0
+        # emitter-local scratch for For nodes used as list comprehensions:
+        # nodeid → (C temp name for result list, mangled list-type name).
+        # Entry presence signals "this For is being emitted as a comprehension".
+        self._comprehension_state: Dict[int, Tuple[str, str]] = {}
 
     @property
     def _scope(self) -> ScopeState:
@@ -9090,10 +9094,10 @@ class CEmitter:
         """Emit for-loop body, with optional list comprehension append."""
         if not fornode.loop:
             return ""
-        list_var = fornode._comprehension_list_var
-        if not list_var:
+        state = self._comprehension_state.get(fornode.nodeid)
+        if state is None:
             return self._emit_statement(fornode.loop)
-        list_name = fornode._comprehension_list_name
+        list_var, list_name = state
         parts: List[str] = []
         stmts = fornode.loop.statements
         for sl in stmts[:-1]:
@@ -9121,9 +9125,9 @@ class CEmitter:
         self._temp.frees.append(tmp)
         if list_name not in self._temp.class_set:
             self._temp.class_set[tmp] = list_name
-        fornode._comprehension_list_var = tmp
-        fornode._comprehension_list_name = list_name
+        self._comprehension_state[fornode.nodeid] = (tmp, list_name)
         self._temp.decls.append(self._emit_for(fornode))
+        del self._comprehension_state[fornode.nodeid]
         if tmp in self._temp.frees:
             self._temp.frees.remove(tmp)
         return tmp

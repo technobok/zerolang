@@ -667,12 +667,6 @@ class For(Node):
     # (re-evaluated each iteration, auto-unwrapped, terminates on none)
     iterator_bindings: typing.Set[str] = field(default_factory=set, init=False)
 
-    # set by emitter when this For is used as a list comprehension
-    # (`[for x: xs do x*2]`): the C temp the result list lives in,
-    # and the mangled C list-type name (e.g. `list__i64`).
-    _comprehension_list_var: Optional[str] = field(default=None, init=False)
-    _comprehension_list_name: Optional[str] = field(default=None, init=False)
-
 
 @dataclass
 class Do(Node):
