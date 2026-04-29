@@ -39,7 +39,8 @@ plan). This file is the running implementation log.
 | 3f. Control-flow mirrors (`TypedIf`/`TypedIfClause`, `TypedCase`/`TypedCaseClause`, `TypedFor`, `TypedDo`, `TypedWith`) | ✅ done | `011ea16` | wrapper pattern around `_check_if`, `_check_case`, `_check_for`, `_check_with`. `_check_do` is inlined in `_check_expression`; mirror call added at the end of the DO branch. IfClauses + CaseClauses are built inline and registered. CaseClause.match is a fresh TypedAtomId (the parsed AtomId is structural). |
 | 3g. Top-level mirrors (`TypedFunction`, `TypedObjectDef`, `TypedUnit`, `TypedProgram.units`) | ✅ done | `7b114d9` | `_check_function_body` wrapped to build `TypedFunction` for body-checked functions. Final post-pass `_build_typed_program_units` walks `Program.units`, constructs typed mirrors for every Unit / Function / ObjectDef using `_typed_path_from_parsed` for typeref-position paths (parameter / returntype / field types — these are resolved via `_resolve_typeref`, never through the wrapper paths). `TypedProgram.units` populated end-to-end; `resolved`, `mono_types`, `func_aliases`, `unit_types_by_id`, `symbol_table` copied across. `mono_functions` / `cloned_methods` still carry parsed Functions today (typed mirrors live in `by_parsed_id`); migration to typed-side comes with the emitter swap (Step 4). |
 | 4. Switch the emitter to consume the typed tree | ✅ done | `09f6aee`-`fad8ee9` | Threaded `TypedProgram` into `CEmitter` (4a `09f6aee`); per-family migrations of decoration reads — AtomId (4b `47d3ad2`), DottedPath (4c `50f0648`), Call/BinOp/NamedOp (4d `e315b84`), Statement-shape (4e `6ed23bf`), control-flow (4f `ecd82b3`), top-level + generic helpers (4g `fad8ee9`). All decoration reads on mirrored node families route through `_typed_*_for` helpers. Outstanding: `Expression`-wrapper `.call_kind` / `.type` (no typed mirror per design) — addressed in Step 6 / 7 alongside parsed-AST cleanup. `make test` 1962 passing throughout. |
-| 5. Switch SQL dump to consume the typed tree | ✅ done | `2c752b8`-`8c9496a` | 5a `2c752b8` routed `zsqldump.py` decoration reads through TypedProgram (`_node_ztype` / `_node_const_value` helpers, schema unchanged). 5b `8c9496a` split the schema: `ast_nodes` keeps parser-set fields only; new typecheck-set columns (`cname`, `is_const`, `const_value`) live on `typed_nodes` joined to `ast_nodes` by FK. `test_cname_in_ast_nodes_dump` re-targeted at the new table. `make test` 1962 passing. | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 5. Switch SQL dump to consume the typed tree | ✅ done | `2c752b8`-`8c9496a` | 5a `2c752b8` routed `zsqldump.py` decoration reads through TypedProgram (`_node_ztype` / `_node_const_value` helpers, schema unchanged). 5b `8c9496a` split the schema: `ast_nodes` keeps parser-set fields only; new typecheck-set columns (`cname`, `is_const`, `const_value`) live on `typed_nodes` joined to `ast_nodes` by FK. `test_cname_in_ast_nodes_dump` re-targeted at the new table. `make test` 1962 passing. |
+| 6. Remove `init=False` decorations from `zast.py` | 🟡 in progress | `03c380c`, `34ca445` | 6.1 `03c380c` stripped `NamedOperation.projected_protocol/_label/_kind`. 6.2 `34ca445` stripped `Assignment.alias_of`, `With.ownership/alias_of`. Pattern: typecheck writes a side-table on `TypeChecker` keyed by parsed `nodeid`; the `_build_typed_*` reader pulls from the table to populate the typed mirror; emitter reads typed only (parsed fallback dropped). Atomic-call hoisting calls `_build_typed_assignment` on synth Assignments inline so the emitter can find their typed mirrors. Remaining fields to strip: `Node.type`, `Node.const_value`, `Expression.call_kind`, `Atom*.narrow*` family, `DottedPath.parent_tagged_type` family, `Call.call_kind/callable_type_name`, `If/Case.taken_vars`, `Case.subject_taken`, `For.iterator_bindings`, `Do.has_break`. | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
 | 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
@@ -291,30 +292,54 @@ Outstanding for Step 6 / 7:
   Test `test_cname_in_ast_nodes_dump` renamed to
   `test_cname_in_typed_nodes_dump` and re-targeted.
 
-## Step 6 — next
+## Step 6 — in progress
 
-Strip `init=False` typecheck-set fields from `zast.py`. The candidate
-list (from prior survey):
+Pattern that landed in 6.1 (`03c380c`) and 6.2 (`34ca445`):
 
-- `Node.type`, `Node.const_value` — replaced by `TypedExpression.ztype`
-  / `.const_value`.
-- `AtomId.narrowed_subtype`, `original_ztype`, `child_id` — on
-  `TypedAtomId`.
+1. Add a side-table on `TypeChecker` keyed by parsed `nodeid` for
+   the field being stripped.
+2. Replace each `parsed_node.field = X` write in typecheck with
+   `self._side_table[parsed_node.nodeid] = X`.
+3. Have `_build_typed_*` read the side-table when populating the
+   typed mirror.
+4. Drop the emitter / SQL-dump fallback to `parsed_node.field`
+   (typed mirror is the single source of truth).
+5. Remove the field declaration from `zast.py`.
+
+Two cross-cutting fixups discovered in 6.2:
+
+- `_OPERATION_NODETYPES` had to include `DO` so `_typed_expression_for`
+  resolves bare-block `with x: y do { ... }` doexprs. IF/CASE/FOR/WITH/
+  DATA are still excluded — adding them caused emitter regressions
+  in match-arm narrowing tests. Revisit alongside their respective
+  field strips.
+- Synth Assignments produced by atomic-call argument hoisting don't
+  go through `_check_assignment`, so `_hoist_arg_to_temp` now calls
+  `_build_typed_assignment(temp_assn)` inline.
+
+Done: `NamedOperation.projected_*`, `Assignment.alias_of`,
+`With.ownership`, `With.alias_of`.
+
+Remaining (in approximate increasing-difficulty order):
+
+- `Do.has_break` — 2 writers.
+- `Case.subject_taken`, `Case.taken_vars`, `If.taken_vars` — 1-2
+  writers each per node kind.
+- `For.iterator_bindings`.
+- `AtomId.narrowed_subtype`, `original_ztype`, `child_id` — 2
+  writers (`_check_atomid` + inline parent-ATOMID branch in
+  `_check_dotted_path_inner`).
 - `DottedPath.parent_tagged_type`, `narrowed_subtype`, `child_id` —
-  on `TypedDottedPath`.
-- `Expression.call_kind` — special-case (no typed mirror); needs
-  either a `TypedExpression`-wrapper class or an inline computation
-  at the four remaining emitter read sites.
-- `Call.call_kind`, `callable_type_name` — on `TypedCall`.
-- `NamedOperation.projected_*` — on `TypedNamedOperation`.
-- `If.taken_vars`, `Case.subject_taken`, `Case.taken_vars`,
-  `For.iterator_bindings`, `Do.has_break`, `With.ownership`,
-  `With.alias_of`, `Assignment.alias_of` — on the matching typed
-  node kinds.
+  3+ writers in `_check_dotted_path_inner`.
+- `Call.call_kind`, `callable_type_name` — many writers across
+  `_check_call_inner` + `_check_expression`.
+- `Expression.call_kind` — wrapper-only; either keep on parsed (and
+  drop the goal of stripping it) or introduce a `TypedExpression`
+  wrapper class.
+- `Node.type`, `Node.const_value` — the largest set; many writers.
 
-The typecheck wrappers still write these in-place during Step 5; the
-strip in Step 6 plus a parallel removal of in-place `field.X = …`
-sets in `ztypecheck.py`. Step 7 then freezes `Node`.
+Step 7 (freeze `Node`) becomes possible only after Step 6 is fully
+complete.
 
 ### Subtle places to remember
 
