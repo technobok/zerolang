@@ -16,7 +16,7 @@ from itertools import count
 import zvfs
 from zvfs import DEntryID
 from zlexer import Token, TT
-from ztypes import ZType, ZOwnership
+from ztypes import ZType
 from zsymtab_proto import SymbolTableProto
 
 
@@ -694,13 +694,11 @@ class With(Node):
     name: str
     value: "Expression"
     doexpr: "Expression"
-    # set by the type checker: ownership of the `name` binding. BORROWED for
-    # bare-name / dotted-path / .borrow RHS (borrow-by-default); OWNED for
-    # call/constructor/.take RHS. Controls destructor emission.
-    ownership: Optional[ZOwnership] = field(default=None, init=False)
-    # set by the type checker: if non-None, emit `name` as an alias for this
-    # C-level expression (bare identifier or `r.f.g`) instead of a real local.
-    alias_of: Optional[str] = field(default=None, init=False)
+    # `ownership` and `alias_of` used to live here as `init=False`
+    # fields populated by `_check_with_inner`. After Step 6 they live
+    # only on `TypedWith`; the typechecker records them in
+    # `TypeChecker._with_ownership` / `_with_alias_of` (side-tables
+    # keyed by parsed `nodeid`) and `_build_typed_with` reads them.
 
 
 @unique
@@ -818,12 +816,11 @@ class Assignment(Node):
     nodetype: NodeType = field(default=NodeType.ASSIGNMENT, init=False)
     name: str  # also in start     # xxTypeDefinition?
     value: "Expression"  # source expression
-    # set by the type checker: if non-None, emit `name` as an alias for this
-    # C-level expression (bare identifier or `r.f.g`) instead of a real local.
-    # Only set when the source path is stable for the binding's lifetime
-    # (borrow-locked or take-invalidated) and no reftype pointer is
-    # dereferenced along the way.
-    alias_of: Optional[str] = field(default=None, init=False)
+    # `alias_of` used to live here as an `init=False` field populated
+    # by `_check_assignment_inner`. After Step 6 it lives on
+    # `TypedAssignment` only; the typechecker records it in
+    # `TypeChecker._assign_alias_of` (side-table keyed by parsed
+    # `nodeid`) and `_build_typed_assignment` reads it.
 
 
 @dataclass

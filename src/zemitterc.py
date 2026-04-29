@@ -5041,7 +5041,7 @@ class CEmitter:
         indent = self._indent()
         # Step 4e: Assignment decoration reads via typed mirror.
         typed_assign = self._typed_assignment_for(assign)
-        _alias_of = typed_assign.alias_of if typed_assign else assign.alias_of
+        _alias_of = typed_assign.alias_of if typed_assign else None
         _assign_ztype = typed_assign.value.ztype if typed_assign else assign.type
         # Phase B alias optimization: inline `x: y.take` or `x: y.borrow`
         # (or similar on a valtype dotted path) becomes a C-level alias —
@@ -9501,8 +9501,8 @@ class CEmitter:
 
         # Step 4f: With decoration reads via typed mirror.
         typed_with = self._typed_with_for(withnode)
-        _with_ownership = typed_with.ownership if typed_with else withnode.ownership
-        _with_alias_of = typed_with.alias_of if typed_with else withnode.alias_of
+        _with_ownership = typed_with.ownership if typed_with else None
+        _with_alias_of = typed_with.alias_of if typed_with else None
         # BORROW bindings do not own the value — no destructor at scope exit
         # and no adoption of reftype temps.
         is_owned = _with_ownership != ZOwnership.BORROWED

@@ -479,18 +479,29 @@ class TypeChecker:
             mainunitname=program.mainunitname,
         )
 
-        # Step 6 (typed-tree migration): per-argument protocol projection
-        # stamps used to live on `zast.NamedOperation` as `init=False`
-        # fields (`projected_protocol` / `projected_label` /
-        # `projected_kind`). Now they live in this side-table keyed by
-        # parsed argument `nodeid`; `_build_typed_call` reads the table
-        # to populate `TypedNamedOperation`. Side-table chosen over
-        # storing on the typed mirror directly because the typed mirror
-        # is built AFTER `_check_call_inner` runs (and `_auto_project_arg`
-        # fires inside the inner).
+        # Step 6 (typed-tree migration): typecheck-set decoration fields
+        # used to live on parsed AST nodes as `init=False` columns. Now
+        # they live in TypeChecker side-tables keyed by parsed `nodeid`;
+        # the typed-mirror builders read from these tables when
+        # constructing the matching `Typed*` node. Side-tables are
+        # chosen over writing directly to the typed mirror because the
+        # typed mirror is built AFTER each `_check_*_inner` returns
+        # (the typecheck logic runs inside the inner method).
+
+        # Per-argument protocol projection stamps (was
+        # `zast.NamedOperation.projected_*`). Read by
+        # `_build_typed_call` to populate `TypedNamedOperation`.
         self._projected_args: dict[
             int, tuple[Optional[ZType], Optional[str], Optional[str]]
         ] = {}
+        # Per-Assignment alias target (was `zast.Assignment.alias_of`).
+        # Read by `_build_typed_assignment`.
+        self._assign_alias_of: dict[int, Optional[str]] = {}
+        # Per-With binding ownership + alias target (was
+        # `zast.With.ownership` / `.alias_of`). Read by
+        # `_build_typed_with`.
+        self._with_ownership: dict[int, ZOwnership] = {}
+        self._with_alias_of: dict[int, Optional[str]] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -5795,7 +5806,7 @@ class TypeChecker:
                 and cast(zast.DottedPath, inner_expr).child.name in ("take", "borrow")
             )
             if borrow_target or is_explicit_take_or_borrow:
-                assign.alias_of = self._alias_target(assign.value)
+                self._assign_alias_of[assign.nodeid] = self._alias_target(assign.value)
 
             # assignment-based narrowing: if RHS is a union/variant subtype
             # construction, narrow the variable to that subtype
@@ -6329,8 +6340,15 @@ class TypeChecker:
         NodeType.FACET,
     )
 
-    # node-types accepted as `Operation` values in the typed tree
-    # (anything that produces a value the typechecker has typed).
+    # node-types accepted as value-producing TypedExpression-derived
+    # mirrors in the typed tree. Includes path-shaped operations
+    # (ATOMID/LABELVALUE/ATOMSTRING/DOTTEDPATH), arithmetic
+    # operations (BINOP/CALL), and the bare-block control-flow form
+    # (DO) — which `_build_typed_with` needs as a `doexpr` typed
+    # counterpart. IF/CASE/FOR/WITH/DATA are intentionally excluded
+    # for now because including them caused emitter regressions in
+    # tests with nested match expressions; revisit alongside the
+    # remaining Step 6 fields.
     _OPERATION_NODETYPES = (
         NodeType.ATOMID,
         NodeType.LABELVALUE,
@@ -6338,6 +6356,7 @@ class TypeChecker:
         NodeType.DOTTEDPATH,
         NodeType.BINOP,
         NodeType.CALL,
+        NodeType.DO,
     )
 
     def _typed_operation_for(self, op: zast.Node) -> Optional[ztypedast.TypedOperation]:
@@ -6430,7 +6449,7 @@ class TypeChecker:
             parsed=assign,
             name=assign.name,
             value=value_typed,
-            alias_of=assign.alias_of,
+            alias_of=self._assign_alias_of.get(assign.nodeid),
         )
         self._register_typed(assign, typed)
 
@@ -6831,8 +6850,8 @@ class TypeChecker:
             name=withnode.name,
             value=value_typed,
             doexpr=doexpr_typed,
-            ownership=withnode.ownership,
-            alias_of=withnode.alias_of,
+            ownership=self._with_ownership.get(withnode.nodeid),
+            alias_of=self._with_alias_of.get(withnode.nodeid),
         )
         self._register_typed(withnode, typed)
 
@@ -8128,7 +8147,13 @@ class TypeChecker:
                     )
                 )
                 if alias_target is not None:
-                    temp_assn.alias_of = alias_target
+                    self._assign_alias_of[temp_assn.nodeid] = alias_target
+        # Synth Assignments hoisted out of call args don't go through
+        # `_check_assignment` (they're inserted into the preamble
+        # buffer and drained back into the parent Statement), so
+        # nothing else would build their typed mirror. Build it here
+        # so emitter consumers can read `alias_of` via TypedAssignment.
+        self._build_typed_assignment(temp_assn)
         self._call_preamble[-1].append(temp_line)
         # Ownership of the temp follows the source expression:
         # - explicit `.borrow` / `.lock` / projection captured an
@@ -10012,7 +10037,7 @@ class TypeChecker:
         if borrow_target and not _is_valtype(t):
             self._install_borrow_locks(borrow_target, withnode.name, withnode.start)
 
-        withnode.ownership = ownership
+        self._with_ownership[withnode.nodeid] = ownership
         withnode.type = t
 
         # Phase B: alias optimization — if the RHS is a plain path reference
@@ -10020,7 +10045,7 @@ class TypeChecker:
         # emit the binding as a C-level alias instead of a real local.
         # Either the borrow lock or the take-invalidation guarantees the
         # source slot is stable for the binding's lifetime.
-        withnode.alias_of = self._alias_target(withnode.value)
+        self._with_alias_of[withnode.nodeid] = self._alias_target(withnode.value)
 
         do_type = self._check_expression(withnode.doexpr).ztype
         self.symtab.pop()
