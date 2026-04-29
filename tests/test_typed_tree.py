@@ -217,8 +217,9 @@ class TestTypedCallInvariants:
         assert isinstance(typed, ztypedast.TypedCall)
         assert typed.parsed is target
         assert typed.ztype is target.type
-        assert typed.call_kind == target.call_kind
-        assert typed.callable_type_name == target.callable_type_name
+        # `call_kind` and `callable_type_name` used to live on
+        # parsed Call; after Step 6.8 they live on TypedCall only.
+        assert isinstance(typed.call_kind, zast.CallKind)
         # callable is the TypedAtomId for `incr`
         assert isinstance(typed.callable, ztypedast.TypedAtomId)
         assert typed.callable.name == "incr"

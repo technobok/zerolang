@@ -356,44 +356,30 @@ class TestFinding8FileIdConsistency:
 
 
 class TestFinding7CallKind:
-    """Finding 7: type checker should classify calls with CallKind."""
+    """Finding 7: type checker should classify calls with CallKind.
 
-    def _find_calls(self, node, visited=None):
-        """Recursively find all Call nodes in an AST."""
-        if visited is None:
-            visited = set()
-        nid = id(node)
-        if nid in visited:
-            return []
-        visited.add(nid)
-        calls = []
-        if isinstance(node, zast.Call):
-            calls.append(node)
-        if hasattr(node, "__dataclass_fields__"):
-            for fname in node.__dataclass_fields__:
-                val = getattr(node, fname, None)
-                if val is None:
-                    continue
-                if isinstance(val, zast.Node):
-                    calls.extend(self._find_calls(val, visited))
-                elif isinstance(val, dict):
-                    for v in val.values():
-                        if isinstance(v, zast.Node):
-                            calls.extend(self._find_calls(v, visited))
-                elif isinstance(val, list):
-                    for v in val:
-                        if isinstance(v, zast.Node):
-                            calls.extend(self._find_calls(v, visited))
-        return calls
+    Step 6.8 of the typed-tree migration moved `call_kind` off the
+    parsed `zast.Call` and onto `TypedCall`. These tests now look up
+    each parsed call's typed counterpart via `program.typed_program`.
+    """
+
+    def _typed_calls(self, program):
+        """Yield every `TypedCall` registered in the typed program."""
+        import ztypedast
+
+        tp = zast.cast(ztypedast.TypedProgram, program.typed_program)
+        for typed in tp.by_parsed_id.values():
+            if isinstance(typed, ztypedast.TypedCall):
+                yield typed
 
     def test_regular_function_call(self):
         program = parse_and_check(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             'main: function is { print "\\{add a: 1 b: 2}" }'
         )
-        mainunit = program.units[program.mainunitname]
-        calls = self._find_calls(mainunit.body["main"])
-        regular = [c for c in calls if c.call_kind == CallKind.REGULAR]
+        regular = [
+            c for c in self._typed_calls(program) if c.call_kind == CallKind.REGULAR
+        ]
         assert len(regular) > 0, "No REGULAR calls found"
 
     def test_return_call(self):
@@ -401,19 +387,21 @@ class TestFinding7CallKind:
             "id: function {x: i64} out i64 is { return x }\n"
             'main: function is { print "\\{id 1}" }'
         )
-        mainunit = program.units[program.mainunitname]
-        calls = self._find_calls(mainunit.body["id"])
-        returns = [c for c in calls if c.call_kind == CallKind.RETURN]
-        assert len(returns) == 1, f"Expected 1 RETURN, got {len(returns)}"
+        returns = [
+            c for c in self._typed_calls(program) if c.call_kind == CallKind.RETURN
+        ]
+        assert len(returns) >= 1, f"Expected at least 1 RETURN, got {len(returns)}"
 
     def test_record_create(self):
         program = parse_and_check(
             "point: record is { x: f64  y: f64 }\n"
             'main: function is {\n    p: point x: 1.0 y: 2.0\n    print "ok"\n}'
         )
-        mainunit = program.units[program.mainunitname]
-        calls = self._find_calls(mainunit.body["main"])
-        creates = [c for c in calls if c.call_kind == CallKind.RECORD_CREATE]
+        creates = [
+            c
+            for c in self._typed_calls(program)
+            if c.call_kind == CallKind.RECORD_CREATE
+        ]
         assert len(creates) >= 1, "No RECORD_CREATE calls found"
 
     def test_class_create(self):
@@ -421,9 +409,11 @@ class TestFinding7CallKind:
             "Box: class is { value: i64 }\n"
             'main: function is {\n    b: Box value: 42\n    print "ok"\n}'
         )
-        mainunit = program.units[program.mainunitname]
-        calls = self._find_calls(mainunit.body["main"])
-        creates = [c for c in calls if c.call_kind == CallKind.CLASS_CREATE]
+        creates = [
+            c
+            for c in self._typed_calls(program)
+            if c.call_kind == CallKind.CLASS_CREATE
+        ]
         assert len(creates) >= 1, "No CLASS_CREATE calls found"
 
     def test_union_create(self):
@@ -431,9 +421,11 @@ class TestFinding7CallKind:
             "Result: union is { ok: i64  err: String }\n"
             'main: function is {\n    r: Result.ok 42\n    print "ok"\n}'
         )
-        mainunit = program.units[program.mainunitname]
-        calls = self._find_calls(mainunit.body["main"])
-        creates = [c for c in calls if c.call_kind == CallKind.UNION_CREATE]
+        creates = [
+            c
+            for c in self._typed_calls(program)
+            if c.call_kind == CallKind.UNION_CREATE
+        ]
         assert len(creates) >= 1, "No UNION_CREATE calls found"
 
     def test_no_unknown_after_typecheck(self):
@@ -442,14 +434,10 @@ class TestFinding7CallKind:
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             'main: function is { print "\\{add a: 1 b: 2}" }'
         )
-        mainunit = program.units[program.mainunitname]
-        for name, defn in mainunit.body.items():
-            calls = self._find_calls(defn)
-            unknowns = [c for c in calls if c.call_kind == CallKind.UNKNOWN]
-            assert unknowns == [], (
-                f"Found UNKNOWN calls in '{name}': "
-                f"{[(c.callable, c.call_kind) for c in unknowns]}"
-            )
+        unknowns = [
+            c for c in self._typed_calls(program) if c.call_kind == CallKind.UNKNOWN
+        ]
+        assert unknowns == [], f"Found UNKNOWN calls: {len(unknowns)}"
 
 
 # ---- Finding 7: Source map ----

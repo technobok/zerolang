@@ -538,6 +538,14 @@ class TypeChecker:
         # `_build_typed_dotted_path`, and `_typed_path_from_parsed`.
         self._dp_parent_tagged_type: dict[int, ZType] = {}
         self._dp_child_id: dict[int, int] = {}
+        # Per-Call classification (was `zast.Call.call_kind` /
+        # `.callable_type_name`). `call_kind` discriminates the
+        # emission shape (REGULAR / RECORD_CREATE / RETURN / CALLABLE
+        # / ...); `callable_type_name` is the mangled type name when
+        # the call dispatches as a callable-object method. Read by
+        # `_build_typed_call`.
+        self._call_kind: dict[int, zast.CallKind] = {}
+        self._call_callable_type_name: dict[int, str] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -5862,7 +5870,10 @@ class TypeChecker:
         # check for Call with UNION_CREATE call_kind
         if inner.nodetype == NodeType.CALL:
             call = cast(zast.Call, inner)
-            if call.call_kind == zast.CallKind.UNION_CREATE:
+            if (
+                self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+                == zast.CallKind.UNION_CREATE
+            ):
                 if call.callable.nodetype == NodeType.DOTTEDPATH:
                     return cast(zast.DottedPath, call.callable).child.name
         # check for DottedPath with parent_tagged_type (null subtype construction)
@@ -6221,7 +6232,9 @@ class TypeChecker:
                         self._do_has_break[target.nodeid] = True
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
-                expr.call_kind = cast(zast.Call, inner).call_kind
+                expr.call_kind = self._call_kind.get(
+                    inner.nodeid, zast.CallKind.UNKNOWN
+                )
         # capture and clear pending flags into the result so they cannot
         # leak between statements (replaces the safety clear that was
         # previously needed after every statement)
@@ -6466,8 +6479,8 @@ class TypeChecker:
             const_value=call.const_value,
             callable=callable_typed,
             arguments=args_typed,
-            call_kind=call.call_kind,
-            callable_type_name=call.callable_type_name,
+            call_kind=self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN),
+            callable_type_name=self._call_callable_type_name.get(call.nodeid),
         )
         self._register_typed(call, typed)
 
@@ -7437,7 +7450,7 @@ class TypeChecker:
     def _check_call(self, call: zast.Call) -> Optional[ZType]:
         """Type-check a call. Thin wrapper that builds the typed-tree
         mirror after the resolution body has populated `call.type`,
-        `call.call_kind`, `call.callable_type_name`, and the per-argument
+        `self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self._call_callable_type_name.get(call.nodeid)`, and the per-argument
         `NamedOperation` projection stamps."""
         t = self._check_call_inner(call)
         self._build_typed_call(call)
@@ -7464,10 +7477,10 @@ class TypeChecker:
 
         # handle control flow: return, break, continue, error
         if callee_type.control_kind == ControlKind.RETURN:
-            call.call_kind = zast.CallKind.RETURN
+            self._call_kind[call.nodeid] = zast.CallKind.RETURN
             return self._check_return_call(call)
         if callee_type.control_kind == ControlKind.BREAK:
-            call.call_kind = zast.CallKind.BREAK
+            self._call_kind[call.nodeid] = zast.CallKind.BREAK
             # flag enclosing do block if break targets it (not a for loop)
             if self._break_targets:
                 target = self._break_targets[-1]
@@ -7475,10 +7488,10 @@ class TypeChecker:
                     self._do_has_break[target.nodeid] = True
             return callee_type
         if callee_type.control_kind == ControlKind.CONTINUE:
-            call.call_kind = zast.CallKind.CONTINUE
+            self._call_kind[call.nodeid] = zast.CallKind.CONTINUE
             return callee_type
         if callee_type.control_kind == ControlKind.ERROR:
-            call.call_kind = zast.CallKind.ERROR
+            self._call_kind[call.nodeid] = zast.CallKind.ERROR
             # type-check the message argument
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
@@ -7489,7 +7502,7 @@ class TypeChecker:
             call.type = callee_type
             return callee_type
         if callee_type.control_kind == ControlKind.PANIC:
-            call.call_kind = zast.CallKind.PANIC
+            self._call_kind[call.nodeid] = zast.CallKind.PANIC
             # type-check the message argument; no compile-time diagnostic
             # (unlike error, panic is a pure runtime terminator).
             for arg in call.arguments:
@@ -7515,8 +7528,11 @@ class TypeChecker:
             # ZType, so normalise to `null`.
             ret = mono_ftype.return_type or self.t_null
             call.type = ret
-            if call.call_kind == zast.CallKind.UNKNOWN:
-                call.call_kind = zast.CallKind.REGULAR
+            if (
+                self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+                == zast.CallKind.UNKNOWN
+            ):
+                self._call_kind[call.nodeid] = zast.CallKind.REGULAR
             return ret
 
         # handle union/variant subtype construction: dotted path parent is a tagged type
@@ -7537,7 +7553,7 @@ class TypeChecker:
                 mono_type = self._infer_generic_union_construction(parent_tagged, call)
                 if mono_type:
                     call.type = mono_type
-                    call.call_kind = zast.CallKind.UNION_CREATE
+                    self._call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
                     # update the parent_tagged_type to point to the monomorphized type
                     self._dp_parent_tagged_type[callable_dp.nodeid] = mono_type
                     self._lift_locked_arm_borrow(mono_type, callable_dp, call)
@@ -7547,7 +7563,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = parent_tagged
-            call.call_kind = zast.CallKind.UNION_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
             self._lift_locked_arm_borrow(parent_tagged, callable_dp, call)
             return parent_tagged
 
@@ -7561,8 +7577,8 @@ class TypeChecker:
             call_method = callee_type.children.get("call")
             if call_method and call_method.typetype == ZTypeType.FUNCTION:
                 # redirect to the 'call' method
-                call.call_kind = zast.CallKind.CALLABLE
-                call.callable_type_name = callee_type.name
+                self._call_kind[call.nodeid] = zast.CallKind.CALLABLE
+                self._call_callable_type_name[call.nodeid] = callee_type.name
                 callee_type = call_method
                 call.callable.type = call_method
                 # fall through to function call checking below
@@ -7648,7 +7664,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type.return_type
-            call.call_kind = zast.CallKind.REGULAR
+            self._call_kind[call.nodeid] = zast.CallKind.REGULAR
             return callee_type.return_type
 
         # handle record construction: calling a record type creates an instance
@@ -7659,7 +7675,7 @@ class TypeChecker:
                 if mono_type:
                     call.type = mono_type
                     call.callable.type = mono_type
-                    call.call_kind = zast.CallKind.RECORD_CREATE
+                    self._call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
                     # only check missing fields when value args are present
                     # (pure generic instantiation like (myrec n: 10) defers to outer call)
                     has_value_args = any(
@@ -7675,7 +7691,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
-            call.call_kind = zast.CallKind.RECORD_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
             self._check_missing_create_args(callee_type, call)
             self._reject_borrow_escape_into_record(call)
             return callee_type
@@ -7697,7 +7713,7 @@ class TypeChecker:
                 if mono_type:
                     call.type = mono_type
                     call.callable.type = mono_type
-                    call.call_kind = zast.CallKind.CLASS_CREATE
+                    self._call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
                     has_value_args = any(
                         arg.name not in callee_type.generic_params
                         for arg in call.arguments
@@ -7711,7 +7727,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
-            call.call_kind = zast.CallKind.CLASS_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
             self._check_missing_create_args(callee_type, call)
             self._check_aggregate_lock_escape(call, callee_type)
             return callee_type
@@ -7721,7 +7737,7 @@ class TypeChecker:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             call.type = callee_type
-            call.call_kind = zast.CallKind.UNION_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
             return callee_type
 
         # bare-name protocol construction: `myproto source` is equivalent
@@ -7732,7 +7748,7 @@ class TypeChecker:
             and callee_type.typetype == ZTypeType.PROTOCOL
             and "create" in callee_type.children
         ):
-            call.call_kind = zast.CallKind.PROTOCOL_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
             return self._check_protocol_create(callee_type, call)
 
         # bare-name facet construction: same pattern as protocol.
@@ -7741,7 +7757,7 @@ class TypeChecker:
             and callee_type.typetype == ZTypeType.FACET
             and "create" in callee_type.children
         ):
-            call.call_kind = zast.CallKind.FACET_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
             return self._check_protocol_create(callee_type, call)
 
         # bare-name typedef construction: same pattern.
@@ -7750,7 +7766,7 @@ class TypeChecker:
             and callee_type.typedef_base is not None
             and "create" in callee_type.children
         ):
-            call.call_kind = zast.CallKind.TYPEDEF_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
             return self._check_typedef_create(callee_type, call)
 
         # generic unit instantiation: (mathops t: i64) → monomorphized unit
@@ -7759,7 +7775,7 @@ class TypeChecker:
             mono = self._resolve_typeref_call(call)
             if mono:
                 call.type = mono
-                call.call_kind = zast.CallKind.UNIT_INSTANTIATE
+                self._call_kind[call.nodeid] = zast.CallKind.UNIT_INSTANTIATE
                 return mono
             return None
             return None
@@ -7782,21 +7798,21 @@ class TypeChecker:
             parent_type = callable_dp2.parent.type
             if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
                 if callable_dp2.child.name == "borrow":
-                    call.call_kind = zast.CallKind.PROTOCOL_BORROW
+                    self._call_kind[call.nodeid] = zast.CallKind.PROTOCOL_BORROW
                     return self._check_protocol_borrow(parent_type, call)
-                call.call_kind = zast.CallKind.PROTOCOL_CREATE
+                self._call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
                 return self._check_protocol_create(parent_type, call)
             if parent_type and parent_type.typetype == ZTypeType.FACET:
                 if callable_dp2.child.name == "borrow":
-                    call.call_kind = zast.CallKind.FACET_BORROW
+                    self._call_kind[call.nodeid] = zast.CallKind.FACET_BORROW
                     return self._check_protocol_borrow(parent_type, call)
-                call.call_kind = zast.CallKind.FACET_CREATE
+                self._call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
                 return self._check_protocol_create(parent_type, call)
             if parent_type and parent_type.typedef_base is not None:
                 if callable_dp2.child.name == "borrow":
-                    call.call_kind = zast.CallKind.TYPEDEF_BORROW
+                    self._call_kind[call.nodeid] = zast.CallKind.TYPEDEF_BORROW
                     return self._check_typedef_borrow(parent_type, call)
-                call.call_kind = zast.CallKind.TYPEDEF_CREATE
+                self._call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
                 return self._check_typedef_create(parent_type, call)
 
         # parameter types (skip 'this' — handled separately for method calls)
@@ -7804,7 +7820,11 @@ class TypeChecker:
 
         # for callable dispatch, skip the 'this' parameter (first param of call method)
         # — the receiver is passed implicitly
-        if call.call_kind == zast.CallKind.CALLABLE and params:
+        if (
+            self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+            == zast.CallKind.CALLABLE
+            and params
+        ):
             params = params[1:]
 
         # check for reftype aliasing: same reftype arg passed twice
@@ -8018,8 +8038,11 @@ class TypeChecker:
         self._call_id_stack.pop()
 
         call.type = ret if ret else self.t_null
-        if call.call_kind == zast.CallKind.UNKNOWN:
-            call.call_kind = zast.CallKind.REGULAR
+        if (
+            self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+            == zast.CallKind.UNKNOWN
+        ):
+            self._call_kind[call.nodeid] = zast.CallKind.REGULAR
         return call.type
 
     def _check_missing_create_args(self, type_def: ZType, call: zast.Call) -> None:
@@ -9771,7 +9794,7 @@ class TypeChecker:
         if inner_type.is_heap_allocated:
             # Already a pointer: passthrough (just take ownership)
             call.type = inner_type
-            call.call_kind = zast.CallKind.BOX_PASSTHROUGH
+            self._call_kind[call.nodeid] = zast.CallKind.BOX_PASSTHROUGH
             return inner_type
 
         # stack-allocated value: create monomorphized box type
@@ -9789,7 +9812,7 @@ class TypeChecker:
                 if cname not in mono.children:
                     mono.children[cname] = ctype
             call.type = mono
-            call.call_kind = zast.CallKind.BOX_CREATE
+            self._call_kind[call.nodeid] = zast.CallKind.BOX_CREATE
         return mono
 
     def _option_template_nodeid(self) -> int:

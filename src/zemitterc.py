@@ -5544,9 +5544,7 @@ class CEmitter:
         """Emit a callable object dispatch: obj(args) -> z_type_call(obj, args)."""
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_ctn = (
-            _typed_call.callable_type_name if _typed_call else call.callable_type_name
-        )
+        _call_ctn = _typed_call.callable_type_name if _typed_call else None
         type_name = _call_ctn
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
@@ -5566,7 +5564,7 @@ class CEmitter:
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
         # callable object dispatch as statement
         if _call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
@@ -6401,7 +6399,7 @@ class CEmitter:
     def _emit_call_value(self, call: zast.Call) -> str:
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
         _call_ztype = _typed_call.ztype if _typed_call else call.type
         # callable object dispatch: obj(args) -> z_type_call(obj, args)
         if _call_kind == zast.CallKind.CALLABLE:
@@ -8228,7 +8226,7 @@ class CEmitter:
         """Check if a call is a union construction (union.subtype or bare union name)."""
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
         _call_ztype = _typed_call.ztype if _typed_call else call.type
         # a regular function call that happens to return a union is NOT a
         # union construction; defer to the standard call emission path.
@@ -8542,7 +8540,7 @@ class CEmitter:
         """Check if a call is a variant construction (variant.subtype expr)."""
         # Step 4d: Call decoration reads via typed mirror.
         _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
         _call_ztype = _typed_call.ztype if _typed_call else call.type
         # A regular function call whose return type happens to be a
         # variant is NOT a construction — defer to the standard call

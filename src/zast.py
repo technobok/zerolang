@@ -750,11 +750,11 @@ class Call(Operation):
     # even though it could still be a call with 0 args)
     arguments: typing.List["NamedOperation"]
 
-    # set by type checker to classify the call for the emitter
-    call_kind: CallKind = field(default=CallKind.UNKNOWN, init=False)
-
-    # for CALLABLE kind: the type name of the callable object (to construct C method name)
-    callable_type_name: Optional[str] = field(default=None, init=False)
+    # `call_kind` and `callable_type_name` used to live here as
+    # `init=False` typecheck-set fields. After Step 6.8 they live on
+    # `TypedCall` only; the typechecker records them via
+    # `TypeChecker._call_kind` / `_call_callable_type_name` (side-tables
+    # keyed by parsed `nodeid`) and `_build_typed_call` reads them.
 
 
 @dataclass
