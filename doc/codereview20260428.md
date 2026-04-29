@@ -579,7 +579,7 @@ Still open:
 
 Independent, low-risk; can be done in any order or in parallel.
 
-- [x] F8 — replace `copy.deepcopy(func)` with explicit clone visitor. *(Resolved <pending-hash>.)*
+- [x] F8 — replace `copy.deepcopy(func)` with explicit clone visitor. *(Resolved 7bb5020.)*
 - [ ] F9 — replace last `isinstance`; drop lint baseline 1 → 0.
 - [ ] F10 — close out the four `TODO` comments.
 - [ ] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`.
