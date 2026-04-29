@@ -6170,7 +6170,8 @@ class CEmitter:
                 == ZTypeType.FUNCTION
             ):
                 atom = cast(zast.AtomId, inner)
-                ftype = atom.type
+                typed_atom = self._typed_atomid_for(atom)
+                ftype = typed_atom.ztype if typed_atom else atom.type
                 if ftype and ftype.param_defaults:
                     # only emit bare call when ALL params have defaults
                     real_params = list(ftype.children.items())
@@ -7004,6 +7005,14 @@ class CEmitter:
         name = atom.name
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
+        # Step 4b: route decoration reads through the typed mirror when
+        # available. Falls back to parsed `atom.*` for synth atoms or
+        # tests that build a Program without running typecheck.
+        typed = self._typed_atomid_for(atom)
+        narrowed_subtype = typed.narrowed_subtype if typed else atom.narrowed_subtype
+        original_ztype = typed.original_ztype if typed else atom.original_ztype
+        child_id = typed.child_id if typed else atom.child_id
+        atom_ztype = typed.ztype if typed else atom.type
         # binding alias: substitute the source expression at the reference site
         # (set by alias-optimized `with`, inline .take/.borrow bindings, and
         # match-arm narrowed subjects). Chain lookups so a hoisted-arg synth
@@ -7022,11 +7031,11 @@ class CEmitter:
         # `narrowed_subtype` that wasn't seeded into `_alias_map` (e.g.
         # subjects not bound to a simple addressable name). Match-arm emission
         # seeds the alias map for the common case.
-        if atom.narrowed_subtype and atom.original_ztype is not None:
+        if narrowed_subtype and original_ztype is not None:
             unwrap = self._narrow_unwrap_expr(
-                atom.original_ztype,
-                atom.narrowed_subtype,
-                atom.child_id,
+                original_ztype,
+                narrowed_subtype,
+                child_id,
                 _mangle_var(name),
             )
             if unwrap is not None:
@@ -7044,7 +7053,7 @@ class CEmitter:
             return f"z_{name}_create({zero_args})"
         # string class: bare "String" as value -> empty string constructor
         # only when the name IS "String" (not a variable that has string type)
-        if name == "String" and atom.type and atom.type.subtype == ZSubType.STRING:
+        if name == "String" and atom_ztype and atom_ztype.subtype == ZSubType.STRING:
             self.needs_string = True
             self.needs_stdlib = True
             return self._alloc_temp("z_String_create((uint64_t)0)")
@@ -7781,7 +7790,10 @@ class CEmitter:
         if dp.parent.nodetype != NodeType.ATOMID:
             return None
         atom = cast(zast.AtomId, dp.parent)
-        if atom.narrowed_subtype is None or atom.original_ztype is None:
+        typed_atom = self._typed_atomid_for(atom)
+        narrowed = typed_atom.narrowed_subtype if typed_atom else atom.narrowed_subtype
+        original = typed_atom.original_ztype if typed_atom else atom.original_ztype
+        if narrowed is None or original is None:
             return None
         return self._emit_atomid_value(atom)
 
@@ -8546,8 +8558,10 @@ class CEmitter:
         """
         if op.nodetype == NodeType.ATOMID:
             atom = cast(zast.AtomId, op)
-            if atom.original_ztype is not None:
-                return atom.original_ztype
+            typed_atom = self._typed_atomid_for(atom)
+            original = typed_atom.original_ztype if typed_atom else atom.original_ztype
+            if original is not None:
+                return original
         if op.nodetype == NodeType.EXPRESSION:
             expr = cast(zast.Expression, op)
             inner = expr.expression
