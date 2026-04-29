@@ -6221,7 +6221,75 @@ class TypeChecker:
     def _check_dotted_path(
         self, path: zast.DottedPath, coerce_method_to_return: bool = True
     ) -> Optional[ZType]:
-        """Check a dotted path, handling .take, .release, and .borrow compiler methods."""
+        """Type-check a dotted path. Thin wrapper that builds the
+        typed-tree mirror after the resolution body has populated
+        `path.type` (and the other in-place decorations). The mirror
+        is skipped when the parent has no typed counterpart yet (e.g.
+        it's an AtomString or interpolation Expression — both
+        scheduled for later sub-steps)."""
+        t = self._check_dotted_path_inner(path, coerce_method_to_return)
+        self._build_typed_dotted_path(path)
+        return t
+
+    def _build_typed_dotted_path(self, path: zast.DottedPath) -> None:
+        """Construct the typed mirror of a parsed `DottedPath` and
+        register it. The typed `child` is a fresh `TypedAtomId` carrying
+        only `name` — the parsed `path.child` is a structural selector,
+        never independently typechecked, so the child mirror has no
+        `ztype`. Skips silently when the parent's typed counterpart is
+        not yet in `by_parsed_id`."""
+        parent_typed = self._typed_path_for_parent(path.parent)
+        if parent_typed is None:
+            return
+        child_typed = ztypedast.TypedAtomId(
+            parsed=path.child,
+            ztype=cast(ZType, None),
+            name=path.child.name,
+            is_label_value=False,
+        )
+        typed = ztypedast.TypedDottedPath(
+            parsed=path,
+            ztype=cast(ZType, path.type),
+            const_value=path.const_value,
+            parent=parent_typed,
+            child=child_typed,
+            parent_tagged_type=path.parent_tagged_type,
+            narrowed_subtype=path.narrowed_subtype,
+            child_id=path.child_id,
+        )
+        self._register_typed(path, typed)
+
+    def _typed_path_for_parent(
+        self, parent: zast.Node
+    ) -> Optional[ztypedast.TypedPath]:
+        """Resolve the typed-tree counterpart of a parser-AST `Path`-shaped
+        node used as the `parent` of a `DottedPath`. The parser wraps
+        parenthesised paths in an `Expression`; the typed tree skips that
+        wrapper, so we descend into `expression.expression` to find the
+        typed mirror by id. Returns None when the typed mirror has not
+        been built yet (e.g. the parent is an AtomString — covered in a
+        later sub-step)."""
+        while parent.nodetype == NodeType.EXPRESSION:
+            parent = cast(zast.Expression, parent).expression
+        typed = self.typed_program.by_parsed_id.get(parent.nodeid)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype not in (
+            NodeType.ATOMID,
+            NodeType.LABELVALUE,
+            NodeType.DOTTEDPATH,
+            NodeType.ATOMSTRING,
+        ):
+            return None
+        return cast(ztypedast.TypedPath, typed)
+
+    def _check_dotted_path_inner(
+        self, path: zast.DottedPath, coerce_method_to_return: bool = True
+    ) -> Optional[ZType]:
+        """Resolution body for `_check_dotted_path`. Handles `.take`,
+        `.release`, `.borrow`, `.lock`, `.private`, numeric casts, and
+        regular dotted-path resolution. The wrapping `_check_dotted_path`
+        builds the typed mirror once this returns."""
         child_name = path.child.name
 
         # handle .take compiler method (but not protocol/typedef.take constructor)
@@ -6479,6 +6547,12 @@ class TypeChecker:
                     )
                     if target_path:
                         self._check_not_locked(target_path, "Cannot access", path.start)
+                # Typed mirror: this branch sets parent_atom.type without
+                # routing through `_check_atomid`, so build the TypedAtomId
+                # here so the wrapping `_check_dotted_path` can find a
+                # typed parent in `by_parsed_id` when constructing
+                # `TypedDottedPath`.
+                self._build_typed_atomid(parent_atom)
             else:
                 taken_loc = self.symtab.get_taken_location(parent_atom.name)
                 if taken_loc:

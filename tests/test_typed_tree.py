@@ -110,6 +110,87 @@ class TestTypedProgramScaffold:
             assert typed.name == "x"
 
 
+class TestTypedDottedPathInvariants:
+    """Every TypedDottedPath in by_parsed_id must mirror its parsed
+    back-reference's in-place decorations and must reference the typed
+    parent / a fresh TypedAtomId selector for `child`."""
+
+    def test_simple_field_access(self):
+        """`v.x` builds a TypedDottedPath whose parent is the
+        TypedAtomId for `v` and whose child is a fresh TypedAtomId
+        with name='x'."""
+        tc = _typecheck(
+            "Point: record { x: i64 y: i64 } as {\n"
+            "    create: function {x: i64 y: i64} out this is {\n"
+            "        return meta.create x: x y: y\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: Point x: 1.i64 y: 2.i64\n"
+            "    q: p.x\n"
+            "}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        dotted = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.DOTTEDPATH]
+        # locate the `p.x` node — child name "x", parent name "p"
+        target = None
+        for d in dotted:
+            dp = _cast(zast.DottedPath, d)
+            if dp.child.name == "x" and dp.parent.nodetype == NodeType.ATOMID:
+                if _cast(zast.AtomId, dp.parent).name == "p":
+                    target = dp
+                    break
+        assert target is not None, "expected a `p.x` dotted path in main"
+        typed = tc.typed_program.by_parsed_id.get(target.nodeid)
+        assert typed is not None, "TypedDottedPath should be registered"
+        assert isinstance(typed, ztypedast.TypedDottedPath)
+        assert typed.parsed is target
+        assert typed.ztype is target.type
+        assert typed.parent_tagged_type is target.parent_tagged_type
+        assert typed.narrowed_subtype == target.narrowed_subtype
+        assert typed.child_id == target.child_id
+        # parent typed mirror must be the TypedAtomId for `p`
+        parent_typed = tc.typed_program.by_parsed_id.get(target.parent.nodeid)
+        assert parent_typed is typed.parent
+        assert isinstance(typed.parent, ztypedast.TypedAtomId)
+        assert typed.parent.name == "p"
+        # child is a fresh TypedAtomId, not registered (it is structural)
+        assert isinstance(typed.child, ztypedast.TypedAtomId)
+        assert typed.child.name == "x"
+
+    def test_dotted_fields_agree_with_parsed(self):
+        """Walk every TypedDottedPath in by_parsed_id and assert
+        field-for-field agreement with its parsed back-reference."""
+        tc = _typecheck(
+            "Point: record { x: i64 y: i64 } as {\n"
+            "    create: function {x: i64 y: i64} out this is {\n"
+            "        return meta.create x: x y: y\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    p: Point x: 1.i64 y: 2.i64\n"
+            "    a: p.x\n"
+            "    b: p.y\n"
+            "}"
+        )
+        n_dotted = 0
+        for parsed_id, typed in tc.typed_program.by_parsed_id.items():
+            if not isinstance(typed, ztypedast.TypedDottedPath):
+                continue
+            parsed = typed.parsed
+            assert parsed.nodeid == parsed_id
+            assert parsed.nodetype == NodeType.DOTTEDPATH
+            pdp = _cast(zast.DottedPath, parsed)
+            assert typed.ztype is pdp.type
+            assert typed.const_value == pdp.const_value
+            assert typed.parent_tagged_type is pdp.parent_tagged_type
+            assert typed.narrowed_subtype == pdp.narrowed_subtype
+            assert typed.child_id == pdp.child_id
+            assert typed.child.name == pdp.child.name
+            n_dotted += 1
+        assert n_dotted > 0, "expected some TypedDottedPath entries"
+
+
 class TestTypedAtomIdInvariants:
     """Every TypedAtomId in by_parsed_id must mirror its parsed
     back-reference's in-place decorations field-for-field. As more

@@ -32,7 +32,8 @@ plan). This file is the running implementation log.
 | 1. For comprehension scratch off AST | ✅ done | `2afe83e` | emitter-local dict keyed by `nodeid` |
 | 2. Define `src/ztypedast.py` | ✅ done | `43ec658` | data-only, no callers |
 | 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | `2033378` | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
-| 3b–3e. Remaining `_check_*` typed-mirror coverage | ⏳ next | — | working leaf-out: AtomString, DottedPath, BinOp, Call, NamedOperation, statements, control flow, top-level |
+| 3b. `TypedDottedPath` mirror | ✅ done | _pending_ | `_check_dotted_path` becomes a thin wrapper; resolution moves to `_check_dotted_path_inner`; `_build_typed_dotted_path` runs on exit and looks up parent via `_typed_path_for_parent` (Expression-unwrapping). Inline parent-ATOMID branch in the inner builds a `TypedAtomId` for the parent so the wrapper finds it. |
+| 3c–3e. Remaining typed-mirror coverage | ⏳ next | — | AtomString, BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
 | 6. Remove `init=False` decorations from `zast.py` | pending | — | typechecker stops writing in place |
@@ -61,31 +62,58 @@ plan). This file is the running implementation log.
   agreement with its parsed back-reference. As more typed-node kinds
   come online, this test broadens to those kinds.
 
-## Step 3b — next
+## Step 3b — what landed
 
-Add typed mirrors for `AtomString` (build during
-`_check_string_interpolation`/`_check_path` ATOMSTRING branch) and
-`DottedPath` (build at the end of `_check_dotted_path`, looking up
-`parent` via `by_parsed_id`, constructing a fresh `TypedAtomId` for
-`child` since the parsed AtomId-as-selector is never independently
-typechecked).
+- `_check_dotted_path` is now a thin wrapper around the renamed
+  `_check_dotted_path_inner`. After the inner returns, the wrapper
+  calls `_build_typed_dotted_path(path)`.
+- `_build_typed_dotted_path(path)` resolves the parent's typed
+  counterpart through `_typed_path_for_parent`, which unwraps
+  `zast.Expression` (the parser's `(parens)` wrapper) before looking
+  up `by_parsed_id`. Skips silently when the parent has no typed
+  mirror yet (parent is an `AtomString` or an interpolation Expression
+  containing an as-yet-untyped subtype).
+- The inline ATOMID-parent branch inside `_check_dotted_path_inner`
+  used to set `parent_atom.type` without routing through
+  `_check_atomid`. It now also calls `_build_typed_atomid(parent_atom)`
+  so the wrapping `_build_typed_dotted_path` finds a typed parent in
+  `by_parsed_id`.
+- `tests/test_typed_tree.py::TestTypedDottedPathInvariants` walks every
+  `TypedDottedPath` in `by_parsed_id` and asserts field-for-field
+  agreement (parent, child name, ztype, parent_tagged_type, narrowed
+  fields, child_id) with the parsed back-reference.
 
-Watch out for these subtle places (already inventoried while landing
-Step 3a):
+Known gaps (covered in later sub-steps):
 
-- `_check_dotted_path` resolves the parent AtomId in two ways: via
-  `_check_path` (which calls `_check_atomid`), and inline at line ~6443
-  (numeric-cast + bare ATOMID branch) which sets `parent_atom.type`
-  directly without calling `_check_atomid`. The inline branch needs to
-  build a `TypedAtomId` for the parent atom, otherwise the
-  `TypedDottedPath.parent` field has no entry in `by_parsed_id` to
-  point at.
+- Numeric-cast shortcut (`5.u32`): the inner returns early before the
+  parent atom's type is set, so no parent typed mirror exists and the
+  wrapper skips. Affects only numeric casts.
+- AtomString-as-parent / interpolation-Expression-as-parent: parent
+  typed mirror not yet built. Lands with Step 3c (AtomString) and
+  Step 3d (BinOp/Call expressions).
+
+## Step 3c — next
+
+Reasonable next slice: `TypedAtomString`. Build at every site that
+sets `AtomString.type` — currently `_check_path`'s ATOMSTRING branch
+and the ATOMSTRING-parent branch inside `_check_dotted_path_inner`.
+For now only handle the no-interpolation case (parts are all
+StringChunks); interpolation parts depend on Expression-level mirrors
+(BinOp / Call) that arrive in a later sub-step.
+
+After AtomString, the next-largest slices are operations
+(`TypedBinOp`, `TypedCall`, `TypedNamedOperation`) — see remaining
+tasks.
+
+### Subtle places to remember
+
 - `BinOp.operator`, `CaseClause.match`, and `DottedPath.child` are
-  AtomIds that the typechecker never independently types (their `type`
-  field is intentionally None). Don't build standalone `TypedAtomId`
-  for these — they're folded into their containing typed node
+  AtomIds that the typechecker never independently types (`type`
+  stays None). Don't build standalone `TypedAtomId` for these —
+  they're folded into their containing typed node
   (`TypedBinOp.operator`, `TypedCaseClause.match`,
   `TypedDottedPath.child`) at the moment that node is built.
+  `TypedDottedPath` already follows this pattern.
 
 ## What's in `src/ztypedast.py` (542 lines, frozen interface)
 
