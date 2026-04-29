@@ -1,0 +1,250 @@
+# Typed-tree migration — session handoff
+
+**Goal:** Treat `zast.Node` as immutable after parsing; have the
+typechecker construct a parallel `TypedProgram` (HIR-style) that the
+emitter and SQL dump consume. Once complete, the parser produces a
+frozen AST and the typechecker's output is a separate hierarchy of
+typed nodes that reference parsed nodes for trivia.
+
+The full design rationale + alternatives considered are in
+`/home/pawe/.claude/plans/is-this-the-best-virtual-sun.md` (approved
+plan). This file is the running implementation log.
+
+## Why we are doing this
+
+- Today ~30 `init=False` fields on parsed `zast.Node` subclasses are
+  written by the typechecker after parsing; nothing in the type system
+  distinguishes "parsed `Function`" from "typechecked `Function`".
+- Project trajectory commits to (a) singular SQL tables that map 1:1
+  to compiler structures and (b) self-hosting. Decorating in place
+  produces sparse wide tables whose meaning depends on which pass last
+  touched them; a clean parsed/typed split maps to two narrow,
+  write-once table families joined by FK.
+- A real boundary violation already existed: the **emitter** was
+  writing scratch state (`For._comprehension_list_var` / `_name`) onto
+  the AST. Fixed in Step 1. Two more such violations would normalise
+  the pattern; the split prevents that class of mistake.
+
+## Status
+
+| Step | Status | Commit | Notes |
+| ---- | ------ | ------ | ----- |
+| 1. For comprehension scratch off AST | ✅ done | `2afe83e` | emitter-local dict keyed by `nodeid` |
+| 2. Define `src/ztypedast.py` | ✅ done | `43ec658` | data-only, no callers |
+| 3. Twin-pass typechecker — build typed tree alongside | ⏳ next | — | the big restructuring |
+| 4. Switch emitter to consume typed tree | pending | — | |
+| 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
+| 6. Remove `init=False` decorations from `zast.py` | pending | — | typechecker stops writing in place |
+| 7. Freeze `Node` (`@dataclass(frozen=True)`) | pending | — | invariant: parsed AST never mutated |
+| 8. Typechecker cleanup (codereview20260428) | pending | — | the originally-planned next task; cheaper after the split |
+
+`make check` clean and `make test` 1943 passing as of `43ec658`.
+
+## What's in `src/ztypedast.py` (542 lines, frozen interface)
+
+Type hierarchy:
+
+```
+TypedNode              (parsed: zast.Node, typedid, synth_origin)
+├── TypedExpression    (abstract; ztype, const_value)
+│   ├── TypedOperation (abstract)
+│   │   ├── TypedPath  (abstract: typeref AND value-yielding path)
+│   │   │   ├── TypedAtomId       (name, is_label_value, narrowed_subtype, original_ztype, child_id)
+│   │   │   ├── TypedDottedPath   (parent, child, parent_tagged_type, narrowed_subtype, child_id)
+│   │   │   └── TypedAtomString   (parts: List[TypedExpression | zast.StringChunk])
+│   │   ├── TypedBinOp            (lhs, operator, rhs)
+│   │   └── TypedCall             (callable, arguments, call_kind, callable_type_name)
+│   ├── TypedIf                   (clauses, elseclause, taken_vars)
+│   ├── TypedFor                  (conditions, loop, postconditions, iterator_bindings)
+│   ├── TypedDo                   (statement, has_break)
+│   ├── TypedWith                 (name, value, doexpr, ownership, alias_of)
+│   ├── TypedCase                 (subject, clauses, elseclause, subject_taken, taken_vars)
+│   ├── TypedData                 (data)
+│   ├── TypedReassignment         (topath, value)  — null-typed
+│   └── TypedSwap                 (lhs, rhs)        — null-typed
+├── TypedStatement                (statements: List[TypedStatementLine])
+├── TypedStatementLine            (wraps TypedAssignment | TypedReassignment | TypedSwap | TypedExpression)
+├── TypedAssignment               (name, value, alias_of)
+├── TypedNamedOperation           (name, valtype, projected_protocol, projected_label, projected_kind)
+├── TypedIfClause                 (conditions, statement)
+├── TypedCaseClause               (name, match, statement)
+├── TypedFunction                 (parameters, returntype, body, is_native, as_items, ztype)
+├── TypedObjectDef                (kind, is_items, as_items, is_native, ztype)
+└── TypedUnit                     (body, ztype)
+```
+
+**Top level:** `TypedProgram` carries the parsed `Program`,
+`Dict[str, TypedUnit]`, plus the already-aggregated side-tables that
+were back-doored onto `zast.Program` post-typecheck (`resolved`,
+`mono_types`, `mono_functions`, `func_aliases`, `cloned_methods`,
+`unit_types_by_id`, `symbol_table`). Plus `by_parsed_id: Dict[int,
+TypedNode]` for cross-tree lookup (symbol-table entries reference
+parsed nodes; the typechecker resolves them to typed nodes via this
+index).
+
+### Design decisions made (do not relitigate)
+
+- **Inert leaves not mirrored.** `StringChunk`, `Error` carry no
+  typecheck-derived state and have no typed children. Typed nodes
+  that reference them (e.g. `TypedAtomString.parts`) embed the
+  parsed node directly. Saves ~10 trivial mirror classes; the
+  principle is "mirror what you type."
+- **`LabelValue` folded into `TypedAtomId`.** LabelValue (`:x`
+  shorthand) carries no typed state distinct from AtomId. Folded via
+  `is_label_value: bool`. Cleaner than a `TypedLabelValue(TypedAtomId)`
+  with no fields.
+- **No `TypedExpression` wrapper class.** The parser-AST `Expression`
+  wraps `ExpressionSubTypes` to give `(parens)` an Atom shape. The
+  typed tree skips this — when typecheck hits `zast.Expression`, it
+  recurses into `expression.expression` and returns the typed
+  counterpart of the inner subtype directly. `(x + 1)` → `TypedBinOp`,
+  not `TypedExpression(TypedBinOp(...))`.
+- **`Path` serves both roles.** In the parser AST, `Path` is a typeref
+  *and* a value-producing expression. `TypedPath` keeps this duality
+  — used in both `TypedFunction.parameters` (typeref) and
+  `TypedCall.callable` (value). The `ztype` field disambiguates by
+  context.
+- **`_typed_children` dispatches on `parsed.nodetype`.** No isinstance
+  (bootstrap-lint forbids it; baseline 0). Same id-based discrimination
+  the parser AST uses.
+- **Fresh `typedid` on cloned subtrees.** `clone_typed_function` deep
+  copies and re-issues typedids on every cloned typed node so
+  monomorphization doesn't carry duplicate ids. Parsed back-refs are
+  left pointing at the original source.
+
+## Step 3 — Twin-pass typechecker (the next big task)
+
+This is structurally the largest change. The typechecker is
+**`src/ztypecheck.py` (9771 lines)**. The goal is to have every
+`_check_*` method **return** a `Typed*` node while still populating
+the existing in-place decorations on parsed nodes (so the emitter
+keeps working unchanged). Both representations live during steps 3–5.
+
+### Recommended approach: leaf-out
+
+Start with leaves where construction is simple and let the structure
+grow upward:
+
+1. **`TypedAtomId`, `TypedAtomString`, `TypedDottedPath`** — these
+   are leaf-ish. The typechecker already resolves their types; just
+   construct the typed counterpart and return it alongside the
+   in-place decoration.
+2. **`TypedBinOp`, `TypedCall`, `TypedNamedOperation`** — operations.
+3. **Statement-line members**: `TypedAssignment`, `TypedReassignment`,
+   `TypedSwap`, `TypedStatementLine`, `TypedStatement`.
+4. **Control flow**: `TypedIf`/`TypedIfClause`, `TypedCase`/
+   `TypedCaseClause`, `TypedFor`, `TypedDo`, `TypedWith`.
+5. **Top-level**: `TypedFunction`, `TypedObjectDef`, `TypedUnit`,
+   `TypedProgram`.
+
+Each step shippable; the typechecker still works the same way for
+the emitter. Only the typed-tree consumers (steps 4 onward) need it.
+
+### Concrete starting point for Step 3
+
+The typechecker's main entry is `TypeChecker.check()` and its
+`_check_*` family. Begin by:
+
+1. Add `TypeChecker.typed_program: TypedProgram` initialised in
+   `__init__`. Populate `parsed`, `mainunitname`, leave `units`
+   empty for now.
+2. Add `TypeChecker.by_parsed_id: Dict[int, TypedNode]` (mirror of
+   `TypedProgram.by_parsed_id`). Helper:
+   `_register_typed(parsed_node: zast.Node, typed_node: TypedNode)`
+   that stores the typed node and indexes by parsed id.
+3. Pick the first `_check_*` to convert — `_check_atom` /
+   `_check_path` are good candidates. Modify the signature to return
+   `(old_return_value, TypedAtomId)` (tuple) initially, OR start by
+   adding a parallel `_build_typed_atom` method invoked alongside.
+4. Walk upward from there. Bootstrap-lint guard: add a ratchet on
+   "`<parsed_node>.<typed_field> = ` outside the typechecker" once
+   you can — but not before, since the twin-pass needs to keep
+   writing both.
+
+### Open questions for Step 3
+
+- **Should `_check_*` return tuples `(extern_or_void, Typed*)` or
+  should the typed node carry along via a separate visitor?** The
+  current shape of `_check_expression` etc. takes a parsed node and
+  produces decorated state via mutation. A tuple return is the
+  smallest diff but multiplies signatures. A typed-builder visitor
+  alongside is cleaner but doubles traversal cost. **Likely answer:**
+  tuple return for the twin-pass period; collapse to single-return
+  in step 6 when the in-place decorations come out.
+- **What about generics / monomorphization?** Today `clone_function`
+  deepcopies a parsed `Function`. After step 3, monomorphization
+  produces a typed clone via `clone_typed_function`. During twin-pass
+  it needs to do BOTH — clone the parsed Function AND build a typed
+  counterpart. The `_mono_functions` accumulator on `TypeChecker`
+  needs a sibling for typed clones. **Likely answer:** add a parallel
+  `_typed_mono_functions` accumulator, populate both, attach to
+  `TypedProgram.mono_functions` at end.
+- **`unit_types_by_id` keyed by parsed nodeid:** still works
+  unchanged; the typed tree references it via
+  `TypedProgram.unit_types_by_id`. No structural change needed.
+- **`SymbolTable` references:** entries reference parsed AST nodes by
+  identity. After step 3, when something needs the typed node for an
+  entry, it goes through `TypedProgram.by_parsed_id`. SymbolTable
+  internals don't need to change.
+
+### Verification for Step 3
+
+- `make check` clean.
+- `make test-fast` clean (the typechecker is the most-tested
+  subsystem).
+- New invariant test — gradually broaden:
+  - Initial form (after first `_check_*` returns typed): assert
+    typed-node fields match the in-place decorations on the
+    corresponding parsed node, on a representative sample of programs.
+  - Final form (after Step 3 complete): every parsed node reachable
+    from `Program` has a `TypedNode` entry in
+    `TypedProgram.by_parsed_id`, and every typed node's fields
+    agree with the in-place decoration on its parsed back-ref.
+- This invariant test stays green for the rest of the migration —
+  it's the structural guarantee that the typed tree is an honest
+  mirror of the in-place state until step 6 retires the in-place
+  state.
+
+## File-size context (informs PR sizing)
+
+```
+src/ztypecheck.py  9771 lines  (touched heavily in steps 3, 6, 8)
+src/zemitterc.py   9829 lines  (touched heavily in step 4)
+src/zast.py        1098 lines  (touched in steps 1, 6, 7)
+src/ztypedast.py    542 lines  (just added, step 2)
+src/zsqldump.py     411 lines  (touched in step 5)
+src/zenv.py        ~?           (review for step 3)
+```
+
+Steps 3 and 4 each plausibly span multiple commits. Don't try to
+collapse them into one PR.
+
+## Process notes for whoever picks this up
+
+- **Do not skip `make check` before commits.** Bootstrap-lint
+  ratchets are real — `isinstance` baseline is 0, `try/except`
+  baseline is 8, `getattr` baseline is whatever it currently is. Any
+  regression blocks the commit.
+- **Do not add Co-Authored-By to commit messages.** Project-wide
+  preference; `CLAUDE.md` says this explicitly.
+- **Run `make test` before push** for any change touching emitter,
+  runtime, examples, or system lib (project policy in `CLAUDE.md`).
+  `make test-fast` on its own is enough during inner-loop iteration
+  but not for ship.
+- **Use field-based dispatch, not isinstance.** Use `nodetype` /
+  `parsed.nodetype` / `type(x) is ClassName` / `getattr` — never
+  `isinstance`.
+- The plan file at
+  `/home/pawe/.claude/plans/is-this-the-best-virtual-sun.md`
+  has the full design rationale and the alternatives considered.
+  Read it once before reopening any of the design choices noted
+  above.
+
+## How to start the next session
+
+Open a fresh Claude session in `/home/pawe/dev/zerolang/` and point
+it at this file:
+
+> Continuing the typed-tree migration. Read `doc/typed_tree_migration.md`
+> for the running log, then `/home/pawe/.claude/plans/is-this-the-best-virtual-sun.md`
+> for the original design. Begin Step 3.
