@@ -589,6 +589,51 @@ class CEmitter:
             return None
         return cast(ztypedast.TypedAssignment, typed)
 
+    def _typed_if_for(self, ifnode: zast.If) -> Optional[ztypedast.TypedIf]:
+        """Narrowing helper: return the TypedIf mirror."""
+        typed = self._typed_for(ifnode)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.IF:
+            return None
+        return cast(ztypedast.TypedIf, typed)
+
+    def _typed_case_for(self, casenode: zast.Case) -> Optional[ztypedast.TypedCase]:
+        """Narrowing helper: return the TypedCase mirror."""
+        typed = self._typed_for(casenode)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.CASE:
+            return None
+        return cast(ztypedast.TypedCase, typed)
+
+    def _typed_for_for(self, fornode: zast.For) -> Optional[ztypedast.TypedFor]:
+        """Narrowing helper: return the TypedFor mirror."""
+        typed = self._typed_for(fornode)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.FOR:
+            return None
+        return cast(ztypedast.TypedFor, typed)
+
+    def _typed_do_for(self, donode: zast.Do) -> Optional[ztypedast.TypedDo]:
+        """Narrowing helper: return the TypedDo mirror."""
+        typed = self._typed_for(donode)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.DO:
+            return None
+        return cast(ztypedast.TypedDo, typed)
+
+    def _typed_with_for(self, withnode: zast.With) -> Optional[ztypedast.TypedWith]:
+        """Narrowing helper: return the TypedWith mirror."""
+        typed = self._typed_for(withnode)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.WITH:
+            return None
+        return cast(ztypedast.TypedWith, typed)
+
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
         """Resolve the ZType of a parser-AST `Path`-shaped node via
         its typed mirror. Falls back to `path.type` when no typed
@@ -8695,6 +8740,9 @@ class CEmitter:
         return self._get_operation_type(op)
 
     def _emit_if(self, ifnode: zast.If) -> str:
+        # Step 4f: route If decoration reads through the typed mirror.
+        typed_if = self._typed_if_for(ifnode)
+        _if_taken_vars = typed_if.taken_vars if typed_if else ifnode.taken_vars
         indent = self._indent()
         parts: List[str] = []
 
@@ -8768,7 +8816,7 @@ class CEmitter:
             parts.append(f"{indent}}}\n")
 
         # post-if cleanup: destroy+zero variables taken in some arm
-        parts.append(self._emit_taken_vars_cleanup(ifnode.taken_vars, indent))
+        parts.append(self._emit_taken_vars_cleanup(_if_taken_vars, indent))
 
         return "".join(parts)
 
@@ -8949,6 +8997,11 @@ class CEmitter:
         return None
 
     def _emit_for(self, fornode: zast.For) -> str:
+        # Step 4f: route For decoration reads through typed mirror.
+        typed_for = self._typed_for_for(fornode)
+        _for_iter_bindings = (
+            typed_for.iterator_bindings if typed_for else fornode.iterator_bindings
+        )
         indent = self._indent()
         parts: List[str] = []
 
@@ -8973,7 +9026,7 @@ class CEmitter:
         for name, cond_op in fornode.conditions.items():
             if name.startswith(" "):
                 cond_exprs.append(self._emit_operation_value(cond_op))
-            elif name in fornode.iterator_bindings:
+            elif name in _for_iter_bindings:
                 # check for .each / .iterate on integer types (C for-loop
                 # optimization). Both names are recognised; `.iterate` is the
                 # canonical name with `.each` retained as a deprecated alias.
@@ -9319,7 +9372,10 @@ class CEmitter:
         return tmp
 
     def _emit_do(self, donode: zast.Do) -> str:
-        if donode.has_break:
+        # Step 4f: Do decoration reads via typed mirror.
+        typed_do = self._typed_do_for(donode)
+        _do_has_break = typed_do.has_break if typed_do else donode.has_break
+        if _do_has_break:
             indent = self._indent()
             parts = [f"{indent}do {{\n"]
             self.indent_level += 1
@@ -9331,12 +9387,16 @@ class CEmitter:
 
     def _emit_do_expression_value(self, donode: zast.Do) -> str:
         """Emit a bare block as an expression, returning the last expression's value."""
-        ctype = _ctype(donode.type)
+        # Step 4f: Do decoration reads via typed mirror.
+        typed_do = self._typed_do_for(donode)
+        _do_has_break = typed_do.has_break if typed_do else donode.has_break
+        _do_ztype = typed_do.ztype if typed_do else donode.type
+        ctype = _ctype(_do_ztype)
         tmp = self._temp_name("do")
         indent = self._indent()
-        if donode.has_break:
+        if _do_has_break:
             # optional result: default to none, set to some on normal completion
-            opt_type = donode.type
+            opt_type = _do_ztype
             opt_name = opt_type.name if opt_type else ""
             none_tag = f"Z_{opt_name.upper()}_TAG_NONE"
             some_tag = f"Z_{opt_name.upper()}_TAG_SOME"
@@ -9374,14 +9434,18 @@ class CEmitter:
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
 
+        # Step 4f: With decoration reads via typed mirror.
+        typed_with = self._typed_with_for(withnode)
+        _with_ownership = typed_with.ownership if typed_with else withnode.ownership
+        _with_alias_of = typed_with.alias_of if typed_with else withnode.alias_of
         # BORROW bindings do not own the value — no destructor at scope exit
         # and no adoption of reftype temps.
-        is_owned = withnode.ownership != ZOwnership.BORROWED
+        is_owned = _with_ownership != ZOwnership.BORROWED
 
         # Phase B alias optimization: when the RHS is a plain path reference,
         # skip the C local declaration and substitute at reference sites.
-        if withnode.alias_of is not None:
-            alias_expr = self._alias_c_expr(withnode.alias_of)
+        if _with_alias_of is not None:
+            alias_expr = self._alias_c_expr(_with_alias_of)
             prev = self._alias_map.get(withnode.name)
             self._alias_map[withnode.name] = alias_expr
             parts.append(f"{indent}{{\n")
@@ -9467,6 +9531,20 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_case(self, casenode: zast.Case) -> str:
+        # Step 4f: Case decoration reads via typed mirror.
+        _typed_case = self._typed_case_for(casenode)
+        _case_taken_vars = (
+            _typed_case.taken_vars if _typed_case else casenode.taken_vars
+        )
+        _case_subject_taken = (
+            _typed_case.subject_taken if _typed_case else casenode.subject_taken
+        )
+        # Step 4f: Case decoration reads via typed mirror.
+        typed_case = self._typed_case_for(casenode)
+        _case_taken_vars = typed_case.taken_vars if typed_case else _case_taken_vars
+        _case_subject_taken = (
+            typed_case.subject_taken if typed_case else _case_subject_taken
+        )
         indent = self._indent()
         parts: List[str] = []
 
@@ -9529,11 +9607,19 @@ class CEmitter:
         parts.append(f"{indent}}}\n")
 
         # post-match cleanup: destroy+zero variables taken in some arm
-        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+        parts.append(self._emit_taken_vars_cleanup(_case_taken_vars, indent))
 
         return "".join(parts)
 
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
+        # Step 4f: Case decoration reads via typed mirror.
+        _typed_case = self._typed_case_for(casenode)
+        _case_taken_vars = (
+            _typed_case.taken_vars if _typed_case else casenode.taken_vars
+        )
+        _case_subject_taken = (
+            _typed_case.subject_taken if _typed_case else casenode.subject_taken
+        )
         # nullable-ptr option: if (ptr != NULL) / else
         if union_type.is_nullable_ptr:
             return self._emit_nullable_ptr_case(casenode, union_type)
@@ -9582,19 +9668,27 @@ class CEmitter:
         parts.append(f"{indent}}}\n")
 
         # post-match cleanup: destroy subject if taken in any arm but not all
-        if casenode.subject_taken:
+        if _case_subject_taken:
             parts.append(
                 f"{indent}z_{union_name}_destroy(&{subject});\n"
                 f"{indent}{subject} = (z_{union_name}_t){{0}};\n"
             )
 
         # post-match cleanup: destroy+zero variables taken in some arm
-        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+        parts.append(self._emit_taken_vars_cleanup(_case_taken_vars, indent))
 
         return "".join(parts)
 
     def _emit_nullable_ptr_case(self, casenode: zast.Case, union_type: ZType) -> str:
         """Emit case matching for nullable-ptr option: if (ptr != NULL) / else."""
+        # Step 4f: Case decoration reads via typed mirror.
+        _typed_case = self._typed_case_for(casenode)
+        _case_taken_vars = (
+            _typed_case.taken_vars if _typed_case else casenode.taken_vars
+        )
+        _case_subject_taken = (
+            _typed_case.subject_taken if _typed_case else casenode.subject_taken
+        )
         indent = self._indent()
         parts: List[str] = []
         subject = self._emit_operation_value(casenode.subject)
@@ -9654,7 +9748,7 @@ class CEmitter:
             parts.append(f"{indent}}}\n")
 
         # post-match cleanup for nullable-ptr
-        if casenode.subject_taken:
+        if _case_subject_taken:
             union_name = union_type.name
             parts.append(
                 f"{indent}if ({subject} != NULL) {{\n"
@@ -9664,11 +9758,16 @@ class CEmitter:
             )
 
         # post-match cleanup: destroy+zero variables taken in some arm
-        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+        parts.append(self._emit_taken_vars_cleanup(_case_taken_vars, indent))
 
         return "".join(parts)
 
     def _emit_variant_case(self, casenode: zast.Case, variant_type: ZType) -> str:
+        # Step 4f: Case decoration reads via typed mirror.
+        _typed_case = self._typed_case_for(casenode)
+        _case_taken_vars = (
+            _typed_case.taken_vars if _typed_case else casenode.taken_vars
+        )
         indent = self._indent()
         parts: List[str] = []
         variant_name = variant_type.name
@@ -9699,7 +9798,7 @@ class CEmitter:
                 parts.append(self._emit_arm_local_cleanup(saved_len))
                 self.indent_level -= 1
                 parts.append(f"{indent}}}\n")
-            parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+            parts.append(self._emit_taken_vars_cleanup(_case_taken_vars, indent))
             return "".join(parts)
 
         alias_name = self._narrow_alias_name(casenode.subject)
@@ -9741,7 +9840,7 @@ class CEmitter:
         parts.append(f"{indent}}}\n")
 
         # post-match cleanup: destroy+zero variables taken in some arm
-        parts.append(self._emit_taken_vars_cleanup(casenode.taken_vars, indent))
+        parts.append(self._emit_taken_vars_cleanup(_case_taken_vars, indent))
 
         return "".join(parts)
 
