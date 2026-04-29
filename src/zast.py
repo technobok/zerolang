@@ -306,10 +306,7 @@ def clone_function(func: "Function") -> "Function":
 # a typesafe node id
 NodeID = NewType("NodeID", int)
 
-# Module-level counter — one per Node instance ever. Named (rather
-# than the older `count().__next__` inline form) so tests and
-# introspection tools can reach it, and so the SQL-dump pipeline
-# can capture/restore the next-id watermark.
+# Module-level Node id generator
 _next_node_id = count()
 
 

@@ -23,6 +23,7 @@ from zvfs import DEntryID, ZVfsOpenFile
 
 TokenID = NewType("TokenID", int)
 
+# Module-level Token id generator
 _next_token_id = count()
 
 
