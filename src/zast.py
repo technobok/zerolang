@@ -860,11 +860,13 @@ class DottedPath(Path):
     nodetype: NodeType = field(default=NodeType.DOTTEDPATH, init=False)
     parent: "Path"
     child: "AtomId"
-    parent_tagged_type: "Optional[ZType]" = field(default=None, init=False)
-    narrowed_subtype: "Optional[str]" = field(default=None, init=False)
-    # Phase 7b: child id stamped at typecheck against parent's ZType. -1
-    # when unstamped — emitter falls back to name lookup in that case.
-    child_id: int = field(default=-1, init=False)
+    # `parent_tagged_type`, `narrowed_subtype`, and `child_id` used to
+    # live here as `init=False` typecheck-set fields. After Step 6 they
+    # live on `TypedDottedPath` only; `parent_tagged_type` and
+    # `child_id` are recorded in `TypeChecker._dp_parent_tagged_type` /
+    # `_dp_child_id` (side-tables keyed by parsed `nodeid`), while
+    # `narrowed_subtype` was effectively unused on parsed DottedPath
+    # (no writer) and is left None on the typed mirror.
 
 
 @dataclass

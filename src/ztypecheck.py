@@ -529,6 +529,15 @@ class TypeChecker:
         self._atom_narrowed_subtype: dict[int, str] = {}
         self._atom_original_ztype: dict[int, ZType] = {}
         self._atom_child_id: dict[int, int] = {}
+        # Per-DottedPath stamps (was `zast.DottedPath.parent_tagged_type`
+        # / `.child_id`). `parent_tagged_type` records the outer
+        # union/variant when a dotted path resolves to one of its
+        # tagged subtypes (`r.ok`, `Result.err`, ...). `child_id` is
+        # the Phase-7b stamp resolving the child name against the
+        # parent's ZType. Read by typecheck's null-subtype dispatch,
+        # `_build_typed_dotted_path`, and `_typed_path_from_parsed`.
+        self._dp_parent_tagged_type: dict[int, ZType] = {}
+        self._dp_child_id: dict[int, int] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -945,12 +954,8 @@ class TypeChecker:
             # definition's type and stamp const_value (bool only) so
             # downstream uses see the variant type and the arm index.
             # Mirrors the logic in _check_path for value-context uses.
-            if (
-                t is not None
-                and t.typetype == ZTypeType.NULL
-                and dp.parent_tagged_type is not None
-            ):
-                outer = dp.parent_tagged_type
+            outer = self._dp_parent_tagged_type.get(dp.nodeid)
+            if t is not None and t.typetype == ZTypeType.NULL and outer is not None:
                 dp.type = outer
                 if outer.name == "bool":
                     arm_name = dp.child.name
@@ -3769,7 +3774,7 @@ class TypeChecker:
                 # non-subtype children (tag, :tag, methods) should not be
                 # treated as union/variant subtype construction
                 if child_name != "tag" and child.typetype != ZTypeType.FUNCTION:
-                    path.parent_tagged_type = parent_type
+                    self._dp_parent_tagged_type[path.nodeid] = parent_type
                 return child
             # child is not an arm of the (narrowed) union/variant. If the
             # parent is a narrowed AtomId and the child is an arm of the
@@ -5863,7 +5868,7 @@ class TypeChecker:
         # check for DottedPath with parent_tagged_type (null subtype construction)
         if inner.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, inner)
-            if dp.parent_tagged_type:
+            if self._dp_parent_tagged_type.get(dp.nodeid):
                 return dp.child.name
         return None
 
@@ -6350,9 +6355,9 @@ class TypeChecker:
             const_value=path.const_value,
             parent=parent_typed,
             child=child_typed,
-            parent_tagged_type=path.parent_tagged_type,
-            narrowed_subtype=path.narrowed_subtype,
-            child_id=path.child_id,
+            parent_tagged_type=self._dp_parent_tagged_type.get(path.nodeid),
+            narrowed_subtype=None,
+            child_id=self._dp_child_id.get(path.nodeid, -1),
         )
         self._register_typed(path, typed)
 
@@ -6590,9 +6595,9 @@ class TypeChecker:
                 const_value=dp.const_value,
                 parent=parent_typed,
                 child=child_typed,
-                parent_tagged_type=dp.parent_tagged_type,
-                narrowed_subtype=dp.narrowed_subtype,
-                child_id=dp.child_id,
+                parent_tagged_type=self._dp_parent_tagged_type.get(dp.nodeid),
+                narrowed_subtype=None,
+                child_id=self._dp_child_id.get(dp.nodeid, -1),
             )
         if path.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path)
@@ -7260,8 +7265,10 @@ class TypeChecker:
             # emitter can dispatch by id on hot paths (union/variant
             # arm access, record field, method dispatch). Falls back to
             # name lookup when child_id stays -1.
-            if parent_type is not None and path.child_id == -1:
-                path.child_id = parent_type.child_id_for(path.child.name)
+            if parent_type is not None and self._dp_child_id.get(path.nodeid, -1) == -1:
+                self._dp_child_id[path.nodeid] = parent_type.child_id_for(
+                    path.child.name
+                )
             # Auto-call coercion: a dotted path naming a method with no
             # required user args (just the implicit receiver, or no
             # params at all) is treated as a no-arg call when accessed
@@ -7313,14 +7320,15 @@ class TypeChecker:
             # where s is a value — return the arm's payload type, not the
             # outer union, so callers like `match (s.err)` dispatch on the
             # payload's tag.
-            if path.parent_tagged_type:
+            outer_pt = self._dp_parent_tagged_type.get(path.nodeid)
+            if outer_pt is not None:
                 parent_is_variable = (
                     path.parent.nodetype == NodeType.ATOMID
                     and self.symtab.lookup_var(cast(zast.AtomId, path.parent).name)
                     is not None
                 )
                 if not parent_is_variable:
-                    path.type = path.parent_tagged_type
+                    path.type = outer_pt
                     # Stamp const_value only for bool: the arm's index in the
                     # parent's children (false -> 0, true -> 1). Enables
                     # downstream const-fold: `if bool.true` collapses to
@@ -7331,13 +7339,13 @@ class TypeChecker:
                     # stamping const_value would cause the emitter's
                     # constant-consult path to short-circuit the struct
                     # emission and pass a bare integer instead.
-                    if path.parent_tagged_type.name == "bool":
+                    if outer_pt.name == "bool":
                         arm_name = path.child.name
-                        if arm_name in path.parent_tagged_type.children:
-                            path.const_value = list(
-                                path.parent_tagged_type.children.keys()
-                            ).index(arm_name)
-                    return path.parent_tagged_type
+                        if arm_name in outer_pt.children:
+                            path.const_value = list(outer_pt.children.keys()).index(
+                                arm_name
+                            )
+                    return outer_pt
         return t
 
     def _check_string_interpolation(self, atom: zast.AtomString) -> None:
@@ -7515,10 +7523,10 @@ class TypeChecker:
         # (must be before record/class checks since subtypes may be records)
         if (
             call.callable.nodetype == NodeType.DOTTEDPATH
-            and cast(zast.DottedPath, call.callable).parent_tagged_type
+            and self._dp_parent_tagged_type.get(call.callable.nodeid) is not None
         ):
             callable_dp = cast(zast.DottedPath, call.callable)
-            parent_tagged = callable_dp.parent_tagged_type
+            parent_tagged = self._dp_parent_tagged_type.get(callable_dp.nodeid)
             assert parent_tagged is not None
 
             # generic union/variant subtype construction
@@ -7531,7 +7539,7 @@ class TypeChecker:
                     call.type = mono_type
                     call.call_kind = zast.CallKind.UNION_CREATE
                     # update the parent_tagged_type to point to the monomorphized type
-                    callable_dp.parent_tagged_type = mono_type
+                    self._dp_parent_tagged_type[callable_dp.nodeid] = mono_type
                     self._lift_locked_arm_borrow(mono_type, callable_dp, call)
                     return mono_type
                 return None  # error already emitted in inference method
@@ -8577,7 +8585,7 @@ class TypeChecker:
                 ZTypeType.FACET,
             ):
                 return None
-            if dp.parent_tagged_type is not None:
+            if self._dp_parent_tagged_type.get(dp.nodeid) is not None:
                 return None
             parent_path = self._alias_target_inner(cast(zast.Operation, dp.parent))
             if parent_path is None:

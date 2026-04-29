@@ -5522,7 +5522,9 @@ class CEmitter:
         # parameter — looking up the method's spec on the protocol
         # type gives the param-by-position ZType.
         # Id-only child lookup — typecheck stamps child_id on every DottedPath.
-        spec = parent_type.resolve_child_by_id(dp.child_id)
+        typed_dp = self._typed_dotted_path_for(dp)
+        dp_child_id = typed_dp.child_id if typed_dp else -1
+        spec = parent_type.resolve_child_by_id(dp_child_id)
         spec_params = (
             [(n, t) for n, t in spec.children.items() if n != "this"]
             if spec is not None
@@ -7345,7 +7347,7 @@ class CEmitter:
         _typed_path = self._typed_dotted_path_for(path)
         _pt_ztype = _typed_path.ztype if _typed_path else path.type
         _pt_const = _typed_path.const_value if _typed_path else path.const_value
-        _pt_child_id = _typed_path.child_id if _typed_path else path.child_id
+        _pt_child_id = _typed_path.child_id if _typed_path else -1
         child = path.child.name
 
         # .take emits just the variable value (nullification handled at call site)

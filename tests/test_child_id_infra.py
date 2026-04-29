@@ -99,11 +99,15 @@ main: function is {
 }
 """
         program = _parse_check(src)
+        # Step 6.7: child_id used to live on parsed DottedPath; after
+        # the strip it lives on `TypedDottedPath`. Walk via TypedProgram.
+        import ztypedast
+
+        typed_program = zast.cast(ztypedast.TypedProgram, program.typed_program)
         stamped = 0
-        for node in _walk(program):
-            if node.nodetype == NodeType.DOTTEDPATH:
-                dp = zast.cast(zast.DottedPath, node)
-                if dp.child_id != -1:
+        for typed in typed_program.by_parsed_id.values():
+            if isinstance(typed, ztypedast.TypedDottedPath):
+                if typed.child_id != -1:
                     stamped += 1
         assert stamped >= 1, (
             "expected at least one DottedPath to carry a stamped child_id"

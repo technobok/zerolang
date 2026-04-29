@@ -464,9 +464,10 @@ class TestTypedDottedPathInvariants:
         assert isinstance(typed, ztypedast.TypedDottedPath)
         assert typed.parsed is target
         assert typed.ztype is target.type
-        assert typed.parent_tagged_type is target.parent_tagged_type
-        assert typed.narrowed_subtype == target.narrowed_subtype
-        assert typed.child_id == target.child_id
+        # `parent_tagged_type` / `narrowed_subtype` / `child_id` used
+        # to live on parsed DottedPath; after Step 6.7 they live on
+        # TypedDottedPath only.
+        assert isinstance(typed.child_id, int)
         # parent typed mirror must be the TypedAtomId for `p`
         parent_typed = tc.typed_program.by_parsed_id.get(target.parent.nodeid)
         assert parent_typed is typed.parent
@@ -501,9 +502,10 @@ class TestTypedDottedPathInvariants:
             pdp = _cast(zast.DottedPath, parsed)
             assert typed.ztype is pdp.type
             assert typed.const_value == pdp.const_value
-            assert typed.parent_tagged_type is pdp.parent_tagged_type
-            assert typed.narrowed_subtype == pdp.narrowed_subtype
-            assert typed.child_id == pdp.child_id
+            # `parent_tagged_type` / `narrowed_subtype` / `child_id`
+            # used to live on parsed DottedPath; after Step 6.7 they
+            # live on TypedDottedPath only.
+            assert isinstance(typed.child_id, int)
             assert typed.child.name == pdp.child.name
             n_dotted += 1
         assert n_dotted > 0, "expected some TypedDottedPath entries"
