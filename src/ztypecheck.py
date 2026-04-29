@@ -5,7 +5,7 @@ Starts at main function, resolves names on demand, detects cycles.
 Includes ownership checking (Phase 4c).
 """
 
-from typing import Callable, Optional, List, Tuple, cast
+from typing import Callable, Optional, List, Tuple, Union, cast
 
 import zast
 import ztypedast
@@ -6189,6 +6189,7 @@ class TypeChecker:
                 p.nodetype != NodeType.STRINGCHUNK for p in path_str.stringparts
             )
             path_str.type = self._resolve_name("String" if has_interp else "StringView")
+            self._build_typed_atomstring(path_str)
             return path_str.type
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             return self._check_atomid(cast(zast.AtomId, path))
@@ -6258,6 +6259,37 @@ class TypeChecker:
             child_id=path.child_id,
         )
         self._register_typed(path, typed)
+
+    def _build_typed_atomstring(self, atom: zast.AtomString) -> None:
+        """Construct the typed mirror of a parsed `AtomString` and
+        register it. Each `Expression` part is replaced by its inner
+        subtype's typed counterpart (the `Expression` parser-AST
+        wrapper has no typed mirror — see ztypedast.py). `StringChunk`
+        parts are inert and embedded directly. Skips silently when an
+        interpolation part's inner subtype has no typed counterpart yet
+        (e.g. it's a BinOp or Call — covered in a later sub-step)."""
+        parts: List[Union[ztypedast.TypedExpression, zast.StringChunk]] = []
+        for part in atom.stringparts:
+            if part.nodetype == NodeType.STRINGCHUNK:
+                parts.append(cast(zast.StringChunk, part))
+                continue
+            inner = part
+            while inner.nodetype == NodeType.EXPRESSION:
+                inner = cast(zast.Expression, inner).expression
+            typed_inner = self.typed_program.by_parsed_id.get(inner.nodeid)
+            if typed_inner is None:
+                # Interpolation part has no typed counterpart yet —
+                # later sub-steps fill the gap; skip the whole mirror
+                # for now rather than emit a partial one.
+                return
+            parts.append(cast(ztypedast.TypedExpression, typed_inner))
+        typed = ztypedast.TypedAtomString(
+            parsed=atom,
+            ztype=cast(ZType, atom.type),
+            const_value=atom.const_value,
+            parts=parts,
+        )
+        self._register_typed(atom, typed)
 
     def _typed_path_for_parent(
         self, parent: zast.Node
@@ -6573,6 +6605,7 @@ class TypeChecker:
                 p.nodetype != NodeType.STRINGCHUNK for p in atom_str.stringparts
             )
             atom_str.type = self._resolve_name("String" if has_interp else "StringView")
+            self._build_typed_atomstring(atom_str)
         elif path.parent.nodetype == NodeType.EXPRESSION:
             self._check_expression(cast(zast.Expression, path.parent))
         t = self._resolve_dotted_path(path)

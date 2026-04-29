@@ -33,7 +33,8 @@ plan). This file is the running implementation log.
 | 2. Define `src/ztypedast.py` | ✅ done | `43ec658` | data-only, no callers |
 | 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | `2033378` | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
 | 3b. `TypedDottedPath` mirror | ✅ done | `2428531` | `_check_dotted_path` becomes a thin wrapper; resolution moves to `_check_dotted_path_inner`; `_build_typed_dotted_path` runs on exit and looks up parent via `_typed_path_for_parent` (Expression-unwrapping). Inline parent-ATOMID branch in the inner builds a `TypedAtomId` for the parent so the wrapper finds it. |
-| 3c–3e. Remaining typed-mirror coverage | ⏳ next | — | AtomString, BinOp, Call, NamedOperation, statements, control flow, top-level |
+| 3c. `TypedAtomString` mirror | ✅ done | _pending_ | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
 | 6. Remove `init=False` decorations from `zast.py` | pending | — | typechecker stops writing in place |
@@ -92,18 +93,35 @@ Known gaps (covered in later sub-steps):
   typed mirror not yet built. Lands with Step 3c (AtomString) and
   Step 3d (BinOp/Call expressions).
 
-## Step 3c — next
+## Step 3c — what landed
 
-Reasonable next slice: `TypedAtomString`. Build at every site that
-sets `AtomString.type` — currently `_check_path`'s ATOMSTRING branch
-and the ATOMSTRING-parent branch inside `_check_dotted_path_inner`.
-For now only handle the no-interpolation case (parts are all
-StringChunks); interpolation parts depend on Expression-level mirrors
-(BinOp / Call) that arrive in a later sub-step.
+- `_build_typed_atomstring(atom)` constructs `TypedAtomString` and
+  registers it. Each `Expression` interpolation part unwraps to its
+  inner subtype, then looks the inner up in `by_parsed_id` and embeds
+  the typed counterpart directly (matching the design's "no typed
+  Expression wrapper" rule). `StringChunk` parts are passed through
+  by reference. Skips the whole mirror when any interpolation part
+  has no typed counterpart yet — partial mirrors would weaken the
+  invariant test.
+- Called from both sites that set `AtomString.type`:
+  - `_check_path` ATOMSTRING branch
+  - `_check_dotted_path_inner` ATOMSTRING-parent branch
+- Tests cover plain string literals (parts pass through identity) and
+  AtomId interpolation (`"hi \\{name}"`). DottedPath interpolation is
+  already covered structurally via Step 3b's mirrors.
 
-After AtomString, the next-largest slices are operations
-(`TypedBinOp`, `TypedCall`, `TypedNamedOperation`) — see remaining
-tasks.
+## Step 3d — next
+
+Operations: `TypedBinOp`, `TypedCall`, `TypedNamedOperation`. These
+unblock the remaining AtomString interpolation cases (BinOp/Call
+inside `\\{...}`) and pull the auto-call-coercion / dotted-callable
+shapes into typed-tree territory.
+
+`_check_call` and `_check_binop` are the construction points. Plan
+the wrapping similarly to `_check_dotted_path` — split into `_inner`
+that returns `Optional[ZType]` (today's contract) and a wrapper that
+also calls `_build_typed_*`. Argument lists for `TypedCall` will
+need `TypedNamedOperation` mirrors built per-argument.
 
 ### Subtle places to remember
 

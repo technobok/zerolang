@@ -110,6 +110,58 @@ class TestTypedProgramScaffold:
             assert typed.name == "x"
 
 
+class TestTypedAtomStringInvariants:
+    """A non-interpolated string literal builds a TypedAtomString whose
+    parts are inert StringChunks. Interpolated literals get a typed
+    mirror only when every interpolation part has a typed counterpart
+    in `by_parsed_id` — earlier sub-steps cover AtomId/DottedPath
+    interpolations; BinOp/Call interpolations land later."""
+
+    def test_plain_string_literal(self):
+        tc = _typecheck('main: function is {\n    s: "hello"\n}')
+        mainunit = tc.program.units[tc.program.mainunitname]
+        strings = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.ATOMSTRING]
+        assert len(strings) == 1
+        atom_str = _cast(zast.AtomString, strings[0])
+        typed = tc.typed_program.by_parsed_id.get(atom_str.nodeid)
+        assert typed is not None
+        assert isinstance(typed, ztypedast.TypedAtomString)
+        assert typed.parsed is atom_str
+        assert typed.ztype is atom_str.type
+        # parts are inert StringChunks for a plain literal
+        assert len(typed.parts) == len(atom_str.stringparts)
+        for tp, sp in zip(typed.parts, atom_str.stringparts):
+            assert tp is sp  # StringChunk passed through by reference
+
+    def test_interpolated_with_atomid(self):
+        """`"hi \\{name}"` — interpolation part is an AtomId, which has a
+        typed mirror. The TypedAtomString's parts include the AtomId's
+        TypedAtomId in place of the parsed Expression wrapper."""
+        tc = _typecheck(
+            "main: function is {\n"
+            '    name: "world"\n'
+            '    msg: "hi \\{name}"\n'
+            "}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        strings = [
+            n for n in _walk_main(mainunit) if n.nodetype == NodeType.ATOMSTRING
+        ]
+        # the second string carries the interpolation
+        interpolated = next(
+            s
+            for s in strings
+            if any(p.nodetype != NodeType.STRINGCHUNK for p in _cast(zast.AtomString, s).stringparts)
+        )
+        typed = tc.typed_program.by_parsed_id.get(interpolated.nodeid)
+        assert typed is not None, "expected TypedAtomString for interpolated literal"
+        assert isinstance(typed, ztypedast.TypedAtomString)
+        # exactly one part should be a TypedAtomId for `name`
+        atomid_parts = [p for p in typed.parts if isinstance(p, ztypedast.TypedAtomId)]
+        assert len(atomid_parts) == 1
+        assert atomid_parts[0].name == "name"
+
+
 class TestTypedDottedPathInvariants:
     """Every TypedDottedPath in by_parsed_id must mirror its parsed
     back-reference's in-place decorations and must reference the typed
