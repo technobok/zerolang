@@ -531,7 +531,7 @@ class Parser:
 
         start = lex.peek()
 
-        prev_filtereol = lex._filtereol
+        prev_filtereol = lex.filtereol_state()
         lex.filtereol(False)  # need EOLs as definition separators
         error: Optional[zast.Error] = None
 
@@ -2294,7 +2294,7 @@ class Parser:
 
         if lex.accept(TT.BRACEOPEN):
             # block
-            prev_filtereol = lex._filtereol
+            prev_filtereol = lex.filtereol_state()
             lex.filtereol(False)  # disable EOL filtering. Need to parse them correctly
             error: Optional[zast.Error] = None
             while True:
@@ -2507,7 +2507,7 @@ class Parser:
 
         error: Optional[zast.Error] = None
 
-        prev_filtereol = lex._filtereol
+        prev_filtereol = lex.filtereol_state()
         lex.filtereol(True)  # enable EOL filtering. EOL's are ignored within parens
 
         expr = self._accept_expression(lex)

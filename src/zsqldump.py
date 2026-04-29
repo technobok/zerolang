@@ -481,7 +481,16 @@ def dump_sql(
     # Stage 6: emitted lines (if emitter provided)
     if emitter and csource:
         c_lines = csource.split("\n")
-        for i, (text, nid) in enumerate(zip(c_lines, emitter.source_map)):
+        # Source-map and emitted-line counts must agree — a mismatch
+        # silently dropped rows under plain `zip` and made source
+        # mappings ambiguous. Pre-assert the lengths (the assertion's
+        # message points at the bug); `strict=True` is the belt to the
+        # assertion's braces.
+        assert len(c_lines) == len(emitter.source_map), (
+            f"emitter source_map length ({len(emitter.source_map)}) "
+            f"does not match emitted-line count ({len(c_lines)})"
+        )
+        for i, (text, nid) in enumerate(zip(c_lines, emitter.source_map, strict=True)):
             lines.append(
                 f"INSERT INTO emitted_lines VALUES ("
                 f"{i + 1}, {_sql_int(nid)}, {_sql_str(text)});"

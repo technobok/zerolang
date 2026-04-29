@@ -589,6 +589,15 @@ class Lexer:
         if filtereol and self._thistoken.toktype == TT.EOL:
             self._advance()
 
+    def filtereol_state(self) -> bool:
+        """Return the current EOL-filtering setting.
+
+        Public read accessor for the parser's save/restore prologues
+        around scopes that switch the setting (e.g. EOLs as definition
+        separators inside unit bodies). Pairs with the `filtereol(bool)`
+        setter."""
+        return self._filtereol
+
     def peek(self) -> Token:
         """
         return the next token (already in the buffer) WITHOUT advancing
@@ -634,7 +643,7 @@ def isvalidunitname(name: str) -> bool:
     isvalidunitname - return true if name is a valid unit name
 
     Valid unit names may only start with a lowercase ascii letter and may
-    only afterwards contain lowercase letters, numbers or undercores.
+    only afterwards contain lowercase letters, numbers or underscores.
     """
     first = True
     for c in name:

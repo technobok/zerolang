@@ -544,7 +544,7 @@ Action items:
 - [ ] Fix `zparser.py:271-272` docstring.
 - [ ] After F2 lands, tighten the `zemitterc.py:1585-1626` docstring.
 
-### F13. Carry-forward audit from `codereview20260322.md` — Low (goal 6)
+### F13. Carry-forward audit from `codereview20260322.md` — Low (goal 6) \[Phase 1 RESOLVED\]
 
 That review left several items in unclear status. Resolved as of
 2026-04-28:
@@ -553,21 +553,21 @@ That review left several items in unclear status. Resolved as of
 - [x] `_fixcalloperation` stub — removed.
 - [x] Big commented-out blocks in `zlexer.py` — none ≥15 lines remain.
 
-Still open:
+Phase 1 sweep (resolved 2026-04-30):
 
-- [ ] **Lexer private state read from parser**: `src/zparser.py:548,
-      2435, 2648` read `lex._filtereol` directly. Add a public
-      `Lexer.filtereol_state -> bool` accessor (or just remove the
-      leading underscore) and switch the parser to it. The parser
-      also calls `lex.filtereol(...)` correctly through the public
-      API, which is the existing contract — only the read side needs
-      a public hook.
-- [ ] **Typo in lexer docstring**: `src/zlexer.py:788` says
-      "undercores"; should be "underscores".
-- [ ] **Source-map zip truncation**: `src/zsqldump.py:424` —
-      `zip(c_lines, emitter.source_map)` will silently drop rows on
-      mismatch. Use `zip(..., strict=True)` and pre-assert lengths
-      (links to F6).
+- [x] **Lexer private state read from parser**: added
+      `Lexer.filtereol_state() -> bool` public read accessor; the
+      three parser sites (`zparser.py:548, 2435, 2648`) that
+      previously read `lex._filtereol` directly now go through it.
+      The setter `lex.filtereol(bool)` and the underlying
+      `_filtereol` attribute are unchanged.
+- [x] **Typo in lexer docstring**: `src/zlexer.py` "undercores" →
+      "underscores".
+- [x] **Source-map zip truncation**: `src/zsqldump.py` —
+      pre-assertion on `len(c_lines) == len(emitter.source_map)`
+      with a descriptive message, plus `zip(..., strict=True)`.
+      A length mismatch now raises with a clear message rather
+      than silently dropping rows.
 - [ ] **Generated-C `malloc` NULL checks** (20260322 finding 2) —
       still open; blocked on the `libzrt.a` runtime library work
       (Phase 40 in the roadmap).
@@ -587,8 +587,8 @@ Independent, low-risk; can be done in any order or in parallel.
 - [x] F9 — replace last `isinstance`; drop lint baseline 1 → 0. *(Resolved incidentally in `32c779a`.)*
 - [ ] F10 — close out the four `TODO` comments.
 - [x] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`. *(Resolved incidentally in `366d0d6`.)*
-- [ ] F13 — `_filtereol` accessor, "undercores" typo,
-      `zip(..., strict=True)` in `zsqldump.py`.
+- [x] F13 — `_filtereol` accessor, "undercores" typo,
+      `zip(..., strict=True)` in `zsqldump.py`. *(Resolved <pending-hash>; remaining items in F13 — `malloc` NULL checks blocked on libzrt.a, examples-coverage audit — out of Phase 1 scope.)*
 
 ### Phase 2 — Back-end cleanup (sequential)
 
