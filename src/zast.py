@@ -335,12 +335,11 @@ class Node:
     # type of this Node, filled in typechecking pass
     # TODO: maybe Union(None, ZType, ZTypeCheckInProgress)
     type: Optional[ZType] = field(default=None, init=False)
-    # compile-time constant value, filled during type checking (constant folding)
-    # int for integer arithmetic, float for float arithmetic, bool for comparisons
-    # str for string constants in 'as' sections
-    const_value: Optional[typing.Union[int, float, bool, str]] = field(
-        default=None, init=False
-    )
+    # `const_value` used to live here as an `init=False` typecheck-set
+    # field. After Step 6.9.a it lives on `TypedExpression.const_value`
+    # only; the typechecker records compile-time constants via
+    # `TypeChecker._node_const_value` (a side-table keyed by parsed
+    # `nodeid`) and the typed-mirror builders read from there.
     # provenance: None for nodes parsed from user source; pass-name string
     # for nodes synthesised by a compiler pass. Surfaces in SQL dumps.
     synth_origin: Optional[str] = field(default=None, init=False)

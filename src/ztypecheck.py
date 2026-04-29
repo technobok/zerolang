@@ -546,6 +546,12 @@ class TypeChecker:
         # `_build_typed_call`.
         self._call_kind: dict[int, zast.CallKind] = {}
         self._call_callable_type_name: dict[int, str] = {}
+        # Per-Node compile-time constant value (was `zast.Node.const_value`,
+        # stripped in Step 6.9.a). Populated during constant folding by
+        # path / atom / binop / call resolution; read by typed-mirror
+        # builders and propagated onto `TypedExpression.const_value`.
+        # Keys are parsed `nodeid`s; values are int / float / bool / str.
+        self._node_const_value: "dict[int, ztypedast.ConstValue]" = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -620,7 +626,7 @@ class TypeChecker:
         typed = ztypedast.TypedAtomId(
             parsed=atom,
             ztype=cast(ZType, atom.type),
-            const_value=atom.const_value,
+            const_value=self._node_const_value.get(atom.nodeid),
             name=atom.name,
             is_label_value=(atom.nodetype == NodeType.LABELVALUE),
             narrowed_subtype=self._atom_narrowed_subtype.get(atom.nodeid),
@@ -968,7 +974,9 @@ class TypeChecker:
                 if outer.name == "bool":
                     arm_name = dp.child.name
                     if arm_name in outer.children:
-                        dp.const_value = list(outer.children.keys()).index(arm_name)
+                        self._node_const_value[dp.nodeid] = list(
+                            outer.children.keys()
+                        ).index(arm_name)
                 return outer
             return t
         if defn.nodetype == NodeType.LABELVALUE:
@@ -1020,9 +1028,9 @@ class TypeChecker:
                 if t:
                     typename, value, err = parse_number(defn_atom.name)
                     if not err and type(value) is int:
-                        defn_atom.const_value = value
+                        self._node_const_value[defn_atom.nodeid] = value
                     elif not err and type(value) is float and typename == "f64":
-                        defn_atom.const_value = value
+                        self._node_const_value[defn_atom.nodeid] = value
                 return t
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
@@ -1062,7 +1070,7 @@ class TypeChecker:
         taken_stmt = None
         for clause in ifnode.clauses:
             all_const = all(
-                cond_op.const_value is not None
+                self._node_const_value.get(cond_op.nodeid) is not None
                 for _, cond_op in clause.conditions.items()
             )
             if not all_const:
@@ -1073,7 +1081,8 @@ class TypeChecker:
                 self._resolving.pop()
                 return None
             all_true = all(
-                bool(cond_op.const_value) for _, cond_op in clause.conditions.items()
+                bool(self._node_const_value.get(cond_op.nodeid))
+                for _, cond_op in clause.conditions.items()
             )
             if all_true and taken_stmt is None:
                 taken_stmt = clause.statement
@@ -1107,11 +1116,20 @@ class TypeChecker:
             last_inner = taken_stmt.statements[-1].statementline
             if last_inner.nodetype == NodeType.EXPRESSION:
                 inner_expr = cast(zast.Expression, last_inner).expression
-                if (
-                    hasattr(inner_expr, "const_value")
-                    and inner_expr.const_value is not None
-                ):
-                    defn.const_value = inner_expr.const_value
+                inner_cv = self._node_const_value.get(inner_expr.nodeid)
+                if inner_cv is not None:
+                    # Stamp both the Expression wrapper (parsed `defn`)
+                    # and the inner If: the emitter's `_node_const_value`
+                    # helper unwraps Expression to the inner subtype and
+                    # consults the typed mirror keyed on the If's
+                    # nodeid.
+                    self._node_const_value[defn.nodeid] = inner_cv
+                    self._node_const_value[ifnode.nodeid] = inner_cv
+
+        # Unit-level ifs don't go through `_check_if`, so the typed
+        # mirror has to be built inline. Emitter / SQL-dump consumers
+        # read const_value via the typed tree only after Step 6.9.a.
+        self._build_typed_if(ifnode)
 
         self._resolving.pop()
         return t_ztype
@@ -2790,7 +2808,7 @@ class TypeChecker:
                 if at:
                     _, value, err = parse_number(apath_atom.name)
                     if not err and type(value) in (int, float):
-                        apath_atom.const_value = value
+                        self._node_const_value[apath_atom.nodeid] = value
                         # create a type that inherits from the canonical numeric type
                         # so operators work, but carries const_value for the emitter
                         ct = _make_type(at.name, at.typetype)
@@ -2802,6 +2820,11 @@ class TypeChecker:
                     else:
                         apath.type = at
                         rtype.children[label] = at
+                    # As-items don't go through `_check_atomid`, so build
+                    # the typed mirror inline; emitter / SQL-dump consumers
+                    # read const_value via the typed tree only after
+                    # Step 6.9.a.
+                    self._build_typed_atomid(apath_atom)
                 continue
 
             # string constant in 'as' section (pure literal, no interpolation)
@@ -2833,17 +2856,22 @@ class TypeChecker:
                         ct.is_valtype = True
                         ct.needs_destructor = False  # static, not freed
                         apath_str.type = ct
-                        apath_str.const_value = raw
+                        self._node_const_value[apath_str.nodeid] = raw
                         rtype.children[label] = ct
+                        # As-items don't go through `_check_path`, so
+                        # build the typed mirror inline (see numeric
+                        # branch above).
+                        self._build_typed_atomstring(apath_str)
                 continue
 
             # computed constant expression (e.g., max: 2 * 1024)
             if apath.nodetype == NodeType.BINOP:
                 t = self._check_binop(cast(zast.BinOp, apath))
-                if t and apath.const_value is not None:
+                apath_cv = self._node_const_value.get(apath.nodeid)
+                if t and apath_cv is not None:
                     ct = _make_type(t.name, t.typetype)
                     ct.children = t.children
-                    ct.const_value = apath.const_value
+                    ct.const_value = apath_cv
                     ct.is_valtype = True
                     rtype.children[label] = ct
                 continue
@@ -2901,15 +2929,30 @@ class TypeChecker:
                 if at:
                     rtype.children[label] = at
                     # propagate const_value from referenced definition
-                    if at.const_value is not None and apath.const_value is None:
-                        apath.const_value = at.const_value
+                    apath_cv = self._node_const_value.get(apath.nodeid)
+                    if at.const_value is not None and apath_cv is None:
+                        self._node_const_value[apath.nodeid] = at.const_value
                     elif (
                         apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
-                        and apath.const_value is None
+                        and apath_cv is None
                     ):
                         defn = self._lookup_definition(cast(zast.AtomId, apath).name)
-                        if defn is not None and defn.const_value is not None:
-                            apath.const_value = defn.const_value
+                        if defn is not None:
+                            defn_cv = self._node_const_value.get(defn.nodeid)
+                            if defn_cv is not None:
+                                self._node_const_value[apath.nodeid] = defn_cv
+                    # As-items don't go through `_check_atomid` /
+                    # `_check_dotted_path`; build the typed mirror inline
+                    # so emitter / SQL-dump consumers can read const_value
+                    # via the typed tree (single source of truth post
+                    # Step 6.9.a).
+                    if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+                        # `apath.type` was set by `_resolve_typeref` above.
+                        if apath.type is not None:
+                            self._build_typed_atomid(cast(zast.AtomId, apath))
+                    elif apath.nodetype == NodeType.DOTTEDPATH:
+                        if apath.type is not None:
+                            self._build_typed_dotted_path(cast(zast.DottedPath, apath))
 
     def _check_protocol_signature(
         self,
@@ -6171,8 +6214,9 @@ class TypeChecker:
             inner_op = cast(zast.Operation, inner)
             t = self._check_operation(inner_op)
             # propagate const_value from inner operation to expression wrapper
-            if inner_op.const_value is not None:
-                expr.const_value = inner_op.const_value
+            inner_cv = self._node_const_value.get(inner_op.nodeid)
+            if inner_cv is not None:
+                self._node_const_value[expr.nodeid] = inner_cv
             # bare function name as value: all params must have defaults
             # (skip control flow: return, break, continue, error)
             # only check when the atom refers to a function definition, not a local var
@@ -6365,7 +6409,7 @@ class TypeChecker:
         typed = ztypedast.TypedDottedPath(
             parsed=path,
             ztype=cast(ZType, path.type),
-            const_value=path.const_value,
+            const_value=self._node_const_value.get(path.nodeid),
             parent=parent_typed,
             child=child_typed,
             parent_tagged_type=self._dp_parent_tagged_type.get(path.nodeid),
@@ -6434,7 +6478,7 @@ class TypeChecker:
         typed = ztypedast.TypedBinOp(
             parsed=binop,
             ztype=cast(ZType, binop.type),
-            const_value=binop.const_value,
+            const_value=self._node_const_value.get(binop.nodeid),
             lhs=lhs_typed,
             operator=operator_typed,
             rhs=cast(ztypedast.TypedPath, rhs_typed),
@@ -6476,7 +6520,7 @@ class TypeChecker:
         typed = ztypedast.TypedCall(
             parsed=call,
             ztype=cast(ZType, call.type),
-            const_value=call.const_value,
+            const_value=self._node_const_value.get(call.nodeid),
             callable=callable_typed,
             arguments=args_typed,
             call_kind=self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN),
@@ -6585,7 +6629,7 @@ class TypeChecker:
             return ztypedast.TypedAtomId(
                 parsed=atom,
                 ztype=cast(ZType, atom.type),
-                const_value=atom.const_value,
+                const_value=self._node_const_value.get(atom.nodeid),
                 name=atom.name,
                 is_label_value=(atom.nodetype == NodeType.LABELVALUE),
                 narrowed_subtype=self._atom_narrowed_subtype.get(atom.nodeid),
@@ -6605,7 +6649,7 @@ class TypeChecker:
             return ztypedast.TypedDottedPath(
                 parsed=dp,
                 ztype=cast(ZType, dp.type),
-                const_value=dp.const_value,
+                const_value=self._node_const_value.get(dp.nodeid),
                 parent=parent_typed,
                 child=child_typed,
                 parent_tagged_type=self._dp_parent_tagged_type.get(dp.nodeid),
@@ -6778,7 +6822,7 @@ class TypeChecker:
         typed = ztypedast.TypedIf(
             parsed=ifnode,
             ztype=cast(ZType, ifnode.type),
-            const_value=ifnode.const_value,
+            const_value=self._node_const_value.get(ifnode.nodeid),
             clauses=clauses_typed,
             elseclause=else_typed,
             taken_vars=list(self._if_taken_vars.get(ifnode.nodeid, ())),
@@ -6800,9 +6844,18 @@ class TypeChecker:
             match_typed = ztypedast.TypedAtomId(
                 parsed=clause.match,
                 ztype=cast(ZType, None),
+                const_value=self._node_const_value.get(clause.match.nodeid),
                 name=clause.match.name,
                 child_id=self._atom_child_id.get(clause.match.nodeid, -1),
             )
+            # Register the clause-match TypedAtomId in `by_parsed_id`
+            # so emitter / SQL-dump consumers can look up its
+            # const_value via the typed-tree convention. Match-name
+            # AtomIds are structural (never independently typed by
+            # `_check_atomid`); registering them here preserves the
+            # one-mirror-per-parsed-node invariant that downstream
+            # `_node_const_value` lookups rely on.
+            self._register_typed(clause.match, match_typed)
             clause_typed = ztypedast.TypedCaseClause(
                 parsed=clause,
                 name=clause.name,
@@ -6820,7 +6873,7 @@ class TypeChecker:
         typed = ztypedast.TypedCase(
             parsed=casenode,
             ztype=cast(ZType, casenode.type),
-            const_value=casenode.const_value,
+            const_value=self._node_const_value.get(casenode.nodeid),
             subject=cast(ztypedast.TypedOperation, subject_typed),
             clauses=clauses_typed,
             elseclause=else_typed,
@@ -6850,7 +6903,7 @@ class TypeChecker:
         typed = ztypedast.TypedFor(
             parsed=fornode,
             ztype=cast(ZType, fornode.type),
-            const_value=fornode.const_value,
+            const_value=self._node_const_value.get(fornode.nodeid),
             conditions=conds_typed,
             loop=loop_typed,
             postconditions=post_typed,
@@ -6870,7 +6923,7 @@ class TypeChecker:
         typed = ztypedast.TypedDo(
             parsed=donode,
             ztype=cast(ZType, donode.type),
-            const_value=donode.const_value,
+            const_value=self._node_const_value.get(donode.nodeid),
             statement=cast(ztypedast.TypedStatement, stmt_typed),
             has_break=self._do_has_break.get(donode.nodeid, False),
         )
@@ -6886,7 +6939,7 @@ class TypeChecker:
         typed = ztypedast.TypedWith(
             parsed=withnode,
             ztype=cast(ZType, withnode.type),
-            const_value=withnode.const_value,
+            const_value=self._node_const_value.get(withnode.nodeid),
             name=withnode.name,
             value=value_typed,
             doexpr=doexpr_typed,
@@ -6933,7 +6986,7 @@ class TypeChecker:
         typed = ztypedast.TypedAtomString(
             parsed=atom,
             ztype=cast(ZType, atom.type),
-            const_value=atom.const_value,
+            const_value=self._node_const_value.get(atom.nodeid),
             parts=parts,
         )
         self._register_typed(atom, typed)
@@ -7273,7 +7326,7 @@ class TypeChecker:
             if parent_type and parent_type.generic_args:
                 garg = parent_type.generic_args.get(child_name)
                 if garg and garg.numeric_value is not None:
-                    path.const_value = garg.numeric_value
+                    self._node_const_value[path.nodeid] = garg.numeric_value
             # Phase 7b: stamp child_id against parent's ZType so the
             # emitter can dispatch by id on hot paths (union/variant
             # arm access, record field, method dispatch). Falls back to
@@ -7355,9 +7408,9 @@ class TypeChecker:
                     if outer_pt.name == "bool":
                         arm_name = path.child.name
                         if arm_name in outer_pt.children:
-                            path.const_value = list(outer_pt.children.keys()).index(
-                                arm_name
-                            )
+                            self._node_const_value[path.nodeid] = list(
+                                outer_pt.children.keys()
+                            ).index(arm_name)
                     return outer_pt
         return t
 
@@ -7377,9 +7430,9 @@ class TypeChecker:
                 # constant folding: set const_value for integer and f64 literals
                 typename, value, err = parse_number(name)
                 if not err and type(value) is int:
-                    atom.const_value = value
+                    self._node_const_value[atom.nodeid] = value
                 elif not err and type(value) is float and typename == "f64":
-                    atom.const_value = value
+                    self._node_const_value[atom.nodeid] = value
             self._build_typed_atomid(atom)
             return t
 
@@ -7407,18 +7460,16 @@ class TypeChecker:
                     )
             # constant folding: propagate const_value for true/false literals
             if name == "true":
-                atom.const_value = True
+                self._node_const_value[atom.nodeid] = True
             elif name == "false":
-                atom.const_value = False
+                self._node_const_value[atom.nodeid] = False
             else:
                 # propagate const_value from named constants
                 defn = self._lookup_definition(name)
-                if (
-                    defn is not None
-                    and hasattr(defn, "const_value")
-                    and defn.const_value is not None
-                ):
-                    atom.const_value = defn.const_value
+                if defn is not None:
+                    defn_cv = self._node_const_value.get(defn.nodeid)
+                    if defn_cv is not None:
+                        self._node_const_value[atom.nodeid] = defn_cv
             self._build_typed_atomid(atom)
             return t
 
@@ -9386,8 +9437,8 @@ class TypeChecker:
             if ret:
                 binop.type = ret
                 # constant folding: evaluate when both operands are constant integers
-                lhs_cv = binop.lhs.const_value
-                rhs_cv = binop.rhs.const_value
+                lhs_cv = self._node_const_value.get(binop.lhs.nodeid)
+                rhs_cv = self._node_const_value.get(binop.rhs.nodeid)
                 if (
                     lhs_cv is not None
                     and rhs_cv is not None
@@ -9420,11 +9471,11 @@ class TypeChecker:
                                         loc=binop.start,
                                     )
                                     return ret
-                            binop.const_value = folded
+                            self._node_const_value[binop.nodeid] = folded
                         elif folded is not None and type(folded) is float:
-                            binop.const_value = folded
+                            self._node_const_value[binop.nodeid] = folded
                         elif folded is not None and type(folded) is bool:
-                            binop.const_value = folded
+                            self._node_const_value[binop.nodeid] = folded
                 return ret
 
         self._error(
@@ -9532,11 +9583,12 @@ class TypeChecker:
                 self._check_operation(cond_op)
             # suppress compile-time errors in constant-false branches
             all_const = all(
-                cond_op.const_value is not None
+                self._node_const_value.get(cond_op.nodeid) is not None
                 for _, cond_op in clause.conditions.items()
             )
             all_false = all_const and not all(
-                bool(cond_op.const_value) for _, cond_op in clause.conditions.items()
+                bool(self._node_const_value.get(cond_op.nodeid))
+                for _, cond_op in clause.conditions.items()
             )
             if all_false or const_true_taken:
                 self._suppress_compile_error += 1
@@ -10125,7 +10177,7 @@ class TypeChecker:
             arm_marker = self.symtab.push_block(f"arm:{clause.match.name}")
             arm_matches = clause.match.name == concrete_name
             # tag each clause with its type name for emitter const folding
-            clause.match.const_value = clause.match.name
+            self._node_const_value[clause.match.nodeid] = clause.match.name
             if const_match_taken or not arm_matches:
                 self._suppress_compile_error += 1
             self._check_statement(clause.statement)
@@ -10147,7 +10199,12 @@ class TypeChecker:
         self.symtab.pop_to(match_marker)
 
         # mark the match as a generic type switch for the emitter
-        casenode.subject.const_value = concrete_name
+        self._node_const_value[casenode.subject.nodeid] = concrete_name
+        # Re-stamp the subject's typed mirror so it picks up the
+        # late-set const_value (the original was built during
+        # `_check_atomid` before this code ran).
+        if casenode.subject.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            self._build_typed_atomid(cast(zast.AtomId, casenode.subject))
 
         # compute result type for match-as-expression
         result_type = self.t_null
@@ -10285,10 +10342,10 @@ class TypeChecker:
         # compile-time constant match: for scalar matches, resolve subject
         # const_value to suppress errors in dead arms
         subject_const: object = None
-        if not is_sum_type and casenode.subject.const_value is not None:
-            cv = casenode.subject.const_value
-            if type(cv) is int or type(cv) is bool:
-                subject_const = cv
+        subject_cv = self._node_const_value.get(casenode.subject.nodeid)
+        if not is_sum_type and subject_cv is not None:
+            if type(subject_cv) is int or type(subject_cv) is bool:
+                subject_const = subject_cv
         const_match_taken = False
 
         # snapshot live owned variables before arms for generalized take-in-arm tracking
@@ -10352,11 +10409,11 @@ class TypeChecker:
                     self._resolve_name(mname)
                     mdefn = self._lookup_definition(mname)
                     if mdefn is not None:
-                        mcv = mdefn.const_value
+                        mcv = self._node_const_value.get(mdefn.nodeid)
                         if mcv is not None:
                             match_cv = mcv
                 if match_cv is not None:
-                    clause.match.const_value = match_cv
+                    self._node_const_value[clause.match.nodeid] = match_cv
                     if const_match_taken or subject_const != match_cv:
                         suppress_arm = True
                     elif subject_const == match_cv:

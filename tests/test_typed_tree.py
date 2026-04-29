@@ -85,7 +85,10 @@ class TestTypedProgramScaffold:
         assert typed.parsed is atom
         assert typed.name == atom.name
         assert typed.ztype is atom.type
-        assert typed.const_value == atom.const_value
+        # `const_value` was stripped from parsed Node in Step 6.9.a; the
+        # atom is the integer literal "42", so the typed mirror carries
+        # the resolved integer value.
+        assert typed.const_value == 42
         assert typed.is_label_value is False
 
     def test_atomid_typed_for_named_constant(self):
@@ -177,7 +180,11 @@ class TestTypedBinOpInvariants:
             assert typed is not None
             assert isinstance(typed, ztypedast.TypedBinOp)
             assert typed.ztype is pb.type
-            assert typed.const_value == pb.const_value
+            # `const_value` lived on parsed BinOp until Step 6.9.a;
+            # afterwards it lives on TypedBinOp only. The numeric-cast
+            # form `21.i64` doesn't propagate const_value to the parent
+            # AtomId, so the BinOp doesn't fold here — assert None.
+            assert typed.const_value is None
             assert typed.operator.name == pb.operator.name
             # operator is a fresh TypedAtomId, not registered separately
             assert pb.operator.nodeid not in tc.typed_program.by_parsed_id
@@ -502,7 +509,8 @@ class TestTypedDottedPathInvariants:
             assert parsed.nodetype == NodeType.DOTTEDPATH
             pdp = _cast(zast.DottedPath, parsed)
             assert typed.ztype is pdp.type
-            assert typed.const_value == pdp.const_value
+            # `const_value` lived on parsed DottedPath until Step 6.9.a;
+            # afterwards it lives on TypedDottedPath only.
             # `parent_tagged_type` / `narrowed_subtype` / `child_id`
             # used to live on parsed DottedPath; after Step 6.7 they
             # live on TypedDottedPath only.
@@ -537,7 +545,8 @@ class TestTypedAtomIdInvariants:
             patom = _cast(zast.AtomId, parsed)
             assert typed.name == patom.name
             assert typed.ztype is patom.type
-            assert typed.const_value == patom.const_value
+            # `const_value` lived on parsed AtomId until Step 6.9.a;
+            # afterwards it lives on TypedAtomId only.
             # `narrowed_subtype` / `original_ztype` / `child_id` used
             # to live on the parsed AtomId. After Step 6.6 they live on
             # `TypedAtomId` only; assert their default sentinel values

@@ -9370,12 +9370,27 @@ class TestConstantFolding:
             return expr
         return sl
 
+    @staticmethod
+    def _const_value(program, parsed_node):
+        """Look up `const_value` for a parsed expression via its typed
+        mirror. After Step 6.9.a `Node.const_value` was stripped — the
+        typed tree is the only carrier of compile-time constant
+        values. Descends `zast.Expression` (no typed mirror per
+        design) into its inner subtype."""
+        target = parsed_node
+        while isinstance(target, zast.Expression):
+            target = target.expression
+        typed = program.typed_program.by_parsed_id.get(target.nodeid)
+        if typed is None:
+            return None
+        return getattr(typed, "const_value", None)
+
     def test_const_value_numeric_literal(self):
         """Numeric literal should have const_value set."""
         program = check_ok("main: function is { x: 42 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert inner.const_value == 42
+        assert self._const_value(program, inner) == 42
 
     @pytest.mark.parametrize(
         "expr,expected",
@@ -9394,14 +9409,14 @@ class TestConstantFolding:
         program = check_ok(f"main: function is {{ x: {expr} }}")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == expected
+        assert self._const_value(program, inner) == expected
 
     def test_const_value_none_for_variables(self):
         """Variable + literal should NOT fold."""
         program = check_ok("main: function is {\n  x: 5\n  y: x + 1\n}")
         inner = self._get_rhs_inner(program, stmt_index=1)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is None
+        assert self._const_value(program, inner) is None
 
     def test_const_value_division_by_zero(self):
         """1 / 0 should be a compile-time error."""
@@ -9415,7 +9430,7 @@ class TestConstantFolding:
         )
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert inner.const_value == 0
+        assert self._const_value(program, inner) == 0
 
     def test_const_value_chained_named(self):
         """Chained named constants: a: 1, b: a + 2 -> b is 3."""
@@ -9424,7 +9439,7 @@ class TestConstantFolding:
         )
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert inner.const_value == 3
+        assert self._const_value(program, inner) == 3
 
     def test_const_value_overflow_error(self):
         """255u8 + 1u8 should produce a compile-time overflow error."""
@@ -9436,14 +9451,14 @@ class TestConstantFolding:
         program = check_ok("main: function is { x: 1.5f64 + 2.5f64 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == 4.0
+        assert self._const_value(program, inner) == 4.0
 
     def test_const_value_f32_not_folded(self):
         """f32 operations should not be folded (precision mismatch with host)."""
         program = check_ok("main: function is { x: 1.5f32 + 2.5f32 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value is None
+        assert self._const_value(program, inner) is None
 
     def test_const_value_bool_via_comparison(self):
         """Comparison results should have bool const_value (True/False)."""
@@ -9451,16 +9466,16 @@ class TestConstantFolding:
         inner0 = self._get_rhs_inner(program, stmt_index=0)
         inner1 = self._get_rhs_inner(program, stmt_index=1)
         assert isinstance(inner0, zast.BinOp)
-        assert inner0.const_value is True
+        assert self._const_value(program, inner0) is True
         assert isinstance(inner1, zast.BinOp)
-        assert inner1.const_value is False
+        assert self._const_value(program, inner1) is False
 
     def test_const_value_propagates_through_expression(self):
         """const_value should propagate from inner Operation to Expression wrapper."""
         program = check_ok("main: function is { x: 1 + 2 }")
         rhs = self._get_rhs(program)
         assert isinstance(rhs, zast.Expression)
-        assert rhs.const_value == 3
+        assert self._const_value(program, rhs) == 3
 
     # -- Division by zero ---
 
@@ -9492,14 +9507,14 @@ class TestConstantFolding:
         program = check_ok(f"main: function is {{ x: {expr} }}")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert inner.const_value == expected
+        assert self._const_value(program, inner) == expected
 
     def test_f64_literal_const_value(self):
         """f64 literal should have const_value set."""
         program = check_ok("main: function is { x: 3.14 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert inner.const_value == 3.14
+        assert self._const_value(program, inner) == 3.14
 
 
 class TestIfExpression:

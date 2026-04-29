@@ -61,13 +61,15 @@ def _node_ztype(
 
 def _node_const_value(typed_program: Optional[ztypedast.TypedProgram], node: zast.Node):
     """Read `const_value` from the typed mirror; same descent rule
-    as `_node_ztype`."""
+    as `_node_ztype`. Returns `None` when no typed mirror exists —
+    after Step 6.9.a `Node.const_value` was stripped from the parser
+    AST."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
     typed = _typed_for(typed_program, target)
     if typed is None or typed.parsed.nodetype not in _OP_NODETYPES:
-        return node.const_value
+        return None
     return cast(ztypedast.TypedExpression, typed).const_value
 
 

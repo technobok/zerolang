@@ -637,14 +637,16 @@ class CEmitter:
     def _node_const_value(self, node: zast.Node):
         """Read `const_value` from the typed mirror of `node`.
         Unwraps `zast.Expression` to its inner subtype (Expression has
-        no typed mirror per design). Falls back to `node.const_value`
-        when no typed mirror exists."""
+        no typed mirror per design). Returns `None` when no typed mirror
+        exists — after Step 6.9.a `Node.const_value` was stripped, so
+        the typed tree is the only carrier of compile-time constant
+        values."""
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression
         typed = self._typed_for(target)
         if typed is None:
-            return node.const_value
+            return None
         if typed.parsed.nodetype not in (
             NodeType.ATOMID,
             NodeType.LABELVALUE,
@@ -658,7 +660,7 @@ class CEmitter:
             NodeType.DO,
             NodeType.WITH,
         ):
-            return node.const_value
+            return None
         return cast(ztypedast.TypedExpression, typed).const_value
 
     def _node_ztype(self, node: zast.Node) -> Optional[ZType]:
@@ -7048,7 +7050,7 @@ class CEmitter:
         return raw
 
     def _emit_operation_value(self, op: zast.Operation) -> str:
-        if op.const_value is not None:
+        if self._node_const_value(op) is not None:
             return self._emit_const_value(op)
         if op.nodetype == NodeType.BINOP:
             return self._emit_binop_value(cast(zast.BinOp, op))
@@ -7065,7 +7067,7 @@ class CEmitter:
     def _emit_binop_value(self, binop: zast.BinOp) -> str:
         # Step 4d: BinOp decoration reads via typed mirror.
         _typed_binop = self._typed_binop_for(binop)
-        _binop_const = _typed_binop.const_value if _typed_binop else binop.const_value
+        _binop_const = _typed_binop.const_value if _typed_binop else None
         if _binop_const is not None:
             return self._emit_const_value(binop)
         lhs = self._emit_operation_value(binop.lhs)
@@ -7344,7 +7346,7 @@ class CEmitter:
         # the full typecheck).
         _typed_path = self._typed_dotted_path_for(path)
         _pt_ztype = _typed_path.ztype if _typed_path else path.type
-        _pt_const = _typed_path.const_value if _typed_path else path.const_value
+        _pt_const = _typed_path.const_value if _typed_path else None
         _pt_child_id = _typed_path.child_id if _typed_path else -1
         child = path.child.name
 
@@ -9625,14 +9627,12 @@ class CEmitter:
             return self._emit_variant_case(casenode, subject_type)
 
         # constant folding: if subject has const_value, emit only matching arm
-        subject_cv = casenode.subject.const_value
+        subject_cv = self._node_const_value(casenode.subject)
         if subject_cv is not None:
             matched_clause = None
             for clause in casenode.clauses:
-                if (
-                    clause.match.const_value is not None
-                    and subject_cv == clause.match.const_value
-                ):
+                clause_match_cv = self._node_const_value(clause.match)
+                if clause_match_cv is not None and subject_cv == clause_match_cv:
                     matched_clause = clause
                     break
             if matched_clause is not None:
@@ -9642,7 +9642,9 @@ class CEmitter:
                 self.indent_level -= 1
                 parts.append(f"{indent}}}\n")
                 return "".join(parts)
-            if all(c.match.const_value is not None for c in casenode.clauses):
+            if all(
+                self._node_const_value(c.match) is not None for c in casenode.clauses
+            ):
                 # all patterns const, none matched — emit else if present
                 if casenode.elseclause:
                     parts.append(f"{indent}{{\n")
@@ -9941,14 +9943,12 @@ class CEmitter:
         parts: List[str] = []
 
         # constant folding: emit only the matching arm's result
-        subject_cv = casenode.subject.const_value
+        subject_cv = self._node_const_value(casenode.subject)
         if subject_cv is not None:
             matched_clause = None
             for clause in casenode.clauses:
-                if (
-                    clause.match.const_value is not None
-                    and subject_cv == clause.match.const_value
-                ):
+                clause_match_cv = self._node_const_value(clause.match)
+                if clause_match_cv is not None and subject_cv == clause_match_cv:
                     matched_clause = clause
                     break
             if matched_clause is not None:
@@ -9960,7 +9960,9 @@ class CEmitter:
                 self.indent_level -= 1
                 parts.append(f"{indent}}}\n")
                 return "".join(parts)
-            if all(c.match.const_value is not None for c in casenode.clauses):
+            if all(
+                self._node_const_value(c.match) is not None for c in casenode.clauses
+            ):
                 if casenode.elseclause:
                     parts.append(f"{indent}{{\n")
                     self.indent_level += 1
