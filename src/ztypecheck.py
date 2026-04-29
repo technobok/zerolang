@@ -6368,6 +6368,15 @@ class TypeChecker:
         callable_typed = self._typed_path_for_parent(call.callable)
         if callable_typed is None:
             return
+        # `_check_call_inner` mutates `call.callable.type` after the
+        # callable's typed mirror was built — generic-function
+        # monomorphisation, dotted-callable method lookup, and
+        # subtype-construction inference each rebind the callable's
+        # ZType to the resolved (mono / method) signature. Refresh
+        # the typed mirror's `ztype` so emitter consumers see the
+        # post-resolution type rather than the original generic /
+        # template type that was captured at AtomId-build time.
+        callable_typed.ztype = cast(ZType, call.callable.type)
         args_typed: List[ztypedast.TypedNamedOperation] = []
         for arg in call.arguments:
             arg_inner = self._typed_operation_for(arg.valtype)

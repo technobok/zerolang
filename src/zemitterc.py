@@ -548,6 +548,36 @@ class CEmitter:
             return None
         return cast(ztypedast.TypedDottedPath, typed)
 
+    def _typed_call_for(self, call: zast.Call) -> Optional[ztypedast.TypedCall]:
+        """Narrowing helper: return the TypedCall mirror of `call`."""
+        typed = self._typed_for(call)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.CALL:
+            return None
+        return cast(ztypedast.TypedCall, typed)
+
+    def _typed_binop_for(self, binop: zast.BinOp) -> Optional[ztypedast.TypedBinOp]:
+        """Narrowing helper: return the TypedBinOp mirror of `binop`."""
+        typed = self._typed_for(binop)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.BINOP:
+            return None
+        return cast(ztypedast.TypedBinOp, typed)
+
+    def _typed_named_op_for(
+        self, named: zast.NamedOperation
+    ) -> Optional[ztypedast.TypedNamedOperation]:
+        """Narrowing helper: return the TypedNamedOperation mirror of
+        a parsed NamedOperation argument."""
+        typed = self._typed_for(named)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.NAMEDOPERATION:
+            return None
+        return cast(ztypedast.TypedNamedOperation, typed)
+
     def _emit_bounds_check(
         self,
         lines: List[str],
@@ -828,8 +858,9 @@ class CEmitter:
 
         Handles function pointer fields (struct field access) vs regular functions.
         """
+        typed_call = self._typed_call_for(call)
         # monomorphized generic function call: use the mangled name
-        ftype = call.callable.type
+        ftype = typed_call.callable.ztype if typed_call else call.callable.type
         if (
             ftype
             and ftype.typetype == ZTypeType.FUNCTION
@@ -839,7 +870,12 @@ class CEmitter:
 
         # check if this is a function pointer field call (e.g. c.op)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            ftype = cast(zast.DottedPath, call.callable).type
+            typed_dp = self._typed_dotted_path_for(cast(zast.DottedPath, call.callable))
+            ftype = (
+                typed_dp.ztype
+                if typed_dp
+                else cast(zast.DottedPath, call.callable).type
+            )
             if ftype and ftype.typetype == ZTypeType.FUNCTION:
                 func_name = ftype.name
                 if func_name in self._is_func_fields:
@@ -5360,7 +5396,12 @@ class CEmitter:
 
     def _emit_callable_dispatch(self, call: zast.Call) -> str:
         """Emit a callable object dispatch: obj(args) -> z_type_call(obj, args)."""
-        type_name = call.callable_type_name
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_ctn = (
+            _typed_call.callable_type_name if _typed_call else call.callable_type_name
+        )
+        type_name = _call_ctn
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
         # Class methods expect a pointer receiver. Wrap the variable with &
@@ -5377,8 +5418,11 @@ class CEmitter:
         return f"{cname}({arg_str})"
 
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
         # callable object dispatch as statement
-        if call.call_kind == zast.CallKind.CALLABLE:
+        if _call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
             return f"{indent}{result};\n"
 
@@ -5471,7 +5515,7 @@ class CEmitter:
             return f'{indent}printf("\\n");\n'
 
         # check call_kind first, then fallback to callable type's control_kind
-        _ck = call.call_kind
+        _ck = _call_kind
         if _ck == zast.CallKind.UNKNOWN and call.callable.type:
             _ctrl = call.callable.type.control_kind
             if _ctrl == ControlKind.RETURN:
@@ -5810,10 +5854,16 @@ class CEmitter:
         C pattern as the explicit `proto.borrow` / `proto.create` forms
         emitted by `_emit_protocol_borrow_call` / `_emit_protocol_create_call`.
         """
-        assert arg.projected_protocol is not None
-        assert arg.projected_label is not None
-        proto_type = arg.projected_protocol
-        label = arg.projected_label
+        typed_arg = self._typed_named_op_for(arg)
+        proj_proto = (
+            typed_arg.projected_protocol if typed_arg else arg.projected_protocol
+        )
+        proj_label = typed_arg.projected_label if typed_arg else arg.projected_label
+        proj_kind = typed_arg.projected_kind if typed_arg else arg.projected_kind
+        assert proj_proto is not None
+        assert proj_label is not None
+        proto_type = proj_proto
+        label = proj_label
         arg_val = self._emit_operation_value(arg.valtype)
         arg_type = self._get_operation_type(arg.valtype)
         impl_name = arg_type.name if arg_type else ""
@@ -5828,7 +5878,7 @@ class CEmitter:
         arg_expr = (
             f"&{arg_val}" if needs_addr and not arg_val.startswith("&") else arg_val
         )
-        if arg.projected_kind == "take":
+        if proj_kind == "take":
             create_name = f"z_{impl_name}_{label}_create_owned"
             tmp = self._temp_name("c")
             indent = self._indent()
@@ -5918,7 +5968,14 @@ class CEmitter:
             # Implicit protocol projection stamped by typecheck: emit
             # `z_<impl>_<label>_create` over the concrete argument value
             # so the callee sees a protocol handle.
-            if arg.projected_protocol is not None and arg.projected_label is not None:
+            typed_arg = self._typed_named_op_for(arg)
+            arg_proj_proto = (
+                typed_arg.projected_protocol if typed_arg else arg.projected_protocol
+            )
+            arg_proj_label = (
+                typed_arg.projected_label if typed_arg else arg.projected_label
+            )
+            if arg_proj_proto is not None and arg_proj_label is not None:
                 val = self._emit_projected_arg(arg)
                 parts.append(val)
                 self._last_emitted_arg_vals.append(val)
@@ -6201,29 +6258,33 @@ class CEmitter:
         return "0"
 
     def _emit_call_value(self, call: zast.Call) -> str:
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_ztype = _typed_call.ztype if _typed_call else call.type
         # callable object dispatch: obj(args) -> z_type_call(obj, args)
-        if call.call_kind == zast.CallKind.CALLABLE:
+        if _call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
-            if call.type:
-                if call.type.subtype == ZSubType.STRING:
+            if _call_ztype:
+                if _call_ztype.subtype == ZSubType.STRING:
                     return self._alloc_temp(result)
-                if call.type.typetype == ZTypeType.CLASS:
-                    ctype = f"z_{call.type.name}_t"
+                if _call_ztype.typetype == ZTypeType.CLASS:
+                    ctype = f"z_{_call_ztype.name}_t"
                     tmp = self._temp_name("c")
                     indent = self._indent()
                     self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                    if call.type.needs_destructor:
+                    if _call_ztype.needs_destructor:
                         self._temp.frees.append(tmp)
-                        self._temp.class_set[tmp] = call.type.name
+                        self._temp.class_set[tmp] = _call_ztype.name
                     return tmp
-                if call.type.typetype == ZTypeType.UNION:
-                    ctype = f"z_{call.type.name}_t"
+                if _call_ztype.typetype == ZTypeType.UNION:
+                    ctype = f"z_{_call_ztype.name}_t"
                     tmp = self._temp_name("c")
                     indent = self._indent()
                     self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                    if call.type.needs_destructor:
+                    if _call_ztype.needs_destructor:
                         self._temp.frees.append(tmp)
-                        self._temp.class_set[tmp] = call.type.name
+                        self._temp.class_set[tmp] = _call_ztype.name
                     return tmp
             return result
 
@@ -6272,7 +6333,7 @@ class CEmitter:
             return f"{_mangle_func(data_name)}[{idx}]"
 
         # typedef create/take/borrow: identity — just emit the from: argument
-        if call.type and call.type.typedef_base is not None:
+        if _call_ztype and _call_ztype.typedef_base is not None:
             if call.arguments:
                 return self._emit_operation_value(call.arguments[0].valtype)
             return "0"
@@ -6448,7 +6509,7 @@ class CEmitter:
                     or _is_stringview_type(dp_parent_type)
                 )
             ):
-                target_type = call.type
+                target_type = _call_ztype
                 if target_type and _is_str_type(target_type):
                     target_name = target_type.name
                     parent_val = self._emit_path_value(dp.parent)
@@ -6685,7 +6746,7 @@ class CEmitter:
                 if method_name == "get" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
                     result = f"z_{map_type_name}_get({parent_val}, {key_val})"
-                    ret_type = call.type
+                    ret_type = _call_ztype
                     if ret_type and ret_type.is_nullable_ptr:
                         # nullable-ptr option: track as temp for destroy
                         tmp = self._temp_name("c")
@@ -6730,9 +6791,9 @@ class CEmitter:
             return result
 
         # box construction: box from: val
-        if call.call_kind == zast.CallKind.BOX_CREATE:
+        if _call_kind == zast.CallKind.BOX_CREATE:
             return self._emit_box_create(call)
-        if call.call_kind == zast.CallKind.BOX_PASSTHROUGH:
+        if _call_kind == zast.CallKind.BOX_PASSTHROUGH:
             return self._emit_box_passthrough(call)
 
         # union construction: union.subtype expr
@@ -6775,8 +6836,8 @@ class CEmitter:
         indent = self._indent()
 
         # if call returns a reftype, wrap in temp for cleanup
-        if call.type:
-            if call.type.subtype == ZSubType.STRING:
+        if _call_ztype:
+            if _call_ztype.subtype == ZSubType.STRING:
                 # A callee declared `out string.borrow` returns a borrowed
                 # view — caller does NOT own it and must not free it.
                 ftype = call.callable.type
@@ -6787,27 +6848,27 @@ class CEmitter:
                     tmp = self._alloc_temp(result)
                 self._apply_call_implicit_takes(call, indent)
                 return tmp
-            if call.type.typetype == ZTypeType.CLASS:
-                ctype = f"z_{call.type.name}_t"
+            if _call_ztype.typetype == ZTypeType.CLASS:
+                ctype = f"z_{_call_ztype.name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                if call.type.needs_destructor:
+                if _call_ztype.needs_destructor:
                     self._temp.frees.append(tmp)
-                    self._temp.class_set[tmp] = call.type.name
+                    self._temp.class_set[tmp] = _call_ztype.name
                 self._apply_call_implicit_takes(call, indent)
                 return tmp
-            if call.type.typetype == ZTypeType.UNION:
+            if _call_ztype.typetype == ZTypeType.UNION:
                 # The callee returns a union by value; wrap in a local
                 # so the subsequent assignment/destroy can take its
                 # address. Cleanup routes through class_set so scope
                 # exit emits `z_<T>_destroy(&tmp)` (freeing the inner
                 # payload without trying to free the stack slot).
-                ctype = f"z_{call.type.name}_t"
+                ctype = f"z_{_call_ztype.name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                if call.type.needs_destructor:
+                if _call_ztype.needs_destructor:
                     self._temp.frees.append(tmp)
-                    self._temp.class_set[tmp] = call.type.name
+                    self._temp.class_set[tmp] = _call_ztype.name
                 self._apply_call_implicit_takes(call, indent)
                 return tmp
 
@@ -6816,7 +6877,7 @@ class CEmitter:
         # call. Only do this when a string arg is present, to avoid disturbing
         # the cleanup of other heap-backed stack-struct args (protocols, etc.).
         if self._call_has_string_arg(call):
-            ret_type = call.type
+            ret_type = _call_ztype
             if ret_type is None or _ctype(ret_type) == "void":
                 self._temp.decls.append(f"{indent}{result};\n")
                 self._apply_call_implicit_takes(call, indent)
@@ -6862,7 +6923,10 @@ class CEmitter:
         return "0"
 
     def _emit_binop_value(self, binop: zast.BinOp) -> str:
-        if binop.const_value is not None:
+        # Step 4d: BinOp decoration reads via typed mirror.
+        _typed_binop = self._typed_binop_for(binop)
+        _binop_const = _typed_binop.const_value if _typed_binop else binop.const_value
+        if _binop_const is not None:
             return self._emit_const_value(binop)
         lhs = self._emit_operation_value(binop.lhs)
         rhs = self._emit_path_value(binop.rhs)
@@ -8006,12 +8070,16 @@ class CEmitter:
 
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_ztype = _typed_call.ztype if _typed_call else call.type
         # a regular function call that happens to return a union is NOT a
         # union construction; defer to the standard call emission path.
-        if call.call_kind == zast.CallKind.REGULAR:
+        if _call_kind == zast.CallKind.REGULAR:
             return False
         # check type annotation for monomorphized union types
-        call_type = call.type
+        call_type = _call_ztype
         if (
             call_type
             and call_type.typetype == ZTypeType.UNION
@@ -8039,7 +8107,10 @@ class CEmitter:
 
     def _emit_union_construction(self, call: zast.Call) -> str:
         """Emit C code for union construction."""
-        call_type = call.type
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_ztype = _typed_call.ztype if _typed_call else call.type
+        call_type = _call_ztype
 
         # nullable-ptr option: .some val → val, .none → NULL
         if call_type and call_type.is_nullable_ptr:
@@ -8218,9 +8289,12 @@ class CEmitter:
 
     def _emit_box_create(self, call: zast.Call) -> str:
         """Emit box from: val for valtype — malloc + copy."""
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_ztype = _typed_call.ztype if _typed_call else call.type
         self.needs_stdlib = True
         indent = self._indent()
-        call_type = call.type
+        call_type = _call_ztype
         if not call_type:
             return "NULL"
         inner_type = call_type.generic_args.get("t")
@@ -8310,13 +8384,17 @@ class CEmitter:
 
     def _is_variant_construction(self, call: zast.Call) -> bool:
         """Check if a call is a variant construction (variant.subtype expr)."""
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_kind = _typed_call.call_kind if _typed_call else call.call_kind
+        _call_ztype = _typed_call.ztype if _typed_call else call.type
         # A regular function call whose return type happens to be a
         # variant is NOT a construction — defer to the standard call
         # emission path (same guard as _is_union_construction).
-        if call.call_kind == zast.CallKind.REGULAR:
+        if _call_kind == zast.CallKind.REGULAR:
             return False
         # check type annotation for monomorphized variant types
-        call_type = call.type
+        call_type = _call_ztype
         if (
             call_type
             and call_type.typetype == ZTypeType.VARIANT
@@ -8344,6 +8422,9 @@ class CEmitter:
 
     def _emit_variant_construction(self, call: zast.Call) -> str:
         """Emit C code for variant construction (stack-allocated, no malloc)."""
+        # Step 4d: Call decoration reads via typed mirror.
+        _typed_call = self._typed_call_for(call)
+        _call_ztype = _typed_call.ztype if _typed_call else call.type
         indent = self._indent()
         tmp = self._temp_name("c")
 
@@ -8356,7 +8437,7 @@ class CEmitter:
             return "(z_unknown_t){0}"
 
         # check for monomorphized variant type (from type annotation)
-        call_type = call.type
+        call_type = _call_ztype
         if (
             call_type
             and call_type.typetype == ZTypeType.VARIANT
