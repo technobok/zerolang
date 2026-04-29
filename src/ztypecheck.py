@@ -10467,6 +10467,9 @@ def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
     # Phase 7d: expose the id-keyed unit_types map for the dumper so
     # it can stamp `unit.unit_type_id` when a unit was materialized.
     program.unit_types_by_id = dict(tc.unit_types_by_id)
+    # Step 4 of typed-tree migration: attach the constructed
+    # TypedProgram so the emitter and SQL dumper can consume it.
+    program.typed_program = tc.typed_program
     return errors
 
 

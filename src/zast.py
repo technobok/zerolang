@@ -297,6 +297,13 @@ class Program:
     # the SQL dumper to populate `unit.unit_type_id`.
     unit_types_by_id: Dict[int, "ZType"] = field(default_factory=dict, init=False)
 
+    # Step 4 of the typed-tree migration: typecheck() attaches the
+    # constructed `TypedProgram` here so the emitter and SQL dumper
+    # can consume it. Typed as `object` to keep `zast.py` decoupled
+    # from `ztypedast.py` (which imports `zast`); consumers cast to
+    # `ztypedast.TypedProgram`.
+    typed_program: "Optional[object]" = field(default=None, init=False)
+
 
 def clone_function(func: "Function") -> "Function":
     """Deep copy a Function AST node for monomorphization."""

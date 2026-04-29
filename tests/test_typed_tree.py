@@ -373,11 +373,7 @@ class TestTypedTopLevelInvariants:
     counterparts."""
 
     def test_main_unit_populated(self):
-        tc = _typecheck(
-            "main: function is {\n"
-            "    x: 7\n"
-            "}"
-        )
+        tc = _typecheck("main: function is {\n    x: 7\n}")
         units = tc.typed_program.units
         assert "test" in units
         unit = units["test"]

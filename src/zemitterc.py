@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple, Callable, cast
 
 import zast
+import ztypedast
 from zast import NodeType
 import zemitterc_runtime as zrt
 import zemitterc_templates as ztmpl
@@ -340,6 +341,17 @@ def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
 class CEmitter:
     def __init__(self, program: zast.Program) -> None:
         self.program = program
+        # Step 4 of the typed-tree migration: hold the typechecker's
+        # constructed `TypedProgram` so emit-site reads of
+        # typecheck-set fields (`type`, `const_value`, `call_kind`,
+        # narrowing stamps, ownership, etc.) can route through the
+        # typed mirror instead of reaching for `init=False` fields on
+        # parsed nodes. May be `None` for tests that build a `Program`
+        # without running the full typechecker; in that case the
+        # emitter falls back to reading parsed-node fields directly.
+        self.typed_program: Optional[ztypedast.TypedProgram] = cast(
+            Optional[ztypedast.TypedProgram], program.typed_program
+        )
         self.out: List[str] = []
         self.indent_level = 0
         self.needs_stdio = False
@@ -500,6 +512,41 @@ class CEmitter:
                     node_id = bnid
             self.source_map.append(node_id)
             char_pos = line_end + 1  # +1 for the \n
+
+    def _typed_for(self, parsed: zast.Node) -> Optional[ztypedast.TypedNode]:
+        """Look up the typed-tree counterpart of a parsed Node by
+        nodeid. Returns None when no `TypedProgram` is attached or the
+        node has no typed mirror yet (e.g. structural sub-nodes like
+        `BinOp.operator`, or a synth node created by the emitter
+        itself). Each Step-4 sub-step replaces decoration reads with
+        typed-mirror reads at sites where the lookup is reliable; the
+        fallback to parsed-node fields keeps the rest unchanged."""
+        if self.typed_program is None:
+            return None
+        return self.typed_program.by_parsed_id.get(parsed.nodeid)
+
+    def _typed_atomid_for(self, atom: zast.AtomId) -> Optional[ztypedast.TypedAtomId]:
+        """Narrowing helper: return the TypedAtomId mirror of `atom`,
+        or None when no typed mirror exists. Validation goes by
+        `parsed.nodetype` (no isinstance per bootstrap-lint)."""
+        typed = self._typed_for(atom)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype not in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return None
+        return cast(ztypedast.TypedAtomId, typed)
+
+    def _typed_dotted_path_for(
+        self, path: zast.DottedPath
+    ) -> Optional[ztypedast.TypedDottedPath]:
+        """Narrowing helper: return the TypedDottedPath mirror of
+        `path`, or None when no typed mirror exists."""
+        typed = self._typed_for(path)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.DOTTEDPATH:
+            return None
+        return cast(ztypedast.TypedDottedPath, typed)
 
     def _emit_bounds_check(
         self,
