@@ -634,6 +634,59 @@ class CEmitter:
             return None
         return cast(ztypedast.TypedWith, typed)
 
+    def _node_const_value(self, node: zast.Node):
+        """Read `const_value` from the typed mirror of `node`.
+        Unwraps `zast.Expression` to its inner subtype (Expression has
+        no typed mirror per design). Falls back to `node.const_value`
+        when no typed mirror exists."""
+        target = node
+        while target.nodetype == NodeType.EXPRESSION:
+            target = cast(zast.Expression, target).expression
+        typed = self._typed_for(target)
+        if typed is None:
+            return node.const_value
+        if typed.parsed.nodetype not in (
+            NodeType.ATOMID,
+            NodeType.LABELVALUE,
+            NodeType.ATOMSTRING,
+            NodeType.DOTTEDPATH,
+            NodeType.BINOP,
+            NodeType.CALL,
+            NodeType.IF,
+            NodeType.CASE,
+            NodeType.FOR,
+            NodeType.DO,
+            NodeType.WITH,
+        ):
+            return node.const_value
+        return cast(ztypedast.TypedExpression, typed).const_value
+
+    def _node_ztype(self, node: zast.Node) -> Optional[ZType]:
+        """Read `ztype` from the typed mirror of `node`. Unwraps
+        `zast.Expression` to its inner subtype. Falls back to
+        `node.type` when no typed mirror exists."""
+        target = node
+        while target.nodetype == NodeType.EXPRESSION:
+            target = cast(zast.Expression, target).expression
+        typed = self._typed_for(target)
+        if typed is None:
+            return node.type
+        if typed.parsed.nodetype not in (
+            NodeType.ATOMID,
+            NodeType.LABELVALUE,
+            NodeType.ATOMSTRING,
+            NodeType.DOTTEDPATH,
+            NodeType.BINOP,
+            NodeType.CALL,
+            NodeType.IF,
+            NodeType.CASE,
+            NodeType.FOR,
+            NodeType.DO,
+            NodeType.WITH,
+        ):
+            return node.type
+        return cast(ztypedast.TypedExpression, typed).ztype
+
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
         """Resolve the ZType of a parser-AST `Path`-shaped node via
         its typed mirror. Falls back to `path.type` when no typed
@@ -1075,14 +1128,14 @@ class CEmitter:
                                 qname
                             )
                         # constant in 'as' section
-                        if apath.const_value is not None:
+                        if self._node_const_value(apath) is not None:
                             self._const_names.add(f"{qname}.{label}")
             elif defn_type in (NodeType.UNION, NodeType.VARIANT):
                 if not self._is_generic_template(defn):
                     for mname in defn.functions():
                         self._is_func_fields.add(f"{qname}.{mname}")
                     for label, apath in defn.as_items.items():
-                        if apath.const_value is not None:
+                        if self._node_const_value(apath) is not None:
                             self._const_names.add(f"{qname}.{label}")
             elif defn_type == NodeType.PROTOCOL:
                 if not self._is_generic_template(defn):
@@ -1092,7 +1145,7 @@ class CEmitter:
                     self._facet_defs[qname] = defn
             elif defn_type == NodeType.ATOMID and _is_numeric_id(defn.name):
                 self._const_names.add(qname)
-            elif hasattr(defn, "const_value") and defn.const_value is not None:
+            elif self._node_const_value(defn) is not None:
                 # unit-level expression that folded to a constant
                 self._const_names.add(qname)
 
@@ -1173,7 +1226,7 @@ class CEmitter:
                 )
             elif defn_type == NodeType.ATOMID and _is_numeric_id(defn.name):
                 self._emit_constant(qname, defn)
-            elif hasattr(defn, "const_value") and type(defn.const_value) in (
+            elif type(self._node_const_value(defn)) in (
                 int,
                 float,
             ):
@@ -1182,13 +1235,14 @@ class CEmitter:
 
     def _emit_folded_constant(self, name: str, node: zast.Node) -> None:
         """Emit a compile-time folded constant as a static const."""
-        v = node.const_value
+        v = self._node_const_value(node)
         assert v is not None
         self.needs_stdint = True
         cname = _mangle_func(name)
         ctype = "int64_t"
-        if node.type:
-            ctype = TYPEMAP.get(node.type.name, "int64_t")
+        n_ztype = self._node_ztype(node)
+        if n_ztype:
+            ctype = TYPEMAP.get(n_ztype.name, "int64_t")
         if type(v) is float:
             self.data_defs.append(f"static const {ctype} {cname} = {repr(v)};\n")
         else:
@@ -1197,10 +1251,11 @@ class CEmitter:
     def _emit_as_constants(self, type_name: str, as_items: dict) -> None:
         """Emit static constants defined in an 'as' section."""
         for label, apath in as_items.items():
-            if apath.const_value is not None:
-                v = apath.const_value
+            v = self._node_const_value(apath)
+            if v is not None:
                 qname = f"{type_name}.{label}"
                 cname = _mangle_func(qname)
+                ap_ztype = self._node_ztype(apath)
                 if type(v) is str:
                     # string constant: emit static stringview + alias
                     self.needs_stringview = True
@@ -1210,14 +1265,14 @@ class CEmitter:
                 elif type(v) is float:
                     self.needs_stdint = True
                     ctype = "int64_t"
-                    if apath.type:
-                        ctype = TYPEMAP.get(apath.type.name, "int64_t")
+                    if ap_ztype:
+                        ctype = TYPEMAP.get(ap_ztype.name, "int64_t")
                     self.data_defs.append(f"static const {ctype} {cname} = {v};\n")
                 else:
                     self.needs_stdint = True
                     ctype = "int64_t"
-                    if apath.type:
-                        ctype = TYPEMAP.get(apath.type.name, "int64_t")
+                    if ap_ztype:
+                        ctype = TYPEMAP.get(ap_ztype.name, "int64_t")
                     self.data_defs.append(f"static const {ctype} {cname} = {int(v)};\n")
 
     def _emit_deferred_facets(self, prefix: str, body: dict) -> None:
@@ -6971,7 +7026,7 @@ class CEmitter:
 
     def _emit_const_value(self, node: zast.Node) -> str:
         """Emit a compile-time constant value as a C literal."""
-        v = node.const_value
+        v = self._node_const_value(node)
         assert v is not None
         self.needs_stdint = True
         if type(v) is bool:
@@ -6980,8 +7035,9 @@ class CEmitter:
             # emit with full precision for f64
             return repr(v)
         raw = str(int(v))
-        if node.type and node.type.name != "i64":
-            ctype = TYPEMAP.get(node.type.name, "int64_t")
+        n_ztype = self._node_ztype(node)
+        if n_ztype and n_ztype.name != "i64":
+            ctype = TYPEMAP.get(n_ztype.name, "int64_t")
             if ctype != "int64_t":
                 return f"(({ctype}){raw})"
         return raw
@@ -7327,12 +7383,26 @@ class CEmitter:
             ):
                 unit_body = self.program.units[pname].body
                 child_defn = unit_body.get(child)
+                child_defn_typed = (
+                    self._typed_for(child_defn) if child_defn is not None else None
+                )
+                child_is_native = (
+                    cast(ztypedast.TypedFunction, child_defn_typed).is_native
+                    if child_defn_typed is not None
+                    and child_defn_typed.parsed.nodetype == NodeType.FUNCTION
+                    else (
+                        cast(zast.Function, child_defn).is_native
+                        if child_defn is not None
+                        and child_defn.nodetype == NodeType.FUNCTION
+                        else False
+                    )
+                )
                 if (
                     child_defn is not None
                     and child_defn.nodetype == NodeType.FUNCTION
-                    and cast(zast.Function, child_defn).is_native
+                    and child_is_native
                 ):
-                    fn_type = child_defn.type
+                    fn_type = self._node_ztype(child_defn) or child_defn.type
                     has_runtime_params = False
                     if fn_type is not None:
                         for p in fn_type.children:
@@ -8753,12 +8823,12 @@ class CEmitter:
         for i, clause in enumerate(ifnode.clauses):
             # check if all conditions in this clause are compile-time constants
             all_const = all(
-                cond_op.const_value is not None
+                self._node_const_value(cond_op) is not None
                 for _, cond_op in clause.conditions.items()
             )
             if all_const and not emitted_true_branch:
                 all_true = all(
-                    bool(cond_op.const_value)
+                    bool(self._node_const_value(cond_op))
                     for _, cond_op in clause.conditions.items()
                 )
                 if all_true:
@@ -8911,12 +8981,12 @@ class CEmitter:
 
         for i, clause in enumerate(ifnode.clauses):
             all_const = all(
-                cond_op.const_value is not None
+                self._node_const_value(cond_op) is not None
                 for _, cond_op in clause.conditions.items()
             )
             if all_const and not emitted_true_branch:
                 all_true = all(
-                    bool(cond_op.const_value)
+                    bool(self._node_const_value(cond_op))
                     for _, cond_op in clause.conditions.items()
                 )
                 if all_true:
