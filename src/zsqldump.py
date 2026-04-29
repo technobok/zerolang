@@ -8,9 +8,67 @@ statements that match the schema from the code review document.
 from typing import List, Optional, Tuple, cast
 
 import zast
+import ztypedast
+from zast import NodeType
 from zlexer import Token
 from ztypes import ZType, is_tag_origin
 import zemitterc
+
+
+# Operation-shaped node kinds whose typed mirrors carry `ztype` /
+# `const_value`. Mirrors `CEmitter._node_const_value` filtering.
+_OP_NODETYPES = (
+    NodeType.ATOMID,
+    NodeType.LABELVALUE,
+    NodeType.ATOMSTRING,
+    NodeType.DOTTEDPATH,
+    NodeType.BINOP,
+    NodeType.CALL,
+    NodeType.IF,
+    NodeType.CASE,
+    NodeType.FOR,
+    NodeType.DO,
+    NodeType.WITH,
+)
+
+
+def _typed_for(
+    typed_program: Optional[ztypedast.TypedProgram], parsed: zast.Node
+) -> Optional[ztypedast.TypedNode]:
+    """Look up a parsed node's typed mirror via TypedProgram.by_parsed_id.
+    Returns None when no TypedProgram is attached or the node has no
+    mirror (synth nodes / parser-only contexts)."""
+    if typed_program is None:
+        return None
+    return typed_program.by_parsed_id.get(parsed.nodeid)
+
+
+def _node_ztype(
+    typed_program: Optional[ztypedast.TypedProgram], node: zast.Node
+) -> Optional[ZType]:
+    """Read `ztype` from the typed mirror of `node`, descending into
+    `Expression.expression` (the wrapper has no typed mirror per
+    ztypedast.py design). Falls back to parsed `node.type` when no
+    typed mirror exists for the inner subtype."""
+    target = node
+    while target.nodetype == NodeType.EXPRESSION:
+        target = cast(zast.Expression, target).expression
+    typed = _typed_for(typed_program, target)
+    if typed is None or typed.parsed.nodetype not in _OP_NODETYPES:
+        return node.type
+    return cast(ztypedast.TypedExpression, typed).ztype
+
+
+def _node_const_value(typed_program: Optional[ztypedast.TypedProgram], node: zast.Node):
+    """Read `const_value` from the typed mirror; same descent rule
+    as `_node_ztype`."""
+    target = node
+    while target.nodetype == NodeType.EXPRESSION:
+        target = cast(zast.Expression, target).expression
+    typed = _typed_for(typed_program, target)
+    if typed is None or typed.parsed.nodetype not in _OP_NODETYPES:
+        return node.const_value
+    return cast(ztypedast.TypedExpression, typed).const_value
 
 
 def _sql_str(s: Optional[str]) -> str:
@@ -236,17 +294,19 @@ def dump_sql(
 
     # Stage 3: AST nodes
     ast_nodes = _collect_ast_nodes(program)
+    typed_program = cast(Optional[ztypedast.TypedProgram], program.typed_program)
     for node, name in ast_nodes:
         kind = type(node).__name__
         token_id = _sql_int(node.start.tokenid) if node.start else "NULL"
         file_id = _sql_int(node.start.fsno) if node.start else "NULL"
         start_line = _sql_int(node.start.lineno) if node.start else "NULL"
         start_col = _sql_int(node.start.colno) if node.start else "NULL"
-        cname = _sql_str(node.type.cname) if node.type and node.type.cname else "NULL"
-        is_const = _sql_bool(node.const_value is not None)
-        const_val = (
-            _sql_str(str(node.const_value)) if node.const_value is not None else "NULL"
-        )
+        # Step 5a: route decoration reads through the typed mirror.
+        n_ztype = _node_ztype(typed_program, node)
+        n_const = _node_const_value(typed_program, node)
+        cname = _sql_str(n_ztype.cname) if n_ztype and n_ztype.cname else "NULL"
+        is_const = _sql_bool(n_const is not None)
+        const_val = _sql_str(str(n_const)) if n_const is not None else "NULL"
         synth_origin = _sql_str(node.synth_origin)
         lines.append(
             f"INSERT INTO ast_nodes VALUES ("
@@ -276,10 +336,12 @@ def dump_sql(
     # from resolved dict
     for ztype in program.resolved.values():
         _register_type(ztype)
-    # from AST node type annotations
+    # from AST node type annotations (route via typed mirror so the
+    # parsed `init=False` `.type` field can be retired in Step 6).
     for node, _ in ast_nodes:
-        if node.type is not None:
-            _register_type(node.type)
+        n_ztype = _node_ztype(typed_program, node)
+        if n_ztype is not None:
+            _register_type(n_ztype)
 
     for ztype in all_types.values():
         parent_id = _sql_int(ztype.parent.nodeid) if ztype.parent else "NULL"
@@ -315,10 +377,11 @@ def dump_sql(
 
     # Stage 5: typed nodes (AST nodes with type annotations)
     for node, name in ast_nodes:
-        if node.type is not None:
+        n_ztype = _node_ztype(typed_program, node)
+        if n_ztype is not None:
             lines.append(
                 f"INSERT OR IGNORE INTO typed_nodes VALUES ("
-                f"{node.nodeid}, {node.type.nodeid});"
+                f"{node.nodeid}, {n_ztype.nodeid});"
             )
 
     # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
