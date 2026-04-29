@@ -306,6 +306,12 @@ def clone_function(func: "Function") -> "Function":
 # a typesafe node id
 NodeID = NewType("NodeID", int)
 
+# Module-level counter — one per Node instance ever. Named (rather
+# than the older `count().__next__` inline form) so tests and
+# introspection tools can reach it, and so the SQL-dump pipeline
+# can capture/restore the next-id watermark.
+_next_node_id = count()
+
 
 @dataclass
 class Node:
@@ -315,7 +321,8 @@ class Node:
     """
 
     nodeid: NodeID = field(
-        default_factory=cast(Callable[[], NodeID], count().__next__), init=False
+        default_factory=cast(Callable[[], NodeID], _next_node_id.__next__),
+        init=False,
     )
     nodetype: NodeType
     # symbol holding the specific instance where this reference is defined
