@@ -578,6 +578,35 @@ class CEmitter:
             return None
         return cast(ztypedast.TypedNamedOperation, typed)
 
+    def _typed_assignment_for(
+        self, assign: zast.Assignment
+    ) -> Optional[ztypedast.TypedAssignment]:
+        """Narrowing helper: return the TypedAssignment mirror."""
+        typed = self._typed_for(assign)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype != NodeType.ASSIGNMENT:
+            return None
+        return cast(ztypedast.TypedAssignment, typed)
+
+    def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
+        """Resolve the ZType of a parser-AST `Path`-shaped node via
+        its typed mirror. Falls back to `path.type` when no typed
+        mirror exists. All Path-shaped typed mirrors (TypedAtomId,
+        TypedDottedPath, TypedAtomString) inherit `ztype` from
+        TypedExpression."""
+        typed = self._typed_for(path)
+        if typed is None:
+            return path.type
+        if typed.parsed.nodetype not in (
+            NodeType.ATOMID,
+            NodeType.LABELVALUE,
+            NodeType.DOTTEDPATH,
+            NodeType.ATOMSTRING,
+        ):
+            return path.type
+        return cast(ztypedast.TypedExpression, typed).ztype
+
     def _emit_bounds_check(
         self,
         lines: List[str],
@@ -4910,11 +4939,15 @@ class CEmitter:
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
+        # Step 4e: Assignment decoration reads via typed mirror.
+        typed_assign = self._typed_assignment_for(assign)
+        _alias_of = typed_assign.alias_of if typed_assign else assign.alias_of
+        _assign_ztype = typed_assign.value.ztype if typed_assign else assign.type
         # Phase B alias optimization: inline `x: y.take` or `x: y.borrow`
         # (or similar on a valtype dotted path) becomes a C-level alias —
         # no local declaration, no destructor, substitute at reference
         # sites. The alias lives until the enclosing function ends.
-        if assign.alias_of is not None:
+        if _alias_of is not None:
             # If the source expression rooted at a narrowed AtomId
             # (e.g., `stolen: s.take` where s is narrowed), the alias
             # must embed the payload-unwrap — plain name substitution
@@ -4924,31 +4957,31 @@ class CEmitter:
             # keep the lightweight string-based alias.
             alias_expr = self._narrowed_alias_expr(assign.value)
             if alias_expr is None:
-                alias_expr = self._alias_c_expr(assign.alias_of)
+                alias_expr = self._alias_c_expr(_alias_of)
             cname = _mangle_var(assign.name)
             self._alias_map[assign.name] = alias_expr
             return f"{indent}/* alias: {cname} => {alias_expr} */\n"
         ctype = "int64_t"
-        if assign.type:
+        if _assign_ztype:
             # typedef method calls: type is FUNCTION but variable holds the
             # return value, not a function pointer
             _is_typedef_call = False
             if (
-                assign.type.typetype == ZTypeType.FUNCTION
-                and assign.type.return_type
+                _assign_ztype.typetype == ZTypeType.FUNCTION
+                and _assign_ztype.return_type
                 and assign.value.expression.nodetype == NodeType.DOTTEDPATH
             ):
                 _pt = cast(zast.DottedPath, assign.value.expression).parent.type
                 _is_typedef_call = _pt is not None and _pt.typedef_base is not None
             if _is_typedef_call:
-                ctype = _ctype(assign.type.return_type)
+                ctype = _ctype(_assign_ztype.return_type)
             else:
-                ctype = _ctype(assign.type)
+                ctype = _ctype(_assign_ztype)
         cname = _mangle_var(assign.name)
         self._in_named_assignment = True
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
-        if assign.type and assign.type.needs_destructor:
+        if _assign_ztype and _assign_ztype.needs_destructor:
             if ctype == "z_String_t":
                 self.needs_string = True
             self.needs_stdlib = True
@@ -4961,7 +4994,7 @@ class CEmitter:
             if self._is_borrow_return_call(assign.value):
                 self._scope.borrowed_vars.add(cname)
             else:
-                self._scope.cleanup_vars.append((cname, assign.type))
+                self._scope.cleanup_vars.append((cname, _assign_ztype))
         # check if value is a bare record name (zero-initialization)
         inner = assign.value.expression
         inner_resolved = (
@@ -4989,7 +5022,7 @@ class CEmitter:
         rhs = self._emit_expression_value(reassign.value)
         result = ""
         # check if this is a reftype reassignment — free old value first
-        lhs_type = reassign.topath.type
+        lhs_type = self._path_ztype(reassign.topath)
         if lhs_type and lhs_type.needs_destructor:
             result += self._emit_field_cleanup(lhs, lhs_type, indent)
             # the variable now owns the new value — remove from temp frees
@@ -5016,8 +5049,9 @@ class CEmitter:
         lhs = self._emit_path_value(swap.lhs)
         rhs = self._emit_path_value(swap.rhs)
         ctype = "int64_t"
-        if swap.lhs.type:
-            ctype = _ctype(swap.lhs.type)
+        lhs_ztype = self._path_ztype(swap.lhs)
+        if lhs_ztype:
+            ctype = _ctype(lhs_ztype)
         return (
             f"{indent}{{\n"
             f"{indent}    {ctype} _tmp = {lhs};\n"
