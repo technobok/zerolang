@@ -2,8 +2,6 @@
 AST Nodes and types
 """
 
-import copy
-
 # import threading
 from dataclasses import dataclass, field
 from enum import IntEnum, unique
@@ -306,8 +304,286 @@ class Program:
 
 
 def clone_function(func: "Function") -> "Function":
-    """Deep copy a Function AST node for monomorphization."""
-    return copy.deepcopy(func)
+    """Deep clone a Function AST subtree for monomorphization.
+
+    Walks the parsed-AST per `NodeType` and reconstructs every node
+    via its dataclass constructor; each clone gets a fresh `nodeid`
+    via the default_factory. `synth_origin` is preserved as a
+    constructor kwarg. Tokens (`start`) are shared by reference —
+    they are immutable enough for source-location reuse and re-issuing
+    them would break diagnostics that point at the original source.
+
+    Replaces the previous `copy.deepcopy(func)` (codereview20260428
+    F8): the explicit walk is portable to a self-hosted zerolang and
+    the fresh nodeids prevent collisions in `TypeChecker._node_*`
+    side-tables when multiple monos of the same generic function are
+    materialised."""
+    return cast("Function", _clone_node(func))
+
+
+def _clone_list(items):
+    """Clone every Node in a list, returning a fresh list. Loop form
+    rather than a comprehension because bootstrap-lint caps list
+    comprehensions and the AST-clone visitor is on the no-new-comps
+    side of the ratchet (Python idiom we're moving away from for
+    self-hosting portability). Untyped parameter because callers
+    pass `List[<NodeSubclass>]` for various subclasses; the
+    invariant-typed `List[Node]` declaration would not accept those
+    under Python's strict invariant container rules."""
+    out = []
+    for item in items:
+        out.append(_clone_node(item))
+    return out
+
+
+def _clone_dict(items):
+    """Clone every Node in a Dict[str, Node], returning a fresh dict.
+    Loop form for the same reason as `_clone_list`; untyped for the
+    same dict-invariance reason."""
+    out = {}
+    for k, v in items.items():
+        out[k] = _clone_node(v)
+    return out
+
+
+def _clone_node(node: "Node") -> "Node":
+    """Recursive AST clone, dispatching on `node.nodetype`. Mutable
+    container fields (List, Dict) are reconstructed; non-Node
+    children (Tokens, strings, bools) are shared by reference."""
+    nt = node.nodetype
+    so = node.synth_origin
+    if nt == NodeType.UNIT:
+        u = cast(Unit, node)
+        return Unit(
+            body=cast("Dict[str, TypeDefinition]", _clone_dict(u.body)),
+            start=u.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.FUNCTION:
+        fn = cast(Function, node)
+        return Function(
+            returntype=cast(
+                Optional[Path],
+                _clone_node(fn.returntype) if fn.returntype is not None else None,
+            ),
+            parameters=cast("Dict[str, Path]", _clone_dict(fn.parameters)),
+            body=cast(
+                Optional[Statement],
+                _clone_node(fn.body) if fn.body is not None else None,
+            ),
+            is_native=fn.is_native,
+            as_items=_clone_dict(fn.as_items),
+            start=fn.start,
+            synth_origin=so,
+        )
+    if nt in (
+        NodeType.RECORD,
+        NodeType.CLASS,
+        NodeType.UNION,
+        NodeType.VARIANT,
+        NodeType.ENUM,
+        NodeType.PROTOCOL,
+        NodeType.FACET,
+    ):
+        od = cast(ObjectDef, node)
+        return ObjectDef(
+            nodetype=od.nodetype,
+            is_items=_clone_dict(od.is_items),
+            as_items=_clone_dict(od.as_items),
+            is_native=od.is_native,
+            start=od.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.EXPRESSION:
+        e = cast(Expression, node)
+        return Expression(
+            expression=cast(ExpressionSubTypes, _clone_node(e.expression)),
+            start=e.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.IF:
+        ifn = cast(If, node)
+        return If(
+            clauses=cast("typing.List[IfClause]", _clone_list(ifn.clauses)),
+            elseclause=cast(
+                Optional[Statement],
+                _clone_node(ifn.elseclause) if ifn.elseclause is not None else None,
+            ),
+            start=ifn.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.IFCLAUSE:
+        ic = cast(IfClause, node)
+        return IfClause(
+            conditions=cast("Dict[str, Operation]", _clone_dict(ic.conditions)),
+            statement=cast(Statement, _clone_node(ic.statement)),
+            start=ic.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.NAMEDOPERATION:
+        no = cast(NamedOperation, node)
+        return NamedOperation(
+            name=no.name,
+            valtype=cast(Operation, _clone_node(no.valtype)),
+            start=no.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.CASE:
+        cn = cast(Case, node)
+        return Case(
+            subject=cast(Operation, _clone_node(cn.subject)),
+            clauses=cast("typing.List[CaseClause]", _clone_list(cn.clauses)),
+            elseclause=cast(
+                Optional[Statement],
+                _clone_node(cn.elseclause) if cn.elseclause is not None else None,
+            ),
+            start=cn.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.CASECLAUSE:
+        cc = cast(CaseClause, node)
+        return CaseClause(
+            name=cc.name,
+            match=cast(AtomId, _clone_node(cc.match)),
+            statement=cast(Statement, _clone_node(cc.statement)),
+            start=cc.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.FOR:
+        fr = cast(For, node)
+        return For(
+            conditions=cast("Dict[str, Operation]", _clone_dict(fr.conditions)),
+            loop=cast(
+                Optional[Statement],
+                _clone_node(fr.loop) if fr.loop is not None else None,
+            ),
+            postconditions=cast(
+                "typing.List[Operation]", _clone_list(fr.postconditions)
+            ),
+            start=fr.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.DO:
+        d = cast(Do, node)
+        return Do(
+            statement=cast(Statement, _clone_node(d.statement)),
+            start=d.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.WITH:
+        w = cast(With, node)
+        return With(
+            name=w.name,
+            value=cast(Expression, _clone_node(w.value)),
+            doexpr=cast(Expression, _clone_node(w.doexpr)),
+            start=w.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.CALL:
+        c = cast(Call, node)
+        return Call(
+            callable=cast(Path, _clone_node(c.callable)),
+            arguments=cast("typing.List[NamedOperation]", _clone_list(c.arguments)),
+            start=c.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.DATA:
+        dn = cast(Data, node)
+        return Data(
+            data=cast("typing.List[NamedOperation]", _clone_list(dn.data)),
+            start=dn.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.BINOP:
+        bo = cast(BinOp, node)
+        return BinOp(
+            lhs=cast(Operation, _clone_node(bo.lhs)),
+            operator=cast(AtomId, _clone_node(bo.operator)),
+            rhs=cast(Path, _clone_node(bo.rhs)),
+            start=bo.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.STATEMENT:
+        s = cast(Statement, node)
+        return Statement(
+            statements=cast("typing.List[StatementLine]", _clone_list(s.statements)),
+            start=s.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.STATEMENTLINE:
+        sl2 = cast(StatementLine, node)
+        return StatementLine(
+            statementline=cast(
+                "typing.Union[Assignment, Reassignment, Swap, Expression]",
+                _clone_node(sl2.statementline),
+            ),
+            start=sl2.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.ASSIGNMENT:
+        a = cast(Assignment, node)
+        return Assignment(
+            name=a.name,
+            value=cast(Expression, _clone_node(a.value)),
+            start=a.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.REASSIGNMENT:
+        ra = cast(Reassignment, node)
+        return Reassignment(
+            topath=cast(Path, _clone_node(ra.topath)),
+            value=cast(Expression, _clone_node(ra.value)),
+            start=ra.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.SWAP:
+        sw = cast(Swap, node)
+        return Swap(
+            lhs=cast(Path, _clone_node(sw.lhs)),
+            rhs=cast(Path, _clone_node(sw.rhs)),
+            start=sw.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.DOTTEDPATH:
+        dp = cast(DottedPath, node)
+        return DottedPath(
+            parent=cast(Path, _clone_node(dp.parent)),
+            child=cast(AtomId, _clone_node(dp.child)),
+            start=dp.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.ATOMID:
+        ai = cast(AtomId, node)
+        return AtomId(name=ai.name, start=ai.start, synth_origin=so)
+    if nt == NodeType.LABELVALUE:
+        lv = cast(LabelValue, node)
+        return LabelValue(name=lv.name, start=lv.start, synth_origin=so)
+    if nt == NodeType.STRINGCHUNK:
+        sc = cast(StringChunk, node)
+        return StringChunk(
+            text=sc.text,
+            chunk_kind=sc.chunk_kind,
+            start=sc.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.ATOMSTRING:
+        as_ = cast(AtomString, node)
+        return AtomString(
+            stringparts=_clone_list(as_.stringparts),
+            start=as_.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.ERROR:
+        er = cast(Error, node)
+        return Error(
+            err=er.err,
+            msg=er.msg,
+            note=er.note,
+            hint=er.hint,
+            start=er.start,
+            synth_origin=so,
+        )
+    raise AssertionError(f"_clone_node: unhandled NodeType {nt}")
 
 
 # a typesafe node id

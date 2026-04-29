@@ -436,21 +436,28 @@ Action items:
       protocol conformance) — fixed shape, 100% mechanical, no
       branching on ad-hoc state.
 
-### F8. `copy.deepcopy(func)` is non-portable — Low (goal 2)
+### F8. `copy.deepcopy(func)` is non-portable — Low (goal 2) \[RESOLVED\]
 
-`src/zast.py:301` uses `copy.deepcopy` inside `clone_function`, which
-runs once per generic monomorphization. This won't survive a port to
-zerolang (no equivalent reflection-driven deep copy). It also means
-cloned nodes initially share their source `nodeid`, which has to be
-patched up afterwards (verify whether this is currently consistent —
-deferred to the action item below).
+`src/zast.py:301` previously used `copy.deepcopy` inside
+`clone_function`, which runs once per generic monomorphization.
+That won't survive a port to zerolang (no equivalent
+reflection-driven deep copy). The deepcopy also shared `nodeid`s
+across clones (verified — `__dict__`-based copy preserves
+init=False fields), which would collide in
+`TypeChecker._node_*` side-tables when multiple monos of the
+same generic function are materialised.
 
 Action items:
-- [ ] Replace `copy.deepcopy(func)` with an explicit nodetype-driven
+- [x] Replaced `copy.deepcopy(func)` with an explicit nodetype-driven
       clone visitor in `zast.py` (one branch per `NodeType`).
-- [ ] Renumber `nodeid` on cloned nodes during the visit so each
-      clone has its own id; document the policy in `compiler.pdoc`.
-- [ ] Remove `import copy` from `zast.py` once unused.
+      Cloned nodes get fresh `nodeid`s via the dataclass
+      default_factory; `synth_origin` preserved as a constructor
+      kwarg; Tokens (`start`) shared by reference.
+- [x] Helper `_clone_list` / `_clone_dict` use loop form rather than
+      list comprehension to stay under the bootstrap-lint cap.
+- [x] Removed `import copy` from `zast.py`.
+
+`make check` clean, `make test` 1962 passing.
 
 ### F9. Single remaining `isinstance` — Low (goal 3)
 
@@ -572,7 +579,7 @@ Still open:
 
 Independent, low-risk; can be done in any order or in parallel.
 
-- [ ] F8 — replace `copy.deepcopy(func)` with explicit clone visitor.
+- [x] F8 — replace `copy.deepcopy(func)` with explicit clone visitor. *(Resolved <pending-hash>.)*
 - [ ] F9 — replace last `isinstance`; drop lint baseline 1 → 0.
 - [ ] F10 — close out the four `TODO` comments.
 - [ ] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`.
