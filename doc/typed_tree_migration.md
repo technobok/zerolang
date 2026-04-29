@@ -558,4 +558,65 @@ it at this file:
 
 > Continuing the typed-tree migration. Read `doc/typed_tree_migration.md`
 > for the running log, then `/home/pawe/.claude/plans/is-this-the-best-virtual-sun.md`
-> for the original design. Begin Step 3.
+> for the original design. Pick up Step 6.9 (strip `Node.type` and
+> `Node.const_value`).
+
+## Session handoff snapshot (after Step 6.8)
+
+State of the tree at commit `d5f8fe1`:
+
+- **Steps 1-5 complete.** Typed tree is fully built; emitter and SQL
+  dump consume it.
+- **Step 6 partially complete: 8 of 10 field families stripped.** The
+  TypeChecker side-table pattern is proven and documented above. Each
+  sub-step landed as one commit + a test fix where needed.
+- **`make test` 1962 passing** (full suite incl. emitter+gcc) at
+  every Step-6 sub-commit.
+
+Remaining for Step 6:
+
+1. **Step 6.9** — `Node.type` and `Node.const_value`. Two side-tables,
+   ~115 writers across `ztypecheck.py` (mostly `node.type = X`,
+   `expr.type = t`, `path.type = ...`), more reads. Mechanical but
+   widespread. Approach options:
+   - One sweep with a Python-driven script that handles writes + reads
+     uniformly. Risk: regex misfires on `ZType.typetype` or similar
+     non-Node `.type` accesses. Audit each replacement.
+   - Per-method sub-steps mirroring 6.1-6.8, e.g. one commit each for
+     `_check_atomid` / `_check_path` / `_check_dotted_path_inner` /
+     `_check_call_inner` / `_check_binop_inner` / etc. Slower but
+     each commit small and reviewable.
+   - The Step-6 pattern's main complication scaled up: typed mirror
+     consumers (`_build_typed_*`) need to read from the side-tables.
+     Many builders already inline `cast(ZType, atom.type)` etc.
+     reading from parsed; redirect those to the side-tables as the
+     last touch.
+
+2. **`Expression.call_kind`** — wrapper-only, no typed mirror per the
+   original design. Needs a design decision before stripping. Three
+   candidate fixes:
+   - Add a `TypedExpression` wrapper class — symmetric, but adds a
+     mirror class the design explicitly avoided.
+   - Move to a TypeChecker side-table copied onto `TypedProgram`
+     for emitter access.
+   - Compute `call_kind` on-demand at the four emitter read sites
+     from the inner subtype's typed counterpart. Cleanest if the
+     four sites share a helper.
+
+After Step 6 finishes, **Step 7** (`@dataclass(frozen=True)` on
+`Node`) becomes mechanical — at that point the parser produces a
+genuinely immutable AST, and the typecheck pass is a pure function
+`Program -> TypedProgram`.
+
+### Cross-cutting things landed during Step 6 that still apply
+
+- `_OPERATION_NODETYPES` includes DO; intentionally excludes IF /
+  CASE / FOR / WITH / DATA (adding them caused emitter regressions
+  in match-arm narrowing tests). Revisit per-field if needed.
+- Atomic-call hoisting in `_hoist_arg_to_temp` calls
+  `_build_typed_assignment(temp_assn)` inline so synth Assignments
+  have typed mirrors the emitter can find.
+- `_build_typed_*` for control-flow nodes (If, Case, For, Do, With)
+  always emits a typed mirror — never skips on missing
+  subcomponents — because post-Step-6 the typed mirror is the only
+  carrier of decoration data.
