@@ -556,7 +556,6 @@ class Expression(Atom):
     separate AST node, it is just slightly different syntax for an Expression)
     """
 
-    is_expression: bool = field(default=True, init=False)
     nodetype: NodeType = field(default=NodeType.EXPRESSION, init=False)
     expression: ExpressionSubTypes
     # set by the type checker for control flow expressions (break, continue, error)

@@ -32,9 +32,6 @@ class Token:
     a token: type, contents and location within file
     """
 
-    is_token: bool = field(default=True, init=False)
-    is_expression: bool = field(default=False, init=False)
-
     toktype: TT
     tokstr: str
     fsno: DEntryID  # unit number in Program / ParserState

@@ -87,10 +87,17 @@ def _is_ws_only(s: str) -> bool:
     return all(c in (" ", "\t") for c in s)
 
 
+def _is_strchunk(p: zast.Node) -> bool:
+    return p.nodetype == NodeType.STRINGCHUNK
+
+
 def _strip_string_whitespace(
-    parts: List[Union[Token, "zast.Expression"]],
-) -> List[Union[Token, "zast.Expression"]]:
+    parts: List[zast.Node],
+) -> List[zast.Node]:
     """Apply string newline/whitespace handling rules from the spec.
+
+    Operates on the post-wrap representation: each part is either a
+    `StringChunk` (literal text) or an `Expression` (interpolation).
 
     1. If the first line is blank (whitespace only), exclude it + its newline.
     2. If the last line is blank (whitespace only), exclude the final newline
@@ -100,18 +107,18 @@ def _strip_string_whitespace(
     if not parts:
         return parts
 
-    # Step 1: strip blank first line (whitespace-only tokens followed by EOL)
+    # Step 1: strip blank first line (whitespace-only chunks followed by EOL)
     first_eol = -1
     for i, p in enumerate(parts):
-        if p.is_expression:
+        if not _is_strchunk(p):
             break
-        tok = cast(Token, p)
-        if tok.toktype == TT.EOL:
+        chunk = cast(zast.StringChunk, p)
+        if chunk.chunk_kind == TT.EOL:
             first_eol = i
             break
-        if tok.toktype == TT.STRMID and _is_ws_only(tok.tokstr):
+        if chunk.chunk_kind == TT.STRMID and _is_ws_only(chunk.text):
             continue
-        if tok.toktype == TT.STRCHR:
+        if chunk.chunk_kind == TT.STRCHR:
             break
         break
     if first_eol >= 0:
@@ -126,15 +133,15 @@ def _strip_string_whitespace(
     last_eol = -1
     for i in range(len(parts) - 1, -1, -1):
         p = parts[i]
-        if p.is_expression:
+        if not _is_strchunk(p):
             break
-        tok = cast(Token, p)
-        if tok.toktype == TT.EOL:
+        chunk = cast(zast.StringChunk, p)
+        if chunk.chunk_kind == TT.EOL:
             last_eol = i
             break
-        if tok.toktype == TT.STRMID and _is_ws_only(tok.tokstr):
+        if chunk.chunk_kind == TT.STRMID and _is_ws_only(chunk.text):
             continue
-        if tok.toktype == TT.STRCHR:
+        if chunk.chunk_kind == TT.STRCHR:
             break
         break
 
@@ -143,15 +150,15 @@ def _strip_string_whitespace(
         # everything after last_eol should be whitespace-only
         trailing = parts[last_eol + 1 :]
         all_ws = all(
-            not p.is_expression
-            and cast(Token, p).toktype == TT.STRMID
-            and _is_ws_only(cast(Token, p).tokstr)
+            _is_strchunk(p)
+            and cast(zast.StringChunk, p).chunk_kind == TT.STRMID
+            and _is_ws_only(cast(zast.StringChunk, p).text)
             for p in trailing
         )
         if all_ws or not trailing:
             # extract the whitespace prefix from the last line
             prefix = "".join(
-                cast(Token, p).tokstr for p in trailing if not p.is_expression
+                cast(zast.StringChunk, p).text for p in trailing if _is_strchunk(p)
             )
             # remove the trailing EOL and whitespace
             parts = parts[:last_eol]
@@ -167,16 +174,16 @@ def _strip_string_whitespace(
     can_strip = True
     at_line_start = True
     for p in parts:
-        if p.is_expression:
+        if not _is_strchunk(p):
             at_line_start = False
             continue
-        tok = cast(Token, p)
-        if tok.toktype == TT.EOL:
+        chunk = cast(zast.StringChunk, p)
+        if chunk.chunk_kind == TT.EOL:
             at_line_start = True
             continue
-        if at_line_start and tok.toktype == TT.STRMID:
+        if at_line_start and chunk.chunk_kind == TT.STRMID:
             # check if this starts a blank line (just whitespace before next EOL)
-            if not _is_ws_only(tok.tokstr) and not tok.tokstr.startswith(prefix):
+            if not _is_ws_only(chunk.text) and not chunk.text.startswith(prefix):
                 can_strip = False
                 break
             at_line_start = False
@@ -187,41 +194,47 @@ def _strip_string_whitespace(
         return parts
 
     # apply the stripping
-    result: List[Union[Token, zast.Expression]] = []
+    result: List[zast.Node] = []
     at_line_start = True
     prefix_len = len(prefix)
     for p in parts:
-        if p.is_expression:
+        if not _is_strchunk(p):
             result.append(p)
             at_line_start = False
             continue
-        tok = cast(Token, p)
-        if tok.toktype == TT.EOL:
-            result.append(tok)
+        chunk = cast(zast.StringChunk, p)
+        if chunk.chunk_kind == TT.EOL:
+            result.append(chunk)
             at_line_start = True
             continue
-        if at_line_start and tok.toktype == TT.STRMID:
-            if _is_ws_only(tok.tokstr):
+        if at_line_start and chunk.chunk_kind == TT.STRMID:
+            if _is_ws_only(chunk.text):
                 # blank line content — keep as-is
-                result.append(tok)
-            elif tok.tokstr.startswith(prefix):
-                stripped = tok.tokstr[prefix_len:]
+                result.append(chunk)
+            elif chunk.text.startswith(prefix):
+                stripped = chunk.text[prefix_len:]
                 if stripped:
+                    # rebuild with the trimmed text and an adjusted column
+                    new_start = Token(
+                        chunk.start.toktype,
+                        chunk.start.tokstr,
+                        chunk.start.fsno,
+                        chunk.start.lineno,
+                        chunk.start.colno + prefix_len,
+                    )
                     result.append(
-                        Token(
-                            tok.toktype,
-                            stripped,
-                            tok.fsno,
-                            tok.lineno,
-                            tok.colno + prefix_len,
+                        zast.StringChunk(
+                            text=stripped,
+                            chunk_kind=chunk.chunk_kind,
+                            start=new_start,
                         )
                     )
-                # else: the token was exactly the prefix, drop it
+                # else: the chunk was exactly the prefix, drop it
             else:
-                result.append(tok)
+                result.append(chunk)
             at_line_start = False
         else:
-            result.append(tok)
+            result.append(chunk)
             at_line_start = False
 
     return result
@@ -2533,7 +2546,7 @@ class Parser:
         if not lex.accept(TT.STRBEG):
             return None
 
-        stringparts: List[Union[Token, zast.Expression]] = []
+        stringparts: List[zast.Node] = []
         extern: Dict[str, zast.AtomId] = {}
 
         while True:
@@ -2548,7 +2561,9 @@ class Parser:
                 break  # end of string
             if tt in (TT.STRMID, TT.STRCHR, TT.EOL):
                 lex.acceptany()
-                stringparts.append(t)
+                stringparts.append(
+                    zast.StringChunk(text=t.tokstr, chunk_kind=t.toktype, start=t)
+                )
             elif tt == TT.STREXPRBEG:
                 lex.acceptany()
                 # string interpolation is \{expr} - braces are consumed by
@@ -2577,19 +2592,5 @@ class Parser:
                 return zast.Error(start=t, err=ERR.BADSTRING, msg=msg)
 
         stringparts = _strip_string_whitespace(stringparts)
-        # Wrap each literal Token as a StringChunk node so the AST
-        # is uniformly Node-typed (Expression interpolations were
-        # already Nodes). The parser-internal `is_expression`
-        # discriminator stays useful inside `_strip_string_whitespace`
-        # which still operates on the raw Token form.
-        wrapped: List[zast.Node] = []
-        for p in stringparts:
-            if p.is_expression:
-                wrapped.append(cast(zast.Expression, p))
-            else:
-                tok = cast(Token, p)
-                wrapped.append(
-                    zast.StringChunk(text=tok.tokstr, chunk_kind=tok.toktype, start=tok)
-                )
-        atomstring = zast.AtomString(stringparts=wrapped, start=firsttoken)
+        atomstring = zast.AtomString(stringparts=stringparts, start=firsttoken)
         return NodeX(node=atomstring, extern=extern)
