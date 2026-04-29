@@ -5768,7 +5768,7 @@ class TypeChecker:
                     loc=sline.start if hasattr(sline, "start") else None,
                 )
                 self._call_preamble.pop()
-                stmt.statements = out
+                stmt.statements[:] = out
                 return
             self._check_statement_line(sline)
             # drain anything _check_call hoisted into the preamble during
@@ -5791,7 +5791,7 @@ class TypeChecker:
                 ):
                     self.symtab.mark_unreachable()
         self._call_preamble.pop()
-        stmt.statements = out
+        stmt.statements[:] = out
 
     def _check_statement_line(self, sline: zast.StatementLine) -> None:
         """Type-check a statement line. Thin wrapper that builds the
@@ -8330,7 +8330,13 @@ class TypeChecker:
         # Replace the arg's value with an AtomId reference to the temp.
         atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
         self._node_type[atom.nodeid] = arg_type
-        arg.valtype = atom
+        # `NamedOperation` is frozen post-Step 7; this is the
+        # last in-place mutation needed for atomic-call hoisting
+        # (rebuilding the parent Call's arguments list with a fresh
+        # NamedOperation would require threading the parent through
+        # every hoist site, which doesn't scale). Use the documented
+        # frozen-dataclass escape hatch.
+        object.__setattr__(arg, "valtype", atom)
         # Build the typed mirror for the synth atom so the wrapping
         # _build_typed_call can resolve the argument's typed counterpart
         # via by_parsed_id. The synth atom doesn't go through

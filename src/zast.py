@@ -317,7 +317,7 @@ NodeID = NewType("NodeID", int)
 _next_node_id = count()
 
 
-@dataclass
+@dataclass(frozen=True)
 class Node:
     """
     Node - the parent of the Ast Node type hierarchy. Do not instantiate
@@ -346,14 +346,18 @@ class Node:
     # only; the typechecker records compile-time constants via
     # `TypeChecker._node_const_value` (a side-table keyed by parsed
     # `nodeid`) and the typed-mirror builders read from there.
+    start: Token  # start location in the source for this Node
     # provenance: None for nodes parsed from user source; pass-name string
     # for nodes synthesised by a compiler pass. Surfaces in SQL dumps.
-    synth_origin: Optional[str] = field(default=None, init=False)
+    # `kw_only=True` so synthesis passes can pass it via the constructor
+    # without disturbing the positional argument order of Node
+    # subclasses (Step 7 prerequisite: frozen Node forbids
+    # post-construction reassignment, so synth-origin must land at
+    # construction time).
+    synth_origin: Optional[str] = field(default=None, kw_only=True)
 
-    start: Token  # start location in the source for this Node
 
-
-@dataclass
+@dataclass(frozen=True)
 class Error(Node):
     """
     Error Node — represents a parse or compile error.
@@ -391,7 +395,7 @@ TypeDefinition = typing.Union[
 ]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Unit(Node):
     """
     Unit Node (unit or unitfile)
@@ -403,7 +407,7 @@ class Unit(Node):
     body: Dict[str, TypeDefinition]  # xxTypeDefinition?
 
 
-@dataclass
+@dataclass(frozen=True)
 class Function(Node):
     """
     Function Node (or spec)
@@ -442,7 +446,7 @@ class Function(Node):
         }
 
 
-@dataclass
+@dataclass(frozen=True)
 class ObjectDef(Node):
     """
     Unified type-definition node. `nodetype` discriminates which
@@ -534,14 +538,14 @@ ExpressionSubTypes = typing.Union[
 
 
 # Operation - real Node not required
-@dataclass
+@dataclass(frozen=True)
 class Operation(Node):
     """
     Operation - parent of Path and BinOp
     """
 
 
-@dataclass
+@dataclass(frozen=True)
 class Path(Operation):
     """
     Path - parent of both DottedPath and Atom
@@ -549,7 +553,7 @@ class Path(Operation):
     """
 
 
-@dataclass
+@dataclass(frozen=True)
 class Atom(Path):
     """
     Atom Node
@@ -561,7 +565,7 @@ class Atom(Path):
     # atom: typing.Union["AtomExpr", "AtomId", "AtomString"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Expression(Atom):
     """
     Expression Node
@@ -583,7 +587,7 @@ class Expression(Atom):
     # `CEmitter._expr_call_kind(expr)` helper to read it.
 
 
-@dataclass
+@dataclass(frozen=True)
 class If(Node):
     """
     If Node
@@ -599,7 +603,7 @@ class If(Node):
     # `TypeChecker._if_taken_vars` and `_build_typed_if` reads it.
 
 
-@dataclass
+@dataclass(frozen=True)
 class IfClause(Node):
     """
     IfClause Node - represents one condition set and statement for If/Case
@@ -611,7 +615,7 @@ class IfClause(Node):
     statement: "Statement"  # then statement to execute. Should be optional?
 
 
-@dataclass
+@dataclass(frozen=True)
 class NamedOperation(Node):
     """
     NamedOperation Node - a named Operation for Call, Data...
@@ -627,7 +631,7 @@ class NamedOperation(Node):
     # by parsed `nodeid`) and the typed-mirror builder reads from there.
 
 
-@dataclass
+@dataclass(frozen=True)
 class Case(Node):
     """
     Case Node - represents top Case statement
@@ -645,7 +649,7 @@ class Case(Node):
     # `_build_typed_case` reads them.
 
 
-@dataclass
+@dataclass(frozen=True)
 class CaseClause(Node):
     """
     CaseClause Node - represents one condition and statement for Case
@@ -658,7 +662,7 @@ class CaseClause(Node):
     statement: "Statement"  # then statement to execute
 
 
-@dataclass
+@dataclass(frozen=True)
 class For(Node):
     """
     For Node
@@ -681,7 +685,7 @@ class For(Node):
     # `TypeChecker._for_iter_bindings` and `_build_typed_for` reads it.
 
 
-@dataclass
+@dataclass(frozen=True)
 class Do(Node):
     """
     Do Node
@@ -697,7 +701,7 @@ class Do(Node):
     # `nodeid`) and `_build_typed_do` reads it.
 
 
-@dataclass
+@dataclass(frozen=True)
 class With(Node):
     """
     With Node - scoped definition with do expression
@@ -741,7 +745,7 @@ class CallKind(IntEnum):
     PANIC = 19  # panic call (runtime terminal error)
 
 
-@dataclass
+@dataclass(frozen=True)
 class Call(Operation):
     """
     Call Node - represents an executable call and also a type reference (in
@@ -766,7 +770,7 @@ class Call(Operation):
     # keyed by parsed `nodeid`) and `_build_typed_call` reads them.
 
 
-@dataclass
+@dataclass(frozen=True)
 class Data(Node):
     """
     Data Node
@@ -776,7 +780,7 @@ class Data(Node):
     data: typing.List["NamedOperation"]  # data, change to dict?
 
 
-@dataclass
+@dataclass(frozen=True)
 class BinOp(Operation):
     """
     BinOp - binary operation
@@ -789,7 +793,7 @@ class BinOp(Operation):
     rhs: "Path"
 
 
-@dataclass
+@dataclass(frozen=True)
 class Statement(Node):
     """
     Statement Node
@@ -804,7 +808,7 @@ class Statement(Node):
     statements: typing.List["StatementLine"]
 
 
-@dataclass
+@dataclass(frozen=True)
 class StatementLine(Node):
     """
     StatementLine Node
@@ -821,7 +825,7 @@ class StatementLine(Node):
     ]
 
 
-@dataclass
+@dataclass(frozen=True)
 class Assignment(Node):
     """
     Assignment Node - create a new variable definition
@@ -837,7 +841,7 @@ class Assignment(Node):
     # `nodeid`) and `_build_typed_assignment` reads it.
 
 
-@dataclass
+@dataclass(frozen=True)
 class Reassignment(Node):
     """
     Reassignment Node - update/change an existing variable
@@ -848,7 +852,7 @@ class Reassignment(Node):
     value: "Expression"  # source expression
 
 
-@dataclass
+@dataclass(frozen=True)
 class Swap(Node):
     """
     Swap Node - swap two owned reference types
@@ -859,7 +863,7 @@ class Swap(Node):
     rhs: "Path"
 
 
-@dataclass
+@dataclass(frozen=True)
 class DottedPath(Path):
     """
     DottedPath Node
@@ -878,7 +882,7 @@ class DottedPath(Path):
     # (no writer) and is left None on the typed mirror.
 
 
-@dataclass
+@dataclass(frozen=True)
 class AtomId(Atom):
     """
     AtomId Node
@@ -897,14 +901,14 @@ class AtomId(Atom):
     # side-tables.
 
 
-@dataclass
+@dataclass(frozen=True)
 class LabelValue(AtomId):
     """Label value (:x) — shorthand for x: x where x doesn't bind to itself."""
 
     nodetype: NodeType = field(default=NodeType.LABELVALUE, init=False)
 
 
-@dataclass
+@dataclass(frozen=True)
 class StringChunk(Node):
     """
     A literal text segment of an interpolated string. Carries the
@@ -920,7 +924,7 @@ class StringChunk(Node):
     chunk_kind: TT
 
 
-@dataclass
+@dataclass(frozen=True)
 class AtomString(Atom):
     """
     AtomString Node — an Atom comprising the ordered parts of an

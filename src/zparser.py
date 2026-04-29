@@ -1585,8 +1585,15 @@ class Parser:
             err = zast.Error(start=lex.peek(), err=ERR.BADUNIT, msg=msg)
             return err
 
-        unitorerr.node.start = start  # change start to 'unit' keyword
-        return unitorerr
+        # Rebuild the Unit with `start` pointing at the `unit` keyword
+        # rather than the body's first token. After Step 7's freeze on
+        # `Node`, post-construction reassignment of `.start` is no
+        # longer permitted; constructing a fresh Unit with the right
+        # start preserves the existing semantics without mutation.
+        return NodeX(
+            node=zast.Unit(start=start, body=unitorerr.node.body),
+            extern=unitorerr.extern,
+        )
 
     def _accept_if_expression(
         self, lex: Lexer

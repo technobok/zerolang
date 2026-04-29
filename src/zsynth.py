@@ -55,9 +55,7 @@ def make_atom_id(name: str, src_loc: Token, origin: str = "anf") -> AtomId:
     point at the original user source. `synth_origin` marks the node
     as compiler-generated.
     """
-    node = AtomId(name=name, start=src_loc)
-    node.synth_origin = origin
-    return node
+    return AtomId(name=name, start=src_loc, synth_origin=origin)
 
 
 def make_assignment(
@@ -74,12 +72,9 @@ def make_assignment(
     is left untouched so callers can pass either an original
     parsed expression or another synthetic one.
     """
-    expr = Expression(expression=value_op, start=src_loc)
-    expr.synth_origin = origin
-    assn = Assignment(name=name, value=expr, start=src_loc)
-    assn.synth_origin = origin
-    line = StatementLine(statementline=assn, start=src_loc)
-    line.synth_origin = origin
+    expr = Expression(expression=value_op, start=src_loc, synth_origin=origin)
+    assn = Assignment(name=name, value=expr, start=src_loc, synth_origin=origin)
+    line = StatementLine(statementline=assn, start=src_loc, synth_origin=origin)
     return line
 
 

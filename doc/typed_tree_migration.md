@@ -41,11 +41,7 @@ plan). This file is the running implementation log.
 | 4. Switch the emitter to consume the typed tree | ✅ done | `09f6aee`-`fad8ee9` | Threaded `TypedProgram` into `CEmitter` (4a `09f6aee`); per-family migrations of decoration reads — AtomId (4b `47d3ad2`), DottedPath (4c `50f0648`), Call/BinOp/NamedOp (4d `e315b84`), Statement-shape (4e `6ed23bf`), control-flow (4f `ecd82b3`), top-level + generic helpers (4g `fad8ee9`). All decoration reads on mirrored node families route through `_typed_*_for` helpers. Outstanding: `Expression`-wrapper `.call_kind` / `.type` (no typed mirror per design) — addressed in Step 6 / 7 alongside parsed-AST cleanup. `make test` 1962 passing throughout. |
 | 5. Switch SQL dump to consume the typed tree | ✅ done | `2c752b8`-`8c9496a` | 5a `2c752b8` routed `zsqldump.py` decoration reads through TypedProgram (`_node_ztype` / `_node_const_value` helpers, schema unchanged). 5b `8c9496a` split the schema: `ast_nodes` keeps parser-set fields only; new typecheck-set columns (`cname`, `is_const`, `const_value`) live on `typed_nodes` joined to `ast_nodes` by FK. `test_cname_in_ast_nodes_dump` re-targeted at the new table. `make test` 1962 passing. |
 | 6. Remove `init=False` decorations from `zast.py` | ✅ done | `03c380c`-`5b9cd47` | 6.1 `03c380c` `NamedOperation.projected_*`. 6.2 `34ca445` `Assignment.alias_of`, `With.ownership/alias_of`. 6.3 `f4ef245` `Do.has_break`. 6.4 `3c717f5` `For.iterator_bindings`. 6.5 `77bc101` `If.taken_vars`, `Case.taken_vars`, `Case.subject_taken`. 6.6 `62ace88` `AtomId.narrowed_subtype/original_ztype/child_id`. 6.7 `3cff63a` `DottedPath.parent_tagged_type/narrowed_subtype/child_id`. 6.8 `f69215a` `Call.call_kind/callable_type_name`. 6.9.a `88dca51` `Node.const_value`. 6.9.b `d5ce033` `Node.type`. 6.10 `5b9cd47` `Expression.call_kind`. Pattern: typecheck writes a side-table on `TypeChecker` keyed by parsed `nodeid`; `_build_typed_*` reads the side-table to populate the typed mirror; emitter/SQL-dump parsed-fallback dropped. `_build_typed_*` for control-flow nodes relaxed to always emit a typed mirror so missing subcomponents don't lose decoration data. Atomic-call hoisting calls `_build_typed_assignment` on synth Assignments inline so the emitter finds their typed mirrors. Remaining fields to strip: `Node.type` (~90 writers), `Expression.call_kind` (no typed mirror — needs design decision). | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
-| 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
-| 4. Switch emitter to consume typed tree | pending | — | |
-| 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
-| 6. Remove `init=False` decorations from `zast.py` | pending | — | typechecker stops writing in place |
-| 7. Freeze `Node` (`@dataclass(frozen=True)`) | pending | — | invariant: parsed AST never mutated |
+| 7. Freeze `Node` (`@dataclass(frozen=True)`) | ✅ done | `<7-pending>` | `frozen=True` on Node + 29 subclasses; `Program` stays mutable (typecheck still writes typed_program / mono_types / etc. onto it). Three real Node mutations addressed first: `synth_origin` made `kw_only=True` so zsynth passes it via constructor; `stmt.statements = out` rewritten to in-place `stmt.statements[:] = out` (frozen blocks attribute reassignment, not list mutation); parser's `unitorerr.node.start = start` rebuilds the NodeX with a freshly-constructed Unit. The atomic-call hoisting `arg.valtype = atom` mutation kept via the documented `object.__setattr__` escape hatch — rebuilding the parent Call's args list would require threading the parent through every hoist site. |
 | 8. Typechecker cleanup (codereview20260428) | pending | — | the originally-planned next task; cheaper after the split |
 
 `make check` clean and `make test-fast` 1358 passing after Step 3a.
@@ -843,6 +839,61 @@ Three lessons that carried over from 6.9.a but scaled up here:
 - `sed -i` on large files in this environment has, twice, written
   an empty file. Avoid `sed -i`; use Python file-write or the Edit
   tool.
+
+`make check` clean, `make test-fast` 1373 passing,
+`make test` 1962 passing (full suite incl. emitter+gcc).
+
+## Step 7 — what landed
+
+`@dataclass(frozen=True)` on `Node` and all 29 subclasses in
+`zast.py`. The parser-produced AST is now genuinely immutable
+post-construction; any `<node>.<field> = X` raises
+`FrozenInstanceError`.
+
+Wasn't quite the one-liner the Step-6 closer suggested. Three
+real mutations remained from earlier passes that had to land
+first:
+
+1. **`synth_origin = origin`** at 4 sites in `zsynth.py`
+   (`make_atom_id`, `make_assignment`'s three nested wrappers).
+   `Node.synth_origin` switched from `init=False` to
+   `field(default=None, kw_only=True)` so `zsynth` callers pass
+   it via the constructor. `kw_only` keeps the positional
+   argument order of every Node subclass undisturbed; existing
+   parser callsites that don't care about provenance need no
+   change.
+
+2. **`stmt.statements = out`** in `_check_statement_inner`
+   (atomic-call hoisting rewrites the StatementLine list in
+   place). Switched to `stmt.statements[:] = out` — frozen
+   blocks *attribute* reassignment but not in-place mutation of
+   mutable contents (`list[:] = …` mutates the list, doesn't
+   rebind the field). Same fix for the early-return dead-code
+   path.
+
+3. **`unitorerr.node.start = start`** in `_accept_subunit`
+   parser. The Unit was constructed with the body's first token
+   as `start`, then post-mutated to point at the `unit` keyword.
+   After freeze, the parser rebuilds the NodeX with a
+   freshly-constructed `Unit(start=start, body=...)`.
+
+One residual mutation kept via the documented frozen-dataclass
+escape hatch:
+
+4. **`arg.valtype = atom`** in `_hoist_arg_to_temp`
+   (atomic-call hoisting replaces a NamedOperation's valtype with
+   a synth AtomId reference to the new temp). Rebuilding the
+   parent `Call.arguments` with a fresh NamedOperation would
+   require threading the parent through every hoist site, so we
+   use `object.__setattr__(arg, "valtype", atom)`. Documented
+   in-place; the only such bypass.
+
+`Program` stays unfrozen — it's not a Node and the typecheck
+pass still writes `typed_program`, `mono_types`,
+`mono_functions`, `func_aliases`, `cloned_methods`,
+`unit_types_by_id` onto it after parsing. Migrating those to a
+TypeChecker side-table or a frozen TypedProgram-only carrier is
+Step 8 territory.
 
 `make check` clean, `make test-fast` 1373 passing,
 `make test` 1962 passing (full suite incl. emitter+gcc).
