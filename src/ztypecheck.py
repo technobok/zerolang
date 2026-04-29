@@ -8,6 +8,7 @@ Includes ownership checking (Phase 4c).
 from typing import Callable, Optional, List, Tuple, cast
 
 import zast
+import ztypedast
 from zast import ERR, NodeType, clone_function
 from zlexer import Token
 from zenv import SymbolTable
@@ -467,6 +468,17 @@ class TypeChecker:
         # cloned methods per mono type: mono_name -> {mname: Function}
         self._cloned_methods: dict[str, dict[str, zast.Function]] = {}
 
+        # Typed-tree mirror (Step 3 of the typed-tree migration). The
+        # typechecker builds typed nodes alongside its in-place parsed
+        # decorations; the emitter and SQL dumper will switch to
+        # consuming this tree in later steps. Today only a subset of
+        # typed-node kinds are populated — see by_parsed_id keys for
+        # what's covered.
+        self.typed_program: ztypedast.TypedProgram = ztypedast.TypedProgram(
+            parsed=program,
+            mainunitname=program.mainunitname,
+        )
+
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
 
@@ -523,6 +535,32 @@ class TypeChecker:
         "Cannot call",
         "param",
     )
+
+    def _register_typed(self, parsed: zast.Node, typed: ztypedast.TypedNode) -> None:
+        """Index a typed-tree node by its parsed back-reference's nodeid
+        so cross-tree consumers (symbol-table -> typed lookup) and the
+        invariant test can find it. Idempotent: re-registering a parsed
+        node overwrites the prior entry (last writer wins, e.g. when a
+        node is re-typechecked under monomorphisation)."""
+        self.typed_program.by_parsed_id[parsed.nodeid] = typed
+
+    def _build_typed_atomid(self, atom: zast.AtomId) -> ztypedast.TypedAtomId:
+        """Construct the typed mirror of a parsed `AtomId` from its
+        in-place decorations and register it. Called from `_check_atomid`
+        once the atom's `type` / `narrowed_subtype` / `child_id` /
+        `const_value` fields are settled."""
+        typed = ztypedast.TypedAtomId(
+            parsed=atom,
+            ztype=cast(ZType, atom.type),
+            const_value=atom.const_value,
+            name=atom.name,
+            is_label_value=(atom.nodetype == NodeType.LABELVALUE),
+            narrowed_subtype=atom.narrowed_subtype,
+            original_ztype=atom.original_ztype,
+            child_id=atom.child_id,
+        )
+        self._register_typed(atom, typed)
+        return typed
 
     def _error(
         self,
@@ -6575,6 +6613,7 @@ class TypeChecker:
                     atom.const_value = value
                 elif not err and type(value) is float and typename == "f64":
                     atom.const_value = value
+            self._build_typed_atomid(atom)
             return t
 
         t = self._resolve_name(name)
@@ -6613,6 +6652,7 @@ class TypeChecker:
                     and defn.const_value is not None
                 ):
                     atom.const_value = defn.const_value
+            self._build_typed_atomid(atom)
             return t
 
         # check if the variable was taken (ownership transferred)
@@ -6625,6 +6665,7 @@ class TypeChecker:
                 err=ERR.OWNERERROR,
                 note=f"ownership of '{name}' was transferred at line {tline}, column {tcol}",
             )
+            self._build_typed_atomid(atom)
             return None
 
         # did-you-mean: search available names in scope
@@ -6636,6 +6677,7 @@ class TypeChecker:
             err=ERR.REFNOTFOUND,
             hint=f"did you mean '{suggestion}'?" if suggestion else None,
         )
+        self._build_typed_atomid(atom)
         return None
 
     def _check_call(self, call: zast.Call) -> Optional[ZType]:

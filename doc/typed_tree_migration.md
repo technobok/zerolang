@@ -31,14 +31,61 @@ plan). This file is the running implementation log.
 | ---- | ------ | ------ | ----- |
 | 1. For comprehension scratch off AST | ✅ done | `2afe83e` | emitter-local dict keyed by `nodeid` |
 | 2. Define `src/ztypedast.py` | ✅ done | `43ec658` | data-only, no callers |
-| 3. Twin-pass typechecker — build typed tree alongside | ⏳ next | — | the big restructuring |
+| 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | _pending_ | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
+| 3b–3e. Remaining `_check_*` typed-mirror coverage | ⏳ next | — | working leaf-out: AtomString, DottedPath, BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
 | 6. Remove `init=False` decorations from `zast.py` | pending | — | typechecker stops writing in place |
 | 7. Freeze `Node` (`@dataclass(frozen=True)`) | pending | — | invariant: parsed AST never mutated |
 | 8. Typechecker cleanup (codereview20260428) | pending | — | the originally-planned next task; cheaper after the split |
 
-`make check` clean and `make test` 1943 passing as of `43ec658`.
+`make check` clean and `make test-fast` 1358 passing after Step 3a.
+
+## Step 3a — what landed
+
+- `TypeChecker.__init__` constructs `self.typed_program: TypedProgram`
+  (parsed back-ref to `program`, `mainunitname` copied through). `units`
+  / side-tables left empty until later sub-steps populate them.
+- `TypeChecker._register_typed(parsed, typed)` indexes a typed node by
+  its parsed back-reference's `nodeid`, exposed via
+  `typed_program.by_parsed_id`. Idempotent (last writer wins, fine for
+  a node that gets re-typed under monomorphisation).
+- `TypeChecker._build_typed_atomid(atom)` mirrors a parsed `AtomId`
+  into a fresh `TypedAtomId` (name + ztype + const_value + narrowing
+  fields + child_id + is_label_value derived from `nodetype`) and
+  registers it. Called from each return path of `_check_atomid`,
+  including the two error returns — so even unresolved AtomIds get a
+  typed mirror with `ztype=None`.
+- Invariant test `tests/test_typed_tree.py::TestTypedAtomIdInvariants`
+  walks every TypedAtomId in `by_parsed_id` and asserts field-for-field
+  agreement with its parsed back-reference. As more typed-node kinds
+  come online, this test broadens to those kinds.
+
+## Step 3b — next
+
+Add typed mirrors for `AtomString` (build during
+`_check_string_interpolation`/`_check_path` ATOMSTRING branch) and
+`DottedPath` (build at the end of `_check_dotted_path`, looking up
+`parent` via `by_parsed_id`, constructing a fresh `TypedAtomId` for
+`child` since the parsed AtomId-as-selector is never independently
+typechecked).
+
+Watch out for these subtle places (already inventoried while landing
+Step 3a):
+
+- `_check_dotted_path` resolves the parent AtomId in two ways: via
+  `_check_path` (which calls `_check_atomid`), and inline at line ~6443
+  (numeric-cast + bare ATOMID branch) which sets `parent_atom.type`
+  directly without calling `_check_atomid`. The inline branch needs to
+  build a `TypedAtomId` for the parent atom, otherwise the
+  `TypedDottedPath.parent` field has no entry in `by_parsed_id` to
+  point at.
+- `BinOp.operator`, `CaseClause.match`, and `DottedPath.child` are
+  AtomIds that the typechecker never independently types (their `type`
+  field is intentionally None). Don't build standalone `TypedAtomId`
+  for these — they're folded into their containing typed node
+  (`TypedBinOp.operator`, `TypedCaseClause.match`,
+  `TypedDottedPath.child`) at the moment that node is built.
 
 ## What's in `src/ztypedast.py` (542 lines, frozen interface)
 
