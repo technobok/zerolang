@@ -506,6 +506,11 @@ class TypeChecker:
         # `_check_expression`'s DO branch (to widen the result type
         # to `option`) and by `_build_typed_do`.
         self._do_has_break: dict[int, bool] = {}
+        # Per-For iterator-binding names (was
+        # `zast.For.iterator_bindings`). The set of `name:` bindings
+        # whose operation auto-unwraps an `option` value at each
+        # iteration. Read by `_build_typed_for`.
+        self._for_iter_bindings: dict[int, set[str]] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -6796,24 +6801,22 @@ class TypeChecker:
         self._register_typed(casenode, typed)
 
     def _build_typed_for(self, fornode: zast.For) -> None:
-        """Construct typed mirror of a `For` loop."""
+        """Construct typed mirror of a `For` loop. Always emits a typed
+        mirror so post-Step-6 `iterator_bindings` reads via the typed
+        tree don't lose data when subcomponents are unmirrored;
+        missing per-condition / per-postcondition operands are left
+        as `None` placeholders in the dict / list."""
         conds_typed: dict = {}
         for cname, cond_op in fornode.conditions.items():
             op_typed = self._typed_operation_for(cond_op)
-            if op_typed is None:
-                return
             conds_typed[cname] = op_typed
         loop_typed: Optional[ztypedast.TypedStatement] = None
         if fornode.loop is not None:
             loop_lookup = self.typed_program.by_parsed_id.get(fornode.loop.nodeid)
-            if loop_lookup is None:
-                return
-            loop_typed = cast(ztypedast.TypedStatement, loop_lookup)
-        post_typed: List[ztypedast.TypedOperation] = []
+            loop_typed = cast(Optional[ztypedast.TypedStatement], loop_lookup)
+        post_typed: list = []
         for post_op in fornode.postconditions:
             op_typed = self._typed_operation_for(post_op)
-            if op_typed is None:
-                return
             post_typed.append(op_typed)
         typed = ztypedast.TypedFor(
             parsed=fornode,
@@ -6822,7 +6825,7 @@ class TypeChecker:
             conditions=conds_typed,
             loop=loop_typed,
             postconditions=post_typed,
-            iterator_bindings=set(fornode.iterator_bindings),
+            iterator_bindings=set(self._for_iter_bindings.get(fornode.nodeid, ())),
         )
         self._register_typed(fornode, typed)
 
@@ -9888,7 +9891,9 @@ class TypeChecker:
                 if iter_option_type:
                     some_type = iter_option_type.children.get("some")
                     if some_type:
-                        fornode.iterator_bindings.add(name)
+                        self._for_iter_bindings.setdefault(fornode.nodeid, set()).add(
+                            name
+                        )
                         t = some_type
                 # optionview yields borrowed views: mark the loop var with
                 # borrow_origin so the existing escape checks (storage,

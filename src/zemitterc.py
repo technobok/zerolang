@@ -9064,9 +9064,7 @@ class CEmitter:
     def _emit_for(self, fornode: zast.For) -> str:
         # Step 4f: route For decoration reads through typed mirror.
         typed_for = self._typed_for_for(fornode)
-        _for_iter_bindings = (
-            typed_for.iterator_bindings if typed_for else fornode.iterator_bindings
-        )
+        _for_iter_bindings = typed_for.iterator_bindings if typed_for else set()
         indent = self._indent()
         parts: List[str] = []
 

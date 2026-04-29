@@ -665,9 +665,11 @@ class For(Node):
     # can be empty, no bindings, Operation - must be bool condition
     postconditions: typing.List["Operation"]
 
-    # set by type checker: named bindings whose operation returns option
-    # (re-evaluated each iteration, auto-unwrapped, terminates on none)
-    iterator_bindings: typing.Set[str] = field(default_factory=set, init=False)
+    # `iterator_bindings` used to live here as an `init=False` field
+    # populated by `_check_for_inner` (named bindings whose operation
+    # returns option, re-evaluated each iteration). After Step 6 it
+    # lives on `TypedFor` only; the typechecker records it via
+    # `TypeChecker._for_iter_bindings` and `_build_typed_for` reads it.
 
 
 @dataclass
