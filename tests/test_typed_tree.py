@@ -259,6 +259,56 @@ class TestTypedCallInvariants:
         assert len(binop_parts) == 1
 
 
+class TestTypedStatementInvariants:
+    """Statements / StatementLines / Assignments wrap operations in
+    typed-tree form. Each parsed statement-shape has a mirror keyed by
+    its parsed nodeid; the wrapped values reference the typed
+    counterparts of their inner expressions."""
+
+    def test_statement_and_assignment_mirrors(self):
+        tc = _typecheck("main: function is {\n    x: 7\n    y: x\n}")
+        mainunit = tc.program.units[tc.program.mainunitname]
+        # the function body is a Statement
+        main_fn = _cast(zast.Function, mainunit.body["main"])
+        assert main_fn.body is not None
+        body_typed = tc.typed_program.by_parsed_id.get(main_fn.body.nodeid)
+        assert body_typed is not None
+        assert isinstance(body_typed, ztypedast.TypedStatement)
+        # two statement lines: `x: 7` and `y: x`
+        assert len(body_typed.statements) == 2
+        for sline_typed, sline_parsed in zip(
+            body_typed.statements, main_fn.body.statements
+        ):
+            assert isinstance(sline_typed, ztypedast.TypedStatementLine)
+            assert sline_typed.parsed is sline_parsed
+            inner_parsed = sline_parsed.statementline
+            assert inner_parsed.nodetype == NodeType.ASSIGNMENT
+            inner_typed = sline_typed.statementline
+            assert isinstance(inner_typed, ztypedast.TypedAssignment)
+            assert inner_typed.name == _cast(zast.Assignment, inner_parsed).name
+            # the assignment is registered in by_parsed_id
+            assert (
+                tc.typed_program.by_parsed_id.get(inner_parsed.nodeid) is inner_typed
+            )
+
+    def test_reassignment_mirror(self):
+        tc = _typecheck(
+            "main: function is {\n    x: 7\n    x = 11\n}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        reassigns = [
+            n for n in _walk_main(mainunit) if n.nodetype == NodeType.REASSIGNMENT
+        ]
+        assert reassigns, "expected a reassignment"
+        for r in reassigns:
+            typed = tc.typed_program.by_parsed_id.get(r.nodeid)
+            assert typed is not None
+            assert isinstance(typed, ztypedast.TypedReassignment)
+            assert typed.parsed is r
+            assert typed.topath is not None
+            assert typed.value is not None
+
+
 class TestTypedDottedPathInvariants:
     """Every TypedDottedPath in by_parsed_id must mirror its parsed
     back-reference's in-place decorations and must reference the typed

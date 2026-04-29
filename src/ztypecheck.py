@@ -5610,6 +5610,12 @@ class TypeChecker:
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
+        """Type-check a statement block. Thin wrapper that builds the
+        typed mirror after the inner walks the statement lines."""
+        self._check_statement_inner(stmt)
+        self._build_typed_statement(stmt)
+
+    def _check_statement_inner(self, stmt: zast.Statement) -> None:
         # Phase C step 2: each Statement maintains a preamble buffer for
         # synth temp Assignments hoisted out of nested calls in its
         # current StatementLine. The buffer drains *before* the
@@ -5651,6 +5657,13 @@ class TypeChecker:
         stmt.statements = out
 
     def _check_statement_line(self, sline: zast.StatementLine) -> None:
+        """Type-check a statement line. Thin wrapper that builds the
+        typed mirror after the inner dispatches to assignment / reassign
+        / swap / expression."""
+        self._check_statement_line_inner(sline)
+        self._build_typed_statement_line(sline)
+
+    def _check_statement_line_inner(self, sline: zast.StatementLine) -> None:
         inner = sline.statementline
         if inner.nodetype == NodeType.ASSIGNMENT:
             self._check_assignment(cast(zast.Assignment, inner))
@@ -5690,6 +5703,12 @@ class TypeChecker:
         return False
 
     def _check_assignment(self, assign: zast.Assignment) -> None:
+        """Type-check a `name: expr` binding. Thin wrapper that builds
+        the typed mirror after the inner runs."""
+        self._check_assignment_inner(assign)
+        self._build_typed_assignment(assign)
+
+    def _check_assignment_inner(self, assign: zast.Assignment) -> None:
         result = self._check_expression(assign.value)
         t = result.ztype
         self._check_exhaustive_if(assign.value)
@@ -5785,6 +5804,12 @@ class TypeChecker:
         return None
 
     def _check_reassignment(self, reassign: zast.Reassignment) -> None:
+        """Type-check a `path = expr` reassignment. Thin wrapper that
+        builds the typed mirror after the inner runs."""
+        self._check_reassignment_inner(reassign)
+        self._build_typed_reassignment(reassign)
+
+    def _check_reassignment_inner(self, reassign: zast.Reassignment) -> None:
         existing = self._check_path(reassign.topath)
         new_t = self._check_expression(reassign.value).ztype
         self._check_exhaustive_if(reassign.value)
@@ -5928,6 +5953,12 @@ class TypeChecker:
                     self.symtab.narrow(var_name, arm_subtype, subtype_name)
 
     def _check_swap(self, swap: zast.Swap) -> None:
+        """Type-check a `lhs swap rhs` swap. Thin wrapper that builds
+        the typed mirror after the inner runs."""
+        self._check_swap_inner(swap)
+        self._build_typed_swap(swap)
+
+    def _check_swap_inner(self, swap: zast.Swap) -> None:
         lhs_t = self._check_path(swap.lhs)
         rhs_t = self._check_path(swap.rhs)
         if lhs_t and rhs_t and lhs_t.name != rhs_t.name:
@@ -6340,6 +6371,105 @@ class TypeChecker:
             callable_type_name=call.callable_type_name,
         )
         self._register_typed(call, typed)
+
+    def _build_typed_assignment(self, assign: zast.Assignment) -> None:
+        """Construct typed mirror of a parsed `Assignment`. Skipped
+        when the value's inner subtype has no typed counterpart yet."""
+        value_typed = self._typed_expression_for(assign.value)
+        if value_typed is None:
+            return
+        typed = ztypedast.TypedAssignment(
+            parsed=assign,
+            name=assign.name,
+            value=value_typed,
+            alias_of=assign.alias_of,
+        )
+        self._register_typed(assign, typed)
+
+    def _build_typed_reassignment(self, reassign: zast.Reassignment) -> None:
+        """Construct typed mirror of a parsed `Reassignment`. Skipped
+        when either side has no typed counterpart yet."""
+        topath_typed = self._typed_path_for_parent(reassign.topath)
+        value_typed = self._typed_expression_for(reassign.value)
+        if topath_typed is None or value_typed is None:
+            return
+        typed = ztypedast.TypedReassignment(
+            parsed=reassign,
+            ztype=cast(ZType, self.t_null),
+            topath=topath_typed,
+            value=value_typed,
+        )
+        self._register_typed(reassign, typed)
+
+    def _build_typed_swap(self, swap: zast.Swap) -> None:
+        """Construct typed mirror of a parsed `Swap`. Skipped when
+        either side has no typed counterpart yet."""
+        lhs_typed = self._typed_path_for_parent(swap.lhs)
+        rhs_typed = self._typed_path_for_parent(swap.rhs)
+        if lhs_typed is None or rhs_typed is None:
+            return
+        typed = ztypedast.TypedSwap(
+            parsed=swap,
+            ztype=cast(ZType, self.t_null),
+            lhs=lhs_typed,
+            rhs=rhs_typed,
+        )
+        self._register_typed(swap, typed)
+
+    def _build_typed_statement_line(self, sline: zast.StatementLine) -> None:
+        """Construct typed mirror of a parsed `StatementLine`. The
+        inner is one of Assignment / Reassignment / Swap / Expression
+        — we look up its typed counterpart in `by_parsed_id`. Skips
+        when the inner has no typed counterpart yet."""
+        inner = sline.statementline
+        if inner.nodetype == NodeType.EXPRESSION:
+            inner_typed = self._typed_expression_for(cast(zast.Expression, inner))
+        else:
+            inner_typed = self.typed_program.by_parsed_id.get(inner.nodeid)
+        if inner_typed is None:
+            return
+        typed = ztypedast.TypedStatementLine(
+            parsed=sline,
+            statementline=cast(
+                Union[
+                    ztypedast.TypedAssignment,
+                    ztypedast.TypedReassignment,
+                    ztypedast.TypedSwap,
+                    ztypedast.TypedExpression,
+                ],
+                inner_typed,
+            ),
+        )
+        self._register_typed(sline, typed)
+
+    def _build_typed_statement(self, stmt: zast.Statement) -> None:
+        """Construct typed mirror of a parsed `Statement`. Each
+        statement-line counterpart is looked up in `by_parsed_id`;
+        missing entries cause the whole `Statement` mirror to be
+        skipped (rather than emit a partial body)."""
+        lines: List[ztypedast.TypedStatementLine] = []
+        for sline in stmt.statements:
+            line_typed = self.typed_program.by_parsed_id.get(sline.nodeid)
+            if line_typed is None:
+                return
+            lines.append(cast(ztypedast.TypedStatementLine, line_typed))
+        typed = ztypedast.TypedStatement(
+            parsed=stmt,
+            statements=lines,
+        )
+        self._register_typed(stmt, typed)
+
+    def _typed_expression_for(
+        self, expr: zast.Expression
+    ) -> Optional[ztypedast.TypedExpression]:
+        """Resolve the typed counterpart of a parser-AST `Expression`
+        wrapper by descending into its inner subtype. The wrapper itself
+        is not mirrored — the typed tree references the inner subtype's
+        typed counterpart directly."""
+        op = self._typed_operation_for(expr)
+        if op is None:
+            return None
+        return cast(ztypedast.TypedExpression, op)
 
     def _build_typed_atomstring(self, atom: zast.AtomString) -> None:
         """Construct the typed mirror of a parsed `AtomString` and

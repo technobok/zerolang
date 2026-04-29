@@ -34,7 +34,8 @@ plan). This file is the running implementation log.
 | 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | `2033378` | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
 | 3b. `TypedDottedPath` mirror | ✅ done | `2428531` | `_check_dotted_path` becomes a thin wrapper; resolution moves to `_check_dotted_path_inner`; `_build_typed_dotted_path` runs on exit and looks up parent via `_typed_path_for_parent` (Expression-unwrapping). Inline parent-ATOMID branch in the inner builds a `TypedAtomId` for the parent so the wrapper finds it. |
 | 3c. `TypedAtomString` mirror | ✅ done | `83e810d` | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
-| 3d. `TypedBinOp` + `TypedCall` + `TypedNamedOperation` mirrors | ✅ done | `faa5841` | wrapper pattern around `_check_binop` and `_check_call`; `_typed_operation_for` resolves typed counterpart of any Operation-shaped parsed node. Numeric-cast shortcut now builds a TypedAtomId for the literal parent. Synth atoms produced by atomic-call hoisting also get a TypedAtomId via `_build_typed_atomid` at the assignment site. | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 3d. `TypedBinOp` + `TypedCall` + `TypedNamedOperation` mirrors | ✅ done | `faa5841` | wrapper pattern around `_check_binop` and `_check_call`; `_typed_operation_for` resolves typed counterpart of any Operation-shaped parsed node. Numeric-cast shortcut now builds a TypedAtomId for the literal parent. Synth atoms produced by atomic-call hoisting also get a TypedAtomId via `_build_typed_atomid` at the assignment site. |
+| 3e. Statement-shape mirrors (`TypedStatement`, `TypedStatementLine`, `TypedAssignment`, `TypedReassignment`, `TypedSwap`) | ✅ done | _pending_ | wrapper pattern around `_check_statement`, `_check_statement_line`, `_check_assignment`, `_check_reassignment`, `_check_swap`. `_typed_expression_for` descends into `Expression.expression` to find the typed counterpart. `TypedStatement` skipped if any line has no mirror; same for the others. | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
 | 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
@@ -146,17 +147,42 @@ Test coverage in `tests/test_typed_tree.py`:
   — `"sum=\\{a + b}"` produces a TypedAtomString whose interpolation
   part is a TypedBinOp, closing the gap noted in Step 3c.
 
-## Step 3e — next
+## Step 3e — what landed
 
-Statements (`TypedAssignment`, `TypedReassignment`, `TypedSwap`,
-`TypedStatementLine`, `TypedStatement`) and control flow
-(`TypedIf`/`TypedIfClause`, `TypedCase`/`TypedCaseClause`, `TypedFor`,
-`TypedDo`, `TypedWith`). Same wrapper pattern. Statements are wrappers
-over the operations they contain, so the lookups should be
-straightforward once each `_check_*` lands.
+Same wrapper pattern as 3d, applied to:
 
-After statements + control flow, the top-level (`TypedFunction`,
-`TypedObjectDef`, `TypedUnit`, `TypedProgram.units`) closes Step 3.
+- `_check_statement` — `TypedStatement` collects per-line typed
+  mirrors; skipped if any line lacks a mirror.
+- `_check_statement_line` — `TypedStatementLine` wraps the inner
+  Assignment / Reassignment / Swap / Expression typed counterpart.
+- `_check_assignment` — `TypedAssignment` carries `name`, `value`
+  (looked up via `_typed_expression_for`), `alias_of`.
+- `_check_reassignment` — `TypedReassignment` (null-typed) carries
+  `topath` + `value`.
+- `_check_swap` — `TypedSwap` (null-typed) carries `lhs` + `rhs`.
+
+`_typed_expression_for(expr)` is a thin convenience around
+`_typed_operation_for` that descends into `Expression.expression` and
+returns the inner subtype's typed mirror — matching the design's
+"no typed Expression wrapper" rule.
+
+Tests in `tests/test_typed_tree.py::TestTypedStatementInvariants`:
+
+- `test_statement_and_assignment_mirrors` — function body Statement +
+  per-line Assignment mirrors.
+- `test_reassignment_mirror` — `x = 11` reassignment registered.
+
+## Step 3f — next
+
+Control flow: `TypedIf` / `TypedIfClause`, `TypedCase` /
+`TypedCaseClause`, `TypedFor`, `TypedDo`, `TypedWith`. Same wrapper
+pattern. The `IfClause.conditions` and `For.conditions` dicts each
+need their typed counterparts looked up by parsed nodeid; `taken_vars`
+on If/Case is already a list of `(name, ZType)` tuples that maps
+straight onto the typed mirror.
+
+After control flow, the top-level (`TypedFunction`, `TypedObjectDef`,
+`TypedUnit`, `TypedProgram.units`) closes Step 3.
 
 ### Subtle places to remember
 
