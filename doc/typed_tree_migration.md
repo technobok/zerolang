@@ -34,6 +34,7 @@ plan). This file is the running implementation log.
 | 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | `2033378` | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
 | 3b. `TypedDottedPath` mirror | ✅ done | `2428531` | `_check_dotted_path` becomes a thin wrapper; resolution moves to `_check_dotted_path_inner`; `_build_typed_dotted_path` runs on exit and looks up parent via `_typed_path_for_parent` (Expression-unwrapping). Inline parent-ATOMID branch in the inner builds a `TypedAtomId` for the parent so the wrapper finds it. |
 | 3c. `TypedAtomString` mirror | ✅ done | `83e810d` | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 3d. `TypedBinOp` + `TypedCall` + `TypedNamedOperation` mirrors | ✅ done | _pending_ | wrapper pattern around `_check_binop` and `_check_call`; `_typed_operation_for` resolves typed counterpart of any Operation-shaped parsed node. Numeric-cast shortcut now builds a TypedAtomId for the literal parent. Synth atoms produced by atomic-call hoisting also get a TypedAtomId via `_build_typed_atomid` at the assignment site. | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
 | 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
@@ -110,18 +111,52 @@ Known gaps (covered in later sub-steps):
   AtomId interpolation (`"hi \\{name}"`). DottedPath interpolation is
   already covered structurally via Step 3b's mirrors.
 
-## Step 3d — next
+## Step 3d — what landed
 
-Operations: `TypedBinOp`, `TypedCall`, `TypedNamedOperation`. These
-unblock the remaining AtomString interpolation cases (BinOp/Call
-inside `\\{...}`) and pull the auto-call-coercion / dotted-callable
-shapes into typed-tree territory.
+- `_check_binop` and `_check_call` follow the same wrapper pattern as
+  `_check_dotted_path`: original body renamed to `*_inner`, the wrapper
+  calls `_inner` then `_build_typed_*`.
+- `_typed_operation_for(node)` is the generic Operation-shaped lookup;
+  unwraps `Expression`, validates the parsed nodetype is one of
+  ATOMID / LABELVALUE / ATOMSTRING / DOTTEDPATH / BINOP / CALL, returns
+  the typed counterpart from `by_parsed_id`. Used by both BinOp and
+  Call builders for their operand fields.
+- `_build_typed_call` walks `call.arguments`, building a
+  `TypedNamedOperation` per parsed `NamedOperation` (registered in
+  `by_parsed_id`). Skips the whole Call mirror if any operand has no
+  typed counterpart yet.
+- Two gaps closed in this step:
+  - Numeric-cast shortcut (`5.u32`) inside `_check_dotted_path_inner`
+    now also builds a TypedAtomId for the literal parent (with
+    `ztype=None`, matching `path.parent.type`). Documented in 3b as
+    a deferred gap; needed for BinOp/Call argument lookup.
+  - Atomic-call hoisting (`zsynth.make_atom_id` produces a fresh
+    AtomId when an arg is hoisted to a synth assignment) now calls
+    `_build_typed_atomid` so the synth atom has a typed mirror that
+    `_build_typed_call`'s arg lookup can find.
 
-`_check_call` and `_check_binop` are the construction points. Plan
-the wrapping similarly to `_check_dotted_path` — split into `_inner`
-that returns `Optional[ZType]` (today's contract) and a wrapper that
-also calls `_build_typed_*`. Argument lists for `TypedCall` will
-need `TypedNamedOperation` mirrors built per-argument.
+Test coverage in `tests/test_typed_tree.py`:
+
+- `TestTypedBinOpInvariants.test_simple_int_add` — operator is a fresh
+  TypedAtomId (not registered in `by_parsed_id`), operands are looked
+  up.
+- `TestTypedCallInvariants.test_simple_call` — callable + args walk;
+  per-argument `TypedNamedOperation` is registered in `by_parsed_id`.
+- `TestTypedCallInvariants.test_atomstring_with_binop_interpolation_now_mirrors`
+  — `"sum=\\{a + b}"` produces a TypedAtomString whose interpolation
+  part is a TypedBinOp, closing the gap noted in Step 3c.
+
+## Step 3e — next
+
+Statements (`TypedAssignment`, `TypedReassignment`, `TypedSwap`,
+`TypedStatementLine`, `TypedStatement`) and control flow
+(`TypedIf`/`TypedIfClause`, `TypedCase`/`TypedCaseClause`, `TypedFor`,
+`TypedDo`, `TypedWith`). Same wrapper pattern. Statements are wrappers
+over the operations they contain, so the lookups should be
+straightforward once each `_check_*` lands.
+
+After statements + control flow, the top-level (`TypedFunction`,
+`TypedObjectDef`, `TypedUnit`, `TypedProgram.units`) closes Step 3.
 
 ### Subtle places to remember
 

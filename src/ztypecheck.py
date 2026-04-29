@@ -6260,6 +6260,87 @@ class TypeChecker:
         )
         self._register_typed(path, typed)
 
+    # node-types accepted as `Operation` values in the typed tree
+    # (anything that produces a value the typechecker has typed).
+    _OPERATION_NODETYPES = (
+        NodeType.ATOMID,
+        NodeType.LABELVALUE,
+        NodeType.ATOMSTRING,
+        NodeType.DOTTEDPATH,
+        NodeType.BINOP,
+        NodeType.CALL,
+    )
+
+    def _typed_operation_for(self, op: zast.Node) -> Optional[ztypedast.TypedOperation]:
+        """Resolve the typed counterpart of a parser-AST `Operation`-shaped
+        node. Unwraps `zast.Expression` (the parser's `(parens)` wrapper)
+        and looks up `by_parsed_id`. Returns None when the typed mirror
+        has not been built yet, so callers can skip the enclosing typed
+        node rather than emit a partial mirror."""
+        while op.nodetype == NodeType.EXPRESSION:
+            op = cast(zast.Expression, op).expression
+        typed = self.typed_program.by_parsed_id.get(op.nodeid)
+        if typed is None:
+            return None
+        if typed.parsed.nodetype not in self._OPERATION_NODETYPES:
+            return None
+        return cast(ztypedast.TypedOperation, typed)
+
+    def _build_typed_binop(self, binop: zast.BinOp) -> None:
+        """Construct the typed mirror of a parsed `BinOp`. Skipped when
+        either operand has no typed counterpart yet."""
+        lhs_typed = self._typed_operation_for(binop.lhs)
+        rhs_typed = self._typed_operation_for(binop.rhs)
+        if lhs_typed is None or rhs_typed is None:
+            return
+        operator_typed = ztypedast.TypedAtomId(
+            parsed=binop.operator,
+            ztype=cast(ZType, None),
+            name=binop.operator.name,
+        )
+        typed = ztypedast.TypedBinOp(
+            parsed=binop,
+            ztype=cast(ZType, binop.type),
+            const_value=binop.const_value,
+            lhs=lhs_typed,
+            operator=operator_typed,
+            rhs=cast(ztypedast.TypedPath, rhs_typed),
+        )
+        self._register_typed(binop, typed)
+
+    def _build_typed_call(self, call: zast.Call) -> None:
+        """Construct the typed mirror of a parsed `Call`. Skipped when
+        the callable or any argument has no typed counterpart yet (e.g.
+        an argument is a still-unmirrored operation kind)."""
+        callable_typed = self._typed_path_for_parent(call.callable)
+        if callable_typed is None:
+            return
+        args_typed: List[ztypedast.TypedNamedOperation] = []
+        for arg in call.arguments:
+            arg_inner = self._typed_operation_for(arg.valtype)
+            if arg_inner is None:
+                return
+            named_typed = ztypedast.TypedNamedOperation(
+                parsed=arg,
+                name=arg.name,
+                valtype=arg_inner,
+                projected_protocol=arg.projected_protocol,
+                projected_label=arg.projected_label,
+                projected_kind=arg.projected_kind,
+            )
+            self._register_typed(arg, named_typed)
+            args_typed.append(named_typed)
+        typed = ztypedast.TypedCall(
+            parsed=call,
+            ztype=cast(ZType, call.type),
+            const_value=call.const_value,
+            callable=callable_typed,
+            arguments=args_typed,
+            call_kind=call.call_kind,
+            callable_type_name=call.callable_type_name,
+        )
+        self._register_typed(call, typed)
+
     def _build_typed_atomstring(self, atom: zast.AtomString) -> None:
         """Construct the typed mirror of a parsed `AtomString` and
         register it. Each `Expression` part is replaced by its inner
@@ -6534,6 +6615,14 @@ class TypeChecker:
                     )
                     return None
                 path.type = resolved_child
+                # Typed mirror: this branch never types `path.parent`
+                # (its standalone type would be the literal's default
+                # numeric inference, not the cast result), but the
+                # wrapper still needs a typed parent in `by_parsed_id`
+                # to build the TypedDottedPath. Register a TypedAtomId
+                # for the literal with `ztype=None`, matching the
+                # untouched `parent.type`.
+                self._build_typed_atomid(cast(zast.AtomId, path.parent))
                 return resolved_child
 
         # regular dotted path resolution
@@ -6788,6 +6877,15 @@ class TypeChecker:
         return None
 
     def _check_call(self, call: zast.Call) -> Optional[ZType]:
+        """Type-check a call. Thin wrapper that builds the typed-tree
+        mirror after the resolution body has populated `call.type`,
+        `call.call_kind`, `call.callable_type_name`, and the per-argument
+        `NamedOperation` projection stamps."""
+        t = self._check_call_inner(call)
+        self._build_typed_call(call)
+        return t
+
+    def _check_call_inner(self, call: zast.Call) -> Optional[ZType]:
         # Resolve the callable as the function type itself, not its
         # return type. The auto-call coercion in `_check_dotted_path`
         # is for value-position uses; in callable position we want the
@@ -7563,6 +7661,11 @@ class TypeChecker:
         atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
         atom.type = arg_type
         arg.valtype = atom
+        # Build the typed mirror for the synth atom so the wrapping
+        # _build_typed_call can resolve the argument's typed counterpart
+        # via by_parsed_id. The synth atom doesn't go through
+        # _check_atomid (it's constructed and pre-typed here).
+        self._build_typed_atomid(atom)
         return temp_name
 
     def _current_call_holder(self) -> str:
@@ -8673,6 +8776,13 @@ class TypeChecker:
         return None
 
     def _check_binop(self, binop: zast.BinOp) -> Optional[ZType]:
+        """Type-check a binary operation. Thin wrapper around
+        `_check_binop_inner` that builds the typed mirror on exit."""
+        t = self._check_binop_inner(binop)
+        self._build_typed_binop(binop)
+        return t
+
+    def _check_binop_inner(self, binop: zast.BinOp) -> Optional[ZType]:
         lhs_type = self._check_operation(binop.lhs)
         rhs_type = self._check_path(binop.rhs)
         if not lhs_type or not rhs_type:

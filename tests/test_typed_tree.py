@@ -138,20 +138,18 @@ class TestTypedAtomStringInvariants:
         typed mirror. The TypedAtomString's parts include the AtomId's
         TypedAtomId in place of the parsed Expression wrapper."""
         tc = _typecheck(
-            "main: function is {\n"
-            '    name: "world"\n'
-            '    msg: "hi \\{name}"\n'
-            "}"
+            'main: function is {\n    name: "world"\n    msg: "hi \\{name}"\n}'
         )
         mainunit = tc.program.units[tc.program.mainunitname]
-        strings = [
-            n for n in _walk_main(mainunit) if n.nodetype == NodeType.ATOMSTRING
-        ]
+        strings = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.ATOMSTRING]
         # the second string carries the interpolation
         interpolated = next(
             s
             for s in strings
-            if any(p.nodetype != NodeType.STRINGCHUNK for p in _cast(zast.AtomString, s).stringparts)
+            if any(
+                p.nodetype != NodeType.STRINGCHUNK
+                for p in _cast(zast.AtomString, s).stringparts
+            )
         )
         typed = tc.typed_program.by_parsed_id.get(interpolated.nodeid)
         assert typed is not None, "expected TypedAtomString for interpolated literal"
@@ -160,6 +158,105 @@ class TestTypedAtomStringInvariants:
         atomid_parts = [p for p in typed.parts if isinstance(p, ztypedast.TypedAtomId)]
         assert len(atomid_parts) == 1
         assert atomid_parts[0].name == "name"
+
+
+class TestTypedBinOpInvariants:
+    """`TypedBinOp` mirrors `zast.BinOp`. The operator AtomId is
+    structural (never independently typed by the typechecker) so the
+    typed mirror constructs a fresh TypedAtomId for `operator` rather
+    than looking it up in `by_parsed_id`."""
+
+    def test_simple_int_add(self):
+        tc = _typecheck("main: function is {\n    x: 21.i64 + 21.i64\n}")
+        mainunit = tc.program.units[tc.program.mainunitname]
+        binops = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.BINOP]
+        assert binops, "expected a BinOp"
+        for b in binops:
+            pb = _cast(zast.BinOp, b)
+            typed = tc.typed_program.by_parsed_id.get(pb.nodeid)
+            assert typed is not None
+            assert isinstance(typed, ztypedast.TypedBinOp)
+            assert typed.ztype is pb.type
+            assert typed.const_value == pb.const_value
+            assert typed.operator.name == pb.operator.name
+            # operator is a fresh TypedAtomId, not registered separately
+            assert pb.operator.nodeid not in tc.typed_program.by_parsed_id
+            # lhs / rhs typed are present
+            assert typed.lhs is not None
+            assert typed.rhs is not None
+
+
+class TestTypedCallInvariants:
+    """`TypedCall` mirrors `zast.Call` plus its argument list as
+    `TypedNamedOperation` siblings (each registered in by_parsed_id)."""
+
+    def test_simple_call(self):
+        tc = _typecheck(
+            "incr: function {x: i64} out i64 is {\n"
+            "    return x + 1.i64\n"
+            "}\n"
+            "main: function is {\n"
+            "    y: incr x: 41.i64\n"
+            "}"
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        calls = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.CALL]
+        # locate the user-level `incr x: 41.i64` call
+        target = None
+        for c in calls:
+            cc = _cast(zast.Call, c)
+            if (
+                cc.callable.nodetype == NodeType.ATOMID
+                and _cast(zast.AtomId, cc.callable).name == "incr"
+            ):
+                target = cc
+                break
+        assert target is not None
+        typed = tc.typed_program.by_parsed_id.get(target.nodeid)
+        assert typed is not None
+        assert isinstance(typed, ztypedast.TypedCall)
+        assert typed.parsed is target
+        assert typed.ztype is target.type
+        assert typed.call_kind == target.call_kind
+        assert typed.callable_type_name == target.callable_type_name
+        # callable is the TypedAtomId for `incr`
+        assert isinstance(typed.callable, ztypedast.TypedAtomId)
+        assert typed.callable.name == "incr"
+        # one argument: x: 41.i64
+        assert len(typed.arguments) == 1
+        arg = typed.arguments[0]
+        assert isinstance(arg, ztypedast.TypedNamedOperation)
+        assert arg.name == "x"
+        # arg is registered in by_parsed_id keyed by the parsed
+        # NamedOperation's nodeid
+        parsed_arg = target.arguments[0]
+        assert tc.typed_program.by_parsed_id.get(parsed_arg.nodeid) is arg
+
+    def test_atomstring_with_binop_interpolation_now_mirrors(self):
+        """Step 3c noted that `\\{a + b}` interpolation could not yet
+        produce a TypedAtomString because BinOp had no typed mirror.
+        After Step 3d, this gap closes — verify the AtomString gets
+        its typed mirror."""
+        tc = _typecheck(
+            'main: function is {\n    a: 1.i64\n    b: 2.i64\n    s: "sum=\\{a + b}"\n}'
+        )
+        mainunit = tc.program.units[tc.program.mainunitname]
+        strings = [n for n in _walk_main(mainunit) if n.nodetype == NodeType.ATOMSTRING]
+        interpolated = next(
+            s
+            for s in strings
+            if any(
+                p.nodetype != NodeType.STRINGCHUNK
+                for p in _cast(zast.AtomString, s).stringparts
+            )
+        )
+        typed = tc.typed_program.by_parsed_id.get(interpolated.nodeid)
+        assert typed is not None, (
+            "after 3d, interpolated string with BinOp should have a typed mirror"
+        )
+        assert isinstance(typed, ztypedast.TypedAtomString)
+        binop_parts = [p for p in typed.parts if isinstance(p, ztypedast.TypedBinOp)]
+        assert len(binop_parts) == 1
 
 
 class TestTypedDottedPathInvariants:
