@@ -31,7 +31,7 @@ plan). This file is the running implementation log.
 | ---- | ------ | ------ | ----- |
 | 1. For comprehension scratch off AST | ✅ done | `2afe83e` | emitter-local dict keyed by `nodeid` |
 | 2. Define `src/ztypedast.py` | ✅ done | `43ec658` | data-only, no callers |
-| 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | _pending_ | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
+| 3a. Typechecker scaffold + `TypedAtomId` mirror | ✅ done | `2033378` | `typed_program` on `TypeChecker`; `_check_atomid` builds `TypedAtomId` via `_register_typed`; invariant test in `tests/test_typed_tree.py` |
 | 3b–3e. Remaining `_check_*` typed-mirror coverage | ⏳ next | — | working leaf-out: AtomString, DottedPath, BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
