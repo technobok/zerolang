@@ -574,9 +574,13 @@ class Expression(Atom):
 
     nodetype: NodeType = field(default=NodeType.EXPRESSION, init=False)
     expression: ExpressionSubTypes
-    # set by the type checker for control flow expressions (break, continue, error)
-    # Uses int to avoid forward reference to CallKind; values match CallKind enum
-    call_kind: int = field(default=0, init=False)
+    # `call_kind` used to live here as an `init=False` typecheck-set
+    # field for control-flow expressions (break/continue/return/
+    # error/panic). After Step 6.10 the typechecker records it via
+    # `TypeChecker._expr_call_kind` (a side-table keyed by parsed
+    # `Expression.nodeid`) and snapshots the dict onto
+    # `TypedProgram.expr_call_kinds`; emitter consumers use the
+    # `CEmitter._expr_call_kind(expr)` helper to read it.
 
 
 @dataclass

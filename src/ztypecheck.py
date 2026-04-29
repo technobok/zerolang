@@ -546,6 +546,14 @@ class TypeChecker:
         # `_build_typed_call`.
         self._call_kind: dict[int, zast.CallKind] = {}
         self._call_callable_type_name: dict[int, str] = {}
+        # Per-Expression wrapper control-flow classification (was
+        # `zast.Expression.call_kind`, stripped in Step 6.10). Set
+        # when an Expression wraps a Call (propagated from
+        # `_call_kind[inner.nodeid]`) or wraps a Path that resolves
+        # to a control-flow type (return/break/continue/error/panic).
+        # Read by `_check_statement` (unreachable marking) and
+        # `_last_statement_type` (NORETURN propagation).
+        self._expr_call_kind: dict[int, zast.CallKind] = {}
         # Per-Node compile-time constant value (was `zast.Node.const_value`,
         # stripped in Step 6.9.a). Populated during constant folding by
         # path / atom / binop / call resolution; read by typed-mirror
@@ -5775,7 +5783,7 @@ class TypeChecker:
             inner = sline.statementline
             if inner.nodetype == NodeType.EXPRESSION:
                 expr = cast(zast.Expression, inner)
-                if expr.call_kind in (
+                if self._expr_call_kind.get(expr.nodeid, zast.CallKind.UNKNOWN) in (
                     zast.CallKind.RETURN,
                     zast.CallKind.BREAK,
                     zast.CallKind.CONTINUE,
@@ -6278,7 +6286,9 @@ class TypeChecker:
                     ControlKind.ERROR: zast.CallKind.ERROR,
                     ControlKind.PANIC: zast.CallKind.PANIC,
                 }
-                expr.call_kind = _CK_MAP.get(t.control_kind, zast.CallKind.UNKNOWN)
+                self._expr_call_kind[expr.nodeid] = _CK_MAP.get(
+                    t.control_kind, zast.CallKind.UNKNOWN
+                )
                 # flag enclosing do block if break targets it
                 if t.control_kind == ControlKind.BREAK and self._break_targets:
                     target = self._break_targets[-1]
@@ -6286,7 +6296,7 @@ class TypeChecker:
                         self._do_has_break[target.nodeid] = True
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
-                expr.call_kind = self._call_kind.get(
+                self._expr_call_kind[expr.nodeid] = self._call_kind.get(
                     inner.nodeid, zast.CallKind.UNKNOWN
                 )
         # capture and clear pending flags into the result so they cannot
@@ -6804,6 +6814,10 @@ class TypeChecker:
         # before Step 6.9.b) so emitter / SQL-dump / asthash consumers
         # can read parsed-Node-keyed types via `TypedProgram.node_types`.
         self.typed_program.node_types = dict(self._node_type)
+        # Snapshot the per-Expression call-kind classification (was
+        # `Expression.call_kind` before Step 6.10) so the emitter's
+        # non-completing-tail detection can consult it.
+        self.typed_program.expr_call_kinds = dict(self._expr_call_kind)
         # mono_functions / cloned_methods still carry parsed Functions
         # today; their typed mirrors live in `by_parsed_id` keyed by
         # the cloned nodeid. TypedProgram declares these as
@@ -9548,7 +9562,7 @@ class TypeChecker:
             last_expr = cast(zast.Expression, last)
             inner = last_expr.expression
             # check for non-completing expressions (return/break/continue/error)
-            if last_expr.call_kind in (
+            if self._expr_call_kind.get(last_expr.nodeid, zast.CallKind.UNKNOWN) in (
                 zast.CallKind.RETURN,
                 zast.CallKind.BREAK,
                 zast.CallKind.CONTINUE,

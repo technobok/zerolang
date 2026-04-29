@@ -4968,7 +4968,7 @@ class CEmitter:
             return False
         last_expr = cast(zast.Expression, last)
         # check call_kind on Expression wrapper for control flow
-        if last_expr.call_kind in (
+        if self._expr_call_kind(last_expr) in (
             zast.CallKind.RETURN,
             zast.CallKind.BREAK,
             zast.CallKind.CONTINUE,
@@ -5189,20 +5189,33 @@ class CEmitter:
             f"{indent}}}\n"
         )
 
+    def _expr_call_kind(self, expr: zast.Expression) -> "zast.CallKind":
+        """Look up the Expression-wrapper's control-flow classification
+        in the TypedProgram side-table. Was `expr.call_kind` before
+        Step 6.10 stripped the field; the typechecker now records
+        these in `TypedProgram.expr_call_kinds` keyed by parsed
+        `Expression.nodeid`."""
+        if self.typed_program is None:
+            return zast.CallKind.UNKNOWN
+        return self.typed_program.expr_call_kinds.get(
+            expr.nodeid, zast.CallKind.UNKNOWN
+        )
+
     def _emit_expression_stmt(self, expr: zast.Expression) -> str:
         indent = self._indent()
         inner = expr.expression
         # handle break/continue as standalone statements
-        if expr.call_kind == zast.CallKind.BREAK:
+        ck = self._expr_call_kind(expr)
+        if ck == zast.CallKind.BREAK:
             return f"{indent}break;\n"
-        if expr.call_kind == zast.CallKind.CONTINUE:
+        if ck == zast.CallKind.CONTINUE:
             return f"{indent}continue;\n"
         # panic(msg): route through the shared z_panic helper in the runtime
         # preamble. msg is declared as `string`, but after type coercion
         # we may have a z_String_t or a z_StringView_t; both expose `.data`
         # as a `const char*`-compatible pointer. Materialising msg may pull
         # in the string runtime, so set the corresponding needs_* flags.
-        if expr.call_kind == zast.CallKind.PANIC:
+        if ck == zast.CallKind.PANIC:
             self.needs_stdlib = True
             self.needs_string = True
             self.needs_stringview = True
@@ -8972,7 +8985,7 @@ class CEmitter:
             if is_last and inner.nodetype == zast.NodeType.EXPRESSION:
                 last_expr = cast(zast.Expression, inner)
                 # non-completing: emit normally (return/break/continue)
-                if last_expr.call_kind in (
+                if self._expr_call_kind(last_expr) in (
                     zast.CallKind.RETURN,
                     zast.CallKind.BREAK,
                     zast.CallKind.CONTINUE,
@@ -9006,7 +9019,7 @@ class CEmitter:
 
             if is_last and inner.nodetype == zast.NodeType.EXPRESSION:
                 last_expr = cast(zast.Expression, inner)
-                if last_expr.call_kind in (
+                if self._expr_call_kind(last_expr) in (
                     zast.CallKind.RETURN,
                     zast.CallKind.BREAK,
                     zast.CallKind.CONTINUE,

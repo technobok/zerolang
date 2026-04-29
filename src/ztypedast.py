@@ -420,6 +420,13 @@ class TypedProgram:
     # types are reachable through TypedFunction / TypedObjectDef but
     # the emitter often holds the parsed Path directly).
     node_types: Dict[int, Optional[ZType]] = field(default_factory=dict)
+    # Per-Expression-wrapper control-flow classification (was
+    # `zast.Expression.call_kind`, stripped in Step 6.10). Set by
+    # `_check_expression` when an Expression wraps a Call or a Path
+    # resolving to a control-flow type. Keys are parsed `Expression`
+    # nodeids. Used by the emitter's `_emit_*_block` non-completing-
+    # tail detection.
+    expr_call_kinds: Dict[int, CallKind] = field(default_factory=dict)
     symbol_table: Optional[SymbolTableProto] = None
 
 
