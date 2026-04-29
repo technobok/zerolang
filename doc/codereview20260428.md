@@ -588,7 +588,7 @@ Independent, low-risk; can be done in any order or in parallel.
 - [ ] F10 — close out the four `TODO` comments.
 - [x] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`. *(Resolved incidentally in `366d0d6`.)*
 - [x] F13 — `_filtereol` accessor, "undercores" typo,
-      `zip(..., strict=True)` in `zsqldump.py`. *(Resolved <pending-hash>; remaining items in F13 — `malloc` NULL checks blocked on libzrt.a, examples-coverage audit — out of Phase 1 scope.)*
+      `zip(..., strict=True)` in `zsqldump.py`. *(Resolved 59ef5eb; remaining items in F13 — `malloc` NULL checks blocked on libzrt.a, examples-coverage audit — out of Phase 1 scope.)*
 
 ### Phase 2 — Back-end cleanup (sequential)
 
