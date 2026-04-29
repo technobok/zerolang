@@ -5,7 +5,7 @@
 Since the 2026-03-29 review the compiler has absorbed several large
 phases (atomic-call refactor, lock-escape, born-borrowed ownership,
 falsy-first, for-loop iterator overhaul, borrow-correctness) and the
-front-end is now in genuinely good shape: `isinstance` is held at 1 by
+front-end is now in genuinely good shape: `isinstance` is held at 0 by
 `bootstrap-lint`, AST dispatch goes through `nodetype` + `cast()`, the
 `native` keyword has absorbed the bulk of "compiler knows about builtin
 type X" specials, and most major data carries integer ids. The lexer,
@@ -33,8 +33,9 @@ The remaining gaps are concentrated in the **back-end** and in the
    `symtab._history + symtab._scopes`, which means in-memory state is
    not yet quite table-flat.
 5. A handful of low-cost portability and hygiene items remain:
-   `copy.deepcopy(func)` for monomorphization, the last `isinstance`,
-   stale TODOs, the `getattr`-driven visitor in `zsynth.py`.
+   `copy.deepcopy(func)` for monomorphization (resolved 7bb5020),
+   the last `isinstance` (resolved 32c779a), stale TODOs, the
+   `getattr`-driven visitor in `zsynth.py`.
 6. Several findings from `codereview20260322.md` were left in unclear
    status; the audit at the end of this review closes them out.
 
@@ -459,22 +460,21 @@ Action items:
 
 `make check` clean, `make test` 1962 passing.
 
-### F9. Single remaining `isinstance` — Low (goal 3)
+### F9. Single remaining `isinstance` — Low (goal 3) \[RESOLVED\]
 
-`src/zparser.py:1621`: `if isinstance(field_node, zast.Path):`. `Path`
-is the parent of `DottedPath` and `AtomId`; replace with:
-
-```python
-if field_node.nodetype in (NodeType.DOTTEDPATH, NodeType.ATOMID):
-```
-
-…or add `field_node.is_path` discriminator if other sites need the
-same check.
+`src/zparser.py:1621` previously held the last `isinstance(field_node,
+zast.Path)`. That site fell out of the parser as a side-effect of
+`32c779a` (W0 — parser cleanup that dropped the dead enum +
+unlabelled-path machinery the isinstance was guarding). The
+bootstrap-lint baseline in `Makefile:25` is now `isinstance:0`;
+`grep -rn 'isinstance(' src/*.py` returns zero hits.
 
 Action items:
-- [ ] Replace the `isinstance` at `zparser.py:1621`.
-- [ ] Drop the `bootstrap-lint` `isinstance` baseline from 1 to 0 in
-      the same commit.
+- [x] Replaced the `isinstance` at `zparser.py:1621`. *(Resolved
+      incidentally in `32c779a` (2026-04-28) when the parser dropped
+      the dead unlabelled-path branch the isinstance was guarding;
+      no separate cleanup commit needed.)*
+- [x] `bootstrap-lint` baseline already at `isinstance:0`.
 
 ### F10. Stale TODO comments — Low (goal 6)
 
@@ -580,7 +580,7 @@ Still open:
 Independent, low-risk; can be done in any order or in parallel.
 
 - [x] F8 — replace `copy.deepcopy(func)` with explicit clone visitor. *(Resolved 7bb5020.)*
-- [ ] F9 — replace last `isinstance`; drop lint baseline 1 → 0.
+- [x] F9 — replace last `isinstance`; drop lint baseline 1 → 0. *(Resolved incidentally in `32c779a`.)*
 - [ ] F10 — close out the four `TODO` comments.
 - [ ] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`.
 - [ ] F13 — `_filtereol` accessor, "undercores" typo,
