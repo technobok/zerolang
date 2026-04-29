@@ -40,7 +40,7 @@ plan). This file is the running implementation log.
 | 3g. Top-level mirrors (`TypedFunction`, `TypedObjectDef`, `TypedUnit`, `TypedProgram.units`) | ✅ done | `7b114d9` | `_check_function_body` wrapped to build `TypedFunction` for body-checked functions. Final post-pass `_build_typed_program_units` walks `Program.units`, constructs typed mirrors for every Unit / Function / ObjectDef using `_typed_path_from_parsed` for typeref-position paths (parameter / returntype / field types — these are resolved via `_resolve_typeref`, never through the wrapper paths). `TypedProgram.units` populated end-to-end; `resolved`, `mono_types`, `func_aliases`, `unit_types_by_id`, `symbol_table` copied across. `mono_functions` / `cloned_methods` still carry parsed Functions today (typed mirrors live in `by_parsed_id`); migration to typed-side comes with the emitter swap (Step 4). |
 | 4. Switch the emitter to consume the typed tree | ✅ done | `09f6aee`-`fad8ee9` | Threaded `TypedProgram` into `CEmitter` (4a `09f6aee`); per-family migrations of decoration reads — AtomId (4b `47d3ad2`), DottedPath (4c `50f0648`), Call/BinOp/NamedOp (4d `e315b84`), Statement-shape (4e `6ed23bf`), control-flow (4f `ecd82b3`), top-level + generic helpers (4g `fad8ee9`). All decoration reads on mirrored node families route through `_typed_*_for` helpers. Outstanding: `Expression`-wrapper `.call_kind` / `.type` (no typed mirror per design) — addressed in Step 6 / 7 alongside parsed-AST cleanup. `make test` 1962 passing throughout. |
 | 5. Switch SQL dump to consume the typed tree | ✅ done | `2c752b8`-`8c9496a` | 5a `2c752b8` routed `zsqldump.py` decoration reads through TypedProgram (`_node_ztype` / `_node_const_value` helpers, schema unchanged). 5b `8c9496a` split the schema: `ast_nodes` keeps parser-set fields only; new typecheck-set columns (`cname`, `is_const`, `const_value`) live on `typed_nodes` joined to `ast_nodes` by FK. `test_cname_in_ast_nodes_dump` re-targeted at the new table. `make test` 1962 passing. |
-| 6. Remove `init=False` decorations from `zast.py` | 🟡 in progress | `03c380c`-`<6.9a>` | 6.1 `03c380c` `NamedOperation.projected_*`. 6.2 `34ca445` `Assignment.alias_of`, `With.ownership/alias_of`. 6.3 `f4ef245` `Do.has_break`. 6.4 `3c717f5` `For.iterator_bindings`. 6.5 `77bc101` `If.taken_vars`, `Case.taken_vars`, `Case.subject_taken`. 6.6 `62ace88` `AtomId.narrowed_subtype/original_ztype/child_id`. 6.7 `3cff63a` `DottedPath.parent_tagged_type/narrowed_subtype/child_id`. 6.8 `f69215a` `Call.call_kind/callable_type_name`. 6.9.a `<pending>` `Node.const_value`. Pattern: typecheck writes a side-table on `TypeChecker` keyed by parsed `nodeid`; `_build_typed_*` reads the side-table to populate the typed mirror; emitter/SQL-dump parsed-fallback dropped. `_build_typed_*` for control-flow nodes relaxed to always emit a typed mirror so missing subcomponents don't lose decoration data. Atomic-call hoisting calls `_build_typed_assignment` on synth Assignments inline so the emitter finds their typed mirrors. Remaining fields to strip: `Node.type` (~90 writers), `Expression.call_kind` (no typed mirror — needs design decision). | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
+| 6. Remove `init=False` decorations from `zast.py` | 🟡 in progress | `03c380c`-`88dca51` | 6.1 `03c380c` `NamedOperation.projected_*`. 6.2 `34ca445` `Assignment.alias_of`, `With.ownership/alias_of`. 6.3 `f4ef245` `Do.has_break`. 6.4 `3c717f5` `For.iterator_bindings`. 6.5 `77bc101` `If.taken_vars`, `Case.taken_vars`, `Case.subject_taken`. 6.6 `62ace88` `AtomId.narrowed_subtype/original_ztype/child_id`. 6.7 `3cff63a` `DottedPath.parent_tagged_type/narrowed_subtype/child_id`. 6.8 `f69215a` `Call.call_kind/callable_type_name`. 6.9.a `88dca51` `Node.const_value`. Pattern: typecheck writes a side-table on `TypeChecker` keyed by parsed `nodeid`; `_build_typed_*` reads the side-table to populate the typed mirror; emitter/SQL-dump parsed-fallback dropped. `_build_typed_*` for control-flow nodes relaxed to always emit a typed mirror so missing subcomponents don't lose decoration data. Atomic-call hoisting calls `_build_typed_assignment` on synth Assignments inline so the emitter finds their typed mirrors. Remaining fields to strip: `Node.type` (~90 writers), `Expression.call_kind` (no typed mirror — needs design decision). | `_build_typed_atomstring` invoked at the two sites that set `AtomString.type`. Interpolation parts unwrap `Expression` and embed the inner subtype's typed counterpart; skips the whole mirror when an interpolation part has no typed counterpart yet (covers AtomId + DottedPath interpolations today, BinOp/Call later). |
 | 3d–3e. Remaining typed-mirror coverage | ⏳ next | — | BinOp, Call, NamedOperation, statements, control flow, top-level |
 | 4. Switch emitter to consume typed tree | pending | — | |
 | 5. Switch SQL dump to typed tree | pending | — | schema split into `parsed_*` / `typed_*` |
@@ -558,39 +558,82 @@ it at this file:
 
 > Continuing the typed-tree migration. Read `doc/typed_tree_migration.md`
 > for the running log, then `/home/pawe/.claude/plans/is-this-the-best-virtual-sun.md`
-> for the original design. Pick up Step 6.9 (strip `Node.type` and
-> `Node.const_value`).
+> for the original design. Pick up Step 6.9.b (strip `Node.type`).
 
-## Session handoff snapshot (after Step 6.8)
+## Session handoff snapshot (after Step 6.9.a)
 
-State of the tree at commit `d5f8fe1`:
+State of the tree at commit `88dca51`:
 
 - **Steps 1-5 complete.** Typed tree is fully built; emitter and SQL
   dump consume it.
-- **Step 6 partially complete: 8 of 10 field families stripped.** The
-  TypeChecker side-table pattern is proven and documented above. Each
-  sub-step landed as one commit + a test fix where needed.
-- **`make test` 1962 passing** (full suite incl. emitter+gcc) at
-  every Step-6 sub-commit.
+- **Step 6 partially complete: 9 of 10 field families stripped.**
+  `Node.const_value` landed in 6.9.a (`88dca51`). The TypeChecker
+  side-table pattern is proven at scale across multiple regressions
+  (as-items, unit-level if, generic-type-match) — see the Step-6.9.a
+  notes above for the three flow fixups that came out of running
+  the full test suite.
+- **`make test` 1962 passing** (full suite incl. emitter+gcc).
 
 Remaining for Step 6:
 
-1. **Step 6.9** — `Node.type` and `Node.const_value`. Two side-tables,
-   ~115 writers across `ztypecheck.py` (mostly `node.type = X`,
-   `expr.type = t`, `path.type = ...`), more reads. Mechanical but
-   widespread. Approach options:
-   - One sweep with a Python-driven script that handles writes + reads
-     uniformly. Risk: regex misfires on `ZType.typetype` or similar
-     non-Node `.type` accesses. Audit each replacement.
-   - Per-method sub-steps mirroring 6.1-6.8, e.g. one commit each for
-     `_check_atomid` / `_check_path` / `_check_dotted_path_inner` /
-     `_check_call_inner` / `_check_binop_inner` / etc. Slower but
-     each commit small and reviewable.
-   - The Step-6 pattern's main complication scaled up: typed mirror
-     consumers (`_build_typed_*`) need to read from the side-tables.
-     Many builders already inline `cast(ZType, atom.type)` etc.
-     reading from parsed; redirect those to the side-tables as the
-     last touch.
+1. **Step 6.9.b — `Node.type`.** ~90 writers across `ztypecheck.py`,
+   ~50 readers in `ztypecheck.py` proper, plus 174 read sites in
+   `zemitterc.py` (most already routed through `_node_ztype` /
+   `_path_ztype` helpers with parsed-fallback) and 18 in
+   `zasthash.py`. Side-table approach is the same as 6.9.a; the
+   complication scaled up:
+
+   - **Typed-mirror late-stamping recurrence.** 6.9.a hit three
+     fixups where a typed mirror was built before the field's value
+     was settled (subject of `_check_generic_type_match`,
+     unit-level if, and as-items propagation). For `.type` the
+     recurrence is wider: `_check_call_inner` mutates
+     `call.callable.type` after `_check_path` already built the
+     callable's typed mirror — handled in 4d via a sync
+     `callable_typed.ztype = cast(ZType, call.callable.type)` at
+     the end of `_build_typed_call`. Several other late-stamping
+     sites (`path.parent.type = enclosing` at 3537, generic param
+     resolution at 5516-5523, parent_atom.type at 7218) probably
+     need similar rebuilds.
+   - **Typeref-vs-value duality.** `Path` serves both as a typeref
+     (parameter type, return type, field type) and as a
+     value-yielding expression (call callable, BinOp lhs). The
+     typeref path is set by `_resolve_typeref` directly without
+     going through `_check_path`. The 6.9.a as-items fix
+     (`_build_typed_atomid` / `_build_typed_dotted_path` inline
+     after `_resolve_typeref`) generalises — every typeref site
+     needs a typed mirror built inline once `.type` is gone from
+     the parsed side. Inventory the call sites of
+     `_resolve_typeref` and the synthetic `path.type = X`
+     assignments.
+   - **`audit_type_annotations` (line ~10588).** Walks the parsed
+     program looking for `node.type is None` on Path nodes. Either
+     migrate to walk the typed program (every Path-shaped
+     TypedExpression is typed by construction except for parents in
+     numeric-cast shortcut and the `clause.match` structural
+     atoms) — or retire the function since the typed-tree
+     guarantee replaces the runtime check.
+   - **`zasthash.hash_function`** is called from typecheck after
+     body checking, with three call sites (mono dedup). It hashes
+     `ppath.type`, `func.returntype.type`, and per-node `node.type`.
+     Pass the TypeChecker (or just the side-table) into
+     `hash_function` so it reads from the side-table; alternatively
+     accept a typed-mirror lookup callback.
+
+   Approach options (same as 6.9.a):
+   - One sweep with a Python-driven script that handles writes +
+     reads uniformly. Risk: regex misfires on `ZType.typetype` or
+     similar non-Node `.type` accesses. Audit each replacement.
+   - Per-method sub-steps mirroring 6.1-6.8 but the cross-method
+     reads (`atom.type` read in `_check_dotted_path_inner` after
+     written in `_check_atomid`) make per-method splitting
+     awkward — the partial state needs the field present and the
+     side-table populated simultaneously. Ends up doing it as one
+     atomic change anyway.
+   - Recommend: one big commit, ratcheted by `make test`'s
+     identical-output invariant and the existing
+     `_node_ztype` / `_path_ztype` emitter helpers (drop the
+     parsed-fallback, same as 6.9.a did for `_node_const_value`).
 
 2. **`Expression.call_kind`** — wrapper-only, no typed mirror per the
    original design. Needs a design decision before stripping. Three
