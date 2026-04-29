@@ -5982,18 +5982,17 @@ class CEmitter:
     def _emit_projected_arg(self, arg: zast.NamedOperation) -> str:
         """Emit an implicit protocol-projected argument.
 
-        Typecheck stamped `arg.projected_protocol`, `arg.projected_label`,
-        and `arg.projected_kind` when the caller passed a concrete arg
-        to a protocol parameter. We synthesise the wrapper here — same
-        C pattern as the explicit `proto.borrow` / `proto.create` forms
-        emitted by `_emit_protocol_borrow_call` / `_emit_protocol_create_call`.
-        """
+        Typecheck stamps the projection on `TypedNamedOperation`
+        (`projected_protocol` / `projected_label` / `projected_kind`)
+        when the caller passed a concrete arg to a protocol parameter.
+        We synthesise the wrapper here — same C pattern as the explicit
+        `proto.borrow` / `proto.create` forms emitted by
+        `_emit_protocol_borrow_call` / `_emit_protocol_create_call`."""
         typed_arg = self._typed_named_op_for(arg)
-        proj_proto = (
-            typed_arg.projected_protocol if typed_arg else arg.projected_protocol
-        )
-        proj_label = typed_arg.projected_label if typed_arg else arg.projected_label
-        proj_kind = typed_arg.projected_kind if typed_arg else arg.projected_kind
+        assert typed_arg is not None, "expected TypedNamedOperation for projected arg"
+        proj_proto = typed_arg.projected_protocol
+        proj_label = typed_arg.projected_label
+        proj_kind = typed_arg.projected_kind
         assert proj_proto is not None
         assert proj_label is not None
         proto_type = proj_proto
@@ -6103,12 +6102,8 @@ class CEmitter:
             # `z_<impl>_<label>_create` over the concrete argument value
             # so the callee sees a protocol handle.
             typed_arg = self._typed_named_op_for(arg)
-            arg_proj_proto = (
-                typed_arg.projected_protocol if typed_arg else arg.projected_protocol
-            )
-            arg_proj_label = (
-                typed_arg.projected_label if typed_arg else arg.projected_label
-            )
+            arg_proj_proto = typed_arg.projected_protocol if typed_arg else None
+            arg_proj_label = typed_arg.projected_label if typed_arg else None
             if arg_proj_proto is not None and arg_proj_label is not None:
                 val = self._emit_projected_arg(arg)
                 parts.append(val)

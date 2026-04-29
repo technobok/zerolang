@@ -479,6 +479,19 @@ class TypeChecker:
             mainunitname=program.mainunitname,
         )
 
+        # Step 6 (typed-tree migration): per-argument protocol projection
+        # stamps used to live on `zast.NamedOperation` as `init=False`
+        # fields (`projected_protocol` / `projected_label` /
+        # `projected_kind`). Now they live in this side-table keyed by
+        # parsed argument `nodeid`; `_build_typed_call` reads the table
+        # to populate `TypedNamedOperation`. Side-table chosen over
+        # storing on the typed mirror directly because the typed mirror
+        # is built AFTER `_check_call_inner` runs (and `_auto_project_arg`
+        # fires inside the inner).
+        self._projected_args: dict[
+            int, tuple[Optional[ZType], Optional[str], Optional[str]]
+        ] = {}
+
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
 
@@ -3994,15 +4007,18 @@ class TypeChecker:
         label = self._find_conformance_label(arg_type, formal_type)
         if label is None:
             return False
-        arg.projected_protocol = formal_type
-        arg.projected_label = label
         # Ownership selection: explicit TAKE or BORROW annotation wins;
         # otherwise reftype parameters default to take semantics (the
         # usual ownership rule).
         if ownership == ZParamOwnership.BORROW or ownership == ZParamOwnership.LOCK:
-            arg.projected_kind = "borrow"
+            kind = "borrow"
         else:
-            arg.projected_kind = "take"
+            kind = "take"
+        # Step 6: stamps live in the typechecker-side side-table now,
+        # not on the parsed `NamedOperation` node. `_build_typed_call`
+        # picks them up from this table when constructing the typed
+        # mirror.
+        self._projected_args[arg.nodeid] = (formal_type, label, kind)
         return True
 
     def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
@@ -6382,13 +6398,14 @@ class TypeChecker:
             arg_inner = self._typed_operation_for(arg.valtype)
             if arg_inner is None:
                 return
+            proj = self._projected_args.get(arg.nodeid)
             named_typed = ztypedast.TypedNamedOperation(
                 parsed=arg,
                 name=arg.name,
                 valtype=arg_inner,
-                projected_protocol=arg.projected_protocol,
-                projected_label=arg.projected_label,
-                projected_kind=arg.projected_kind,
+                projected_protocol=proj[0] if proj is not None else None,
+                projected_label=proj[1] if proj is not None else None,
+                projected_kind=proj[2] if proj is not None else None,
             )
             self._register_typed(arg, named_typed)
             args_typed.append(named_typed)

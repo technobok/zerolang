@@ -610,16 +610,11 @@ class NamedOperation(Node):
     nodetype: NodeType = field(default=NodeType.NAMEDOPERATION, init=False)
     name: Optional[str]  # start points here if provided
     valtype: "Operation"
-    # Protocol auto-projection stamps (set by _check_call when the
-    # argument is a concrete type conforming to a protocol parameter).
-    # None when no projection is required. `projected_label` is the
-    # conformance label on the implementor type (e.g., the `:reader`
-    # label on `file`).
-    projected_protocol: "Optional[ZType]" = field(default=None, init=False)
-    projected_label: Optional[str] = field(default=None, init=False)
-    # "borrow" or "take" — selected based on the parameter's declared
-    # ownership.
-    projected_kind: Optional[str] = field(default=None, init=False)
+    # Protocol auto-projection stamps used to live here as `init=False`
+    # fields populated by `_check_call`. After Step 6 of the typed-tree
+    # migration they live on `TypedNamedOperation` only; the typecheck
+    # records them via `TypeChecker._projected_args` (a side-table keyed
+    # by parsed `nodeid`) and the typed-mirror builder reads from there.
 
 
 @dataclass
