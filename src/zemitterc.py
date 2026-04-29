@@ -7132,6 +7132,16 @@ class CEmitter:
         return None
 
     def _emit_dotted_path_value(self, path: zast.DottedPath) -> str:
+        # Step 4c: route decoration reads through the typed mirror.
+        # `_pt_*` locals shadow the parsed `path.{type,const_value,child_id}`
+        # field reads sprinkled through this method body; falls back to
+        # parsed fields when the typed mirror is missing (e.g. a path
+        # synthesized by the emitter or a test program built without
+        # the full typecheck).
+        _typed_path = self._typed_dotted_path_for(path)
+        _pt_ztype = _typed_path.ztype if _typed_path else path.type
+        _pt_const = _typed_path.const_value if _typed_path else path.const_value
+        _pt_child_id = _typed_path.child_id if _typed_path else path.child_id
         child = path.child.name
 
         # .take emits just the variable value (nullification handled at call site)
@@ -7169,8 +7179,8 @@ class CEmitter:
             # analogous helpers.
             if (
                 pname in self.program.units
-                and path.type is not None
-                and path.type.typetype != ZTypeType.FUNCTION
+                and _pt_ztype is not None
+                and _pt_ztype.typetype != ZTypeType.FUNCTION
             ):
                 unit_body = self.program.units[pname].body
                 child_defn = unit_body.get(child)
@@ -7448,7 +7458,7 @@ class CEmitter:
             and parent_type_dp.typetype == ZTypeType.DATA
             and child == "array"
         ):
-            arr_type = path.type
+            arr_type = _pt_ztype
             if arr_type and _is_array_type(arr_type):
                 arr_len = _array_length(arr_type)
                 arr_ctype = _ctype(arr_type)
@@ -7462,7 +7472,7 @@ class CEmitter:
                 )
                 return tmp
         # check if the dotted path resolves to a constant (from 'as' section)
-        if path.type and path.type.const_value is not None:
+        if _pt_ztype and _pt_ztype.const_value is not None:
             parent_type_dp = path.parent.type
             if parent_type_dp:
                 const_qname = f"{parent_type_dp.name}.{child}"
@@ -7482,7 +7492,7 @@ class CEmitter:
         if path.parent.type and path.parent.type.typetype == ZTypeType.PROTOCOL:
             parent_type_p = path.parent.type
             # Id-only child lookup — PROTOCOL parent is always stamped.
-            spec = parent_type_p.resolve_child_by_id(path.child_id)
+            spec = parent_type_p.resolve_child_by_id(_pt_child_id)
             if spec is not None and spec.typetype == ZTypeType.FUNCTION:
                 parent = self._emit_path_value(path.parent)
                 acc = "->" if self._is_class_pointer_path(path.parent) else "."
@@ -7490,22 +7500,22 @@ class CEmitter:
 
         # check if the dotted path resolves to a function (method call or
         # field access). Two shapes hit this branch:
-        #   - path.type is FUNCTION directly (legacy: only happens now
+        #   - _pt_ztype is FUNCTION directly (legacy: only happens now
         #     when we explicitly opted out of auto-call coercion in the
-        #     typechecker — i.e. `path.type` was stamped via
+        #     typechecker — i.e. `_pt_ztype` was stamped via
         #     `_check_path(..., coerce_method_to_return=False)` from
         #     `_check_call`).
-        #   - path.type is the method's return type and the parent's
+        #   - _pt_ztype is the method's return type and the parent's
         #     child by this name is a FUNCTION (the post-`546f7fd`
         #     auto-call coercion in `_check_dotted_path`). For value-
         #     position dotted paths (`p1.distance` inside a string
         #     interpolation, or `v: s.stringview`), the typechecker
-        #     coerced path.type to the return type — but the path is
+        #     coerced _pt_ztype to the return type — but the path is
         #     still semantically a no-arg method call and must lower
         #     as one.
         method_type: "ZType | None" = None
-        if path.type and path.type.typetype == ZTypeType.FUNCTION:
-            method_type = path.type
+        if _pt_ztype and _pt_ztype.typetype == ZTypeType.FUNCTION:
+            method_type = _pt_ztype
         elif (
             path.parent.type
             and path.parent.type.typetype
@@ -7528,7 +7538,7 @@ class CEmitter:
             if (
                 cand is not None
                 and cand.typetype == ZTypeType.FUNCTION
-                and cand.return_type is path.type
+                and cand.return_type is _pt_ztype
             ):
                 method_type = cand
         if method_type is not None:
@@ -7559,12 +7569,12 @@ class CEmitter:
         # whose declared type happens to be a protocol (`source:
         # reader.lock` on a class) — those need a plain struct-field
         # access which falls through to the general path below.
-        if path.type and path.type.typetype == ZTypeType.PROTOCOL:
+        if _pt_ztype and _pt_ztype.typetype == ZTypeType.PROTOCOL:
             parent_type = path.parent.type
             if (
                 parent_type
                 and parent_type.typetype in (ZTypeType.RECORD, ZTypeType.CLASS)
-                and self._proto_conformance.get((parent_type.name, path.type.name))
+                and self._proto_conformance.get((parent_type.name, _pt_ztype.name))
                 == child
             ):
                 self.needs_stdlib = True
@@ -7577,13 +7587,13 @@ class CEmitter:
                     arg = parent_val
                 tmp = self._temp_name("p")
                 indent = self._indent()
-                proto_ctype = f"z_{path.type.name}_t"
+                proto_ctype = f"z_{_pt_ztype.name}_t"
                 # stack-allocate: protocol struct is now stack-based
                 self._temp.decls.append(
                     f"{indent}{proto_ctype} {tmp} = {create_name}({arg});\n"
                 )
                 self._temp.frees.append(tmp)
-                self._temp.proto_set[tmp] = path.type.name
+                self._temp.proto_set[tmp] = _pt_ztype.name
                 return tmp
 
         # runtime numeric cast: x.u32 where x is a numeric variable
@@ -7608,7 +7618,7 @@ class CEmitter:
         if parent_type and parent_type.typetype == ZTypeType.VARIANT:
             # Id-only lookup — typecheck stamps child_id on every DottedPath
             # with a known parent_type, so we should never see -1 here.
-            child_type = parent_type.resolve_child_by_id(path.child_id)
+            child_type = parent_type.resolve_child_by_id(_pt_child_id)
             if child_type and child_type.typetype != ZTypeType.FUNCTION:
                 return f"{parent}.data.{child}"
         # union payload access: u.subname → *(T*)u.data (heap-boxed)
@@ -7617,7 +7627,7 @@ class CEmitter:
         # payload and should not be accessed this way — the typechecker
         # rejects it.
         if parent_type and parent_type.typetype == ZTypeType.UNION:
-            child_type = parent_type.resolve_child_by_id(path.child_id)
+            child_type = parent_type.resolve_child_by_id(_pt_child_id)
             if (
                 child_type
                 and child_type.typetype != ZTypeType.FUNCTION
