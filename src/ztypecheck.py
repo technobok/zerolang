@@ -519,6 +519,16 @@ class TypeChecker:
         self._case_taken_vars: dict[int, list[tuple[str, Optional[ZType]]]] = {}
         # Per-Case subject-taken flag (was `zast.Case.subject_taken`).
         self._case_subject_taken: dict[int, bool] = {}
+        # Per-AtomId narrowing stamps (was `zast.AtomId.narrowed_subtype`
+        # / `.original_ztype` / `.child_id`). Set when an AtomId
+        # references a variable narrowed in an enclosing match arm,
+        # plus the standalone child_id stamp for `CaseClause.match` tag
+        # selectors. Read by the two `TypedAtomId` constructor sites
+        # (`_build_typed_atomid` and `_typed_path_from_parsed`'s ATOMID
+        # branch) and by `_build_typed_case_clause`'s match construction.
+        self._atom_narrowed_subtype: dict[int, str] = {}
+        self._atom_original_ztype: dict[int, ZType] = {}
+        self._atom_child_id: dict[int, int] = {}
 
         # C name collision tracking: assigned cnames -> set for collision detection
         self._assigned_cnames: set[str] = set()
@@ -596,9 +606,9 @@ class TypeChecker:
             const_value=atom.const_value,
             name=atom.name,
             is_label_value=(atom.nodetype == NodeType.LABELVALUE),
-            narrowed_subtype=atom.narrowed_subtype,
-            original_ztype=atom.original_ztype,
-            child_id=atom.child_id,
+            narrowed_subtype=self._atom_narrowed_subtype.get(atom.nodeid),
+            original_ztype=self._atom_original_ztype.get(atom.nodeid),
+            child_id=self._atom_child_id.get(atom.nodeid, -1),
         )
         self._register_typed(atom, typed)
         return typed
@@ -6560,9 +6570,9 @@ class TypeChecker:
                 const_value=atom.const_value,
                 name=atom.name,
                 is_label_value=(atom.nodetype == NodeType.LABELVALUE),
-                narrowed_subtype=atom.narrowed_subtype,
-                original_ztype=atom.original_ztype,
-                child_id=atom.child_id,
+                narrowed_subtype=self._atom_narrowed_subtype.get(atom.nodeid),
+                original_ztype=self._atom_original_ztype.get(atom.nodeid),
+                child_id=self._atom_child_id.get(atom.nodeid, -1),
             )
         if path.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, path)
@@ -6773,6 +6783,7 @@ class TypeChecker:
                 parsed=clause.match,
                 ztype=cast(ZType, None),
                 name=clause.match.name,
+                child_id=self._atom_child_id.get(clause.match.nodeid, -1),
             )
             clause_typed = ztypedast.TypedCaseClause(
                 parsed=clause,
@@ -7188,13 +7199,15 @@ class TypeChecker:
                     and entry.narrowed_subtype is not None
                     and entry.original_ztype is not None
                 ):
-                    parent_atom.narrowed_subtype = entry.narrowed_subtype
-                    parent_atom.original_ztype = entry.original_ztype
+                    self._atom_narrowed_subtype[parent_atom.nodeid] = (
+                        entry.narrowed_subtype
+                    )
+                    self._atom_original_ztype[parent_atom.nodeid] = entry.original_ztype
                     # Phase 7b: stamp narrowed-subtype child_id against the
                     # outer union/variant (mirrors _check_atomid path).
-                    if parent_atom.child_id == -1:
-                        parent_atom.child_id = entry.original_ztype.child_id_for(
-                            entry.narrowed_subtype
+                    if self._atom_child_id.get(parent_atom.nodeid, -1) == -1:
+                        self._atom_child_id[parent_atom.nodeid] = (
+                            entry.original_ztype.child_id_for(entry.narrowed_subtype)
                         )
                 # Borrow-scoped lock enforcement: locked paths are completely
                 # unavailable (reads AND writes). Check the full path being
@@ -7362,14 +7375,14 @@ class TypeChecker:
             # at this AtomId's lowering site.
             entry = self.symtab.lookup_entry(name)
             if entry and entry.narrowed_subtype and entry.original_ztype is not None:
-                atom.narrowed_subtype = entry.narrowed_subtype
-                atom.original_ztype = entry.original_ztype
+                self._atom_narrowed_subtype[atom.nodeid] = entry.narrowed_subtype
+                self._atom_original_ztype[atom.nodeid] = entry.original_ztype
                 # Phase 7b: stamp child_id of narrowed subtype against the
                 # outer union/variant so the emitter's payload-unwrap can
                 # dispatch by id.
-                if atom.child_id == -1:
-                    atom.child_id = entry.original_ztype.child_id_for(
-                        entry.narrowed_subtype
+                if self._atom_child_id.get(atom.nodeid, -1) == -1:
+                    self._atom_child_id[atom.nodeid] = (
+                        entry.original_ztype.child_id_for(entry.narrowed_subtype)
                     )
             # constant folding: propagate const_value for true/false literals
             if name == "true":
@@ -10288,9 +10301,11 @@ class TypeChecker:
             if (
                 subject_type is not None
                 and subject_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT)
-                and clause.match.child_id == -1
+                and self._atom_child_id.get(clause.match.nodeid, -1) == -1
             ):
-                clause.match.child_id = subject_type.child_id_for(clause.match.name)
+                self._atom_child_id[clause.match.nodeid] = subject_type.child_id_for(
+                    clause.match.name
+                )
 
             # resolve match pattern const_value for scalar const folding
             suppress_arm = False

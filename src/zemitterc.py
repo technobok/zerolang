@@ -687,6 +687,16 @@ class CEmitter:
             return node.type
         return cast(ztypedast.TypedExpression, typed).ztype
 
+    def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
+        """Read the child_id stamped on `clause.match` via the typed
+        mirror's `TypedCaseClause.match`. Falls back to -1 when the
+        typed mirror isn't available (e.g. emitter run on a Program
+        without a TypedProgram)."""
+        typed = self._typed_for(clause)
+        if typed is None or typed.parsed.nodetype != NodeType.CASECLAUSE:
+            return -1
+        return cast(ztypedast.TypedCaseClause, typed).match.child_id
+
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
         """Resolve the ZType of a parser-AST `Path`-shaped node via
         its typed mirror. Falls back to `path.type` when no typed
@@ -7203,9 +7213,9 @@ class CEmitter:
         # available. Falls back to parsed `atom.*` for synth atoms or
         # tests that build a Program without running typecheck.
         typed = self._typed_atomid_for(atom)
-        narrowed_subtype = typed.narrowed_subtype if typed else atom.narrowed_subtype
-        original_ztype = typed.original_ztype if typed else atom.original_ztype
-        child_id = typed.child_id if typed else atom.child_id
+        narrowed_subtype = typed.narrowed_subtype if typed else None
+        original_ztype = typed.original_ztype if typed else None
+        child_id = typed.child_id if typed else -1
         atom_ztype = typed.ztype if typed else atom.type
         # binding alias: substitute the source expression at the reference site
         # (set by alias-optimized `with`, inline .take/.borrow bindings, and
@@ -8009,8 +8019,8 @@ class CEmitter:
             return None
         atom = cast(zast.AtomId, dp.parent)
         typed_atom = self._typed_atomid_for(atom)
-        narrowed = typed_atom.narrowed_subtype if typed_atom else atom.narrowed_subtype
-        original = typed_atom.original_ztype if typed_atom else atom.original_ztype
+        narrowed = typed_atom.narrowed_subtype if typed_atom else None
+        original = typed_atom.original_ztype if typed_atom else None
         if narrowed is None or original is None:
             return None
         return self._emit_atomid_value(atom)
@@ -8794,7 +8804,7 @@ class CEmitter:
         if op.nodetype == NodeType.ATOMID:
             atom = cast(zast.AtomId, op)
             typed_atom = self._typed_atomid_for(atom)
-            original = typed_atom.original_ztype if typed_atom else atom.original_ztype
+            original = typed_atom.original_ztype if typed_atom else None
             if original is not None:
                 return original
         if op.nodetype == NodeType.EXPRESSION:
@@ -9697,7 +9707,7 @@ class CEmitter:
                 alias_name,
                 union_type,
                 sname,
-                clause.match.child_id,
+                self._case_clause_match_child_id(clause),
                 subject,
                 parts,
                 arm_indent,
@@ -9863,7 +9873,7 @@ class CEmitter:
                 alias_name,
                 variant_type,
                 sname,
-                clause.match.child_id,
+                self._case_clause_match_child_id(clause),
                 subject,
                 parts,
                 arm_indent,
@@ -10004,7 +10014,7 @@ class CEmitter:
                 alias_name,
                 union_type,
                 sname,
-                clause.match.child_id,
+                self._case_clause_match_child_id(clause),
                 subject,
                 parts,
                 arm_indent,
@@ -10135,7 +10145,7 @@ class CEmitter:
                 alias_name,
                 variant_type,
                 sname,
-                clause.match.child_id,
+                self._case_clause_match_child_id(clause),
                 subject,
                 parts,
                 arm_indent,

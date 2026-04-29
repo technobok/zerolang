@@ -131,11 +131,16 @@ main: function is {
 }
 """
         program = _parse_check(src)
+        # Step 6.6: child_id used to live on parsed `clause.match`;
+        # after the strip it lives on `TypedCaseClause.match`. Walk
+        # the typed program instead.
+        import ztypedast
+
+        typed_program = zast.cast(ztypedast.TypedProgram, program.typed_program)
         stamped = 0
-        for node in _walk(program):
-            if node.nodetype == NodeType.CASECLAUSE:
-                clause = zast.cast(zast.CaseClause, node)
-                if clause.match.child_id != -1:
+        for typed in typed_program.by_parsed_id.values():
+            if isinstance(typed, ztypedast.TypedCaseClause):
+                if typed.match.child_id != -1:
                     stamped += 1
         assert stamped >= 2, (
             f"expected both match clauses to carry stamped child_ids, got {stamped}"

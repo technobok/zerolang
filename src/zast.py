@@ -875,14 +875,15 @@ class AtomId(Atom):
 
     nodetype: NodeType = field(default=NodeType.ATOMID, init=False)
     name: str  # this is also in the start token
-    # narrowing stamp — set by typecheck when this AtomId references a
-    # variable narrowed in an enclosing match arm. The emitter reads these
-    # to decide whether to emit a payload-unwrap in place of the bare name.
-    narrowed_subtype: "Optional[str]" = field(default=None, init=False)
-    original_ztype: "Optional[ZType]" = field(default=None, init=False)
-    # Phase 7b: child id against a contextually-known parent type (e.g.
-    # the scrutinee's union type inside a match clause). -1 when unstamped.
-    child_id: int = field(default=-1, init=False)
+    # `narrowed_subtype` / `original_ztype` / `child_id` used to live
+    # here as `init=False` fields populated by the typechecker. After
+    # Step 6 they live on `TypedAtomId` only; the typechecker records
+    # them via `TypeChecker._atom_narrowed_subtype` /
+    # `_atom_original_ztype` / `_atom_child_id` (side-tables keyed by
+    # parsed `nodeid`). The two `TypedAtomId` constructor sites
+    # (`_build_typed_atomid` and `_typed_path_from_parsed`) plus the
+    # `CaseClause.match` selector in `_build_typed_case` read the
+    # side-tables.
 
 
 @dataclass

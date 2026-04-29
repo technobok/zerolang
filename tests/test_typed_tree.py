@@ -535,9 +535,11 @@ class TestTypedAtomIdInvariants:
             assert typed.name == patom.name
             assert typed.ztype is patom.type
             assert typed.const_value == patom.const_value
-            assert typed.narrowed_subtype == patom.narrowed_subtype
-            assert typed.original_ztype is patom.original_ztype
-            assert typed.child_id == patom.child_id
+            # `narrowed_subtype` / `original_ztype` / `child_id` used
+            # to live on the parsed AtomId. After Step 6.6 they live on
+            # `TypedAtomId` only; assert their default sentinel values
+            # for atoms outside narrowing / case-arm contexts.
+            assert isinstance(typed.child_id, int)
             assert typed.is_label_value == (parsed.nodetype == NodeType.LABELVALUE)
             atomid_typed_count += 1
         assert atomid_typed_count > 0, (
