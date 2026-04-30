@@ -37,6 +37,37 @@ from zsymtab_proto import SymbolTableProto
 
 
 @dataclass
+class TypeChild:
+    """One row of the flat children table (F5.H).
+
+    Replaces a `(parent_ztype, name) → child_ztype` entry from
+    `ZType.children`. `child_name_id` is the monotonic id minted by
+    `ZType.child_id_for(child_name)` (Phase 7b children_id_map);
+    `position` preserves declaration order (rows appear in
+    insertion order in `Typing.type_child` per parent).
+    """
+
+    parent_type_id: int
+    child_name: str
+    child_name_id: int
+    child_type_id: int
+    position: int
+
+
+@dataclass
+class TypeGenericArg:
+    """One row of the flat generic-args table (F5.H).
+
+    Replaces a `(parent_ztype, param_name) → arg_ztype` entry from
+    `ZType.generic_args`.
+    """
+
+    parent_type_id: int
+    param_name: str
+    arg_type_id: int
+
+
+@dataclass
 class TypedProgramView:
     """Thin compat namespace exposing legacy `typed_program.X` access
     to a few `Typing` component tables. Each field aliases the
@@ -143,3 +174,11 @@ class Typing:
         int,
         "tuple[Optional[ZType], Optional[str], Optional[str]]",
     ] = field(default_factory=dict, init=False)
+
+    # ----- Flat ZType.children / generic_args tables (F5.H).
+    #
+    # F5.H.1: introduced empty alongside the existing `ZType.children`
+    # / `ZType.generic_args` dicts. F5.H.2 will populate these at every
+    # write site; F5.H.3/4 migrate consumers; F5.H.5 removes the dicts.
+    type_child: List[TypeChild] = field(default_factory=list, init=False)
+    type_generic_arg: List[TypeGenericArg] = field(default_factory=list, init=False)
