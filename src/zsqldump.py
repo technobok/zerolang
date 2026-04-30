@@ -308,7 +308,7 @@ def dump_sql(
         if zt.nodeid in all_types:
             return
         all_types[zt.nodeid] = zt
-        for ctype in zt.children.values():
+        for ctype in typing.child_types_of(zt):
             _register_type(ctype)
         if zt.return_type:
             _register_type(zt.return_type)
@@ -349,17 +349,19 @@ def dump_sql(
             f"{_sql_str(ztype.cname if ztype.cname else None)});"
         )
 
-    # type_children (Phase 7b: child_id column populated from
-    # children_id_map when a name was asked for during compilation;
-    # NULL otherwise).
-    for ztype in all_types.values():
-        for i, (cname, ctype) in enumerate(ztype.children.items()):
-            cid = ztype.children_id_map.get(cname)
-            cid_sql = "NULL" if cid is None else str(cid)
-            lines.append(
-                f"INSERT OR IGNORE INTO type_children VALUES ("
-                f"{ztype.nodeid}, {_sql_str(cname)}, {ctype.nodeid}, {i}, {cid_sql});"
-            )
+    # type_children (F5.H.3.c: dumped directly from the flat
+    # typing.type_child table, which is now the authoritative form).
+    # Rows belonging to types unreachable from `all_types` (e.g.
+    # discarded mono shells, transient builders) are filtered out so
+    # the dump stays in sync with the `types` table.
+    for row in typing.type_child:
+        if row.parent_type_id not in all_types:
+            continue
+        lines.append(
+            f"INSERT OR IGNORE INTO type_children VALUES ("
+            f"{row.parent_type_id}, {_sql_str(row.child_name)}, "
+            f"{row.child_type_id}, {row.position}, {row.child_name_id});"
+        )
 
     # Stage 5: typed nodes — typecheck-set per-node data. Step 5b
     # consolidated the cname / is_const / const_value columns out of
