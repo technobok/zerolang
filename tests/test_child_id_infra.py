@@ -99,16 +99,23 @@ main: function is {
 }
 """
         program = _parse_check(src)
-        # Step 6.7: child_id used to live on parsed DottedPath; after
-        # the strip it lives on `TypedDottedPath`. Walk via TypedProgram.
-        import ztypedast
-
-        typed_program = zast.cast(ztypedast.TypedProgram, program.typed_program)
+        # F5.E.4.d: child_id is on `Typing.dp_child_id` keyed by parsed
+        # DottedPath nodeid. Walk parsed nodes and check the stamps.
+        dp_child_id = program.typed_program.dp_child_id
         stamped = 0
-        for typed in typed_program.by_parsed_id.values():
-            if isinstance(typed, ztypedast.TypedDottedPath):
-                if typed.child_id != -1:
+
+        def _walk(node):
+            nonlocal stamped
+            if node is None:
+                return
+            if node.nodetype == zast.NodeType.DOTTEDPATH:
+                if dp_child_id.get(node.nodeid, -1) != -1:
                     stamped += 1
+            for child in zast.node_children(node):
+                _walk(child)
+
+        for unit in program.units.values():
+            _walk(unit)
         assert stamped >= 1, (
             "expected at least one DottedPath to carry a stamped child_id"
         )
@@ -135,17 +142,24 @@ main: function is {
 }
 """
         program = _parse_check(src)
-        # Step 6.6: child_id used to live on parsed `clause.match`;
-        # after the strip it lives on `TypedCaseClause.match`. Walk
-        # the typed program instead.
-        import ztypedast
-
-        typed_program = zast.cast(ztypedast.TypedProgram, program.typed_program)
+        # F5.E.4.d: child_id for case-clause match selectors lives on
+        # `Typing.atom_child_id` keyed by the parsed `clause.match`
+        # AtomId's nodeid. Walk parsed clauses and check the stamps.
+        atom_child_id = program.typed_program.atom_child_id
         stamped = 0
-        for typed in typed_program.by_parsed_id.values():
-            if isinstance(typed, ztypedast.TypedCaseClause):
-                if typed.match.child_id != -1:
+
+        def _walk(node):
+            nonlocal stamped
+            if node is None:
+                return
+            if node.nodetype == zast.NodeType.CASECLAUSE:
+                if atom_child_id.get(node.match.nodeid, -1) != -1:
                     stamped += 1
+            for child in zast.node_children(node):
+                _walk(child)
+
+        for unit in program.units.values():
+            _walk(unit)
         assert stamped >= 2, (
             f"expected both match clauses to carry stamped child_ids, got {stamped}"
         )

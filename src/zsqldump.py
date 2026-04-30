@@ -8,7 +8,6 @@ statements that match the schema from the code review document.
 from typing import List, Optional, Tuple, cast
 
 import zast
-import ztypedast
 import ztyping
 from zast import NodeType
 from zlexer import Token
@@ -33,48 +32,30 @@ _OP_NODETYPES = (
 )
 
 
-def _typed_for(
-    typed_program: Optional[ztypedast.TypedProgram], parsed: zast.Node
-) -> Optional[ztypedast.TypedNode]:
-    """Look up a parsed node's typed mirror via TypedProgram.by_parsed_id.
-    Returns None when no TypedProgram is attached or the node has no
-    mirror (synth nodes / parser-only contexts)."""
-    if typed_program is None:
-        return None
-    return typed_program.by_parsed_id.get(parsed.nodeid)
-
-
-def _node_ztype(
-    typed_program: Optional[ztypedast.TypedProgram], node: zast.Node
-) -> Optional[ZType]:
-    """Read `ztype` from the typed mirror of `node`, descending into
-    `Expression.expression` (the wrapper has no typed mirror per
-    ztypedast.py design). After Step 6.9.b stripped `Node.type`,
-    falls back to the TypedProgram's `node_types` side-table when no
-    typed mirror exists for the inner subtype."""
+def _node_ztype(typing: "ztyping.Typing", node: zast.Node) -> Optional[ZType]:
+    """Read the resolved `ZType` for `node`, descending through the
+    `Expression` wrapper. F5.E.4.d: reads `Typing.node_type` directly.
+    Tries the inner-subtype nodeid first and falls back to the outer
+    Expression nodeid (typecheck stamps both paths)."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
-    typed = _typed_for(typed_program, target)
-    if typed is None or typed.parsed.nodetype not in _OP_NODETYPES:
-        if typed_program is None:
-            return None
-        return typed_program.node_types.get(node.nodeid)
-    return cast(ztypedast.TypedExpression, typed).ztype
+    zt = typing.node_type.get(target.nodeid)
+    if zt is not None:
+        return zt
+    return typing.node_type.get(node.nodeid)
 
 
-def _node_const_value(typed_program: Optional[ztypedast.TypedProgram], node: zast.Node):
-    """Read `const_value` from the typed mirror; same descent rule
-    as `_node_ztype`. Returns `None` when no typed mirror exists —
-    after Step 6.9.a `Node.const_value` was stripped from the parser
-    AST."""
+def _node_const_value(typing: "ztyping.Typing", node: zast.Node):
+    """Read `const_value` for `node`. Same descent rule as
+    `_node_ztype`. F5.E.4.d: reads `Typing.node_const_value` directly."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
-    typed = _typed_for(typed_program, target)
-    if typed is None or typed.parsed.nodetype not in _OP_NODETYPES:
-        return None
-    return cast(ztypedast.TypedExpression, typed).const_value
+    v = typing.node_const_value.get(target.nodeid)
+    if v is not None:
+        return v
+    return typing.node_const_value.get(node.nodeid)
 
 
 def _sql_str(s: Optional[str]) -> str:
@@ -297,7 +278,15 @@ def dump_sql(
         typing.resolved = program.resolved
         typing.symbol_table = program.symbol_table
         typing.unit_types_by_id = program.unit_types_by_id
-        typing.typed_program = program.typed_program
+        # Pull through the component-table aliases via the typed_program
+        # shim. Each `view.X` field is the same dict object as the
+        # original Typing.X, so this re-populates the fresh Typing's
+        # nodeid-keyed tables for the dump-time walk.
+        view = cast(ztyping.TypedProgramView, program.typed_program)
+        if view is not None:
+            typing.node_type = view.node_types
+            typing.node_const_value = view.node_const_value
+            typing.typed_program = view
     lines: List[str] = []
     lines.append(SCHEMA_SQL)
 
@@ -321,7 +310,6 @@ def dump_sql(
 
     # Stage 3: AST nodes (parser-set fields only — Step 5b)
     ast_nodes = _collect_ast_nodes(program)
-    typed_program = cast(Optional[ztypedast.TypedProgram], typing.typed_program)
     for node, name in ast_nodes:
         kind = type(node).__name__
         token_id = _sql_int(node.start.tokenid) if node.start else "NULL"
@@ -360,7 +348,7 @@ def dump_sql(
     # from AST node type annotations (route via typed mirror so the
     # parsed `init=False` `.type` field can be retired in Step 6).
     for node, _ in ast_nodes:
-        n_ztype = _node_ztype(typed_program, node)
+        n_ztype = _node_ztype(typing, node)
         if n_ztype is not None:
             _register_type(n_ztype)
 
@@ -401,8 +389,8 @@ def dump_sql(
     # ast_nodes so the parser-side and typecheck-side rows are
     # disjoint.
     for node, name in ast_nodes:
-        n_ztype = _node_ztype(typed_program, node)
-        n_const = _node_const_value(typed_program, node)
+        n_ztype = _node_ztype(typing, node)
+        n_const = _node_const_value(typing, node)
         # Skip rows where the node carries no typecheck-set data at
         # all — reflects a parser-only node (e.g. a structural child
         # selector, error sentinel) untouched by typecheck.

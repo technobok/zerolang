@@ -137,10 +137,10 @@ def _walk_path_nodes(node, visited=None):
 
 
 def _node_ztype(program, node):
-    """Look up a parsed node's resolved ZType via the typed-program
-    side-table. After Step 6.9.b stripped `Node.type`, the per-node
-    type lives on `program.typed_program.node_types` keyed by parsed
-    `nodeid`."""
+    """Look up a parsed node's resolved ZType. F5.E.4.d: reads from the
+    `Program.typed_program.node_types` snapshot, which is the legacy
+    name for what is now a thin shim view onto `Typing.node_type`. The
+    canonical access path is `typing.node_type[node.nodeid]`."""
     return program.typed_program.node_types.get(node.nodeid)
 
 
@@ -406,13 +406,34 @@ class TestFinding7CallKind:
     """
 
     def _typed_calls(self, program):
-        """Yield every `TypedCall` registered in the typed program."""
-        import ztypedast
+        """Yield every parsed `Call` that was visited by the typechecker
+        (`call_kind` was stamped) paired with its classified `call_kind`.
+        F5.E.4.d: walks the parsed AST instead of the deleted typed-tree
+        mirror, then filters to calls that have a `call_kind` entry — this
+        matches the pre-F5.E.4.d behaviour where the mirror only held
+        typechecked calls."""
+        # Tiny ad-hoc namespace so existing test bodies that read
+        # `c.call_kind` keep working without further per-site rewrite.
+        from types import SimpleNamespace
 
-        tp = zast.cast(ztypedast.TypedProgram, program.typed_program)
-        for typed in tp.by_parsed_id.values():
-            if isinstance(typed, ztypedast.TypedCall):
-                yield typed
+        call_kinds = program.typed_program.call_kind
+
+        def _walk(node):
+            if node is None:
+                return
+            if node.nodetype == zast.NodeType.CALL:
+                yield node
+            for child in zast.node_children(node):
+                yield from _walk(child)
+
+        for unit in program.units.values():
+            for call in _walk(unit):
+                if call.nodeid not in call_kinds:
+                    continue
+                yield SimpleNamespace(
+                    call_kind=call_kinds[call.nodeid],
+                    parsed=call,
+                )
 
     def test_regular_function_call(self):
         program = parse_and_check(

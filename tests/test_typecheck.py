@@ -9391,10 +9391,9 @@ class TestConstantFolding:
         target = parsed_node
         while isinstance(target, zast.Expression):
             target = target.expression
-        typed = program.typed_program.by_parsed_id.get(target.nodeid)
-        if typed is None:
-            return None
-        return getattr(typed, "const_value", None)
+        # F5.E.4.d: const_value lives on `Typing.node_const_value`
+        # (snapshot exposed via `typed_program.node_const_value` shim).
+        return program.typed_program.node_const_value.get(target.nodeid)
 
     def test_const_value_numeric_literal(self):
         """Numeric literal should have const_value set."""
