@@ -676,7 +676,7 @@ Larger refactors; do in order.
        `_check_path` / `_check_call` / `_check_operation` boundaries.
        F5.F (TAG_ORIGIN sentinel removal) resolved in `feba9e5`.
        F5.D (move side tables to `Program` as ECS components) resolved
-       in <PIN>: 19 nodeid-keyed dicts (`_node_type`, `_node_const_value`,
+       in `f75c0d5`: 19 nodeid-keyed dicts (`_node_type`, `_node_const_value`,
        `_call_kind`, `_call_callable_type_name`, `_expr_call_kind`,
        `_do_has_break`, `_case_subject_taken`, `_for_iter_bindings`,
        `_if_taken_vars`, `_case_taken_vars`, `_atom_*`, `_dp_*`,
