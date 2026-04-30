@@ -259,12 +259,18 @@ Action items:
 - [x] After F2 lands: add `getattr` baseline.
       *(Done in commit `7d34d5a`. Baseline locked at 4. Sanity-checked
       with a synthetic regression in `src/zc.py`.)*
-- [ ] After F4 lands: add `startswith` and name-literal-compare baselines.
+- [~] After F4 lands: add `startswith` and name-literal-compare
+      baselines. *(F4 landed scoped — buckets A/B done, C/D deferred,
+      so the name-literal-compare count is still ~50+ from the
+      meta/method-name literals. The lint should be added with the
+      current count as the baseline (policy: "no new literal
+      compares") rather than waiting for buckets C/D. The
+      `startswith` baseline is independent and ready to add.)*
 - [~] Update the comment block at `Makefile:24-26` to reflect the
       expanded set. *(getattr line added; startswith / name-literal
-      pending F4.)*
+      pending the lint addition above.)*
 
-### F4. String-literal compares in the C emitter — High (goal 4)
+### F4. String-literal compares in the C emitter — High (goal 4) \[~partial\]
 
 `zemitterc.py` has ~134 `== "..."` literals against names. The hot ones:
 
@@ -303,13 +309,57 @@ record (`Entry.builtin_name`, `ZType.builtin_name`,
 `ZFunction.builtin_func`).
 
 Action items:
-- [ ] Add `Entry.is_receiver: bool`; set in parser; replace the four
-      `pname == "this"` sites with the bool.
-- [ ] Add `BuiltinName`/`BuiltinFunc` enums for the small set of
-      compiler-known names (audit `grep -nE '"(this|String|StringView|parseF64|envNames|none|some|err|ok|...)"' src/zemitterc.py`).
-- [ ] Replace literal compares with enum compares.
-- [ ] When F3's name-literal-compare lint goes in, set the baseline
-      at the post-cleanup count.
+- [x] Add `Entry.is_receiver: bool`; stamp at parameter binding;
+      replace the receiver-detection sites in the emitter that aren't
+      coupled to `_prepend_method_receiver`'s prepend predicate.
+      *(F4.1+F4.2: 5 of the 8 `pname == "this"` sites migrate to
+      `ftype.this_param_name == pname` (a string-to-string compare,
+      not a literal compare). The remaining 2 — `_emit_call_args`
+      `params[0][0] == "this"` and `children_keys[0] == "this"` —
+      are the prepend predicate, semantically coupled to
+      `_prepend_method_receiver`'s `"this" not in ftype.children`
+      early return; left as literals with `# ztc-string-compare-ok`
+      escape and explanatory comment.)*
+- [x] **Bucket B — String/StringView checks.** *(F4.3: 3 sites in
+      `_ctype` and `_emit_atom` migrated to
+      `ztype.subtype == ZSubType.STRING/STRINGVIEW`. The bare-class
+      disambiguator follows the surrounding record-case idiom
+      (`atom_ztype.name == name`).)*
+- [ ] **Bucket C — `parseF64` / `envNames`** at `src/zemitterc.py:967, 998`.
+      *(Deferred from F4. Two sites; needs a `BuiltinFunc` enum or
+      similar id-tag at type-check time. Worth doing alongside the
+      meta/method-name sweep below since they share the same shape.)*
+- [ ] **Bucket D — meta / method names**: `create`, `take`, `borrow`,
+      `box`, `main`, `copy`, `length`, `private`, `lock`, `release`
+      (~50 sites). *(Deferred from F4. Single-character role-names
+      are more readable as literals than `BuiltinName.CREATE` plus a
+      module-level frozenset of constants. Revisit only if a
+      self-hosting port hits a concrete portability blocker.)*
+- [ ] Replace literal compares with enum compares (covers buckets C/D
+      above).
+- [~] When F3's name-literal-compare lint goes in, set the baseline
+      at the post-cleanup count. *(See F3b — lint baseline set at the
+      post-F4-scoped count, not zero, since buckets C/D are deferred.)*
+
+**Resolved-as-scoped 2026-04-30** — landed in three sub-commits:
+
+- `94fcb42` (F4.1): `Entry.is_receiver: bool` added; stamped in
+  `_check_function_body_inner` via `ftype.this_param_name == pname`.
+  No emitter changes; 1962 tests passing.
+- `55246a9` (F4.2): emitter receiver detection — 5 of 8 sites
+  migrated to `ftype.this_param_name == pname` /
+  `spec_type.this_param_name == pname`. `_emit_facet` and
+  `_emit_facet_impl` gain a single `_resolved_type(...)` lookup
+  each. The 2 prepend-predicate sites are kept as literals with
+  ztc-string-compare-ok escapes — see action-item note above.
+  Byte-identical C output verified across all 85 examples.
+- `9e519b5` (F4.3): `_ctype` String/StringView dispatch and
+  `_emit_atom` bare-class branch use `ztype.subtype == ZSubType.*`.
+  Byte-identical C output verified.
+
+Buckets C and D remain open; F3b's name-literal-compare baseline
+should be set at the current count rather than zero (~50+
+remaining literals).
 
 ### F5. TypeChecker state sprawl — Med (goals 1, 5)
 
@@ -598,9 +648,17 @@ Each step depends on the previous one. F4 is the largest.
        `getattr`s. *(Resolved 2026-04-28; count 125 → 4.)*
 2. [x] F3a — add `getattr` baseline to `bootstrap-lint`.
        *(Resolved 2026-04-28; baseline 4.)*
-3. [ ] F4 — `Entry.is_receiver`, `BuiltinName`/`BuiltinFunc` enums,
-       replace literal compares.
-4. [ ] F3b — add `startswith` and `name-literal-compare` baselines.
+3. [~] F4 — `Entry.is_receiver`, `BuiltinName`/`BuiltinFunc` enums,
+       replace literal compares. *(Partial 2026-04-30 in commits
+       `94fcb42`, `55246a9`, `9e519b5`: receiver-detection bucket A
+       and String/StringView bucket B done. Buckets C
+       (`parseF64`/`envNames`) and D (~50 meta/method-name literals)
+       deferred — would hurt readability for limited gain; revisit
+       only if a self-hosting port hits a concrete portability
+       blocker.)*
+4. [~] F3b — add `startswith` and `name-literal-compare` baselines.
+       *(Partial: ready to add at the current post-F4-scoped count
+       rather than zero, since buckets C/D leave ~50+ literals.)*
 
 ### Phase 3 — Architecture
 
