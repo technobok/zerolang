@@ -537,127 +537,6 @@ class CEmitter:
             self.source_map.append(node_id)
             char_pos = line_end + 1  # +1 for the \n
 
-    def _typed_for(self, parsed: zast.Node) -> Optional[ztypedast.TypedNode]:
-        """Look up the typed-tree counterpart of a parsed Node by
-        nodeid. Returns None when no `TypedProgram` is attached or the
-        node has no typed mirror yet (e.g. structural sub-nodes like
-        `BinOp.operator`, or a synth node created by the emitter
-        itself). Each Step-4 sub-step replaces decoration reads with
-        typed-mirror reads at sites where the lookup is reliable; the
-        fallback to parsed-node fields keeps the rest unchanged."""
-        if self.typed_program is None:
-            return None
-        return self.typed_program.by_parsed_id.get(parsed.nodeid)
-
-    def _typed_atomid_for(self, atom: zast.AtomId) -> Optional[ztypedast.TypedAtomId]:
-        """Narrowing helper: return the TypedAtomId mirror of `atom`,
-        or None when no typed mirror exists. Validation goes by
-        `parsed.nodetype` (no isinstance per bootstrap-lint)."""
-        typed = self._typed_for(atom)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype not in (NodeType.ATOMID, NodeType.LABELVALUE):
-            return None
-        return cast(ztypedast.TypedAtomId, typed)
-
-    def _typed_dotted_path_for(
-        self, path: zast.DottedPath
-    ) -> Optional[ztypedast.TypedDottedPath]:
-        """Narrowing helper: return the TypedDottedPath mirror of
-        `path`, or None when no typed mirror exists."""
-        typed = self._typed_for(path)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.DOTTEDPATH:
-            return None
-        return cast(ztypedast.TypedDottedPath, typed)
-
-    def _typed_call_for(self, call: zast.Call) -> Optional[ztypedast.TypedCall]:
-        """Narrowing helper: return the TypedCall mirror of `call`."""
-        typed = self._typed_for(call)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.CALL:
-            return None
-        return cast(ztypedast.TypedCall, typed)
-
-    def _typed_binop_for(self, binop: zast.BinOp) -> Optional[ztypedast.TypedBinOp]:
-        """Narrowing helper: return the TypedBinOp mirror of `binop`."""
-        typed = self._typed_for(binop)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.BINOP:
-            return None
-        return cast(ztypedast.TypedBinOp, typed)
-
-    def _typed_named_op_for(
-        self, named: zast.NamedOperation
-    ) -> Optional[ztypedast.TypedNamedOperation]:
-        """Narrowing helper: return the TypedNamedOperation mirror of
-        a parsed NamedOperation argument."""
-        typed = self._typed_for(named)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.NAMEDOPERATION:
-            return None
-        return cast(ztypedast.TypedNamedOperation, typed)
-
-    def _typed_assignment_for(
-        self, assign: zast.Assignment
-    ) -> Optional[ztypedast.TypedAssignment]:
-        """Narrowing helper: return the TypedAssignment mirror."""
-        typed = self._typed_for(assign)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.ASSIGNMENT:
-            return None
-        return cast(ztypedast.TypedAssignment, typed)
-
-    def _typed_if_for(self, ifnode: zast.If) -> Optional[ztypedast.TypedIf]:
-        """Narrowing helper: return the TypedIf mirror."""
-        typed = self._typed_for(ifnode)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.IF:
-            return None
-        return cast(ztypedast.TypedIf, typed)
-
-    def _typed_case_for(self, casenode: zast.Case) -> Optional[ztypedast.TypedCase]:
-        """Narrowing helper: return the TypedCase mirror."""
-        typed = self._typed_for(casenode)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.CASE:
-            return None
-        return cast(ztypedast.TypedCase, typed)
-
-    def _typed_for_for(self, fornode: zast.For) -> Optional[ztypedast.TypedFor]:
-        """Narrowing helper: return the TypedFor mirror."""
-        typed = self._typed_for(fornode)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.FOR:
-            return None
-        return cast(ztypedast.TypedFor, typed)
-
-    def _typed_do_for(self, donode: zast.Do) -> Optional[ztypedast.TypedDo]:
-        """Narrowing helper: return the TypedDo mirror."""
-        typed = self._typed_for(donode)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.DO:
-            return None
-        return cast(ztypedast.TypedDo, typed)
-
-    def _typed_with_for(self, withnode: zast.With) -> Optional[ztypedast.TypedWith]:
-        """Narrowing helper: return the TypedWith mirror."""
-        typed = self._typed_for(withnode)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype != NodeType.WITH:
-            return None
-        return cast(ztypedast.TypedWith, typed)
-
     def _node_const_value(self, node: zast.Node):
         """Read `const_value` for `node`. Unwraps `zast.Expression` to
         its inner subtype, then tries the inner nodeid first and falls
@@ -693,14 +572,9 @@ class CEmitter:
         return self.typing.node_type.get(node.nodeid)
 
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
-        """Read the child_id stamped on `clause.match` via the typed
-        mirror's `TypedCaseClause.match`. Falls back to -1 when the
-        typed mirror isn't available (e.g. emitter run on a Program
-        without a TypedProgram)."""
-        typed = self._typed_for(clause)
-        if typed is None or typed.parsed.nodetype != NodeType.CASECLAUSE:
-            return -1
-        return cast(ztypedast.TypedCaseClause, typed).match.child_id
+        """Read the child_id stamped on `clause.match` (the tag selector
+        AtomId of a case arm). F5.E.4.b: reads from Typing directly."""
+        return self.typing.atom_child_id.get(clause.match.nodeid, -1)
 
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
         """Resolve the `ZType` of a parser-AST `Path`-shaped node.
@@ -990,11 +864,9 @@ class CEmitter:
 
         Handles function pointer fields (struct field access) vs regular functions.
         """
-        typed_call = self._typed_call_for(call)
-        # monomorphized generic function call: use the mangled name
-        ftype = (
-            typed_call.callable.ztype if typed_call else self._node_ztype(call.callable)
-        )
+        # F5.E.4.b: read callable's resolved type via Typing.node_type;
+        # was a typed-mirror lookup with the same fallback.
+        ftype = self._node_ztype(call.callable)
         if (
             ftype
             and ftype.typetype == ZTypeType.FUNCTION
@@ -1004,8 +876,7 @@ class CEmitter:
 
         # check if this is a function pointer field call (e.g. c.op)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
-            typed_dp = self._typed_dotted_path_for(cast(zast.DottedPath, call.callable))
-            ftype = typed_dp.ztype if typed_dp else self._node_ztype(call.callable)
+            ftype = self._node_ztype(call.callable)
             if ftype and ftype.typetype == ZTypeType.FUNCTION:
                 func_name = ftype.name
                 if func_name in self._is_func_fields:
@@ -5051,12 +4922,12 @@ class CEmitter:
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
-        # Step 4e: Assignment decoration reads via typed mirror.
-        typed_assign = self._typed_assignment_for(assign)
-        _alias_of = typed_assign.alias_of if typed_assign else None
-        _assign_ztype = (
-            typed_assign.value.ztype if typed_assign else self._node_ztype(assign)
-        )
+        # F5.E.4.b: read decorations directly from Typing component
+        # tables. `typed_assign.value.ztype` was the typed mirror's
+        # value; the assignment's resolved type lives at
+        # `typing.node_type[assign.nodeid]` either way.
+        _alias_of = self.typing.assign_alias_of.get(assign.nodeid)
+        _assign_ztype = self._node_ztype(assign)
         # Phase B alias optimization: inline `x: y.take` or `x: y.borrow`
         # (or similar on a valtype dotted path) becomes a C-level alias —
         # no local declaration, no destructor, substitute at reference
@@ -5549,8 +5420,7 @@ class CEmitter:
         # parameter — looking up the method's spec on the protocol
         # type gives the param-by-position ZType.
         # Id-only child lookup — typecheck stamps child_id on every DottedPath.
-        typed_dp = self._typed_dotted_path_for(dp)
-        dp_child_id = typed_dp.child_id if typed_dp else -1
+        dp_child_id = self.typing.dp_child_id.get(dp.nodeid, -1)
         spec = parent_type.resolve_child_by_id(dp_child_id)
         spec_params = (
             [(n, t) for n, t in spec.children.items() if n != "this"]
@@ -5570,8 +5440,7 @@ class CEmitter:
     def _emit_callable_dispatch(self, call: zast.Call) -> str:
         """Emit a callable object dispatch: obj(args) -> z_type_call(obj, args)."""
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_ctn = _typed_call.callable_type_name if _typed_call else None
+        _call_ctn = self.typing.call_callable_type_name.get(call.nodeid)
         type_name = _call_ctn
         cname = _mangle_func(f"{type_name}.call")
         receiver = self._emit_path_value(call.callable)
@@ -5590,8 +5459,7 @@ class CEmitter:
 
     def _emit_call_stmt(self, call: zast.Call, indent: str) -> str:
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
+        _call_kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
         # callable object dispatch as statement
         if _call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
@@ -6039,11 +5907,9 @@ class CEmitter:
         We synthesise the wrapper here — same C pattern as the explicit
         `proto.borrow` / `proto.create` forms emitted by
         `_emit_protocol_borrow_call` / `_emit_protocol_create_call`."""
-        typed_arg = self._typed_named_op_for(arg)
-        assert typed_arg is not None, "expected TypedNamedOperation for projected arg"
-        proj_proto = typed_arg.projected_protocol
-        proj_label = typed_arg.projected_label
-        proj_kind = typed_arg.projected_kind
+        _proj = self.typing.projected_args.get(arg.nodeid)
+        assert _proj is not None, "expected projected-arg stamp for projected arg"
+        proj_proto, proj_label, proj_kind = _proj
         assert proj_proto is not None
         assert proj_label is not None
         proto_type = proj_proto
@@ -6159,9 +6025,9 @@ class CEmitter:
             # Implicit protocol projection stamped by typecheck: emit
             # `z_<impl>_<label>_create` over the concrete argument value
             # so the callee sees a protocol handle.
-            typed_arg = self._typed_named_op_for(arg)
-            arg_proj_proto = typed_arg.projected_protocol if typed_arg else None
-            arg_proj_label = typed_arg.projected_label if typed_arg else None
+            _proj = self.typing.projected_args.get(arg.nodeid)
+            arg_proj_proto = _proj[0] if _proj else None
+            arg_proj_label = _proj[1] if _proj else None
             if arg_proj_proto is not None and arg_proj_label is not None:
                 val = self._emit_projected_arg(arg)
                 parts.append(val)
@@ -6414,8 +6280,7 @@ class CEmitter:
                 == ZTypeType.FUNCTION
             ):
                 atom = cast(zast.AtomId, inner)
-                typed_atom = self._typed_atomid_for(atom)
-                ftype = typed_atom.ztype if typed_atom else self._node_ztype(atom)
+                ftype = self._node_ztype(atom)
                 if ftype and ftype.param_defaults:
                     # only emit bare call when ALL params have defaults
                     real_params = list(ftype.children.items())
@@ -6446,9 +6311,8 @@ class CEmitter:
 
     def _emit_call_value(self, call: zast.Call) -> str:
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
-        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
+        _call_kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+        _call_ztype = self._node_ztype(call)
         # callable object dispatch: obj(args) -> z_type_call(obj, args)
         if _call_kind == zast.CallKind.CALLABLE:
             result = self._emit_callable_dispatch(call)
@@ -7143,9 +7007,8 @@ class CEmitter:
         return "0"
 
     def _emit_binop_value(self, binop: zast.BinOp) -> str:
-        # Step 4d: BinOp decoration reads via typed mirror.
-        _typed_binop = self._typed_binop_for(binop)
-        _binop_const = _typed_binop.const_value if _typed_binop else None
+        # F5.E.4.b: BinOp const-value via Typing.
+        _binop_const = self.typing.node_const_value.get(binop.nodeid)
         if _binop_const is not None:
             return self._emit_const_value(binop)
         lhs = self._emit_operation_value(binop.lhs)
@@ -7289,14 +7152,11 @@ class CEmitter:
         name = atom.name
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
-        # Step 4b: route decoration reads through the typed mirror when
-        # available. Falls back to parsed `atom.*` for synth atoms or
-        # tests that build a Program without running typecheck.
-        typed = self._typed_atomid_for(atom)
-        narrowed_subtype = typed.narrowed_subtype if typed else None
-        original_ztype = typed.original_ztype if typed else None
-        child_id = typed.child_id if typed else -1
-        atom_ztype = typed.ztype if typed else self._node_ztype(atom)
+        # F5.E.4.b: AtomId decorations from Typing component tables.
+        narrowed_subtype = self.typing.atom_narrowed_subtype.get(atom.nodeid)
+        original_ztype = self.typing.atom_original_ztype.get(atom.nodeid)
+        child_id = self.typing.atom_child_id.get(atom.nodeid, -1)
+        atom_ztype = self._node_ztype(atom)
         # binding alias: substitute the source expression at the reference site
         # (set by alias-optimized `with`, inline .take/.borrow bindings, and
         # match-arm narrowed subjects). Chain lookups so a hoisted-arg synth
@@ -7427,10 +7287,9 @@ class CEmitter:
         # parsed fields when the typed mirror is missing (e.g. a path
         # synthesized by the emitter or a test program built without
         # the full typecheck).
-        _typed_path = self._typed_dotted_path_for(path)
-        _pt_ztype = _typed_path.ztype if _typed_path else self._node_ztype(path)
-        _pt_const = _typed_path.const_value if _typed_path else None
-        _pt_child_id = _typed_path.child_id if _typed_path else -1
+        _pt_ztype = self._node_ztype(path)
+        _pt_const = self._node_const_value(path)
+        _pt_child_id = self.typing.dp_child_id.get(path.nodeid, -1)
         child = path.child.name
 
         # .take emits just the variable value (nullification handled at call site)
@@ -7473,19 +7332,11 @@ class CEmitter:
             ):
                 unit_body = self.program.units[pname].body
                 child_defn = unit_body.get(child)
-                child_defn_typed = (
-                    self._typed_for(child_defn) if child_defn is not None else None
-                )
                 child_is_native = (
-                    cast(ztypedast.TypedFunction, child_defn_typed).is_native
-                    if child_defn_typed is not None
-                    and child_defn_typed.parsed.nodetype == NodeType.FUNCTION
-                    else (
-                        cast(zast.Function, child_defn).is_native
-                        if child_defn is not None
-                        and child_defn.nodetype == NodeType.FUNCTION
-                        else False
-                    )
+                    cast(zast.Function, child_defn).is_native
+                    if child_defn is not None
+                    and child_defn.nodetype == NodeType.FUNCTION
+                    else False
                 )
                 if (
                     child_defn is not None
@@ -8109,9 +7960,8 @@ class CEmitter:
         if dp.parent.nodetype != NodeType.ATOMID:
             return None
         atom = cast(zast.AtomId, dp.parent)
-        typed_atom = self._typed_atomid_for(atom)
-        narrowed = typed_atom.narrowed_subtype if typed_atom else None
-        original = typed_atom.original_ztype if typed_atom else None
+        narrowed = self.typing.atom_narrowed_subtype.get(atom.nodeid)
+        original = self.typing.atom_original_ztype.get(atom.nodeid)
         if narrowed is None or original is None:
             return None
         return self._emit_atomid_value(atom)
@@ -8316,9 +8166,8 @@ class CEmitter:
     def _is_union_construction(self, call: zast.Call) -> bool:
         """Check if a call is a union construction (union.subtype or bare union name)."""
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
-        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
+        _call_kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+        _call_ztype = self._node_ztype(call)
         # a regular function call that happens to return a union is NOT a
         # union construction; defer to the standard call emission path.
         if _call_kind == zast.CallKind.REGULAR:
@@ -8353,8 +8202,7 @@ class CEmitter:
     def _emit_union_construction(self, call: zast.Call) -> str:
         """Emit C code for union construction."""
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
+        _call_ztype = self._node_ztype(call)
         call_type = _call_ztype
 
         # nullable-ptr option: .some val → val, .none → NULL
@@ -8535,8 +8383,7 @@ class CEmitter:
     def _emit_box_create(self, call: zast.Call) -> str:
         """Emit box from: val for valtype — malloc + copy."""
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
+        _call_ztype = self._node_ztype(call)
         self.needs_stdlib = True
         indent = self._indent()
         call_type = _call_ztype
@@ -8630,9 +8477,8 @@ class CEmitter:
     def _is_variant_construction(self, call: zast.Call) -> bool:
         """Check if a call is a variant construction (variant.subtype expr)."""
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_kind = _typed_call.call_kind if _typed_call else zast.CallKind.UNKNOWN
-        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
+        _call_kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+        _call_ztype = self._node_ztype(call)
         # A regular function call whose return type happens to be a
         # variant is NOT a construction — defer to the standard call
         # emission path (same guard as _is_union_construction).
@@ -8668,8 +8514,7 @@ class CEmitter:
     def _emit_variant_construction(self, call: zast.Call) -> str:
         """Emit C code for variant construction (stack-allocated, no malloc)."""
         # Step 4d: Call decoration reads via typed mirror.
-        _typed_call = self._typed_call_for(call)
-        _call_ztype = _typed_call.ztype if _typed_call else self._node_ztype(call)
+        _call_ztype = self._node_ztype(call)
         indent = self._indent()
         tmp = self._temp_name("c")
 
@@ -8894,8 +8739,7 @@ class CEmitter:
         """
         if op.nodetype == NodeType.ATOMID:
             atom = cast(zast.AtomId, op)
-            typed_atom = self._typed_atomid_for(atom)
-            original = typed_atom.original_ztype if typed_atom else None
+            original = self.typing.atom_original_ztype.get(atom.nodeid)
             if original is not None:
                 return original
         if op.nodetype == NodeType.EXPRESSION:
@@ -8906,9 +8750,8 @@ class CEmitter:
         return self._get_operation_type(op)
 
     def _emit_if(self, ifnode: zast.If) -> str:
-        # Step 4f: route If decoration reads through the typed mirror.
-        typed_if = self._typed_if_for(ifnode)
-        _if_taken_vars = typed_if.taken_vars if typed_if else []
+        # F5.E.4.b: If decorations from Typing component tables.
+        _if_taken_vars = self.typing.if_taken_vars.get(ifnode.nodeid, [])
         indent = self._indent()
         parts: List[str] = []
 
@@ -9166,9 +9009,8 @@ class CEmitter:
         return None
 
     def _emit_for(self, fornode: zast.For) -> str:
-        # Step 4f: route For decoration reads through typed mirror.
-        typed_for = self._typed_for_for(fornode)
-        _for_iter_bindings = typed_for.iterator_bindings if typed_for else set()
+        # F5.E.4.b: For decorations from Typing component tables.
+        _for_iter_bindings = self.typing.for_iter_bindings.get(fornode.nodeid, set())
         indent = self._indent()
         parts: List[str] = []
 
@@ -9539,9 +9381,8 @@ class CEmitter:
         return tmp
 
     def _emit_do(self, donode: zast.Do) -> str:
-        # Step 4f: Do decoration reads via typed mirror.
-        typed_do = self._typed_do_for(donode)
-        _do_has_break = typed_do.has_break if typed_do else False
+        # F5.E.4.b: Do decorations from Typing component tables.
+        _do_has_break = self.typing.do_has_break.get(donode.nodeid, False)
         if _do_has_break:
             indent = self._indent()
             parts = [f"{indent}do {{\n"]
@@ -9554,10 +9395,9 @@ class CEmitter:
 
     def _emit_do_expression_value(self, donode: zast.Do) -> str:
         """Emit a bare block as an expression, returning the last expression's value."""
-        # Step 4f: Do decoration reads via typed mirror.
-        typed_do = self._typed_do_for(donode)
-        _do_has_break = typed_do.has_break if typed_do else False
-        _do_ztype = typed_do.ztype if typed_do else self._node_ztype(donode)
+        # F5.E.4.b: Do decorations from Typing component tables.
+        _do_has_break = self.typing.do_has_break.get(donode.nodeid, False)
+        _do_ztype = self._node_ztype(donode)
         ctype = _ctype(_do_ztype)
         tmp = self._temp_name("do")
         indent = self._indent()
@@ -9601,10 +9441,9 @@ class CEmitter:
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
 
-        # Step 4f: With decoration reads via typed mirror.
-        typed_with = self._typed_with_for(withnode)
-        _with_ownership = typed_with.ownership if typed_with else None
-        _with_alias_of = typed_with.alias_of if typed_with else None
+        # F5.E.4.b: With decorations from Typing component tables.
+        _with_ownership = self.typing.with_ownership.get(withnode.nodeid)
+        _with_alias_of = self.typing.with_alias_of.get(withnode.nodeid)
         # BORROW bindings do not own the value — no destructor at scope exit
         # and no adoption of reftype temps.
         is_owned = _with_ownership != ZOwnership.BORROWED
@@ -9698,16 +9537,10 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_case(self, casenode: zast.Case) -> str:
-        # Step 4f: Case decoration reads via typed mirror.
-        _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
-        _case_subject_taken = _typed_case.subject_taken if _typed_case else False
-        # Step 4f: Case decoration reads via typed mirror.
-        typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = typed_case.taken_vars if typed_case else _case_taken_vars
-        _case_subject_taken = (
-            typed_case.subject_taken if typed_case else _case_subject_taken
-        )
+        # F5.E.4.b: Case decorations from Typing component tables.
+        _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
+        _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
+        # (case decorations already read above from Typing)
         indent = self._indent()
         parts: List[str] = []
 
@@ -9775,10 +9608,9 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
-        # Step 4f: Case decoration reads via typed mirror.
-        _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
-        _case_subject_taken = _typed_case.subject_taken if _typed_case else False
+        # F5.E.4.b: Case decorations from Typing component tables.
+        _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
+        _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
         # nullable-ptr option: if (ptr != NULL) / else
         if union_type.is_nullable_ptr:
             return self._emit_nullable_ptr_case(casenode, union_type)
@@ -9840,10 +9672,9 @@ class CEmitter:
 
     def _emit_nullable_ptr_case(self, casenode: zast.Case, union_type: ZType) -> str:
         """Emit case matching for nullable-ptr option: if (ptr != NULL) / else."""
-        # Step 4f: Case decoration reads via typed mirror.
-        _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
-        _case_subject_taken = _typed_case.subject_taken if _typed_case else False
+        # F5.E.4.b: Case decorations from Typing component tables.
+        _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
+        _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
         indent = self._indent()
         parts: List[str] = []
         subject = self._emit_operation_value(casenode.subject)
@@ -9918,9 +9749,8 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_variant_case(self, casenode: zast.Case, variant_type: ZType) -> str:
-        # Step 4f: Case decoration reads via typed mirror.
-        _typed_case = self._typed_case_for(casenode)
-        _case_taken_vars = _typed_case.taken_vars if _typed_case else []
+        # F5.E.4.b: Case decorations from Typing component tables.
+        _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
         indent = self._indent()
         parts: List[str] = []
         variant_name = variant_type.name
