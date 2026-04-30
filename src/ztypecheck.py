@@ -211,7 +211,7 @@ def _set_destructor_metadata(ztype: ZType) -> None:
         ztype.is_heap_allocated = False
 
 
-def _set_field_cleanup_metadata(ztype: ZType) -> None:
+def _set_field_cleanup_metadata(typing: ztyping.Typing, ztype: ZType) -> None:
     """Set needs_field_cleanup based on whether any non-function children need cleanup.
 
     Must be called after children are fully resolved. Scans fields (non-function
@@ -219,9 +219,7 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
     For stack-allocated classes without heap fields, clears needs_destructor since
     no cleanup is needed.
     """
-    # F5.H residual: module-level helper, no Typing access. Uses dict
-    # directly until F5.H.5 either method-ifies this or plumbs typing.
-    for child_name, child_type in ztype.children.items():
+    for child_name, child_type in typing.children_of(ztype):
         if child_type.typetype == ZTypeType.FUNCTION:
             continue
         if child_type.needs_destructor:
@@ -1637,7 +1635,7 @@ class TypeChecker:
         priv = _check_private_redefinition(cls.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
-        _set_field_cleanup_metadata(ctype)
+        _set_field_cleanup_metadata(self.typing, ctype)
         self._resolving.pop()
         return ctype
 
@@ -1905,7 +1903,7 @@ class TypeChecker:
             priv = _check_private_redefinition(union_defn.as_items)
             if priv:
                 self._error("'private' cannot be redefined", loc=priv.start)
-            _set_field_cleanup_metadata(utype)
+            _set_field_cleanup_metadata(self.typing, utype)
             self._resolving.pop()
             return utype
 
@@ -1950,7 +1948,7 @@ class TypeChecker:
         # unified call dispatch reports a targeted error.
         utype.create_disabled = True
 
-        _set_field_cleanup_metadata(utype)
+        _set_field_cleanup_metadata(self.typing, utype)
         # Destructor elision: when every arm is either `null` or a `.lock`
         # reference, no runtime cleanup is needed. Locked arms hold a
         # borrowed pointer (no payload to free); null arms have no payload.
@@ -2152,7 +2150,7 @@ class TypeChecker:
             # Variants: no bare-name construction (subtype must be selected).
             vtype.create_disabled = True
 
-            _set_field_cleanup_metadata(vtype)
+            _set_field_cleanup_metadata(self.typing, vtype)
             self._reject_valtype_reftype_fields(
                 name,
                 vtype,
@@ -2212,7 +2210,7 @@ class TypeChecker:
         # so the unified call dispatch reports a targeted error.
         vtype.create_disabled = True
 
-        _set_field_cleanup_metadata(vtype)
+        _set_field_cleanup_metadata(self.typing, vtype)
         self._reject_valtype_reftype_fields(
             name,
             vtype,
@@ -2481,7 +2479,7 @@ class TypeChecker:
         priv = _check_private_redefinition(rec.as_items)
         if priv:
             self._error("'private' cannot be redefined", loc=priv.start)
-        _set_field_cleanup_metadata(rtype)
+        _set_field_cleanup_metadata(self.typing, rtype)
         self._reject_valtype_reftype_fields(
             name, rtype, set(rec.is_paths().keys()), "record", rec.start
         )
@@ -3086,7 +3084,7 @@ class TypeChecker:
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             self._set_child(ptype, "borrow", borrow_type)
 
-        _set_field_cleanup_metadata(ptype)
+        _set_field_cleanup_metadata(self.typing, ptype)
         self._resolving.pop()
         return ptype
 
@@ -3145,7 +3143,7 @@ class TypeChecker:
             borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
             self._set_child(ftype, "borrow", borrow_type)
 
-        _set_field_cleanup_metadata(ftype)
+        _set_field_cleanup_metadata(self.typing, ftype)
         # Facets have specs (functions), not data fields — the reftype
         # check is a no-op but run it for parity.
         self._reject_valtype_reftype_fields(name, ftype, set(), "facet", facet.start)
@@ -4765,7 +4763,7 @@ class TypeChecker:
         the mono cache, and (for non-partial monos) register in the
         global mono-type list and `_resolved` map under one
         `<unit>.<mangled>` key."""
-        _set_field_cleanup_metadata(mono)
+        _set_field_cleanup_metadata(self.typing, mono)
         self.mono.cache[cache_key] = mono
         if not is_partial:
             self.mono.types.append((mono, defn))

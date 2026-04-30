@@ -262,6 +262,20 @@ class Typing:
             i += 1
         return False
 
+    def child_by_id(self, parent: ZType, cid: int) -> "Optional[ZType]":
+        """Reverse lookup: child ZType whose name has minted id `cid`
+        on `parent`. Returns None if no live row matches. Replaces the
+        legacy `ZType.resolve_child_by_id` once the dict goes away."""
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid and row.child_name_id == cid:
+                return row.child_type
+            i += 1
+        return None
+
     def child_count(self, parent: ZType) -> int:
         """`len(parent.children)` equivalent."""
         c = 0
