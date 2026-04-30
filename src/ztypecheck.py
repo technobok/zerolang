@@ -6901,11 +6901,53 @@ class TypeChecker:
         # `_check_path`'s boundary capture; this assignment is defensive.
         self._pending_borrow_lock = None
 
-        # handle control flow: return, break, continue, error
-        if callee_type.control_kind == ControlKind.RETURN:
+        cf_result = self._dispatch_call_control_flow(call, callee_type)
+        if cf_result is not None:
+            return cf_result
+
+        early, result, callee_type = self._dispatch_call_construction(call, callee_type)
+        if early:
+            return result
+
+        # parameter types (skip 'this' — handled separately for method calls)
+        params = [(k, v) for k, v in callee_type.children.items() if k != "this"]
+
+        # for callable dispatch, skip the 'this' parameter (first param of call method)
+        # — the receiver is passed implicitly
+        if (
+            self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+            == zast.CallKind.CALLABLE
+            and params
+        ):
+            params = params[1:]
+
+        # push a call scope for call-scoped locking
+        call_marker = self.symtab.push_call()
+        # push call identity onto the typechecker's stack — locks installed
+        # below carry this string as `holder`, and try_lock skips conflicts
+        # where existing.holder == this id (so receiver + arg locks owned
+        # by the same call merge naturally instead of self-blocking).
+        call_id = f"call:{call.nodeid}"
+        self._call_id_stack.append(call_id)
+
+        lock_param_targets = self._check_call_arguments(call, callee_type, params)
+
+        self._check_missing_call_args(call, callee_type, params)
+        return self._finalize_call(call, callee_type, lock_param_targets, call_marker)
+
+    def _dispatch_call_control_flow(
+        self, call: zast.Call, callee_type: ZType
+    ) -> Optional[ZType]:
+        """If the callable is a control-flow primitive (return / break /
+        continue / error / panic), stamp the call_kind, run any
+        secondary checks, and return the call's resolved type. Returns
+        None when the callable is NOT a control-flow primitive — the
+        caller continues with the regular call dispatch."""
+        ck = callee_type.control_kind
+        if ck == ControlKind.RETURN:
             self.typing.call_kind[call.nodeid] = zast.CallKind.RETURN
             return self._check_return_call(call)
-        if callee_type.control_kind == ControlKind.BREAK:
+        if ck == ControlKind.BREAK:
             self.typing.call_kind[call.nodeid] = zast.CallKind.BREAK
             # flag enclosing do block if break targets it (not a for loop)
             if self._break_targets:
@@ -6913,10 +6955,10 @@ class TypeChecker:
                 if target is not None:
                     self.typing.do_has_break[target.nodeid] = True
             return callee_type
-        if callee_type.control_kind == ControlKind.CONTINUE:
+        if ck == ControlKind.CONTINUE:
             self.typing.call_kind[call.nodeid] = zast.CallKind.CONTINUE
             return callee_type
-        if callee_type.control_kind == ControlKind.ERROR:
+        if ck == ControlKind.ERROR:
             self.typing.call_kind[call.nodeid] = zast.CallKind.ERROR
             # type-check the message argument
             for arg in call.arguments:
@@ -6927,27 +6969,49 @@ class TypeChecker:
                 self._error(msg, loc=call.start)
             self.typing.node_type[call.nodeid] = callee_type
             return callee_type
-        if callee_type.control_kind == ControlKind.PANIC:
+        if ck == ControlKind.PANIC:
             self.typing.call_kind[call.nodeid] = zast.CallKind.PANIC
-            # type-check the message argument; no compile-time diagnostic
-            # (unlike error, panic is a pure runtime terminator).
+            # type-check the message argument; no compile-time
+            # diagnostic (unlike error, panic is a pure runtime
+            # terminator).
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             self.typing.node_type[call.nodeid] = callee_type
             return callee_type
+        return None
 
+    def _dispatch_call_construction(
+        self,
+        call: zast.Call,
+        callee_type: ZType,
+    ) -> Tuple[bool, Optional[ZType], ZType]:
+        """Special-case dispatch for non-control-flow calls. Handles
+        `.str` conversion, generic function inference, union/variant
+        subtype construction, callable-object redirect, disabled-create
+        check, constructor-recursion check, `.stringview` substring,
+        record/box/class/union/protocol/facet/typedef/unit
+        construction, and protocol/facet/typedef `.create`/`.take`/
+        `.borrow` from a dotted callable.
+
+        Returns `(early, result, new_callee_type)`:
+        - `(True, ZType, _)` — early-return a result.
+        - `(True, None, _)` — early-return None (error already emitted).
+        - `(False, _, new_callee_type)` — caller falls through to
+          regular function-call dispatch with `new_callee_type` (which
+          may differ from the input when the callable-object redirect
+          fires)."""
         # handle .str conversion: string.str to: N or str.str to: N
         if (
             callee_type.name == "__str_convert"
             and call.callable.nodetype == NodeType.DOTTEDPATH
         ):
-            return self._check_str_convert_call(call)
+            return True, self._check_str_convert_call(call), callee_type
 
         # handle generic function call: infer type args and monomorphize
         if callee_type.isgeneric and callee_type.typetype == ZTypeType.FUNCTION:
             mono_ftype = self._infer_generic_function_call(callee_type, call)
             if not mono_ftype:
-                return None  # error already emitted
+                return True, None, callee_type  # error already emitted
             self.typing.node_type[call.callable.nodeid] = mono_ftype
             # functions with no `out` have return_type None — callers
             # (match/if branch unification, expression typing) expect a
@@ -6959,10 +7023,11 @@ class TypeChecker:
                 == zast.CallKind.UNKNOWN
             ):
                 self.typing.call_kind[call.nodeid] = zast.CallKind.REGULAR
-            return ret
+            return True, ret, callee_type
 
-        # handle union/variant subtype construction: dotted path parent is a tagged type
-        # (must be before record/class checks since subtypes may be records)
+        # handle union/variant subtype construction: dotted path parent
+        # is a tagged type (must be before record/class checks since
+        # subtypes may be records).
         if (
             call.callable.nodetype == NodeType.DOTTEDPATH
             and self.typing.dp_parent_tagged_type.get(call.callable.nodeid) is not None
@@ -6970,7 +7035,6 @@ class TypeChecker:
             callable_dp = cast(zast.DottedPath, call.callable)
             parent_tagged = self.typing.dp_parent_tagged_type.get(callable_dp.nodeid)
             assert parent_tagged is not None
-
             # generic union/variant subtype construction
             if parent_tagged.isgeneric and parent_tagged.typetype in (
                 ZTypeType.UNION,
@@ -6980,40 +7044,40 @@ class TypeChecker:
                 if mono_type:
                     self.typing.node_type[call.nodeid] = mono_type
                     self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
-                    # update the parent_tagged_type to point to the monomorphized type
                     self.typing.dp_parent_tagged_type[callable_dp.nodeid] = mono_type
                     self._lift_locked_arm_borrow(mono_type, callable_dp, call)
-                    return mono_type
-                return None  # error already emitted in inference method
-
+                    return True, mono_type, callee_type
+                return True, None, callee_type
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             self.typing.node_type[call.nodeid] = parent_tagged
             self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
             self._lift_locked_arm_borrow(parent_tagged, callable_dp, call)
-            return parent_tagged
+            return True, parent_tagged, callee_type
 
-        # callable object dispatch: variable with a 'call' method
-        # must be before construction checks — a variable of record/class type
-        # with a 'call' method should dispatch to call, not construct
+        # callable-object dispatch: a variable with a 'call' method.
+        # Must be before construction checks — a variable of record/class
+        # type with a 'call' method should dispatch to call, not
+        # construct. This MUTATES `callee_type` to the call method and
+        # falls through to the regular function-call dispatch.
         callee_is_var = call.callable.nodetype == NodeType.ATOMID and (
             self.symtab.lookup_var(cast(zast.AtomId, call.callable).name) is not None
         )
         if callee_is_var and callee_type.typetype != ZTypeType.FUNCTION:
             call_method = callee_type.children.get("call")
             if call_method and call_method.typetype == ZTypeType.FUNCTION:
-                # redirect to the 'call' method
                 self.typing.call_kind[call.nodeid] = zast.CallKind.CALLABLE
                 self.typing.call_callable_type_name[call.nodeid] = callee_type.name
                 callee_type = call_method
                 self.typing.node_type[call.callable.nodeid] = call_method
-                # fall through to function call checking below
+                # fall through
 
-        # Unified call dispatch for types in callable position (bare-name
-        # construction). The callable is not a runtime variable; it refers to
-        # a type. If the type's 'create' is disabled — either explicitly via
-        # 'create: null' or implicitly for unions/variants that require
-        # subtype selection — emit a targeted error here. Otherwise fall
+        # Unified call dispatch for types in callable position
+        # (bare-name construction). The callable is not a runtime
+        # variable; it refers to a type. If the type's 'create' is
+        # disabled — either explicitly via 'create: null' or
+        # implicitly for unions/variants that require subtype
+        # selection — emit a targeted error here. Otherwise fall
         # through to the family-specific construction branches below.
         if (
             not callee_is_var
@@ -7036,12 +7100,11 @@ class TypeChecker:
                     loc=call.start,
                     err=ERR.CALLERROR,
                 )
-            return None
+            return True, None, callee_type
 
-        # Constructor-recursion detection: reject a call that would route to
-        # the type's 'create' function when that function is currently being
-        # type-checked. Covers both bare-name construction (`return Type ...`
-        # inside `Type.create`) and the explicit form (`return Type.create ...`).
+        # Constructor-recursion detection: reject a call that would
+        # route to the type's 'create' function when that function is
+        # currently being type-checked.
         if (
             not callee_is_var
             and callee_type.typetype != ZTypeType.FUNCTION
@@ -7056,9 +7119,9 @@ class TypeChecker:
                     loc=call.start,
                     err=ERR.CALLERROR,
                 )
-                return None
-        # Also catch the explicit form: `Type.create ...` where the callable
-        # resolves to the function we're currently in.
+                return True, None, callee_type
+        # Also catch the explicit form: `Type.create ...` where the
+        # callable resolves to the function we're currently in.
         if (
             callee_type.typetype == ZTypeType.FUNCTION
             and self._function_body_stack
@@ -7073,12 +7136,10 @@ class TypeChecker:
                 loc=call.start,
                 err=ERR.CALLERROR,
             )
-            return None
+            return True, None, callee_type
 
-        # .stringview from: to: — substring view on string, str, or stringview
-        # (not record construction). After the auto-call coercion moved out
-        # of path resolution, the callable resolves to the function type;
-        # check via the function's return type instead of callee_type itself.
+        # .stringview from: to: — substring view on string, str, or
+        # stringview (not record construction).
         if (
             call.callable.nodetype == NodeType.DOTTEDPATH
             and cast(zast.DottedPath, call.callable).child.name == "stringview"
@@ -7091,19 +7152,16 @@ class TypeChecker:
                 self._check_operation(arg.valtype)
             self.typing.node_type[call.nodeid] = callee_type.return_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.REGULAR
-            return callee_type.return_type
+            return True, callee_type.return_type, callee_type
 
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
-            # generic record construction
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
                 if mono_type:
                     self.typing.node_type[call.nodeid] = mono_type
                     self.typing.node_type[call.callable.nodeid] = mono_type
                     self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
-                    # only check missing fields when value args are present
-                    # (pure generic instantiation like (myrec n: 10) defers to outer call)
                     has_value_args = any(
                         arg.name not in callee_type.generic_params
                         for arg in call.arguments
@@ -7112,15 +7170,15 @@ class TypeChecker:
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
                     self._reject_borrow_escape_into_record(call)
-                    return mono_type
-                return None  # error already emitted
+                    return True, mono_type, callee_type
+                return True, None, callee_type
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
             self._check_missing_create_args(callee_type, call)
             self._reject_borrow_escape_into_record(call)
-            return callee_type
+            return True, callee_type, callee_type
 
         # handle box construction: box from: val (system box only — empty class body)
         if (
@@ -7130,7 +7188,7 @@ class TypeChecker:
             and "t" in callee_type.generic_params
             and not callee_type.children
         ):
-            return self._check_box_construction(call, callee_type)
+            return True, self._check_box_construction(call, callee_type), callee_type
 
         # handle class construction: calling a class type creates a new owned instance
         if callee_type.typetype == ZTypeType.CLASS:
@@ -7148,15 +7206,15 @@ class TypeChecker:
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
                     self._check_aggregate_lock_escape(call, mono_type)
-                    return mono_type
-                return None
+                    return True, mono_type, callee_type
+                return True, None, callee_type
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
             self._check_missing_create_args(callee_type, call)
             self._check_aggregate_lock_escape(call, callee_type)
-            return callee_type
+            return True, callee_type, callee_type
 
         # handle union construction: union.subtype expr
         if callee_type.typetype == ZTypeType.UNION:
@@ -7164,54 +7222,46 @@ class TypeChecker:
                 self._check_operation(arg.valtype)
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
-            return callee_type
+            return True, callee_type, callee_type
 
-        # bare-name protocol construction: `myproto source` is equivalent
-        # to `myproto.create from: source`, routing through the unified
-        # dispatch via children["create"] (which for protocols aliases .take).
+        # bare-name protocol construction.
         if (
             not callee_is_var
             and callee_type.typetype == ZTypeType.PROTOCOL
             and "create" in callee_type.children
         ):
             self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
-            return self._check_protocol_create(callee_type, call)
-
-        # bare-name facet construction: same pattern as protocol.
+            return True, self._check_protocol_create(callee_type, call), callee_type
         if (
             not callee_is_var
             and callee_type.typetype == ZTypeType.FACET
             and "create" in callee_type.children
         ):
             self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
-            return self._check_protocol_create(callee_type, call)
-
-        # bare-name typedef construction: same pattern.
+            return True, self._check_protocol_create(callee_type, call), callee_type
         if (
             not callee_is_var
             and callee_type.typedef_base is not None
             and "create" in callee_type.children
         ):
             self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
-            return self._check_typedef_create(callee_type, call)
+            return True, self._check_typedef_create(callee_type, call), callee_type
 
         # generic unit instantiation: (mathops t: i64) → monomorphized unit
-        # (valid at unit level; _check_non_runtime_type catches misuse in code)
         if callee_type.typetype == ZTypeType.UNIT and callee_type.isgeneric:
             mono = self._resolve_typeref_call(call)
             if mono:
                 self.typing.node_type[call.nodeid] = mono
                 self.typing.call_kind[call.nodeid] = zast.CallKind.UNIT_INSTANTIATE
-                return mono
-            return None
-            return None
+                return True, mono, callee_type
+            return True, None, callee_type
 
         if callee_type.typetype != ZTypeType.FUNCTION:
             self._error(
                 f"Cannot call non-function type: {callee_type.name}",
                 loc=call.start,
             )
-            return None
+            return True, None, callee_type
 
         # protocol/typedef .create/take/borrow from: expr
         if (
@@ -7225,61 +7275,72 @@ class TypeChecker:
             if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
                 if callable_dp2.child.name == "borrow":
                     self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_BORROW
-                    return self._check_protocol_borrow(parent_type, call)
+                    return (
+                        True,
+                        self._check_protocol_borrow(parent_type, call),
+                        callee_type,
+                    )
                 self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
-                return self._check_protocol_create(parent_type, call)
+                return True, self._check_protocol_create(parent_type, call), callee_type
             if parent_type and parent_type.typetype == ZTypeType.FACET:
                 if callable_dp2.child.name == "borrow":
                     self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_BORROW
-                    return self._check_protocol_borrow(parent_type, call)
+                    return (
+                        True,
+                        self._check_protocol_borrow(parent_type, call),
+                        callee_type,
+                    )
                 self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
-                return self._check_protocol_create(parent_type, call)
+                return True, self._check_protocol_create(parent_type, call), callee_type
             if parent_type and parent_type.typedef_base is not None:
                 if callable_dp2.child.name == "borrow":
                     self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_BORROW
-                    return self._check_typedef_borrow(parent_type, call)
+                    return (
+                        True,
+                        self._check_typedef_borrow(parent_type, call),
+                        callee_type,
+                    )
                 self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
-                return self._check_typedef_create(parent_type, call)
+                return True, self._check_typedef_create(parent_type, call), callee_type
 
-        # parameter types (skip 'this' — handled separately for method calls)
-        params = [(k, v) for k, v in callee_type.children.items() if k != "this"]
+        return False, None, callee_type
 
-        # for callable dispatch, skip the 'this' parameter (first param of call method)
-        # — the receiver is passed implicitly
-        if (
-            self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
-            == zast.CallKind.CALLABLE
-            and params
-        ):
-            params = params[1:]
+    def _check_call_arguments(
+        self,
+        call: zast.Call,
+        callee_type: ZType,
+        params: List[Tuple[str, ZType]],
+    ) -> List[Tuple[Tuple[str, ...], Optional[str]]]:
+        """Per-argument typecheck loop: type each arg, hoist non-trivial
+        ones, match by name or position, apply protocol coercion where
+        appropriate, apply TAKE ownership transfer, and install
+        call-scoped locks for reftype args. Returns the
+        `(leaf_path, param_name)` list that `_finalize_call` will
+        transfer to the binding scope for LOCK params.
 
+        Also enforces reftype-aliasing (same reftype passed as two
+        arguments)."""
         # check for reftype aliasing: same reftype arg passed twice
         reftype_args: dict[str, Token] = {}
-
-        # push a call scope for call-scoped locking
-        call_marker = self.symtab.push_call()
-        # push call identity onto the typechecker's stack — locks installed
-        # below carry this string as `holder`, and try_lock skips conflicts
-        # where existing.holder == this id (so receiver + arg locks owned
-        # by the same call merge naturally instead of self-blocking).
-        call_id = f"call:{call.nodeid}"
-        self._call_id_stack.append(call_id)
-        # track which lock targets correspond to .lock parameters (for transfer)
+        # track which lock targets correspond to .lock parameters
+        # (for transfer in `_finalize_call`).
         lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]] = []
 
         for i, arg in enumerate(call.arguments):
             arg_result = self._check_operation(arg.valtype)
             arg_type = arg_result.ztype
-            # Capture the source path that `.lock` / `.borrow` / `.stringview`
-            # / `.listview` or protocol projection would have lifted to the
-            # binding. For a bare `m2.lock` arg, this is `(m2,)`, not
-            # `(m2, lock)` — the `.lock` suffix is a wrapper marker, not a
-            # field access, so the call-scoped lock must target the source.
+            # Capture the source path that `.lock` / `.borrow` /
+            # `.stringview` / `.listview` or protocol projection would
+            # have lifted to the binding. For a bare `m2.lock` arg,
+            # this is `(m2,)`, not `(m2, lock)` — the `.lock` suffix
+            # is a wrapper marker, not a field access, so the
+            # call-scoped lock must target the source.
             arg_borrow_path = arg_result.borrow_target
 
             # reftype aliasing check — runs against the ORIGINAL arg
-            # expression so that two args derived from the same reftype
-            # source are caught even after hoisting renames them.
+            # expression so that two args derived from the same
+            # reftype source are caught even after hoisting renames
+            # them.
             if arg_type and not _is_valtype(arg_type):
                 arg_name = self._get_arg_root_name(arg.valtype)
                 if arg_name:
@@ -7297,10 +7358,10 @@ class TypeChecker:
 
             # Phase C step 2 / commit 2: hoist non-trivial args into a
             # synth `_tN: <expr>` Assignment in the current Statement's
-            # preamble. arg.valtype becomes `AtomId(_tN)`; downstream
-            # type-matching, TAKE-application, and lock installation see
-            # a bare name through the simple-path codepath. Trivial args
-            # (bare AtomId / literal) bypass — no temp needed.
+            # preamble. `arg.valtype` becomes `AtomId(_tN)`; downstream
+            # type-matching, TAKE-application, and lock installation
+            # see a bare name through the simple-path codepath. Trivial
+            # args (bare AtomId / literal) bypass — no temp needed.
             if arg_type is not None and not self._arg_is_trivial(arg):
                 self._hoist_arg(arg, arg_type, arg_borrow_path)
 
@@ -7383,11 +7444,12 @@ class TypeChecker:
                 if effective_own == ZParamOwnership.TAKE:
                     self._apply_take_to_arg(arg, pname)
 
-            # locking algorithm: take locks on arguments. Prefer the source
-            # path captured from `.lock`/`.borrow`/protocol projection; it
-            # points at the true source (e.g. `(m2,)` for `m2.lock`). Fall
-            # back to `_lock_arg` building the path from raw syntax for
-            # plain dotted arguments without a lifting suffix.
+            # locking algorithm: take locks on arguments. Prefer the
+            # source path captured from `.lock` / `.borrow` /
+            # protocol projection; it points at the true source (e.g.
+            # `(m2,)` for `m2.lock`). Fall back to `_lock_arg`
+            # building the path from raw syntax for plain dotted
+            # arguments without a lifting suffix.
             if arg_type and not _is_valtype(arg_type):
                 leaf: Optional[Tuple[str, ...]]
                 if arg_borrow_path is not None:
@@ -7397,38 +7459,55 @@ class TypeChecker:
                 if leaf is not None:
                     lock_param_targets.append((leaf, pname_for_lock))
 
-        # check for missing required arguments (no default value)
-        if params:
-            provided: set = set()
-            for i, arg in enumerate(call.arguments):
-                if arg.name:
-                    provided.add(arg.name)
-                elif i < len(params):
-                    provided.add(params[i][0])
-            # The receiver-bound parameter is implicitly provided by
-            # the receiver in method calls. Use this_param_name so the
-            # named form `h: this` is recognised as well as the `:this`
-            # shorthand (which sets this_param_name == "this").
-            if (
-                call.callable.nodetype == NodeType.DOTTEDPATH
-                and callee_type.this_param_name is not None
-                and callee_type.this_param_name in callee_type.children
-            ):
-                provided.add(callee_type.this_param_name)
-            for pname, ptype in params:
-                if pname not in provided and pname not in callee_type.param_defaults:
-                    self._error(
-                        f"missing required argument '{pname}' (type: {ptype.name})",
-                        loc=call.start,
-                        err=ERR.CALLERROR,
-                    )
+        return lock_param_targets
 
-        # lock the receiver (dotted chain on the callable) — lock goes
-        # in the call scope and vanishes when popped
+    def _check_missing_call_args(
+        self,
+        call: zast.Call,
+        callee_type: ZType,
+        params: List[Tuple[str, ZType]],
+    ) -> None:
+        """Emit errors for required parameters (no default) that
+        weren't provided. Receiver-bound params (when calling a method
+        via dotted-path) count as provided implicitly."""
+        if not params:
+            return
+        provided: set = set()
+        for i, arg in enumerate(call.arguments):
+            if arg.name:
+                provided.add(arg.name)
+            elif i < len(params):
+                provided.add(params[i][0])
+        # Method-call receiver: the dispatch target consumes the
+        # receiver as the `this_param_name` parameter implicitly.
+        if (
+            call.callable.nodetype == NodeType.DOTTEDPATH
+            and callee_type.this_param_name is not None
+            and callee_type.this_param_name in callee_type.children
+        ):
+            provided.add(callee_type.this_param_name)
+        for pname, ptype in params:
+            if pname not in provided and pname not in callee_type.param_defaults:
+                self._error(
+                    f"missing required argument '{pname}' (type: {ptype.name})",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+
+    def _finalize_call(
+        self,
+        call: zast.Call,
+        callee_type: ZType,
+        lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]],
+        call_marker: int,
+    ) -> Optional[ZType]:
+        """Lock the receiver, transfer LOCK-param locks out to the
+        binding scope (via `_pending_borrow_lock`), pop the call
+        scope, and stamp the call's resolved type / call_kind."""
+        # lock the receiver (dotted chain on the callable) — lock
+        # goes in the call scope and vanishes when popped
         self._lock_receiver(call.callable)
 
-        # after call: pop call scope (releases all call-scoped locks),
-        # but first transfer .lock param locks to parent scope
         ret = callee_type.return_type
         lock_param_names = {
             k
@@ -7437,18 +7516,20 @@ class TypeChecker:
         }
         for target_path, pname in lock_param_targets:
             if pname in lock_param_names:
-                # Transfer: set _pending_borrow_lock so the receiving variable
-                # installs a borrow-scoped lock in _check_assignment.
-                # We transfer only the leaf path (the EXCLUSIVE one); any
-                # SHARED ancestors will be reinstalled by the consumer's
-                # path walk in the result binding's scope.
+                # Transfer: set _pending_borrow_lock so the receiving
+                # variable installs a borrow-scoped lock in
+                # `_check_assignment`. We transfer only the leaf path
+                # (the EXCLUSIVE one); any SHARED ancestors will be
+                # reinstalled by the consumer's path walk in the
+                # result binding's scope.
                 self._pending_borrow_lock = self._chain_through_synth_temp(target_path)
-        # Receiver-as-.lock-param: when the receiver parameter itself is
-        # `.lock`-annotated (e.g. `string.stringview`'s `t: this.lock`),
-        # the receiver path must transfer to the binding so the source
-        # slot stays locked for the borrowed return's lifetime. The
-        # receiver's call-scoped lock (taken by `_lock_receiver`) lives
-        # outside `lock_param_targets`, so add the propagation here.
+        # Receiver-as-.lock-param: when the receiver parameter itself
+        # is `.lock`-annotated (e.g. `string.stringview`'s
+        # `t: this.lock`), the receiver path must transfer to the
+        # binding so the source slot stays locked for the borrowed
+        # return's lifetime. The receiver's call-scoped lock (taken
+        # by `_lock_receiver`) lives outside `lock_param_targets`,
+        # so add the propagation here.
         recv_param = callee_type.this_param_name
         if (
             recv_param is not None
