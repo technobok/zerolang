@@ -91,8 +91,8 @@ class TestBasicPrograms:
         tc.check()
         core_type = tc.unit_types.get("core")
         assert core_type is not None
-        assert "print" in core_type.children
-        assert core_type.children["print"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(core_type, "print")
+        assert tc.typing.child_of(core_type, "print").typetype == ZTypeType.FUNCTION
 
 
 class TestNumericLiterals:
@@ -371,9 +371,9 @@ class TestUnitResolution:
         tc.check()
         # print was referenced, so it should be resolved in core
         core = tc.unit_types["core"]
-        assert "print" in core.children
+        assert tc.typing.has_child(core, "print")
         # i64 was referenced (via literal 42), so it should be resolved
-        assert "i64" in core.children
+        assert tc.typing.has_child(core, "i64")
 
     def test_cross_unit_alias_resolution(self):
         """io.print -> system.io_print should resolve across units."""
@@ -382,8 +382,8 @@ class TestUnitResolution:
         tc.check()
         io_type = tc.unit_types.get("io")
         assert io_type is not None
-        assert "print" in io_type.children
-        assert io_type.children["print"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(io_type, "print")
+        assert tc.typing.child_of(io_type, "print").typetype == ZTypeType.FUNCTION
 
     def test_system_unit_has_numeric_records(self):
         """System unit should have numeric types as records with methods.
@@ -392,13 +392,13 @@ class TestUnitResolution:
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
-        i64 = system.children.get("i64")
+        i64 = tc.typing.child_of(system, "i64")
         assert i64 is not None
         assert i64.typetype == ZTypeType.RECORD
-        assert "+" in i64.children
-        assert "-" in i64.children
-        assert "*" in i64.children
-        assert "/" in i64.children
+        assert tc.typing.has_child(i64, "+")
+        assert tc.typing.has_child(i64, "-")
+        assert tc.typing.has_child(i64, "*")
+        assert tc.typing.has_child(i64, "/")
 
 
 class TestComparisonOperators:
@@ -427,8 +427,8 @@ class TestComparisonOperators:
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
-        i64 = system.children["i64"]
-        lt = i64.children["<"]
+        i64 = tc.typing.child_of(system, "i64")
+        lt = tc.typing.child_of(i64, "<")
         assert lt.typetype == ZTypeType.FUNCTION
         ret = lt.return_type
         assert ret.name == "bool"
@@ -673,7 +673,7 @@ class TestCircularReferences:
         tc.check()
         vec_type = tc._resolved.get("test.vec")
         assert vec_type is not None
-        scale = vec_type.children.get("scale")
+        scale = tc.typing.child_of(vec_type, "scale")
         assert scale is not None
         ret = scale.return_type
         assert ret is vec_type
@@ -901,7 +901,7 @@ class TestValTypeTagging:
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
-        i64 = system.children.get("i64")
+        i64 = tc.typing.child_of(system, "i64")
         assert i64 is not None
         assert i64.is_valtype is True
 
@@ -922,7 +922,7 @@ class TestValTypeTagging:
         tc = TypeChecker(program)
         tc.check(full=True)
         system = tc.unit_types["system"]
-        any_type = system.children.get("Any")
+        any_type = tc.typing.child_of(system, "Any")
         assert any_type is not None
         assert any_type.is_valtype is False
 
@@ -4308,10 +4308,10 @@ class TestClassTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ct = tc._resolved.get("test.myclass")
-        assert "x" in ct.children
-        assert ct.children["x"].name == "i64"
-        assert "y" in ct.children
-        assert ct.children["y"].name == "f64"
+        assert tc.typing.has_child(ct, "x")
+        assert tc.typing.child_of(ct, "x").name == "i64"
+        assert tc.typing.has_child(ct, "y")
+        assert tc.typing.child_of(ct, "y").name == "f64"
 
     def test_class_methods_resolved(self):
         """Class methods should be resolved as children."""
@@ -4324,8 +4324,8 @@ class TestClassTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ct = tc._resolved.get("test.myclass")
-        assert "get" in ct.children
-        assert ct.children["get"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(ct, "get")
+        assert tc.typing.child_of(ct, "get").typetype == ZTypeType.FUNCTION
 
     def test_class_this_resolves_to_class(self):
         """The `this` keyword in class methods resolves to the class type."""
@@ -4338,8 +4338,8 @@ class TestClassTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ct = tc._resolved.get("test.myclass")
-        get_fn = ct.children["get"]
-        param_c = get_fn.children.get("c")
+        get_fn = tc.typing.child_of(ct, "get")
+        param_c = tc.typing.child_of(get_fn, "c")
         assert param_c is ct
 
     def test_class_type_keyword(self):
@@ -4353,7 +4353,7 @@ class TestClassTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ct = tc._resolved.get("test.myclass")
-        clone_fn = ct.children["clone"]
+        clone_fn = tc.typing.child_of(ct, "clone")
         ret = clone_fn.return_type
         assert ret is ct
 
@@ -4520,12 +4520,12 @@ class TestUnionTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        assert "a" in ut.children
-        assert "b" in ut.children
-        assert "c" in ut.children
-        assert ut.children["a"].name == "i64"
-        assert ut.children["b"].name == "String"
-        assert ut.children["c"].name == "null"
+        assert tc.typing.has_child(ut, "a")
+        assert tc.typing.has_child(ut, "b")
+        assert tc.typing.has_child(ut, "c")
+        assert tc.typing.child_of(ut, "a").name == "i64"
+        assert tc.typing.child_of(ut, "b").name == "String"
+        assert tc.typing.child_of(ut, "c").name == "null"
 
     def test_union_tag_type_generated(self):
         """Union should have a :tag child with enum-like discriminators."""
@@ -4538,8 +4538,8 @@ class TestUnionTypeResolution:
         tag = ut.tag_type
         assert tag is not None
         assert tag.typetype == ZTypeType.ENUM
-        assert "a" in tag.children
-        assert "b" in tag.children
+        assert tc.typing.has_child(tag, "a")
+        assert tc.typing.has_child(tag, "b")
 
     def test_union_null_subtype(self):
         """Null subtypes get a sentinel NULL type."""
@@ -4549,8 +4549,8 @@ class TestUnionTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        assert ut.children["b"].name == "null"
-        assert ut.children["b"].is_valtype is True
+        assert tc.typing.child_of(ut, "b").name == "null"
+        assert tc.typing.child_of(ut, "b").is_valtype is True
 
 
 class TestUnionConstruction:
@@ -4729,9 +4729,9 @@ class TestDataTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
-        assert "0" in dt.children
-        assert "1" in dt.children
-        assert "2" in dt.children
+        assert tc.typing.has_child(dt, "0")
+        assert tc.typing.has_child(dt, "1")
+        assert tc.typing.has_child(dt, "2")
 
     def test_data_named_elements(self):
         """Named data elements use their labels."""
@@ -4741,8 +4741,8 @@ class TestDataTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
-        assert "LOW" in dt.children
-        assert "HIGH" in dt.children
+        assert tc.typing.has_child(dt, "LOW")
+        assert tc.typing.has_child(dt, "HIGH")
 
     def test_data_has_tag_subtype(self):
         """All data types should have a .tag subtype (monomorphized tag record)."""
@@ -4752,8 +4752,8 @@ class TestDataTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
-        assert "tag" in dt.children
-        tag = dt.children["tag"]
+        assert tc.typing.has_child(dt, "tag")
+        tag = tc.typing.child_of(dt, "tag")
         assert tag.typetype == ZTypeType.RECORD
         assert tag.is_tag_generic_origin
         assert tag.name == "tag__i64"
@@ -4766,7 +4766,7 @@ class TestDataTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
-        tag = dt.children["tag"]
+        tag = tc.typing.child_of(dt, "tag")
         assert tag.parent is dt
 
     def test_data_mixed_named_unnamed(self):
@@ -4777,9 +4777,9 @@ class TestDataTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
-        assert "0" in dt.children
-        assert "MIDDLE" in dt.children
-        assert "2" in dt.children
+        assert tc.typing.has_child(dt, "0")
+        assert tc.typing.has_child(dt, "MIDDLE")
+        assert tc.typing.has_child(dt, "2")
 
 
 class TestUnionCustomTag:
@@ -4811,8 +4811,8 @@ class TestUnionCustomTag:
         tag = ut.tag_type
         assert tag is not None
         # check that the discriminator values match the data
-        assert tag.children["A"].name == "10"
-        assert tag.children["B"].name == "20"
+        assert tc.typing.child_of(tag, "A").name == "10"
+        assert tc.typing.child_of(tag, "B").name == "20"
 
     def test_custom_tag_mismatched_labels_error(self):
         """Data labels not matching union subtypes should error."""
@@ -4850,7 +4850,7 @@ class TestUnionCustomTag:
         tc.check()
         ut = tc._resolved.get("test.priority")
         tag = ut.tag_type
-        assert tag.children["CRITICAL"].name == "10"
+        assert tc.typing.child_of(tag, "CRITICAL").name == "10"
 
     def test_multiple_tag_items_error(self):
         """Multiple .tag items in as block should error."""
@@ -4872,8 +4872,8 @@ class TestUnionCustomTag:
         ut = tc._resolved.get("test.myunion")
         tag = ut.tag_type
         assert tag is not None
-        assert tag.children["a"].name == "0"
-        assert tag.children["b"].name == "1"
+        assert tc.typing.child_of(tag, "a").name == "0"
+        assert tc.typing.child_of(tag, "b").name == "1"
 
     def test_union_has_tag_data_child(self):
         """Union should have a 'tag' child (data type) for MyUnion.tag access."""
@@ -4883,8 +4883,8 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        assert "tag" in ut.children
-        assert ut.children["tag"].typetype == ZTypeType.DATA
+        assert tc.typing.has_child(ut, "tag")
+        assert tc.typing.child_of(ut, "tag").typetype == ZTypeType.DATA
 
     def test_custom_tag_union_has_data_child(self):
         """Union with custom tag should have the data instance as 'tag' child."""
@@ -4896,8 +4896,8 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        assert "tag" in ut.children
-        tag_data = ut.children["tag"]
+        assert tc.typing.has_child(ut, "tag")
+        tag_data = tc.typing.child_of(ut, "tag")
         assert tag_data.typetype == ZTypeType.DATA
         assert tag_data.name == "pv"
 
@@ -4952,7 +4952,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
-        tag = dt.children["tag"]
+        tag = tc.typing.child_of(dt, "tag")
         assert tag.is_tag_generic_origin
         assert tag.name == "tag__i64"
         assert tag.parent is dt
@@ -5011,9 +5011,9 @@ class TestLabelValueShorthand:
         ut = tc._resolved.get("test.myunion")
         assert ut is not None
         assert ut.typetype == ZTypeType.UNION
-        assert "u8" in ut.children
-        assert "u16" in ut.children
-        assert "u32" in ut.children
+        assert tc.typing.has_child(ut, "u8")
+        assert tc.typing.has_child(ut, "u16")
+        assert tc.typing.has_child(ut, "u32")
 
     def test_union_label_value_subtype_names(self):
         """Label value union subtypes resolve to their payload types."""
@@ -5023,8 +5023,8 @@ class TestLabelValueShorthand:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        assert ut.children["u8"].name == "u8"
-        assert ut.children["String"].name == "String"
+        assert tc.typing.child_of(ut, "u8").name == "u8"
+        assert tc.typing.child_of(ut, "String").name == "String"
 
     def test_function_with_label_value_param(self):
         """Function with :i64 parameter type checks."""
@@ -5064,7 +5064,7 @@ class TestInlineUnits:
         )
         tc = TypeChecker(prog)
         tc.check()
-        ft = tc.unit_types["m"].children.get("greet")
+        ft = tc.typing.child_of(tc.unit_types["m"], "greet")
         assert ft is not None
         assert ft.typetype == ZTypeType.FUNCTION
 
@@ -5087,7 +5087,7 @@ class TestInlineUnits:
         )
         tc = TypeChecker(prog)
         tc.check()
-        pt = tc.unit_types["m"].children.get("pt")
+        pt = tc.typing.child_of(tc.unit_types["m"], "pt")
         assert pt is not None
         assert pt.typetype == ZTypeType.RECORD
 
@@ -5112,7 +5112,7 @@ class TestInlineUnits:
         # nested units are stored with qualified names
         at = tc.unit_types.get("a")
         assert at is not None
-        assert "b" in at.children
+        assert tc.typing.has_child(at, "b")
 
     def test_inline_unit_upward_reference(self):
         """Inline unit body can reference definitions from parent unit."""
@@ -5128,7 +5128,7 @@ class TestInlineUnits:
         # b is stored under qualified name "a.b"
         bt = tc.unit_types.get("a.b")
         assert bt is not None
-        assert "Y" in bt.children
+        assert tc.typing.has_child(bt, "Y")
 
 
 class TestVariantTypeResolution:
@@ -5165,12 +5165,12 @@ class TestVariantTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         vt = tc._resolved.get("test.myvar")
-        assert "a" in vt.children
-        assert "b" in vt.children
-        assert "c" in vt.children
-        assert vt.children["a"].name == "i64"
-        assert vt.children["b"].name == "u8"
-        assert vt.children["c"].name == "null"
+        assert tc.typing.has_child(vt, "a")
+        assert tc.typing.has_child(vt, "b")
+        assert tc.typing.has_child(vt, "c")
+        assert tc.typing.child_of(vt, "a").name == "i64"
+        assert tc.typing.child_of(vt, "b").name == "u8"
+        assert tc.typing.child_of(vt, "c").name == "null"
 
     def test_variant_tag_generated(self):
         """Variant should have a :tag child with enum-like discriminators."""
@@ -5183,8 +5183,8 @@ class TestVariantTypeResolution:
         tag = vt.tag_type
         assert tag is not None
         assert tag.typetype == ZTypeType.ENUM
-        assert "a" in tag.children
-        assert "b" in tag.children
+        assert tc.typing.has_child(tag, "a")
+        assert tc.typing.has_child(tag, "b")
 
     def test_variant_null_subtype(self):
         """Null subtypes are fine in variants."""
@@ -5194,8 +5194,8 @@ class TestVariantTypeResolution:
         tc = TypeChecker(program)
         tc.check()
         vt = tc._resolved.get("test.myvar")
-        assert vt.children["b"].name == "null"
-        assert vt.children["b"].is_valtype is True
+        assert tc.typing.child_of(vt, "b").name == "null"
+        assert tc.typing.child_of(vt, "b").is_valtype is True
 
     def test_variant_rejects_string(self):
         """Variant subtypes that are reftypes (String) should be rejected."""
@@ -5413,8 +5413,8 @@ class TestSpecs:
         assert t is not None
         create_t = t.meta_create
         assert create_t is not None
-        assert "x" in create_t.children
-        assert "helper" not in create_t.children
+        assert tc.typing.has_child(create_t, "x")
+        assert not tc.typing.has_child(create_t, "helper")
 
 
 class TestDefaults:
@@ -5428,8 +5428,8 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "greet")
         assert t is not None
-        assert "a" in t.children
-        assert t.children["a"].name == "i64"
+        assert tc.typing.has_child(t, "a")
+        assert tc.typing.child_of(t, "a").name == "i64"
 
     def test_numeric_default_42(self):
         """Numeric default '42' resolves to i64 type."""
@@ -5441,7 +5441,7 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "greet")
         assert t is not None
-        assert t.children["a"].name == "i64"
+        assert tc.typing.child_of(t, "a").name == "i64"
 
     def test_param_defaults_populated_numeric(self):
         """param_defaults populated for numeric defaults."""
@@ -5605,8 +5605,8 @@ class TestProtocols:
         assert t is not None
         assert t.typetype == ZTypeType.PROTOCOL
         assert t.is_valtype is False
-        assert "read" in t.children
-        assert t.children["read"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(t, "read")
+        assert tc.typing.child_of(t, "read").typetype == ZTypeType.FUNCTION
 
     def test_protocol_conformance_ok(self):
         """Record with correct methods passes conformance check."""
@@ -5676,8 +5676,8 @@ class TestProtocols:
         tc.check()
         t = tc._resolve_unit_name("test", "myfile")
         assert t is not None
-        assert "myreader" in t.children
-        assert t.children["myreader"].typetype == ZTypeType.PROTOCOL
+        assert tc.typing.has_child(t, "myreader")
+        assert tc.typing.child_of(t, "myreader").typetype == ZTypeType.PROTOCOL
 
     def test_protocol_is_field(self):
         """Protocol in 'is' block becomes instance field."""
@@ -5864,8 +5864,8 @@ class TestProtocols:
         tc.check()
         t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
-        assert "create" in t.children
-        assert t.children["create"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(t, "create")
+        assert tc.typing.child_of(t, "create").typetype == ZTypeType.FUNCTION
 
     def test_protocol_create_typechecks(self):
         """Reader.create from: f.take type-checks, Result is PROTOCOL."""
@@ -5936,7 +5936,7 @@ class TestProtocols:
         t = tc._resolved.get("test.myproto")
         assert t is not None
         assert t.isgeneric is True
-        assert "create" not in t.children
+        assert not tc.typing.has_child(t, "create")
 
     def test_protocol_has_no_take(self):
         """Protocol type has no `.take` child; `.take` is not a constructor."""
@@ -5950,9 +5950,9 @@ class TestProtocols:
         tc.check()
         t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
-        assert "take" not in t.children
-        assert "create" in t.children
-        assert "borrow" in t.children
+        assert not tc.typing.has_child(t, "take")
+        assert tc.typing.has_child(t, "create")
+        assert tc.typing.has_child(t, "borrow")
 
     def test_protocol_take_rejected_with_hint(self):
         """`Reader.take from: ...` errors with a migration hint."""
@@ -5992,8 +5992,8 @@ class TestProtocols:
         tc.check()
         t = tc._resolve_unit_name("test", "Reader")
         assert t is not None
-        assert "borrow" in t.children
-        assert t.children["borrow"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(t, "borrow")
+        assert tc.typing.child_of(t, "borrow").typetype == ZTypeType.FUNCTION
 
     def test_protocol_borrow_typechecks(self):
         """Reader.borrow from: f.lock type-checks, Result is PROTOCOL."""
@@ -6088,7 +6088,7 @@ class TestProtocols:
         t = tc._resolved.get("test.myproto")
         assert t is not None
         assert t.isgeneric is True
-        assert "take" not in t.children
+        assert not tc.typing.has_child(t, "take")
 
     def test_generic_protocol_no_borrow(self):
         """Generic (unmonomorphized) protocol has no `borrow`."""
@@ -6104,7 +6104,7 @@ class TestProtocols:
         t = tc._resolved.get("test.myproto")
         assert t is not None
         assert t.isgeneric is True
-        assert "borrow" not in t.children
+        assert not tc.typing.has_child(t, "borrow")
 
 
 class TestProtocolCreateInvalidatesSource:
@@ -6726,8 +6726,8 @@ class TestStreamProtocolsAndFile:
         f = tc._resolved.get("system.io.File") or tc._resolved.get("io.File")
         assert f is not None
         assert f.typetype == ZTypeType.CLASS
-        assert "fd" in f.children
-        assert "closed" in f.children
+        assert tc.typing.has_child(f, "fd")
+        assert tc.typing.has_child(f, "closed")
 
     def test_protocols_resolve(self):
         """Reader/Writer/Closer/Seeker resolve as PROTOCOL types."""
@@ -6757,7 +6757,9 @@ class TestStreamProtocolsAndFile:
                 f"io.{proto}"
             )
             assert t is not None
-            actual = {k for k in t.children if k not in ("create", "borrow")}
+            actual = {
+                k for k in tc.typing.child_names_of(t) if k not in ("create", "borrow")
+            }
             assert methods.issubset(actual), (
                 f"protocol {proto}: expected {methods}, got {actual}"
             )
@@ -6947,7 +6949,7 @@ class TestIoNativeDispatch:
             assert expected in labels, (
                 f"file should declare :{expected} conformance; labels: {labels}"
             )
-            assert file_type.children.get(expected) is not None
+            assert tc.typing.child_of(file_type, expected) is not None
 
     def test_file_projects_to_closer(self):
         """A File value can be passed as a `Closer` parameter via the
@@ -7241,8 +7243,8 @@ class TestGenerics:
         assert myrec is not None
         assert myrec.isgeneric is True
         assert "t" in myrec.generic_params
-        assert "t" not in myrec.children
-        assert "x" in myrec.children
+        assert not tc.typing.has_child(myrec, "t")
+        assert tc.typing.has_child(myrec, "x")
 
     def test_generic_record_with_generic_field_ref(self):
         """Record field referencing generic param: x: t resolves to GENERIC_PARAM."""
@@ -7254,8 +7256,8 @@ class TestGenerics:
         myrec = tc._resolved.get("test.myrec")
         assert myrec is not None
         assert myrec.isgeneric
-        assert "x" in myrec.children
-        assert myrec.children["x"].typetype == ZTypeType.GENERIC_PARAM
+        assert tc.typing.has_child(myrec, "x")
+        assert tc.typing.child_of(myrec, "x").typetype == ZTypeType.GENERIC_PARAM
 
     def test_generic_union_resolution(self):
         """Union with t: Any.generic detects generic params correctly."""
@@ -7269,9 +7271,9 @@ class TestGenerics:
         assert myopt is not None
         assert myopt.isgeneric is True
         assert "t" in myopt.generic_params
-        assert "some" in myopt.children
-        assert "none" in myopt.children
-        assert "t" not in myopt.children
+        assert tc.typing.has_child(myopt, "some")
+        assert tc.typing.has_child(myopt, "none")
+        assert not tc.typing.has_child(myopt, "t")
 
     def test_generic_union_subtype_is_generic_param_ref(self):
         """Union subtype referencing generic param: some: t is GENERIC_PARAM."""
@@ -7283,7 +7285,7 @@ class TestGenerics:
         tc.check(full=True)
         myopt = tc._resolved.get("test.myopt")
         assert myopt is not None
-        assert myopt.children["some"].typetype == ZTypeType.GENERIC_PARAM
+        assert tc.typing.child_of(myopt, "some").typetype == ZTypeType.GENERIC_PARAM
 
     def test_multiple_generic_params(self):
         """Record with multiple generic params."""
@@ -7298,8 +7300,8 @@ class TestGenerics:
         assert pair.isgeneric
         assert "a" in pair.generic_params
         assert "b" in pair.generic_params
-        assert "x" in pair.children
-        assert "y" in pair.children
+        assert tc.typing.has_child(pair, "x")
+        assert tc.typing.has_child(pair, "y")
 
     def test_generic_function_resolution(self):
         """Function with generic param in 'as' clause: t: Any.generic."""
@@ -7312,8 +7314,8 @@ class TestGenerics:
         assert myfn is not None
         assert myfn.isgeneric is True
         assert "t" in myfn.generic_params
-        assert "x" in myfn.children
-        assert myfn.children["x"].typetype == ZTypeType.GENERIC_PARAM
+        assert tc.typing.has_child(myfn, "x")
+        assert tc.typing.child_of(myfn, "x").typetype == ZTypeType.GENERIC_PARAM
 
     def test_generic_function_multiple_params(self):
         """Function with multiple generic params in 'as'."""
@@ -7328,8 +7330,8 @@ class TestGenerics:
         assert myfn.isgeneric is True
         assert "t" in myfn.generic_params
         assert "u" in myfn.generic_params
-        assert "x" in myfn.children
-        assert "y" in myfn.children
+        assert tc.typing.has_child(myfn, "x")
+        assert tc.typing.has_child(myfn, "y")
 
     def test_generic_function_any_clause_order(self):
         """Function with 'as' after 'out' resolves correctly."""
@@ -7731,8 +7733,8 @@ class TestGenerics:
         assert mono.tag_type is not None
         tag_type = mono.tag_type
         assert tag_type.typetype == ZTypeType.ENUM
-        assert "some" in tag_type.children
-        assert "none" in tag_type.children
+        assert typing.has_child(tag_type, "some")
+        assert typing.has_child(tag_type, "none")
 
     def test_monomorphized_union_concrete_subtypes(self):
         """Monomorphized union replaces generic param with concrete type."""
@@ -7743,7 +7745,7 @@ class TestGenerics:
         monos = find_user_monos(typing, origin_name="myopt")
         assert len(monos) >= 1
         mono, _ = monos[0]
-        some_type = mono.children.get("some")
+        some_type = typing.child_of(mono, "some")
         assert some_type is not None
         assert some_type.name == "i64"
         assert some_type.typetype != ZTypeType.GENERIC_PARAM
@@ -7878,7 +7880,7 @@ class TestGenerics:
         mono, _ = box_monos[0]
         assert mono.is_box is True
         # should have i64's operator children
-        assert "+" in mono.children or len(mono.children) > 0
+        assert typing.has_child(mono, "+") or typing.child_count(mono) > 0
 
     def test_error_generic_record_no_args(self):
         """Using generic record with no args emits error."""
@@ -7905,7 +7907,7 @@ class TestGenerics:
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
-        assert mono.children["x"].name == "i64"
+        assert typing.child_of(mono, "x").name == "i64"
 
     def test_generic_record_explicit_and_value(self):
         """myrec t: i64 x: 42 — both explicit type arg and value, compatible."""
@@ -7936,8 +7938,8 @@ class TestGenerics:
         # contribute additional monomorphizations (e.g. optionval(u64)
         # from stringview.index_of) that land ahead of it.
         mono = next(m for m, _ in typing.mono_types if m.name.startswith("mypair_"))
-        assert mono.children["x"].name == "i64"
-        assert mono.children["y"].name == "String"
+        assert typing.child_of(mono, "x").name == "i64"
+        assert typing.child_of(mono, "y").name == "String"
 
     def test_generic_type_in_type_position_concrete(self):
         """(myrec t: i64) in field type position produces concrete monomorphization."""
@@ -7950,11 +7952,11 @@ class TestGenerics:
         tc.check(full=True)
         wrapper = tc._resolved.get("test.wrapper")
         assert wrapper is not None
-        inner = wrapper.children.get("inner")
+        inner = tc.typing.child_of(wrapper, "inner")
         assert inner is not None
         assert inner.name == "myrec_i64"
         assert inner.isgeneric is False
-        assert inner.children["x"].name == "i64"
+        assert tc.typing.child_of(inner, "x").name == "i64"
 
     def test_generic_type_in_type_position_partial(self):
         """(myrec t: u) in field type position produces partial instantiation."""
@@ -7967,7 +7969,7 @@ class TestGenerics:
         tc.check(full=True)
         wrapper = tc._resolved.get("test.wrapper")
         assert wrapper is not None
-        inner = wrapper.children.get("inner")
+        inner = tc.typing.child_of(wrapper, "inner")
         assert inner is not None
         assert inner.name == "myrec_u"
         assert inner.isgeneric is True
@@ -7983,7 +7985,7 @@ class TestGenerics:
         monos = {m.name: m for m, _ in typing.mono_types}
         assert "wrapper_i64" in monos
         wrapper_mono = monos["wrapper_i64"]
-        inner = wrapper_mono.children.get("inner")
+        inner = typing.child_of(wrapper_mono, "inner")
         assert inner is not None
         assert inner.name == "myrec_i64"
         assert inner.isgeneric is False
@@ -8030,8 +8032,8 @@ class TestGenerics:
         assert mycls is not None
         assert mycls.isgeneric is True
         assert "t" in mycls.generic_params
-        assert "t" not in mycls.children
-        assert "x" in mycls.children
+        assert not tc.typing.has_child(mycls, "t")
+        assert tc.typing.has_child(mycls, "x")
 
     def test_generic_class_field_uses_param(self):
         """Class field referencing generic param: val: t resolves to GENERIC_PARAM."""
@@ -8043,8 +8045,8 @@ class TestGenerics:
         mycls = tc._resolved.get("test.mycls")
         assert mycls is not None
         assert mycls.isgeneric
-        assert "val" in mycls.children
-        assert mycls.children["val"].typetype == ZTypeType.GENERIC_PARAM
+        assert tc.typing.has_child(mycls, "val")
+        assert tc.typing.child_of(mycls, "val").typetype == ZTypeType.GENERIC_PARAM
 
     def test_generic_class_construction_infers(self):
         """mycls val: 42 infers t=i64 and produces monomorphized type."""
@@ -8058,8 +8060,8 @@ class TestGenerics:
         assert "i64" in mono.name
         assert mono.typetype == ZTypeType.CLASS
         assert mono.isgeneric is False
-        assert "val" in mono.children
-        assert mono.children["val"].name == "i64"
+        assert typing.has_child(mono, "val")
+        assert typing.child_of(mono, "val").name == "i64"
 
     def test_generic_class_explicit_type_arg(self):
         """mycls t: i64 val: 42 with explicit type arg."""
@@ -8133,7 +8135,7 @@ class TestGenerics:
         tc.check(full=True)
         myproto = tc._resolved.get("test.myproto")
         assert myproto is not None
-        get_fn = myproto.children.get("get")
+        get_fn = tc.typing.child_of(myproto, "get")
         assert get_fn is not None
         ret = get_fn.return_type
         assert ret is not None
@@ -8319,7 +8321,7 @@ class TestTypedefs:
         tc.check()
         mt = tc._resolved.get("test.meters")
         assert mt is not None
-        assert "double" in mt.children
+        assert tc.typing.has_child(mt, "double")
 
     def test_typedef_null_hides_method(self):
         """Setting a method to null in 'as' hides it from the typedef."""
@@ -8415,9 +8417,9 @@ class TestTypedefs:
         tc.check()
         mt = tc._resolved.get("test.meters")
         assert mt is not None
-        assert "create" in mt.children
-        assert "borrow" in mt.children
-        assert "take" not in mt.children
+        assert tc.typing.has_child(mt, "create")
+        assert tc.typing.has_child(mt, "borrow")
+        assert not tc.typing.has_child(mt, "take")
 
     def test_typedef_of_typedef(self):
         """Chained typedefs, compatibility walks stack."""
@@ -8450,8 +8452,8 @@ class TestFacets:
         assert t is not None
         assert t.typetype == ZTypeType.FACET
         assert t.is_valtype is True
-        assert "show" in t.children
-        assert t.children["show"].typetype == ZTypeType.FUNCTION
+        assert tc.typing.has_child(t, "show")
+        assert tc.typing.child_of(t, "show").typetype == ZTypeType.FUNCTION
 
     def test_facet_has_constructors(self):
         """Non-generic facets get create/borrow constructors. `.take` is not
@@ -8465,9 +8467,9 @@ class TestFacets:
         tc = TypeChecker(program)
         tc.check()
         t = tc._resolve_unit_name("test", "showable")
-        assert "create" in t.children
-        assert "borrow" in t.children
-        assert "take" not in t.children
+        assert tc.typing.has_child(t, "create")
+        assert tc.typing.has_child(t, "borrow")
+        assert not tc.typing.has_child(t, "take")
 
     def test_facet_conformance_ok(self):
         """Record with correct methods passes facet conformance check."""
@@ -8617,8 +8619,8 @@ class TestNumericGenerics:
         assert mono.name == "myrec_10"
         assert mono.generic_origin is not None
         # auto-synthesized field
-        assert "size" in mono.children
-        assert mono.children["size"].name == "u64"
+        assert typing.has_child(mono, "size")
+        assert typing.child_of(mono, "size").name == "u64"
         assert mono.param_defaults["size"] == "10"
 
     def test_numeric_generic_range_check(self):
@@ -8638,10 +8640,10 @@ class TestNumericGenerics:
         monos = [m for m, _ in typing.mono_types if m.name == "myarray_i64_10"]
         assert len(monos) == 1
         mono = monos[0]
-        assert "payload" in mono.children
-        assert mono.children["payload"].name == "i64"
-        assert "size" in mono.children
-        assert mono.children["size"].name == "u64"
+        assert typing.has_child(mono, "payload")
+        assert typing.child_of(mono, "payload").name == "i64"
+        assert typing.has_child(mono, "size")
+        assert typing.child_of(mono, "size").name == "u64"
         assert mono.param_defaults["size"] == "10"
 
     def test_numeric_generic_different_values(self):
@@ -8699,8 +8701,8 @@ class TestNumericGenerics:
         monos = [m for m, _ in typing.mono_types if m.name == "myrec_42"]
         assert len(monos) == 1
         mono = monos[0]
-        assert "n" in mono.children
-        assert mono.children["n"].name == "u32"
+        assert typing.has_child(mono, "n")
+        assert typing.child_of(mono, "n").name == "u32"
         assert mono.param_defaults["n"] == "42"
 
 
@@ -8744,8 +8746,8 @@ class TestArrays:
         monos = [m for m, _ in typing.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
         mono = monos[0]
-        assert "get" in mono.children
-        get = mono.children["get"]
+        assert typing.has_child(mono, "get")
+        get = typing.child_of(mono, "get")
         assert get.typetype == ZTypeType.FUNCTION
         ret = get.return_type
         assert ret is not None
@@ -8757,8 +8759,8 @@ class TestArrays:
         monos = [m for m, _ in typing.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
         mono = monos[0]
-        assert "set" in mono.children
-        set_ = mono.children["set"]
+        assert typing.has_child(mono, "set")
+        set_ = typing.child_of(mono, "set")
         assert set_.typetype == ZTypeType.FUNCTION
         ret = set_.return_type
         assert ret is not None
@@ -8770,7 +8772,7 @@ class TestArrays:
         monos = [m for m, _ in typing.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
         mono = monos[0]
-        assert "length" in mono.children
+        assert typing.has_child(mono, "length")
         assert mono.param_defaults.get("length") == "4"
 
     def test_array_different_lengths_different_types(self):
@@ -8827,15 +8829,15 @@ class TestStr:
         program, typing = check_ok("main: function is { s: (str to: 32) }")
         monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
-        assert "length" in mono.children
-        assert mono.children["length"].name == "u64"
+        assert typing.has_child(mono, "length")
+        assert typing.child_of(mono, "length").name == "u64"
 
     def test_str_size_field(self):
         """.size is synthesized with correct default value."""
         program, typing = check_ok("main: function is { s: (str to: 32) }")
         monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
-        assert "size" in mono.children
+        assert typing.has_child(mono, "size")
         assert mono.param_defaults.get("size") == "32"
 
     def test_str_string_method(self):
@@ -8843,8 +8845,8 @@ class TestStr:
         program, typing = check_ok("main: function is { s: (str to: 32) }")
         monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
-        assert "string" in mono.children
-        string_method = mono.children["string"]
+        assert typing.has_child(mono, "string")
+        string_method = typing.child_of(mono, "string")
         assert string_method.typetype == ZTypeType.FUNCTION
         ret = string_method.return_type
         assert ret is not None
@@ -9098,36 +9100,36 @@ class TestList:
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "length" in mono.children
-        assert mono.children["length"].name == "u64"
+        assert typing.has_child(mono, "length")
+        assert typing.child_of(mono, "length").name == "u64"
 
     def test_list_capacity_field(self):
         """.capacity is synthesized as u64 field."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "capacity" in mono.children
-        assert mono.children["capacity"].name == "u64"
+        assert typing.has_child(mono, "capacity")
+        assert typing.child_of(mono, "capacity").name == "u64"
 
     def test_list_append_method(self):
         """.append is synthesized with from: parameter."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "append" in mono.children
-        append = mono.children["append"]
+        assert typing.has_child(mono, "append")
+        append = typing.child_of(mono, "append")
         assert append.typetype == ZTypeType.FUNCTION
-        assert "from" in append.children
+        assert typing.has_child(append, "from")
 
     def test_list_get_method(self):
         """.get is synthesized returning element type."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "get" in mono.children
-        get = mono.children["get"]
+        assert typing.has_child(mono, "get")
+        get = typing.child_of(mono, "get")
         assert get.typetype == ZTypeType.FUNCTION
-        assert "i" in get.children
+        assert typing.has_child(get, "i")
         ret = get.return_type
         assert ret is not None
         assert ret.name == "i64"
@@ -9137,19 +9139,19 @@ class TestList:
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "set" in mono.children
-        set_m = mono.children["set"]
+        assert typing.has_child(mono, "set")
+        set_m = typing.child_of(mono, "set")
         assert set_m.typetype == ZTypeType.FUNCTION
-        assert "i" in set_m.children
-        assert "val" in set_m.children
+        assert typing.has_child(set_m, "i")
+        assert typing.has_child(set_m, "val")
 
     def test_list_pop_method(self):
         """.pop is synthesized returning element type."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "pop" in mono.children
-        pop = mono.children["pop"]
+        assert typing.has_child(mono, "pop")
+        pop = typing.child_of(mono, "pop")
         assert pop.typetype == ZTypeType.FUNCTION
         ret = pop.return_type
         assert ret is not None
@@ -9160,21 +9162,21 @@ class TestList:
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "insert" in mono.children
-        insert = mono.children["insert"]
+        assert typing.has_child(mono, "insert")
+        insert = typing.child_of(mono, "insert")
         assert insert.typetype == ZTypeType.FUNCTION
-        assert "from" in insert.children
-        assert "at" in insert.children
+        assert typing.has_child(insert, "from")
+        assert typing.has_child(insert, "at")
 
     def test_list_extend_method(self):
         """.extend is synthesized with from: list_T parameter."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        assert "extend" in mono.children
-        extend = mono.children["extend"]
+        assert typing.has_child(mono, "extend")
+        extend = typing.child_of(mono, "extend")
         assert extend.typetype == ZTypeType.FUNCTION
-        assert "from" in extend.children
+        assert typing.has_child(extend, "from")
 
     def test_list_different_element_types(self):
         """List of: i64 and List of: u64 are different types."""
@@ -9194,7 +9196,7 @@ class TestList:
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        listview_method = mono.children["listview"]
+        listview_method = typing.child_of(mono, "listview")
         assert listview_method.return_ownership == ZParamOwnership.BORROW
 
     def test_list_iterate_returns_borrow(self):
@@ -9202,7 +9204,7 @@ class TestList:
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
-        iterate_method = mono.children["iterate"]
+        iterate_method = typing.child_of(mono, "iterate")
         assert iterate_method.return_ownership == ZParamOwnership.BORROW
 
 
@@ -9226,14 +9228,14 @@ class TestSynthesisedNativeMethodFlag:
     def test_list_i64_methods_all_native(self):
         program, typing = check_ok("main: function is { l: (List of: i64) }")
         list_i64 = next(m for m, _ in typing.mono_types if m.name == "List_i64")
-        for name, child in list_i64.children.items():
+        for name, child in typing.children_of(list_i64):
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, f"list_i64.{name} should be is_native=True"
 
     def test_map_methods_all_native(self):
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         map_mono = next(m for m, _ in typing.mono_types if m.name == "Map_i64_i64")
-        for name, child in map_mono.children.items():
+        for name, child in typing.children_of(map_mono):
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, (
                     f"{map_mono.name}.{name} should be is_native=True"
@@ -9248,7 +9250,7 @@ class TestSynthesisedNativeMethodFlag:
             None,
         )
         assert lv_mono is not None, [m.name for m, _ in typing.mono_types]
-        for name, child in lv_mono.children.items():
+        for name, child in typing.children_of(lv_mono):
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, (
                     f"{lv_mono.name}.{name} should be is_native=True"
@@ -9263,7 +9265,7 @@ class TestSynthesisedNativeMethodFlag:
             None,
         )
         assert li_mono is not None, [m.name for m, _ in typing.mono_types]
-        call_method = li_mono.children.get("call")
+        call_method = typing.child_of(li_mono, "call")
         assert call_method is not None
         assert call_method.is_native
 
@@ -9289,32 +9291,32 @@ class TestMap:
         """.length is synthesized as u64 field."""
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
-        assert "length" in mono.children
-        assert mono.children["length"].name == "u64"
+        assert typing.has_child(mono, "length")
+        assert typing.child_of(mono, "length").name == "u64"
 
     def test_map_capacity_field(self):
         """.capacity is synthesized as u64 field."""
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
-        assert "capacity" in mono.children
-        assert mono.children["capacity"].name == "u64"
+        assert typing.has_child(mono, "capacity")
+        assert typing.child_of(mono, "capacity").name == "u64"
 
     def test_map_set_method(self):
         """.set is synthesized with key: and value: parameters."""
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
-        assert "set" in mono.children
-        set_m = mono.children["set"]
+        assert typing.has_child(mono, "set")
+        set_m = typing.child_of(mono, "set")
         assert set_m.typetype == ZTypeType.FUNCTION
-        assert "key" in set_m.children
-        assert "value" in set_m.children
+        assert typing.has_child(set_m, "key")
+        assert typing.has_child(set_m, "value")
 
     def test_map_get_method_returns_option(self):
         """.get is synthesized returning Option of value type."""
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
-        assert "get" in mono.children
-        get_m = mono.children["get"]
+        assert typing.has_child(mono, "get")
+        get_m = typing.child_of(mono, "get")
         assert get_m.typetype == ZTypeType.FUNCTION
         ret = get_m.return_type
         assert ret is not None
@@ -9324,10 +9326,10 @@ class TestMap:
         """.delete is synthesized returning bool."""
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
-        assert "delete" in mono.children
-        del_m = mono.children["delete"]
+        assert typing.has_child(mono, "delete")
+        del_m = typing.child_of(mono, "delete")
         assert del_m.typetype == ZTypeType.FUNCTION
-        assert "key" in del_m.children
+        assert typing.has_child(del_m, "key")
         ret = del_m.return_type
         assert ret is not None
         assert ret.name == "bool"
@@ -9336,8 +9338,8 @@ class TestMap:
         """.has is synthesized returning bool."""
         program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
         mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
-        assert "has" in mono.children
-        has_m = mono.children["has"]
+        assert typing.has_child(mono, "has")
+        has_m = typing.child_of(mono, "has")
         assert has_m.typetype == ZTypeType.FUNCTION
         ret = has_m.return_type
         assert ret is not None
@@ -10780,11 +10782,11 @@ class TestAutoGeneratedEquality:
         )
         point_type = typing.resolved.get("test.point")
         assert point_type is not None
-        eq = point_type.children.get("==")
+        eq = typing.child_of(point_type, "==")
         assert eq is not None
         assert eq.is_autogen_eq
         assert eq.return_type.name == "bool"
-        neq = point_type.children.get("!=")
+        neq = typing.child_of(point_type, "!=")
         assert neq is not None
         assert neq.is_autogen_eq
 
@@ -10850,7 +10852,7 @@ class TestAutoGeneratedEquality:
         )
         point_type = typing.resolved.get("test.point")
         assert point_type is not None
-        eq = point_type.children.get("==")
+        eq = typing.child_of(point_type, "==")
         assert eq is not None
         assert not eq.is_autogen_eq  # user-defined, not auto-generated
 
@@ -10899,7 +10901,7 @@ class TestAutoGeneratedEquality:
             "}"
         )
         point_type = typing.resolved.get("test.point")
-        eq = point_type.children["=="]
+        eq = typing.child_of(point_type, "==")
         assert eq.is_simple_eq
 
     def test_memcmp_eq_float_disqualifies(self):
@@ -10913,7 +10915,7 @@ class TestAutoGeneratedEquality:
             "}"
         )
         point_type = typing.resolved.get("test.point")
-        eq = point_type.children["=="]
+        eq = typing.child_of(point_type, "==")
         assert eq.is_autogen_eq
         assert not eq.is_simple_eq
 
@@ -10928,7 +10930,7 @@ class TestAutoGeneratedEquality:
             "}"
         )
         rec_type = typing.resolved.get("test.rec")
-        assert not rec_type.children["=="].is_simple_eq
+        assert not typing.child_of(rec_type, "==").is_simple_eq
 
     def test_memcmp_eq_enum_variant(self):
         """Pure enum variant is memcmp-safe."""
@@ -10941,7 +10943,7 @@ class TestAutoGeneratedEquality:
             "}"
         )
         color_type = typing.resolved.get("test.color")
-        assert color_type.children["=="].is_simple_eq
+        assert typing.child_of(color_type, "==").is_simple_eq
 
     def test_memcmp_eq_variant_with_int_payloads(self):
         """Variant with integer payloads is memcmp-safe."""
@@ -10954,7 +10956,7 @@ class TestAutoGeneratedEquality:
             "}"
         )
         result_type = typing.resolved.get("test.Result")
-        assert result_type.children["=="].is_simple_eq
+        assert typing.child_of(result_type, "==").is_simple_eq
 
     def test_memcmp_eq_variant_with_float_payload(self):
         """Variant with float payload is NOT memcmp-safe."""
@@ -10967,7 +10969,7 @@ class TestAutoGeneratedEquality:
             "}"
         )
         result_type = typing.resolved.get("test.Result")
-        assert not result_type.children["=="].is_simple_eq
+        assert not typing.child_of(result_type, "==").is_simple_eq
 
 
 class TestStringEquality:

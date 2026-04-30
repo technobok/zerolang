@@ -436,7 +436,7 @@ class TypeChecker:
         # exists for callers and for incremental migration.
         self.typing = ztyping.Typing(parsed=program)
         self.errors: List[zast.Error] = []
-        self.symtab = SymbolTable()
+        self.symtab = SymbolTable(typing=self.typing)
 
         # well-known types (only null/never are standalone — others come from system.z)
         self.t_null = _make_type("null", ZTypeType.NULL)
@@ -591,81 +591,20 @@ class TypeChecker:
         )
 
     def _set_child(self, parent: ZType, name: str, child: ZType) -> None:
-        """F5.H.2: write a (parent, name, child) entry to both
-        `parent.children` and `Typing.type_child`. Idempotent on
-        reassignment — a second call with the same `(parent, name)`
-        updates the existing row's `child_type_id` rather than
-        appending. After F5.H.5 the dict goes away and the table is
-        authoritative.
-        """
-        is_new = not self.typing.has_child(parent, name)
-        parent.children[name] = child
-        name_id = parent.child_id_for(name)
-        rows = self.typing.type_child
-        if not is_new:
-            n = len(rows)
-            i = 0
-            while i < n:
-                row = rows[i]
-                if row.parent_type_id == parent.nodeid and row.child_name_id == name_id:
-                    row.child_type_id = child.nodeid
-                    row.child_type = child
-                    return
-                i += 1
-        # new key (or stale/missing row): append at the next position
-        # for this parent
-        pos = 0
-        for r in rows:
-            if r.parent_type_id == parent.nodeid:
-                pos += 1
-        rows.append(
-            ztyping.TypeChild(
-                parent_type_id=parent.nodeid,
-                child_name=name,
-                child_name_id=name_id,
-                child_type_id=child.nodeid,
-                position=pos,
-                child_type=child,
-            )
-        )
+        """Thin alias for `self.typing.set_child(parent, name, child)`.
+        Kept on TypeChecker for ergonomic call-site brevity throughout
+        the typechecker."""
+        self.typing.set_child(parent, name, child)
 
     def _copy_children(self, dst: ZType, src: ZType) -> None:
-        """F5.H.2: copy every child of `src` into `dst` via _set_child.
-
-        Replaces the legacy `dst.children = src.children` aliasing
-        (shared dict reference) with explicit per-key mirroring so the
-        flat table picks up matching rows under `dst.nodeid`. Used for
-        const-bearing wrapper types in `as`-block items, which after
-        creation are not further mutated, so a snapshot copy is
-        semantically equivalent to the old shared-dict form.
-        """
+        """Mirror every child of `src` onto `dst` (snapshot copy).
+        Used for const-bearing wrapper types in `as`-block items."""
         for k, v in self.typing.children_of(src):
-            self._set_child(dst, k, v)
+            self.typing.set_child(dst, k, v)
 
     def _set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
-        """F5.H.2: write a (parent, name, arg) generic-arg entry to
-        both `parent.generic_args` and `Typing.type_generic_arg`.
-        Idempotent on reassignment.
-        """
-        parent.generic_args[name] = arg
-        rows = self.typing.type_generic_arg
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
-            if row.parent_type_id == parent.nodeid and row.param_name == name:
-                row.arg_type_id = arg.nodeid
-                row.arg_type = arg
-                return
-            i += 1
-        rows.append(
-            ztyping.TypeGenericArg(
-                parent_type_id=parent.nodeid,
-                param_name=name,
-                arg_type_id=arg.nodeid,
-                arg_type=arg,
-            )
-        )
+        """Thin alias for `self.typing.set_generic_arg(...)`."""
+        self.typing.set_generic_arg(parent, name, arg)
 
     def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
         """Assign a C identifier to a type, auto-resolving collisions.

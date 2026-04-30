@@ -194,6 +194,62 @@ class Typing:
     type_child: List[TypeChild] = field(default_factory=list, init=False)
     type_generic_arg: List[TypeGenericArg] = field(default_factory=list, init=False)
 
+    # ---- F5.H.5 setters (table-only) ----
+
+    def set_child(self, parent: ZType, name: str, child: ZType) -> None:
+        """Add or update the (parent, name, child) entry in
+        `type_child`. Idempotent on reassignment: a second call with
+        the same `(parent, name)` updates the existing row in place.
+        """
+        name_id = parent.child_id_for(name)
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid and row.child_name_id == name_id:
+                row.child_type_id = child.nodeid
+                row.child_type = child
+                return
+            i += 1
+        # new key — append at the next position for this parent
+        pos = 0
+        for r in rows:
+            if r.parent_type_id == parent.nodeid:
+                pos += 1
+        rows.append(
+            TypeChild(
+                parent_type_id=parent.nodeid,
+                child_name=name,
+                child_name_id=name_id,
+                child_type_id=child.nodeid,
+                position=pos,
+                child_type=child,
+            )
+        )
+
+    def set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
+        """Add or update a (parent, param_name, arg) entry in
+        `type_generic_arg`. Idempotent on reassignment."""
+        rows = self.type_generic_arg
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid and row.param_name == name:
+                row.arg_type_id = arg.nodeid
+                row.arg_type = arg
+                return
+            i += 1
+        rows.append(
+            TypeGenericArg(
+                parent_type_id=parent.nodeid,
+                param_name=name,
+                arg_type_id=arg.nodeid,
+                arg_type=arg,
+            )
+        )
+
     # ---- F5.H.3 read accessors (table-backed) ----
 
     def child_of(self, parent: ZType, name: str) -> "Optional[ZType]":

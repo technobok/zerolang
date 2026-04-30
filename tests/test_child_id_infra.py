@@ -9,7 +9,15 @@ import pytest
 from conftest import make_parser
 from ztypecheck import typecheck
 from ztypes import ZType, ZTypeType
+from ztyping import Typing
 import zast
+
+
+def _empty_typing() -> Typing:
+    from zvfs import ZVfs
+
+    return Typing(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
+
 
 pytestmark = pytest.mark.infra
 
@@ -41,24 +49,27 @@ class TestChildIdInfrastructure:
         # globally unique — ids minted on different parents do not collide
         assert a != b
 
-    def test_resolve_child_by_id_returns_none_when_no_child(self):
+    def test_child_by_id_returns_none_when_no_child(self):
         t = _make_ztype("parent")
         cid = t.child_id_for("foo")
-        assert t.resolve_child_by_id(cid) is None
+        typing = _empty_typing()
+        assert typing.child_by_id(t, cid) is None
 
-    def test_resolve_child_by_id_round_trips_when_child_present(self):
+    def test_child_by_id_round_trips_when_child_present(self):
         parent = _make_ztype("parent")
         child = _make_ztype("child")
-        parent.children["foo"] = child
+        typing = _empty_typing()
+        typing.set_child(parent, "foo", child)
         cid = parent.child_id_for("foo")
-        assert parent.resolve_child_by_id(cid) is child
+        assert typing.child_by_id(parent, cid) is child
 
-    def test_resolve_child_by_id_returns_none_for_unknown_id(self):
+    def test_child_by_id_returns_none_for_unknown_id(self):
         t = _make_ztype("parent")
         # minted on a different type — must not resolve on t
         other = _make_ztype("other")
         alien = other.child_id_for("anything")
-        assert t.resolve_child_by_id(alien) is None
+        typing = _empty_typing()
+        assert typing.child_by_id(t, alien) is None
 
 
 def _parse_check(source: str, unitname: str = "test"):

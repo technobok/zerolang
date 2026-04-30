@@ -819,26 +819,35 @@ class TestFinding12SelfHostingPatterns:
         assert "Lock" not in source
 
     def test_no_ordered_dict_in_ztype(self):
-        """ZType fields should use plain dict, not OrderedDict."""
+        """Remaining dict-typed fields on ZType should be plain dicts
+        (not OrderedDict). F5.H.5 removed `children` / `generic_args`
+        in favour of flat tables on Typing — only `generic_params`
+        survives as a per-ZType dict."""
         from ztypes import ZType, ZTypeType
 
         t = ZType(name="test", typetype=ZTypeType.RECORD, parent=None)
-        assert type(t.children) is dict
         assert type(t.generic_params) is dict
-        assert type(t.generic_args) is dict
 
-    def test_children_dict_preserves_order(self):
-        """Plain dict should preserve insertion order (Python 3.7+)."""
+    def test_children_table_preserves_order(self):
+        """Typing.type_child rows preserve declaration order via the
+        `position` column (and via the order rows are appended). This
+        replaces the pre-F5.H test that exercised ZType.children dict
+        ordering directly."""
         from ztypes import ZType, ZTypeType
+        from ztyping import Typing
+        from zvfs import ZVfs
+        import zast
 
+        typing = Typing(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
         parent = ZType(name="rec", typetype=ZTypeType.RECORD, parent=None)
         c1 = ZType(name="x", typetype=ZTypeType.RECORD, parent=parent)
         c2 = ZType(name="y", typetype=ZTypeType.RECORD, parent=parent)
         c3 = ZType(name="z", typetype=ZTypeType.RECORD, parent=parent)
-        parent.children["x"] = c1
-        parent.children["y"] = c2
-        parent.children["z"] = c3
-        assert list(parent.children.keys()) == ["x", "y", "z"]
+        typing.set_child(parent, "x", c1)
+        typing.set_child(parent, "y", c2)
+        typing.set_child(parent, "z", c3)
+        names = [n for n, _ in typing.children_of(parent)]
+        assert names == ["x", "y", "z"]
 
 
 # ---- SQL Schema: dump_sql integration ----

@@ -16,7 +16,7 @@ from typing import Dict, Optional, cast
 
 import zast
 from zast import NodeType
-from ztypes import ZType, ZTypeType
+from ztypes import ZType
 
 
 NodeTypes = Dict[int, Optional[ZType]]
@@ -59,23 +59,6 @@ def hash_function(func: zast.Function, node_types: NodeTypes) -> str:
 def _hash_type(ztype: ZType) -> str:
     """Hash a ZType by name and typetype."""
     return f"{ztype.typetype.name}:{ztype.name}"
-
-
-def _hash_type_structure(ztype: ZType) -> str:
-    """Hash a ZType structurally (excludes the type name).
-
-    Hashes typetype plus the structure of children (their types),
-    so two structurally identical types hash the same even with different names.
-    """
-    h = hashlib.sha256()
-    h.update(ztype.typetype.name.encode())
-    for cname, ctype in ztype.children.items():
-        if ctype.typetype == ZTypeType.FUNCTION:
-            continue
-        h.update(cname.encode())
-        h.update(b":")
-        h.update(_hash_type(ctype).encode())
-    return h.hexdigest()
 
 
 def _hash_node(node: zast.Node, node_types: NodeTypes) -> str:

@@ -5,7 +5,7 @@ List-based environment: each scope holds a List[Entry] rather than dicts.
 Scopes are small (measured max ~6 entries), so linear scan beats hash lookup.
 """
 
-from typing import Optional, List, Tuple
+from typing import Any, Optional, List, Tuple
 from ztypes import (
     ZType,
     ZVariable,
@@ -126,13 +126,18 @@ class SymbolTable:
     - OVERLAY: per-statement state change (immutable shadow records)
     """
 
-    def __init__(self) -> None:
+    def __init__(self, typing: "Optional[Any]" = None) -> None:
         self._scopes: List[Scope] = []
         # Phase 7c: archive of popped scopes, in pop order. The SQL dumper
         # reads this plus `_scopes` to reconstruct the full scope history.
         # Popped scopes keep their entries/scope_id so an id-based dump is
         # deterministic across runs.
         self._history: List[Scope] = []
+        # F5.H.5: bound `Typing` for narrowing/exclude lookups that need
+        # to read the flat type_child table. Typed Any to keep zenv free
+        # of an import cycle with ztyping; production callers (TypeChecker)
+        # pass a real Typing.
+        self._typing: "Any" = typing
 
     # ---- scope management ----
 
@@ -531,7 +536,11 @@ class SymbolTable:
         existing = self.lookup_entry(name)
         original_type = existing.ztype if existing else to_type
         if shadow:
-            payload = original_type.children.get(subtype_name) if subtype_name else None
+            payload = (
+                self._typing.child_of(original_type, subtype_name)
+                if subtype_name
+                else None
+            )
             if payload is None or payload.typetype == ZTypeType.NULL:
                 # null-payload or missing arm: keep outer as ztype.
                 entry_ztype = original_type
@@ -563,7 +572,7 @@ class SymbolTable:
         # collect all subtypes of the full union/variant
         all_subtypes = {
             k: v
-            for k, v in full_type.children.items()
+            for k, v in self._typing.children_of(full_type)
             if v.typetype
             not in (ZTypeType.FUNCTION, ZTypeType.DATA, ZTypeType.TAG, ZTypeType.ENUM)
             and not v.is_tag_generic_origin

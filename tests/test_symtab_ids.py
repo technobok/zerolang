@@ -7,11 +7,22 @@ import sqlite3
 
 import pytest
 
+import zast
 from conftest import make_parser
 from ztypecheck import typecheck
 from zsqldump import dump_sql
 from ztypes import Entry, ZType, ZTypeType, ZOwnership, ZNaming, ZVariable
+from ztyping import Typing
 from zenv import SymbolTable
+
+
+def _empty_typing() -> Typing:
+    """Construct a minimal Typing for tests that just need the
+    type_child / type_generic_arg tables."""
+    from zvfs import ZVfs
+
+    return Typing(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
+
 
 pytestmark = pytest.mark.infra
 
@@ -58,9 +69,10 @@ class TestNarrowStampsIds:
     def test_narrow_stamps_narrowed_subtype_id(self):
         outer = _make_ztype("Result", ZTypeType.UNION)
         ok = _make_ztype("ok_payload", ZTypeType.RECORD)
-        outer.children["ok"] = ok
+        typing = _empty_typing()
+        typing.set_child(outer, "ok", ok)
 
-        st = SymbolTable()
+        st = SymbolTable(typing=typing)
         st.push("main")
         v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
         st.define_var("r", v)
@@ -71,16 +83,17 @@ class TestNarrowStampsIds:
         assert entry is not None
         assert entry.narrowed_subtype == "ok"
         assert entry.narrowed_subtype_id == expected_id
-        # round-trip via resolve_child_by_id
-        assert outer.resolve_child_by_id(entry.narrowed_subtype_id) is ok
+        # round-trip via Typing.child_by_id
+        assert typing.child_by_id(outer, entry.narrowed_subtype_id) is ok
 
     def test_exclude_stamps_excluded_subtype_ids(self):
         outer = _make_ztype("Result", ZTypeType.UNION)
-        outer.children["ok"] = _make_ztype("ok_payload", ZTypeType.RECORD)
-        outer.children["err"] = _make_ztype("err_payload", ZTypeType.RECORD)
-        outer.children["none"] = _make_ztype("none", ZTypeType.NULL)
+        typing = _empty_typing()
+        typing.set_child(outer, "ok", _make_ztype("ok_payload", ZTypeType.RECORD))
+        typing.set_child(outer, "err", _make_ztype("err_payload", ZTypeType.RECORD))
+        typing.set_child(outer, "none", _make_ztype("none", ZTypeType.NULL))
 
-        st = SymbolTable()
+        st = SymbolTable(typing=typing)
         st.push("main")
         v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
         st.define_var("r", v)
