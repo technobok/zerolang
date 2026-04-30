@@ -773,14 +773,23 @@ Larger refactors; do in order.
        narrowing/dotted-path stamping is rewritten to mint ids
        directly off `typing.type_child` rows.
        `make check`, `make test` (1943), and byte-identical C across
-       all 85 examples verified at every sub-commit. Net repo line
-       impact: `ztypecheck.py` 10,263 → 10,326 (+63, dominated by
-       plumbed `self.typing` parameters and ruff-wrapped multi-line
-       `_set_child` calls); `ztypes.py` -16; `zemitterc.py` and
-       `zsqldump.py` net positive (helpers added) but consumer reads
-       are now uniform `self.typing.X` calls. The 2-class typecheck-
-       output shape (`Typing` flat tables + `ZType.children_id_map`
-       allocator) is the basis for F6's per-table SQL dump rework.)*
+       all 85 examples verified at every sub-commit. Honest line
+       accounting (post-`0dce458` tighten) for the affected src/
+       subset (8 files): 22,804 → 22,999 (+195). Breakdown:
+       `ztyping.py` +143 (accessor API + 2 row dataclasses — replacing
+       per-ZType dicts with a relational table materialises a query
+       surface that wasn't there before),
+       `ztypecheck.py` +57 (plumbed `self.typing` params, ruff
+       multi-line wraps, `cast(ZType, ...)` at 9 sites where dict
+       subscript was non-Optional and `child_of` returns Optional),
+       `zenv.py` +9 (typing param + `child_of`/`children_of` swaps),
+       `ztypeutil.py` +3, `zsqldump.py` +2, `zemitterc.py` +5,
+       `ztypes.py` -7 (children/generic_args dicts + resolve_child_by_id
+       removed), `zasthash.py` -17 (dead code).
+       The architectural goal — single flat table consumable by SQL
+       dump (basis for F6's per-table dump rework) — is achieved;
+       the line count is the cost of materialising an accessor API
+       where dict syntax used to suffice.)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
