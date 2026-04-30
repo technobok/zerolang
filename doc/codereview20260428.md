@@ -676,19 +676,30 @@ Larger refactors; do in order.
        `_check_path` / `_check_call` / `_check_operation` boundaries.
        F5.F (TAG_ORIGIN sentinel removal) resolved in `feba9e5`.
        F5.D (move side tables to `Program` as ECS components) resolved
-       in `f75c0d5`: 19 nodeid-keyed dicts (`_node_type`, `_node_const_value`,
-       `_call_kind`, `_call_callable_type_name`, `_expr_call_kind`,
-       `_do_has_break`, `_case_subject_taken`, `_for_iter_bindings`,
-       `_if_taken_vars`, `_case_taken_vars`, `_atom_*`, `_dp_*`,
-       `_with_*`, `_assign_alias_of`, `_projected_args`) moved off
-       `TypeChecker.__init__` onto `Program` as documented component
-       fields; 283 access sites rebased to `self.program.<name>`;
-       `make check`, `make test` (1962), byte-identical C output across
-       all 85 examples.
+       in `f75c0d5` — first relocated 19 nodeid-keyed dicts off
+       `TypeChecker` onto `zast.Program`. F5.E (typecheck-output
+       container + drop typed-tree mirror) resolved across
+       `744620f` (E.1: empty `Typing` module),
+       `6dfef80` (E.2: 19 component dicts moved from Program to Typing),
+       `fd646e4` (E.3: aggregate state moved to Typing,
+       `typecheck() -> Typing`, Program-compat shims),
+       `1976ccd`/`d061291`/`0199f89` (E.4.a–c: emitter consumers
+       routed through Typing) and `64ba8a2` (E.4.d: typed-tree
+       mirror module + 19 `_build_typed_*` methods + `tests/test_typed_tree.py`
+       deleted; replaced by `TypedProgramView` thin compat shim).
+       Net effect: typecheck output lives in its own module
+       (`src/ztyping.py`); `zast.Program` is mutable only via the
+       transitional compat shims (canonical access path is `typing.X`);
+       parallel typed-tree class hierarchy gone. Repo −1828 lines
+       in F5.E.4.d alone; `ztypecheck.py` from 10,777 → 9,995 lines.
+       `make check`, `make test` (1943, was 1962 minus 19 typed-mirror
+       tests), byte-identical C output across all 85 examples at
+       every sub-commit.
        Remaining sub-items: F5.B (state records), F5.C (decompose
-       `_monomorphize`), F5.E (drop typed-tree mirror module), F5.G
-       (decompose 4 remaining monsters), F5.H (flatten
-       `ZType.children` to a relational table).)*
+       `_monomorphize`), F5.G (decompose 4 remaining monsters),
+       F5.H (flatten `ZType.children` to a relational table). A
+       follow-up to F5.E should remove the Program-side compat shims
+       and freeze `Program`.)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
