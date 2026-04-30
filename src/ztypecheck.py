@@ -6353,6 +6353,201 @@ class TypeChecker:
         t = self._check_dotted_path_inner(path, coerce_method_to_return)
         return t
 
+    def _check_dp_take(self, path: zast.DottedPath) -> Optional[ZType]:
+        """`.take` ownership transfer intrinsic. Resolves the parent,
+        propagates its borrow/private intent into the side-channel,
+        and either invalidates the parent (when it's an addressable
+        variable) or signals fall-through to the regular child lookup
+        when the parent type defines a user-level `.take` member,
+        is a protocol/facet/typedef whose `.take` is a constructor,
+        or has no resolvable type. Returns the resolved type when
+        the intrinsic handled the path; None for fall-through."""
+        parent_result = self._check_path(path.parent)
+        parent_type = parent_result.ztype
+        self._pending_borrow_lock = parent_result.borrow_target
+        self._pending_private_access = parent_result.private_access
+        if parent_type is None:
+            return None
+        if "take" in parent_type.children:
+            return None
+        if parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+            return None
+        if parent_type.typedef_base is not None:
+            return None
+        # check if parent is a unit-level definition (function or spec)
+        if (
+            parent_type.typetype == ZTypeType.FUNCTION
+            and path.parent.nodetype == NodeType.ATOMID
+        ):
+            defn = self._lookup_definition(cast(zast.AtomId, path.parent).name)
+            if defn is not None and defn.nodetype == NodeType.FUNCTION:
+                defn_func = cast(zast.Function, defn)
+                if defn_func.body is None and not defn_func.is_native:
+                    self._error(
+                        f"Cannot take spec '{cast(zast.AtomId, path.parent).name}': "
+                        f"specs have no value; use a function name",
+                        loc=path.start,
+                    )
+                    return parent_type
+                # real function — immutable program text, no invalidation
+                self.typing.node_type[path.nodeid] = parent_type
+                return parent_type
+        # .take invalidates the source name (variable)
+        if path.parent.nodetype == NodeType.ATOMID:
+            take_parent_name = cast(zast.AtomId, path.parent).name
+            var = self.symtab.lookup_var(take_parent_name)
+            if var and var.ownership == ZOwnership.BORROWED:
+                self._error(
+                    f"Cannot take ownership of borrowed variable '{take_parent_name}'",
+                    loc=path.start,
+                )
+            else:
+                self.symtab.release_held_locks(take_parent_name)
+                take_loc = (
+                    (path.start.lineno, path.start.colno, path.start.fsno)
+                    if path.start
+                    else None
+                )
+                self.symtab.invalidate(take_parent_name, loc=take_loc)
+        self.typing.node_type[path.nodeid] = parent_type
+        return parent_type
+
+    def _check_dp_release(self, path: zast.DottedPath) -> Optional[ZType]:
+        """`.release` early scope-exit intrinsic. Returns the parent
+        type when handled; None for fall-through (user-defined
+        `.release` member or unresolved parent)."""
+        parent_result = self._check_path(path.parent)
+        parent_type = parent_result.ztype
+        self._pending_borrow_lock = parent_result.borrow_target
+        self._pending_private_access = parent_result.private_access
+        if parent_type is None or "release" in parent_type.children:
+            return None
+        if path.parent.nodetype != NodeType.ATOMID:
+            self._error(
+                "'.release' can only be applied to a variable name",
+                loc=path.start,
+                err=ERR.OWNERERROR,
+            )
+            return parent_type
+        release_name = cast(zast.AtomId, path.parent).name
+        # cannot release a top-level definition
+        if self._lookup_definition(release_name) is not None:
+            self._error(
+                f"Cannot release top-level definition '{release_name}'",
+                loc=path.start,
+                err=ERR.OWNERERROR,
+            )
+            return parent_type
+        var = self.symtab.lookup_var(release_name)
+        if var:
+            lock = self.symtab.find_lock(release_name)
+            if lock:
+                self._error(
+                    f"Cannot release '{release_name}': "
+                    f"{lock.lock_type.name.lower()} lock held by "
+                    f"'{lock.holder}'",
+                    loc=path.start,
+                    err=ERR.OWNERERROR,
+                )
+                return parent_type
+            self.symtab.release_held_locks(release_name)
+        # invalidate the variable
+        release_loc = (
+            (path.start.lineno, path.start.colno, path.start.fsno)
+            if path.start
+            else None
+        )
+        self.symtab.invalidate(release_name, loc=release_loc)
+        self.typing.node_type[path.nodeid] = parent_type
+        return parent_type
+
+    def _check_dp_borrow(self, path: zast.DottedPath) -> Optional[ZType]:
+        """`.borrow` lock-and-share intrinsic. Returns the parent type
+        when handled; None for fall-through (user-defined `.borrow`
+        member, protocol/facet/typedef constructor, or unresolved
+        parent)."""
+        parent_result = self._check_path(path.parent)
+        parent_type = parent_result.ztype
+        self._pending_borrow_lock = parent_result.borrow_target
+        self._pending_private_access = parent_result.private_access
+        if parent_type is None:
+            return None
+        if "borrow" in parent_type.children:
+            return None
+        if parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
+            return None
+        if parent_type.typedef_base is not None:
+            return None
+        # .borrow takes an exclusive lock on the leaf path and SHARED
+        # on intermediates (for reftypes). For valtypes, the lock is
+        # skipped in `_check_assignment` — the result is just a copy.
+        src_path = self._get_dotted_path_tuple(path.parent)
+        if src_path:
+            self._pending_borrow_lock = src_path
+        else:
+            self._error(
+                "Cannot borrow temporary expression; "
+                "assign the value to a variable first",
+                loc=path.start,
+                err=ERR.OWNERERROR,
+            )
+        self.typing.node_type[path.nodeid] = parent_type
+        return parent_type
+
+    def _check_dp_lock(self, path: zast.DottedPath) -> Optional[ZType]:
+        """`.lock` alias for `.borrow`. Returns the parent type when
+        handled; None for fall-through (user-defined `.lock` member
+        or unresolved parent)."""
+        parent_result = self._check_path(path.parent)
+        parent_type = parent_result.ztype
+        self._pending_borrow_lock = parent_result.borrow_target
+        self._pending_private_access = parent_result.private_access
+        if parent_type is None:
+            return None
+        if "lock" in parent_type.children:
+            return None
+        src_path = self._get_dotted_path_tuple(path.parent)
+        if src_path:
+            self._pending_borrow_lock = src_path
+        else:
+            self._error(
+                "Cannot lock temporary expression; "
+                "assign the value to a variable first",
+                loc=path.start,
+                err=ERR.OWNERERROR,
+            )
+        self.typing.node_type[path.nodeid] = parent_type
+        return parent_type
+
+    def _check_dp_private(self, path: zast.DottedPath) -> Optional[ZType]:
+        """`.private` friend-access intrinsic. Returns the parent type
+        when handled; None for fall-through (user-defined `.private`
+        member or unresolved parent)."""
+        parent_result = self._check_path(path.parent)
+        parent_type = parent_result.ztype
+        self._pending_borrow_lock = parent_result.borrow_target
+        self._pending_private_access = parent_result.private_access
+        if parent_type is None:
+            return None
+        if "private" in parent_type.children:
+            return None
+        if not self._is_internal_access(parent_type, path):
+            # also allow if the variable itself has private access
+            # (chained friend: `it.items.private` where items is
+            # `bag.private`)
+            root_var = self._get_path_root_var(path.parent)
+            if not (root_var and root_var.is_private_access):
+                self._error(
+                    f"Cannot access '{parent_type.name}.private' from outside "
+                    f"the type definition",
+                    loc=path.start,
+                    err=ERR.TYPEERROR,
+                    hint="only methods of the type or friend types can use .private",
+                )
+        self._pending_private_access = True
+        self.typing.node_type[path.nodeid] = parent_type
+        return parent_type
+
     def _check_dotted_path_inner(
         self, path: zast.DottedPath, coerce_method_to_return: bool = True
     ) -> Optional[ZType]:
@@ -6362,227 +6557,29 @@ class TypeChecker:
         builds the typed mirror once this returns."""
         child_name = path.child.name
 
-        # handle .take compiler method (but not protocol/typedef.take constructor)
+        # Compiler intrinsics: each helper either handles the case (returns
+        # ZType) or signals fall-through (returns None) when the parent
+        # type shadows the intrinsic with a user-defined member.
         if child_name == "take":
-            parent_result = self._check_path(path.parent)
-            parent_type = parent_result.ztype
-            # propagate parent's borrow/private intent into the side-channel
-            # so this dotted-path's resolution either inherits it (when no
-            # branch overrides) or replaces it (when .borrow/.lock/.private
-            # below set their own).
-            self._pending_borrow_lock = parent_result.borrow_target
-            self._pending_private_access = parent_result.private_access
-            if parent_type:
-                # Resolution-order inversion: a user-defined .take member on
-                # the parent type shadows the intrinsic.
-                if "take" in parent_type.children:
-                    pass  # fall through to normal child lookup below
-                # protocol/facet/typedef.take is a constructor, not ownership transfer
-                elif parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
-                    pass  # fall through to normal child lookup below
-                elif parent_type.typedef_base is not None:
-                    pass  # fall through to normal child lookup below
-                else:
-                    # check if parent is a unit-level definition (function or spec)
-                    if (
-                        parent_type.typetype == ZTypeType.FUNCTION
-                        and path.parent.nodetype == NodeType.ATOMID
-                    ):
-                        defn = self._lookup_definition(
-                            cast(zast.AtomId, path.parent).name
-                        )
-                        if defn is not None and defn.nodetype == NodeType.FUNCTION:
-                            defn_func = cast(zast.Function, defn)
-                            if defn_func.body is None and not defn_func.is_native:
-                                # spec — no value to take
-                                self._error(
-                                    f"Cannot take spec '{cast(zast.AtomId, path.parent).name}': "
-                                    f"specs have no value; use a function name",
-                                    loc=path.start,
-                                )
-                                return parent_type
-                            # real function — immutable program text, no invalidation
-                            self.typing.node_type[path.nodeid] = parent_type
-                            return parent_type
-
-                    # .take invalidates the source name (variable)
-                    if path.parent.nodetype == NodeType.ATOMID:
-                        take_parent_name = cast(zast.AtomId, path.parent).name
-                        var = self.symtab.lookup_var(take_parent_name)
-                        if var and var.ownership == ZOwnership.BORROWED:
-                            self._error(
-                                f"Cannot take ownership of borrowed variable "
-                                f"'{take_parent_name}'",
-                                loc=path.start,
-                            )
-                        else:
-                            # release any locks held by this variable before invalidating
-                            self.symtab.release_held_locks(take_parent_name)
-                            take_loc = (
-                                (path.start.lineno, path.start.colno, path.start.fsno)
-                                if path.start
-                                else None
-                            )
-                            self.symtab.invalidate(take_parent_name, loc=take_loc)
-                    self.typing.node_type[path.nodeid] = parent_type
-                    return parent_type
-
-        # handle .release compiler method (early scope-exit for a variable)
+            handled = self._check_dp_take(path)
+            if handled is not None:
+                return handled
         if child_name == "release":
-            parent_result = self._check_path(path.parent)
-            parent_type = parent_result.ztype
-            # propagate parent's borrow/private intent into the side-channel
-            # so this dotted-path's resolution either inherits it (when no
-            # branch overrides) or replaces it (when .borrow/.lock/.private
-            # below set their own).
-            self._pending_borrow_lock = parent_result.borrow_target
-            self._pending_private_access = parent_result.private_access
-            if parent_type and "release" not in parent_type.children:
-                # .release only valid on simple variable names
-                if path.parent.nodetype != NodeType.ATOMID:
-                    self._error(
-                        "'.release' can only be applied to a variable name",
-                        loc=path.start,
-                        err=ERR.OWNERERROR,
-                    )
-                    return parent_type
-
-                release_name = cast(zast.AtomId, path.parent).name
-
-                # cannot release a top-level definition
-                defn = self._lookup_definition(release_name)
-                if defn is not None:
-                    self._error(
-                        f"Cannot release top-level definition '{release_name}'",
-                        loc=path.start,
-                        err=ERR.OWNERERROR,
-                    )
-                    return parent_type
-
-                var = self.symtab.lookup_var(release_name)
-                if var:
-                    # cannot release if someone holds a lock on this variable
-                    lock = self.symtab.find_lock(release_name)
-                    if lock:
-                        self._error(
-                            f"Cannot release '{release_name}': "
-                            f"{lock.lock_type.name.lower()} lock held by "
-                            f"'{lock.holder}'",
-                            loc=path.start,
-                            err=ERR.OWNERERROR,
-                        )
-                        return parent_type
-
-                    # release any locks this variable holds on others
-                    self.symtab.release_held_locks(release_name)
-
-                # invalidate the variable
-                release_loc = (
-                    (path.start.lineno, path.start.colno, path.start.fsno)
-                    if path.start
-                    else None
-                )
-                self.symtab.invalidate(release_name, loc=release_loc)
-                self.typing.node_type[path.nodeid] = parent_type
-                return parent_type
-
-        # handle .borrow compiler method (but not protocol/typedef.borrow constructor)
+            handled = self._check_dp_release(path)
+            if handled is not None:
+                return handled
         if child_name == "borrow":
-            parent_result = self._check_path(path.parent)
-            parent_type = parent_result.ztype
-            # propagate parent's borrow/private intent into the side-channel
-            # so this dotted-path's resolution either inherits it (when no
-            # branch overrides) or replaces it (when .borrow/.lock/.private
-            # below set their own).
-            self._pending_borrow_lock = parent_result.borrow_target
-            self._pending_private_access = parent_result.private_access
-            if parent_type:
-                # Resolution-order inversion: a user-defined .borrow member on
-                # the parent type shadows the intrinsic.
-                if "borrow" in parent_type.children:
-                    pass  # fall through to normal child lookup below
-                # protocol/facet/typedef.borrow is a constructor, not ownership borrow
-                elif parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
-                    pass  # fall through to normal child lookup below
-                elif parent_type.typedef_base is not None:
-                    pass  # fall through to normal child lookup below
-                else:
-                    # .borrow takes an exclusive lock on the leaf path and
-                    # SHARED on intermediates (for reftypes). For valtypes,
-                    # the lock is skipped in _check_assignment — the result
-                    # is just a copy.
-                    src_path = self._get_dotted_path_tuple(path.parent)
-                    if src_path:
-                        self._pending_borrow_lock = src_path
-                    else:
-                        self._error(
-                            "Cannot borrow temporary expression; "
-                            "assign the value to a variable first",
-                            loc=path.start,
-                            err=ERR.OWNERERROR,
-                        )
-                    self.typing.node_type[path.nodeid] = parent_type
-                    return parent_type
-
-        # handle .lock compiler method (alias for .borrow)
+            handled = self._check_dp_borrow(path)
+            if handled is not None:
+                return handled
         if child_name == "lock":
-            parent_result = self._check_path(path.parent)
-            parent_type = parent_result.ztype
-            # propagate parent's borrow/private intent into the side-channel
-            # so this dotted-path's resolution either inherits it (when no
-            # branch overrides) or replaces it (when .borrow/.lock/.private
-            # below set their own).
-            self._pending_borrow_lock = parent_result.borrow_target
-            self._pending_private_access = parent_result.private_access
-            if parent_type is None:
-                return parent_type
-            # Resolution-order inversion: a user-defined .lock member on
-            # the parent type shadows the intrinsic.
-            if "lock" not in parent_type.children:
-                src_path = self._get_dotted_path_tuple(path.parent)
-                if src_path:
-                    self._pending_borrow_lock = src_path
-                else:
-                    self._error(
-                        "Cannot lock temporary expression; "
-                        "assign the value to a variable first",
-                        loc=path.start,
-                        err=ERR.OWNERERROR,
-                    )
-                self.typing.node_type[path.nodeid] = parent_type
-                return parent_type
-
-        # handle .private (friend access)
+            handled = self._check_dp_lock(path)
+            if handled is not None:
+                return handled
         if child_name == "private":
-            parent_result = self._check_path(path.parent)
-            parent_type = parent_result.ztype
-            # propagate parent's borrow/private intent into the side-channel
-            # so this dotted-path's resolution either inherits it (when no
-            # branch overrides) or replaces it (when .borrow/.lock/.private
-            # below set their own).
-            self._pending_borrow_lock = parent_result.borrow_target
-            self._pending_private_access = parent_result.private_access
-            if parent_type is None:
-                return parent_type
-            # Resolution-order inversion: a user-defined .private member on
-            # the parent type shadows the intrinsic.
-            if "private" not in parent_type.children:
-                # enforce: only internal access can use .private
-                if not self._is_internal_access(parent_type, path):
-                    # also allow if the variable itself has private access
-                    # (chained friend: it.items.private where items is bag.private)
-                    root_var = self._get_path_root_var(path.parent)
-                    if not (root_var and root_var.is_private_access):
-                        self._error(
-                            f"Cannot access '{parent_type.name}.private' from outside "
-                            f"the type definition",
-                            loc=path.start,
-                            err=ERR.TYPEERROR,
-                            hint="only methods of the type or friend types can use .private",
-                        )
-                self._pending_private_access = True
-                self.typing.node_type[path.nodeid] = parent_type
-                return parent_type
+            handled = self._check_dp_private(path)
+            if handled is not None:
+                return handled
 
         # numeric dotted path: 0.u32, 42.i8, 0xff.u16. Only treat as a
         # numeric cast when child names a known numeric type; other
