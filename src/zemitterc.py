@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple, Callable, cast
 
 import zast
-import ztypedast
 import ztyping
 from zast import NodeType
 import zemitterc_runtime as zrt
@@ -357,25 +356,12 @@ class CEmitter:
             self.typing.resolved = program.resolved
             self.typing.symbol_table = program.symbol_table
             self.typing.unit_types_by_id = program.unit_types_by_id
-            self.typing.typed_program = program.typed_program
         # Convenience alias: most of the emitter walks the parsed AST
         # for tree structure (units, function bodies, etc.); routing
         # those reads through `self.typing.parsed` would be noise.
         # `self.program` is the parsed `Program`; mutable typecheck
         # output lives on `self.typing`.
         self.program = self.typing.parsed
-        # Step 4 of the typed-tree migration: hold the typechecker's
-        # constructed `TypedProgram` so emit-site reads of
-        # typecheck-set fields (`type`, `const_value`, `call_kind`,
-        # narrowing stamps, ownership, etc.) can route through the
-        # typed mirror instead of reaching for `init=False` fields on
-        # parsed nodes. May be `None` for tests that build a `Typing`
-        # without running the full typechecker; in that case the
-        # emitter falls back to reading parsed-node fields directly.
-        # Transitional — deleted in F5.E.4 along with the typed mirror.
-        self.typed_program: Optional[ztypedast.TypedProgram] = cast(
-            Optional[ztypedast.TypedProgram], self.typing.typed_program
-        )
         self.out: List[str] = []
         self.indent_level = 0
         self.needs_stdio = False
@@ -5050,16 +5036,10 @@ class CEmitter:
         )
 
     def _expr_call_kind(self, expr: zast.Expression) -> "zast.CallKind":
-        """Look up the Expression-wrapper's control-flow classification
-        in the TypedProgram side-table. Was `expr.call_kind` before
-        Step 6.10 stripped the field; the typechecker now records
-        these in `TypedProgram.expr_call_kinds` keyed by parsed
-        `Expression.nodeid`."""
-        if self.typed_program is None:
-            return zast.CallKind.UNKNOWN
-        return self.typed_program.expr_call_kinds.get(
-            expr.nodeid, zast.CallKind.UNKNOWN
-        )
+        """Look up the Expression-wrapper's control-flow classification.
+        F5.E.4.c: reads `Typing.expr_call_kind` directly (was a
+        `TypedProgram.expr_call_kinds` snapshot — same data)."""
+        return self.typing.expr_call_kind.get(expr.nodeid, zast.CallKind.UNKNOWN)
 
     def _emit_expression_stmt(self, expr: zast.Expression) -> str:
         indent = self._indent()
