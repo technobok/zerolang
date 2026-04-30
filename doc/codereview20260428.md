@@ -700,8 +700,21 @@ Larger refactors; do in order.
        are gone, the `typing_or_program` dual-accept dispatch in
        emitter/sqldump collapsed to single-arg `Typing`, and ~280
        test sites rebased to read `typing.<field>` directly.
-       Remaining F5 sub-items: F5.B (state records), F5.C (decompose
-       `_monomorphize`), F5.G (decompose 4 remaining monsters),
+       F5.C (decompose `_monomorphize`) resolved across `a2d3712`
+       (F5.C.1: extract `_check_mono_constraints`,
+       `_synth_collection_methods`, `_clone_mono_methods` — 750→339
+       lines) and `535ee74` (F5.C.2: extract `_make_mono_shell`,
+       `_substitute_mono_children`, `_recompute_mono_typetype_marks`,
+       `_rebuild_mono_tag`, `_setup_mono_meta_create`,
+       `_register_mono`, `_mark_mono_native` — 339→64 lines).
+       The coordinator is a pure sequence of 11 named helper calls;
+       all helpers ≤80 lines except `_synth_collection_methods`
+       (371 lines, cohesive — further per-collection-type splitting
+       is deferred). Pilot success: the same technique applies to
+       the other 4 monsters (F5.G).
+       Remaining F5 sub-items: F5.B (state records), F5.G (decompose
+       4 remaining monsters: `_check_call_inner` 589, `_check_dotted_path_inner`
+       401, `_resolve_dotted_path` 375, `_check_case_inner` 417),
        F5.H (flatten `ZType.children` to a relational table).)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
