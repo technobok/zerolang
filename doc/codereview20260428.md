@@ -664,7 +664,7 @@ Each step depends on the previous one. F4 is the largest.
 
 Larger refactors; do in order.
 
-5. [~] F5 — TypeChecker context records + decomposition + ECS shape.
+5. [x] F5 — TypeChecker context records + decomposition + ECS shape.
        *(Scoped expansion 2026-04-30: see plan
        `~/.claude/plans/start-planning-for-f5-fluffy-dragonfly.md`. F5
        split into 8 sub-items. F5.A (BorrowState + ExprResult flow)
@@ -736,9 +736,51 @@ Larger refactors; do in order.
        deferred: those fields are publicly named on `TypeChecker`
        and read by ~100 test sites; the cosmetic gain doesn't
        justify the test churn.
-       Remaining F5 sub-item: F5.H (flatten `ZType.children` to a
-       relational table) — high blast radius, deferred to a future
-       focused pass.)*
+       F5.H (flatten `ZType.children` / `ZType.generic_args` to flat
+       relational tables) resolved 2026-05-01 across 13 commits:
+       `5f56621` (H.1: `TypeChild` + `TypeGenericArg` dataclasses +
+       `Typing.type_child` / `type_generic_arg` empty fields),
+       `dbe52f7` (H.2.a/b: `_set_child` helper + 137 single-key
+       `parent.children[k] = v` writes routed),
+       `2d74ae9` (H.2.c: 3 `dst.children = src.children` aliasing
+       sites + 4 `mono.generic_args = dict(...)` bulk writes routed),
+       `3ddf300` (H.3.a: `child_type` ref column + Typing read
+       accessors `child_of` / `children_of` / `has_child` / `child_count`
+       / `child_names_of` / `child_types_of` / `child_by_id` /
+       `generic_arg_of` / `generic_args_of` / `has_generic_args`),
+       `57ab204` (H.3.b: ~70 zemitterc consumer sites migrated),
+       `a785d4e` (H.3.c: zsqldump consumers migrated; type_children
+       INSERTs now generated directly from `typing.type_child` rows),
+       `d06076d` (H.3.d: ~110 ztypecheck reads migrated),
+       `ce7232f` (H.4.a: `typing` plumbed through 14 ztypeutil
+       generic-args helpers + 25 callers in zemitterc/ztypecheck),
+       `aec8d90` (H.4.b/c: remaining 11 generic_args reads migrated),
+       `24ec3c8` (H.5.a: F5.H module-level residuals eliminated —
+       dead `_ctype_func_inline` deleted, `typing` plumbed through
+       `_ctype` + `_proto_param_ctype` + `_set_field_cleanup_metadata`
+       at 95+9+9 call sites; `Typing.child_by_id` replaces
+       `ZType.resolve_child_by_id` at 5 zemitter call sites),
+       `1a8455d` (H.5.b: setter logic moved to `Typing.set_child` /
+       `Typing.set_generic_arg`; TypeChecker helpers shrink to thin
+       wrappers; `SymbolTable` takes a `typing` ref so `narrow` /
+       `exclude` read children via the table; ~210 test sites in
+       `test_typecheck.py` migrated; `_hash_type_structure` deleted
+       as dead code), `ebe440e` (H.5.c: `ZType.children`,
+       `ZType.generic_args`, and `ZType.resolve_child_by_id` removed
+       — flat tables become the sole source). `children_id_map`
+       survives as the per-process id allocator backing
+       `child_id_for`; deferred F5.H.5.d would collapse it once
+       narrowing/dotted-path stamping is rewritten to mint ids
+       directly off `typing.type_child` rows.
+       `make check`, `make test` (1943), and byte-identical C across
+       all 85 examples verified at every sub-commit. Net repo line
+       impact: `ztypecheck.py` 10,263 → 10,326 (+63, dominated by
+       plumbed `self.typing` parameters and ruff-wrapped multi-line
+       `_set_child` calls); `ztypes.py` -16; `zemitterc.py` and
+       `zsqldump.py` net positive (helpers added) but consumer reads
+       are now uniform `self.typing.X` calls. The 2-class typecheck-
+       output shape (`Typing` flat tables + `ZType.children_id_map`
+       allocator) is the basis for F6's per-table SQL dump rework.)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;

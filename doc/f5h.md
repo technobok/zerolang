@@ -1,8 +1,10 @@
 # F5.H — flatten ZType.children + ZType.generic_args
 
-Sole remaining F5 sub-item from `doc/codereview20260428.md`.
-Highest blast radius of all F5 sub-items per the original plan.
-Tip: stage in 4–6 commits, never skip byte-identical C verification.
+Status: **complete** (2026-05-01, 13 commits 5f56621 → ebe440e).
+See `doc/codereview20260428.md` §F5 for the full per-commit log.
+The plan below is preserved for reference; final shape diverges
+slightly from what's described — see "Endpoint shape (actual)" at
+the bottom.
 
 ## Where we are
 
@@ -147,3 +149,61 @@ Then begin F5.H.1: add `TypeChild` + `TypeGenericArg` dataclasses
 to `ztyping.py` and the empty fields to `Typing`. Verify
 `make check` + `make test` (1943) + byte-identical C across 85
 examples.
+
+---
+
+## Endpoint shape (actual, post-completion)
+
+The plan said `TypeChild` would be id-only. Implementation kept an
+in-memory `child_type: ZType` ref alongside the id so consumers
+could migrate without first standing up a global nodeid → ZType
+registry. The SQL dump writes `child_type_id` only (matching the
+plan); in-memory consumers read `child_type`. A future refactor
+(post-F5.H) can drop the ref once a registry is in place — flagged
+on `TypeChild` / `TypeGenericArg` docstrings.
+
+```python
+@dataclass
+class TypeChild:
+    parent_type_id: int
+    child_name: str
+    child_name_id: int
+    child_type_id: int
+    position: int
+    child_type: "ZType"   # transitional in-memory ref
+
+@dataclass
+class TypeGenericArg:
+    parent_type_id: int
+    param_name: str
+    arg_type_id: int
+    arg_type: "ZType"     # transitional in-memory ref
+```
+
+`Typing` accessors added: `child_of`, `children_of`, `has_child`,
+`child_count`, `child_names_of`, `child_types_of`, `child_by_id`,
+`generic_arg_of`, `generic_args_of`, `has_generic_args`.
+Setters: `set_child`, `set_generic_arg`.
+
+`children_id_map` survives on `ZType` as the id allocator backing
+`child_id_for`. Plan called for collapsing it; that's deferred as
+F5.H.5.d — narrowing and dotted-path stamping in `zenv.py` /
+`ztypecheck.py` would need to mint ids directly off `typing.type_child`
+rows first. Not blocking for any subsequent work.
+
+Module-level helpers that previously read `.children` / `.generic_args`
+now thread `typing` through their parameter lists:
+- `zemitterc._ctype(typing, ztype)` (95 callers updated)
+- `zemitterc._proto_param_ctype(typing, ptype)` (4 callers)
+- `ztypecheck._set_field_cleanup_metadata(typing, ztype)` (9 callers)
+- 14 `ztypeutil` accessors (25 callers in zemitterc + ztypecheck)
+- `SymbolTable(typing=...)` constructor; `narrow` / `exclude` read via
+  `self._typing.{child_of, children_of}`.
+
+Dead code removed: `zemitterc._ctype_func_inline`,
+`zasthash._hash_type_structure`, `ZType.resolve_child_by_id`.
+
+Tests migrated: `test_typecheck.py` (~210 sites; per-method script
+rewrote `typing` to `tc.typing` inside any test method that
+constructs a second `TypeChecker`), `test_child_id_infra.py`,
+`test_symtab_ids.py`, `test_findings.py`.
