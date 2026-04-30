@@ -3893,14 +3893,14 @@ class TypeChecker:
         # for arrays: numeric index access (array.0, array.1, etc.)
         if _is_array_type(parent_type) and child_name.isdigit():
             idx = int(child_name)
-            arr_len = _array_length(parent_type)
+            arr_len = _array_length(self.typing, parent_type)
             if arr_len is not None and idx >= arr_len:
                 self._error(
                     f"Array index {idx} out of bounds for array of length {arr_len}",
                     loc=path.start,
                 )
                 return None
-            elem_type = _array_element_type(parent_type)
+            elem_type = _array_element_type(self.typing, parent_type)
             return elem_type
         # for str types: .string returns the string type directly (not the function)
         if _is_str_type(parent_type) and child_name == "string":
@@ -3932,7 +3932,7 @@ class TypeChecker:
             return marker
         # for list types: .pop returns the element type directly (zero-arg method)
         if _is_list_type(parent_type) and child_name == "pop":
-            return _list_element_type(parent_type)
+            return _list_element_type(self.typing, parent_type)
         # NOTE: the auto-call coercion that previously lived here (returning
         # `method.return_type` and installing `_pending_borrow_lock` for
         # zero-user-arg methods on PROTOCOL / CLASS / str-valtype) has moved
@@ -4327,8 +4327,8 @@ class TypeChecker:
         only invoke this for non-partial monos."""
         # for arrays: validate element type, synthesize get/set/length
         if _is_array_type(mono):
-            elem_type = _array_element_type(mono)
-            arr_len = _array_length(mono)
+            elem_type = _array_element_type(self.typing, mono)
+            arr_len = _array_length(self.typing, mono)
             if elem_type and not _is_valtype(elem_type):
                 self._error(
                     f"Array element type '{elem_type.name}' is not a value type; "
@@ -4357,7 +4357,7 @@ class TypeChecker:
         if _is_str_type(mono):
             mono.is_valtype = True
             _set_destructor_metadata(mono)
-            str_cap = _str_capacity(mono)
+            str_cap = _str_capacity(self.typing, mono)
             # synthesize .length field (runtime, u64)
             length_type = _make_type("u64", ZTypeType.RECORD)
             length_type.is_valtype = True
@@ -4378,7 +4378,7 @@ class TypeChecker:
         if _is_listview_type(mono):
             mono.is_valtype = False
             _set_destructor_metadata(mono)
-            elem_type = _listview_element_type(mono)
+            elem_type = _listview_element_type(self.typing, mono)
             t_u64 = self._resolve_name("u64") or self.t_null
             # synthesize .length field (runtime, u64)
             length_type = _make_type("u64", ZTypeType.RECORD)
@@ -4399,7 +4399,7 @@ class TypeChecker:
         if _is_listiter_type(mono):
             mono.is_valtype = False
             _set_destructor_metadata(mono)
-            elem_type = _listiter_element_type(mono)
+            elem_type = _listiter_element_type(self.typing, mono)
             if elem_type is not None:
                 ov_template = self._resolve_name("OptionView")
                 if ov_template:
@@ -4422,7 +4422,7 @@ class TypeChecker:
         if _is_mapkeyiter_type(mono):
             mono.is_valtype = False
             _set_destructor_metadata(mono)
-            key_t = _mapkeyiter_key_type(mono)
+            key_t = _mapkeyiter_key_type(self.typing, mono)
             if key_t is not None:
                 ov_template = self._resolve_name("OptionView")
                 if ov_template:
@@ -4446,8 +4446,8 @@ class TypeChecker:
             mono.needs_destructor = False
             mono.destructor_name = None
             mono.create_disabled = True
-            key_t = _mapentry_key_type(mono)
-            value_t = _mapentry_value_type(mono)
+            key_t = _mapentry_key_type(self.typing, mono)
+            value_t = _mapentry_value_type(self.typing, mono)
             if key_t is not None:
                 key_method = _make_type(f"{mangled}.key", ZTypeType.FUNCTION)
                 key_method.return_type = key_t
@@ -4465,8 +4465,8 @@ class TypeChecker:
         if _is_mapitemiter_type(mono):
             mono.is_valtype = False
             _set_destructor_metadata(mono)
-            key_t = _mapitemiter_key_type(mono)
-            value_t = _mapitemiter_value_type(mono)
+            key_t = _mapitemiter_key_type(self.typing, mono)
+            value_t = _mapitemiter_value_type(self.typing, mono)
             if key_t is not None and value_t is not None:
                 # monomorphise mapentry<K,V> first (the call's payload)
                 me_template = self._resolve_name("MapEntry")
@@ -4502,7 +4502,7 @@ class TypeChecker:
             mono.is_valtype = False
             _set_destructor_metadata(mono)
             mono.needs_field_cleanup = True  # data buffer needs cleanup
-            elem_type = _list_element_type(mono)
+            elem_type = _list_element_type(self.typing, mono)
             t_u64 = self._resolve_name("u64") or self.t_null
             # .length / .capacity expose the global u64 type so arithmetic
             # operators (+, -, <, ...) declared on u64 resolve through
@@ -4598,8 +4598,8 @@ class TypeChecker:
             _set_destructor_metadata(mono)
             mono.is_heap_allocated = True  # map struct is still heap-allocated
             mono.needs_field_cleanup = True  # data buckets need cleanup
-            key_type = _map_key_type(mono)
-            value_type = _map_value_type(mono)
+            key_type = _map_key_type(self.typing, mono)
+            value_type = _map_value_type(self.typing, mono)
             t_u64 = self._resolve_name("u64") or self.t_null
             t_bool = self._resolve_name("bool") or self.t_null
             # synthesize .length field (runtime, u64)

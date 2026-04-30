@@ -3529,8 +3529,8 @@ class CEmitter:
         self.needs_stdio = True
         name = mono_type.name
         ctype = f"z_{name}_t"
-        elem_type = _array_element_type(mono_type)
-        arr_len = _array_length(mono_type)
+        elem_type = _array_element_type(self.typing, mono_type)
+        arr_len = _array_length(self.typing, mono_type)
         if not elem_type or arr_len is None:
             return
         elem_ctype = _ctype(elem_type)
@@ -3599,7 +3599,7 @@ class CEmitter:
         self.needs_string = True
         name = mono_type.name
         ctype = f"z_{name}_t"
-        cap = _str_capacity(mono_type)
+        cap = _str_capacity(self.typing, mono_type)
         if cap is None:
             return
 
@@ -3656,7 +3656,7 @@ class CEmitter:
         self.needs_string = True
         name = mono_type.name
         ctype = f"z_{name}_t"
-        elem_type = _list_element_type(mono_type)
+        elem_type = _list_element_type(self.typing, mono_type)
         if elem_type is None:
             return
         elem_ctype = _ctype(elem_type)
@@ -3786,7 +3786,7 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdlib = True
         self.needs_stdio = True
-        elem_type = _listview_element_type(mono_type)
+        elem_type = _listview_element_type(self.typing, mono_type)
         if elem_type is None:
             return
         self.struct_defs.append(
@@ -3804,8 +3804,8 @@ class CEmitter:
         self.needs_string = True
         name = mono_type.name
         ctype = f"z_{name}_t"
-        key_type = _map_key_type(mono_type)
-        value_type = _map_value_type(mono_type)
+        key_type = _map_key_type(self.typing, mono_type)
+        value_type = _map_value_type(self.typing, mono_type)
         if key_type is None or value_type is None:
             return
         key_ctype = _ctype(key_type)
@@ -6563,7 +6563,7 @@ class CEmitter:
                         p.nodetype != zast.NodeType.STRINGCHUNK
                         for p in cast(zast.AtomString, inner).stringparts
                     ):
-                        cap = _str_capacity(target_type)
+                        cap = _str_capacity(self.typing, target_type)
                         literal = self._collect_string_literal(
                             cast(zast.AtomString, inner).stringparts
                         )
@@ -7590,7 +7590,7 @@ class CEmitter:
         ):
             arr_type = _pt_ztype
             if arr_type and _is_array_type(arr_type):
-                arr_len = _array_length(arr_type)
+                arr_len = _array_length(self.typing, arr_type)
                 arr_ctype = _ctype(arr_type)
                 parent = self._emit_path_value(path.parent)
                 tmp = self._temp_name("da")
