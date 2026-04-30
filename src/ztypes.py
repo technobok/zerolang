@@ -181,11 +181,13 @@ class ZType:
     parent: "Optional[ZType]"
     subtype: ZSubType = ZSubType.NONE
 
-    # plain dict (insertion-ordered since Python 3.7+, replaces OrderedDict)
-    children: "dict[str, ZType]" = field(default_factory=dict, init=False)
-
     # parallel name→id map for children. Lazily populated by child_id_for;
-    # never pre-seeded. Enables id-based lookup on hot paths (Phase 7b).
+    # never pre-seeded. Globally-unique ids consumed by `Typing.type_child`
+    # rows and by narrowing entries that reference a child by id rather
+    # than by string. Pre-F5.H this paralleled a `children` dict on the
+    # ZType; F5.H.5 removed that dict — children now live on
+    # `Typing.type_child` and `child_id_for` exists solely as the id
+    # allocator that keeps the SQL row's `child_name_id` stable.
     children_id_map: "dict[str, int]" = field(default_factory=dict, init=False)
 
     # return type for function types (None for non-functions or void functions)
@@ -225,8 +227,9 @@ class ZType:
     # that used to live in `generic_origin`).
     is_tag_generic_origin: bool = field(default=False, init=False)
 
-    # for monomorphized types: maps param name → concrete ZType
-    generic_args: "dict[str, ZType]" = field(default_factory=dict, init=False)
+    # F5.H.5: monomorphized type generic args (param name → concrete ZType)
+    # live on `Typing.type_generic_arg`; query via `typing.generic_arg_of`
+    # / `typing.generic_args_of`.
 
     # names of generic params that are numeric (constraint is a numeric type)
     numeric_generic_params: "set[str]" = field(default_factory=set, init=False)
@@ -331,16 +334,6 @@ class ZType:
             cid = _alloc_child_id()
             self.children_id_map[name] = cid
         return cid
-
-    def resolve_child_by_id(self, cid: int) -> "Optional[ZType]":
-        """Reverse lookup: find the child ZType whose id was minted by
-        child_id_for on this parent. Returns None if the id has no live
-        child. Linear scan — scopes-of-children are small (≤ handful).
-        """
-        for name, mapped in self.children_id_map.items():
-            if mapped == cid:
-                return self.children.get(name)
-        return None
 
     def __repr__(self) -> str:
         return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"
