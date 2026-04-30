@@ -695,11 +695,14 @@ Larger refactors; do in order.
        `make check`, `make test` (1943, was 1962 minus 19 typed-mirror
        tests), byte-identical C output across all 85 examples at
        every sub-commit.
-       Remaining sub-items: F5.B (state records), F5.C (decompose
+       F5.E.5 (`1249112`) closed out F5.E: `zast.Program` is
+       `@dataclass(frozen=True)`, the 8 typecheck-output compat shims
+       are gone, the `typing_or_program` dual-accept dispatch in
+       emitter/sqldump collapsed to single-arg `Typing`, and ~280
+       test sites rebased to read `typing.<field>` directly.
+       Remaining F5 sub-items: F5.B (state records), F5.C (decompose
        `_monomorphize`), F5.G (decompose 4 remaining monsters),
-       F5.H (flatten `ZType.children` to a relational table). A
-       follow-up to F5.E should remove the Program-side compat shims
-       and freeze `Program`.)*
+       F5.H (flatten `ZType.children` to a relational table).)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
