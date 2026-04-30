@@ -194,188 +194,95 @@ class Typing:
     type_child: List[TypeChild] = field(default_factory=list, init=False)
     type_generic_arg: List[TypeGenericArg] = field(default_factory=list, init=False)
 
-    # ---- F5.H.5 setters (table-only) ----
+    # ---- F5.H children/generic_arg setters + accessors ----
+    #
+    # `set_*` is idempotent on the (parent, name) key — repeat call
+    # updates the existing row in place. Reads scan linearly; per-parent
+    # row counts are small (handful of methods/fields per type).
 
     def set_child(self, parent: ZType, name: str, child: ZType) -> None:
-        """Add or update the (parent, name, child) entry in
-        `type_child`. Idempotent on reassignment: a second call with
-        the same `(parent, name)` updates the existing row in place.
-        """
         name_id = parent.child_id_for(name)
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
-            if row.parent_type_id == parent.nodeid and row.child_name_id == name_id:
+        pos = 0
+        for row in self.type_child:
+            if row.parent_type_id != parent.nodeid:
+                continue
+            if row.child_name_id == name_id:
                 row.child_type_id = child.nodeid
                 row.child_type = child
                 return
-            i += 1
-        # new key — append at the next position for this parent
-        pos = 0
-        for r in rows:
-            if r.parent_type_id == parent.nodeid:
-                pos += 1
-        rows.append(
-            TypeChild(
-                parent_type_id=parent.nodeid,
-                child_name=name,
-                child_name_id=name_id,
-                child_type_id=child.nodeid,
-                position=pos,
-                child_type=child,
-            )
+            pos += 1
+        self.type_child.append(
+            TypeChild(parent.nodeid, name, name_id, child.nodeid, pos, child)
         )
 
     def set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
-        """Add or update a (parent, param_name, arg) entry in
-        `type_generic_arg`. Idempotent on reassignment."""
-        rows = self.type_generic_arg
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_generic_arg:
             if row.parent_type_id == parent.nodeid and row.param_name == name:
                 row.arg_type_id = arg.nodeid
                 row.arg_type = arg
                 return
-            i += 1
-        rows.append(
-            TypeGenericArg(
-                parent_type_id=parent.nodeid,
-                param_name=name,
-                arg_type_id=arg.nodeid,
-                arg_type=arg,
-            )
+        self.type_generic_arg.append(
+            TypeGenericArg(parent.nodeid, name, arg.nodeid, arg)
         )
 
-    # ---- F5.H.3 read accessors (table-backed) ----
-
     def child_of(self, parent: ZType, name: str) -> "Optional[ZType]":
-        """`parent.children.get(name)` equivalent. Linear scan over
-        `type_child`; child counts per parent are small (handful of
-        methods/fields per type), so this is acceptable."""
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_child:
             if row.parent_type_id == parent.nodeid and row.child_name == name:
                 return row.child_type
-            i += 1
         return None
 
+    def child_by_id(self, parent: ZType, cid: int) -> "Optional[ZType]":
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name_id == cid:
+                return row.child_type
+        return None
+
+    def has_child(self, parent: ZType, name: str) -> bool:
+        return self.child_of(parent, name) is not None
+
     def children_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
-        """`list(parent.children.items())` equivalent. Pairs are in
-        declaration order."""
         out: "List[tuple[str, ZType]]" = []
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_child:
             if row.parent_type_id == parent.nodeid:
                 out.append((row.child_name, row.child_type))
-            i += 1
         return out
 
     def child_names_of(self, parent: ZType) -> "List[str]":
-        """`list(parent.children.keys())` equivalent."""
         out: "List[str]" = []
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_child:
             if row.parent_type_id == parent.nodeid:
                 out.append(row.child_name)
-            i += 1
         return out
 
     def child_types_of(self, parent: ZType) -> "List[ZType]":
-        """`list(parent.children.values())` equivalent."""
         out: "List[ZType]" = []
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_child:
             if row.parent_type_id == parent.nodeid:
                 out.append(row.child_type)
-            i += 1
         return out
 
-    def has_child(self, parent: ZType, name: str) -> bool:
-        """`name in parent.children` equivalent."""
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
-                return True
-            i += 1
-        return False
-
-    def child_by_id(self, parent: ZType, cid: int) -> "Optional[ZType]":
-        """Reverse lookup: child ZType whose name has minted id `cid`
-        on `parent`. Returns None if no live row matches. Replaces the
-        legacy `ZType.resolve_child_by_id` once the dict goes away."""
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
-            if row.parent_type_id == parent.nodeid and row.child_name_id == cid:
-                return row.child_type
-            i += 1
-        return None
-
     def child_count(self, parent: ZType) -> int:
-        """`len(parent.children)` equivalent."""
         c = 0
-        rows = self.type_child
-        n = len(rows)
-        i = 0
-        while i < n:
-            if rows[i].parent_type_id == parent.nodeid:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid:
                 c += 1
-            i += 1
         return c
 
     def generic_arg_of(self, parent: ZType, name: str) -> "Optional[ZType]":
-        """`parent.generic_args.get(name)` equivalent."""
-        rows = self.type_generic_arg
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_generic_arg:
             if row.parent_type_id == parent.nodeid and row.param_name == name:
                 return row.arg_type
-            i += 1
         return None
 
     def generic_args_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
-        """`list(parent.generic_args.items())` equivalent."""
         out: "List[tuple[str, ZType]]" = []
-        rows = self.type_generic_arg
-        n = len(rows)
-        i = 0
-        while i < n:
-            row = rows[i]
+        for row in self.type_generic_arg:
             if row.parent_type_id == parent.nodeid:
                 out.append((row.param_name, row.arg_type))
-            i += 1
         return out
 
     def has_generic_args(self, parent: ZType) -> bool:
-        """Truthy `parent.generic_args` equivalent (non-empty test)."""
-        rows = self.type_generic_arg
-        n = len(rows)
-        i = 0
-        while i < n:
-            if rows[i].parent_type_id == parent.nodeid:
+        for row in self.type_generic_arg:
+            if row.parent_type_id == parent.nodeid:
                 return True
-            i += 1
         return False

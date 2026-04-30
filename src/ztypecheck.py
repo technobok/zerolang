@@ -591,20 +591,14 @@ class TypeChecker:
         )
 
     def _set_child(self, parent: ZType, name: str, child: ZType) -> None:
-        """Thin alias for `self.typing.set_child(parent, name, child)`.
-        Kept on TypeChecker for ergonomic call-site brevity throughout
-        the typechecker."""
         self.typing.set_child(parent, name, child)
 
+    def _set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
+        self.typing.set_generic_arg(parent, name, arg)
+
     def _copy_children(self, dst: ZType, src: ZType) -> None:
-        """Mirror every child of `src` onto `dst` (snapshot copy).
-        Used for const-bearing wrapper types in `as`-block items."""
         for k, v in self.typing.children_of(src):
             self.typing.set_child(dst, k, v)
-
-    def _set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
-        """Thin alias for `self.typing.set_generic_arg(...)`."""
-        self.typing.set_generic_arg(parent, name, arg)
 
     def _assign_cname(self, ztype: ZType, base_cname: str) -> None:
         """Assign a C identifier to a type, auto-resolving collisions.
