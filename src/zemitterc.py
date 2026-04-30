@@ -201,9 +201,9 @@ def _ctype(ztype: Optional[ZType]) -> str:
     name = ztype.name
     if name in TYPEMAP:
         return TYPEMAP[name]
-    if name == "String":
+    if ztype.subtype == ZSubType.STRING:
         return "z_String_t"
-    if name == "StringView":
+    if ztype.subtype == ZSubType.STRINGVIEW:
         return "z_StringView_t"
     # use pre-computed cname when available
     if ztype.cname:
@@ -7350,9 +7350,14 @@ class CEmitter:
         if tt == ZTypeType.RECORD and resolved is not None and resolved.name == name:
             zero_args = self._zero_args_for_ctypes(name)
             return f"z_{name}_create({zero_args})"
-        # string class: bare "String" as value -> empty string constructor
-        # only when the name IS "String" (not a variable that has string type)
-        if name == "String" and atom_ztype and atom_ztype.subtype == ZSubType.STRING:
+        # string class: bare class name as value -> empty string constructor.
+        # Disambiguator (`atom_ztype.name == name`) rejects variables of String
+        # type — same idiom as the record case above.
+        if (
+            atom_ztype
+            and atom_ztype.subtype == ZSubType.STRING
+            and atom_ztype.name == name
+        ):
             self.needs_string = True
             self.needs_stdlib = True
             return self._alloc_temp("z_String_create((uint64_t)0)")
