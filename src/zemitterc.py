@@ -659,62 +659,38 @@ class CEmitter:
         return cast(ztypedast.TypedWith, typed)
 
     def _node_const_value(self, node: zast.Node):
-        """Read `const_value` from the typed mirror of `node`.
-        Unwraps `zast.Expression` to its inner subtype (Expression has
-        no typed mirror per design). Returns `None` when no typed mirror
-        exists — after Step 6.9.a `Node.const_value` was stripped, so
-        the typed tree is the only carrier of compile-time constant
-        values."""
+        """Read `const_value` for `node`. Unwraps `zast.Expression` to
+        its inner subtype, then tries the inner nodeid first and falls
+        back to the outer Expression's nodeid (typecheck stamps both
+        for some paths). Returns `None` if no entry exists.
+
+        F5.E.4.a: reads `Typing.node_const_value` directly."""
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression
-        typed = self._typed_for(target)
-        if typed is None:
-            return None
-        if typed.parsed.nodetype not in (
-            NodeType.ATOMID,
-            NodeType.LABELVALUE,
-            NodeType.ATOMSTRING,
-            NodeType.DOTTEDPATH,
-            NodeType.BINOP,
-            NodeType.CALL,
-            NodeType.IF,
-            NodeType.CASE,
-            NodeType.FOR,
-            NodeType.DO,
-            NodeType.WITH,
-        ):
-            return None
-        return cast(ztypedast.TypedExpression, typed).const_value
+        v = self.typing.node_const_value.get(target.nodeid)
+        if v is not None:
+            return v
+        return self.typing.node_const_value.get(node.nodeid)
 
     def _node_ztype(self, node: zast.Node) -> Optional[ZType]:
-        """Read `ztype` from the typed mirror of `node`. Unwraps
-        `zast.Expression` to its inner subtype. Falls back to the
-        TypedProgram's `node_types` side-table when no typed mirror
-        exists — after Step 6.9.b stripped `self._node_ztype(Node)`, this
-        side-table replaces direct parsed-node reads."""
-        node_types = self.typed_program.node_types if self.typed_program else {}
+        """Read the resolved `ZType` for `node`. Unwraps
+        `zast.Expression` to its inner subtype, then tries the inner
+        nodeid first, falling back to the outer Expression's nodeid
+        (typecheck stamps both for some paths — typeref paths in
+        record/class fields, in particular, only carry the entry on
+        the outer Expression).
+
+        F5.E.4.a: reads `Typing.node_type` directly. Pre-F5.E.4 this
+        routed through the typed mirror with a fallback to
+        `typed_program.node_types`; both paths read the same data."""
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression
-        typed = self._typed_for(target)
-        if typed is None:
-            return node_types.get(node.nodeid)
-        if typed.parsed.nodetype not in (
-            NodeType.ATOMID,
-            NodeType.LABELVALUE,
-            NodeType.ATOMSTRING,
-            NodeType.DOTTEDPATH,
-            NodeType.BINOP,
-            NodeType.CALL,
-            NodeType.IF,
-            NodeType.CASE,
-            NodeType.FOR,
-            NodeType.DO,
-            NodeType.WITH,
-        ):
-            return node_types.get(node.nodeid)
-        return cast(ztypedast.TypedExpression, typed).ztype
+        zt = self.typing.node_type.get(target.nodeid)
+        if zt is not None:
+            return zt
+        return self.typing.node_type.get(node.nodeid)
 
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
         """Read the child_id stamped on `clause.match` via the typed
@@ -727,25 +703,12 @@ class CEmitter:
         return cast(ztypedast.TypedCaseClause, typed).match.child_id
 
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
-        """Resolve the ZType of a parser-AST `Path`-shaped node via
-        its typed mirror. Falls back to the TypedProgram's
-        `node_types` side-table when no typed mirror exists — after
-        Step 6.9.b stripped `self._node_ztype(Node)`, this is the replacement for
-        direct parsed-node reads. All Path-shaped typed mirrors
-        (TypedAtomId, TypedDottedPath, TypedAtomString) inherit
-        `ztype` from TypedExpression."""
-        node_types = self.typed_program.node_types if self.typed_program else {}
-        typed = self._typed_for(path)
-        if typed is None:
-            return node_types.get(path.nodeid)
-        if typed.parsed.nodetype not in (
-            NodeType.ATOMID,
-            NodeType.LABELVALUE,
-            NodeType.DOTTEDPATH,
-            NodeType.ATOMSTRING,
-        ):
-            return node_types.get(path.nodeid)
-        return cast(ztypedast.TypedExpression, typed).ztype
+        """Resolve the `ZType` of a parser-AST `Path`-shaped node.
+
+        F5.E.4.a: reads `Typing.node_type` directly. Path nodes don't
+        have an Expression wrapper, so the lookup is a single dict
+        get."""
+        return self.typing.node_type.get(path.nodeid)
 
     def _emit_bounds_check(
         self,
