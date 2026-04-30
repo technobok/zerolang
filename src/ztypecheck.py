@@ -563,13 +563,13 @@ class TypeChecker:
         `const_value` fields are settled."""
         typed = ztypedast.TypedAtomId(
             parsed=atom,
-            ztype=cast(ZType, self.program.node_type.get(atom.nodeid)),
-            const_value=self.program.node_const_value.get(atom.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(atom.nodeid)),
+            const_value=self.typing.node_const_value.get(atom.nodeid),
             name=atom.name,
             is_label_value=(atom.nodetype == NodeType.LABELVALUE),
-            narrowed_subtype=self.program.atom_narrowed_subtype.get(atom.nodeid),
-            original_ztype=self.program.atom_original_ztype.get(atom.nodeid),
-            child_id=self.program.atom_child_id.get(atom.nodeid, -1),
+            narrowed_subtype=self.typing.atom_narrowed_subtype.get(atom.nodeid),
+            original_ztype=self.typing.atom_original_ztype.get(atom.nodeid),
+            child_id=self.typing.atom_child_id.get(atom.nodeid, -1),
         )
         self._register_typed(atom, typed)
         return typed
@@ -906,13 +906,13 @@ class TypeChecker:
             # definition's type and stamp const_value (bool only) so
             # downstream uses see the variant type and the arm index.
             # Mirrors the logic in _check_path for value-context uses.
-            outer = self.program.dp_parent_tagged_type.get(dp.nodeid)
+            outer = self.typing.dp_parent_tagged_type.get(dp.nodeid)
             if t is not None and t.typetype == ZTypeType.NULL and outer is not None:
-                self.program.node_type[dp.nodeid] = outer
+                self.typing.node_type[dp.nodeid] = outer
                 if outer.name == "bool":
                     arm_name = dp.child.name
                     if arm_name in outer.children:
-                        self.program.node_const_value[dp.nodeid] = list(
+                        self.typing.node_const_value[dp.nodeid] = list(
                             outer.children.keys()
                         ).index(arm_name)
                 return outer
@@ -966,9 +966,9 @@ class TypeChecker:
                 if t:
                     typename, value, err = parse_number(defn_atom.name)
                     if not err and type(value) is int:
-                        self.program.node_const_value[defn_atom.nodeid] = value
+                        self.typing.node_const_value[defn_atom.nodeid] = value
                     elif not err and type(value) is float and typename == "f64":
-                        self.program.node_const_value[defn_atom.nodeid] = value
+                        self.typing.node_const_value[defn_atom.nodeid] = value
                 return t
             key = f"{unitname}.{name}"
             shell = _make_type(name, ZTypeType.NULL)  # placeholder for alias
@@ -1008,7 +1008,7 @@ class TypeChecker:
         taken_stmt = None
         for clause in ifnode.clauses:
             all_const = all(
-                self.program.node_const_value.get(cond_op.nodeid) is not None
+                self.typing.node_const_value.get(cond_op.nodeid) is not None
                 for _, cond_op in clause.conditions.items()
             )
             if not all_const:
@@ -1019,7 +1019,7 @@ class TypeChecker:
                 self._resolving.pop()
                 return None
             all_true = all(
-                bool(self.program.node_const_value.get(cond_op.nodeid))
+                bool(self.typing.node_const_value.get(cond_op.nodeid))
                 for _, cond_op in clause.conditions.items()
             )
             if all_true and taken_stmt is None:
@@ -1047,22 +1047,22 @@ class TypeChecker:
             return None
 
         t_ztype = cast(ZType, t)
-        self.program.node_type[ifnode.nodeid] = t_ztype
+        self.typing.node_type[ifnode.nodeid] = t_ztype
 
         # propagate const_value from taken branch if available
         if taken_stmt.statements:
             last_inner = taken_stmt.statements[-1].statementline
             if last_inner.nodetype == NodeType.EXPRESSION:
                 inner_expr = cast(zast.Expression, last_inner).expression
-                inner_cv = self.program.node_const_value.get(inner_expr.nodeid)
+                inner_cv = self.typing.node_const_value.get(inner_expr.nodeid)
                 if inner_cv is not None:
                     # Stamp both the Expression wrapper (parsed `defn`)
                     # and the inner If: the emitter's `_node_const_value`
                     # helper unwraps Expression to the inner subtype and
                     # consults the typed mirror keyed on the If's
                     # nodeid.
-                    self.program.node_const_value[defn.nodeid] = inner_cv
-                    self.program.node_const_value[ifnode.nodeid] = inner_cv
+                    self.typing.node_const_value[defn.nodeid] = inner_cv
+                    self.typing.node_const_value[ifnode.nodeid] = inner_cv
 
         # Unit-level ifs don't go through `_check_if`, so the typed
         # mirror has to be built inline. Emitter / SQL-dump consumers
@@ -1089,7 +1089,7 @@ class TypeChecker:
                 for arg in call_node.arguments:
                     if arg.name == "default":
                         default_type = self._resolve_typeref_from_operation(arg.valtype)
-                self.program.node_type[ppath.nodeid] = pt
+                self.typing.node_type[ppath.nodeid] = pt
                 return pt, default_type
         pt = self._resolve_typeref(ppath)
         return pt, None
@@ -1171,7 +1171,7 @@ class TypeChecker:
             # consumers (emitter) reading `func.returntype.type` still
             # see the right ZType when the path carried a `.borrow`
             # / `.lock` / `.take` suffix.
-            self.program.node_type[func.returntype.nodeid] = rt
+            self.typing.node_type[func.returntype.nodeid] = rt
             if rt:
                 if not func.is_native and self._check_non_runtime_type(
                     rt,
@@ -1188,7 +1188,7 @@ class TypeChecker:
         for pname, ppath in func.parameters.items():
             stripped_ppath, p_own = _strip_path_ownership(ppath)
             pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
-            self.program.node_type[ppath.nodeid] = pt
+            self.typing.node_type[ppath.nodeid] = pt
             if p_own is not None:
                 ftype.param_ownership[pname] = p_own
             if (
@@ -1619,7 +1619,7 @@ class TypeChecker:
                     zast.DottedPath, as_path
                 ).parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     as_path_dp = cast(zast.DottedPath, as_path)
-                    custom_tag_data = self.program.node_type.get(
+                    custom_tag_data = self.typing.node_type.get(
                         as_path_dp.parent.nodeid
                     )
                     if not custom_tag_data:
@@ -2748,17 +2748,17 @@ class TypeChecker:
                 if at:
                     _, value, err = parse_number(apath_atom.name)
                     if not err and type(value) in (int, float):
-                        self.program.node_const_value[apath_atom.nodeid] = value
+                        self.typing.node_const_value[apath_atom.nodeid] = value
                         # create a type that inherits from the canonical numeric type
                         # so operators work, but carries const_value for the emitter
                         ct = _make_type(at.name, at.typetype)
                         ct.children = at.children  # share operator methods
                         ct.const_value = value
                         ct.is_valtype = True
-                        self.program.node_type[apath.nodeid] = ct
+                        self.typing.node_type[apath.nodeid] = ct
                         rtype.children[label] = ct
                     else:
-                        self.program.node_type[apath.nodeid] = at
+                        self.typing.node_type[apath.nodeid] = at
                         rtype.children[label] = at
                     # As-items don't go through `_check_atomid`, so build
                     # the typed mirror inline; emitter / SQL-dump consumers
@@ -2795,8 +2795,8 @@ class TypeChecker:
                         ct.const_value = raw
                         ct.is_valtype = True
                         ct.needs_destructor = False  # static, not freed
-                        self.program.node_type[apath_str.nodeid] = ct
-                        self.program.node_const_value[apath_str.nodeid] = raw
+                        self.typing.node_type[apath_str.nodeid] = ct
+                        self.typing.node_const_value[apath_str.nodeid] = raw
                         rtype.children[label] = ct
                         # As-items don't go through `_check_path`, so
                         # build the typed mirror inline (see numeric
@@ -2807,7 +2807,7 @@ class TypeChecker:
             # computed constant expression (e.g., max: 2 * 1024)
             if apath.nodetype == NodeType.BINOP:
                 t = self._check_binop(cast(zast.BinOp, apath))
-                apath_cv = self.program.node_const_value.get(apath.nodeid)
+                apath_cv = self.typing.node_const_value.get(apath.nodeid)
                 if t and apath_cv is not None:
                     ct = _make_type(t.name, t.typetype)
                     ct.children = t.children
@@ -2869,18 +2869,18 @@ class TypeChecker:
                 if at:
                     rtype.children[label] = at
                     # propagate const_value from referenced definition
-                    apath_cv = self.program.node_const_value.get(apath.nodeid)
+                    apath_cv = self.typing.node_const_value.get(apath.nodeid)
                     if at.const_value is not None and apath_cv is None:
-                        self.program.node_const_value[apath.nodeid] = at.const_value
+                        self.typing.node_const_value[apath.nodeid] = at.const_value
                     elif (
                         apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                         and apath_cv is None
                     ):
                         defn = self._lookup_definition(cast(zast.AtomId, apath).name)
                         if defn is not None:
-                            defn_cv = self.program.node_const_value.get(defn.nodeid)
+                            defn_cv = self.typing.node_const_value.get(defn.nodeid)
                             if defn_cv is not None:
-                                self.program.node_const_value[apath.nodeid] = defn_cv
+                                self.typing.node_const_value[apath.nodeid] = defn_cv
                     # As-items don't go through `_check_atomid` /
                     # `_check_dotted_path`; build the typed mirror inline
                     # so emitter / SQL-dump consumers can read const_value
@@ -2888,10 +2888,10 @@ class TypeChecker:
                     # Step 6.9.a).
                     if apath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                         # `apath.type` was set by `_resolve_typeref` above.
-                        if self.program.node_type.get(apath.nodeid) is not None:
+                        if self.typing.node_type.get(apath.nodeid) is not None:
                             self._build_typed_atomid(cast(zast.AtomId, apath))
                     elif apath.nodetype == NodeType.DOTTEDPATH:
-                        if self.program.node_type.get(apath.nodeid) is not None:
+                        if self.typing.node_type.get(apath.nodeid) is not None:
                             self._build_typed_dotted_path(cast(zast.DottedPath, apath))
 
     def _check_protocol_signature(
@@ -3324,7 +3324,7 @@ class TypeChecker:
                 if path_atom.name in ctx:
                     gp_ref = _make_type(path_atom.name, ZTypeType.GENERIC_PARAM)
                     gp_ref.parent = ctx[path_atom.name]  # constraint
-                    self.program.node_type[path.nodeid] = gp_ref
+                    self.typing.node_type[path.nodeid] = gp_ref
                     return gp_ref
         if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             path_atom2 = cast(zast.AtomId, path)
@@ -3332,23 +3332,23 @@ class TypeChecker:
             if _is_numeric_id(name):
                 t = self._resolve_numeric(name, loc=path_atom2.start)
                 if t:
-                    self.program.node_type[path.nodeid] = t
+                    self.typing.node_type[path.nodeid] = t
                 return t
             if name == "type":
                 t = self._resolve_type_keyword()
                 if t:
-                    self.program.node_type[path.nodeid] = t
+                    self.typing.node_type[path.nodeid] = t
                 return t
             if name == "this":
                 t = self._resolve_this_keyword()
                 if t:
-                    self.program.node_type[path.nodeid] = t
+                    self.typing.node_type[path.nodeid] = t
                 return t
             t = self._resolve_name(name)
             if t and t.isgeneric:
                 # allow bare generic 'tag' as field type (monomorphized on use)
                 if name == "tag":
-                    self.program.node_type[path.nodeid] = t
+                    self.typing.node_type[path.nodeid] = t
                     return t
                 self._error(
                     f"generic type '{name}' requires type arguments",
@@ -3358,19 +3358,19 @@ class TypeChecker:
                 )
                 return None
             if t:
-                self.program.node_type[path.nodeid] = t
+                self.typing.node_type[path.nodeid] = t
             return t
         if path.nodetype == NodeType.DOTTEDPATH:
             t = self._resolve_dotted_path(cast(zast.DottedPath, path))
             if t:
-                self.program.node_type[path.nodeid] = t
+                self.typing.node_type[path.nodeid] = t
             return t
         if path.nodetype == NodeType.EXPRESSION:
             inner = cast(zast.Expression, path).expression
             if inner.nodetype == NodeType.CALL:
                 t = self._resolve_typeref_call(cast(zast.Call, inner))
                 if t:
-                    self.program.node_type[path.nodeid] = t
+                    self.typing.node_type[path.nodeid] = t
                 return t
         return None
 
@@ -3517,8 +3517,8 @@ class TypeChecker:
                     enclosing = self._enclosing_type_stack[-1]
                     raw = enclosing.meta_create
                     if raw is not None:
-                        self.program.node_type[path.nodeid] = raw
-                        self.program.node_type[path.parent.nodeid] = enclosing
+                        self.typing.node_type[path.nodeid] = raw
+                        self.typing.node_type[path.parent.nodeid] = enclosing
                         return raw
                 self._error(
                     "'meta.create' is only valid inside a type's method body",
@@ -3617,7 +3617,7 @@ class TypeChecker:
         elif path.parent.nodetype == NodeType.DOTTEDPATH:
             parent_type = self._resolve_dotted_path(cast(zast.DottedPath, path.parent))
         elif path.parent.nodetype == NodeType.EXPRESSION:
-            parent_type = self.program.node_type.get(path.parent.nodeid)
+            parent_type = self.typing.node_type.get(path.parent.nodeid)
             if parent_type is None:
                 # Field / typeref resolution can see a DottedPath whose
                 # parent Expression has not been type-checked yet (for
@@ -3638,7 +3638,7 @@ class TypeChecker:
         if child_name == "typedef":
             marker = _make_type("__typedef_marker", ZTypeType.GENERIC_PARAM)
             marker.parent = parent_type  # the base type being wrapped
-            self.program.node_type[path.nodeid] = marker
+            self.typing.node_type[path.nodeid] = marker
             return marker
         # Explicit `Type.create` when create is disabled (either via
         # `create: null` or implicitly for unions/variants). Emit a targeted
@@ -3686,36 +3686,36 @@ class TypeChecker:
                 )
             gp = _make_type("__generic_param", ZTypeType.GENERIC_PARAM)
             gp.parent = constraint
-            self.program.node_type[path.nodeid] = gp
+            self.typing.node_type[path.nodeid] = gp
             return gp
         if child_name == "take" and parent_type.typetype not in (
             ZTypeType.PROTOCOL,
             ZTypeType.FACET,
         ):
             # .take returns the same type (ownership transfer)
-            self.program.node_type[path.nodeid] = parent_type
+            self.typing.node_type[path.nodeid] = parent_type
             return parent_type
         if child_name == "borrow" and parent_type.typetype not in (
             ZTypeType.PROTOCOL,
             ZTypeType.FACET,
         ):
             # .borrow returns the same type (borrowed reference)
-            self.program.node_type[path.nodeid] = parent_type
+            self.typing.node_type[path.nodeid] = parent_type
             return parent_type
         if child_name == "lock":
             # .lock is an alias for .borrow (borrowed reference / explicit lock)
-            self.program.node_type[path.nodeid] = parent_type
+            self.typing.node_type[path.nodeid] = parent_type
             return parent_type
         if child_name == "private":
             # .private grants access to all members (friend access)
-            self.program.node_type[path.nodeid] = parent_type
+            self.typing.node_type[path.nodeid] = parent_type
             return parent_type
         # numeric type casting: x.u32 where x is a numeric type
         _NUMERIC_NAMES = set(NUMERIC_RANGES) | {"f32", "f64", "f128"}
         if child_name in _NUMERIC_NAMES and parent_type.name in _NUMERIC_NAMES:
             target_type = self._resolve_name(child_name)
             if target_type:
-                self.program.node_type[path.nodeid] = target_type
+                self.typing.node_type[path.nodeid] = target_type
                 return target_type
         # for unions/variants, store parent type on the path for construction detection
         if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
@@ -3765,7 +3765,7 @@ class TypeChecker:
                 # non-subtype children (tag, :tag, methods) should not be
                 # treated as union/variant subtype construction
                 if child_name != "tag" and child.typetype != ZTypeType.FUNCTION:
-                    self.program.dp_parent_tagged_type[path.nodeid] = parent_type
+                    self.typing.dp_parent_tagged_type[path.nodeid] = parent_type
                 return child
             # child is not an arm of the (narrowed) union/variant. If the
             # parent is a narrowed AtomId and the child is an arm of the
@@ -4052,7 +4052,7 @@ class TypeChecker:
         # not on the parsed `NamedOperation` node. `_build_typed_call`
         # picks them up from this table when constructing the typed
         # mirror.
-        self.program.projected_args[arg.nodeid] = (formal_type, label, kind)
+        self.typing.projected_args[arg.nodeid] = (formal_type, label, kind)
         return True
 
     def _function_types_equivalent(self, a: ZType, b: ZType) -> bool:
@@ -4764,7 +4764,7 @@ class TypeChecker:
                 self._resolving.pop()
 
                 # hash and dedup
-                func_hash = zasthash.hash_function(cloned, self.program.node_type)
+                func_hash = zasthash.hash_function(cloned, self.typing.node_type)
                 if func_hash in self._func_hashes:
                     canonical_name, canonical_func = self._func_hashes[func_hash]
                     self._func_aliases[qualified] = canonical_name
@@ -4893,7 +4893,7 @@ class TypeChecker:
                     self.symtab.define(gp_name, concrete_type)
                 self._check_function_body(qualified, cloned)
                 self.symtab.pop()
-                func_hash = zasthash.hash_function(cloned, self.program.node_type)
+                func_hash = zasthash.hash_function(cloned, self.typing.node_type)
                 if func_hash in self._func_hashes:
                     canonical_name, canonical_func = self._func_hashes[func_hash]
                     self._func_aliases[qualified] = canonical_name
@@ -5493,36 +5493,36 @@ class TypeChecker:
             # fix up parameter types: replace GENERIC_PARAM with concrete types
             # (_check_function_body sets ppath.type to GENERIC_PARAM; emitter needs concrete)
             for pname, ppath in cloned.parameters.items():
-                ppath_t = self.program.node_type.get(ppath.nodeid)
+                ppath_t = self.typing.node_type.get(ppath.nodeid)
                 if (
                     ppath_t
                     and ppath_t.typetype == ZTypeType.GENERIC_PARAM
                     and ppath_t.name in generic_args
                 ):
-                    self.program.node_type[ppath.nodeid] = generic_args[ppath_t.name]
+                    self.typing.node_type[ppath.nodeid] = generic_args[ppath_t.name]
                 elif (
                     ppath_t
                     and ppath_t.typetype == ZTypeType.GENERIC_PARAM
                     and ppath_t.parent
                 ):
                     # GENERIC_PARAM's parent is the concrete type in generic context
-                    self.program.node_type[ppath.nodeid] = ppath_t.parent
+                    self.typing.node_type[ppath.nodeid] = ppath_t.parent
             # fix up return type
             rt = (
-                self.program.node_type.get(cloned.returntype.nodeid)
+                self.typing.node_type.get(cloned.returntype.nodeid)
                 if cloned.returntype
                 else None
             )
             if cloned.returntype and rt and rt.typetype == ZTypeType.GENERIC_PARAM:
                 if rt.name in generic_args:
-                    self.program.node_type[cloned.returntype.nodeid] = generic_args[
+                    self.typing.node_type[cloned.returntype.nodeid] = generic_args[
                         rt.name
                     ]
                 elif rt.parent:
-                    self.program.node_type[cloned.returntype.nodeid] = rt.parent
+                    self.typing.node_type[cloned.returntype.nodeid] = rt.parent
 
             # hash and dedup
-            func_hash = zasthash.hash_function(cloned, self.program.node_type)
+            func_hash = zasthash.hash_function(cloned, self.typing.node_type)
             if func_hash in self._func_hashes:
                 canonical_name, canonical_func = self._func_hashes[func_hash]
                 self._func_aliases[mangled] = canonical_name
@@ -5660,7 +5660,7 @@ class TypeChecker:
         # implicit return validation: last expression type must match 'out'
         if self._current_return_type and func.body.statements:
             last = func.body.statements[-1]
-            last_type = self.program.node_type.get(last.nodeid)
+            last_type = self.typing.node_type.get(last.nodeid)
             if last_type is not None and last_type.typetype != ZTypeType.NEVER:
                 if not self._types_compatible(last_type, self._current_return_type):
                     self._error(
@@ -5712,7 +5712,7 @@ class TypeChecker:
             inner = sline.statementline
             if inner.nodetype == NodeType.EXPRESSION:
                 expr = cast(zast.Expression, inner)
-                if self.program.expr_call_kind.get(
+                if self.typing.expr_call_kind.get(
                     expr.nodeid, zast.CallKind.UNKNOWN
                 ) in (
                     zast.CallKind.RETURN,
@@ -5742,9 +5742,9 @@ class TypeChecker:
         elif inner.nodetype == NodeType.EXPRESSION:
             self._check_expression(cast(zast.Expression, inner))
         # propagate type to statement line wrapper
-        inner_t = self.program.node_type.get(inner.nodeid)
+        inner_t = self.typing.node_type.get(inner.nodeid)
         if inner_t is not None:
-            self.program.node_type[sline.nodeid] = inner_t
+            self.typing.node_type[sline.nodeid] = inner_t
 
     def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
         """Check if a type is non-runtime (null/never/unit). Returns True if error emitted."""
@@ -5825,7 +5825,7 @@ class TypeChecker:
                 )
                 var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
-            self.program.node_type[assign.nodeid] = t
+            self.typing.node_type[assign.nodeid] = t
 
             # Phase B: alias optimization for inline `x: y.take` and
             # `x: y.borrow`. We only alias when ownership is explicitly
@@ -5838,7 +5838,7 @@ class TypeChecker:
                 and cast(zast.DottedPath, inner_expr).child.name in ("take", "borrow")
             )
             if borrow_target or is_explicit_take_or_borrow:
-                self.program.assign_alias_of[assign.nodeid] = self._alias_target(
+                self.typing.assign_alias_of[assign.nodeid] = self._alias_target(
                     assign.value
                 )
 
@@ -5865,7 +5865,7 @@ class TypeChecker:
         if inner.nodetype == NodeType.CALL:
             call = cast(zast.Call, inner)
             if (
-                self.program.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+                self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
                 == zast.CallKind.UNION_CREATE
             ):
                 if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -5873,7 +5873,7 @@ class TypeChecker:
         # check for DottedPath with parent_tagged_type (null subtype construction)
         if inner.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, inner)
-            if self.program.dp_parent_tagged_type.get(dp.nodeid):
+            if self.typing.dp_parent_tagged_type.get(dp.nodeid):
                 return dp.child.name
         return None
 
@@ -5936,7 +5936,7 @@ class TypeChecker:
         # Phase B: .lock fields are immutable after construction.
         if reassign.topath.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, reassign.topath)
-            parent_t = self.program.node_type.get(dp.parent.nodeid)
+            parent_t = self.typing.node_type.get(dp.parent.nodeid)
             child_name = dp.child.name
             if parent_t and child_name in parent_t.lock_field_names:
                 self._error(
@@ -6127,7 +6127,7 @@ class TypeChecker:
             self._check_statement(inner_do.statement)
             self._break_targets.pop()
             last_type = self._last_statement_type(inner_do.statement)
-            if self.program.do_has_break.get(inner_do.nodeid, False):
+            if self.typing.do_has_break.get(inner_do.nodeid, False):
                 # break makes the do expression type optional
                 if (
                     last_type is not None
@@ -6137,14 +6137,14 @@ class TypeChecker:
                     opt_t = self._make_optional_type(cast(ZType, last_type))
                     if opt_t:
                         t = opt_t
-                        self.program.node_type[inner_do.nodeid] = opt_t
+                        self.typing.node_type[inner_do.nodeid] = opt_t
                     else:
                         t = self.t_null
                 else:
                     t = self.t_null
             elif last_type is not None and last_type.is_ztype:
                 t = cast(ZType, last_type)
-                self.program.node_type[inner_do.nodeid] = t
+                self.typing.node_type[inner_do.nodeid] = t
             else:
                 t = self.t_null
             self.symtab.pop()
@@ -6176,9 +6176,9 @@ class TypeChecker:
             borrow_target = op_result.borrow_target
             private_access = op_result.private_access
             # propagate const_value from inner operation to expression wrapper
-            inner_cv = self.program.node_const_value.get(inner_op.nodeid)
+            inner_cv = self.typing.node_const_value.get(inner_op.nodeid)
             if inner_cv is not None:
-                self.program.node_const_value[expr.nodeid] = inner_cv
+                self.typing.node_const_value[expr.nodeid] = inner_cv
             # bare function name as value: all params must have defaults
             # (skip control flow: return, break, continue, error)
             # only check when the atom refers to a function definition, not a local var
@@ -6220,7 +6220,7 @@ class TypeChecker:
                             )
                             break
         if t is not None:
-            self.program.node_type[expr.nodeid] = t
+            self.typing.node_type[expr.nodeid] = t
             # tag control flow expressions using resolved type's control_kind
             if t.control_kind != ControlKind.NONE:
                 _CK_MAP = {
@@ -6230,17 +6230,17 @@ class TypeChecker:
                     ControlKind.ERROR: zast.CallKind.ERROR,
                     ControlKind.PANIC: zast.CallKind.PANIC,
                 }
-                self.program.expr_call_kind[expr.nodeid] = _CK_MAP.get(
+                self.typing.expr_call_kind[expr.nodeid] = _CK_MAP.get(
                     t.control_kind, zast.CallKind.UNKNOWN
                 )
                 # flag enclosing do block if break targets it
                 if t.control_kind == ControlKind.BREAK and self._break_targets:
                     target = self._break_targets[-1]
                     if target is not None:
-                        self.program.do_has_break[target.nodeid] = True
+                        self.typing.do_has_break[target.nodeid] = True
             elif inner.nodetype == NodeType.CALL:
                 # propagate call_kind from Call to Expression wrapper
-                self.program.expr_call_kind[expr.nodeid] = self.program.call_kind.get(
+                self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind.get(
                     inner.nodeid, zast.CallKind.UNKNOWN
                 )
         return ExprResult(t, borrow_target, private_access)
@@ -6317,19 +6317,19 @@ class TypeChecker:
         if path.nodetype == NodeType.EXPRESSION:
             path_expr = cast(zast.Expression, path)
             t = self._check_expression(path_expr).ztype
-            if t and not self.program.node_type.get(path_expr.nodeid):
-                self.program.node_type[path_expr.nodeid] = t
+            if t and not self.typing.node_type.get(path_expr.nodeid):
+                self.typing.node_type[path_expr.nodeid] = t
         elif path.nodetype == NodeType.ATOMSTRING:
             path_str = cast(zast.AtomString, path)
             self._check_string_interpolation(path_str)
             has_interp = any(
                 p.nodetype != NodeType.STRINGCHUNK for p in path_str.stringparts
             )
-            self.program.node_type[path_str.nodeid] = self._resolve_name(
+            self.typing.node_type[path_str.nodeid] = self._resolve_name(
                 "String" if has_interp else "StringView"
             )
             self._build_typed_atomstring(path_str)
-            t = self.program.node_type.get(path_str.nodeid)
+            t = self.typing.node_type.get(path_str.nodeid)
         elif path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             t = self._check_atomid(cast(zast.AtomId, path))
         elif path.nodetype == NodeType.DOTTEDPATH:
@@ -6367,7 +6367,7 @@ class TypeChecker:
     ) -> Optional[ZType]:
         """Type-check a dotted path. Thin wrapper that builds the
         typed-tree mirror after the resolution body has populated
-        `self.program.node_type.get(path.nodeid)` (and the other in-place decorations). The mirror
+        `self.typing.node_type.get(path.nodeid)` (and the other in-place decorations). The mirror
         is skipped when the parent has no typed counterpart yet (e.g.
         it's an AtomString or interpolation Expression — both
         scheduled for later sub-steps)."""
@@ -6393,13 +6393,13 @@ class TypeChecker:
         )
         typed = ztypedast.TypedDottedPath(
             parsed=path,
-            ztype=cast(ZType, self.program.node_type.get(path.nodeid)),
-            const_value=self.program.node_const_value.get(path.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(path.nodeid)),
+            const_value=self.typing.node_const_value.get(path.nodeid),
             parent=parent_typed,
             child=child_typed,
-            parent_tagged_type=self.program.dp_parent_tagged_type.get(path.nodeid),
+            parent_tagged_type=self.typing.dp_parent_tagged_type.get(path.nodeid),
             narrowed_subtype=None,
-            child_id=self.program.dp_child_id.get(path.nodeid, -1),
+            child_id=self.typing.dp_child_id.get(path.nodeid, -1),
         )
         self._register_typed(path, typed)
 
@@ -6462,8 +6462,8 @@ class TypeChecker:
         )
         typed = ztypedast.TypedBinOp(
             parsed=binop,
-            ztype=cast(ZType, self.program.node_type.get(binop.nodeid)),
-            const_value=self.program.node_const_value.get(binop.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(binop.nodeid)),
+            const_value=self.typing.node_const_value.get(binop.nodeid),
             lhs=lhs_typed,
             operator=operator_typed,
             rhs=cast(ztypedast.TypedPath, rhs_typed),
@@ -6486,14 +6486,14 @@ class TypeChecker:
         # post-resolution type rather than the original generic /
         # template type that was captured at AtomId-build time.
         callable_typed.ztype = cast(
-            ZType, self.program.node_type.get(call.callable.nodeid)
+            ZType, self.typing.node_type.get(call.callable.nodeid)
         )
         args_typed: List[ztypedast.TypedNamedOperation] = []
         for arg in call.arguments:
             arg_inner = self._typed_operation_for(arg.valtype)
             if arg_inner is None:
                 return
-            proj = self.program.projected_args.get(arg.nodeid)
+            proj = self.typing.projected_args.get(arg.nodeid)
             named_typed = ztypedast.TypedNamedOperation(
                 parsed=arg,
                 name=arg.name,
@@ -6506,12 +6506,12 @@ class TypeChecker:
             args_typed.append(named_typed)
         typed = ztypedast.TypedCall(
             parsed=call,
-            ztype=cast(ZType, self.program.node_type.get(call.nodeid)),
-            const_value=self.program.node_const_value.get(call.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(call.nodeid)),
+            const_value=self.typing.node_const_value.get(call.nodeid),
             callable=callable_typed,
             arguments=args_typed,
-            call_kind=self.program.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN),
-            callable_type_name=self.program.call_callable_type_name.get(call.nodeid),
+            call_kind=self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN),
+            callable_type_name=self.typing.call_callable_type_name.get(call.nodeid),
         )
         self._register_typed(call, typed)
 
@@ -6525,7 +6525,7 @@ class TypeChecker:
             parsed=assign,
             name=assign.name,
             value=value_typed,
-            alias_of=self.program.assign_alias_of.get(assign.nodeid),
+            alias_of=self.typing.assign_alias_of.get(assign.nodeid),
         )
         self._register_typed(assign, typed)
 
@@ -6606,7 +6606,7 @@ class TypeChecker:
         """Build a fresh TypedPath mirroring a parsed Path used in
         typeref position (parameter type, return type, field type).
         Typerefs are resolved via `_resolve_typeref`, which sets
-        `self.program.node_type.get(path.nodeid)` directly without going through `_check_path`, so
+        `self.typing.node_type.get(path.nodeid)` directly without going through `_check_path`, so
         their typed mirror is constructed ad-hoc here rather than via
         `by_parsed_id` lookup."""
         while path.nodetype == NodeType.EXPRESSION:
@@ -6615,13 +6615,13 @@ class TypeChecker:
             atom = cast(zast.AtomId, path)
             return ztypedast.TypedAtomId(
                 parsed=atom,
-                ztype=cast(ZType, self.program.node_type.get(atom.nodeid)),
-                const_value=self.program.node_const_value.get(atom.nodeid),
+                ztype=cast(ZType, self.typing.node_type.get(atom.nodeid)),
+                const_value=self.typing.node_const_value.get(atom.nodeid),
                 name=atom.name,
                 is_label_value=(atom.nodetype == NodeType.LABELVALUE),
-                narrowed_subtype=self.program.atom_narrowed_subtype.get(atom.nodeid),
-                original_ztype=self.program.atom_original_ztype.get(atom.nodeid),
-                child_id=self.program.atom_child_id.get(atom.nodeid, -1),
+                narrowed_subtype=self.typing.atom_narrowed_subtype.get(atom.nodeid),
+                original_ztype=self.typing.atom_original_ztype.get(atom.nodeid),
+                child_id=self.typing.atom_child_id.get(atom.nodeid, -1),
             )
         if path.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, path)
@@ -6635,19 +6635,19 @@ class TypeChecker:
             )
             return ztypedast.TypedDottedPath(
                 parsed=dp,
-                ztype=cast(ZType, self.program.node_type.get(dp.nodeid)),
-                const_value=self.program.node_const_value.get(dp.nodeid),
+                ztype=cast(ZType, self.typing.node_type.get(dp.nodeid)),
+                const_value=self.typing.node_const_value.get(dp.nodeid),
                 parent=parent_typed,
                 child=child_typed,
-                parent_tagged_type=self.program.dp_parent_tagged_type.get(dp.nodeid),
+                parent_tagged_type=self.typing.dp_parent_tagged_type.get(dp.nodeid),
                 narrowed_subtype=None,
-                child_id=self.program.dp_child_id.get(dp.nodeid, -1),
+                child_id=self.typing.dp_child_id.get(dp.nodeid, -1),
             )
         if path.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path)
             return ztypedast.TypedAtomString(
                 parsed=atom_str,
-                ztype=cast(ZType, self.program.node_type.get(atom_str.nodeid)),
+                ztype=cast(ZType, self.typing.node_type.get(atom_str.nodeid)),
                 parts=[],
             )
         return None
@@ -6778,11 +6778,11 @@ class TypeChecker:
         # Snapshot the per-Node resolved-type table (was `Node.type`
         # before Step 6.9.b) so emitter / SQL-dump / asthash consumers
         # can read parsed-Node-keyed types via `TypedProgram.node_types`.
-        self.typed_program.node_types = dict(self.program.node_type)
+        self.typed_program.node_types = dict(self.typing.node_type)
         # Snapshot the per-Expression call-kind classification (was
         # `Expression.call_kind` before Step 6.10) so the emitter's
         # non-completing-tail detection can consult it.
-        self.typed_program.expr_call_kinds = dict(self.program.expr_call_kind)
+        self.typed_program.expr_call_kinds = dict(self.typing.expr_call_kind)
         # mono_functions / cloned_methods still carry parsed Functions
         # today; their typed mirrors live in `by_parsed_id` keyed by
         # the cloned nodeid. TypedProgram declares these as
@@ -6816,11 +6816,11 @@ class TypeChecker:
             else_typed = cast(Optional[ztypedast.TypedStatement], else_lookup)
         typed = ztypedast.TypedIf(
             parsed=ifnode,
-            ztype=cast(ZType, self.program.node_type.get(ifnode.nodeid)),
-            const_value=self.program.node_const_value.get(ifnode.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(ifnode.nodeid)),
+            const_value=self.typing.node_const_value.get(ifnode.nodeid),
             clauses=clauses_typed,
             elseclause=else_typed,
-            taken_vars=list(self.program.if_taken_vars.get(ifnode.nodeid, ())),
+            taken_vars=list(self.typing.if_taken_vars.get(ifnode.nodeid, ())),
         )
         self._register_typed(ifnode, typed)
 
@@ -6839,9 +6839,9 @@ class TypeChecker:
             match_typed = ztypedast.TypedAtomId(
                 parsed=clause.match,
                 ztype=cast(ZType, None),
-                const_value=self.program.node_const_value.get(clause.match.nodeid),
+                const_value=self.typing.node_const_value.get(clause.match.nodeid),
                 name=clause.match.name,
-                child_id=self.program.atom_child_id.get(clause.match.nodeid, -1),
+                child_id=self.typing.atom_child_id.get(clause.match.nodeid, -1),
             )
             # Register the clause-match TypedAtomId in `by_parsed_id`
             # so emitter / SQL-dump consumers can look up its
@@ -6867,13 +6867,13 @@ class TypeChecker:
             else_typed = cast(Optional[ztypedast.TypedStatement], else_lookup)
         typed = ztypedast.TypedCase(
             parsed=casenode,
-            ztype=cast(ZType, self.program.node_type.get(casenode.nodeid)),
-            const_value=self.program.node_const_value.get(casenode.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(casenode.nodeid)),
+            const_value=self.typing.node_const_value.get(casenode.nodeid),
             subject=cast(ztypedast.TypedOperation, subject_typed),
             clauses=clauses_typed,
             elseclause=else_typed,
-            subject_taken=self.program.case_subject_taken.get(casenode.nodeid, False),
-            taken_vars=list(self.program.case_taken_vars.get(casenode.nodeid, ())),
+            subject_taken=self.typing.case_subject_taken.get(casenode.nodeid, False),
+            taken_vars=list(self.typing.case_taken_vars.get(casenode.nodeid, ())),
         )
         self._register_typed(casenode, typed)
 
@@ -6897,13 +6897,13 @@ class TypeChecker:
             post_typed.append(op_typed)
         typed = ztypedast.TypedFor(
             parsed=fornode,
-            ztype=cast(ZType, self.program.node_type.get(fornode.nodeid)),
-            const_value=self.program.node_const_value.get(fornode.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(fornode.nodeid)),
+            const_value=self.typing.node_const_value.get(fornode.nodeid),
             conditions=conds_typed,
             loop=loop_typed,
             postconditions=post_typed,
             iterator_bindings=set(
-                self.program.for_iter_bindings.get(fornode.nodeid, ())
+                self.typing.for_iter_bindings.get(fornode.nodeid, ())
             ),
         )
         self._register_typed(fornode, typed)
@@ -6919,10 +6919,10 @@ class TypeChecker:
         stmt_typed = self.typed_program.by_parsed_id.get(donode.statement.nodeid)
         typed = ztypedast.TypedDo(
             parsed=donode,
-            ztype=cast(ZType, self.program.node_type.get(donode.nodeid)),
-            const_value=self.program.node_const_value.get(donode.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(donode.nodeid)),
+            const_value=self.typing.node_const_value.get(donode.nodeid),
             statement=cast(ztypedast.TypedStatement, stmt_typed),
-            has_break=self.program.do_has_break.get(donode.nodeid, False),
+            has_break=self.typing.do_has_break.get(donode.nodeid, False),
         )
         self._register_typed(donode, typed)
 
@@ -6935,13 +6935,13 @@ class TypeChecker:
             return
         typed = ztypedast.TypedWith(
             parsed=withnode,
-            ztype=cast(ZType, self.program.node_type.get(withnode.nodeid)),
-            const_value=self.program.node_const_value.get(withnode.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(withnode.nodeid)),
+            const_value=self.typing.node_const_value.get(withnode.nodeid),
             name=withnode.name,
             value=value_typed,
             doexpr=doexpr_typed,
-            ownership=self.program.with_ownership.get(withnode.nodeid),
-            alias_of=self.program.with_alias_of.get(withnode.nodeid),
+            ownership=self.typing.with_ownership.get(withnode.nodeid),
+            alias_of=self.typing.with_alias_of.get(withnode.nodeid),
         )
         self._register_typed(withnode, typed)
 
@@ -6982,8 +6982,8 @@ class TypeChecker:
             parts.append(cast(ztypedast.TypedExpression, typed_inner))
         typed = ztypedast.TypedAtomString(
             parsed=atom,
-            ztype=cast(ZType, self.program.node_type.get(atom.nodeid)),
-            const_value=self.program.node_const_value.get(atom.nodeid),
+            ztype=cast(ZType, self.typing.node_type.get(atom.nodeid)),
+            const_value=self.typing.node_const_value.get(atom.nodeid),
             parts=parts,
         )
         self._register_typed(atom, typed)
@@ -7061,7 +7061,7 @@ class TypeChecker:
                                 )
                                 return parent_type
                             # real function — immutable program text, no invalidation
-                            self.program.node_type[path.nodeid] = parent_type
+                            self.typing.node_type[path.nodeid] = parent_type
                             return parent_type
 
                     # .take invalidates the source name (variable)
@@ -7083,7 +7083,7 @@ class TypeChecker:
                                 else None
                             )
                             self.symtab.invalidate(take_parent_name, loc=take_loc)
-                    self.program.node_type[path.nodeid] = parent_type
+                    self.typing.node_type[path.nodeid] = parent_type
                     return parent_type
 
         # handle .release compiler method (early scope-exit for a variable)
@@ -7142,7 +7142,7 @@ class TypeChecker:
                     else None
                 )
                 self.symtab.invalidate(release_name, loc=release_loc)
-                self.program.node_type[path.nodeid] = parent_type
+                self.typing.node_type[path.nodeid] = parent_type
                 return parent_type
 
         # handle .borrow compiler method (but not protocol/typedef.borrow constructor)
@@ -7180,7 +7180,7 @@ class TypeChecker:
                             loc=path.start,
                             err=ERR.OWNERERROR,
                         )
-                    self.program.node_type[path.nodeid] = parent_type
+                    self.typing.node_type[path.nodeid] = parent_type
                     return parent_type
 
         # handle .lock compiler method (alias for .borrow)
@@ -7208,7 +7208,7 @@ class TypeChecker:
                         loc=path.start,
                         err=ERR.OWNERERROR,
                     )
-                self.program.node_type[path.nodeid] = parent_type
+                self.typing.node_type[path.nodeid] = parent_type
                 return parent_type
 
         # handle .private (friend access)
@@ -7240,7 +7240,7 @@ class TypeChecker:
                             hint="only methods of the type or friend types can use .private",
                         )
                 self._pending_private_access = True
-                self.program.node_type[path.nodeid] = parent_type
+                self.typing.node_type[path.nodeid] = parent_type
                 return parent_type
 
         # numeric dotted path: 0.u32, 42.i8, 0xff.u16. Only treat as a
@@ -7265,7 +7265,7 @@ class TypeChecker:
                         loc=path.start,
                     )
                     return None
-                self.program.node_type[path.nodeid] = resolved_child
+                self.typing.node_type[path.nodeid] = resolved_child
                 # Typed mirror: this branch never types `path.parent`
                 # (its standalone type would be the literal's default
                 # numeric inference, not the cast result), but the
@@ -7288,11 +7288,11 @@ class TypeChecker:
                     parent_atom.name, loc=parent_atom.start
                 )
                 if parent_type:
-                    self.program.node_type[parent_atom.nodeid] = parent_type
+                    self.typing.node_type[parent_atom.nodeid] = parent_type
             else:
                 parent_type = self._resolve_name(parent_atom.name)
             if parent_type:
-                self.program.node_type[path.parent.nodeid] = parent_type
+                self.typing.node_type[path.parent.nodeid] = parent_type
                 # Narrowing stamp: same as in _check_atomid, so the
                 # emitter's AtomId lowering can unwrap the union/variant
                 # payload when the parent is a narrowed name.
@@ -7302,16 +7302,16 @@ class TypeChecker:
                     and entry.narrowed_subtype is not None
                     and entry.original_ztype is not None
                 ):
-                    self.program.atom_narrowed_subtype[parent_atom.nodeid] = (
+                    self.typing.atom_narrowed_subtype[parent_atom.nodeid] = (
                         entry.narrowed_subtype
                     )
-                    self.program.atom_original_ztype[parent_atom.nodeid] = (
+                    self.typing.atom_original_ztype[parent_atom.nodeid] = (
                         entry.original_ztype
                     )
                     # Phase 7b: stamp narrowed-subtype child_id against the
                     # outer union/variant (mirrors _check_atomid path).
-                    if self.program.atom_child_id.get(parent_atom.nodeid, -1) == -1:
-                        self.program.atom_child_id[parent_atom.nodeid] = (
+                    if self.typing.atom_child_id.get(parent_atom.nodeid, -1) == -1:
+                        self.typing.atom_child_id[parent_atom.nodeid] = (
                             entry.original_ztype.child_id_for(entry.narrowed_subtype)
                         )
                 # Borrow-scoped lock enforcement: locked paths are completely
@@ -7348,7 +7348,7 @@ class TypeChecker:
             has_interp = any(
                 p.nodetype != NodeType.STRINGCHUNK for p in atom_str.stringparts
             )
-            self.program.node_type[atom_str.nodeid] = self._resolve_name(
+            self.typing.node_type[atom_str.nodeid] = self._resolve_name(
                 "String" if has_interp else "StringView"
             )
             self._build_typed_atomstring(atom_str)
@@ -7356,22 +7356,22 @@ class TypeChecker:
             self._check_expression(cast(zast.Expression, path.parent))
         t = self._resolve_dotted_path(path)
         if t:
-            self.program.node_type[path.nodeid] = t
+            self.typing.node_type[path.nodeid] = t
             # propagate const_value for numeric generic param fields
-            parent_type = self.program.node_type.get(path.parent.nodeid)
+            parent_type = self.typing.node_type.get(path.parent.nodeid)
             if parent_type and parent_type.generic_args:
                 garg = parent_type.generic_args.get(child_name)
                 if garg and garg.numeric_value is not None:
-                    self.program.node_const_value[path.nodeid] = garg.numeric_value
+                    self.typing.node_const_value[path.nodeid] = garg.numeric_value
             # Phase 7b: stamp child_id against parent's ZType so the
             # emitter can dispatch by id on hot paths (union/variant
             # arm access, record field, method dispatch). Falls back to
             # name lookup when child_id stays -1.
             if (
                 parent_type is not None
-                and self.program.dp_child_id.get(path.nodeid, -1) == -1
+                and self.typing.dp_child_id.get(path.nodeid, -1) == -1
             ):
-                self.program.dp_child_id[path.nodeid] = parent_type.child_id_for(
+                self.typing.dp_child_id[path.nodeid] = parent_type.child_id_for(
                     path.child.name
                 )
             # Auto-call coercion: a dotted path naming a method with no
@@ -7404,7 +7404,7 @@ class TypeChecker:
                             loc=path.start,
                             err=ERR.OWNERERROR,
                         )
-                self.program.node_type[path.nodeid] = t.return_type
+                self.typing.node_type[path.nodeid] = t.return_type
                 return t.return_type
             # protocol/facet borrow: lock the source path
             if t.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
@@ -7425,7 +7425,7 @@ class TypeChecker:
             # where s is a value — return the arm's payload type, not the
             # outer union, so callers like `match (s.err)` dispatch on the
             # payload's tag.
-            outer_pt = self.program.dp_parent_tagged_type.get(path.nodeid)
+            outer_pt = self.typing.dp_parent_tagged_type.get(path.nodeid)
             if outer_pt is not None:
                 parent_is_variable = (
                     path.parent.nodetype == NodeType.ATOMID
@@ -7433,7 +7433,7 @@ class TypeChecker:
                     is not None
                 )
                 if not parent_is_variable:
-                    self.program.node_type[path.nodeid] = outer_pt
+                    self.typing.node_type[path.nodeid] = outer_pt
                     # Stamp const_value only for bool: the arm's index in the
                     # parent's children (false -> 0, true -> 1). Enables
                     # downstream const-fold: `if bool.true` collapses to
@@ -7447,7 +7447,7 @@ class TypeChecker:
                     if outer_pt.name == "bool":
                         arm_name = path.child.name
                         if arm_name in outer_pt.children:
-                            self.program.node_const_value[path.nodeid] = list(
+                            self.typing.node_const_value[path.nodeid] = list(
                                 outer_pt.children.keys()
                             ).index(arm_name)
                     return outer_pt
@@ -7465,13 +7465,13 @@ class TypeChecker:
         if _is_numeric_id(name):
             t = self._resolve_numeric(name, loc=atom.start)
             if t:
-                self.program.node_type[atom.nodeid] = t
+                self.typing.node_type[atom.nodeid] = t
                 # constant folding: set const_value for integer and f64 literals
                 typename, value, err = parse_number(name)
                 if not err and type(value) is int:
-                    self.program.node_const_value[atom.nodeid] = value
+                    self.typing.node_const_value[atom.nodeid] = value
                 elif not err and type(value) is float and typename == "f64":
-                    self.program.node_const_value[atom.nodeid] = value
+                    self.typing.node_const_value[atom.nodeid] = value
             self._build_typed_atomid(atom)
             return t
 
@@ -7481,34 +7481,34 @@ class TypeChecker:
             # unavailable (reads AND writes) for the duration of the lock.
             if self.symtab.lookup_var(name):
                 self._check_not_locked((name,), "Cannot access", atom.start)
-            self.program.node_type[atom.nodeid] = t
+            self.typing.node_type[atom.nodeid] = t
             # Narrowing stamp: if the name was narrowed via shadow=True
             # (match arm narrowing), record the subtype + original outer
             # type so the emitter can generate the C-level payload unwrap
             # at this AtomId's lowering site.
             entry = self.symtab.lookup_entry(name)
             if entry and entry.narrowed_subtype and entry.original_ztype is not None:
-                self.program.atom_narrowed_subtype[atom.nodeid] = entry.narrowed_subtype
-                self.program.atom_original_ztype[atom.nodeid] = entry.original_ztype
+                self.typing.atom_narrowed_subtype[atom.nodeid] = entry.narrowed_subtype
+                self.typing.atom_original_ztype[atom.nodeid] = entry.original_ztype
                 # Phase 7b: stamp child_id of narrowed subtype against the
                 # outer union/variant so the emitter's payload-unwrap can
                 # dispatch by id.
-                if self.program.atom_child_id.get(atom.nodeid, -1) == -1:
-                    self.program.atom_child_id[atom.nodeid] = (
+                if self.typing.atom_child_id.get(atom.nodeid, -1) == -1:
+                    self.typing.atom_child_id[atom.nodeid] = (
                         entry.original_ztype.child_id_for(entry.narrowed_subtype)
                     )
             # constant folding: propagate const_value for true/false literals
             if name == "true":
-                self.program.node_const_value[atom.nodeid] = True
+                self.typing.node_const_value[atom.nodeid] = True
             elif name == "false":
-                self.program.node_const_value[atom.nodeid] = False
+                self.typing.node_const_value[atom.nodeid] = False
             else:
                 # propagate const_value from named constants
                 defn = self._lookup_definition(name)
                 if defn is not None:
-                    defn_cv = self.program.node_const_value.get(defn.nodeid)
+                    defn_cv = self.typing.node_const_value.get(defn.nodeid)
                     if defn_cv is not None:
-                        self.program.node_const_value[atom.nodeid] = defn_cv
+                        self.typing.node_const_value[atom.nodeid] = defn_cv
             self._build_typed_atomid(atom)
             return t
 
@@ -7539,8 +7539,8 @@ class TypeChecker:
 
     def _check_call(self, call: zast.Call) -> ExprResult:
         """Type-check a call. Thin wrapper that builds the typed-tree
-        mirror after the resolution body has populated `self.program.node_type.get(call.nodeid)`,
-        `self.program.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self.program.call_callable_type_name.get(call.nodeid)`, and the per-argument
+        mirror after the resolution body has populated `self.typing.node_type.get(call.nodeid)`,
+        `self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self.typing.call_callable_type_name.get(call.nodeid)`, and the per-argument
         `NamedOperation` projection stamps. Captures and clears the legacy
         `_pending_*` side-channel flags at the boundary so the result
         carries the borrow_target / private_access intent explicitly."""
@@ -7575,21 +7575,21 @@ class TypeChecker:
 
         # handle control flow: return, break, continue, error
         if callee_type.control_kind == ControlKind.RETURN:
-            self.program.call_kind[call.nodeid] = zast.CallKind.RETURN
+            self.typing.call_kind[call.nodeid] = zast.CallKind.RETURN
             return self._check_return_call(call)
         if callee_type.control_kind == ControlKind.BREAK:
-            self.program.call_kind[call.nodeid] = zast.CallKind.BREAK
+            self.typing.call_kind[call.nodeid] = zast.CallKind.BREAK
             # flag enclosing do block if break targets it (not a for loop)
             if self._break_targets:
                 target = self._break_targets[-1]
                 if target is not None:
-                    self.program.do_has_break[target.nodeid] = True
+                    self.typing.do_has_break[target.nodeid] = True
             return callee_type
         if callee_type.control_kind == ControlKind.CONTINUE:
-            self.program.call_kind[call.nodeid] = zast.CallKind.CONTINUE
+            self.typing.call_kind[call.nodeid] = zast.CallKind.CONTINUE
             return callee_type
         if callee_type.control_kind == ControlKind.ERROR:
-            self.program.call_kind[call.nodeid] = zast.CallKind.ERROR
+            self.typing.call_kind[call.nodeid] = zast.CallKind.ERROR
             # type-check the message argument
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
@@ -7597,15 +7597,15 @@ class TypeChecker:
             if self._suppress_compile_error == 0:
                 msg = self._extract_error_message(call)
                 self._error(msg, loc=call.start)
-            self.program.node_type[call.nodeid] = callee_type
+            self.typing.node_type[call.nodeid] = callee_type
             return callee_type
         if callee_type.control_kind == ControlKind.PANIC:
-            self.program.call_kind[call.nodeid] = zast.CallKind.PANIC
+            self.typing.call_kind[call.nodeid] = zast.CallKind.PANIC
             # type-check the message argument; no compile-time diagnostic
             # (unlike error, panic is a pure runtime terminator).
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.program.node_type[call.nodeid] = callee_type
+            self.typing.node_type[call.nodeid] = callee_type
             return callee_type
 
         # handle .str conversion: string.str to: N or str.str to: N
@@ -7620,27 +7620,27 @@ class TypeChecker:
             mono_ftype = self._infer_generic_function_call(callee_type, call)
             if not mono_ftype:
                 return None  # error already emitted
-            self.program.node_type[call.callable.nodeid] = mono_ftype
+            self.typing.node_type[call.callable.nodeid] = mono_ftype
             # functions with no `out` have return_type None — callers
             # (match/if branch unification, expression typing) expect a
             # ZType, so normalise to `null`.
             ret = mono_ftype.return_type or self.t_null
-            self.program.node_type[call.nodeid] = ret
+            self.typing.node_type[call.nodeid] = ret
             if (
-                self.program.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+                self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
                 == zast.CallKind.UNKNOWN
             ):
-                self.program.call_kind[call.nodeid] = zast.CallKind.REGULAR
+                self.typing.call_kind[call.nodeid] = zast.CallKind.REGULAR
             return ret
 
         # handle union/variant subtype construction: dotted path parent is a tagged type
         # (must be before record/class checks since subtypes may be records)
         if (
             call.callable.nodetype == NodeType.DOTTEDPATH
-            and self.program.dp_parent_tagged_type.get(call.callable.nodeid) is not None
+            and self.typing.dp_parent_tagged_type.get(call.callable.nodeid) is not None
         ):
             callable_dp = cast(zast.DottedPath, call.callable)
-            parent_tagged = self.program.dp_parent_tagged_type.get(callable_dp.nodeid)
+            parent_tagged = self.typing.dp_parent_tagged_type.get(callable_dp.nodeid)
             assert parent_tagged is not None
 
             # generic union/variant subtype construction
@@ -7650,18 +7650,18 @@ class TypeChecker:
             ):
                 mono_type = self._infer_generic_union_construction(parent_tagged, call)
                 if mono_type:
-                    self.program.node_type[call.nodeid] = mono_type
-                    self.program.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
+                    self.typing.node_type[call.nodeid] = mono_type
+                    self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
                     # update the parent_tagged_type to point to the monomorphized type
-                    self.program.dp_parent_tagged_type[callable_dp.nodeid] = mono_type
+                    self.typing.dp_parent_tagged_type[callable_dp.nodeid] = mono_type
                     self._lift_locked_arm_borrow(mono_type, callable_dp, call)
                     return mono_type
                 return None  # error already emitted in inference method
 
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.program.node_type[call.nodeid] = parent_tagged
-            self.program.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
+            self.typing.node_type[call.nodeid] = parent_tagged
+            self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
             self._lift_locked_arm_borrow(parent_tagged, callable_dp, call)
             return parent_tagged
 
@@ -7675,10 +7675,10 @@ class TypeChecker:
             call_method = callee_type.children.get("call")
             if call_method and call_method.typetype == ZTypeType.FUNCTION:
                 # redirect to the 'call' method
-                self.program.call_kind[call.nodeid] = zast.CallKind.CALLABLE
-                self.program.call_callable_type_name[call.nodeid] = callee_type.name
+                self.typing.call_kind[call.nodeid] = zast.CallKind.CALLABLE
+                self.typing.call_callable_type_name[call.nodeid] = callee_type.name
                 callee_type = call_method
-                self.program.node_type[call.callable.nodeid] = call_method
+                self.typing.node_type[call.callable.nodeid] = call_method
                 # fall through to function call checking below
 
         # Unified call dispatch for types in callable position (bare-name
@@ -7761,8 +7761,8 @@ class TypeChecker:
         ):
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.program.node_type[call.nodeid] = callee_type.return_type
-            self.program.call_kind[call.nodeid] = zast.CallKind.REGULAR
+            self.typing.node_type[call.nodeid] = callee_type.return_type
+            self.typing.call_kind[call.nodeid] = zast.CallKind.REGULAR
             return callee_type.return_type
 
         # handle record construction: calling a record type creates an instance
@@ -7771,9 +7771,9 @@ class TypeChecker:
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
                 if mono_type:
-                    self.program.node_type[call.nodeid] = mono_type
-                    self.program.node_type[call.callable.nodeid] = mono_type
-                    self.program.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
+                    self.typing.node_type[call.nodeid] = mono_type
+                    self.typing.node_type[call.callable.nodeid] = mono_type
+                    self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
                     # only check missing fields when value args are present
                     # (pure generic instantiation like (myrec n: 10) defers to outer call)
                     has_value_args = any(
@@ -7788,8 +7788,8 @@ class TypeChecker:
                 return None  # error already emitted
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.program.node_type[call.nodeid] = callee_type
-            self.program.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
+            self.typing.node_type[call.nodeid] = callee_type
+            self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
             self._check_missing_create_args(callee_type, call)
             self._reject_borrow_escape_into_record(call)
             return callee_type
@@ -7809,9 +7809,9 @@ class TypeChecker:
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
                 if mono_type:
-                    self.program.node_type[call.nodeid] = mono_type
-                    self.program.node_type[call.callable.nodeid] = mono_type
-                    self.program.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
+                    self.typing.node_type[call.nodeid] = mono_type
+                    self.typing.node_type[call.callable.nodeid] = mono_type
+                    self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
                     has_value_args = any(
                         arg.name not in callee_type.generic_params
                         for arg in call.arguments
@@ -7824,8 +7824,8 @@ class TypeChecker:
                 return None
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.program.node_type[call.nodeid] = callee_type
-            self.program.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
+            self.typing.node_type[call.nodeid] = callee_type
+            self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
             self._check_missing_create_args(callee_type, call)
             self._check_aggregate_lock_escape(call, callee_type)
             return callee_type
@@ -7834,8 +7834,8 @@ class TypeChecker:
         if callee_type.typetype == ZTypeType.UNION:
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
-            self.program.node_type[call.nodeid] = callee_type
-            self.program.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
+            self.typing.node_type[call.nodeid] = callee_type
+            self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
             return callee_type
 
         # bare-name protocol construction: `myproto source` is equivalent
@@ -7846,7 +7846,7 @@ class TypeChecker:
             and callee_type.typetype == ZTypeType.PROTOCOL
             and "create" in callee_type.children
         ):
-            self.program.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
+            self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
             return self._check_protocol_create(callee_type, call)
 
         # bare-name facet construction: same pattern as protocol.
@@ -7855,7 +7855,7 @@ class TypeChecker:
             and callee_type.typetype == ZTypeType.FACET
             and "create" in callee_type.children
         ):
-            self.program.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
+            self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
             return self._check_protocol_create(callee_type, call)
 
         # bare-name typedef construction: same pattern.
@@ -7864,7 +7864,7 @@ class TypeChecker:
             and callee_type.typedef_base is not None
             and "create" in callee_type.children
         ):
-            self.program.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
+            self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
             return self._check_typedef_create(callee_type, call)
 
         # generic unit instantiation: (mathops t: i64) → monomorphized unit
@@ -7872,8 +7872,8 @@ class TypeChecker:
         if callee_type.typetype == ZTypeType.UNIT and callee_type.isgeneric:
             mono = self._resolve_typeref_call(call)
             if mono:
-                self.program.node_type[call.nodeid] = mono
-                self.program.call_kind[call.nodeid] = zast.CallKind.UNIT_INSTANTIATE
+                self.typing.node_type[call.nodeid] = mono
+                self.typing.call_kind[call.nodeid] = zast.CallKind.UNIT_INSTANTIATE
                 return mono
             return None
             return None
@@ -7893,24 +7893,24 @@ class TypeChecker:
             in ("create", "take", "borrow")
         ):
             callable_dp2 = cast(zast.DottedPath, call.callable)
-            parent_type = self.program.node_type.get(callable_dp2.parent.nodeid)
+            parent_type = self.typing.node_type.get(callable_dp2.parent.nodeid)
             if parent_type and parent_type.typetype == ZTypeType.PROTOCOL:
                 if callable_dp2.child.name == "borrow":
-                    self.program.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_BORROW
+                    self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_BORROW
                     return self._check_protocol_borrow(parent_type, call)
-                self.program.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
+                self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
                 return self._check_protocol_create(parent_type, call)
             if parent_type and parent_type.typetype == ZTypeType.FACET:
                 if callable_dp2.child.name == "borrow":
-                    self.program.call_kind[call.nodeid] = zast.CallKind.FACET_BORROW
+                    self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_BORROW
                     return self._check_protocol_borrow(parent_type, call)
-                self.program.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
+                self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
                 return self._check_protocol_create(parent_type, call)
             if parent_type and parent_type.typedef_base is not None:
                 if callable_dp2.child.name == "borrow":
-                    self.program.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_BORROW
+                    self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_BORROW
                     return self._check_typedef_borrow(parent_type, call)
-                self.program.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
+                self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
                 return self._check_typedef_create(parent_type, call)
 
         # parameter types (skip 'this' — handled separately for method calls)
@@ -7919,7 +7919,7 @@ class TypeChecker:
         # for callable dispatch, skip the 'this' parameter (first param of call method)
         # — the receiver is passed implicitly
         if (
-            self.program.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+            self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
             == zast.CallKind.CALLABLE
             and params
         ):
@@ -8135,13 +8135,13 @@ class TypeChecker:
         self.symtab.pop_to(call_marker)
         self._call_id_stack.pop()
 
-        self.program.node_type[call.nodeid] = ret if ret else self.t_null
+        self.typing.node_type[call.nodeid] = ret if ret else self.t_null
         if (
-            self.program.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+            self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
             == zast.CallKind.UNKNOWN
         ):
-            self.program.call_kind[call.nodeid] = zast.CallKind.REGULAR
-        return self.program.node_type.get(call.nodeid)
+            self.typing.call_kind[call.nodeid] = zast.CallKind.REGULAR
+        return self.typing.node_type.get(call.nodeid)
 
     def _check_missing_create_args(self, type_def: ZType, call: zast.Call) -> None:
         """Check for missing required arguments in bare-name construction.
@@ -8269,8 +8269,8 @@ class TypeChecker:
         # (otherwise _emit_assignment defaults to int64_t and breaks
         # any non-i64 hoist).
         temp_assn = cast(zast.Assignment, temp_line.statementline)
-        self.program.node_type[temp_assn.nodeid] = arg_type
-        self.program.node_type[temp_assn.value.nodeid] = arg_type
+        self.typing.node_type[temp_assn.nodeid] = arg_type
+        self.typing.node_type[temp_assn.value.nodeid] = arg_type
         # If the source expression is alias-eligible, make the synth
         # temp a C-level alias instead of a real local. Without this,
         # hoisting `w.lock` into `_t1: w.lock` emits a struct copy
@@ -8300,7 +8300,7 @@ class TypeChecker:
                     )
                 )
                 if alias_target is not None:
-                    self.program.assign_alias_of[temp_assn.nodeid] = alias_target
+                    self.typing.assign_alias_of[temp_assn.nodeid] = alias_target
         # Synth Assignments hoisted out of call args don't go through
         # `_check_assignment` (they're inserted into the preamble
         # buffer and drained back into the parent Statement), so
@@ -8323,7 +8323,7 @@ class TypeChecker:
             borrow_origin = ".".join(arg_borrow_path)
         elif arg.valtype.nodetype == NodeType.DOTTEDPATH:
             dp = cast(zast.DottedPath, arg.valtype)
-            parent_t = self.program.node_type.get(dp.parent.nodeid)
+            parent_t = self.typing.node_type.get(dp.parent.nodeid)
             method = (
                 parent_t.children.get(dp.child.name) if parent_t is not None else None
             )
@@ -8344,7 +8344,7 @@ class TypeChecker:
         self.symtab.define_var(temp_name, var)
         # Replace the arg's value with an AtomId reference to the temp.
         atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
-        self.program.node_type[atom.nodeid] = arg_type
+        self.typing.node_type[atom.nodeid] = arg_type
         # `NamedOperation` is frozen post-Step 7; this is the
         # last in-place mutation needed for atomic-call hoisting
         # (rebuilding the parent Call's arguments list with a fresh
@@ -8663,7 +8663,7 @@ class TypeChecker:
             # already invalidated the source — we still want to alias to
             # that source's storage (the source slot persists until its
             # enclosing scope ends; the alias just names it).
-            atom_t = self.program.node_type.get(atom.nodeid)
+            atom_t = self.typing.node_type.get(atom.nodeid)
             if atom_t is None:
                 return None
             # Reject names that resolve to types, functions, data, or
@@ -8696,7 +8696,7 @@ class TypeChecker:
             # field access — the parent must be a valtype (struct-field
             # addressing is free). Reftype pointer hops are rejected so the
             # programmer's "pin in a register" intent is preserved.
-            parent_type = self.program.node_type.get(dp.parent.nodeid)
+            parent_type = self.typing.node_type.get(dp.parent.nodeid)
             if parent_type is None or not _is_valtype(parent_type):
                 return None
             # The child must be a real data field of the parent type, not a
@@ -8713,7 +8713,7 @@ class TypeChecker:
                 ZTypeType.FACET,
             ):
                 return None
-            if self.program.dp_parent_tagged_type.get(dp.nodeid) is not None:
+            if self.typing.dp_parent_tagged_type.get(dp.nodeid) is not None:
                 return None
             parent_path = self._alias_target_inner(cast(zast.Operation, dp.parent))
             if parent_path is None:
@@ -8783,7 +8783,7 @@ class TypeChecker:
             # produces a value whose lock lives on its source path.
             if arg.valtype.nodetype == NodeType.DOTTEDPATH:
                 dp = cast(zast.DottedPath, arg.valtype)
-                parent_type = self.program.node_type.get(dp.parent.nodeid)
+                parent_type = self.typing.node_type.get(dp.parent.nodeid)
                 method_type = (
                     parent_type.children.get(dp.child.name)
                     if parent_type is not None
@@ -8999,7 +8999,7 @@ class TypeChecker:
                 self._hoist_arg(from_arg, arg_type, arg_borrow_path)
             self._apply_take_to_arg(from_arg, "from")
 
-        self.program.node_type[call.nodeid] = proto_type
+        self.typing.node_type[call.nodeid] = proto_type
         return proto_type
 
     def _check_protocol_borrow(
@@ -9050,7 +9050,7 @@ class TypeChecker:
         if src_path:
             self._pending_borrow_lock = src_path
 
-        self.program.node_type[call.nodeid] = proto_type
+        self.typing.node_type[call.nodeid] = proto_type
         return proto_type
 
     def _check_typedef_create(
@@ -9097,7 +9097,7 @@ class TypeChecker:
             self._hoist_arg(from_arg, arg_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
 
-        self.program.node_type[call.nodeid] = typedef_type
+        self.typing.node_type[call.nodeid] = typedef_type
         return typedef_type
 
     def _check_typedef_borrow(
@@ -9137,7 +9137,7 @@ class TypeChecker:
         if src_path:
             self._pending_borrow_lock = src_path
 
-        self.program.node_type[call.nodeid] = typedef_type
+        self.typing.node_type[call.nodeid] = typedef_type
         return typedef_type
 
     def _check_return_call(self, call: zast.Call) -> Optional[ZType]:
@@ -9226,7 +9226,7 @@ class TypeChecker:
                 # — that goes through the meta-create signature in Phase 4)
                 for a in call.arguments[1:]:
                     self._check_operation(a.valtype)
-                self.program.node_type[call.arguments[0].valtype.nodeid] = enclosing
+                self.typing.node_type[call.arguments[0].valtype.nodeid] = enclosing
                 ret_type_meta: Optional[ZType] = enclosing
                 if self._current_return_type and ret_type_meta:
                     if not self._types_compatible(
@@ -9240,10 +9240,10 @@ class TypeChecker:
                             err=ERR.TYPEERROR,
                         )
                 never_meta = self._resolve_name("never")
-                self.program.node_type[call.nodeid] = (
+                self.typing.node_type[call.nodeid] = (
                     never_meta if never_meta else self.t_null
                 )
-                return self.program.node_type.get(call.nodeid)
+                return self.typing.node_type.get(call.nodeid)
 
         # type-check the return expression (first argument)
         ret_type = None
@@ -9415,8 +9415,8 @@ class TypeChecker:
 
         # return has type 'never' (control flow doesn't continue)
         never = self._resolve_name("never")
-        self.program.node_type[call.nodeid] = never if never else self.t_null
-        return self.program.node_type.get(call.nodeid)
+        self.typing.node_type[call.nodeid] = never if never else self.t_null
+        return self.typing.node_type.get(call.nodeid)
 
     def _check_str_convert_call(self, call: zast.Call) -> Optional[ZType]:
         """Check a .str conversion call: string.str to: N or str.str to: N."""
@@ -9453,7 +9453,7 @@ class TypeChecker:
         mono = self._monomorphize(str_template, {"to": to_type}, defn)
         if not mono:
             return None
-        self.program.node_type[call.nodeid] = mono
+        self.typing.node_type[call.nodeid] = mono
         return mono
 
     @staticmethod
@@ -9492,10 +9492,10 @@ class TypeChecker:
         if method and method.typetype == ZTypeType.FUNCTION:
             ret = method.return_type
             if ret:
-                self.program.node_type[binop.nodeid] = ret
+                self.typing.node_type[binop.nodeid] = ret
                 # constant folding: evaluate when both operands are constant integers
-                lhs_cv = self.program.node_const_value.get(binop.lhs.nodeid)
-                rhs_cv = self.program.node_const_value.get(binop.rhs.nodeid)
+                lhs_cv = self.typing.node_const_value.get(binop.lhs.nodeid)
+                rhs_cv = self.typing.node_const_value.get(binop.rhs.nodeid)
                 if (
                     lhs_cv is not None
                     and rhs_cv is not None
@@ -9528,11 +9528,11 @@ class TypeChecker:
                                         loc=binop.start,
                                     )
                                     return ret
-                            self.program.node_const_value[binop.nodeid] = folded
+                            self.typing.node_const_value[binop.nodeid] = folded
                         elif folded is not None and type(folded) is float:
-                            self.program.node_const_value[binop.nodeid] = folded
+                            self.typing.node_const_value[binop.nodeid] = folded
                         elif folded is not None and type(folded) is bool:
-                            self.program.node_const_value[binop.nodeid] = folded
+                            self.typing.node_const_value[binop.nodeid] = folded
                 return ret
 
         self._error(
@@ -9586,7 +9586,7 @@ class TypeChecker:
             last_expr = cast(zast.Expression, last)
             inner = last_expr.expression
             # check for non-completing expressions (return/break/continue/error)
-            if self.program.expr_call_kind.get(
+            if self.typing.expr_call_kind.get(
                 last_expr.nodeid, zast.CallKind.UNKNOWN
             ) in (
                 zast.CallKind.RETURN,
@@ -9596,11 +9596,11 @@ class TypeChecker:
             ):
                 return self._NORETURN
             # get type from the inner expression node (Expression wrapper .type may be None)
-            if self.program.node_type.get(inner.nodeid) is not None:
-                return self.program.node_type.get(inner.nodeid)
-            return self.program.node_type.get(last_expr.nodeid)
+            if self.typing.node_type.get(inner.nodeid) is not None:
+                return self.typing.node_type.get(inner.nodeid)
+            return self.typing.node_type.get(last_expr.nodeid)
         if last.nodetype == NodeType.ASSIGNMENT:
-            return self.program.node_type.get(cast(zast.Assignment, last).nodeid)
+            return self.typing.node_type.get(cast(zast.Assignment, last).nodeid)
         return None
 
     def _check_exhaustive_if(self, expr: zast.Expression) -> None:
@@ -9642,11 +9642,11 @@ class TypeChecker:
                 self._check_operation(cond_op)
             # suppress compile-time errors in constant-false branches
             all_const = all(
-                self.program.node_const_value.get(cond_op.nodeid) is not None
+                self.typing.node_const_value.get(cond_op.nodeid) is not None
                 for _, cond_op in clause.conditions.items()
             )
             all_false = all_const and not all(
-                bool(self.program.node_const_value.get(cond_op.nodeid))
+                bool(self.typing.node_const_value.get(cond_op.nodeid))
                 for _, cond_op in clause.conditions.items()
             )
             if all_false or const_true_taken:
@@ -9705,7 +9705,7 @@ class TypeChecker:
                 never = self._resolve_name("never")
                 if never:
                     result_type = never
-                    self.program.node_type[ifnode.nodeid] = never
+                    self.typing.node_type[ifnode.nodeid] = never
             elif completing:
                 first_raw = completing[0]
                 if first_raw is not None and first_raw.is_ztype:
@@ -9718,7 +9718,7 @@ class TypeChecker:
                     )
                     if all_ok:
                         result_type = first
-                        self.program.node_type[ifnode.nodeid] = first
+                        self.typing.node_type[ifnode.nodeid] = first
                     else:
                         # find first incompatible type for error message
                         for t in completing[1:]:
@@ -9745,7 +9745,7 @@ class TypeChecker:
         if taken_in_any_arm:
             for vname in taken_in_any_arm:
                 _, vtype = saved_vars[vname]
-                self.program.if_taken_vars.setdefault(ifnode.nodeid, []).append(
+                self.typing.if_taken_vars.setdefault(ifnode.nodeid, []).append(
                     (vname, vtype)
                 )
                 take_loc = ifnode.start
@@ -9832,7 +9832,7 @@ class TypeChecker:
         if path.parent.nodetype == NodeType.DOTTEDPATH:
             path_parent_dp = cast(zast.DottedPath, path.parent)
             grandparent_type = (
-                self.program.node_type.get(path_parent_dp.parent.nodeid)
+                self.typing.node_type.get(path_parent_dp.parent.nodeid)
                 if path_parent_dp.parent
                 else None
             )
@@ -9908,8 +9908,8 @@ class TypeChecker:
         # heap-allocated classes in legacy code) use passthrough.
         if inner_type.is_heap_allocated:
             # Already a pointer: passthrough (just take ownership)
-            self.program.node_type[call.nodeid] = inner_type
-            self.program.call_kind[call.nodeid] = zast.CallKind.BOX_PASSTHROUGH
+            self.typing.node_type[call.nodeid] = inner_type
+            self.typing.call_kind[call.nodeid] = zast.CallKind.BOX_PASSTHROUGH
             return inner_type
 
         # stack-allocated value: create monomorphized box type
@@ -9926,8 +9926,8 @@ class TypeChecker:
             for cname, ctype in inner_type.children.items():
                 if cname not in mono.children:
                     mono.children[cname] = ctype
-            self.program.node_type[call.nodeid] = mono
-            self.program.call_kind[call.nodeid] = zast.CallKind.BOX_CREATE
+            self.typing.node_type[call.nodeid] = mono
+            self.typing.call_kind[call.nodeid] = zast.CallKind.BOX_CREATE
         return mono
 
     def _option_template_nodeid(self) -> int:
@@ -10050,7 +10050,7 @@ class TypeChecker:
                 if iter_option_type:
                     some_type = iter_option_type.children.get("some")
                     if some_type:
-                        self.program.for_iter_bindings.setdefault(
+                        self.typing.for_iter_bindings.setdefault(
                             fornode.nodeid, set()
                         ).add(name)
                         t = some_type
@@ -10092,9 +10092,9 @@ class TypeChecker:
                 last = fornode.loop.statements[-1].statementline
                 if last.nodetype == NodeType.EXPRESSION:
                     last_expr2 = cast(zast.Expression, last)
-                    inner_type = self.program.node_type.get(
+                    inner_type = self.typing.node_type.get(
                         last_expr2.nodeid
-                    ) or self.program.node_type.get(last_expr2.expression.nodeid)
+                    ) or self.typing.node_type.get(last_expr2.expression.nodeid)
                     if inner_type:
                         elem_type = inner_type
         # for-loop locks are released when the for scope is popped
@@ -10109,7 +10109,7 @@ class TypeChecker:
                     list_mono = self._monomorphize(
                         list_template, {"of": elem_type}, list_defn
                     )
-                    self.program.node_type[fornode.nodeid] = list_mono
+                    self.typing.node_type[fornode.nodeid] = list_mono
                     return list_mono
         return self.t_null
 
@@ -10211,15 +10211,15 @@ class TypeChecker:
         if borrow_target and not _is_valtype(t):
             self._install_borrow_locks(borrow_target, withnode.name, withnode.start)
 
-        self.program.with_ownership[withnode.nodeid] = ownership
-        self.program.node_type[withnode.nodeid] = t
+        self.typing.with_ownership[withnode.nodeid] = ownership
+        self.typing.node_type[withnode.nodeid] = t
 
         # Phase B: alias optimization — if the RHS is a plain path reference
         # (bare name, dotted valtype path, or inline take/borrow of either),
         # emit the binding as a C-level alias instead of a real local.
         # Either the borrow lock or the take-invalidation guarantees the
         # source slot is stable for the binding's lifetime.
-        self.program.with_alias_of[withnode.nodeid] = self._alias_target(withnode.value)
+        self.typing.with_alias_of[withnode.nodeid] = self._alias_target(withnode.value)
 
         do_type = self._check_expression(withnode.doexpr).ztype
         self.symtab.pop()
@@ -10242,7 +10242,7 @@ class TypeChecker:
             arm_marker = self.symtab.push_block(f"arm:{clause.match.name}")
             arm_matches = clause.match.name == concrete_name
             # tag each clause with its type name for emitter const folding
-            self.program.node_const_value[clause.match.nodeid] = clause.match.name
+            self.typing.node_const_value[clause.match.nodeid] = clause.match.name
             if const_match_taken or not arm_matches:
                 self._suppress_compile_error += 1
             self._check_statement(clause.statement)
@@ -10264,7 +10264,7 @@ class TypeChecker:
         self.symtab.pop_to(match_marker)
 
         # mark the match as a generic type switch for the emitter
-        self.program.node_const_value[casenode.subject.nodeid] = concrete_name
+        self.typing.node_const_value[casenode.subject.nodeid] = concrete_name
         # Re-stamp the subject's typed mirror so it picks up the
         # late-set const_value (the original was built during
         # `_check_atomid` before this code ran).
@@ -10288,12 +10288,12 @@ class TypeChecker:
                 never = self._resolve_name("never")
                 if never:
                     result_type = never
-                    self.program.node_type[casenode.nodeid] = never
+                    self.typing.node_type[casenode.nodeid] = never
             elif completing:
                 first_raw = completing[0]
                 if first_raw is not None and first_raw.is_ztype:
                     result_type = cast(ZType, first_raw)
-                    self.program.node_type[casenode.nodeid] = result_type
+                    self.typing.node_type[casenode.nodeid] = result_type
 
         self.symtab.pop()
         return result_type
@@ -10407,7 +10407,7 @@ class TypeChecker:
         # compile-time constant match: for scalar matches, resolve subject
         # const_value to suppress errors in dead arms
         subject_const: object = None
-        subject_cv = self.program.node_const_value.get(casenode.subject.nodeid)
+        subject_cv = self.typing.node_const_value.get(casenode.subject.nodeid)
         if not is_sum_type and subject_cv is not None:
             if type(subject_cv) is int or type(subject_cv) is bool:
                 subject_const = subject_cv
@@ -10454,9 +10454,9 @@ class TypeChecker:
             if (
                 subject_type is not None
                 and subject_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT)
-                and self.program.atom_child_id.get(clause.match.nodeid, -1) == -1
+                and self.typing.atom_child_id.get(clause.match.nodeid, -1) == -1
             ):
-                self.program.atom_child_id[clause.match.nodeid] = (
+                self.typing.atom_child_id[clause.match.nodeid] = (
                     subject_type.child_id_for(clause.match.name)
                 )
 
@@ -10474,11 +10474,11 @@ class TypeChecker:
                     self._resolve_name(mname)
                     mdefn = self._lookup_definition(mname)
                     if mdefn is not None:
-                        mcv = self.program.node_const_value.get(mdefn.nodeid)
+                        mcv = self.typing.node_const_value.get(mdefn.nodeid)
                         if mcv is not None:
                             match_cv = mcv
                 if match_cv is not None:
-                    self.program.node_const_value[clause.match.nodeid] = match_cv
+                    self.typing.node_const_value[clause.match.nodeid] = match_cv
                     if const_match_taken or subject_const != match_cv:
                         suppress_arm = True
                     elif subject_const == match_cv:
@@ -10564,7 +10564,7 @@ class TypeChecker:
 
         # post-match ownership: if subject was taken in any arm, invalidate it
         if subject_taken_in_arm and subject_name:
-            self.program.case_subject_taken[casenode.nodeid] = True
+            self.typing.case_subject_taken[casenode.nodeid] = True
             take_loc = casenode.subject.start
             loc_tuple = (
                 (take_loc.lineno, take_loc.colno, take_loc.fsno) if take_loc else None
@@ -10581,7 +10581,7 @@ class TypeChecker:
         if taken_in_any_match_arm:
             for vname in taken_in_any_match_arm:
                 _, vtype = saved_match_vars[vname]
-                self.program.case_taken_vars.setdefault(casenode.nodeid, []).append(
+                self.typing.case_taken_vars.setdefault(casenode.nodeid, []).append(
                     (vname, vtype)
                 )
                 take_loc = casenode.start
@@ -10641,7 +10641,7 @@ class TypeChecker:
                 never = self._resolve_name("never")
                 if never:
                     result_type = never
-                    self.program.node_type[casenode.nodeid] = never
+                    self.typing.node_type[casenode.nodeid] = never
             elif completing:
                 first_raw = completing[0]
                 if first_raw is not None and first_raw.is_ztype:
@@ -10654,7 +10654,7 @@ class TypeChecker:
                     )
                     if all_ok:
                         result_type = first
-                        self.program.node_type[casenode.nodeid] = first
+                        self.typing.node_type[casenode.nodeid] = first
                     else:
                         for t in completing[1:]:
                             if (
