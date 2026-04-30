@@ -9,6 +9,7 @@ from typing import Callable, Optional, List, Tuple, Union, cast
 
 import zast
 import ztypedast
+import ztyping
 from zast import ERR, NodeType, clone_function
 from zlexer import Token
 from zenv import SymbolTable
@@ -368,6 +369,12 @@ class TypeChecker:
 
     def __init__(self, program: zast.Program) -> None:
         self.program = program
+        # F5.E.1: typecheck-output container. F5.E.2 onwards
+        # relocates component tables and aggregate state off
+        # `program` onto here; today it carries only the back-ref
+        # to the parsed program and `is_error` so the structure
+        # exists for callers and for incremental migration.
+        self.typing = ztyping.Typing(parsed=program)
         self.errors: List[zast.Error] = []
         self.symtab = SymbolTable()
 
