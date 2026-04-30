@@ -712,9 +712,21 @@ Larger refactors; do in order.
        (371 lines, cohesive — further per-collection-type splitting
        is deferred). Pilot success: the same technique applies to
        the other 4 monsters (F5.G).
-       Remaining F5 sub-items: F5.B (state records), F5.G (decompose
-       4 remaining monsters: `_check_call_inner` 589, `_check_dotted_path_inner`
-       401, `_resolve_dotted_path` 375, `_check_case_inner` 417),
+       F5.G (decompose remaining monsters) resolved across:
+       `a60c961` (F5.G.1: `_check_call_inner` 591→55, 5 helpers
+       — control-flow dispatch, construction dispatch, arg loop,
+       missing-args, finalize),
+       `eaa174d` (F5.G.2: `_check_case_inner` 427→352, 2 helpers
+       — result-type unification, take-invalidation),
+       `6523dde` (F5.G.3: `_check_dotted_path_inner` 433→235, 5
+       intrinsic helpers — `.take`/`.release`/`.borrow`/`.lock`/
+       `.private`),
+       `bc75996` (F5.G.4: `_resolve_dotted_path` 375→252, 1 helper
+       — parent-type resolution).
+       _check_case_inner's residual 352 lines is heavily state-coupled
+       (per-arm clause loop sharing 10+ mutable variables); further
+       reduction would need a context object or wide parameter
+       lists, deferred. Remaining F5 sub-items: F5.B (state records),
        F5.H (flatten `ZType.children` to a relational table).)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
