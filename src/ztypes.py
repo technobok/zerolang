@@ -145,36 +145,10 @@ def _alloc_child_id() -> int:
     return cid
 
 
-class _TagOrigin:
-    """Sentinel for generic_origin when the origin is a tag discriminator type.
-
-    Carries `nodeid = TAG_ORIGIN_ID` so callers can discriminate via the
-    integer id (see `is_tag_origin` below) without dragging in the
-    sentinel object. Keeps compatibility with legacy `is TAG_ORIGIN`
-    checks until those are migrated.
-    """
-
-    is_ztype: bool = False
-    name: str = "tag"
-    nodeid: int = -1
-
-    def __repr__(self) -> str:
-        return "TAG_ORIGIN"
-
-
-TAG_ORIGIN_ID: int = -1
-TAG_ORIGIN = _TagOrigin()
-
-
-def is_tag_origin(origin: "Optional[ZType | _TagOrigin]") -> bool:
-    """True if `origin` is the tag-origin sentinel. Callers should use
-    this helper rather than `is TAG_ORIGIN` so the check runs off
-    `nodeid == TAG_ORIGIN_ID` and future interning / serialization
-    changes don't break identity-based comparison.
-    """
-    if origin is None:
-        return False
-    return origin.nodeid == TAG_ORIGIN_ID
+# Tag-origin types (variant tag discriminator instances) are flagged by
+# `ZType.is_tag_generic_origin = True`. `generic_origin` stays None on
+# those — the boolean is the SQL-shaped marker, replacing the old
+# `_TagOrigin` sentinel that lived in `generic_origin`.
 
 
 @dataclass
@@ -243,8 +217,13 @@ class ZType:
     # generic type parameters: param name → constraint ZType (for template types)
     generic_params: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
-    # for monomorphized types: points to the original template type (or TAG_ORIGIN sentinel)
-    generic_origin: "Optional[ZType | _TagOrigin]" = field(default=None, init=False)
+    # for monomorphized types: points to the original template type.
+    # None for non-monomorphized types AND for variant-tag discriminator
+    # types — the latter are flagged separately via `is_tag_generic_origin`.
+    generic_origin: "Optional[ZType]" = field(default=None, init=False)
+    # variant-tag discriminator marker (replaces the old TAG_ORIGIN sentinel
+    # that used to live in `generic_origin`).
+    is_tag_generic_origin: bool = field(default=False, init=False)
 
     # for monomorphized types: maps param name → concrete ZType
     generic_args: "dict[str, ZType]" = field(default_factory=dict, init=False)

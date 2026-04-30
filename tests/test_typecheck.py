@@ -17,8 +17,6 @@ from ztypes import (
     ZLockState,
     ZVariable,
     ZNaming,
-    TAG_ORIGIN,
-    is_tag_origin,
 )
 import zast
 from zast import NodeType
@@ -4746,7 +4744,7 @@ class TestDataTypeResolution:
         assert "tag" in dt.children
         tag = dt.children["tag"]
         assert tag.typetype == ZTypeType.RECORD
-        assert tag.generic_origin is TAG_ORIGIN
+        assert tag.is_tag_generic_origin
         assert tag.name == "tag__i64"
 
     def test_data_tag_parent_is_data(self):
@@ -4944,7 +4942,7 @@ class TestUnionCustomTag:
         tc.check()
         dt = tc._resolved.get("test.mydata")
         tag = dt.children["tag"]
-        assert tag.generic_origin is TAG_ORIGIN
+        assert tag.is_tag_generic_origin
         assert tag.name == "tag__i64"
         assert tag.parent is dt
 
@@ -11223,7 +11221,7 @@ class TestOptionview:
         mono = None
         for k, v in tc._resolved.items():
             if "OptionView" in k and v.typetype == ZTypeType.UNION:
-                if v.generic_origin is not None and not is_tag_origin(v.generic_origin):
+                if v.generic_origin is not None:
                     mono = v
                     break
         assert mono is not None, "OptionView mono not resolved"
@@ -11252,7 +11250,7 @@ class TestOptionview:
             elif "optionval_i64" in k and v.typetype == ZTypeType.VARIANT:
                 b_t = v
             elif "OptionView" in k and v.typetype == ZTypeType.UNION:
-                if v.generic_origin is not None and not is_tag_origin(v.generic_origin):
+                if v.generic_origin is not None:
                     c_t = v
         assert a_t and b_t and c_t
         assert tc._is_iterator_wrapper(a_t)

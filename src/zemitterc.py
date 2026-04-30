@@ -22,7 +22,6 @@ from ztypes import (
     ZParamOwnership,
     ZOwnership,
     NUMERIC_RANGES,
-    is_tag_origin,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -1627,9 +1626,7 @@ class CEmitter:
             ftype = self._node_ztype(fpath)
             if ftype is None:
                 return False
-            if ftype.generic_origin is not None and not is_tag_origin(
-                ftype.generic_origin
-            ):
+            if ftype.generic_origin is not None:
                 return False  # list / map / option / result etc.
             # Numeric / bool / null — native records in TYPEMAP are OK.
             if ftype.name in TYPEMAP:
@@ -2813,7 +2810,7 @@ class CEmitter:
                     ZTypeType.NULL,
                 ):
                     continue
-                if is_tag_origin(ftype.generic_origin):
+                if ftype.is_tag_generic_origin:
                     continue
                 ct = _ctype(ftype)
                 sz = CTYPE_SIZES.get(ct, 0)
@@ -2835,7 +2832,7 @@ class CEmitter:
                 ZTypeType.NULL,
             ):
                 continue
-            if is_tag_origin(ftype.generic_origin):
+            if ftype.is_tag_generic_origin:
                 continue
             ct = _ctype(ftype)
             sz = CTYPE_SIZES.get(ct, 0)
@@ -3433,7 +3430,7 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
-            if is_tag_origin(stype.generic_origin):
+            if stype.is_tag_generic_origin:
                 continue
             subtype_items.append((sname, stype))
 
@@ -3557,7 +3554,7 @@ class CEmitter:
                 ZTypeType.ENUM,
             ):
                 continue
-            if is_tag_origin(stype.generic_origin):
+            if stype.is_tag_generic_origin:
                 continue
             subtype_items.append((sname, stype))
 
@@ -6143,7 +6140,7 @@ class CEmitter:
             and ftype.generic_origin is not None
             and ftype.generic_origin.is_ztype
         ):
-            gp = cast(ZType, ftype.generic_origin).generic_params
+            gp = ftype.generic_origin.generic_params
             if gp:
                 generic_param_names = set(gp.keys())
 

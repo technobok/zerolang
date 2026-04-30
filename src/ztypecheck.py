@@ -26,8 +26,6 @@ from ztypes import (
     ControlKind,
     ExprResult,
     NUMERIC_RANGES,
-    TAG_ORIGIN,
-    is_tag_origin,
     parse_number,
 )
 from ztypeutil import (
@@ -1679,7 +1677,7 @@ class TypeChecker:
             )
             is_tag = (
                 (as_type and as_type.typetype == ZTypeType.TAG)
-                or (as_type and is_tag_origin(as_type.generic_origin))
+                or (as_type and as_type.is_tag_generic_origin)
                 or (as_type and as_type.isgeneric and as_type.name == "tag")
             )
             if is_tag:
@@ -1765,7 +1763,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
+            gen_tag.is_tag_generic_origin = True
             gen_data.children["tag"] = gen_tag
             ztype.children["tag"] = gen_data
 
@@ -1789,7 +1787,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
+            gen_tag.is_tag_generic_origin = True
             gen_data.children["tag"] = gen_tag
             ztype.children["tag"] = gen_data
 
@@ -2283,7 +2281,7 @@ class TypeChecker:
         et_name = element_type.name if element_type else "i64"
         tag_type = _make_type(f"tag__{et_name}", ZTypeType.RECORD, parent=dtype)
         tag_type.is_valtype = True
-        tag_type.generic_origin = TAG_ORIGIN
+        tag_type.is_tag_generic_origin = True
         dtype.children["tag"] = tag_type
 
         self._resolving.pop()
@@ -2665,7 +2663,7 @@ class TypeChecker:
                 # methods, not value fields — don't participate in equality
             if ftype.typetype == ZTypeType.GENERIC_PARAM:
                 return  # cannot verify, skip synthesis
-            if is_tag_origin(ftype.generic_origin):
+            if ftype.is_tag_generic_origin:
                 continue  # tag access helper
             # float fields disqualify memcmp (NaN != NaN, -0.0 == +0.0)
             if ftype.name in self._FLOAT_TYPES:
@@ -4094,10 +4092,10 @@ class TypeChecker:
                 ) and self._types_compatible(child, proto_type):
                     return label
             origin = t.generic_origin
-            if origin is None or is_tag_origin(origin):
+            if origin is None or t.is_tag_generic_origin:
                 t = None
             else:
-                t = cast(ZType, origin)
+                t = origin
         return None
 
     def _try_protocol_coerce(
@@ -4216,7 +4214,7 @@ class TypeChecker:
                         and v.typetype != ZTypeType.DATA
                         and v.typetype != ZTypeType.TAG
                         and v.typetype != ZTypeType.ENUM
-                        and not is_tag_origin(v.generic_origin)
+                        and not v.is_tag_generic_origin
                     }
                     if concrete_type.name not in subtype_names:
                         self._error(
@@ -4282,7 +4280,7 @@ class TypeChecker:
             elif (
                 child_type.isgeneric
                 and child_type.generic_origin is not None
-                and not is_tag_origin(child_type.generic_origin)
+                and not child_type.is_tag_generic_origin
                 and not is_partial
                 and child_type.typetype != ZTypeType.UNIT
             ):
@@ -4297,7 +4295,9 @@ class TypeChecker:
                         child_args[gp_name] = generic_args[gp_arg.name]
                     else:
                         child_args[gp_name] = gp_arg
-                child_origin = cast(ZType, child_type.generic_origin)
+                child_origin = child_type.generic_origin
+                if child_origin is None:
+                    continue
                 child_defn = self._find_generic_defn(child_origin)
                 if child_defn:
                     mono.children[child_name] = self._monomorphize(
@@ -4371,7 +4371,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
-                and not is_tag_origin(mono.children[k].generic_origin)
+                and not mono.children[k].is_tag_generic_origin
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -4384,7 +4384,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
+            gen_tag.is_tag_generic_origin = True
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
 
@@ -4398,7 +4398,7 @@ class TypeChecker:
                 and mono.children[k].typetype != ZTypeType.DATA
                 and mono.children[k].typetype != ZTypeType.TAG
                 and mono.children[k].typetype != ZTypeType.ENUM
-                and not is_tag_origin(mono.children[k].generic_origin)
+                and not mono.children[k].is_tag_generic_origin
             ]
             tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
             for i, sname in enumerate(subtype_names):
@@ -4410,7 +4410,7 @@ class TypeChecker:
                 gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
             gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
             gen_tag.is_valtype = True
-            gen_tag.generic_origin = TAG_ORIGIN
+            gen_tag.is_tag_generic_origin = True
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
 
@@ -5038,9 +5038,9 @@ class TypeChecker:
         if "." in name:
             parts = name.rsplit(".", 1)
             origin = template_type.generic_origin
-            if origin is not None and not is_tag_origin(origin):
+            if origin is not None and not template_type.is_tag_generic_origin:
                 # the generic origin IS the original definition
-                origin_defn = self._find_generic_defn(cast(ZType, origin))
+                origin_defn = self._find_generic_defn(origin)
                 if origin_defn is not None:
                     return origin_defn
             # also search all unit bodies recursively for the leaf name
@@ -5476,7 +5476,7 @@ class TypeChecker:
                                 ZTypeType.TAG,
                                 ZTypeType.ENUM,
                             )
-                            or is_tag_origin(v.generic_origin)
+                            or v.is_tag_generic_origin
                         ):
                             continue
                         if v.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
@@ -5640,10 +5640,10 @@ class TypeChecker:
                 ):
                     return True
             origin = t.generic_origin
-            if origin is None or is_tag_origin(origin):
+            if origin is None or t.is_tag_generic_origin:
                 t = None
             else:
-                t = cast(ZType, origin)
+                t = origin
         return False
 
     def _find_generic_func_defn(self, template: ZType) -> Optional[zast.Function]:
@@ -10012,7 +10012,7 @@ class TypeChecker:
         return (
             t.typetype == ZTypeType.UNION
             and t.generic_origin is not None
-            and not is_tag_origin(t.generic_origin)
+            and not t.is_tag_generic_origin
             and t.generic_origin.nodeid == self._option_template_nodeid()
         )
 
@@ -10021,7 +10021,7 @@ class TypeChecker:
         return (
             t.typetype == ZTypeType.VARIANT
             and t.generic_origin is not None
-            and not is_tag_origin(t.generic_origin)
+            and not t.is_tag_generic_origin
             and t.generic_origin.nodeid == self._optionval_template_nodeid()
         )
 
@@ -10030,7 +10030,7 @@ class TypeChecker:
         return (
             t.typetype == ZTypeType.UNION
             and t.generic_origin is not None
-            and not is_tag_origin(t.generic_origin)
+            and not t.is_tag_generic_origin
             and t.generic_origin.nodeid == self._optionview_template_nodeid()
         )
 
@@ -10444,7 +10444,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
-                and not is_tag_origin(v.generic_origin)
+                and not v.is_tag_generic_origin
             }
             covered = {clause.match.name for clause in casenode.clauses}
             missing = subtypes - covered
@@ -10671,7 +10671,7 @@ class TypeChecker:
                     ZTypeType.TAG,
                     ZTypeType.ENUM,
                 )
-                and not is_tag_origin(v.generic_origin)
+                and not v.is_tag_generic_origin
             }
             covered_for_exhaust = {clause.match.name for clause in casenode.clauses}
             if not (subtypes_for_exhaust - covered_for_exhaust):

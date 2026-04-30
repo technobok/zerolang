@@ -11,7 +11,7 @@ import zast
 import ztypedast
 from zast import NodeType
 from zlexer import Token
-from ztypes import ZType, is_tag_origin
+from ztypes import ZType
 import zemitterc
 
 
@@ -334,8 +334,8 @@ def dump_sql(
             _register_type(zt.parent)
         if zt.typedef_base:
             _register_type(zt.typedef_base)
-        if zt.generic_origin is not None and not is_tag_origin(zt.generic_origin):
-            _register_type(cast(ZType, zt.generic_origin))
+        if zt.generic_origin is not None:
+            _register_type(zt.generic_origin)
 
     # from resolved dict
     for ztype in program.resolved.values():
@@ -353,7 +353,7 @@ def dump_sql(
             _sql_int(ztype.typedef_base.nodeid) if ztype.typedef_base else "NULL"
         )
         origin_id = "NULL"
-        if ztype.generic_origin is not None and not is_tag_origin(ztype.generic_origin):
+        if ztype.generic_origin is not None:
             origin_id = _sql_int(ztype.generic_origin.nodeid)
         lines.append(
             f"INSERT OR IGNORE INTO types VALUES ("

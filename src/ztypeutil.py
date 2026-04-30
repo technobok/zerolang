@@ -6,7 +6,7 @@ and extract their type parameters.
 """
 
 from typing import Optional
-from ztypes import ZType, ZSubType, TAG_ORIGIN
+from ztypes import ZType, ZSubType
 
 
 def is_numeric_id(name: str) -> bool:
@@ -37,11 +37,7 @@ def is_array_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "array"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "array"
 
 
 def array_element_type(ztype: ZType) -> Optional[ZType]:
@@ -66,11 +62,7 @@ def is_str_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "str"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "str"
 
 
 def str_capacity(ztype: ZType) -> Optional[int]:
@@ -89,11 +81,7 @@ def is_list_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "List"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "List"
 
 
 def list_element_type(ztype: ZType) -> Optional[ZType]:
@@ -107,11 +95,7 @@ def is_listview_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "ListView"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "ListView"
 
 
 def listview_element_type(ztype: ZType) -> Optional[ZType]:
@@ -125,11 +109,7 @@ def is_listiter_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "ListIter"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "ListIter"
 
 
 def listiter_element_type(ztype: ZType) -> Optional[ZType]:
@@ -144,9 +124,7 @@ def is_mapkeyiter_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "MapKeyIter"
+        ztype.generic_origin is not None and ztype.generic_origin.name == "MapKeyIter"
     )
 
 
@@ -168,9 +146,7 @@ def is_mapitemiter_type(ztype: Optional[ZType]) -> bool:
     if not ztype:
         return False
     return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "MapItemIter"
+        ztype.generic_origin is not None and ztype.generic_origin.name == "MapItemIter"
     )
 
 
@@ -191,11 +167,7 @@ def is_mapentry_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "MapEntry"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "MapEntry"
 
 
 def mapentry_key_type(ztype: ZType) -> Optional[ZType]:
@@ -215,11 +187,7 @@ def is_map_type(ztype: Optional[ZType]) -> bool:
     ztype = _unwrap_typedef(ztype)
     if not ztype:
         return False
-    return (
-        ztype.generic_origin is not None
-        and ztype.generic_origin is not TAG_ORIGIN
-        and ztype.generic_origin.name == "Map"
-    )
+    return ztype.generic_origin is not None and ztype.generic_origin.name == "Map"
 
 
 def map_key_type(ztype: ZType) -> Optional[ZType]:
