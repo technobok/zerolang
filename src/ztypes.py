@@ -467,6 +467,11 @@ class Entry:
     # taken state
     is_taken: bool = False
     taken_at: Optional[Tuple[int, int, int]] = None
+    # F4.1: marks the receiver-bound parameter Entry (the parameter whose
+    # declared type is the `this` keyword). Lets the emitter detect the
+    # receiver via Entry instead of comparing the parameter name to the
+    # literal "this".
+    is_receiver: bool = False
 
 
 @dataclass

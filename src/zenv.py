@@ -195,9 +195,15 @@ class SymbolTable:
         entry = Entry(name=name, ztype=ztype, is_definition=True)
         self._scopes[-1].append(entry)
 
-    def define_var(self, name: str, var: ZVariable) -> None:
+    def define_var(self, name: str, var: ZVariable, is_receiver: bool = False) -> None:
         """Define a runtime variable with ownership tracking."""
-        entry = Entry(name=name, ztype=var.ztype, is_definition=True, var=var)
+        entry = Entry(
+            name=name,
+            ztype=var.ztype,
+            is_definition=True,
+            var=var,
+            is_receiver=is_receiver,
+        )
         self._scopes[-1].append(entry)
 
     def lookup(self, name: str) -> Optional[ZType]:
