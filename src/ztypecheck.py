@@ -627,6 +627,19 @@ class TypeChecker:
             )
         )
 
+    def _copy_children(self, dst: ZType, src: ZType) -> None:
+        """F5.H.2: copy every child of `src` into `dst` via _set_child.
+
+        Replaces the legacy `dst.children = src.children` aliasing
+        (shared dict reference) with explicit per-key mirroring so the
+        flat table picks up matching rows under `dst.nodeid`. Used for
+        const-bearing wrapper types in `as`-block items, which after
+        creation are not further mutated, so a snapshot copy is
+        semantically equivalent to the old shared-dict form.
+        """
+        for k, v in src.children.items():
+            self._set_child(dst, k, v)
+
     def _set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
         """F5.H.2: write a (parent, name, arg) generic-arg entry to
         both `parent.generic_args` and `Typing.type_generic_arg`.
@@ -2798,7 +2811,7 @@ class TypeChecker:
                         # create a type that inherits from the canonical numeric type
                         # so operators work, but carries const_value for the emitter
                         ct = _make_type(at.name, at.typetype)
-                        ct.children = at.children  # share operator methods
+                        self._copy_children(ct, at)  # mirror operator methods
                         ct.const_value = value
                         ct.is_valtype = True
                         self.typing.node_type[apath.nodeid] = ct
@@ -2835,7 +2848,7 @@ class TypeChecker:
                             if p.nodetype == NodeType.STRINGCHUNK
                         )
                         ct = _make_type(sv_type.name, sv_type.typetype)
-                        ct.children = sv_type.children
+                        self._copy_children(ct, sv_type)
                         ct.subtype = sv_type.subtype
                         ct.const_value = raw
                         ct.is_valtype = True
@@ -2854,7 +2867,7 @@ class TypeChecker:
                 apath_cv = self.typing.node_const_value.get(apath.nodeid)
                 if t and apath_cv is not None:
                     ct = _make_type(t.name, t.typetype)
-                    ct.children = t.children
+                    self._copy_children(ct, t)
                     ct.const_value = apath_cv
                     ct.is_valtype = True
                     self._set_child(rtype, label, ct)
@@ -4659,7 +4672,8 @@ class TypeChecker:
         then populates `mono.children`."""
         mono = _make_type(mangled, template_type.typetype)
         mono.generic_origin = template_type
-        mono.generic_args = dict(generic_args)
+        for ga_name, ga_type in generic_args.items():
+            self._set_generic_arg(mono, ga_name, ga_type)
         mono.is_valtype = template_type.is_valtype
         mono.is_native = template_type.is_native
         _set_destructor_metadata(mono)
@@ -5020,8 +5034,10 @@ class TypeChecker:
             sub_name = f"{parent_name}.{child_name}"
             sub_unit = _make_type(sub_name, ZTypeType.UNIT)
             sub_unit.generic_origin = child_type
-            sub_unit.generic_args = dict(child_type.generic_args)
-            sub_unit.generic_args.update(args)
+            for ga_name, ga_type in child_type.generic_args.items():
+                self._set_generic_arg(sub_unit, ga_name, ga_type)
+            for ga_name, ga_type in args.items():
+                self._set_generic_arg(sub_unit, ga_name, ga_type)
             for gp_name, gp_constraint in child_type.generic_params.items():
                 if gp_name not in args:
                     sub_unit.generic_params[gp_name] = gp_constraint
@@ -5546,7 +5562,8 @@ class TypeChecker:
         # create monomorphized function type
         mono = _make_type(mangled, ZTypeType.FUNCTION)
         mono.generic_origin = template
-        mono.generic_args = dict(generic_args)
+        for ga_name, ga_type in generic_args.items():
+            self._set_generic_arg(mono, ga_name, ga_type)
         mono.is_native = template.is_native
 
         # copy internal metadata fields
