@@ -726,8 +726,19 @@ Larger refactors; do in order.
        _check_case_inner's residual 352 lines is heavily state-coupled
        (per-arm clause loop sharing 10+ mutable variables); further
        reduction would need a context object or wide parameter
-       lists, deferred. Remaining F5 sub-items: F5.B (state records),
-       F5.H (flatten `ZType.children` to a relational table).)*
+       lists, deferred.
+       F5.B (state records — partial) resolved across `fb8360a`
+       (F5.B.1: MonoState — 8 mono-related fields, 59 access rebases),
+       `1224b59` (F5.B.2: FunctionContext — 5 function-body fields,
+       63 access rebases), `3ec7802` (F5.B.3: TemplateIds — 3 lazy
+       template-id fields, 9 access rebases). The fourth planned
+       grouping (ResolverState — `unit_types`/`_resolved`/etc.) is
+       deferred: those fields are publicly named on `TypeChecker`
+       and read by ~100 test sites; the cosmetic gain doesn't
+       justify the test churn.
+       Remaining F5 sub-item: F5.H (flatten `ZType.children` to a
+       relational table) — high blast radius, deferred to a future
+       focused pass.)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
