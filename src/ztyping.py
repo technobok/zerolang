@@ -45,6 +45,12 @@ class TypeChild:
     `ZType.child_id_for(child_name)` (Phase 7b children_id_map);
     `position` preserves declaration order (rows appear in
     insertion order in `Typing.type_child` per parent).
+
+    `child_type` is the in-memory ZType reference, kept alongside the
+    id for fast resolution during the F5.H transition. SQL dumps
+    write `child_type_id` only; in-memory consumers read `child_type`.
+    A future refactor (post-F5.H) can drop the ref once a global
+    nodeid → ZType registry is in place.
     """
 
     parent_type_id: int
@@ -52,6 +58,7 @@ class TypeChild:
     child_name_id: int
     child_type_id: int
     position: int
+    child_type: "ZType"
 
 
 @dataclass
@@ -59,12 +66,14 @@ class TypeGenericArg:
     """One row of the flat generic-args table (F5.H).
 
     Replaces a `(parent_ztype, param_name) → arg_ztype` entry from
-    `ZType.generic_args`.
+    `ZType.generic_args`. `arg_type` is the in-memory ZType
+    reference (transitional; see TypeChild docstring).
     """
 
     parent_type_id: int
     param_name: str
     arg_type_id: int
+    arg_type: "ZType"
 
 
 @dataclass
@@ -178,7 +187,99 @@ class Typing:
     # ----- Flat ZType.children / generic_args tables (F5.H).
     #
     # F5.H.1: introduced empty alongside the existing `ZType.children`
-    # / `ZType.generic_args` dicts. F5.H.2 will populate these at every
-    # write site; F5.H.3/4 migrate consumers; F5.H.5 removes the dicts.
+    # / `ZType.generic_args` dicts. F5.H.2 populates them at every
+    # write site; F5.H.3/4 migrate consumers via the helper methods
+    # below; F5.H.5 removes the dicts and the helpers become the
+    # only access path.
     type_child: List[TypeChild] = field(default_factory=list, init=False)
     type_generic_arg: List[TypeGenericArg] = field(default_factory=list, init=False)
+
+    # ---- F5.H.3 read accessors (table-backed) ----
+
+    def child_of(self, parent: ZType, name: str) -> "Optional[ZType]":
+        """`parent.children.get(name)` equivalent. Linear scan over
+        `type_child`; child counts per parent are small (handful of
+        methods/fields per type), so this is acceptable."""
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                return row.child_type
+            i += 1
+        return None
+
+    def children_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
+        """`list(parent.children.items())` equivalent. Pairs are in
+        declaration order."""
+        out: "List[tuple[str, ZType]]" = []
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid:
+                out.append((row.child_name, row.child_type))
+            i += 1
+        return out
+
+    def has_child(self, parent: ZType, name: str) -> bool:
+        """`name in parent.children` equivalent."""
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                return True
+            i += 1
+        return False
+
+    def child_count(self, parent: ZType) -> int:
+        """`len(parent.children)` equivalent."""
+        c = 0
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            if rows[i].parent_type_id == parent.nodeid:
+                c += 1
+            i += 1
+        return c
+
+    def generic_arg_of(self, parent: ZType, name: str) -> "Optional[ZType]":
+        """`parent.generic_args.get(name)` equivalent."""
+        rows = self.type_generic_arg
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid and row.param_name == name:
+                return row.arg_type
+            i += 1
+        return None
+
+    def generic_args_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
+        """`list(parent.generic_args.items())` equivalent."""
+        out: "List[tuple[str, ZType]]" = []
+        rows = self.type_generic_arg
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid:
+                out.append((row.param_name, row.arg_type))
+            i += 1
+        return out
+
+    def has_generic_args(self, parent: ZType) -> bool:
+        """Truthy `parent.generic_args` equivalent (non-empty test)."""
+        rows = self.type_generic_arg
+        n = len(rows)
+        i = 0
+        while i < n:
+            if rows[i].parent_type_id == parent.nodeid:
+                return True
+            i += 1
+        return False

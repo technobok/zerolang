@@ -609,6 +609,7 @@ class TypeChecker:
                 row = rows[i]
                 if row.parent_type_id == parent.nodeid and row.child_name_id == name_id:
                     row.child_type_id = child.nodeid
+                    row.child_type = child
                     return
                 i += 1
         # new key (or stale/missing row): append at the next position
@@ -624,6 +625,7 @@ class TypeChecker:
                 child_name_id=name_id,
                 child_type_id=child.nodeid,
                 position=pos,
+                child_type=child,
             )
         )
 
@@ -653,6 +655,7 @@ class TypeChecker:
             row = rows[i]
             if row.parent_type_id == parent.nodeid and row.param_name == name:
                 row.arg_type_id = arg.nodeid
+                row.arg_type = arg
                 return
             i += 1
         rows.append(
@@ -660,6 +663,7 @@ class TypeChecker:
                 parent_type_id=parent.nodeid,
                 param_name=name,
                 arg_type_id=arg.nodeid,
+                arg_type=arg,
             )
         )
 
