@@ -6167,8 +6167,16 @@ class TypeChecker:
     def _check_expression(self, expr: zast.Expression) -> ExprResult:
         inner = expr.expression
         t: Optional[ZType] = None
+        # borrow_target / private_access flow back from the inner CALL or
+        # OPERATION through their ExprResult; other branches don't carry
+        # borrow intent.
+        borrow_target: Optional[Tuple[str, ...]] = None
+        private_access: bool = False
         if inner.nodetype == NodeType.CALL:
-            t = self._check_call(cast(zast.Call, inner))
+            call_result = self._check_call(cast(zast.Call, inner))
+            t = call_result.ztype
+            borrow_target = call_result.borrow_target
+            private_access = call_result.private_access
         elif inner.nodetype == NodeType.IF:
             t = self._check_if(cast(zast.If, inner))
         elif inner.nodetype == NodeType.FOR:
@@ -6233,12 +6241,8 @@ class TypeChecker:
             inner_op = cast(zast.Operation, inner)
             op_result = self._check_operation(inner_op)
             t = op_result.ztype
-            # restore the borrow/private intent that _check_operation
-            # captured from the legacy side-channel — preserves it for
-            # the final capture below until F5.A.2 pushes ExprResult
-            # all the way through _check_path / _check_dotted_path.
-            self._pending_borrow_lock = op_result.borrow_target
-            self._pending_private_access = op_result.private_access
+            borrow_target = op_result.borrow_target
+            private_access = op_result.private_access
             # propagate const_value from inner operation to expression wrapper
             inner_cv = self._node_const_value.get(inner_op.nodeid)
             if inner_cv is not None:
@@ -6307,26 +6311,25 @@ class TypeChecker:
                 self._expr_call_kind[expr.nodeid] = self._call_kind.get(
                     inner.nodeid, zast.CallKind.UNKNOWN
                 )
-        # capture and clear pending flags into the result so they cannot
-        # leak between statements (replaces the safety clear that was
-        # previously needed after every statement)
-        borrow_target = self._pending_borrow_lock
-        private_access = self._pending_private_access
-        self._pending_borrow_lock = None
-        self._pending_private_access = False
         return ExprResult(t, borrow_target, private_access)
 
     def _check_operation(self, op: zast.Operation) -> ExprResult:
         """Type-check an operation. Returns an ExprResult carrying the
-        resolved ztype plus any borrow_target / private_access intent that
-        the inner path or call resolution stamped via the legacy
-        `_pending_*` side-channel. Captures and clears those flags at the
-        boundary so downstream callers consume intent through the result
-        instead of poking the flags directly.
+        resolved ztype plus any borrow_target / private_access intent
+        that the inner call or path resolution stamped. The CALL branch
+        receives the intent via _check_call's ExprResult; the BINOP /
+        PATH branches still rely on the legacy _pending_* side-channel
+        (cleared at this boundary) until F5.A.3 pushes ExprResult
+        through _check_path / _check_dotted_path / _check_atomid.
         """
         t: Optional[ZType] = None
+        borrow_target: Optional[Tuple[str, ...]] = None
+        private_access: bool = False
         if op.nodetype == NodeType.CALL:
-            t = self._check_call(cast(zast.Call, op))
+            call_result = self._check_call(cast(zast.Call, op))
+            t = call_result.ztype
+            borrow_target = call_result.borrow_target
+            private_access = call_result.private_access
         elif op.nodetype == NodeType.BINOP:
             t = self._check_binop(cast(zast.BinOp, op))
         elif op.nodetype in (
@@ -6357,10 +6360,17 @@ class TypeChecker:
                     loc=op.start,
                 )
                 t = None
-        borrow_target = self._pending_borrow_lock
-        private_access = self._pending_private_access
+        # Capture+clear the side-channel for the BINOP / PATH branches.
+        # CALL branch already cleared the flag inside _check_call; the
+        # capture below sees None for it.
+        flag_borrow = self._pending_borrow_lock
+        flag_private = self._pending_private_access
         self._pending_borrow_lock = None
         self._pending_private_access = False
+        if borrow_target is None:
+            borrow_target = flag_borrow
+        if not private_access:
+            private_access = flag_private
         return ExprResult(t, borrow_target, private_access)
 
     def _check_path(
@@ -7549,14 +7559,20 @@ class TypeChecker:
         self._build_typed_atomid(atom)
         return None
 
-    def _check_call(self, call: zast.Call) -> Optional[ZType]:
+    def _check_call(self, call: zast.Call) -> ExprResult:
         """Type-check a call. Thin wrapper that builds the typed-tree
         mirror after the resolution body has populated `self._node_type.get(call.nodeid)`,
         `self._call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self._call_callable_type_name.get(call.nodeid)`, and the per-argument
-        `NamedOperation` projection stamps."""
+        `NamedOperation` projection stamps. Captures and clears the legacy
+        `_pending_*` side-channel flags at the boundary so the result
+        carries the borrow_target / private_access intent explicitly."""
         t = self._check_call_inner(call)
         self._build_typed_call(call)
-        return t
+        borrow_target = self._pending_borrow_lock
+        private_access = self._pending_private_access
+        self._pending_borrow_lock = None
+        self._pending_private_access = False
+        return ExprResult(t, borrow_target, private_access)
 
     def _check_call_inner(self, call: zast.Call) -> Optional[ZType]:
         # Resolve the callable as the function type itself, not its
