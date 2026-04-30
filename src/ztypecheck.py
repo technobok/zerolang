@@ -3451,14 +3451,25 @@ class TypeChecker:
                 return rtype
         return None
 
-    def _resolve_dotted_path(self, path: zast.DottedPath) -> Optional[ZType]:
-        parent_type: Optional[ZType] = None
+    def _resolve_dp_parent_type(
+        self, path: zast.DottedPath
+    ) -> Tuple[Optional[ZType], bool]:
+        """Resolve the parent type of a dotted path. Returns
+        `(parent_type, early_handled)`:
+
+        - `(t, False)` — `t` is the parent's resolved type; caller
+          continues with child-name dispatch.
+        - `(t, True)` — the helper has already returned the dotted
+          path's final value via `t` (e.g. `meta.create`, numeric
+          cast, unit member lookup). Caller returns `t` immediately.
+        - `(None, True)` — error already emitted; caller returns None."""
+        # ATOMID / LABELVALUE parent — by far the dominant case
         if path.parent.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
             pname = cast(zast.AtomId, path.parent).name
-            # meta.create: compiler-internal raw allocator of the lexically
-            # enclosing type. Only resolves inside a type's method body; at
-            # top level, falls through to the normal name-resolution path
-            # which will error.
+            # meta.create: compiler-internal raw allocator of the
+            # lexically enclosing type. Only resolves inside a type's
+            # method body; at top level, falls through to the normal
+            # name-resolution path which will error.
             if pname == "meta" and path.child.name == "create":
                 if self._enclosing_type_stack:
                     enclosing = self._enclosing_type_stack[-1]
@@ -3466,59 +3477,53 @@ class TypeChecker:
                     if raw is not None:
                         self.typing.node_type[path.nodeid] = raw
                         self.typing.node_type[path.parent.nodeid] = enclosing
-                        return raw
+                        return raw, True
                 self._error(
                     "'meta.create' is only valid inside a type's method body",
                     loc=path.start,
                 )
-                return None
-            # numeric dotted path: 0.u32, 42.i8, 0xff.u16. Only treat as
-            # a numeric cast when child names a known numeric type. Other
-            # suffixes (e.g. `.iterate`, `.each` declared natively on
-            # the integer record) fall through to standard child lookup
-            # against the inferred numeric type.
+                return None, True
+            # numeric dotted path: 0.u32, 42.i8, 0xff.u16. Only treat
+            # as a numeric cast when child names a known numeric type;
+            # other suffixes (.iterate / .each declared natively on
+            # the integer record) fall through to standard child
+            # lookup against the inferred numeric type.
             if _is_numeric_id(pname):
-                child_name = path.child.name
-                resolved_child = self._resolve_name(child_name)
+                child_name_local = path.child.name
+                resolved_child = self._resolve_name(child_name_local)
                 if (
                     resolved_child is not None
                     and resolved_child.typetype != ZTypeType.FUNCTION
                 ):
-                    _, _, err = parse_number(pname + child_name)
+                    _, _, err = parse_number(pname + child_name_local)
                     if err:
-                        # range error / overflow — same behaviour as the
-                        # original blanket numeric-cast handler.
                         self._error(
-                            f"Invalid numeric cast {pname}.{child_name}: {err}",
+                            f"Invalid numeric cast {pname}.{child_name_local}: {err}",
                             loc=path.start,
                         )
-                        return None
-                    return resolved_child
-            # check if it's a unit name first (file-level units)
+                        return None, True
+                    return resolved_child, True
+            # File-level unit member lookup
             if pname in self.program.units:
-                # ensure file unit is fully resolved (generic params detected)
                 utype = self._ensure_file_unit_resolved(pname)
                 if utype and utype.isgeneric:
-                    # generic file unit accessed as dotted path without
-                    # instantiation — must instantiate first
                     self._error(
                         f"Generic unit '{pname}' must be instantiated"
                         f" with type arguments before use",
                         loc=path.start,
                     )
-                    return None
+                    return None, True
                 if utype:
                     child = utype.children.get(path.child.name)
                     if child:
-                        return child
-                # fallback: demand-resolve the child
+                        return child, True
                 t = self._resolve_unit_name(pname, path.child.name)
                 if t:
-                    return t
-                # Phase D: known unit, unknown child — surface as an
-                # error instead of silently returning None. Without this,
-                # `io.read_only` (or any other typo on a unit-qualified
-                # path) would slip through call argument resolution.
+                    return t, True
+                # Phase D: known unit, unknown child — error rather
+                # than silent None. Without this, `io.read_only` (or
+                # any other typo on a unit-qualified path) would slip
+                # through call argument resolution.
                 candidates = list((utype.children if utype else {}).keys())
                 suggestion = _suggest_similar(path.child.name, candidates)
                 self._error(
@@ -3526,58 +3531,71 @@ class TypeChecker:
                     loc=path.start,
                     hint=f"did you mean '{suggestion}'?" if suggestion else None,
                 )
-                return None
-            # check if it's an inline unit name. Phase 7d: prefer id-keyed
-            # cache when an inline unit AST handle is reachable via the
-            # unit-context stack; fall back to name lookup otherwise.
-            parent_type = None
-            for ctx_name, ctx_unit in reversed(self._unit_context):
+                return None, True
+            # Inline unit member lookup. Phase 7d: prefer id-keyed
+            # cache when an inline unit AST handle is reachable via
+            # the unit-context stack; fall back to name lookup
+            # otherwise.
+            inline_unit_type: Optional[ZType] = None
+            for _ctx_name, ctx_unit in reversed(self._unit_context):
                 inline = ctx_unit.body.get(pname)
                 if inline is not None and inline.nodetype == NodeType.UNIT:
-                    parent_type = self.unit_types_by_id.get(
+                    inline_unit_type = self.unit_types_by_id.get(
                         cast(zast.Unit, inline).nodeid
                     )
                     break
-            if parent_type is None and pname in self.unit_types:
-                parent_type = self.unit_types[pname]
-            if parent_type is not None and parent_type.typetype == ZTypeType.UNIT:
-                child = parent_type.children.get(path.child.name)
+            if inline_unit_type is None and pname in self.unit_types:
+                inline_unit_type = self.unit_types[pname]
+            if (
+                inline_unit_type is not None
+                and inline_unit_type.typetype == ZTypeType.UNIT
+            ):
+                child = inline_unit_type.children.get(path.child.name)
                 if child:
-                    return child
-                # Phase D: as above — known inline unit, unknown member.
-                candidates = list(parent_type.children.keys())
+                    return child, True
+                candidates = list(inline_unit_type.children.keys())
                 suggestion = _suggest_similar(path.child.name, candidates)
                 self._error(
                     f"unit '{pname}' has no member '{path.child.name}'",
                     loc=path.start,
                     hint=f"did you mean '{suggestion}'?" if suggestion else None,
                 )
-                return None
-            # otherwise resolve parent as a name; for numeric literals
-            # (`5.iterate`, `42.each`) resolve via the numeric inference
-            # so the standard child lookup finds natives declared on
-            # the integer record (e.g. `iterate`, `each`).
+                return None, True
+            # Otherwise resolve parent as a name; for numeric literals
+            # (`5.iterate`, `42.each`) resolve via the numeric
+            # inference so the standard child lookup finds natives
+            # declared on the integer record.
             if _is_numeric_id(pname):
-                parent_type = self._resolve_numeric(pname, loc=path.parent.start)
-            else:
-                parent_type = self._resolve_name(pname)
-        elif path.parent.nodetype == NodeType.DOTTEDPATH:
-            parent_type = self._resolve_dotted_path(cast(zast.DottedPath, path.parent))
-        elif path.parent.nodetype == NodeType.EXPRESSION:
+                return self._resolve_numeric(pname, loc=path.parent.start), False
+            return self._resolve_name(pname), False
+        # DOTTEDPATH parent: recurse
+        if path.parent.nodetype == NodeType.DOTTEDPATH:
+            return self._resolve_dotted_path(cast(zast.DottedPath, path.parent)), False
+        # EXPRESSION parent: take the expression's already-resolved
+        # type, falling back to typeref resolution for type-only
+        # expressions (`(list of: u8).typedef`).
+        if path.parent.nodetype == NodeType.EXPRESSION:
             parent_type = self.typing.node_type.get(path.parent.nodeid)
             if parent_type is None:
-                # Field / typeref resolution can see a DottedPath whose
-                # parent Expression has not been type-checked yet (for
-                # example `(list of: u8).typedef` in a record field).
-                # Resolve the expression now so `.typedef` / `.generic`
-                # / etc. on parenthesised type applications work.
                 parent_type = self._resolve_typeref(path.parent)
-        elif path.parent.nodetype == NodeType.ATOMSTRING:
+            return parent_type, False
+        # ATOMSTRING parent: String / StringView depending on whether
+        # the literal has interpolation parts.
+        if path.parent.nodetype == NodeType.ATOMSTRING:
             atom_str = cast(zast.AtomString, path.parent)
             has_interp = any(
                 p.nodetype != NodeType.STRINGCHUNK for p in atom_str.stringparts
             )
-            parent_type = self._resolve_name("String" if has_interp else "StringView")
+            return (
+                self._resolve_name("String" if has_interp else "StringView"),
+                False,
+            )
+        return None, False
+
+    def _resolve_dotted_path(self, path: zast.DottedPath) -> Optional[ZType]:
+        parent_type, early_handled = self._resolve_dp_parent_type(path)
+        if early_handled:
+            return parent_type
         if not parent_type:
             return None
         # check for .typedef — creates a marker detected by type resolvers
