@@ -5129,7 +5129,7 @@ class TypeChecker:
         elif subtype_child and subtype_child.typetype == ZTypeType.GENERIC_PARAM:
             # option.some 42 or option.some from: 42 — infer from argument type
             if value_arg:
-                arg_type = self._check_operation(value_arg.valtype)
+                arg_type = self._check_operation(value_arg.valtype).ztype
                 if arg_type:
                     param_ref_name = subtype_child.name
                     if param_ref_name not in generic_args:
@@ -5241,7 +5241,7 @@ class TypeChecker:
                 else:
                     field_name = None
 
-            val_type = self._check_operation(arg.valtype)
+            val_type = self._check_operation(arg.valtype).ztype
 
             # infer generic param from field type
             if field_name and field_name in field_to_gparam and val_type:
@@ -5335,7 +5335,7 @@ class TypeChecker:
                 else:
                     param_name = None
 
-            val_type = self._check_operation(arg.valtype)
+            val_type = self._check_operation(arg.valtype).ztype
             checked_value_args.append((param_name, val_type, arg))
 
             if param_name and param_name in param_to_gparam and val_type:
@@ -6231,7 +6231,14 @@ class TypeChecker:
             NodeType.LABELVALUE,
         ):
             inner_op = cast(zast.Operation, inner)
-            t = self._check_operation(inner_op)
+            op_result = self._check_operation(inner_op)
+            t = op_result.ztype
+            # restore the borrow/private intent that _check_operation
+            # captured from the legacy side-channel — preserves it for
+            # the final capture below until F5.A.2 pushes ExprResult
+            # all the way through _check_path / _check_dotted_path.
+            self._pending_borrow_lock = op_result.borrow_target
+            self._pending_private_access = op_result.private_access
             # propagate const_value from inner operation to expression wrapper
             inner_cv = self._node_const_value.get(inner_op.nodeid)
             if inner_cv is not None:
@@ -6309,12 +6316,20 @@ class TypeChecker:
         self._pending_private_access = False
         return ExprResult(t, borrow_target, private_access)
 
-    def _check_operation(self, op: zast.Operation) -> Optional[ZType]:
+    def _check_operation(self, op: zast.Operation) -> ExprResult:
+        """Type-check an operation. Returns an ExprResult carrying the
+        resolved ztype plus any borrow_target / private_access intent that
+        the inner path or call resolution stamped via the legacy
+        `_pending_*` side-channel. Captures and clears those flags at the
+        boundary so downstream callers consume intent through the result
+        instead of poking the flags directly.
+        """
+        t: Optional[ZType] = None
         if op.nodetype == NodeType.CALL:
-            return self._check_call(cast(zast.Call, op))
-        if op.nodetype == NodeType.BINOP:
-            return self._check_binop(cast(zast.BinOp, op))
-        if op.nodetype in (
+            t = self._check_call(cast(zast.Call, op))
+        elif op.nodetype == NodeType.BINOP:
+            t = self._check_binop(cast(zast.BinOp, op))
+        elif op.nodetype in (
             NodeType.ATOMID,
             NodeType.DOTTEDPATH,
             NodeType.ATOMSTRING,
@@ -6341,9 +6356,12 @@ class TypeChecker:
                     f"cannot infer type arguments for generic type '{type_desc}'",
                     loc=op.start,
                 )
-                return None
-            return t
-        return None
+                t = None
+        borrow_target = self._pending_borrow_lock
+        private_access = self._pending_private_access
+        self._pending_borrow_lock = None
+        self._pending_private_access = False
+        return ExprResult(t, borrow_target, private_access)
 
     def _check_path(
         self, path: zast.Path, coerce_method_to_return: bool = True
@@ -7926,14 +7944,14 @@ class TypeChecker:
         lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]] = []
 
         for i, arg in enumerate(call.arguments):
-            arg_type = self._check_operation(arg.valtype)
+            arg_result = self._check_operation(arg.valtype)
+            arg_type = arg_result.ztype
             # Capture the source path that `.lock` / `.borrow` / `.stringview`
             # / `.listview` or protocol projection would have lifted to the
             # binding. For a bare `m2.lock` arg, this is `(m2,)`, not
             # `(m2, lock)` — the `.lock` suffix is a wrapper marker, not a
             # field access, so the call-scoped lock must target the source.
-            arg_borrow_path = self._pending_borrow_lock
-            self._pending_borrow_lock = None  # clear protocol borrow for call args
+            arg_borrow_path = arg_result.borrow_target
 
             # reftype aliasing check — runs against the ORIGINAL arg
             # expression so that two args derived from the same reftype
@@ -8933,7 +8951,8 @@ class TypeChecker:
             return None
 
         # type-check the from: argument
-        arg_type = self._check_operation(from_arg.valtype)
+        arg_result = self._check_operation(from_arg.valtype)
+        arg_type = arg_result.ztype
         if not arg_type:
             return None
 
@@ -8979,8 +8998,7 @@ class TypeChecker:
         create_fn = proto_type.children.get("create")
         own = create_fn.param_ownership.get("from") if create_fn is not None else None
         if own == ZParamOwnership.TAKE:
-            arg_borrow_path = self._pending_borrow_lock
-            self._pending_borrow_lock = None
+            arg_borrow_path = arg_result.borrow_target
             if not self._arg_is_trivial(from_arg):
                 self._hoist_arg(from_arg, arg_type, arg_borrow_path)
             self._apply_take_to_arg(from_arg, "from")
@@ -9004,10 +9022,11 @@ class TypeChecker:
             return None
 
         # type-check the from: argument. If the arg is `.lock` / `.borrow`,
-        # `_check_operation` has already set `_pending_borrow_lock` to the
-        # SOURCE path (e.g. `(m,)` for `m.lock`). Capture it before overwrite.
-        arg_type = self._check_operation(from_arg.valtype)
-        source_from_lift = self._pending_borrow_lock
+        # the lifted SOURCE path (e.g. `(m,)` for `m.lock`) comes back on
+        # `arg_result.borrow_target`.
+        arg_result = self._check_operation(from_arg.valtype)
+        arg_type = arg_result.ztype
+        source_from_lift = arg_result.borrow_target
         if not arg_type:
             return None
 
@@ -9059,7 +9078,8 @@ class TypeChecker:
             self._error("typedef.create requires 'from:' argument", loc=call.start)
             return None
 
-        arg_type = self._check_operation(from_arg.valtype)
+        arg_result = self._check_operation(from_arg.valtype)
+        arg_type = arg_result.ztype
         if not arg_type:
             return None
 
@@ -9076,8 +9096,7 @@ class TypeChecker:
         # `.create` takes ownership of the source. Hoist non-trivial args
         # into a synth temp first (mirroring _check_call) so TAKE-application
         # operates on a bare AtomId.
-        arg_borrow_path = self._pending_borrow_lock
-        self._pending_borrow_lock = None
+        arg_borrow_path = arg_result.borrow_target
         if not self._arg_is_trivial(from_arg):
             self._hoist_arg(from_arg, arg_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
@@ -9101,8 +9120,9 @@ class TypeChecker:
             self._error("typedef.borrow requires 'from:' argument", loc=call.start)
             return None
 
-        arg_type = self._check_operation(from_arg.valtype)
-        source_from_lift = self._pending_borrow_lock
+        arg_result = self._check_operation(from_arg.valtype)
+        arg_type = arg_result.ztype
+        source_from_lift = arg_result.borrow_target
         if not arg_type:
             return None
 
@@ -9231,12 +9251,11 @@ class TypeChecker:
         ret_type = None
         inline_borrow_src: Optional[Tuple[str, ...]] = None
         if call.arguments:
-            ret_type = self._check_operation(call.arguments[0].valtype)
+            ret_result = self._check_operation(call.arguments[0].valtype)
+            ret_type = ret_result.ztype
             # G2: capture any lock source installed by an inline projection
-            # (.stringview / .listview / .borrow) in the return expression,
-            # then clear the flag so it does not leak past this statement.
-            inline_borrow_src = self._pending_borrow_lock
-            self._pending_borrow_lock = None
+            # (.stringview / .listview / .borrow) in the return expression.
+            inline_borrow_src = ret_result.borrow_target
             # Return-construction shorthand: `return Type field: val ...`
             # parses as a Call with the type as args[0] (no name) and the
             # fields as named args[1:]. The emitter folds these via
@@ -9461,7 +9480,7 @@ class TypeChecker:
         return t
 
     def _check_binop_inner(self, binop: zast.BinOp) -> Optional[ZType]:
-        lhs_type = self._check_operation(binop.lhs)
+        lhs_type = self._check_operation(binop.lhs).ztype
         rhs_type = self._check_path(binop.rhs)
         if not lhs_type or not rhs_type:
             return None
@@ -9865,7 +9884,8 @@ class TypeChecker:
             self._error("box requires a 'from:' argument", loc=call.start)
             return None
 
-        inner_type = self._check_operation(from_arg.valtype)
+        inner_result = self._check_operation(from_arg.valtype)
+        inner_type = inner_result.ztype
         if not inner_type:
             return None
 
@@ -9875,8 +9895,7 @@ class TypeChecker:
         # non-trivial args into a synth temp first (mirroring _check_call)
         # so TAKE-application operates on a bare AtomId. Literals have no
         # root name and are unaffected.
-        arg_borrow_path = self._pending_borrow_lock
-        self._pending_borrow_lock = None
+        arg_borrow_path = inner_result.borrow_target
         if not self._arg_is_trivial(from_arg):
             self._hoist_arg(from_arg, inner_type, arg_borrow_path)
         self._apply_take_to_arg(from_arg, "from")
@@ -9997,7 +10016,7 @@ class TypeChecker:
         # for loops mask do-block break targets (break binds to the for, not enclosing do)
         self._break_targets.append(None)
         for name, cond_op in fornode.conditions.items():
-            t = self._check_operation(cond_op)
+            t = self._check_operation(cond_op).ztype
             if t and not name.startswith(" "):
                 # iterator binding: check if operation type is or returns
                 # one of the iterator wrappers (option/optionval/optionview).
@@ -10319,7 +10338,7 @@ class TypeChecker:
                         return self._check_generic_type_match(casenode, concrete)
                     break
 
-        subject_type = self._check_operation(casenode.subject)
+        subject_type = self._check_operation(casenode.subject).ztype
 
         # match does NOT lock its subject (unlike 'for' and function calls).
         # Arms are mutually exclusive and the subject is evaluated once, so
