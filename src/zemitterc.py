@@ -1553,7 +1553,7 @@ class CEmitter:
                 return False
             if t.name in user_names:
                 return True
-            for ga in t.generic_args.values():
+            for _, ga in self.typing.generic_args_of(t):
                 if ga is None:
                     continue
                 if check(ga):
@@ -1563,7 +1563,7 @@ class CEmitter:
         for child in self.typing.child_types_of(mono_type):
             if check(child):
                 return True
-        for ga in mono_type.generic_args.values():
+        for _, ga in self.typing.generic_args_of(mono_type):
             if ga is None:
                 continue
             if check(ga):
@@ -3456,7 +3456,7 @@ class CEmitter:
         """
         self.needs_stdlib = True
         name = mono_type.name
-        inner_type = mono_type.generic_args.get("t")
+        inner_type = self.typing.generic_arg_of(mono_type, "t")
         if not inner_type:
             return
         inner_ctype = _ctype(inner_type)
@@ -7740,7 +7740,7 @@ class CEmitter:
                 return self._emit_numeric_cast(parent_val, parent_type.name, child)
             # box(numeric): auto-deref then cast
             if parent_type and parent_type.is_box:
-                inner_type = parent_type.generic_args.get("t")
+                inner_type = self.typing.generic_arg_of(parent_type, "t")
                 if inner_type and inner_type.name in TYPEMAP:
                     parent_val = self._emit_path_value(path.parent)
                     return self._emit_numeric_cast(parent_val, inner_type.name, child)
@@ -8365,7 +8365,7 @@ class CEmitter:
         call_type = _call_ztype
         if not call_type:
             return "NULL"
-        inner_type = call_type.generic_args.get("t")
+        inner_type = self.typing.generic_arg_of(call_type, "t")
         if not inner_type:
             return "NULL"
         inner_ctype = _ctype(inner_type)

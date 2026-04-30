@@ -4290,7 +4290,9 @@ class TypeChecker:
         # 3. register and clone function bodies
         self._register_unit_type(mangled, None, mono)
         cloned_methods: dict[str, zast.Function] = {}
-        all_args = dict(template_type.generic_args)
+        all_args: dict[str, ZType] = {}
+        for ga_name, ga_type in self.typing.generic_args_of(template_type):
+            all_args[ga_name] = ga_type
         all_args.update(generic_args)
         for dname, ddefn in defn.body.items():
             if dname in template_type.generic_params:
@@ -4845,7 +4847,7 @@ class TypeChecker:
                 # partially-instantiated non-unit child — resolve remaining generic params
                 # (UNIT children are handled by _monomorphize_unit)
                 child_args: dict[str, ZType] = {}
-                for gp_name, gp_arg in child_type.generic_args.items():
+                for gp_name, gp_arg in self.typing.generic_args_of(child_type):
                     if (
                         gp_arg.typetype == ZTypeType.GENERIC_PARAM
                         and gp_arg.name in generic_args
@@ -5066,7 +5068,7 @@ class TypeChecker:
             sub_name = f"{parent_name}.{child_name}"
             sub_unit = _make_type(sub_name, ZTypeType.UNIT)
             sub_unit.generic_origin = child_type
-            for ga_name, ga_type in child_type.generic_args.items():
+            for ga_name, ga_type in self.typing.generic_args_of(child_type):
                 self._set_generic_arg(sub_unit, ga_name, ga_type)
             for ga_name, ga_type in args.items():
                 self._set_generic_arg(sub_unit, ga_name, ga_type)
@@ -6855,8 +6857,8 @@ class TypeChecker:
             self.typing.node_type[path.nodeid] = t
             # propagate const_value for numeric generic param fields
             parent_type = self.typing.node_type.get(path.parent.nodeid)
-            if parent_type and parent_type.generic_args:
-                garg = parent_type.generic_args.get(child_name)
+            if parent_type and self.typing.has_generic_args(parent_type):
+                garg = self.typing.generic_arg_of(parent_type, child_name)
                 if garg and garg.numeric_value is not None:
                     self.typing.node_const_value[path.nodeid] = garg.numeric_value
             # Phase 7b: stamp child_id against parent's ZType so the
@@ -8539,7 +8541,7 @@ class TypeChecker:
             # box+create composition is unnecessary.
             hint = None
             if arg_type.is_box:
-                inner = arg_type.generic_args.get("t")
+                inner = self.typing.generic_arg_of(arg_type, "t")
                 inner_name = inner.name if inner else "the inner value"
                 inner_labels = (
                     self._protocol_labels.get(inner.name, []) if inner else []
