@@ -255,38 +255,15 @@ def _collect_ast_nodes(program: zast.Program) -> List[Tuple[zast.Node, str]]:
 
 
 def dump_sql(
-    typing_or_program,
+    typing: ztyping.Typing,
     emitter: Optional[zemitterc.CEmitter] = None,
     csource: Optional[str] = None,
 ) -> str:
     """Generate SQL statements for the full compiler state.
 
-    Accepts either a `ztyping.Typing` (canonical) or a `zast.Program`
-    (transitional F5.E.3 compat — the test corpus still passes Program
-    via the compat shims set on Program by `typecheck()`). When a
-    Program is passed, its compat shims are read directly via the
-    Typing protocol — same data, different access path.
-
     Returns a string of SQL (schema DDL + INSERT statements).
     """
-    if type(typing_or_program) is ztyping.Typing:
-        typing = typing_or_program
-        program = typing.parsed
-    else:
-        program = cast(zast.Program, typing_or_program)
-        typing = ztyping.Typing(parsed=program)
-        typing.resolved = program.resolved
-        typing.symbol_table = program.symbol_table
-        typing.unit_types_by_id = program.unit_types_by_id
-        # Pull through the component-table aliases via the typed_program
-        # shim. Each `view.X` field is the same dict object as the
-        # original Typing.X, so this re-populates the fresh Typing's
-        # nodeid-keyed tables for the dump-time walk.
-        view = cast(ztyping.TypedProgramView, program.typed_program)
-        if view is not None:
-            typing.node_type = view.node_types
-            typing.node_const_value = view.node_const_value
-            typing.typed_program = view
+    program = typing.parsed
     lines: List[str] = []
     lines.append(SCHEMA_SQL)
 

@@ -30,39 +30,35 @@ SRC_TYPECHECK_PATH = os.path.join(
 
 
 def parse_and_check(source: str, unitname: str = "test"):
-    """Parse source, run type checker, return (program, errors)."""
+    """Parse source, run type checker, return `(program, typing, errors)`."""
     p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
     typing = typecheck(program)
-    errors = typing.errors
-    return program, errors
+    return program, typing, typing.errors
 
 
 def check_ok(source: str, unitname: str = "test"):
-    """Parse and type-check, assert no errors, return program."""
-    program, errors = parse_and_check(source, unitname)
+    """Parse and type-check, assert no errors, return `(program, typing)`."""
+    program, typing, errors = parse_and_check(source, unitname)
     assert errors == [], f"Expected no errors, got: {[e.msg for e in errors]}"
-    return program
+    return program, typing
 
 
-def _node_ztype(program, node):
-    """Look up a parsed node's resolved ZType via the typed-program
-    side-table. After Step 6.9.b stripped `Node.type`, the per-node
-    type lives on `program.typed_program.node_types` keyed by parsed
-    `nodeid`."""
-    return program.typed_program.node_types.get(node.nodeid)
+def _node_ztype(typing, node):
+    """Look up a parsed node's resolved ZType in `Typing.node_type`."""
+    return typing.node_type.get(node.nodeid)
 
 
 def check_errors(source: str, unitname: str = "test"):
     """Parse and type-check, assert errors, return error List."""
-    program, errors = parse_and_check(source, unitname)
+    program, typing, errors = parse_and_check(source, unitname)
     assert errors != [], "Expected type errors but got none"
     return errors
 
 
-def find_user_monos(program, *, origin_name: Optional[str] = None):
-    """Filter mono_types to entries triggered by user code.
+def find_user_monos(typing, *, origin_name: Optional[str] = None):
+    """Filter `typing.mono_types` to entries triggered by user code.
 
     System library load eagerly monomorphises types whose natives reference
     a generic (e.g. `optionval<T>` from each integer record's `iterate`
@@ -72,7 +68,7 @@ def find_user_monos(program, *, origin_name: Optional[str] = None):
     return all monos with nodes whose definition is in a user unit.
     """
     result = []
-    for mono, defn in program.mono_types:
+    for mono, defn in typing.mono_types:
         if origin_name is not None:
             origin = mono.generic_origin
             if origin is None or getattr(origin, "name", None) != origin_name:
@@ -90,7 +86,7 @@ class TestBasicPrograms:
 
     def test_print_resolves_from_core(self):
         """print should be resolved via core -> io -> system.io_print."""
-        program = check_ok('main: function is { print "test" }')
+        program, typing = check_ok('main: function is { print "test" }')
         tc = TypeChecker(program)
         tc.check()
         core_type = tc.unit_types.get("core")
@@ -370,7 +366,7 @@ class TestUnitResolution:
     def test_core_types_populated(self):
         """Core unit type should have numeric types, print, etc.
         Demand-driven: types are resolved when referenced."""
-        program = check_ok('main: function is { x: 42\n print "test" }')
+        program, typing = check_ok('main: function is { x: 42\n print "test" }')
         tc = TypeChecker(program)
         tc.check()
         # print was referenced, so it should be resolved in core
@@ -381,7 +377,7 @@ class TestUnitResolution:
 
     def test_cross_unit_alias_resolution(self):
         """io.print -> system.io_print should resolve across units."""
-        program = check_ok('main: function is { print "test" }')
+        program, typing = check_ok('main: function is { print "test" }')
         tc = TypeChecker(program)
         tc.check()
         io_type = tc.unit_types.get("io")
@@ -392,7 +388,7 @@ class TestUnitResolution:
     def test_system_unit_has_numeric_records(self):
         """System unit should have numeric types as records with methods.
         Demand-driven: reference i64 to trigger resolution."""
-        program = check_ok("f: function {n: i64} out i64 is { return n + 1 }")
+        program, typing = check_ok("f: function {n: i64} out i64 is { return n + 1 }")
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
@@ -425,7 +421,9 @@ class TestComparisonOperators:
 
     def test_comparison_returns_bool(self):
         """Comparison operators should return bool, not the numeric type."""
-        program = check_ok("f: function {a: i64 b: i64} is { if a < b then return 0 }")
+        program, typing = check_ok(
+            "f: function {a: i64 b: i64} is { if a < b then return 0 }"
+        )
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
@@ -621,7 +619,7 @@ class TestDemandDriven:
 
     def test_unreferenced_not_resolved(self):
         """Definitions not reachable from main are not type-checked."""
-        program = check_ok(
+        program, typing = check_ok(
             "unused: function {n: i64} out i64 is { return n }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -663,7 +661,7 @@ class TestCircularReferences:
 
     def test_record_method_returns_own_type(self):
         """A record method returning its own type via `type` resolves correctly."""
-        program = check_ok(
+        program, typing = check_ok(
             "vec: record {\n"
             "    x: 0.0\n"
             "} as {\n"
@@ -736,7 +734,7 @@ class TestFullTypecheck:
     def test_full_flag_checks_all_units(self):
         from ztypecheck import TypeChecker
 
-        program = check_ok("main: function is {}")
+        program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         # system unit types should all be resolved with full check
@@ -788,62 +786,66 @@ class TestOwnershipParsing:
 
     def test_param_borrow(self):
         """Parameter with .borrow annotation should parse and type-check."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.borrow} is {}\nmain: function is {}"
         )
-        ftype = program.resolved["test.f"]
+        ftype = typing.resolved["test.f"]
         assert ftype.param_ownership["a"] == ZParamOwnership.BORROW
 
     def test_param_take(self):
         """Parameter with .take annotation."""
-        program = check_ok("f: function {a: i64.take} is {}\nmain: function is {}")
-        ftype = program.resolved["test.f"]
+        program, typing = check_ok(
+            "f: function {a: i64.take} is {}\nmain: function is {}"
+        )
+        ftype = typing.resolved["test.f"]
         assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
 
     def test_param_lock(self):
         """Parameter with .lock annotation (requires return value)."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.lock} out myclass is { return a }\n"
             "main: function is {}"
         )
-        ftype = program.resolved["test.f"]
+        ftype = typing.resolved["test.f"]
         assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
 
     def test_param_no_ownership(self):
         """Parameter without annotation should have empty param_ownership."""
-        program = check_ok("f: function {a: i64} is {}\nmain: function is {}")
-        ftype = program.resolved["test.f"]
+        program, typing = check_ok("f: function {a: i64} is {}\nmain: function is {}")
+        ftype = typing.resolved["test.f"]
         assert "a" not in ftype.param_ownership
 
     def test_mixed_params(self):
         """Mix of annotated and unannotated parameters."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.take b: myclass c: myclass.borrow} is {}\n"
             "main: function is {}"
         )
-        ftype = program.resolved["test.f"]
+        ftype = typing.resolved["test.f"]
         assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
         assert "b" not in ftype.param_ownership
         assert ftype.param_ownership["c"] == ZParamOwnership.BORROW
 
     def test_return_type_borrow(self):
         """Return type with .borrow annotation."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
             "main: function is {}"
         )
-        ftype = program.resolved["test.f"]
+        ftype = typing.resolved["test.f"]
         assert ftype.return_ownership == ZParamOwnership.BORROW
         assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
 
     def test_return_type_no_ownership(self):
         """Return type without annotation should not have return_ownership set."""
-        program = check_ok("f: function out i64 is { return 42 }\nmain: function is {}")
-        ftype = program.resolved["test.f"]
+        program, typing = check_ok(
+            "f: function out i64 is { return 42 }\nmain: function is {}"
+        )
+        ftype = typing.resolved["test.f"]
         assert ftype.return_ownership is None
 
 
@@ -852,7 +854,7 @@ class TestOwnershipInZType:
 
     def test_param_ownership_on_ztype(self):
         """Ownership annotations should be on the ZType after type checking."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.take b: myclass.borrow} out myclass is { return a }\n"
             "main: function is {}"
@@ -866,7 +868,7 @@ class TestOwnershipInZType:
 
     def test_return_ownership_on_ztype(self):
         """Return ownership should propagate to ZType."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { value: 0 }\n"
             "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
             "main: function is {}"
@@ -880,7 +882,7 @@ class TestOwnershipInZType:
 
     def test_no_ownership_empty_dict(self):
         """Functions without ownership annotations should have empty param_ownership."""
-        program = check_ok(
+        program, typing = check_ok(
             "f: function {a: i64} out i64 is { return a }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -895,7 +897,7 @@ class TestValTypeTagging:
 
     def test_numeric_records_are_valtype(self):
         """System numeric types (records) should be tagged as valtype."""
-        program = check_ok("f: function {n: i64} out i64 is { return n }")
+        program, typing = check_ok("f: function {n: i64} out i64 is { return n }")
         tc = TypeChecker(program)
         tc.check()
         system = tc.unit_types["system"]
@@ -905,7 +907,7 @@ class TestValTypeTagging:
 
     def test_user_record_is_valtype(self):
         """User-defined records should be tagged as valtype."""
-        program = check_ok(
+        program, typing = check_ok(
             "point: record { x: 0.0\n y: 0.0 }\nmain: function is { p: point }"
         )
         tc = TypeChecker(program)
@@ -916,7 +918,7 @@ class TestValTypeTagging:
 
     def test_union_is_reftype(self):
         """Unions should be tagged as reftype (is_valtype=False)."""
-        program = check_ok("main: function is {}")
+        program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         system = tc.unit_types["system"]
@@ -937,7 +939,7 @@ class TestValTypeTagging:
 
     def test_function_type_valtype_is_none(self):
         """Function types don't have a valtype classification."""
-        program = check_ok("f: function is {}\nmain: function is {}")
+        program, typing = check_ok("f: function is {}\nmain: function is {}")
         tc = TypeChecker(program)
         tc.check()
         ftype = tc._resolved.get("test.f")
@@ -1048,7 +1050,7 @@ class TestOwnershipReturnChecking:
         their `.type` stamped and the emitter silently falls through to
         field access. The smoking gun is a Path like `s.copy` in a field
         slot — verify type resolution propagates to the Path's parent."""
-        program = check_ok(
+        program, typing = check_ok(
             "mybox: class { label: String }\n"
             "mk: function {s: String.take} out mybox is {\n"
             "  return mybox label: s.copy\n"
@@ -1067,7 +1069,7 @@ class TestOwnershipReturnChecking:
         # return is a Call whose arguments[1].valtype is `s.copy`
         s_copy = return_call.arguments[1].valtype
         assert s_copy.nodetype == zast.NodeType.DOTTEDPATH, s_copy.nodetype
-        s_copy_parent_t = _node_ztype(program, s_copy.parent)
+        s_copy_parent_t = _node_ztype(typing, s_copy.parent)
         assert s_copy_parent_t is not None, (
             "s.copy parent.type unstamped — _check_return_call's "
             "field-arg visit is missing"
@@ -1359,7 +1361,7 @@ class TestReturnLockPropagation:
           (b) implicit-receiver value access: `c.slice`
         Both must bind to `cview`.
         """
-        program = check_ok(
+        program, typing = check_ok(
             "container: class { x: i64 } as { public: unit { :slice }\n"
             "  slice: function {c: this.lock} out cview is {\n"
             "    return cview source: c.private\n"
@@ -1389,9 +1391,9 @@ class TestReturnLockPropagation:
             if (
                 sline.nodetype == NodeType.ASSIGNMENT
                 and getattr(sline, "value", None) is not None
-                and _node_ztype(program, sline.value) is not None
+                and _node_ztype(typing, sline.value) is not None
             ):
-                bindings[sline.name] = _node_ztype(program, sline.value)
+                bindings[sline.name] = _node_ztype(typing, sline.value)
         assert "v1" in bindings, list(bindings.keys())
         assert "v2" in bindings, list(bindings.keys())
         assert bindings["v1"].name == "cview", bindings["v1"].name
@@ -1444,7 +1446,7 @@ class TestPhaseC3Pins:
         outer call then hoists its own arg-temp on top. Both temps
         carry synth_origin == 'anf'.
         """
-        program = check_ok(
+        program, typing = check_ok(
             "make_val: function {x: i64} out i64 is { return x + 1 }\n"
             "consume: function {v: i64} is {}\n"
             "main: function is {\n"
@@ -1495,7 +1497,7 @@ class TestPhaseC3Pins:
         non-trivial arg appears in the preamble before the second.
         Pinned by walking the post-typecheck AST.
         """
-        program = check_ok(
+        program, typing = check_ok(
             "make_val: function {x: i64} out i64 is { return x + 1 }\n"
             "consume2: function {a: i64 b: i64} is {}\n"
             "main: function is {\n"
@@ -1552,7 +1554,7 @@ class TestPhaseC3Pins:
         type, so the scope-exit machinery cleans it up. Pin via the
         type metadata on the synth Assignment's RHS.
         """
-        program = check_ok(
+        program, typing = check_ok(
             "make_str: function {tag: i64} out String is {\n"
             '    return "hi".string\n'
             "}\n"
@@ -1572,7 +1574,7 @@ class TestPhaseC3Pins:
         temp_assn = synth_assigns[0]
         # The temp's bound type is `string`, a reftype with
         # needs_destructor == True. Pin it.
-        temp_t = _node_ztype(program, temp_assn)
+        temp_t = _node_ztype(typing, temp_assn)
         assert temp_t is not None
         assert temp_t.needs_destructor is True, (
             f"temp type {temp_t.name} should need a destructor"
@@ -1760,7 +1762,7 @@ class TestArgHoistInfrastructure:
         """Build a TypeChecker over a minimal program and prime its
         symtab with a function scope so define_var has somewhere to land.
         """
-        program, errors = parse_and_check("main: function is {}")
+        program, typing, errors = parse_and_check("main: function is {}")
         assert errors == []
         tc = TypeChecker(program)
         tc.check()
@@ -4278,7 +4280,9 @@ class TestClassTypeResolution:
 
     def test_class_resolves_as_class_type(self):
         """A class definition resolves to ZTypeType.CLASS."""
-        program = check_ok("myclass: class { x: 0 }\nmain: function is { c: myclass }")
+        program, typing = check_ok(
+            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
+        )
         tc = TypeChecker(program)
         tc.check()
         ct = tc._resolved.get("test.myclass")
@@ -4287,7 +4291,9 @@ class TestClassTypeResolution:
 
     def test_class_is_reftype(self):
         """Classes should be tagged as reftype (is_valtype=False)."""
-        program = check_ok("myclass: class { x: 0 }\nmain: function is { c: myclass }")
+        program, typing = check_ok(
+            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
+        )
         tc = TypeChecker(program)
         tc.check()
         ct = tc._resolved.get("test.myclass")
@@ -4296,7 +4302,7 @@ class TestClassTypeResolution:
 
     def test_class_fields_resolved(self):
         """Class fields should be resolved as children of the class type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
         )
         tc = TypeChecker(program)
@@ -4309,7 +4315,7 @@ class TestClassTypeResolution:
 
     def test_class_methods_resolved(self):
         """Class methods should be resolved as children."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { x: 0 } as {\n"
             "  get: function {c: this} out i64 is { return c.x }\n"
             "}\n"
@@ -4323,7 +4329,7 @@ class TestClassTypeResolution:
 
     def test_class_this_resolves_to_class(self):
         """The `this` keyword in class methods resolves to the class type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { x: 0 } as {\n"
             "  get: function {c: this} out i64 is { return c.x }\n"
             "}\n"
@@ -4338,7 +4344,7 @@ class TestClassTypeResolution:
 
     def test_class_type_keyword(self):
         """The `type` keyword in a class resolves to the class type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myclass: class { x: 0 } as {\n"
             "  clone: function {c: this.take} out type is { return c }\n"
             "}\n"
@@ -4424,7 +4430,7 @@ class TestStringMigration:
 
     def test_string_resolves_as_class_type(self):
         """String should resolve as ZTypeType.CLASS."""
-        program = check_ok('main: function is { s: "hello" }')
+        program, typing = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()
         st = tc._resolved.get("system.String")
@@ -4433,7 +4439,7 @@ class TestStringMigration:
 
     def test_string_is_reftype(self):
         """String should be tagged as reftype (is_valtype=False) via class Path."""
-        program = check_ok('main: function is { s: "hello" }')
+        program, typing = check_ok('main: function is { s: "hello" }')
         tc = TypeChecker(program)
         tc.check()
         st = tc._resolved.get("system.String")
@@ -4484,7 +4490,7 @@ class TestUnionTypeResolution:
 
     def test_union_resolves_as_union_type(self):
         """A union definition resolves to ZTypeType.UNION."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is { x: myunion.a 1 }"
         )
@@ -4496,7 +4502,7 @@ class TestUnionTypeResolution:
 
     def test_union_is_reftype(self):
         """Unions should be tagged as reftype (is_valtype=False)."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4507,7 +4513,7 @@ class TestUnionTypeResolution:
 
     def test_union_subtypes_stored_as_children(self):
         """Union subtypes should be stored as children."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: String\n c: null }\n"
             "main: function is { x: myunion.a 1 }"
         )
@@ -4523,7 +4529,7 @@ class TestUnionTypeResolution:
 
     def test_union_tag_type_generated(self):
         """Union should have a :tag child with enum-like discriminators."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4537,7 +4543,7 @@ class TestUnionTypeResolution:
 
     def test_union_null_subtype(self):
         """Null subtypes get a sentinel NULL type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
         )
         tc = TypeChecker(program)
@@ -4552,7 +4558,7 @@ class TestUnionConstruction:
 
     def test_union_subtype_construction_returns_union_type(self):
         """Calling union.subtype expr returns the union type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4706,7 +4712,7 @@ class TestDataTypeResolution:
 
     def test_data_resolves_as_data_type(self):
         """Data definitions should resolve to DATA ZType."""
-        program = check_ok(
+        program, typing = check_ok(
             "mydata: data { 10 20 30 }\nmain: function is { x: mydata.0 }"
         )
         tc = TypeChecker(program)
@@ -4717,7 +4723,7 @@ class TestDataTypeResolution:
 
     def test_data_ordinal_identifiers(self):
         """Unnamed data elements get ordinal identifiers 0, 1, 2..."""
-        program = check_ok(
+        program, typing = check_ok(
             "mydata: data { 10 20 30 }\nmain: function is { x: mydata.0 }"
         )
         tc = TypeChecker(program)
@@ -4729,7 +4735,7 @@ class TestDataTypeResolution:
 
     def test_data_named_elements(self):
         """Named data elements use their labels."""
-        program = check_ok(
+        program, typing = check_ok(
             "mydata: data { LOW: 0 HIGH: 10 }\nmain: function is { x: mydata.LOW }"
         )
         tc = TypeChecker(program)
@@ -4740,7 +4746,9 @@ class TestDataTypeResolution:
 
     def test_data_has_tag_subtype(self):
         """All data types should have a .tag subtype (monomorphized tag record)."""
-        program = check_ok("mydata: data { 1 2 3 }\nmain: function is { x: mydata.0 }")
+        program, typing = check_ok(
+            "mydata: data { 1 2 3 }\nmain: function is { x: mydata.0 }"
+        )
         tc = TypeChecker(program)
         tc.check()
         dt = tc._resolved.get("test.mydata")
@@ -4752,7 +4760,7 @@ class TestDataTypeResolution:
 
     def test_data_tag_parent_is_data(self):
         """The .tag type's parent should point back to its data type."""
-        program = check_ok(
+        program, typing = check_ok(
             "mydata: data { LOW: 0 HIGH: 1 }\nmain: function is { x: mydata.LOW }"
         )
         tc = TypeChecker(program)
@@ -4763,7 +4771,7 @@ class TestDataTypeResolution:
 
     def test_data_mixed_named_unnamed(self):
         """Data with mixed named and unnamed elements."""
-        program = check_ok(
+        program, typing = check_ok(
             "mydata: data { 10 MIDDLE: 20 30 }\nmain: function is { x: mydata.0 }"
         )
         tc = TypeChecker(program)
@@ -4792,7 +4800,7 @@ class TestUnionCustomTag:
 
     def test_custom_tag_values_in_tag_enum(self):
         """Custom data values should appear in the :tag enum."""
-        program = check_ok(
+        program, typing = check_ok(
             "pv: data { A: 10 B: 20 }\n"
             "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
             "main: function is { x: myunion.A }"
@@ -4826,7 +4834,7 @@ class TestUnionCustomTag:
 
     def test_custom_tag_sparse_values(self):
         """Custom tag with non-sequential values."""
-        program = check_ok(
+        program, typing = check_ok(
             "pv: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }\n"
             "priority: union {\n"
             "    LOW: null\n"
@@ -4856,7 +4864,7 @@ class TestUnionCustomTag:
 
     def test_default_auto_tag_u8(self):
         """Union without custom tag gets auto-generated u8 tag."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4869,7 +4877,7 @@ class TestUnionCustomTag:
 
     def test_union_has_tag_data_child(self):
         """Union should have a 'tag' child (data type) for MyUnion.tag access."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
         )
         tc = TypeChecker(program)
@@ -4880,7 +4888,7 @@ class TestUnionCustomTag:
 
     def test_custom_tag_union_has_data_child(self):
         """Union with custom tag should have the data instance as 'tag' child."""
-        program = check_ok(
+        program, typing = check_ok(
             "pv: data { A: 0 B: 1 }\n"
             "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
             "main: function is { x: myunion.A }"
@@ -4927,7 +4935,7 @@ class TestUnionCustomTag:
 
     def test_tag_is_generic_record(self):
         """The system 'tag' type is a generic record."""
-        program = check_ok("main: function is {}")
+        program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check()
         tag = tc._resolve_unit_name("system", "tag")
@@ -4938,7 +4946,7 @@ class TestUnionCustomTag:
 
     def test_data_tag_returns_monomorphized_tag(self):
         """data.tag returns tag__element_type with generic_origin='tag'."""
-        program = check_ok(
+        program, typing = check_ok(
             "mydata: data { A: 0 B: 1 }\nmain: function is { x: mydata.A }"
         )
         tc = TypeChecker(program)
@@ -4969,7 +4977,7 @@ class TestLabelValueShorthand:
 
     def test_label_value_unit_level_resolves_core_type(self):
         """:u8 at unit level resolves to core u8, not circular error."""
-        program = check_ok(":u8\nmain: function is { x: u8 42 }")
+        program, typing = check_ok(":u8\nmain: function is { x: u8 42 }")
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.u8")
@@ -4978,7 +4986,7 @@ class TestLabelValueShorthand:
 
     def test_label_value_core_type_resolves(self):
         """:x where x exists in core resolves correctly."""
-        program = check_ok(":i64\nmain: function is { x: i64 1 }")
+        program, typing = check_ok(":i64\nmain: function is { x: i64 1 }")
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.i64")
@@ -4994,7 +5002,7 @@ class TestLabelValueShorthand:
 
     def test_union_with_label_value_subtypes(self):
         """union { :u8 :u16 :u32 } type checks correctly."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { :u8\n :u16\n :u32 }\n"
             "main: function is { x: myunion.u8 42 }"
         )
@@ -5009,7 +5017,7 @@ class TestLabelValueShorthand:
 
     def test_union_label_value_subtype_names(self):
         """Label value union subtypes resolve to their payload types."""
-        program = check_ok(
+        program, typing = check_ok(
             "myunion: union { :u8\n :String }\nmain: function is { x: myunion.u8 42 }"
         )
         tc = TypeChecker(program)
@@ -5038,7 +5046,7 @@ class TestLabelValueShorthand:
 class TestInlineUnits:
     def test_inline_unit_with_constant(self):
         """Inline unit with a constant resolves as UNIT type."""
-        prog = check_ok("m: unit { X: 42 }\nmain: function is {}")
+        prog, typing = check_ok("m: unit { X: 42 }\nmain: function is {}")
         tc = TypeChecker(prog)
         tc.check()
         assert "m" in tc.unit_types
@@ -5050,7 +5058,7 @@ class TestInlineUnits:
 
     def test_inline_unit_with_function(self):
         """Inline unit containing a function resolves the function type."""
-        prog = check_ok(
+        prog, typing = check_ok(
             'm: unit { greet: function is { print "hi" } }\n'
             "main: function is { m.greet }"
         )
@@ -5074,7 +5082,7 @@ class TestInlineUnits:
 
     def test_inline_unit_with_record(self):
         """Inline unit containing a record definition."""
-        prog = check_ok(
+        prog, typing = check_ok(
             "m: unit { pt: record { x: i64  y: i64 } }\nmain: function is {}"
         )
         tc = TypeChecker(prog)
@@ -5085,7 +5093,7 @@ class TestInlineUnits:
 
     def test_inline_unit_function_body_checking(self):
         """Function bodies inside inline units are type-checked."""
-        prog = check_ok(
+        prog, typing = check_ok(
             'm: unit { f: function {x: i64} is { print "\\{x}" } }\n'
             "main: function is { m.f 42 }"
         )
@@ -5094,7 +5102,7 @@ class TestInlineUnits:
 
     def test_3level_nesting(self):
         """3-level nesting resolves correctly via dotted access."""
-        prog = check_ok(
+        prog, typing = check_ok(
             "a: unit { b: unit { c: unit { X: 99 } } }\n"
             "Y: a.b.c.X\n"
             "main: function is {}"
@@ -5112,7 +5120,7 @@ class TestInlineUnits:
 
     def test_nesting_shadow(self):
         """Nested unit shadows parent definition via unit context stack."""
-        prog = check_ok(
+        prog, typing = check_ok(
             "a: unit { X: 10\n b: unit { X: 20\n Y: X } }\nmain: function is {}"
         )
         tc = TypeChecker(prog)
@@ -5128,7 +5136,7 @@ class TestVariantTypeResolution:
 
     def test_variant_resolves(self):
         """A variant definition resolves to ZTypeType.VARIANT."""
-        program = check_ok(
+        program, typing = check_ok(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
         )
         tc = TypeChecker(program)
@@ -5139,7 +5147,7 @@ class TestVariantTypeResolution:
 
     def test_variant_is_valtype(self):
         """Variants should be tagged as valtype (is_valtype=True)."""
-        program = check_ok(
+        program, typing = check_ok(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
         )
         tc = TypeChecker(program)
@@ -5150,7 +5158,7 @@ class TestVariantTypeResolution:
 
     def test_variant_subtypes(self):
         """Variant subtypes should be stored as children."""
-        program = check_ok(
+        program, typing = check_ok(
             "myvar: variant { a: i64\n b: u8\n c: null }\n"
             "main: function is { x: myvar.a 1 }"
         )
@@ -5166,7 +5174,7 @@ class TestVariantTypeResolution:
 
     def test_variant_tag_generated(self):
         """Variant should have a :tag child with enum-like discriminators."""
-        program = check_ok(
+        program, typing = check_ok(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
         )
         tc = TypeChecker(program)
@@ -5180,7 +5188,7 @@ class TestVariantTypeResolution:
 
     def test_variant_null_subtype(self):
         """Null subtypes are fine in variants."""
-        program = check_ok(
+        program, typing = check_ok(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.b }"
         )
         tc = TypeChecker(program)
@@ -5223,7 +5231,7 @@ class TestVariantTypeResolution:
 
     def test_variant_construction_type(self):
         """Constructing a variant returns the variant type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 42 }"
         )
         tc = TypeChecker(program)
@@ -5283,7 +5291,7 @@ class TestSpecs:
 
     def test_spec_resolves_to_function_type(self):
         """A Spec (function without body) resolves to a FUNCTION type."""
-        program = check_ok(
+        program, typing = check_ok(
             "binop: function {a: i64 b: i64} out i64\n"
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             'main: function is { print "\\{add a: 1 b: 2}" }'
@@ -5391,7 +5399,7 @@ class TestSpecs:
 
     def test_record_with_function_in_as(self):
         """Record with function in 'as' section does NOT create a field."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record {\n"
             "    x: i64\n"
             "} as {\n"
@@ -5412,7 +5420,7 @@ class TestSpecs:
 class TestDefaults:
     def test_numeric_default_resolves_i64(self):
         """Numeric default '0' resolves to i64 type."""
-        program = check_ok(
+        program, typing = check_ok(
             "greet: function {a: 0} out i64 is { return a }\n"
             "main: function is { greet }"
         )
@@ -5425,7 +5433,7 @@ class TestDefaults:
 
     def test_numeric_default_42(self):
         """Numeric default '42' resolves to i64 type."""
-        program = check_ok(
+        program, typing = check_ok(
             "greet: function {a: 42} out i64 is { return a }\n"
             "main: function is { greet }"
         )
@@ -5437,7 +5445,7 @@ class TestDefaults:
 
     def test_param_defaults_populated_numeric(self):
         """param_defaults populated for numeric defaults."""
-        program = check_ok(
+        program, typing = check_ok(
             "greet: function {a: 0 b: 42} out i64 is { return a + b }\n"
             "main: function is { greet }"
         )
@@ -5449,7 +5457,7 @@ class TestDefaults:
 
     def test_function_ref_default_detected(self):
         """Function reference default detected (function with body)."""
-        program = check_ok(
+        program, typing = check_ok(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             "apply: function {f: add} out i64 is {\n"
             "  result: f a: 1 b: 2\n"
@@ -5466,7 +5474,7 @@ class TestDefaults:
 
     def test_spec_no_default(self):
         """Spec (function without body) does NOT produce a default."""
-        program = check_ok(
+        program, typing = check_ok(
             "binop: function {a: i64 b: i64} out i64\n"
             "apply: function {f: binop a: i64 b: i64} out i64 is {\n"
             "  result: f a: a b: b\n"
@@ -5490,7 +5498,7 @@ class TestDefaults:
 
     def test_record_with_numeric_default_field(self):
         """Record field with numeric default stores it on the type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record {\n"
             "    x: i64\n"
             "    y: 0\n"
@@ -5509,7 +5517,7 @@ class TestDefaults:
 
     def test_type_name_no_default(self):
         """A type name like 'i64' does NOT produce a default."""
-        program = check_ok(
+        program, typing = check_ok(
             "greet: function {a: i64} out i64 is { return a }\n"
             "main: function is { greet a: 5 }"
         )
@@ -5523,19 +5531,19 @@ class TestDefaults:
 class TestNumericCasting:
     def test_dotted_numeric_u32(self):
         """x: 0.u32 resolves, type is u32."""
-        program = check_ok("main: function is { x: 0.u32 }")
+        program, typing = check_ok("main: function is { x: 0.u32 }")
         tc = TypeChecker(program)
         tc.check()
 
     def test_dotted_numeric_i8(self):
         """x: 42.i8 resolves, type is i8."""
-        program = check_ok("main: function is { x: 42.i8 }")
+        program, typing = check_ok("main: function is { x: 42.i8 }")
         tc = TypeChecker(program)
         tc.check()
 
     def test_dotted_numeric_hex(self):
         """x: 0xff.u16 resolves, type is u16."""
-        program = check_ok("main: function is { x: 0xff.u16 }")
+        program, typing = check_ok("main: function is { x: 0xff.u16 }")
         tc = TypeChecker(program)
         tc.check()
 
@@ -5556,7 +5564,7 @@ class TestNumericCasting:
 
     def test_dotted_default_param(self):
         """a: 0.u32 as function default: type=u32, default='0'."""
-        program = check_ok(
+        program, typing = check_ok(
             "greet: function {a: 0.u32} out u32 is { return a }\n"
             "main: function is { greet }"
         )
@@ -5568,7 +5576,7 @@ class TestNumericCasting:
 
     def test_dotted_default_record_field(self):
         """Record with x: 0.u32 field default."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record {\n"
             "    x: i64\n"
             "    y: 0.u32\n"
@@ -5585,7 +5593,7 @@ class TestNumericCasting:
 class TestProtocols:
     def test_protocol_resolves(self):
         """Protocol definition creates PROTOCOL ZType with Spec children."""
-        program = check_ok(
+        program, typing = check_ok(
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
@@ -5647,7 +5655,7 @@ class TestProtocols:
 
     def test_protocol_instance_via_dotted_path(self):
         """f.myreader resolves to PROTOCOL type."""
-        program = check_ok(
+        program, typing = check_ok(
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
@@ -5846,7 +5854,7 @@ class TestProtocols:
 
     def test_protocol_has_create(self):
         """Protocol type has `create` child (FUNCTION)."""
-        program = check_ok(
+        program, typing = check_ok(
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
@@ -5916,7 +5924,7 @@ class TestProtocols:
 
     def test_generic_protocol_no_create(self):
         """Generic (unmonomorphized) protocol has no `create`."""
-        program = check_ok(
+        program, typing = check_ok(
             "myproto: protocol {\n"
             "    t: Any.generic\n"
             "    get: function {:this} out t\n"
@@ -5932,7 +5940,7 @@ class TestProtocols:
 
     def test_protocol_has_no_take(self):
         """Protocol type has no `.take` child; `.take` is not a constructor."""
-        program = check_ok(
+        program, typing = check_ok(
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
@@ -5974,7 +5982,7 @@ class TestProtocols:
 
     def test_protocol_has_borrow(self):
         """Protocol type has `borrow` child (FUNCTION)."""
-        program = check_ok(
+        program, typing = check_ok(
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
@@ -6068,7 +6076,7 @@ class TestProtocols:
 
     def test_generic_protocol_no_take(self):
         """Generic (unmonomorphized) protocol has no `take`."""
-        program = check_ok(
+        program, typing = check_ok(
             "myproto: protocol {\n"
             "    t: Any.generic\n"
             "    get: function {:this} out t\n"
@@ -6084,7 +6092,7 @@ class TestProtocols:
 
     def test_generic_protocol_no_borrow(self):
         """Generic (unmonomorphized) protocol has no `borrow`."""
-        program = check_ok(
+        program, typing = check_ok(
             "myproto: protocol {\n"
             "    t: Any.generic\n"
             "    get: function {:this} out t\n"
@@ -6712,7 +6720,7 @@ class TestStreamProtocolsAndFile:
 
     def test_file_class_resolves_as_class(self):
         """File is a CLASS type with fd and closed fields."""
-        program = check_ok("main: function is {}")
+        program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         f = tc._resolved.get("system.io.File") or tc._resolved.get("io.File")
@@ -6723,7 +6731,7 @@ class TestStreamProtocolsAndFile:
 
     def test_protocols_resolve(self):
         """Reader/Writer/Closer/Seeker resolve as PROTOCOL types."""
-        program = check_ok("main: function is {}")
+        program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         for p in ("Reader", "Writer", "Closer", "Seeker"):
@@ -6735,7 +6743,7 @@ class TestStreamProtocolsAndFile:
 
     def test_protocols_have_their_methods(self):
         """Each protocol declares the expected method set."""
-        program = check_ok("main: function is {}")
+        program, typing = check_ok("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         expected = {
@@ -6861,7 +6869,7 @@ class TestIoNativeDispatch:
     def test_file_has_destructor(self):
         """The io.File class must carry a destructor so Result(File, _)
         destructors invoke z_File_destroy on the ok payload (RAII close)."""
-        program, _ = parse_and_check("main: function is {}")
+        program, typing, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         file_type = tc._resolved.get("io.File")
@@ -6929,7 +6937,7 @@ class TestIoNativeDispatch:
         """io.File declares `:Reader :Writer :Closer :Seeker`. Protocol
         conformance validation compares method signatures against each
         protocol; all four must match for this to typecheck."""
-        program, _ = parse_and_check("main: function is {}")
+        program, typing, _ = parse_and_check("main: function is {}")
         tc = TypeChecker(program)
         tc.check(full=True)
         file_type = tc._resolved.get("io.File")
@@ -7224,7 +7232,7 @@ class TestGenerics:
 
     def test_generic_record_resolution(self):
         """Record with t: Any.generic puts t in generic_params, not children."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -7238,7 +7246,7 @@ class TestGenerics:
 
     def test_generic_record_with_generic_field_ref(self):
         """Record field referencing generic param: x: t resolves to GENERIC_PARAM."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -7251,7 +7259,7 @@ class TestGenerics:
 
     def test_generic_union_resolution(self):
         """Union with t: Any.generic detects generic params correctly."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {}"
         )
@@ -7267,7 +7275,7 @@ class TestGenerics:
 
     def test_generic_union_subtype_is_generic_param_ref(self):
         """Union subtype referencing generic param: some: t is GENERIC_PARAM."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {}"
         )
@@ -7279,7 +7287,7 @@ class TestGenerics:
 
     def test_multiple_generic_params(self):
         """Record with multiple generic params."""
-        program = check_ok(
+        program, typing = check_ok(
             "mypair: record { x: a\n y: b } as { a: Any.generic\n b: Any.generic }\n"
             "main: function is {}"
         )
@@ -7295,7 +7303,7 @@ class TestGenerics:
 
     def test_generic_function_resolution(self):
         """Function with generic param in 'as' clause: t: Any.generic."""
-        program = check_ok(
+        program, typing = check_ok(
             "myfn: function as { t: Any.generic } in { x: t } out t\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -7309,7 +7317,7 @@ class TestGenerics:
 
     def test_generic_function_multiple_params(self):
         """Function with multiple generic params in 'as'."""
-        program = check_ok(
+        program, typing = check_ok(
             "myfn: function as { t: Any.generic\n u: Any.generic } "
             "in { x: t\n y: u } out t\nmain: function is {}"
         )
@@ -7325,7 +7333,7 @@ class TestGenerics:
 
     def test_generic_function_any_clause_order(self):
         """Function with 'as' after 'out' resolves correctly."""
-        program = check_ok(
+        program, typing = check_ok(
             "myfn: function in { x: t } out t as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -7358,7 +7366,7 @@ class TestGenerics:
 
     def test_static_function_in_type_as_with_own_as(self):
         """Static function (no 'this') in type's 'as' block can have own 'as'."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as {\n"
             "  helper: function as { t: Any.generic } in { val: t } out i64 is { 0 }\n"
             "}\nmain: function is { r: myrec x: 1 }"
@@ -7374,23 +7382,23 @@ class TestGenerics:
 
     def test_generic_function_infer_single_arg(self):
         """Generic function call infers type from single value arg."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
         assert mono.generic_origin is not None
 
     def test_generic_function_infer_multiple_same_param(self):
         """Multiple args of the same generic param must agree."""
-        program = check_ok(
+        program, typing = check_ok(
             "pair: function as { t: Any.generic } in { a: t\n b: t } out t is { return a }\n"
             "main: function is { x: pair 1 b: 2 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
 
     def test_generic_function_conflict_error(self):
@@ -7403,12 +7411,12 @@ class TestGenerics:
 
     def test_generic_function_explicit_type_arg(self):
         """Explicit generic arg in function call."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id t: i64 val: 42 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
 
     def test_generic_function_explicit_conflicts_with_inferred(self):
@@ -7421,13 +7429,13 @@ class TestGenerics:
 
     def test_generic_function_multiple_params_inferred(self):
         """Multiple generic params, both inferred from args."""
-        program = check_ok(
+        program, typing = check_ok(
             "pick: function as { a: Any.generic\n b: Any.generic }\n"
             "  in { x: a\n y: b } out b is { return y }\n"
             'main: function is { r: pick 42 y: "hello" }'
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
         assert "String" in mono.name
 
@@ -7496,7 +7504,7 @@ class TestGenerics:
     def test_generic_function_stringlike_declaration_order_stringview_wins(self):
         """StringLike declares :StringView before :Text; a StringView T
         matches :StringView even if StringView conformed to Text."""
-        program = check_ok(
+        program, typing = check_ok(
             "show: function as { t: StringLike.generic } in { v: t } is "
             "{ print v }\n"
             'main: function is { show "hi" }'
@@ -7504,37 +7512,37 @@ class TestGenerics:
         # monomorphization for stringview, not text
         sv_monos = [
             m
-            for m, _ in program.mono_functions
+            for m, _ in typing.mono_functions
             if "StringView" in m.name and m.name.startswith("show_")
         ]
         assert len(sv_monos) == 1
 
     def test_generic_function_monomorphization_cached(self):
         """Same instantiation produces one cached mono function."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42\n y: id 99 }"
         )
-        i64_monos = [m for m, _ in program.mono_functions if "i64" in m.name]
+        i64_monos = [m for m, _ in typing.mono_functions if "i64" in m.name]
         assert len(i64_monos) == 1
 
     def test_generic_function_different_instantiations(self):
         """Different type args produce different mono functions."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42\n y: id 3.14 }"
         )
-        names = {m.name for m, _ in program.mono_functions}
+        names = {m.name for m, _ in typing.mono_functions}
         assert any("i64" in n for n in names)
         assert any("f64" in n for n in names)
 
     def test_generic_function_return_type_resolved(self):
         """Monomorphized function has resolved return type."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id 42 }"
         )
-        mono, _ = program.mono_functions[0]
+        mono, _ = typing.mono_functions[0]
         assert mono.return_type is not None
         assert mono.return_type.name == "i64"
 
@@ -7574,46 +7582,46 @@ class TestGenerics:
 
     def test_generic_function_default_used(self):
         """Default type is used when generic param cannot be inferred."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: (Any.generic default: i64) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id 42 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
 
     def test_generic_record_default_used(self):
         """Default type fills in when not inferred for records."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t\n y: i64 } as { t: (Any.generic default: i64) }\n"
             "main: function is { r: myrec x: 42 y: 1 }"
         )
-        monos = find_user_monos(program, origin_name="myrec")
+        monos = find_user_monos(typing, origin_name="myrec")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
 
     def test_generic_default_overridden_by_explicit(self):
         """Explicit generic arg overrides default."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: (Any.generic default: i64) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id t: f64 val: 3.14 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "f64" in mono.name
 
     def test_generic_default_overridden_by_inference(self):
         """Inferred type takes priority over default."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: (Any.generic default: i32) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id 42 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         # i64 inferred from 42, not default i32
         assert "i64" in mono.name
 
@@ -7621,29 +7629,29 @@ class TestGenerics:
 
     def test_inline_generic_and_value_args(self):
         """Generic arg inline with value args in function call."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: Any.generic } in { val: t } out t is { return val }\n"
             "main: function is { x: id t: i64 val: 42 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
 
     def test_inline_multiple_generic_args(self):
         """Multiple generic args inline with value args."""
-        program = check_ok(
+        program, typing = check_ok(
             "pick: function as { a: Any.generic\n b: Any.generic }\n"
             "  in { x: a\n y: b } out b is { return y }\n"
             "main: function is { r: pick a: i64 b: f64 x: 42 y: 3.14 }"
         )
-        assert len(program.mono_functions) >= 1
-        mono, _ = program.mono_functions[0]
+        assert len(typing.mono_functions) >= 1
+        mono, _ = typing.mono_functions[0]
         assert "i64" in mono.name
         assert "f64" in mono.name
 
     def test_generic_default_stored_on_type(self):
         """Default type is stored in generic_defaults dict."""
-        program = check_ok(
+        program, typing = check_ok(
             "id: function as { t: (Any.generic default: i64) } in { val: t } out t\n"
             "  is { return val }\n"
             "main: function is { x: id 42 }"
@@ -7657,11 +7665,11 @@ class TestGenerics:
 
     def test_option_some_infers_i64(self):
         """Option.some 42 infers t=i64."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
-        monos = find_user_monos(program, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="myopt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -7669,32 +7677,32 @@ class TestGenerics:
 
     def test_option_none_explicit_type_arg(self):
         """Option.none i32 with explicit type argument."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.none i32 }"
         )
-        monos = find_user_monos(program, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="myopt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i32" in mono.name
 
     def test_same_generic_different_types(self):
         """Same generic instantiated with different types creates different monomorphizations."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 42\n"
             "    y: myopt.some 3.14\n"
             "}"
         )
-        assert len(program.mono_types) >= 2
-        names = {m.name for m, _ in program.mono_types}
+        assert len(typing.mono_types) >= 2
+        names = {m.name for m, _ in typing.mono_types}
         assert any("i64" in n for n in names)
         assert any("f64" in n for n in names)
 
     def test_duplicate_instantiation_cached(self):
         """Duplicate instantiation with same type returns cached type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some 1\n"
@@ -7702,24 +7710,24 @@ class TestGenerics:
             "}"
         )
         # should produce only one monomorphization of `myopt` with t=i64
-        myopt_monos = find_user_monos(program, origin_name="myopt")
+        myopt_monos = find_user_monos(typing, origin_name="myopt")
         i64_monos = [m for m, _ in myopt_monos if "i64" in m.name]
         assert len(i64_monos) == 1
 
     def test_system_option_available(self):
         """System optionval type is available via core for valtypes."""
-        program = check_ok("main: function is { x: optionval.some 42 }")
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        program, typing = check_ok("main: function is { x: optionval.some 42 }")
+        assert len(typing.mono_types) >= 1
+        mono, _ = typing.mono_types[0]
         assert mono.generic_origin is not None
 
     def test_monomorphized_union_has_tag(self):
         """Monomorphized union has proper :tag enum."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
-        mono, _ = program.mono_types[0]
+        mono, _ = typing.mono_types[0]
         assert mono.tag_type is not None
         tag_type = mono.tag_type
         assert tag_type.typetype == ZTypeType.ENUM
@@ -7728,11 +7736,11 @@ class TestGenerics:
 
     def test_monomorphized_union_concrete_subtypes(self):
         """Monomorphized union replaces generic param with concrete type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
-        monos = find_user_monos(program, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="myopt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         some_type = mono.children.get("some")
@@ -7758,11 +7766,11 @@ class TestGenerics:
 
     def test_generic_union_from_infers_type(self):
         """Option.some from: 42 infers t=i64 via from: syntax."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some from: 42 }"
         )
-        monos = find_user_monos(program, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="myopt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -7770,34 +7778,34 @@ class TestGenerics:
 
     def test_generic_union_explicit_type_and_from(self):
         """Option.some t: i64 from: 42 with explicit generic param and from: value."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some t: i64 from: 42 }"
         )
-        monos = find_user_monos(program, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="myopt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
 
     def test_generic_union_from_with_different_types(self):
         """from: syntax with different types creates different monomorphizations."""
-        program = check_ok(
+        program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
             "    x: myopt.some from: 42\n"
             "    y: myopt.some from: 3.14\n"
             "}"
         )
-        assert len(program.mono_types) >= 2
-        names = {m.name for m, _ in program.mono_types}
+        assert len(typing.mono_types) >= 2
+        names = {m.name for m, _ in typing.mono_types}
         assert any("i64" in n for n in names)
         assert any("f64" in n for n in names)
 
     def test_system_option_from_syntax(self):
         """System optionval type works with from: syntax."""
-        program = check_ok("main: function is { x: optionval.some from: 42 }")
-        assert len(program.mono_types) >= 1
-        mono, _ = program.mono_types[0]
+        program, typing = check_ok("main: function is { x: optionval.some from: 42 }")
+        assert len(typing.mono_types) >= 1
+        mono, _ = typing.mono_types[0]
         assert mono.generic_origin is not None
 
     def test_option_requires_reftype(self):
@@ -7812,10 +7820,10 @@ class TestGenerics:
 
     def test_optionval_some_infers_i64(self):
         """optionval.some 42 infers t=i64."""
-        program = check_ok("main: function is { x: optionval.some 42 }")
+        program, typing = check_ok("main: function is { x: optionval.some 42 }")
         i64_monos = [
             (m, d)
-            for m, d in find_user_monos(program, origin_name="optionval")
+            for m, d in find_user_monos(typing, origin_name="optionval")
             if "i64" in m.name
         ]
         assert len(i64_monos) >= 1
@@ -7824,30 +7832,32 @@ class TestGenerics:
 
     def test_optionval_none_explicit_type(self):
         """optionval.none i32 with explicit type argument."""
-        program = check_ok("main: function is { x: optionval.none i32 }")
+        program, typing = check_ok("main: function is { x: optionval.none i32 }")
         i32_monos = [
             (m, d)
-            for m, d in find_user_monos(program, origin_name="optionval")
+            for m, d in find_user_monos(typing, origin_name="optionval")
             if "i32" in m.name
         ]
         assert len(i32_monos) >= 1
 
     def test_optionval_is_valtype(self):
         """Monomorphized optionval is a value type."""
-        program = check_ok("main: function is { x: optionval.some 42 }")
-        mono, _ = program.mono_types[0]
+        program, typing = check_ok("main: function is { x: optionval.some 42 }")
+        mono, _ = typing.mono_types[0]
         assert mono.is_valtype is True
 
     def test_option_nullable_ptr_flag(self):
         """Monomorphized Option(stack-struct) does NOT use nullable-ptr."""
-        program = check_ok('main: function is { x: Option.some "hello".string }')
-        mono, _ = program.mono_types[0]
+        program, typing = check_ok(
+            'main: function is { x: Option.some "hello".string }'
+        )
+        mono, _ = typing.mono_types[0]
         assert mono.is_nullable_ptr is False
 
     def test_box_valtype_creates_reftype(self):
         """Box from: valtype creates a Box reftype."""
-        program = check_ok("main: function is { b: Box from: 42 }")
-        box_monos = [(m, d) for m, d in program.mono_types if m.is_box]
+        program, typing = check_ok("main: function is { b: Box from: 42 }")
+        box_monos = [(m, d) for m, d in typing.mono_types if m.is_box]
         assert len(box_monos) >= 1
         mono, _ = box_monos[0]
         assert mono.is_box is True
@@ -7855,15 +7865,15 @@ class TestGenerics:
 
     def test_box_string_creates_box_mono(self):
         """Box from: String creates a Box monomorphized type (strings are stack now)."""
-        program = check_ok('main: function is { b: Box from: "hello".string }')
+        program, typing = check_ok('main: function is { b: Box from: "hello".string }')
         # string is stack-allocated now; box creates a real box mono
-        box_monos = [m for m, _ in program.mono_types if m.is_box]
+        box_monos = [m for m, _ in typing.mono_types if m.is_box]
         assert len(box_monos) >= 1
 
     def test_box_valtype_has_inner_children(self):
         """Box(valtype) has children copied from inner type for transparent access."""
-        program = check_ok("main: function is { b: Box from: 42 }")
-        box_monos = [(m, d) for m, d in program.mono_types if m.is_box]
+        program, typing = check_ok("main: function is { b: Box from: 42 }")
+        box_monos = [(m, d) for m, d in typing.mono_types if m.is_box]
         assert len(box_monos) >= 1
         mono, _ = box_monos[0]
         assert mono.is_box is True
@@ -7887,11 +7897,11 @@ class TestGenerics:
 
     def test_generic_record_infer_from_value(self):
         """myrec x: 42 infers t=i64 from field type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.generic }\n"
             "main: function is { r: myrec x: 42 }"
         )
-        monos = find_user_monos(program, origin_name="myrec")
+        monos = find_user_monos(typing, origin_name="myrec")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -7899,11 +7909,11 @@ class TestGenerics:
 
     def test_generic_record_explicit_and_value(self):
         """myrec t: i64 x: 42 — both explicit type arg and value, compatible."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.generic }\n"
             "main: function is { r: myrec t: i64 x: 42 }"
         )
-        monos = find_user_monos(program, origin_name="myrec")
+        monos = find_user_monos(typing, origin_name="myrec")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -7918,20 +7928,20 @@ class TestGenerics:
 
     def test_generic_record_multi_param_infer(self):
         """pair x: 42 y: "hi".string infers a=i64, b=String."""
-        program = check_ok(
+        program, typing = check_ok(
             "mypair: record { x: a\n y: b } as { a: Any.generic\n b: Any.generic }\n"
             'main: function is { p: mypair x: 42 y: "hi".string }'
         )
         # Find the user mypair mono; stdlib method signatures may
         # contribute additional monomorphizations (e.g. optionval(u64)
         # from stringview.index_of) that land ahead of it.
-        mono = next(m for m, _ in program.mono_types if m.name.startswith("mypair_"))
+        mono = next(m for m, _ in typing.mono_types if m.name.startswith("mypair_"))
         assert mono.children["x"].name == "i64"
         assert mono.children["y"].name == "String"
 
     def test_generic_type_in_type_position_concrete(self):
         """(myrec t: i64) in field type position produces concrete monomorphization."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.generic }\n"
             "wrapper: record { inner: (myrec t: i64) }\n"
             "main: function is {}"
@@ -7948,7 +7958,7 @@ class TestGenerics:
 
     def test_generic_type_in_type_position_partial(self):
         """(myrec t: u) in field type position produces partial instantiation."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.generic }\n"
             "wrapper: record { inner: (myrec t: u) } as { u: Any.generic }\n"
             "main: function is {}"
@@ -7965,12 +7975,12 @@ class TestGenerics:
 
     def test_partial_instantiation_full_monomorphize(self):
         """Wrapper with (myrec t: u) fully resolves inner when monomorphized."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.generic }\n"
             "wrapper: record { inner: (myrec t: u) } as { u: Any.generic }\n"
             "main: function is { w: wrapper u: i64 inner: (myrec x: 42) }"
         )
-        monos = {m.name: m for m, _ in program.mono_types}
+        monos = {m.name: m for m, _ in typing.mono_types}
         assert "wrapper_i64" in monos
         wrapper_mono = monos["wrapper_i64"]
         inner = wrapper_mono.children.get("inner")
@@ -8011,7 +8021,7 @@ class TestGenerics:
 
     def test_generic_class_resolution(self):
         """Class with t: Any.generic puts t in generic_params, not children."""
-        program = check_ok(
+        program, typing = check_ok(
             "mycls: class { x: i64 } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -8025,7 +8035,7 @@ class TestGenerics:
 
     def test_generic_class_field_uses_param(self):
         """Class field referencing generic param: val: t resolves to GENERIC_PARAM."""
-        program = check_ok(
+        program, typing = check_ok(
             "mycls: class { val: t } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -8038,11 +8048,11 @@ class TestGenerics:
 
     def test_generic_class_construction_infers(self):
         """mycls val: 42 infers t=i64 and produces monomorphized type."""
-        program = check_ok(
+        program, typing = check_ok(
             "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        monos = find_user_monos(program, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="mycls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -8053,11 +8063,11 @@ class TestGenerics:
 
     def test_generic_class_explicit_type_arg(self):
         """mycls t: i64 val: 42 with explicit type arg."""
-        program = check_ok(
+        program, typing = check_ok(
             "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls t: i64 val: 42 }"
         )
-        monos = find_user_monos(program, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="mycls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -8065,22 +8075,22 @@ class TestGenerics:
 
     def test_generic_class_is_reftype(self):
         """Monomorphized generic class is still a reference type."""
-        program = check_ok(
+        program, typing = check_ok(
             "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        monos = find_user_monos(program, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="mycls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert mono.is_valtype is False
 
     def test_generic_class_has_create(self):
         """Monomorphized class has :meta.create constructor."""
-        program = check_ok(
+        program, typing = check_ok(
             "mycls: class { val: t } as { t: Any.generic }\n"
             "main: function is { x: mycls val: 42 }"
         )
-        monos = find_user_monos(program, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="mycls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert mono.meta_create is not None
@@ -8098,7 +8108,7 @@ class TestGenerics:
 
     def test_generic_protocol_resolution(self):
         """Protocol with t: Any.generic param is generic."""
-        program = check_ok(
+        program, typing = check_ok(
             "myproto: protocol {\n"
             "  t: Any.generic\n"
             "  get: function {:this} out t\n"
@@ -8113,7 +8123,7 @@ class TestGenerics:
 
     def test_generic_protocol_spec_uses_param(self):
         """Spec function uses generic param type."""
-        program = check_ok(
+        program, typing = check_ok(
             "myproto: protocol {\n"
             "  t: Any.generic\n"
             "  get: function {:this} out t\n"
@@ -8223,7 +8233,7 @@ class TestGenerics:
 
     def test_valtype_constraint_in_generic_params(self):
         """Any.valtype constraint stored correctly in generic_params."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.valtype }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -8236,7 +8246,7 @@ class TestGenerics:
 
     def test_reftype_constraint_in_generic_params(self):
         """Any.reftype constraint stored correctly in generic_params."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: t } as { t: Any.reftype }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -8270,7 +8280,7 @@ class TestGenerics:
 class TestTypedefs:
     def test_record_typedef_resolves(self):
         """Record typedef with .typedef resolves and sets typedef_base."""
-        program = check_ok(
+        program, typing = check_ok(
             "meters: record { val: i64.typedef } as {}\n"
             "main: function is { m: meters.create from: 42 }"
         )
@@ -8294,7 +8304,7 @@ class TestTypedefs:
 
     def test_typedef_method_shadow(self):
         """New method in 'as' shadows base method."""
-        program = check_ok(
+        program, typing = check_ok(
             "meters: record { val: i64.typedef } as {\n"
             "    double: function {a: this} out meters is {\n"
             "        return (meters.create from: (a.val + a.val))\n"
@@ -8397,7 +8407,7 @@ class TestTypedefs:
 
     def test_typedef_has_constructors(self):
         """create/borrow are synthesized for typedefs. `.take` is not."""
-        program = check_ok(
+        program, typing = check_ok(
             "meters: record { val: i64.typedef } as {}\n"
             "main: function is { m: meters.create from: 42 }"
         )
@@ -8428,7 +8438,7 @@ class TestTypedefs:
 class TestFacets:
     def test_facet_resolves(self):
         """Facet definition creates FACET ZType with Spec children."""
-        program = check_ok(
+        program, typing = check_ok(
             "showable: facet {\n"
             "    show: function {:this} out i64\n"
             "}\n"
@@ -8446,7 +8456,7 @@ class TestFacets:
     def test_facet_has_constructors(self):
         """Non-generic facets get create/borrow constructors. `.take` is not
         registered — it was an alias for create and has been removed."""
-        program = check_ok(
+        program, typing = check_ok(
             "showable: facet {\n"
             "    show: function {:this} out i64\n"
             "}\n"
@@ -8573,7 +8583,7 @@ class TestNumericGenerics:
 
     def test_numeric_generic_record_detection(self):
         """size: u64.generic detected as numeric generic param."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { size: u64.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -8586,7 +8596,7 @@ class TestNumericGenerics:
 
     def test_numeric_generic_in_generic_params(self):
         """Constraint for numeric generic is the numeric type itself."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { size: u64.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
@@ -8597,11 +8607,11 @@ class TestNumericGenerics:
 
     def test_numeric_generic_monomorphization(self):
         """(myrec size: 10) creates myrec_10 with u64 field."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { size: u64.generic }\n"
             "main: function is { a: (myrec size: 10) x: 5 }"
         )
-        monos = find_user_monos(program, origin_name="myrec")
+        monos = find_user_monos(typing, origin_name="myrec")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert mono.name == "myrec_10"
@@ -8621,11 +8631,11 @@ class TestNumericGenerics:
 
     def test_mixed_type_and_numeric_generics(self):
         """(myarray t: i64 size: 10) creates myarray_i64_10."""
-        program = check_ok(
+        program, typing = check_ok(
             "myarray: record { payload: t } as { t: Any.generic\n size: u64.generic }\n"
             "main: function is { a: (myarray t: i64 size: 10) payload: 42 }"
         )
-        monos = [m for m, _ in program.mono_types if m.name == "myarray_i64_10"]
+        monos = [m for m, _ in typing.mono_types if m.name == "myarray_i64_10"]
         assert len(monos) == 1
         mono = monos[0]
         assert "payload" in mono.children
@@ -8636,20 +8646,20 @@ class TestNumericGenerics:
 
     def test_numeric_generic_different_values(self):
         """size 10 vs 20 produce different types."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { size: u64.generic }\n"
             "main: function is {\n"
             "    a: (myrec size: 10) x: 1\n"
             "    b: (myrec size: 20) x: 2\n"
             "}"
         )
-        names = [m.name for m, _ in program.mono_types]
+        names = [m.name for m, _ in typing.mono_types]
         assert "myrec_10" in names
         assert "myrec_20" in names
 
     def test_numeric_generic_same_value_cached(self):
         """Same value produces same type (cache hit)."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { size: u64.generic }\n"
             "main: function is {\n"
             "    a: (myrec size: 10) x: 1\n"
@@ -8657,7 +8667,7 @@ class TestNumericGenerics:
             "}"
         )
         mono_names = [
-            m.name for m, _ in program.mono_types if m.name.startswith("myrec_")
+            m.name for m, _ in typing.mono_types if m.name.startswith("myrec_")
         ]
         assert mono_names.count("myrec_10") == 1
 
@@ -8671,22 +8681,22 @@ class TestNumericGenerics:
 
     def test_numeric_generic_negative_value(self):
         """Negative value produces neg prefix in mangled name."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { off: i32.generic }\n"
             "main: function is { a: (myrec off: -5) x: 1 }"
         )
-        monos = [m for m, _ in program.mono_types if m.name == "myrec_neg5"]
+        monos = [m for m, _ in typing.mono_types if m.name == "myrec_neg5"]
         assert len(monos) == 1
         mono = monos[0]
         assert mono.param_defaults["off"] == "-5"
 
     def test_numeric_generic_auto_field(self):
         """Numeric param auto-creates field when not referenced by Any child."""
-        program = check_ok(
+        program, typing = check_ok(
             "myrec: record { x: i64 } as { n: u32.generic }\n"
             "main: function is { a: (myrec n: 42) x: 1 }"
         )
-        monos = [m for m, _ in program.mono_types if m.name == "myrec_42"]
+        monos = [m for m, _ in typing.mono_types if m.name == "myrec_42"]
         assert len(monos) == 1
         mono = monos[0]
         assert "n" in mono.children
@@ -8699,8 +8709,8 @@ class TestArrays:
 
     def test_array_creation(self):
         """array of: i64 to: 4 creates a monomorphized array type."""
-        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
-        monos = [m for m, _ in program.mono_types if "array" in m.name]
+        program, typing = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in typing.mono_types if "array" in m.name]
         assert len(monos) >= 1
         mono = monos[0]
         assert mono.name == "array_i64_4"
@@ -8730,8 +8740,8 @@ class TestArrays:
 
     def test_array_get_method(self):
         """.get method is synthesized and returns element type."""
-        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
-        monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
+        program, typing = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
         mono = monos[0]
         assert "get" in mono.children
@@ -8743,8 +8753,8 @@ class TestArrays:
 
     def test_array_set_method(self):
         """.set method is synthesized and returns element type."""
-        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
-        monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
+        program, typing = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
         mono = monos[0]
         assert "set" in mono.children
@@ -8756,8 +8766,8 @@ class TestArrays:
 
     def test_array_length_field(self):
         """.length is synthesized with correct default value."""
-        program = check_ok("main: function is { a: (array of: i64 to: 4) }")
-        monos = [m for m, _ in program.mono_types if m.name == "array_i64_4"]
+        program, typing = check_ok("main: function is { a: (array of: i64 to: 4) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "array_i64_4"]
         assert len(monos) == 1
         mono = monos[0]
         assert "length" in mono.children
@@ -8765,13 +8775,13 @@ class TestArrays:
 
     def test_array_different_lengths_different_types(self):
         """array of: i64 to: 4 and array of: i64 to: 8 are different types."""
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n"
             "    a: (array of: i64 to: 4)\n"
             "    b: (array of: i64 to: 8)\n"
             "}"
         )
-        names = [m.name for m, _ in program.mono_types if "array" in m.name]
+        names = [m.name for m, _ in typing.mono_types if "array" in m.name]
         assert "array_i64_4" in names
         assert "array_i64_8" in names
 
@@ -8784,10 +8794,10 @@ class TestArrays:
 
     def test_data_array_method(self):
         """data.array returns matching array type."""
-        program = check_ok(
+        program, typing = check_ok(
             "primes: data { 2 3 5 7 11 }\nmain: function is { a: primes.array }"
         )
-        monos = [m for m, _ in program.mono_types if "array" in m.name]
+        monos = [m for m, _ in typing.mono_types if "array" in m.name]
         assert len(monos) >= 1
         mono = monos[0]
         assert "i64" in mono.name
@@ -8799,39 +8809,39 @@ class TestStr:
 
     def test_str_creation(self):
         """str to: 32 creates a monomorphized str type."""
-        program = check_ok("main: function is { s: (str to: 32) }")
-        monos = [m for m, _ in program.mono_types if m.name.startswith("str_")]
+        program, typing = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in typing.mono_types if m.name.startswith("str_")]
         assert len(monos) >= 1
         mono = monos[0]
         assert mono.name == "str_32"
 
     def test_str_is_valtype(self):
         """str is a value type."""
-        program = check_ok("main: function is { s: (str to: 32) }")
-        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        program, typing = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         assert len(monos) == 1
         assert monos[0].is_valtype is True
 
     def test_str_length_field(self):
         """.length is synthesized as u64 field."""
-        program = check_ok("main: function is { s: (str to: 32) }")
-        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        program, typing = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
         assert "length" in mono.children
         assert mono.children["length"].name == "u64"
 
     def test_str_size_field(self):
         """.size is synthesized with correct default value."""
-        program = check_ok("main: function is { s: (str to: 32) }")
-        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        program, typing = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
         assert "size" in mono.children
         assert mono.param_defaults.get("size") == "32"
 
     def test_str_string_method(self):
         """.string method is synthesized returning String type."""
-        program = check_ok("main: function is { s: (str to: 32) }")
-        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        program, typing = check_ok("main: function is { s: (str to: 32) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
         assert "string" in mono.children
         string_method = mono.children["string"]
@@ -8842,10 +8852,10 @@ class TestStr:
 
     def test_str_different_capacities_different_types(self):
         """str to: 16 and str to: 32 are different types."""
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n    a: (str to: 16)\n    b: (str to: 32)\n}"
         )
-        names = [m.name for m, _ in program.mono_types if "str" in m.name]
+        names = [m.name for m, _ in typing.mono_types if "str" in m.name]
         assert "str_16" in names
         assert "str_32" in names
 
@@ -8866,16 +8876,16 @@ class TestStr:
 
     def test_string_str_method_resolves(self):
         """String.str to: N resolves to str_N type."""
-        program = check_ok('main: function is { s: "hello".str to: 32 }')
-        monos = [m for m, _ in program.mono_types if m.name == "str_32"]
+        program, typing = check_ok('main: function is { s: "hello".str to: 32 }')
+        monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         assert len(monos) >= 1
 
     def test_str_str_method_resolves(self):
         """str.str to: N resolves to different str type."""
-        program = check_ok(
+        program, typing = check_ok(
             'main: function is {\n    a: "hi".str to: 16\n    b: a.str to: 32\n}'
         )
-        names = [m.name for m, _ in program.mono_types]
+        names = [m.name for m, _ in typing.mono_types]
         assert "str_16" in names
         assert "str_32" in names
 
@@ -8900,7 +8910,7 @@ class TestStrStringview:
     """
 
     def test_returns_stringview(self):
-        program = check_ok(
+        program, typing = check_ok(
             'main: function is {\n  s: "hi".str to: 32\n  v: s.stringview\n}'
         )
         # the view local should have stringview type
@@ -9067,9 +9077,9 @@ class TestList:
 
     def test_list_creation(self):
         """List of: i64 creates a monomorphized List type."""
-        program = check_ok("main: function is { l: (List of: i64) }")
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
         # look specifically for list_i64 (not listview_i64, which is also mono'd)
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         assert len(monos) == 1
 
     def test_list_creation_with_capacity(self):
@@ -9078,31 +9088,31 @@ class TestList:
 
     def test_list_is_reftype(self):
         """List is a reference type (not valtype)."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         assert len(monos) == 1
         assert monos[0].is_valtype is False
 
     def test_list_length_field(self):
         """.length is synthesized as u64 field."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "length" in mono.children
         assert mono.children["length"].name == "u64"
 
     def test_list_capacity_field(self):
         """.capacity is synthesized as u64 field."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "capacity" in mono.children
         assert mono.children["capacity"].name == "u64"
 
     def test_list_append_method(self):
         """.append is synthesized with from: parameter."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "append" in mono.children
         append = mono.children["append"]
@@ -9111,8 +9121,8 @@ class TestList:
 
     def test_list_get_method(self):
         """.get is synthesized returning element type."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "get" in mono.children
         get = mono.children["get"]
@@ -9124,8 +9134,8 @@ class TestList:
 
     def test_list_set_method(self):
         """.set is synthesized returning element type."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "set" in mono.children
         set_m = mono.children["set"]
@@ -9135,8 +9145,8 @@ class TestList:
 
     def test_list_pop_method(self):
         """.pop is synthesized returning element type."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "pop" in mono.children
         pop = mono.children["pop"]
@@ -9147,8 +9157,8 @@ class TestList:
 
     def test_list_insert_method(self):
         """.insert is synthesized with from: and at: parameters."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "insert" in mono.children
         insert = mono.children["insert"]
@@ -9158,8 +9168,8 @@ class TestList:
 
     def test_list_extend_method(self):
         """.extend is synthesized with from: list_T parameter."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         assert "extend" in mono.children
         extend = mono.children["extend"]
@@ -9168,10 +9178,10 @@ class TestList:
 
     def test_list_different_element_types(self):
         """List of: i64 and List of: u64 are different types."""
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n    a: (List of: i64)\n    b: (List of: u64)\n}"
         )
-        names = [m.name for m, _ in program.mono_types if "List" in m.name]
+        names = [m.name for m, _ in typing.mono_types if "List" in m.name]
         assert "List_i64" in names
         assert "List_u64" in names
 
@@ -9181,16 +9191,16 @@ class TestList:
         standard `.lock`-param mechanism declared on collections.z's
         native List.listview (`{t: this.lock} out (ListView of: of).borrow`).
         """
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         listview_method = mono.children["listview"]
         assert listview_method.return_ownership == ZParamOwnership.BORROW
 
     def test_list_iterate_returns_borrow(self):
         """Same propagation for the .iterate iterator method."""
-        program = check_ok("main: function is { l: (List of: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "List_i64"]
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
         mono = monos[0]
         iterate_method = mono.children["iterate"]
         assert iterate_method.return_ownership == ZParamOwnership.BORROW
@@ -9214,15 +9224,15 @@ class TestSynthesisedNativeMethodFlag:
     that gap."""
 
     def test_list_i64_methods_all_native(self):
-        program = check_ok("main: function is { l: (List of: i64) }")
-        list_i64 = next(m for m, _ in program.mono_types if m.name == "List_i64")
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        list_i64 = next(m for m, _ in typing.mono_types if m.name == "List_i64")
         for name, child in list_i64.children.items():
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, f"list_i64.{name} should be is_native=True"
 
     def test_map_methods_all_native(self):
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        map_mono = next(m for m, _ in program.mono_types if m.name == "Map_i64_i64")
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        map_mono = next(m for m, _ in typing.mono_types if m.name == "Map_i64_i64")
         for name, child in map_mono.children.items():
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, (
@@ -9230,14 +9240,14 @@ class TestSynthesisedNativeMethodFlag:
                 )
 
     def test_listview_methods_all_native(self):
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n  l: (List of: i64)\n  v: l.listview\n}"
         )
         lv_mono = next(
-            (m for m, _ in program.mono_types if m.name.startswith("ListView_")),
+            (m for m, _ in typing.mono_types if m.name.startswith("ListView_")),
             None,
         )
-        assert lv_mono is not None, [m.name for m, _ in program.mono_types]
+        assert lv_mono is not None, [m.name for m, _ in typing.mono_types]
         for name, child in lv_mono.children.items():
             if child.typetype == ZTypeType.FUNCTION:
                 assert child.is_native, (
@@ -9245,14 +9255,14 @@ class TestSynthesisedNativeMethodFlag:
                 )
 
     def test_listiter_call_native(self):
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n  l: (List of: i64)\n  with it: l.iterate do { }\n}"
         )
         li_mono = next(
-            (m for m, _ in program.mono_types if m.name.startswith("ListIter_")),
+            (m for m, _ in typing.mono_types if m.name.startswith("ListIter_")),
             None,
         )
-        assert li_mono is not None, [m.name for m, _ in program.mono_types]
+        assert li_mono is not None, [m.name for m, _ in typing.mono_types]
         call_method = li_mono.children.get("call")
         assert call_method is not None
         assert call_method.is_native
@@ -9263,36 +9273,36 @@ class TestMap:
 
     def test_map_creation(self):
         """Map key: i64 value: i64 creates a monomorphized Map type."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        monos = [m for m, _ in program.mono_types if "Map" in m.name]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        monos = [m for m, _ in typing.mono_types if "Map" in m.name]
         assert len(monos) >= 1
         assert any(m.name == "Map_i64_i64" for m in monos)
 
     def test_map_is_reftype(self):
         """Map is a reference type (not valtype)."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        monos = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"]
         assert len(monos) == 1
         assert monos[0].is_valtype is False
 
     def test_map_length_field(self):
         """.length is synthesized as u64 field."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
         assert "length" in mono.children
         assert mono.children["length"].name == "u64"
 
     def test_map_capacity_field(self):
         """.capacity is synthesized as u64 field."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
         assert "capacity" in mono.children
         assert mono.children["capacity"].name == "u64"
 
     def test_map_set_method(self):
         """.set is synthesized with key: and value: parameters."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
         assert "set" in mono.children
         set_m = mono.children["set"]
         assert set_m.typetype == ZTypeType.FUNCTION
@@ -9301,8 +9311,8 @@ class TestMap:
 
     def test_map_get_method_returns_option(self):
         """.get is synthesized returning Option of value type."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
         assert "get" in mono.children
         get_m = mono.children["get"]
         assert get_m.typetype == ZTypeType.FUNCTION
@@ -9312,8 +9322,8 @@ class TestMap:
 
     def test_map_delete_method(self):
         """.delete is synthesized returning bool."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
         assert "delete" in mono.children
         del_m = mono.children["delete"]
         assert del_m.typetype == ZTypeType.FUNCTION
@@ -9324,8 +9334,8 @@ class TestMap:
 
     def test_map_has_method(self):
         """.has is synthesized returning bool."""
-        program = check_ok("main: function is { m: (Map key: i64 value: i64) }")
-        mono = [m for m, _ in program.mono_types if m.name == "Map_i64_i64"][0]
+        program, typing = check_ok("main: function is { m: (Map key: i64 value: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Map_i64_i64"][0]
         assert "has" in mono.children
         has_m = mono.children["has"]
         assert has_m.typetype == ZTypeType.FUNCTION
@@ -9335,13 +9345,13 @@ class TestMap:
 
     def test_map_different_types(self):
         """Different key/value types produce different monomorphized types."""
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n"
             "    a: (Map key: i64 value: i64)\n"
             "    b: (Map key: String value: u64)\n"
             "}"
         )
-        names = [m.name for m, _ in program.mono_types if "Map" in m.name]
+        names = [m.name for m, _ in typing.mono_types if "Map" in m.name]
         assert "Map_i64_i64" in names
         assert "Map_String_u64" in names
 
@@ -9382,25 +9392,21 @@ class TestConstantFolding:
         return sl
 
     @staticmethod
-    def _const_value(program, parsed_node):
-        """Look up `const_value` for a parsed expression via its typed
-        mirror. After Step 6.9.a `Node.const_value` was stripped — the
-        typed tree is the only carrier of compile-time constant
-        values. Descends `zast.Expression` (no typed mirror per
-        design) into its inner subtype."""
+    def _const_value(typing, parsed_node):
+        """Look up `const_value` for a parsed expression. Descends the
+        `Expression` wrapper into its inner subtype, then reads from
+        `Typing.node_const_value`."""
         target = parsed_node
         while isinstance(target, zast.Expression):
             target = target.expression
-        # F5.E.4.d: const_value lives on `Typing.node_const_value`
-        # (snapshot exposed via `typed_program.node_const_value` shim).
-        return program.typed_program.node_const_value.get(target.nodeid)
+        return typing.node_const_value.get(target.nodeid)
 
     def test_const_value_numeric_literal(self):
         """Numeric literal should have const_value set."""
-        program = check_ok("main: function is { x: 42 }")
+        program, typing = check_ok("main: function is { x: 42 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert self._const_value(program, inner) == 42
+        assert self._const_value(typing, inner) == 42
 
     @pytest.mark.parametrize(
         "expr,expected",
@@ -9416,17 +9422,17 @@ class TestConstantFolding:
         ],
     )
     def test_const_value_binop_folds(self, expr, expected):
-        program = check_ok(f"main: function is {{ x: {expr} }}")
+        program, typing = check_ok(f"main: function is {{ x: {expr} }}")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert self._const_value(program, inner) == expected
+        assert self._const_value(typing, inner) == expected
 
     def test_const_value_none_for_variables(self):
         """Variable + literal should NOT fold."""
-        program = check_ok("main: function is {\n  x: 5\n  y: x + 1\n}")
+        program, typing = check_ok("main: function is {\n  x: 5\n  y: x + 1\n}")
         inner = self._get_rhs_inner(program, stmt_index=1)
         assert isinstance(inner, zast.BinOp)
-        assert self._const_value(program, inner) is None
+        assert self._const_value(typing, inner) is None
 
     def test_const_value_division_by_zero(self):
         """1 / 0 should be a compile-time error."""
@@ -9435,21 +9441,21 @@ class TestConstantFolding:
 
     def test_const_value_named_constant(self):
         """Reference to a named constant should propagate const_value."""
-        program = check_ok(
+        program, typing = check_ok(
             'north: 0\nmain: function is {\n  x: north\n  print "\\{x}"\n}'
         )
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert self._const_value(program, inner) == 0
+        assert self._const_value(typing, inner) == 0
 
     def test_const_value_chained_named(self):
         """Chained named constants: a: 1, b: a + 2 -> b is 3."""
-        program = check_ok(
+        program, typing = check_ok(
             'a: 1\nb: a + 2\nmain: function is {\n  x: b\n  print "\\{x}"\n}'
         )
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert self._const_value(program, inner) == 3
+        assert self._const_value(typing, inner) == 3
 
     def test_const_value_overflow_error(self):
         """255u8 + 1u8 should produce a compile-time overflow error."""
@@ -9458,34 +9464,34 @@ class TestConstantFolding:
 
     def test_const_value_f64_folded(self):
         """f64 operations should be folded."""
-        program = check_ok("main: function is { x: 1.5f64 + 2.5f64 }")
+        program, typing = check_ok("main: function is { x: 1.5f64 + 2.5f64 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert self._const_value(program, inner) == 4.0
+        assert self._const_value(typing, inner) == 4.0
 
     def test_const_value_f32_not_folded(self):
         """f32 operations should not be folded (precision mismatch with host)."""
-        program = check_ok("main: function is { x: 1.5f32 + 2.5f32 }")
+        program, typing = check_ok("main: function is { x: 1.5f32 + 2.5f32 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert self._const_value(program, inner) is None
+        assert self._const_value(typing, inner) is None
 
     def test_const_value_bool_via_comparison(self):
         """Comparison results should have bool const_value (True/False)."""
-        program = check_ok("main: function is {\n  x: 1 == 1\n  y: 1 == 2\n}")
+        program, typing = check_ok("main: function is {\n  x: 1 == 1\n  y: 1 == 2\n}")
         inner0 = self._get_rhs_inner(program, stmt_index=0)
         inner1 = self._get_rhs_inner(program, stmt_index=1)
         assert isinstance(inner0, zast.BinOp)
-        assert self._const_value(program, inner0) is True
+        assert self._const_value(typing, inner0) is True
         assert isinstance(inner1, zast.BinOp)
-        assert self._const_value(program, inner1) is False
+        assert self._const_value(typing, inner1) is False
 
     def test_const_value_propagates_through_expression(self):
         """const_value should propagate from inner Operation to Expression wrapper."""
-        program = check_ok("main: function is { x: 1 + 2 }")
+        program, typing = check_ok("main: function is { x: 1 + 2 }")
         rhs = self._get_rhs(program)
         assert isinstance(rhs, zast.Expression)
-        assert self._const_value(program, rhs) == 3
+        assert self._const_value(typing, rhs) == 3
 
     # -- Division by zero ---
 
@@ -9514,17 +9520,17 @@ class TestConstantFolding:
         ],
     )
     def test_f64_binop_folds(self, expr, expected):
-        program = check_ok(f"main: function is {{ x: {expr} }}")
+        program, typing = check_ok(f"main: function is {{ x: {expr} }}")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
-        assert self._const_value(program, inner) == expected
+        assert self._const_value(typing, inner) == expected
 
     def test_f64_literal_const_value(self):
         """f64 literal should have const_value set."""
-        program = check_ok("main: function is { x: 3.14 }")
+        program, typing = check_ok("main: function is { x: 3.14 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.AtomId)
-        assert self._const_value(program, inner) == 3.14
+        assert self._const_value(typing, inner) == 3.14
 
 
 class TestIfExpression:
@@ -9532,23 +9538,23 @@ class TestIfExpression:
 
     def test_if_expression_basic(self):
         """Basic if-expression with compatible integer branches."""
-        program = check_ok("main: function is { x: if 1 < 2 then 1 else 2 }")
+        program, typing = check_ok("main: function is { x: if 1 < 2 then 1 else 2 }")
         main = program.units[program.mainunitname].body["main"]
         assign = main.body.statements[0].statementline
         assert isinstance(assign, zast.Assignment)
-        assign_t = _node_ztype(program, assign)
+        assign_t = _node_ztype(typing, assign)
         assert assign_t is not None
         assert assign_t.name == "i64"
 
     def test_if_expression_sets_ifnode_type(self):
         """If with else should set ifnode.type to common branch type."""
-        program = check_ok("main: function is { x: if 1 < 2 then 10 else 20 }")
+        program, typing = check_ok("main: function is { x: if 1 < 2 then 10 else 20 }")
         main = program.units[program.mainunitname].body["main"]
         assign = main.body.statements[0].statementline
         expr = assign.value
         inner = expr.expression
         assert isinstance(inner, zast.If)
-        inner_t = _node_ztype(program, inner)
+        inner_t = _node_ztype(typing, inner)
         assert inner_t is not None
         assert inner_t.name == "i64"
 
@@ -9598,10 +9604,10 @@ class TestUnitLevelIf:
 
     def test_unit_level_if_type(self):
         """Unit-level if should resolve to the taken branch's type."""
-        program = check_ok(
+        program, typing = check_ok(
             'x: if 1 < 2 then { 42 } else { 0 }\nmain: function is { print "\\{x}" }'
         )
-        resolved = program.resolved
+        resolved = typing.resolved
         x_type = None
         for k, v in resolved.items():
             if k.endswith(".x"):
@@ -9633,11 +9639,11 @@ class TestUnitLevelIf:
 
     def test_unit_level_if_different_types(self):
         """Unit-level if arms can produce different types."""
-        program = check_ok(
+        program, typing = check_ok(
             'x: if 1 < 2 then { 42 } else { 99u8 }\nmain: function is { print "\\{x}" }'
         )
         # x should have type i64 (the true branch type)
-        resolved = program.resolved
+        resolved = typing.resolved
         x_type = None
         for k, v in resolved.items():
             if k.endswith(".x"):
@@ -9746,7 +9752,7 @@ class TestNativeTypeCheck:
 
     def test_system_native_function_resolves(self):
         """System native functions (error, return, break, continue) resolve normally."""
-        program = check_ok('main: function is { print "hello" }')
+        program, typing = check_ok('main: function is { print "hello" }')
         # return/break/continue are resolved from system.z as native functions
         assert program is not None
 
@@ -10069,7 +10075,7 @@ class TestDoBreak:
 
     def test_do_break_makes_type_optionval(self):
         """Do block with break wraps return type in optionval."""
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n  x: {\n    if 1 > 2 then { break }\n    42\n  }\n}"
         )
         tc = TypeChecker(program)
@@ -10080,13 +10086,13 @@ class TestDoBreak:
 
     def test_do_without_break_unchanged(self):
         """Do block without break keeps plain type (no optional wrapping)."""
-        program = check_ok("main: function is { x: { 42 } }")
+        program, typing = check_ok("main: function is { x: { 42 } }")
         tc = TypeChecker(program)
         tc.check()
 
     def test_do_break_nested_for_binds_to_for(self):
         """break inside for inside do binds to the for, not the do."""
-        program = check_ok(
+        program, typing = check_ok(
             "main: function is {\n"
             "  x: {\n"
             "    for loop {\n"
@@ -10764,7 +10770,7 @@ class TestAutoGeneratedEquality:
 
     def test_record_auto_eq(self):
         """Record with numeric fields gets == and != synthesized."""
-        program = check_ok(
+        program, typing = check_ok(
             "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
             "  a: point\n"
@@ -10772,7 +10778,7 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        point_type = program.resolved.get("test.point")
+        point_type = typing.resolved.get("test.point")
         assert point_type is not None
         eq = point_type.children.get("==")
         assert eq is not None
@@ -10830,7 +10836,7 @@ class TestAutoGeneratedEquality:
 
     def test_record_eq_user_override(self):
         """User-defined == in as_functions is preserved."""
-        program = check_ok(
+        program, typing = check_ok(
             "point: record { x: 0 } as {\n"
             "  ==: function {a: this b: point} out bool is {\n"
             "    return a.x == b.x\n"
@@ -10842,7 +10848,7 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        point_type = program.resolved.get("test.point")
+        point_type = typing.resolved.get("test.point")
         assert point_type is not None
         eq = point_type.children.get("==")
         assert eq is not None
@@ -10884,7 +10890,7 @@ class TestAutoGeneratedEquality:
 
     def test_memcmp_eq_integer_record(self):
         """Record with only integer fields gets memcmp-safe equality."""
-        program = check_ok(
+        program, typing = check_ok(
             "point: record { x: 0  y: 0 }\n"
             "main: function is {\n"
             "  a: point\n"
@@ -10892,13 +10898,13 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        point_type = program.resolved.get("test.point")
+        point_type = typing.resolved.get("test.point")
         eq = point_type.children["=="]
         assert eq.is_simple_eq
 
     def test_memcmp_eq_float_disqualifies(self):
         """Record with float field does NOT get memcmp-safe equality."""
-        program = check_ok(
+        program, typing = check_ok(
             "point: record { x: 0.0  y: 0.0 }\n"
             "main: function is {\n"
             "  a: point\n"
@@ -10906,14 +10912,14 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        point_type = program.resolved.get("test.point")
+        point_type = typing.resolved.get("test.point")
         eq = point_type.children["=="]
         assert eq.is_autogen_eq
         assert not eq.is_simple_eq
 
     def test_memcmp_eq_mixed_int_float(self):
         """Record with mixed int and float fields is NOT memcmp-safe."""
-        program = check_ok(
+        program, typing = check_ok(
             "rec: record { a: 0  b: 0.0f32 }\n"
             "main: function is {\n"
             "  x: rec\n"
@@ -10921,12 +10927,12 @@ class TestAutoGeneratedEquality:
             "  if x == y then return 0\n"
             "}"
         )
-        rec_type = program.resolved.get("test.rec")
+        rec_type = typing.resolved.get("test.rec")
         assert not rec_type.children["=="].is_simple_eq
 
     def test_memcmp_eq_enum_variant(self):
         """Pure enum variant is memcmp-safe."""
-        program = check_ok(
+        program, typing = check_ok(
             "color: variant { red: null  green: null }\n"
             "main: function is {\n"
             "  a: color.red\n"
@@ -10934,12 +10940,12 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        color_type = program.resolved.get("test.color")
+        color_type = typing.resolved.get("test.color")
         assert color_type.children["=="].is_simple_eq
 
     def test_memcmp_eq_variant_with_int_payloads(self):
         """Variant with integer payloads is memcmp-safe."""
-        program = check_ok(
+        program, typing = check_ok(
             "Result: variant { ok: i64  err: u8 }\n"
             "main: function is {\n"
             "  a: Result.ok 1\n"
@@ -10947,12 +10953,12 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        result_type = program.resolved.get("test.Result")
+        result_type = typing.resolved.get("test.Result")
         assert result_type.children["=="].is_simple_eq
 
     def test_memcmp_eq_variant_with_float_payload(self):
         """Variant with float payload is NOT memcmp-safe."""
-        program = check_ok(
+        program, typing = check_ok(
             "Result: variant { ok: f64  none: null }\n"
             "main: function is {\n"
             "  a: Result.ok 1.0\n"
@@ -10960,7 +10966,7 @@ class TestAutoGeneratedEquality:
             "  if a == b then return 0\n"
             "}"
         )
-        result_type = program.resolved.get("test.Result")
+        result_type = typing.resolved.get("test.Result")
         assert not result_type.children["=="].is_simple_eq
 
 
@@ -11086,7 +11092,7 @@ class TestUnionLockedArm:
 
     def test_union_with_locked_arm_resolves(self):
         """A union may declare an arm as `name: type.lock`."""
-        program = check_ok(
+        program, typing = check_ok(
             "src: class { v: i64 }\n"
             "myview: union { none: null\n some: src.lock }\n"
             "main: function is {\n"
@@ -11103,7 +11109,7 @@ class TestUnionLockedArm:
 
     def test_union_all_null_or_locked_no_destructor(self):
         """A union whose every arm is `null` or `.lock` needs no destructor."""
-        program = check_ok(
+        program, typing = check_ok(
             "src: class { v: i64 }\n"
             "myview: union { none: null\n some: src.lock }\n"
             "main: function is {\n"
@@ -11119,7 +11125,7 @@ class TestUnionLockedArm:
 
     def test_union_mixed_arms_keeps_destructor(self):
         """An owned arm anywhere in the union keeps the destructor live."""
-        program = check_ok(
+        program, typing = check_ok(
             "src: class { v: i64 }\n"
             "errkind: variant { e1: null\n e2: null }\n"
             "mixed: union { err: errkind\n cached: src.lock\n fresh: src }\n"
@@ -11160,7 +11166,7 @@ class TestUnionLockedArm:
 
     def test_union_with_only_locked_arm(self):
         """Single-locked-arm union resolves and has no destructor."""
-        program = check_ok(
+        program, typing = check_ok(
             "src: class { v: i64 }\n"
             "wrap: union { val: src.lock }\n"
             "main: function is {\n"
@@ -11183,7 +11189,7 @@ class TestOptionview:
 
     def test_optionview_template_resolves(self):
         """The OptionView template exists in stdlib and is a generic union."""
-        program = check_ok("main: function is { x: OptionView.none i64 }")
+        program, typing = check_ok("main: function is { x: OptionView.none i64 }")
         tc = TypeChecker(program)
         tc.check()
         ovt = tc._resolve_name("OptionView")
@@ -11211,7 +11217,7 @@ class TestOptionview:
 
     def test_optionview_mono_no_destructor(self):
         """A monomorphized OptionView<T> needs no runtime cleanup."""
-        program = check_ok(
+        program, typing = check_ok(
             "src: class { v: i64 }\n"
             "main: function is {\n"
             "  s: src v: 7\n"
@@ -11234,7 +11240,7 @@ class TestOptionview:
     def test_is_iterator_wrapper_recognises_all_three(self):
         """The for-loop dispatch helper accepts Option, optionval, AND
         OptionView."""
-        program = check_ok(
+        program, typing = check_ok(
             "src: class { v: i64 }\n"
             "main: function is {\n"
             '  a: Option.some "x".string\n'

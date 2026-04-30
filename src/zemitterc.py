@@ -338,28 +338,12 @@ def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
 
 
 class CEmitter:
-    def __init__(self, typing_or_program) -> None:
-        # F5.E.3 transitional: accept either a `ztyping.Typing`
-        # (canonical) or a `zast.Program` (legacy test corpus). When a
-        # Program is passed, build a Typing-shaped view from its
-        # compat shims so internal reads via `self.typing.<field>`
-        # still hit the right data.
-        if type(typing_or_program) is ztyping.Typing:
-            self.typing: ztyping.Typing = typing_or_program
-        else:
-            program = cast(zast.Program, typing_or_program)
-            self.typing = ztyping.Typing(parsed=program)
-            self.typing.mono_types = program.mono_types
-            self.typing.mono_functions = program.mono_functions
-            self.typing.func_aliases = program.func_aliases
-            self.typing.cloned_methods = program.cloned_methods
-            self.typing.resolved = program.resolved
-            self.typing.symbol_table = program.symbol_table
-            self.typing.unit_types_by_id = program.unit_types_by_id
+    def __init__(self, typing: ztyping.Typing) -> None:
+        self.typing = typing
         # Convenience alias: most of the emitter walks the parsed AST
         # for tree structure (units, function bodies, etc.); routing
         # those reads through `self.typing.parsed` would be noise.
-        # `self.program` is the parsed `Program`; mutable typecheck
+        # `self.program` is the (frozen) parsed `Program`; typecheck
         # output lives on `self.typing`.
         self.program = self.typing.parsed
         self.out: List[str] = []
@@ -10075,8 +10059,7 @@ class CEmitter:
         return "".join(parts)
 
 
-def emit(typing_or_program) -> str:
-    """F5.E.3 transitional: accepts `Typing` (canonical) or `Program`
-    (legacy). See `CEmitter.__init__` for compat behaviour."""
-    emitter = CEmitter(typing_or_program)
+def emit(typing: ztyping.Typing) -> str:
+    """Emit C source from a populated `Typing`."""
+    emitter = CEmitter(typing)
     return emitter.emit()

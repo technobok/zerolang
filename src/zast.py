@@ -14,8 +14,6 @@ from itertools import count
 import zvfs
 from zvfs import DEntryID
 from zlexer import Token, TT
-from ztypes import ZType
-from zsymtab_proto import SymbolTableProto
 
 
 @unique
@@ -251,18 +249,19 @@ class NodeType(IntEnum):
 #    #BUILTIN ????
 
 
-@dataclass
+@dataclass(frozen=True)
 class Program:
     """
-    Program - top level, hold all Units, streams (files), types for the program
-    It is not a Node itself.
+    Program - top level, holds all Units and streams (files).
 
-    F5.E.3 added the canonical home for typecheck output on
-    `ztyping.Typing`. The legacy fields below remain as transitional
-    compat shims (typecheck writes both); they are removed and Program
-    is frozen in a follow-up. The 19 nodeid-keyed component dicts
-    that lived here pre-F5.E.2 are gone — those moved to `Typing`
-    cleanly without a compat shim.
+    Frozen as of F5.E.5 — this is parser output and is immutable
+    post-parse. Typecheck output lives on `ztyping.Typing`.
+
+    Two siblings carry `is_error: bool` to discriminate parser
+    results: `Program.is_error = False`, `Error.is_error = True`.
+    Callers do `if obj.is_error:` to distinguish without
+    `isinstance`. This is parser-discriminator state, not typecheck
+    state — typecheck never writes to it.
     """
 
     is_error: bool = field(default=False, init=False)
@@ -274,20 +273,6 @@ class Program:
     # dict shape: it's how the parser materialises imports today.
     units: Dict[str, "Unit"]
     mainunitname: str
-
-    # ----- F5.E.3 transitional compat shims for typecheck output.
-    # Canonical home is `ztyping.Typing`; these duplicate the data so
-    # tests reading `program.<field>` keep working until the test rebase
-    # in the follow-up commit.
-
-    mono_types: typing.List = field(default_factory=list)
-    mono_functions: typing.List = field(default_factory=list)
-    func_aliases: Dict[str, str] = field(default_factory=dict)
-    cloned_methods: Dict[str, Dict[str, "Function"]] = field(default_factory=dict)
-    resolved: Dict[str, "ZType"] = field(default_factory=dict)
-    symbol_table: "Optional[SymbolTableProto]" = field(default=None, init=False)
-    unit_types_by_id: Dict[int, "ZType"] = field(default_factory=dict, init=False)
-    typed_program: "Optional[object]" = field(default=None, init=False)
 
 
 def clone_function(func: "Function") -> "Function":

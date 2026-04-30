@@ -9969,14 +9969,10 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
     """Top-level entry point: type-check a parsed program.
 
     Returns the populated `Typing` (typecheck-output container).
-    The `Typing` carries the back-reference to the parsed program,
-    the typecheck errors, and every typecheck-derived datum the
-    emitter / SQL dumper / asthash need to read.
-
-    F5.E.3 is transitional: typecheck output is also mirrored onto
-    legacy compat fields on `program` so test code that still reads
-    `program.mono_types` etc. continues to work. The follow-up commit
-    rebases tests, removes the compat fields, and freezes `Program`.
+    `Typing` carries the back-reference to the parsed program, the
+    typecheck errors, and every typecheck-derived datum the emitter /
+    SQL dumper / asthash need to read. `program` is read-only —
+    F5.E.5 froze `zast.Program`.
     """
     tc = TypeChecker(program)
     errors = tc.check(full=full)
@@ -9987,17 +9983,13 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
     tc.typing.func_aliases = tc._func_aliases
     tc.typing.cloned_methods = tc._cloned_methods
     tc.typing.resolved = dict(tc._resolved)
-    # Phase 7c: expose the symbol table for the SQL dumper.
     tc.typing.symbol_table = tc.symtab
-    # Phase 7d: expose the id-keyed unit_types map for the dumper so
-    # it can stamp `unit.unit_type_id` when a unit was materialized.
     tc.typing.unit_types_by_id = dict(tc.unit_types_by_id)
-    # F5.E.4.d: build the thin `TypedProgramView` shim. Replaces the
-    # full structural `ztypedast.TypedProgram` — exposes a few
-    # `Typing` component dicts under their legacy `typed_program.X`
-    # access path. Tests still read these by name; emitter / sqldump
-    # have already moved to `typing.X` directly.
-    view = ztyping.TypedProgramView(
+    # `TypedProgramView` exposes a handful of `Typing` component
+    # tables under their legacy `typed_program.X` access path for
+    # compatibility with the codereview fields (no consumer in src/
+    # uses it after F5.E.4; one or two tests still do).
+    tc.typing.typed_program = ztyping.TypedProgramView(
         node_types=tc.typing.node_type,
         expr_call_kinds=tc.typing.expr_call_kind,
         node_const_value=tc.typing.node_const_value,
@@ -10005,33 +9997,18 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
         dp_child_id=tc.typing.dp_child_id,
         atom_child_id=tc.typing.atom_child_id,
     )
-    tc.typing.typed_program = view
-    # ----- F5.E.3 compat shims: mirror typecheck output onto Program.
-    program.mono_types = tc.typing.mono_types
-    program.mono_functions = tc.typing.mono_functions
-    program.func_aliases = tc.typing.func_aliases
-    program.cloned_methods = tc.typing.cloned_methods
-    program.resolved = dict(tc.typing.resolved)
-    program.symbol_table = tc.typing.symbol_table
-    program.unit_types_by_id = dict(tc.typing.unit_types_by_id)
-    program.typed_program = view
     return tc.typing
 
 
-def audit_type_annotations(program: zast.Program) -> List[str]:
+def audit_type_annotations(typing: ztyping.Typing) -> List[str]:
     """Post-type-check validation: find Path nodes missing .type annotations.
 
     Returns a list of diagnostic strings for nodes that should have .type
-    set but don't. Empty list means all Path nodes are annotated.
-
-    F5.E.4.d: reads from `program.typed_program.node_types` (the
-    `TypedProgramView` shim, which aliases `Typing.node_type`)."""
+    set but don't. Empty list means all Path nodes are annotated."""
     missing: List[str] = []
     visited: set[int] = set()
-    if program.typed_program is None:
-        return missing
-    view = cast(ztyping.TypedProgramView, program.typed_program)
-    node_types = view.node_types
+    program = typing.parsed
+    node_types = typing.node_type
 
     def _is_skipped_path(
         node: zast.Node, parent: Optional[zast.Node], in_data: bool

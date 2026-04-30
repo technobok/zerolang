@@ -21,16 +21,14 @@ def _parse(src: str, unitname: str = "test"):
 
 
 def _parse_check(src: str, unitname: str = "test"):
-    program, _typing = _parse_check_typing(src, unitname)
-    return program
-
-
-def _parse_check_typing(src: str, unitname: str = "test"):
     program = _parse(src, unitname)
     typing = typecheck(program)
-    errors = typing.errors
-    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
+    assert typing.errors == [], f"unexpected errors: {[e.msg for e in typing.errors]}"
     return program, typing
+
+
+# F5.E.5: alias retained for callers that switched to this name during F5.E.
+_parse_check_typing = _parse_check
 
 
 class TestUnitTypesById:
@@ -43,11 +41,11 @@ class TestUnitTypesById:
             assert tc.unit_types_by_id[unit_ast.nodeid] is tc.unit_types[uname]
 
     def test_id_lookup_hits_after_resolution(self):
-        program = _parse_check('main: function is { print "hi" }')
+        program, typing = _parse_check('main: function is { print "hi" }')
         # after typecheck, system unit's ZType is reachable by its AST nodeid
         system_ast = program.units["system"]
-        assert system_ast.nodeid in program.unit_types_by_id
-        system_type = program.unit_types_by_id[system_ast.nodeid]
+        assert system_ast.nodeid in typing.unit_types_by_id
+        system_type = typing.unit_types_by_id[system_ast.nodeid]
         assert system_type.nodeid >= 0
         # sanity: Unit AST nodeid is distinct from unit ZType nodeid
         assert system_ast.nodeid != system_type.nodeid

@@ -64,9 +64,8 @@ class TestChildIdInfrastructure:
 def _parse_check(source: str, unitname: str = "test"):
     program = make_parser(source, unitname=unitname, src_dir=LIB_DIR).parse()
     typing = typecheck(program)
-    errors = typing.errors
-    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
-    return program
+    assert typing.errors == [], f"unexpected errors: {[e.msg for e in typing.errors]}"
+    return program, typing
 
 
 def _walk(node):
@@ -98,10 +97,10 @@ main: function is {
     v: p.x
 }
 """
-        program = _parse_check(src)
+        program, typing = _parse_check(src)
         # F5.E.4.d: child_id is on `Typing.dp_child_id` keyed by parsed
         # DottedPath nodeid. Walk parsed nodes and check the stamps.
-        dp_child_id = program.typed_program.dp_child_id
+        dp_child_id = typing.dp_child_id
         stamped = 0
 
         def _walk(node):
@@ -141,11 +140,11 @@ main: function is {
     }
 }
 """
-        program = _parse_check(src)
+        program, typing = _parse_check(src)
         # F5.E.4.d: child_id for case-clause match selectors lives on
         # `Typing.atom_child_id` keyed by the parsed `clause.match`
         # AtomId's nodeid. Walk parsed clauses and check the stamps.
-        atom_child_id = program.typed_program.atom_child_id
+        atom_child_id = typing.atom_child_id
         stamped = 0
 
         def _walk(node):

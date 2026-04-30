@@ -23,16 +23,14 @@ def _make_ztype(name: str, tt: ZTypeType = ZTypeType.RECORD) -> ZType:
 
 
 def _parse_check(src: str, unitname: str = "test"):
-    program, _typing = _parse_check_typing(src, unitname)
-    return program
-
-
-def _parse_check_typing(src: str, unitname: str = "test"):
     program = make_parser(src, unitname=unitname, src_dir=LIB_DIR).parse()
     typing = typecheck(program)
-    errors = typing.errors
-    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
+    assert typing.errors == [], f"unexpected errors: {[e.msg for e in typing.errors]}"
     return program, typing
+
+
+# F5.E.5: alias retained for callers using this name.
+_parse_check_typing = _parse_check
 
 
 class TestEntryIdInfrastructure:
