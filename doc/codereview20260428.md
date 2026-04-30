@@ -675,9 +675,18 @@ Larger refactors; do in order.
        `_check_call_inner`, and three helpers; capture happens at
        `_check_path` / `_check_call` / `_check_operation` boundaries.
        F5.F (TAG_ORIGIN sentinel removal) resolved in `feba9e5`.
+       F5.D (move side tables to `Program` as ECS components) resolved
+       in <PIN>: 19 nodeid-keyed dicts (`_node_type`, `_node_const_value`,
+       `_call_kind`, `_call_callable_type_name`, `_expr_call_kind`,
+       `_do_has_break`, `_case_subject_taken`, `_for_iter_bindings`,
+       `_if_taken_vars`, `_case_taken_vars`, `_atom_*`, `_dp_*`,
+       `_with_*`, `_assign_alias_of`, `_projected_args`) moved off
+       `TypeChecker.__init__` onto `Program` as documented component
+       fields; 283 access sites rebased to `self.program.<name>`;
+       `make check`, `make test` (1962), byte-identical C output across
+       all 85 examples.
        Remaining sub-items: F5.B (state records), F5.C (decompose
-       `_monomorphize`), F5.D (move side tables to `Program` as ECS
-       components), F5.E (drop typed-tree mirror module), F5.G
+       `_monomorphize`), F5.E (drop typed-tree mirror module), F5.G
        (decompose 4 remaining monsters), F5.H (flatten
        `ZType.children` to a relational table).)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,

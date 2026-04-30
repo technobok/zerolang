@@ -14,7 +14,7 @@ from itertools import count
 import zvfs
 from zvfs import DEntryID
 from zlexer import Token, TT
-from ztypes import ZType
+from ztypes import ZType, ZOwnership
 from zsymtab_proto import SymbolTableProto
 
 
@@ -305,6 +305,85 @@ class Program:
     # `ztypedast.TypedProgram`.
     typed_program: "Optional[object]" = field(default=None, init=False)
 
+    # ----- F5.D: typecheck side tables, keyed by parsed Node.nodeid.
+    # Populated by the type checker during checking, then read by the
+    # typed-tree mirror builders, the emitter, the SQL dumper, and
+    # asthash. Each is conceptually one row per parsed node — a future
+    # SQL representation has one column per dict here, keyed by
+    # `node_id`. They live on Program (rather than on TypeChecker as
+    # private dicts) so consumers can read them without holding a
+    # reference to the type checker, and so they survive past the
+    # end of typecheck.
+
+    # Per-Node resolved type (was `zast.Node.type`, stripped in
+    # Step 6.9.b). Populated by every `_check_*` / `_resolve_*` /
+    # typeref-resolution path; read by typed-mirror builders, by
+    # typecheck-internal cross-method lookups, and via
+    # `TypedProgram.node_types` by emitter / SQL-dump consumers.
+    node_type: Dict[int, "Optional[ZType]"] = field(default_factory=dict, init=False)
+    # Per-Node compile-time constant value (was `zast.Node.const_value`,
+    # stripped in Step 6.9.a). Values are int / float / bool / str
+    # — same as `ztypedast.ConstValue`. Inlined rather than imported
+    # because ztypedast imports zast.
+    node_const_value: Dict[int, "int | float | bool | str"] = field(
+        default_factory=dict, init=False
+    )
+    # Per-Call classification (was `zast.Call.call_kind` /
+    # `.callable_type_name`). `call_kind` discriminates the emission
+    # shape (REGULAR / RECORD_CREATE / RETURN / CALLABLE / ...);
+    # `callable_type_name` is the mangled type name when the call
+    # dispatches as a callable-object method.
+    call_kind: Dict[int, "CallKind"] = field(default_factory=dict, init=False)
+    call_callable_type_name: Dict[int, str] = field(default_factory=dict, init=False)
+    # Per-Expression wrapper control-flow classification (was
+    # `zast.Expression.call_kind`, stripped in Step 6.10).
+    expr_call_kind: Dict[int, "CallKind"] = field(default_factory=dict, init=False)
+    # Per-Do break flag (was `zast.Do.has_break`).
+    do_has_break: Dict[int, bool] = field(default_factory=dict, init=False)
+    # Per-Case subject-taken flag (was `zast.Case.subject_taken`).
+    case_subject_taken: Dict[int, bool] = field(default_factory=dict, init=False)
+    # Per-For iterator-binding names (was
+    # `zast.For.iterator_bindings`). The set of `name:` bindings whose
+    # operation auto-unwraps an `option` value at each iteration.
+    for_iter_bindings: Dict[int, "set[str]"] = field(default_factory=dict, init=False)
+    # Per-If / per-Case post-block ownership cleanup (was
+    # `zast.If.taken_vars` / `zast.Case.taken_vars`). `(name, ZType)`
+    # tuples for variables consumed in some arm so the emitter knows
+    # which to destruct on the merge path.
+    if_taken_vars: Dict[int, "list[tuple[str, Optional[ZType]]]"] = field(
+        default_factory=dict, init=False
+    )
+    case_taken_vars: Dict[int, "list[tuple[str, Optional[ZType]]]"] = field(
+        default_factory=dict, init=False
+    )
+    # Per-AtomId narrowing stamps (was `zast.AtomId.narrowed_subtype`
+    # / `.original_ztype` / `.child_id`).
+    atom_narrowed_subtype: Dict[int, str] = field(default_factory=dict, init=False)
+    atom_original_ztype: Dict[int, "ZType"] = field(default_factory=dict, init=False)
+    atom_child_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # Per-DottedPath stamps (was `zast.DottedPath.parent_tagged_type`
+    # / `.child_id`). `parent_tagged_type` records the outer
+    # union/variant when a dotted path resolves to one of its tagged
+    # subtypes (`r.ok`, `Result.err`, ...). `child_id` is the
+    # Phase-7b stamp resolving the child name against the parent's ZType.
+    dp_parent_tagged_type: Dict[int, "ZType"] = field(default_factory=dict, init=False)
+    dp_child_id: Dict[int, int] = field(default_factory=dict, init=False)
+    # Per-With binding ownership + alias target (was
+    # `zast.With.ownership` / `.alias_of`).
+    with_ownership: Dict[int, ZOwnership] = field(default_factory=dict, init=False)
+    with_alias_of: Dict[int, "Optional[str]"] = field(default_factory=dict, init=False)
+    # Per-Assignment alias target (was `zast.Assignment.alias_of`).
+    assign_alias_of: Dict[int, "Optional[str]"] = field(
+        default_factory=dict, init=False
+    )
+    # Per-argument protocol projection stamps (was
+    # `zast.NamedOperation.projected_*`). Read by `_build_typed_call`
+    # to populate `TypedNamedOperation`.
+    projected_args: Dict[
+        int,
+        "tuple[Optional[ZType], Optional[str], Optional[str]]",
+    ] = field(default_factory=dict, init=False)
+
 
 def clone_function(func: "Function") -> "Function":
     """Deep clone a Function AST subtree for monomorphization.
@@ -318,7 +397,7 @@ def clone_function(func: "Function") -> "Function":
 
     Replaces the previous `copy.deepcopy(func)` (codereview20260428
     F8): the explicit walk is portable to a self-hosted zerolang and
-    the fresh nodeids prevent collisions in `TypeChecker._node_*`
+    the fresh nodeids prevent collisions in `Program.node_*`
     side-tables when multiple monos of the same generic function are
     materialised."""
     return cast("Function", _clone_node(func))
@@ -610,7 +689,7 @@ class Node:
     nodetype: NodeType
     # `type` used to live here as an `init=False` typecheck-set field.
     # After Step 6.9.b it lives on `TypedExpression.ztype` (for typed
-    # mirrors) and on `TypeChecker._node_type` / `TypedProgram.node_types`
+    # mirrors) and on `Program.node_type` / `TypedProgram.node_types`
     # (for parsed-node-keyed lookup, including typeref Path nodes inside
     # parameters / returntypes / field declarations whose typed mirror
     # is reachable through TypedFunction / TypedObjectDef but the
@@ -618,7 +697,7 @@ class Node:
     # `const_value` used to live here as an `init=False` typecheck-set
     # field. After Step 6.9.a it lives on `TypedExpression.const_value`
     # only; the typechecker records compile-time constants via
-    # `TypeChecker._node_const_value` (a side-table keyed by parsed
+    # `Program.node_const_value` (a side-table keyed by parsed
     # `nodeid`) and the typed-mirror builders read from there.
     start: Token  # start location in the source for this Node
     # provenance: None for nodes parsed from user source; pass-name string
@@ -855,7 +934,7 @@ class Expression(Atom):
     # `call_kind` used to live here as an `init=False` typecheck-set
     # field for control-flow expressions (break/continue/return/
     # error/panic). After Step 6.10 the typechecker records it via
-    # `TypeChecker._expr_call_kind` (a side-table keyed by parsed
+    # `Program.expr_call_kind` (a side-table keyed by parsed
     # `Expression.nodeid`) and snapshots the dict onto
     # `TypedProgram.expr_call_kinds`; emitter consumers use the
     # `CEmitter._expr_call_kind(expr)` helper to read it.
@@ -874,7 +953,7 @@ class If(Node):
     # by `_check_if_inner` (variables consumed in some arm so the
     # emitter can destruct on the merge path). After Step 6 it lives on
     # `TypedIf` only; the typechecker records it via
-    # `TypeChecker._if_taken_vars` and `_build_typed_if` reads it.
+    # `Program.if_taken_vars` and `_build_typed_if` reads it.
 
 
 @dataclass(frozen=True)
@@ -901,7 +980,7 @@ class NamedOperation(Node):
     # Protocol auto-projection stamps used to live here as `init=False`
     # fields populated by `_check_call`. After Step 6 of the typed-tree
     # migration they live on `TypedNamedOperation` only; the typecheck
-    # records them via `TypeChecker._projected_args` (a side-table keyed
+    # records them via `Program.projected_args` (a side-table keyed
     # by parsed `nodeid`) and the typed-mirror builder reads from there.
 
 
@@ -919,7 +998,7 @@ class Case(Node):
     # `subject_taken` and `taken_vars` used to live here as `init=False`
     # fields populated by `_check_case_inner`. After Step 6 they live on
     # `TypedCase` only; the typechecker records them via
-    # `TypeChecker._case_subject_taken` / `_case_taken_vars` and
+    # `Program.case_subject_taken` / `_case_taken_vars` and
     # `_build_typed_case` reads them.
 
 
@@ -956,7 +1035,7 @@ class For(Node):
     # populated by `_check_for_inner` (named bindings whose operation
     # returns option, re-evaluated each iteration). After Step 6 it
     # lives on `TypedFor` only; the typechecker records it via
-    # `TypeChecker._for_iter_bindings` and `_build_typed_for` reads it.
+    # `Program.for_iter_bindings` and `_build_typed_for` reads it.
 
 
 @dataclass(frozen=True)
@@ -971,7 +1050,7 @@ class Do(Node):
     # `has_break` used to live here as an `init=False` field set by
     # the type checker when a break inside the block targets this Do.
     # After Step 6 it lives on `TypedDo` only; the typechecker records
-    # it via `TypeChecker._do_has_break` (side-table keyed by parsed
+    # it via `Program.do_has_break` (side-table keyed by parsed
     # `nodeid`) and `_build_typed_do` reads it.
 
 
@@ -989,7 +1068,7 @@ class With(Node):
     # `ownership` and `alias_of` used to live here as `init=False`
     # fields populated by `_check_with_inner`. After Step 6 they live
     # only on `TypedWith`; the typechecker records them in
-    # `TypeChecker._with_ownership` / `_with_alias_of` (side-tables
+    # `Program.with_ownership` / `_with_alias_of` (side-tables
     # keyed by parsed `nodeid`) and `_build_typed_with` reads them.
 
 
@@ -1040,7 +1119,7 @@ class Call(Operation):
     # `call_kind` and `callable_type_name` used to live here as
     # `init=False` typecheck-set fields. After Step 6.8 they live on
     # `TypedCall` only; the typechecker records them via
-    # `TypeChecker._call_kind` / `_call_callable_type_name` (side-tables
+    # `Program.call_kind` / `_call_callable_type_name` (side-tables
     # keyed by parsed `nodeid`) and `_build_typed_call` reads them.
 
 
@@ -1111,7 +1190,7 @@ class Assignment(Node):
     # `alias_of` used to live here as an `init=False` field populated
     # by `_check_assignment_inner`. After Step 6 it lives on
     # `TypedAssignment` only; the typechecker records it in
-    # `TypeChecker._assign_alias_of` (side-table keyed by parsed
+    # `Program.assign_alias_of` (side-table keyed by parsed
     # `nodeid`) and `_build_typed_assignment` reads it.
 
 
@@ -1150,7 +1229,7 @@ class DottedPath(Path):
     # `parent_tagged_type`, `narrowed_subtype`, and `child_id` used to
     # live here as `init=False` typecheck-set fields. After Step 6 they
     # live on `TypedDottedPath` only; `parent_tagged_type` and
-    # `child_id` are recorded in `TypeChecker._dp_parent_tagged_type` /
+    # `child_id` are recorded in `Program.dp_parent_tagged_type` /
     # `_dp_child_id` (side-tables keyed by parsed `nodeid`), while
     # `narrowed_subtype` was effectively unused on parsed DottedPath
     # (no writer) and is left None on the typed mirror.
@@ -1167,7 +1246,7 @@ class AtomId(Atom):
     # `narrowed_subtype` / `original_ztype` / `child_id` used to live
     # here as `init=False` fields populated by the typechecker. After
     # Step 6 they live on `TypedAtomId` only; the typechecker records
-    # them via `TypeChecker._atom_narrowed_subtype` /
+    # them via `Program.atom_narrowed_subtype` /
     # `_atom_original_ztype` / `_atom_child_id` (side-tables keyed by
     # parsed `nodeid`). The two `TypedAtomId` constructor sites
     # (`_build_typed_atomid` and `_typed_path_from_parsed`) plus the
