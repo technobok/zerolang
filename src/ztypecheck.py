@@ -219,6 +219,8 @@ def _set_field_cleanup_metadata(ztype: ZType) -> None:
     For stack-allocated classes without heap fields, clears needs_destructor since
     no cleanup is needed.
     """
+    # F5.H residual: module-level helper, no Typing access. Uses dict
+    # directly until F5.H.5 either method-ifies this or plumbs typing.
     for child_name, child_type in ztype.children.items():
         if child_type.typetype == ZTypeType.FUNCTION:
             continue
@@ -598,7 +600,7 @@ class TypeChecker:
         appending. After F5.H.5 the dict goes away and the table is
         authoritative.
         """
-        is_new = name not in parent.children
+        is_new = not self.typing.has_child(parent, name)
         parent.children[name] = child
         name_id = parent.child_id_for(name)
         rows = self.typing.type_child
@@ -639,7 +641,7 @@ class TypeChecker:
         creation are not further mutated, so a snapshot copy is
         semantically equivalent to the old shared-dict form.
         """
-        for k, v in src.children.items():
+        for k, v in self.typing.children_of(src):
             self._set_child(dst, k, v)
 
     def _set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
@@ -975,9 +977,9 @@ class TypeChecker:
                 self.typing.node_type[dp.nodeid] = outer
                 if outer.name == "bool":
                     arm_name = dp.child.name
-                    if arm_name in outer.children:
+                    if self.typing.has_child(outer, arm_name):
                         self.typing.node_const_value[dp.nodeid] = list(
-                            outer.children.keys()
+                            self.typing.child_names_of(outer)
                         ).index(arm_name)
                 return outer
             return t
@@ -1346,7 +1348,7 @@ class TypeChecker:
         for pname in func.parameters:
             if pname in ftype.param_ownership:
                 continue
-            pt = ftype.children.get(pname)
+            pt = self.typing.child_of(ftype, pname)
             if (
                 pt is not None
                 and pt.typetype == ZTypeType.CLASS
@@ -1398,7 +1400,7 @@ class TypeChecker:
             if pown == ZParamOwnership.LOCK:
                 if ftype.this_param_name == pname:
                     continue
-                ptype = ftype.children.get(pname)
+                ptype = self.typing.child_of(ftype, pname)
                 if (
                     ptype
                     and _is_valtype(ptype)
@@ -1610,19 +1612,23 @@ class TypeChecker:
             ctype.meta_create = create_type
             # Only install the default 'create' child if the user has not
             # disabled it via 'create: null'.
-            if "create" not in ctype.children and not ctype.create_disabled:
+            if not self.typing.has_child(ctype, "create") and not ctype.create_disabled:
                 self._set_child(ctype, "create", create_type)
 
             # typecheck method bodies
             self.func_ctx.enclosing_type.append(ctype)
             for mname, mfunc in cls.functions().items():
                 if mfunc.body:
-                    self.func_ctx.body.append(ctype.children[mname])
+                    self.func_ctx.body.append(
+                        cast(ZType, self.typing.child_of(ctype, mname))
+                    )
                     self._check_function_body(f"{name}.{mname}", mfunc)
                     self.func_ctx.body.pop()
             for mname, mfunc in cls.as_functions().items():
                 if mfunc.body:
-                    self.func_ctx.body.append(ctype.children[mname])
+                    self.func_ctx.body.append(
+                        cast(ZType, self.typing.child_of(ctype, mname))
+                    )
                     self._check_function_body(f"{name}.{mname}", mfunc)
                     self.func_ctx.body.pop()
             self.func_ctx.enclosing_type.pop()
@@ -1648,7 +1654,7 @@ class TypeChecker:
 
         Scans as_items for a .tag type reference, validates it against
         subtype_names, and populates ztype.tag_type and
-        ztype.children["tag"].
+        self.typing.child_of(ztype, "tag").
 
         type_kind is "Union" or "Variant" (for error messages).
         """
@@ -1691,7 +1697,9 @@ class TypeChecker:
 
         if custom_tag_data and custom_tag_data.typetype == ZTypeType.DATA:
             # validate: data labels must match subtypes 1:1
-            data_labels = [k for k in custom_tag_data.children if k != "tag"]
+            data_labels = [
+                k for k in self.typing.child_names_of(custom_tag_data) if k != "tag"
+            ]
             if sorted(data_labels) != sorted(subtype_names):
                 missing_in_data = set(subtype_names) - set(data_labels)
                 missing_in_type = set(data_labels) - set(subtype_names)
@@ -1713,7 +1721,7 @@ class TypeChecker:
             # validate: data values must be unique
             seen_values: dict = {}
             for dl in data_labels:
-                child = custom_tag_data.children[dl]
+                child = self.typing.child_of(custom_tag_data, dl)
                 val = child.name if child else None
                 if val in seen_values:
                     self._error(
@@ -1726,7 +1734,7 @@ class TypeChecker:
             # use custom data values as discriminators
             tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
             for sname in subtype_names:
-                child = custom_tag_data.children.get(sname)
+                child = self.typing.child_of(custom_tag_data, sname)
                 val = child.name if child else str(subtype_names.index(sname))
                 self._set_child(tag_type, sname, _make_type(val, ZTypeType.RECORD))
             ztype.tag_type = tag_type
@@ -1918,12 +1926,16 @@ class TypeChecker:
         self.func_ctx.enclosing_type.append(utype)
         for mname, mfunc in union_defn.functions().items():
             if mfunc.body:
-                self.func_ctx.body.append(utype.children[mname])
+                self.func_ctx.body.append(
+                    cast(ZType, self.typing.child_of(utype, mname))
+                )
                 self._check_function_body(f"{name}.{mname}", mfunc)
                 self.func_ctx.body.pop()
         for mname, mfunc in union_defn.as_functions().items():
             if mfunc.body:
-                self.func_ctx.body.append(utype.children[mname])
+                self.func_ctx.body.append(
+                    cast(ZType, self.typing.child_of(utype, mname))
+                )
                 self._check_function_body(f"{name}.{mname}", mfunc)
                 self.func_ctx.body.pop()
         self.func_ctx.enclosing_type.pop()
@@ -2173,12 +2185,16 @@ class TypeChecker:
         self.func_ctx.enclosing_type.append(vtype)
         for mname, mfunc in variant_defn.functions().items():
             if mfunc.body:
-                self.func_ctx.body.append(vtype.children[mname])
+                self.func_ctx.body.append(
+                    cast(ZType, self.typing.child_of(vtype, mname))
+                )
                 self._check_function_body(f"{name}.{mname}", mfunc)
                 self.func_ctx.body.pop()
         for mname, mfunc in variant_defn.as_functions().items():
             if mfunc.body:
-                self.func_ctx.body.append(vtype.children[mname])
+                self.func_ctx.body.append(
+                    cast(ZType, self.typing.child_of(vtype, mname))
+                )
                 self._check_function_body(f"{name}.{mname}", mfunc)
                 self.func_ctx.body.pop()
         self.func_ctx.enclosing_type.pop()
@@ -2435,7 +2451,7 @@ class TypeChecker:
         rtype.meta_create = create_type
         # Only install the default 'create' child if the user has not
         # disabled it via 'create: null'.
-        if "create" not in rtype.children and not rtype.create_disabled:
+        if not self.typing.has_child(rtype, "create") and not rtype.create_disabled:
             self._set_child(rtype, "create", create_type)
 
         # typecheck method bodies (non-generic only)
@@ -2443,12 +2459,16 @@ class TypeChecker:
             self.func_ctx.enclosing_type.append(rtype)
             for mname, mfunc in rec.functions().items():
                 if mfunc.body:
-                    self.func_ctx.body.append(rtype.children[mname])
+                    self.func_ctx.body.append(
+                        cast(ZType, self.typing.child_of(rtype, mname))
+                    )
                     self._check_function_body(f"{name}.{mname}", mfunc)
                     self.func_ctx.body.pop()
             for mname, mfunc in rec.as_functions().items():
                 if mfunc.body:
-                    self.func_ctx.body.append(rtype.children[mname])
+                    self.func_ctx.body.append(
+                        cast(ZType, self.typing.child_of(rtype, mname))
+                    )
                     self._check_function_body(f"{name}.{mname}", mfunc)
                     self.func_ctx.body.pop()
             self.func_ctx.enclosing_type.pop()
@@ -2598,7 +2618,7 @@ class TypeChecker:
         if ztype.is_native:
             return  # native system records (bool, i64, ...) opt out
         for fname in is_field_names:
-            ftype = ztype.children.get(fname)
+            ftype = self.typing.child_of(ztype, fname)
             if ftype is None:
                 continue
             if ftype.typetype == ZTypeType.FUNCTION:
@@ -2630,12 +2650,12 @@ class TypeChecker:
         recursively). The emitter decides whether to use memcmp or
         field-by-field based on estimated type size.
         """
-        if "==" in ztype.children:
+        if self.typing.has_child(ztype, "=="):
             return  # user-defined or null-hidden
 
         # check all fields/subtypes support == and track memcmp eligibility
         simple_eq = True
-        for fname, ftype in ztype.children.items():
+        for fname, ftype in self.typing.children_of(ztype):
             if ftype.typetype == ZTypeType.FUNCTION:
                 continue  # function pointers compared by address in C
             if ftype.typetype == ZTypeType.TAG:
@@ -2657,7 +2677,7 @@ class TypeChecker:
             if ftype.name in self._FLOAT_TYPES:
                 simple_eq = False
             # field must have == (native, user-defined, or will be auto-generated)
-            if "==" not in ftype.children:
+            if not self.typing.has_child(ftype, "=="):
                 # accept records/variants that will get == synthesized
                 if ftype.typetype in (ZTypeType.RECORD, ZTypeType.VARIANT):
                     simple_eq = False  # can't verify nested yet
@@ -2665,7 +2685,7 @@ class TypeChecker:
                 return  # field lacks ==, skip synthesis
             else:
                 # nested type has ==; check if it's memcmp-safe
-                nested_eq = ftype.children["=="]
+                nested_eq = cast(ZType, self.typing.child_of(ftype, "=="))
                 if nested_eq.is_autogen_eq:
                     # auto-generated: safe only if the nested type is also memcmp-safe
                     if not nested_eq.is_simple_eq:
@@ -2902,14 +2922,14 @@ class TypeChecker:
                         loc=start,
                     )
                 # conformance check: implementor must have all spec methods
-                for spec_name, spec_func in at.children.items():
+                for spec_name, spec_func in self.typing.children_of(at):
                     if spec_name in (
                         "create",
                         "take",
                         "borrow",
                     ):
                         continue
-                    method = rtype.children.get(spec_name)
+                    method = self.typing.child_of(rtype, spec_name)
                     if not method:
                         self._error(
                             f"'{name}' satisfies '{at.name}' but missing method '{spec_name}'",
@@ -2960,10 +2980,12 @@ class TypeChecker:
         """Check that impl method signature matches protocol spec signature."""
         # extract non-receiver params
         # "this" is the receiver in both spec and impl; skip it
-        spec_params = [(k, v) for k, v in spec_func.children.items() if k != "this"]
+        spec_params = [
+            (k, v) for k, v in self.typing.children_of(spec_func) if k != "this"
+        ]
         impl_params = [
             (k, v)
-            for k, v in impl_func.children.items()
+            for k, v in self.typing.children_of(impl_func)
             if k != "this" and v.name != impl_name
         ]
 
@@ -3198,7 +3220,7 @@ class TypeChecker:
         """
         ftype = _make_type(f"{name}.create", ZTypeType.FUNCTION)
         ftype.return_type = parent_type
-        for fname, ft in parent_type.children.items():
+        for fname, ft in self.typing.children_of(parent_type):
             # skip non-field children (as constants, protocol satisfaction, etc.)
             if field_names is not None and fname not in field_names:
                 continue
@@ -3621,7 +3643,7 @@ class TypeChecker:
                     )
                     return None, True
                 if utype:
-                    child = utype.children.get(path.child.name)
+                    child = self.typing.child_of(utype, path.child.name)
                     if child:
                         return child, True
                 t = self._resolve_unit_name(pname, path.child.name)
@@ -3631,7 +3653,7 @@ class TypeChecker:
                 # than silent None. Without this, `io.read_only` (or
                 # any other typo on a unit-qualified path) would slip
                 # through call argument resolution.
-                candidates = list((utype.children if utype else {}).keys())
+                candidates = self.typing.child_names_of(utype) if utype else []
                 suggestion = _suggest_similar(path.child.name, candidates)
                 self._error(
                     f"unit '{pname}' has no member '{path.child.name}'",
@@ -3657,10 +3679,10 @@ class TypeChecker:
                 inline_unit_type is not None
                 and inline_unit_type.typetype == ZTypeType.UNIT
             ):
-                child = inline_unit_type.children.get(path.child.name)
+                child = self.typing.child_of(inline_unit_type, path.child.name)
                 if child:
                     return child, True
-                candidates = list(inline_unit_type.children.keys())
+                candidates = self.typing.child_names_of(inline_unit_type)
                 suggestion = _suggest_similar(path.child.name, candidates)
                 self._error(
                     f"unit '{pname}' has no member '{path.child.name}'",
@@ -3793,9 +3815,9 @@ class TypeChecker:
         if parent_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
             # resolve public name (may redirect renamed members)
             resolved_name = self._resolve_public_name(parent_type, child_name, path)
-            child = parent_type.children.get(resolved_name)
+            child = self.typing.child_of(parent_type, resolved_name)
             if not child:
-                child = parent_type.children.get(child_name)
+                child = self.typing.child_of(parent_type, child_name)
             if child:
                 # public access check
                 if self._is_non_public_access(parent_type, child_name, path):
@@ -3850,7 +3872,9 @@ class TypeChecker:
             elem_type = parent_type.element_type
             if elem_type:
                 # count data elements (non-special keys)
-                data_len = sum(1 for k in parent_type.children if k != "tag")
+                data_len = sum(
+                    1 for k in self.typing.child_names_of(parent_type) if k != "tag"
+                )
                 # monomorphize array with matching type and length
                 array_template = self._resolve_name("array")
                 if array_template and array_template.isgeneric:
@@ -3921,9 +3945,9 @@ class TypeChecker:
         # for records/enums, look up child in children
         # resolve public name (may redirect renamed members)
         resolved_name = self._resolve_public_name(parent_type, child_name, path)
-        child = parent_type.children.get(resolved_name)
+        child = self.typing.child_of(parent_type, resolved_name)
         if not child:
-            child = parent_type.children.get(child_name)
+            child = self.typing.child_of(parent_type, child_name)
         if child:
             # null-hidden methods on typedefs
             if parent_type.typedef_base and child.typetype == ZTypeType.NULL:
@@ -3943,7 +3967,7 @@ class TypeChecker:
         # Typedef fall-through: walk base chain for unshadowed methods
         base = parent_type.typedef_base
         while base is not None:
-            child = base.children.get(child_name)
+            child = self.typing.child_of(base, child_name)
             if child:
                 return child
             base = base.typedef_base
@@ -3968,7 +3992,7 @@ class TypeChecker:
             or entry.original_ztype is None
         ):
             return
-        if child_name in entry.original_ztype.children:
+        if self.typing.has_child(entry.original_ztype, child_name):
             self._error(
                 f"'{parent_atom.name}' is narrowed to "
                 f"'{entry.ztype.name}' in this arm; "
@@ -4081,7 +4105,7 @@ class TypeChecker:
         seen: set[int] = set()
         while t is not None and id(t) not in seen:
             seen.add(id(t))
-            for label, child in t.children.items():
+            for label, child in self.typing.children_of(t):
                 if child is proto_type or child.nodeid == proto_type.nodeid:
                     return label
                 if child.typetype in (
@@ -4138,8 +4162,8 @@ class TypeChecker:
             return False
         if a_ret and b_ret and not self._types_compatible(a_ret, b_ret):
             return False
-        a_params = list(a.children.items())
-        b_params = list(b.children.items())
+        a_params = self.typing.children_of(a)
+        b_params = self.typing.children_of(b)
         if len(a_params) != len(b_params):
             return False
         for (ak, av), (bk, bv) in zip(a_params, b_params):
@@ -4221,7 +4245,7 @@ class TypeChecker:
     ) -> ZType:
         """Create a new function type with generic params substituted."""
         new_func = _make_type(name, ZTypeType.FUNCTION)
-        for pk, pv in func_type.children.items():
+        for pk, pv in self.typing.children_of(func_type):
             if pv.typetype == ZTypeType.GENERIC_PARAM and pv.name in args:
                 self._set_child(new_func, pk, args[pv.name])
             else:
@@ -4250,7 +4274,7 @@ class TypeChecker:
         of nested generic subunits, function body cloning and type-checking.
         """
         # 1. substitute generic params in function children
-        for child_name, child_type in list(mono.children.items()):
+        for child_name, child_type in self.typing.children_of(mono):
             if child_type.typetype == ZTypeType.FUNCTION:
                 new_func = self._substitute_func_type(
                     f"{mangled}.{child_name}", child_type, generic_args
@@ -4720,10 +4744,10 @@ class TypeChecker:
                 mangled, mono, is_func_names, field_names
             )
             mono.meta_create = create_type
-            if "create" not in mono.children:
+            if not self.typing.has_child(mono, "create"):
                 self._set_child(mono, "create", create_type)
         if template_type.typetype == ZTypeType.RECORD:
-            create_child = mono.children.get("create")
+            create_child = self.typing.child_of(mono, "create")
             if create_child and create_child.typetype == ZTypeType.FUNCTION:
                 mono.meta_create = create_child
 
@@ -4771,7 +4795,7 @@ class TypeChecker:
         )
         if not (mono.is_native or is_compiler_collection):
             return
-        for child in mono.children.values():
+        for child in self.typing.child_types_of(mono):
             if child.typetype == ZTypeType.FUNCTION:
                 child.is_native = True
 
@@ -4789,7 +4813,7 @@ class TypeChecker:
         auto-synthesises numeric-param fields not referenced by any
         child (size constants for str, length for array, etc.)."""
         numeric_params_referenced: set[str] = set()
-        for child_name, child_type in template_type.children.items():
+        for child_name, child_type in self.typing.children_of(template_type):
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 param_ref_name = child_type.name
                 concrete = generic_args.get(param_ref_name)
@@ -4885,7 +4909,7 @@ class TypeChecker:
             template_type.typetype == ZTypeType.UNION
             and template_type.nodeid == self._option_template_nodeid()
         ):
-            some_child = mono.children.get("some")
+            some_child = self.typing.child_of(mono, "some")
             if some_child and some_child.is_heap_allocated:
                 mono.is_nullable_ptr = True
         # OptionView: standard {tag, void*} layout. Carry the template's
@@ -4905,16 +4929,20 @@ class TypeChecker:
         The shape is identical for both kinds; the difference between
         union and variant is captured by `is_valtype` (already set by
         `_recompute_mono_typetype_marks`)."""
-        subtype_names = [
-            k
-            for k in mono.children
-            if k != "tag"
-            and mono.children[k].typetype != ZTypeType.FUNCTION
-            and mono.children[k].typetype != ZTypeType.DATA
-            and mono.children[k].typetype != ZTypeType.TAG
-            and mono.children[k].typetype != ZTypeType.ENUM
-            and not mono.children[k].is_tag_generic_origin
-        ]
+        subtype_names: List[str] = []
+        for k, ct in self.typing.children_of(mono):
+            if k == "tag":
+                continue
+            if ct.typetype in (
+                ZTypeType.FUNCTION,
+                ZTypeType.DATA,
+                ZTypeType.TAG,
+                ZTypeType.ENUM,
+            ):
+                continue
+            if ct.is_tag_generic_origin:
+                continue
+            subtype_names.append(k)
         tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
         for i, sname in enumerate(subtype_names):
             self._set_child(tag_type, sname, _make_type(str(i), ZTypeType.RECORD))
@@ -4966,7 +4994,7 @@ class TypeChecker:
                 continue
             subtype_names = {
                 k
-                for k, v in constraint.children.items()
+                for k, v in self.typing.children_of(constraint)
                 if k != "tag"
                 and v.typetype != ZTypeType.FUNCTION
                 and v.typetype != ZTypeType.DATA
@@ -5032,7 +5060,7 @@ class TypeChecker:
         into its function children while keeping its own generic params.
         Recurses to arbitrary depth.
         """
-        for child_name, child_type in list(parent.children.items()):
+        for child_name, child_type in self.typing.children_of(parent):
             if child_type.typetype != ZTypeType.UNIT or not child_type.isgeneric:
                 continue
             sub_name = f"{parent_name}.{child_name}"
@@ -5046,7 +5074,7 @@ class TypeChecker:
                 if gp_name not in args:
                     sub_unit.generic_params[gp_name] = gp_constraint
                     sub_unit.isgeneric = True
-            for ck, cv in child_type.children.items():
+            for ck, cv in self.typing.children_of(child_type):
                 if cv.typetype == ZTypeType.FUNCTION:
                     self._set_child(
                         sub_unit,
@@ -5136,7 +5164,7 @@ class TypeChecker:
         generic_args: dict[str, ZType] = {}
 
         # check if this is a null subtype with explicit type arg
-        subtype_child = template.children.get(subtype_name)
+        subtype_child = self.typing.child_of(template, subtype_name)
         is_null_subtype = (
             subtype_child is not None and subtype_child.typetype == ZTypeType.NULL
         )
@@ -5258,7 +5286,7 @@ class TypeChecker:
         # build field_to_gparam: field_name -> generic_param_name
         field_to_gparam: dict[str, str] = {}
         field_names: list[str] = []
-        for child_name, child_type in template.children.items():
+        for child_name, child_type in self.typing.children_of(template):
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 field_to_gparam[child_name] = child_type.name
             field_names.append(child_name)
@@ -5346,7 +5374,7 @@ class TypeChecker:
         # build param_to_gparam: param_name -> generic_param_name
         param_to_gparam: dict[str, str] = {}
         param_names: list[str] = []
-        for child_name, child_type in template.children.items():
+        for child_name, child_type in self.typing.children_of(template):
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 param_to_gparam[child_name] = child_type.name
             param_names.append(child_name)
@@ -5430,7 +5458,7 @@ class TypeChecker:
             return None
 
         # verify value arg types against monomorphized parameter types
-        mono_params = list(mono_ftype.children.items())
+        mono_params = self.typing.children_of(mono_ftype)
         for param_name, val_type, arg in checked_value_args:
             if not val_type or not param_name:
                 continue
@@ -5515,7 +5543,7 @@ class TypeChecker:
                     matched = False
                     concrete_members: list[str] = []
                     proto_members: list[str] = []
-                    for k, v in constraint.children.items():
+                    for k, v in self.typing.children_of(constraint):
                         if (
                             k == "tag"
                             or v.typetype
@@ -5576,7 +5604,7 @@ class TypeChecker:
         mono.element_type = template.element_type
 
         # substitute generic params in parameter types
-        for child_name, child_type in template.children.items():
+        for child_name, child_type in self.typing.children_of(template):
             if child_type.typetype == ZTypeType.GENERIC_PARAM:
                 concrete = generic_args.get(child_type.name)
                 if concrete:
@@ -5683,7 +5711,7 @@ class TypeChecker:
         seen: set[int] = set()
         while t is not None and id(t) not in seen:
             seen.add(id(t))
-            for child_type in t.children.values():
+            for child_type in self.typing.child_types_of(t):
                 if child_type is protocol:
                     return True
                 if (
@@ -5966,7 +5994,7 @@ class TypeChecker:
             # construction, narrow the variable to that subtype
             subtype_name = self._get_construction_subtype_name(assign.value)
             if subtype_name and t.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
-                arm_subtype = t.children.get(subtype_name)
+                arm_subtype = self.typing.child_of(t, subtype_name)
                 if arm_subtype:
                     self.symtab.narrow(assign.name, arm_subtype, subtype_name)
 
@@ -6141,7 +6169,7 @@ class TypeChecker:
                     ZTypeType.VARIANT,
                 )
             ):
-                arm_subtype = existing.children.get(subtype_name)
+                arm_subtype = self.typing.child_of(existing, subtype_name)
                 if arm_subtype:
                     self.symtab.narrow(var_name, arm_subtype, subtype_name)
 
@@ -6304,10 +6332,10 @@ class TypeChecker:
                 and t.typetype == ZTypeType.FUNCTION
                 and t.control_kind == ControlKind.NONE
                 and inner.nodetype == NodeType.ATOMID
-                and t.children
+                and self.typing.child_count(t) > 0
                 and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
             ):
-                for pname, ptype in t.children.items():
+                for pname, ptype in self.typing.children_of(t):
                     if pname not in t.param_defaults:
                         self._error(
                             f"missing required argument '{pname}' (type: {ptype.name})",
@@ -6325,7 +6353,7 @@ class TypeChecker:
             ):
                 create_type = t.meta_create
                 if create_type:
-                    for pname, ptype in create_type.children.items():
+                    for pname, ptype in self.typing.children_of(create_type):
                         if ptype.typetype == ZTypeType.FUNCTION:
                             continue
                         if pname not in create_type.param_defaults:
@@ -6467,11 +6495,12 @@ class TypeChecker:
           (c) no params recorded at all (synthesized natives like
               `list.listview` after monomorphisation)
         """
-        if not method.children:
+        cnt = self.typing.child_count(method)
+        if cnt == 0:
             return True
-        if len(method.children) != 1:
+        if cnt != 1:
             return False
-        only_param = next(iter(method.children))
+        only_param = self.typing.child_names_of(method)[0]
         if only_param == "this":
             return True
         if method.this_param_name == only_param:
@@ -6505,7 +6534,7 @@ class TypeChecker:
         self._pending_private_access = parent_result.private_access
         if parent_type is None:
             return None
-        if "take" in parent_type.children:
+        if self.typing.has_child(parent_type, "take"):
             return None
         if parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
             return None
@@ -6557,7 +6586,7 @@ class TypeChecker:
         parent_type = parent_result.ztype
         self._pending_borrow_lock = parent_result.borrow_target
         self._pending_private_access = parent_result.private_access
-        if parent_type is None or "release" in parent_type.children:
+        if parent_type is None or self.typing.has_child(parent_type, "release"):
             return None
         if path.parent.nodetype != NodeType.ATOMID:
             self._error(
@@ -6609,7 +6638,7 @@ class TypeChecker:
         self._pending_private_access = parent_result.private_access
         if parent_type is None:
             return None
-        if "borrow" in parent_type.children:
+        if self.typing.has_child(parent_type, "borrow"):
             return None
         if parent_type.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
             return None
@@ -6641,7 +6670,7 @@ class TypeChecker:
         self._pending_private_access = parent_result.private_access
         if parent_type is None:
             return None
-        if "lock" in parent_type.children:
+        if self.typing.has_child(parent_type, "lock"):
             return None
         src_path = self._get_dotted_path_tuple(path.parent)
         if src_path:
@@ -6666,7 +6695,7 @@ class TypeChecker:
         self._pending_private_access = parent_result.private_access
         if parent_type is None:
             return None
-        if "private" in parent_type.children:
+        if self.typing.has_child(parent_type, "private"):
             return None
         if not self._is_internal_access(parent_type, path):
             # also allow if the variable itself has private access
@@ -6913,9 +6942,9 @@ class TypeChecker:
                     # emission and pass a bare integer instead.
                     if outer_pt.name == "bool":
                         arm_name = path.child.name
-                        if arm_name in outer_pt.children:
+                        if self.typing.has_child(outer_pt, arm_name):
                             self.typing.node_const_value[path.nodeid] = list(
-                                outer_pt.children.keys()
+                                self.typing.child_names_of(outer_pt)
                             ).index(arm_name)
                     return outer_pt
         return t
@@ -7044,7 +7073,9 @@ class TypeChecker:
             return result
 
         # parameter types (skip 'this' — handled separately for method calls)
-        params = [(k, v) for k, v in callee_type.children.items() if k != "this"]
+        params = [
+            (k, v) for k, v in self.typing.children_of(callee_type) if k != "this"
+        ]
 
         # for callable dispatch, skip the 'this' parameter (first param of call method)
         # — the receiver is passed implicitly
@@ -7198,7 +7229,7 @@ class TypeChecker:
             self.symtab.lookup_var(cast(zast.AtomId, call.callable).name) is not None
         )
         if callee_is_var and callee_type.typetype != ZTypeType.FUNCTION:
-            call_method = callee_type.children.get("call")
+            call_method = self.typing.child_of(callee_type, "call")
             if call_method and call_method.typetype == ZTypeType.FUNCTION:
                 self.typing.call_kind[call.nodeid] = zast.CallKind.CALLABLE
                 self.typing.call_callable_type_name[call.nodeid] = callee_type.name
@@ -7244,7 +7275,7 @@ class TypeChecker:
             and callee_type.typetype != ZTypeType.FUNCTION
             and self.func_ctx.body
         ):
-            create_fn = callee_type.children.get("create")
+            create_fn = self.typing.child_of(callee_type, "create")
             if create_fn is self.func_ctx.body[-1]:
                 self._error(
                     f"cannot call '{callee_type.name}.create' recursively "
@@ -7320,7 +7351,7 @@ class TypeChecker:
             and callee_type.isgeneric
             and callee_type.name == "Box"
             and "t" in callee_type.generic_params
-            and not callee_type.children
+            and self.typing.child_count(callee_type) == 0
         ):
             return True, self._check_box_construction(call, callee_type), callee_type
 
@@ -7362,21 +7393,21 @@ class TypeChecker:
         if (
             not callee_is_var
             and callee_type.typetype == ZTypeType.PROTOCOL
-            and "create" in callee_type.children
+            and self.typing.has_child(callee_type, "create")
         ):
             self.typing.call_kind[call.nodeid] = zast.CallKind.PROTOCOL_CREATE
             return True, self._check_protocol_create(callee_type, call), callee_type
         if (
             not callee_is_var
             and callee_type.typetype == ZTypeType.FACET
-            and "create" in callee_type.children
+            and self.typing.has_child(callee_type, "create")
         ):
             self.typing.call_kind[call.nodeid] = zast.CallKind.FACET_CREATE
             return True, self._check_protocol_create(callee_type, call), callee_type
         if (
             not callee_is_var
             and callee_type.typedef_base is not None
-            and "create" in callee_type.children
+            and self.typing.has_child(callee_type, "create")
         ):
             self.typing.call_kind[call.nodeid] = zast.CallKind.TYPEDEF_CREATE
             return True, self._check_typedef_create(callee_type, call), callee_type
@@ -7617,7 +7648,7 @@ class TypeChecker:
         if (
             call.callable.nodetype == NodeType.DOTTEDPATH
             and callee_type.this_param_name is not None
-            and callee_type.this_param_name in callee_type.children
+            and self.typing.has_child(callee_type, callee_type.this_param_name)
         ):
             provided.add(callee_type.this_param_name)
         for pname, ptype in params:
@@ -7703,13 +7734,13 @@ class TypeChecker:
             or _is_map_type(type_def)
         ):
             return
-        create_type = type_def.children.get("create")
+        create_type = self.typing.child_of(type_def, "create")
         if not create_type or create_type.typetype != ZTypeType.FUNCTION:
             return
         # collect non-function params (user-visible data fields only)
         data_params = [
             (pname, ptype)
-            for pname, ptype in create_type.children.items()
+            for pname, ptype in self.typing.children_of(create_type)
             if ptype.typetype != ZTypeType.FUNCTION
         ]
         if not data_params:
@@ -7867,7 +7898,9 @@ class TypeChecker:
             dp = cast(zast.DottedPath, arg.valtype)
             parent_t = self.typing.node_type.get(dp.parent.nodeid)
             method = (
-                parent_t.children.get(dp.child.name) if parent_t is not None else None
+                self.typing.child_of(parent_t, dp.child.name)
+                if parent_t is not None
+                else None
             )
             if (
                 method is not None
@@ -8244,7 +8277,7 @@ class TypeChecker:
             # method/protocol/facet label or a compiler-special resolution.
             # Protocol/facet/typedef subtype construction (e.g., f.myreader)
             # would not have child_name in parent_type.children.
-            child = parent_type.children.get(child_name)
+            child = self.typing.child_of(parent_type, child_name)
             if child is None:
                 return None
             # Methods and protocol/facet labels are not data fields.
@@ -8326,7 +8359,7 @@ class TypeChecker:
                 dp = cast(zast.DottedPath, arg.valtype)
                 parent_type = self.typing.node_type.get(dp.parent.nodeid)
                 method_type = (
-                    parent_type.children.get(dp.child.name)
+                    self.typing.child_of(parent_type, dp.child.name)
                     if parent_type is not None
                     else None
                 )
@@ -8532,7 +8565,7 @@ class TypeChecker:
         # into a synth temp first (mirroring _check_call) so TAKE-application
         # operates on a bare AtomId — unifies the constructor path with the
         # standard call path.
-        create_fn = proto_type.children.get("create")
+        create_fn = self.typing.child_of(proto_type, "create")
         own = create_fn.param_ownership.get("from") if create_fn is not None else None
         if own == ZParamOwnership.TAKE:
             arg_borrow_path = arg_result.borrow_target
@@ -8704,7 +8737,7 @@ class TypeChecker:
                 type_ref is not None
                 and type_ref.typetype
                 in (ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.VARIANT)
-                and type_ref.children.get("create") is self.func_ctx.body[-1]
+                and self.typing.child_of(type_ref, "create") is self.func_ctx.body[-1]
             ):
                 self._error(
                     f"cannot construct '{first.name}' inside '{first.name}.create' "
@@ -8734,7 +8767,8 @@ class TypeChecker:
                 type_ref = self._resolve_name(type_name)
                 if (
                     type_ref is not None
-                    and type_ref.children.get("create") is self.func_ctx.body[-1]
+                    and self.typing.child_of(type_ref, "create")
+                    is self.func_ctx.body[-1]
                 ):
                     self._error(
                         f"cannot call '{type_name}.create' recursively (directly "
@@ -9026,9 +9060,9 @@ class TypeChecker:
         # look up operator as method on lhs type (fall through typedef base)
         op_name = binop.operator.name
         lookup_type = lhs_type
-        if not lookup_type.children.get(op_name) and lookup_type.typedef_base:
+        if not self.typing.child_of(lookup_type, op_name) and lookup_type.typedef_base:
             lookup_type = lookup_type.typedef_base
-        method = lookup_type.children.get(op_name)
+        method = self.typing.child_of(lookup_type, op_name)
         if method and method.typetype == ZTypeType.FUNCTION:
             ret = method.return_type
             if ret:
@@ -9462,8 +9496,8 @@ class TypeChecker:
             mono.needs_destructor = True
             mono.destructor_name = f"z_{mono.name}_destroy"
             # copy children from inner type for transparent access
-            for cname, ctype in inner_type.children.items():
-                if cname not in mono.children:
+            for cname, ctype in self.typing.children_of(inner_type):
+                if not self.typing.has_child(mono, cname):
                     self._set_child(mono, cname, ctype)
             self.typing.node_type[call.nodeid] = mono
             self.typing.call_kind[call.nodeid] = zast.CallKind.BOX_CREATE
@@ -9576,7 +9610,7 @@ class TypeChecker:
                     iter_option_type = t.return_type
                 elif t.typetype != ZTypeType.FUNCTION:
                     # callable object: T has a .call returning a wrapper
-                    call_method = t.children.get("call")
+                    call_method = self.typing.child_of(t, "call")
                     if (
                         call_method
                         and call_method.typetype == ZTypeType.FUNCTION
@@ -9586,7 +9620,7 @@ class TypeChecker:
                         iter_option_type = call_method.return_type
 
                 if iter_option_type:
-                    some_type = iter_option_type.children.get("some")
+                    some_type = self.typing.child_of(iter_option_type, "some")
                     if some_type:
                         self.typing.for_iter_bindings.setdefault(
                             fornode.nodeid, set()
@@ -10017,7 +10051,7 @@ class TypeChecker:
             # collect subtype names (exclude tag data, and methods)
             subtypes = {
                 k
-                for k, v in subject_type.children.items()
+                for k, v in self.typing.children_of(subject_type)
                 if v.typetype
                 not in (
                     ZTypeType.FUNCTION,
@@ -10074,7 +10108,7 @@ class TypeChecker:
             # if the name were the payload. The outer union/variant is
             # stashed in Entry.original_ztype for the emitter's unwrap.
             if target_name and subject_type:
-                arm_subtype = subject_type.children.get(clause.match.name)
+                arm_subtype = self.typing.child_of(subject_type, clause.match.name)
                 if arm_subtype:
                     self.symtab.narrow(
                         target_name,
@@ -10217,7 +10251,7 @@ class TypeChecker:
         ):
             subtypes_for_exhaust = {
                 k
-                for k, v in subject_type.children.items()
+                for k, v in self.typing.children_of(subject_type)
                 if v.typetype
                 not in (
                     ZTypeType.FUNCTION,
