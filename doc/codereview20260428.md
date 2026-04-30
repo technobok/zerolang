@@ -664,8 +664,22 @@ Each step depends on the previous one. F4 is the largest.
 
 Larger refactors; do in order.
 
-5. [ ] F5 — TypeChecker context records (`ResolverState`,
-       `FunctionContext`, `BorrowState`, `MonoState`, `TemplateIds`).
+5. [~] F5 — TypeChecker context records + decomposition + ECS shape.
+       *(Scoped expansion 2026-04-30: see plan
+       `~/.claude/plans/start-planning-for-f5-fluffy-dragonfly.md`. F5
+       split into 8 sub-items. F5.A (BorrowState + ExprResult flow)
+       resolved in `4e4ba47`/`ebf9638`/`909267d` — the cross-cutting
+       `_pending_borrow_lock` / `_pending_private_access` flag is
+       contained: external readers/setters are gone; mutation is
+       scope-contained to `_check_dotted_path_inner`,
+       `_check_call_inner`, and three helpers; capture happens at
+       `_check_path` / `_check_call` / `_check_operation` boundaries.
+       F5.F (TAG_ORIGIN sentinel removal) resolved in `feba9e5`.
+       Remaining sub-items: F5.B (state records), F5.C (decompose
+       `_monomorphize`), F5.D (move side tables to `Program` as ECS
+       components), F5.E (drop typed-tree mirror module), F5.G
+       (decompose 4 remaining monsters), F5.H (flatten
+       `ZType.children` to a relational table).)*
 6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
