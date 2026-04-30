@@ -5,6 +5,7 @@ Starts at main function, resolves names on demand, detects cycles.
 Includes ownership checking (Phase 4c).
 """
 
+from dataclasses import dataclass, field
 from typing import Callable, Optional, List, Tuple, cast
 
 import zast
@@ -358,6 +359,34 @@ def _strip_path_ownership(
     return path, None
 
 
+@dataclass
+class MonoState:
+    """Monomorphization-related state on `TypeChecker`. Bagged here
+    so the cluster has one named home and the pre-relocation 7+ fields
+    in `TypeChecker.__init__` collapse to a single line. Each field
+    is mutable — `TypeChecker` writes through them during typecheck;
+    `typecheck()` (the public entry point) snapshots the relevant
+    subset onto `Typing` at the end."""
+
+    # mono dedup cache: key = (template_id, sorted-mono-arg-key tuple)
+    cache: "dict[tuple, ZType]" = field(default_factory=dict)
+    # monomorphized generic types: list of (mono_ztype, original_ast_node)
+    types: "list[tuple[ZType, zast.TypeDefinition]]" = field(default_factory=list)
+    # monomorphized generic functions: list of (mono_ztype, cloned_function)
+    functions: "list[tuple[ZType, zast.Function]]" = field(default_factory=list)
+    # generic-context stack: each frame is the {param_name: concrete_type}
+    # bindings active inside a method body or generic instantiation.
+    generic_context: "list[dict[str, ZType]]" = field(default_factory=list)
+    # dedup: hash -> (canonical_qualified_name, canonical_Function)
+    func_hashes: "dict[str, tuple[str, zast.Function]]" = field(default_factory=dict)
+    # dedup aliases: alias_qualified_name -> canonical_qualified_name
+    func_aliases: "dict[str, str]" = field(default_factory=dict)
+    # cloned methods per mono type: mono_name -> {mname: Function}
+    cloned_methods: "dict[str, dict[str, zast.Function]]" = field(default_factory=dict)
+    # C-name collision tracking: assigned cnames for collision detection
+    assigned_cnames: "set[str]" = field(default_factory=set)
+
+
 class TypeChecker:
     """
     Single-pass demand-driven type checker.
@@ -451,26 +480,13 @@ class TypeChecker:
         # maps implementor type name -> list of (label, protocol ZType)
         self._protocol_labels: dict[str, list[tuple[str, ZType]]] = {}
 
-        # monomorphization cache: (template_name, (arg1_name, ...)) -> ZType
-        self._mono_cache: dict[tuple, ZType] = {}
-        # ordered list of (monomorphized ZType, original AST node) for emitter
-        self._mono_types: list[tuple[ZType, zast.TypeDefinition]] = []
-        # ordered list of (monomorphized function ZType, cloned Function) for emitter
-        self._mono_functions: list[tuple[ZType, zast.Function]] = []
-
-        # generic context stack: list of dicts mapping generic param name -> ZType
-        self._generic_context: list[dict[str, ZType]] = []
+        # F5.B.1: monomorphization-related state grouped into a
+        # single record. See `MonoState` for per-field documentation.
+        self.mono = MonoState()
 
         # break target stack: tracks which construct a break binds to
         # Do node = break targets this do block; None = break targets a for loop
         self._break_targets: list[Optional[zast.Do]] = []
-
-        # dedup: hash -> (canonical_qualified_name, canonical_Function)
-        self._func_hashes: dict[str, tuple[str, zast.Function]] = {}
-        # dedup aliases: alias_qualified_name -> canonical_qualified_name
-        self._func_aliases: dict[str, str] = {}
-        # cloned methods per mono type: mono_name -> {mname: Function}
-        self._cloned_methods: dict[str, dict[str, zast.Function]] = {}
 
         # Step 6 (typed-tree migration): typecheck-set decoration fields
         # used to live on parsed AST nodes as `init=False` columns; in
@@ -478,9 +494,6 @@ class TypeChecker:
         # component dicts (`program.node_type`, `program.call_kind`,
         # `program.atom_*`, ...). See `Program` in `zast.py` for the
         # full set and per-table documentation.
-
-        # C name collision tracking: assigned cnames -> set for collision detection
-        self._assigned_cnames: set[str] = set()
 
         # flow typing is now tracked via scope-based narrowing entries
         # (TypeState removed — narrowing lives in Scope.entries)
@@ -569,11 +582,11 @@ class TypeChecker:
         """
         if ztype.cname:
             return  # already assigned via earlier resolution path
-        if base_cname not in self._assigned_cnames:
+        if base_cname not in self.mono.assigned_cnames:
             ztype.cname = base_cname
         else:
             ztype.cname = f"{base_cname}_{ztype.nodeid}"
-        self._assigned_cnames.add(ztype.cname)
+        self.mono.assigned_cnames.add(ztype.cname)
 
     # Multi-char operator names (checked first, before per-char mangling)
     _OP_NAMES = {
@@ -663,7 +676,7 @@ class TypeChecker:
         if not ztype.isgeneric:
             return
         if ztype.cname:
-            self._assigned_cnames.discard(ztype.cname)
+            self.mono.assigned_cnames.discard(ztype.cname)
             ztype.cname = ""
 
     def check(self, full: bool = False) -> List[zast.Error]:
@@ -1119,7 +1132,7 @@ class TypeChecker:
 
         # pass 2: resolve non-generic params with generic context
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         if func.returntype:
             stripped_ret, ret_own = _strip_path_ownership(func.returntype)
             rt = self._resolve_typeref(cast(zast.Path, stripped_ret))
@@ -1201,7 +1214,7 @@ class TypeChecker:
                             zast.AtomId, stripped_ppath
                         ).name
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         # ownership annotations were filled per-parameter / for the
         # return type during resolution above, by stripping `.take` /
@@ -1403,7 +1416,7 @@ class TypeChecker:
 
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         for fname, fpath in cls.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
@@ -1468,7 +1481,7 @@ class TypeChecker:
                     ):
                         ctype.param_defaults[fname] = cast(zast.AtomId, fpath).name
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         self._check_is_as_name_collision(
             name,
@@ -1729,7 +1742,7 @@ class TypeChecker:
 
         # pass 2: resolve subtype items with generic context
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         subtype_names = list(union_defn.is_paths().keys())
         for sname, spath in union_defn.is_paths().items():
             stripped_spath, arm_own = _strip_path_ownership(spath)
@@ -1767,7 +1780,7 @@ class TypeChecker:
                     err=ERR.TYPEERROR,
                 )
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         self._check_is_as_name_collision(
             name,
@@ -1957,7 +1970,7 @@ class TypeChecker:
 
         # resolve each subtype item (with generic context if applicable)
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         subtype_names = list(variant_defn.is_paths().keys())
         for sname, spath in variant_defn.is_paths().items():
             stripped_spath, arm_own = _strip_path_ownership(spath)
@@ -2007,7 +2020,7 @@ class TypeChecker:
                     err=ERR.TYPEERROR,
                 )
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         self._check_is_as_name_collision(
             name,
@@ -2230,7 +2243,7 @@ class TypeChecker:
 
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         for fname, fpath in rec.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
@@ -2293,7 +2306,7 @@ class TypeChecker:
                     ):
                         rtype.param_defaults[fname] = cast(zast.AtomId, fpath).name
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
         self._check_is_as_name_collision(
             name,
             rec.is_paths(),
@@ -2640,7 +2653,7 @@ class TypeChecker:
 
         # Process as_functions: new/shadowed methods
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         for mname, mfunc in as_functions.items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             rtype.children[mname] = mt
@@ -2662,7 +2675,7 @@ class TypeChecker:
             if at and at.typetype in (ZTypeType.PROTOCOL, ZTypeType.FACET):
                 self._process_as_items_protocols(name, rtype, {label: apath}, start)
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         # Synthesize constructors: create and borrow. Bare-name `typedef obj`
         # routes through children["create"] via the unified call dispatch.
@@ -2933,12 +2946,12 @@ class TypeChecker:
 
         # pass 2: resolve specs with generic context
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         for sname, sfunc in proto.functions().items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ptype.children[sname] = st
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         # owned create: protocol.create from: expr (bare-name `proto obj`
         # routes through children["create"] via the unified call dispatch)
@@ -2990,12 +3003,12 @@ class TypeChecker:
 
         # pass 2: resolve specs with generic context
         if generic_ctx:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
         for sname, sfunc in facet.functions().items():
             st = self._resolve_function_type(unitname, f"{name}.{sname}", sfunc)
             ftype.children[sname] = st
         if generic_ctx:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         # create: owned facet creation (copies value). Facets are value-type
         # existentials — the source is read and copied into inline storage,
@@ -3147,7 +3160,7 @@ class TypeChecker:
 
         # if generic, push generic context so body definitions can reference params
         if utype.isgeneric:
-            self._generic_context.append(generic_ctx)
+            self.mono.generic_context.append(generic_ctx)
 
         # resolve each non-generic-param definition in the inline unit's body
         for dname, ddefn in unit.body.items():
@@ -3171,7 +3184,7 @@ class TypeChecker:
                 self._check_function_body(f"{name}.{dname}", cast(zast.Function, ddefn))
 
         if utype.isgeneric:
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
         self._unit_context.pop()
         return utype
@@ -3264,10 +3277,10 @@ class TypeChecker:
         # check generic context first for simple names
         if (
             path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
-            and self._generic_context
+            and self.mono.generic_context
         ):
             path_atom = cast(zast.AtomId, path)
-            for ctx in reversed(self._generic_context):
+            for ctx in reversed(self.mono.generic_context):
                 if path_atom.name in ctx:
                     gp_ref = _make_type(path_atom.name, ZTypeType.GENERIC_PARAM)
                     gp_ref.parent = ctx[path_atom.name]  # constraint
@@ -4061,8 +4074,8 @@ class TypeChecker:
             template_type.nodeid,
             tuple(sorted((k, _mono_arg_key(v)) for k, v in generic_args.items())),
         )
-        if cache_key in self._mono_cache:
-            return self._mono_cache[cache_key]
+        if cache_key in self.mono.cache:
+            return self.mono.cache[cache_key]
 
         # check if this is a partial instantiation (some args are GENERIC_PARAM)
         is_partial = any(
@@ -4173,15 +4186,15 @@ class TypeChecker:
                 self._check_function_body(qualified, cloned)
                 self.symtab.pop()
                 func_hash = zasthash.hash_function(cloned, self.typing.node_type)
-                if func_hash in self._func_hashes:
-                    canonical_name, canonical_func = self._func_hashes[func_hash]
-                    self._func_aliases[qualified] = canonical_name
+                if func_hash in self.mono.func_hashes:
+                    canonical_name, canonical_func = self.mono.func_hashes[func_hash]
+                    self.mono.func_aliases[qualified] = canonical_name
                     cloned_methods[dname] = canonical_func
                 else:
-                    self._func_hashes[func_hash] = (qualified, cloned)
+                    self.mono.func_hashes[func_hash] = (qualified, cloned)
                     cloned_methods[dname] = cloned
         if cloned_methods:
-            self._cloned_methods[mangled] = cloned_methods
+            self.mono.cloned_methods[mangled] = cloned_methods
 
     def _synth_collection_methods(
         self,
@@ -4632,9 +4645,9 @@ class TypeChecker:
         global mono-type list and `_resolved` map under one
         `<unit>.<mangled>` key."""
         _set_field_cleanup_metadata(mono)
-        self._mono_cache[cache_key] = mono
+        self.mono.cache[cache_key] = mono
         if not is_partial:
-            self._mono_types.append((mono, defn))
+            self.mono.types.append((mono, defn))
             # Register the mono in _resolved under the first unit's
             # qualified name so the emitter can find it. The choice
             # of "first unit" matches pre-F5.C behaviour.
@@ -4875,8 +4888,8 @@ class TypeChecker:
     ) -> None:
         """Clone, typecheck, hash, and dedup method bodies of a
         non-partial monomorphized RECORD / CLASS / UNION / VARIANT.
-        Stores the dedup'd method dict on `self._cloned_methods[mangled]`
-        and records alias entries on `self._func_aliases` for hashes
+        Stores the dedup'd method dict on `self.mono.cloned_methods[mangled]`
+        and records alias entries on `self.mono.func_aliases` for hashes
         that collapse onto an earlier canonical function."""
         defn_typed = cast(zast.ObjectDef, defn)
         method_sources: list[tuple[str, zast.Function]] = []
@@ -4893,21 +4906,21 @@ class TypeChecker:
             cloned = clone_function(mfunc)
             # push mono type onto resolving stack so 'this' resolves
             self._resolving.append((mangled, mono))
-            self._generic_context.append({k: v for k, v in generic_args.items()})
+            self.mono.generic_context.append({k: v for k, v in generic_args.items()})
             self._check_function_body(qualified, cloned)
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
             self._resolving.pop()
             # hash and dedup
             func_hash = zasthash.hash_function(cloned, self.typing.node_type)
-            if func_hash in self._func_hashes:
-                _canonical_name, canonical_func = self._func_hashes[func_hash]
-                self._func_aliases[qualified] = _canonical_name
+            if func_hash in self.mono.func_hashes:
+                _canonical_name, canonical_func = self.mono.func_hashes[func_hash]
+                self.mono.func_aliases[qualified] = _canonical_name
                 cloned_methods[mname] = canonical_func
             else:
-                self._func_hashes[func_hash] = (qualified, cloned)
+                self.mono.func_hashes[func_hash] = (qualified, cloned)
                 cloned_methods[mname] = cloned
 
-        self._cloned_methods[mangled] = cloned_methods
+        self.mono.cloned_methods[mangled] = cloned_methods
 
     def _partially_instantiate_subunits(
         self, parent: ZType, parent_name: str, args: dict[str, ZType]
@@ -5361,8 +5374,8 @@ class TypeChecker:
             template.nodeid,
             tuple(sorted((k, _mono_arg_key(v)) for k, v in generic_args.items())),
         )
-        if cache_key in self._mono_cache:
-            return self._mono_cache[cache_key]
+        if cache_key in self.mono.cache:
+            return self.mono.cache[cache_key]
 
         # constraint checking
         for param_name, concrete_type in generic_args.items():
@@ -5491,9 +5504,9 @@ class TypeChecker:
         # clone and type-check the function body
         if func_defn and func_defn.body:
             cloned = clone_function(func_defn)
-            self._generic_context.append({k: v for k, v in generic_args.items()})
+            self.mono.generic_context.append({k: v for k, v in generic_args.items()})
             self._check_function_body(mangled, cloned)
-            self._generic_context.pop()
+            self.mono.generic_context.pop()
 
             # fix up parameter types: replace GENERIC_PARAM with concrete types
             # (_check_function_body sets ppath.type to GENERIC_PARAM; emitter needs concrete)
@@ -5528,19 +5541,19 @@ class TypeChecker:
 
             # hash and dedup
             func_hash = zasthash.hash_function(cloned, self.typing.node_type)
-            if func_hash in self._func_hashes:
-                canonical_name, canonical_func = self._func_hashes[func_hash]
-                self._func_aliases[mangled] = canonical_name
-                self._mono_functions.append((mono, canonical_func))
+            if func_hash in self.mono.func_hashes:
+                canonical_name, canonical_func = self.mono.func_hashes[func_hash]
+                self.mono.func_aliases[mangled] = canonical_name
+                self.mono.functions.append((mono, canonical_func))
             else:
-                self._func_hashes[func_hash] = (mangled, cloned)
-                self._mono_functions.append((mono, cloned))
+                self.mono.func_hashes[func_hash] = (mangled, cloned)
+                self.mono.functions.append((mono, cloned))
         elif func_defn and func_defn.is_native:
             # native generic function: no body to clone
-            self._mono_functions.append((mono, func_defn))
+            self.mono.functions.append((mono, func_defn))
 
         # cache and register
-        self._mono_cache[cache_key] = mono
+        self.mono.cache[cache_key] = mono
         for unitname in self.program.units:
             key = f"{unitname}.{mangled}"
             self._resolved[key] = mono
@@ -9845,9 +9858,9 @@ class TypeChecker:
             return None
 
         # generic type parameter match: match on t where t is a generic param
-        if casenode.subject.nodetype == NodeType.ATOMID and self._generic_context:
+        if casenode.subject.nodetype == NodeType.ATOMID and self.mono.generic_context:
             gp_name = cast(zast.AtomId, casenode.subject).name
-            for ctx in reversed(self._generic_context):
+            for ctx in reversed(self.mono.generic_context):
                 if gp_name in ctx:
                     concrete = ctx[gp_name]
                     # only fold when concrete type is known (not still generic)
@@ -10140,10 +10153,10 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
     errors = tc.check(full=full)
     tc.typing.errors = errors
     tc.typing.is_error = bool(errors)
-    tc.typing.mono_types = tc._mono_types
-    tc.typing.mono_functions = tc._mono_functions
-    tc.typing.func_aliases = tc._func_aliases
-    tc.typing.cloned_methods = tc._cloned_methods
+    tc.typing.mono_types = tc.mono.types
+    tc.typing.mono_functions = tc.mono.functions
+    tc.typing.func_aliases = tc.mono.func_aliases
+    tc.typing.cloned_methods = tc.mono.cloned_methods
     tc.typing.resolved = dict(tc._resolved)
     tc.typing.symbol_table = tc.symtab
     tc.typing.unit_types_by_id = dict(tc.unit_types_by_id)
