@@ -4051,49 +4051,7 @@ class TypeChecker:
             v.typetype == ZTypeType.GENERIC_PARAM for v in generic_args.values()
         )
 
-        # constraint checking (skip for generic param args — checked at final instantiation)
-        for param_name, concrete_type in generic_args.items():
-            if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
-                continue
-            # numeric generic params already validated in _resolve_numeric_generic_arg
-            if param_name in template_type.numeric_generic_params:
-                continue
-            constraint = template_type.generic_params.get(param_name)
-            if not constraint:
-                continue
-            # any.valtype / any.reftype constraints
-            if constraint.name == "Any.valtype":
-                if not _is_valtype(concrete_type):
-                    self._error(
-                        f"Type '{concrete_type.name}' is not a value type; "
-                        f"generic parameter '{param_name}' requires any.valtype"
-                    )
-                continue
-            if constraint.name == "Any.reftype":
-                if _is_valtype(concrete_type):
-                    self._error(
-                        f"Type '{concrete_type.name}' is not a reference type; "
-                        f"generic parameter '{param_name}' requires any.reftype"
-                    )
-                continue
-            if constraint.name != "Any":
-                # constraint is a union: check concrete type matches a subtype
-                if constraint.typetype == ZTypeType.UNION:
-                    subtype_names = {
-                        k
-                        for k, v in constraint.children.items()
-                        if k != "tag"
-                        and v.typetype != ZTypeType.FUNCTION
-                        and v.typetype != ZTypeType.DATA
-                        and v.typetype != ZTypeType.TAG
-                        and v.typetype != ZTypeType.ENUM
-                        and not v.is_tag_generic_origin
-                    }
-                    if concrete_type.name not in subtype_names:
-                        self._error(
-                            f"Type '{concrete_type.name}' does not satisfy constraint "
-                            f"'{constraint.name}' for generic parameter '{param_name}'"
-                        )
+        self._check_mono_constraints(template_type, generic_args)
 
         # build mangled name
         arg_names = [generic_args[k].name for k in template_type.generic_params]
@@ -4287,365 +4245,8 @@ class TypeChecker:
             gen_data.children["tag"] = gen_tag
             mono.children["tag"] = gen_data
 
-        # for arrays: validate element type, synthesize get/set/length
-        if _is_array_type(mono) and not is_partial:
-            elem_type = _array_element_type(mono)
-            arr_len = _array_length(mono)
-            if elem_type and not _is_valtype(elem_type):
-                self._error(
-                    f"Array element type '{elem_type.name}' is not a value type; "
-                    f"arrays require valtype elements"
-                )
-            # synthesize .length constant
-            length_type = _make_type("u64", ZTypeType.RECORD)
-            length_type.is_valtype = True
-            mono.children["length"] = length_type
-            if arr_len is not None:
-                mono.param_defaults["length"] = str(arr_len)
-            # synthesize .get method: function {i: i64} out <elem>
-            if elem_type:
-                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
-                get_type.children["i"] = self._resolve_name("i64") or self.t_null
-                get_type.return_type = elem_type
-                mono.children["get"] = get_type
-                # synthesize .set method: function {i: i64, val: <elem>} out <elem>
-                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
-                set_type.children["i"] = self._resolve_name("i64") or self.t_null
-                set_type.children["val"] = elem_type
-                set_type.return_type = elem_type
-                mono.children["set"] = set_type
-
-        # for str types: set valtype, synthesize length/size/string
-        if _is_str_type(mono) and not is_partial:
-            mono.is_valtype = True
-            _set_destructor_metadata(mono)
-            str_cap = _str_capacity(mono)
-            # synthesize .length field (runtime, u64)
-            length_type = _make_type("u64", ZTypeType.RECORD)
-            length_type.is_valtype = True
-            mono.children["length"] = length_type
-            # synthesize .size constant (compile-time)
-            size_type = _make_type("u64", ZTypeType.RECORD)
-            size_type.is_valtype = True
-            mono.children["size"] = size_type
-            if str_cap is not None:
-                mono.param_defaults["size"] = str(str_cap)
-            # synthesize .string method: function {} out string
-            string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
-            string_method.return_type = self._resolve_name("String") or self.t_null
-            mono.children["string"] = string_method
-
-        # for listview types: set reftype, synthesize methods
-        # Listview struct is stack-allocated; no owned data (borrowed from list).
-        if _is_listview_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            elem_type = _listview_element_type(mono)
-            t_u64 = self._resolve_name("u64") or self.t_null
-            # synthesize .length field (runtime, u64)
-            length_type = _make_type("u64", ZTypeType.RECORD)
-            length_type.is_valtype = True
-            mono.children["length"] = length_type
-            if elem_type:
-                # synthesize .get method: function {i: u64} out <elem>
-                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
-                get_type.children["i"] = t_u64
-                get_type.return_type = elem_type
-                get_type.return_ownership = ZParamOwnership.BORROW
-                mono.children["get"] = get_type
-
-        # for listiter types: synthesize the .call method returning
-        # (optionview of: elem). listiter holds a borrowed pointer to
-        # the source list and an index; .call yields a borrowed view
-        # to the element at the current index, or .none when exhausted.
-        if _is_listiter_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            elem_type = _listiter_element_type(mono)
-            if elem_type is not None:
-                ov_template = self._resolve_name("OptionView")
-                if ov_template:
-                    ov_defn = self._find_generic_defn(ov_template)
-                    if ov_defn:
-                        ov_mono = self._monomorphize(
-                            ov_template, {"t": elem_type}, ov_defn
-                        )
-                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
-                        call_type.return_type = ov_mono
-                        mono.children["call"] = call_type
-            # listiter holds a borrowed pointer to its source list; no
-            # owned data, so no runtime destructor is needed.
-            mono.needs_destructor = False
-            mono.destructor_name = None
-
-        # for mapkeyiter types: synthesize the .call method returning
-        # (optionview of: key). Same shape as listiter — the iterator
-        # walks bucket slots and skips empty / deleted ones at runtime.
-        if _is_mapkeyiter_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            key_t = _mapkeyiter_key_type(mono)
-            if key_t is not None:
-                ov_template = self._resolve_name("OptionView")
-                if ov_template:
-                    ov_defn = self._find_generic_defn(ov_template)
-                    if ov_defn:
-                        ov_mono = self._monomorphize(ov_template, {"t": key_t}, ov_defn)
-                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
-                        call_type.return_type = ov_mono
-                        mono.children["call"] = call_type
-            mono.needs_destructor = False
-            mono.destructor_name = None
-
-        # for mapentry types: synthesize .key / .value accessors. mapentry
-        # is a borrow-only view — its C representation is a pointer to a
-        # source bucket; .key / .value emit as field projections through
-        # that pointer. There is no constructor (only iteration yields
-        # mapentry values) and no destructor (no owned data).
-        if _is_mapentry_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            mono.needs_destructor = False
-            mono.destructor_name = None
-            mono.create_disabled = True
-            key_t = _mapentry_key_type(mono)
-            value_t = _mapentry_value_type(mono)
-            if key_t is not None:
-                key_method = _make_type(f"{mangled}.key", ZTypeType.FUNCTION)
-                key_method.return_type = key_t
-                key_method.return_ownership = ZParamOwnership.BORROW
-                mono.children["key"] = key_method
-            if value_t is not None:
-                val_method = _make_type(f"{mangled}.value", ZTypeType.FUNCTION)
-                val_method.return_type = value_t
-                val_method.return_ownership = ZParamOwnership.BORROW
-                mono.children["value"] = val_method
-
-        # for mapitemiter types: synthesize the .call method returning
-        # (optionview of: mapentry). Walks bucket slots and yields a
-        # bucket-pointer view per USED slot.
-        if _is_mapitemiter_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            key_t = _mapitemiter_key_type(mono)
-            value_t = _mapitemiter_value_type(mono)
-            if key_t is not None and value_t is not None:
-                # monomorphise mapentry<K,V> first (the call's payload)
-                me_template = self._resolve_name("MapEntry")
-                me_mono = None
-                if me_template:
-                    me_defn = self._find_generic_defn(me_template)
-                    if me_defn:
-                        me_mono = self._monomorphize(
-                            me_template,
-                            {"key": key_t, "value": value_t},
-                            me_defn,
-                        )
-                # then optionview<mapentry<K,V>>
-                if me_mono is not None:
-                    ov_template = self._resolve_name("OptionView")
-                    if ov_template:
-                        ov_defn = self._find_generic_defn(ov_template)
-                        if ov_defn:
-                            ov_mono = self._monomorphize(
-                                ov_template, {"t": me_mono}, ov_defn
-                            )
-                            call_type = _make_type(
-                                f"{mangled}.call", ZTypeType.FUNCTION
-                            )
-                            call_type.return_type = ov_mono
-                            mono.children["call"] = call_type
-            mono.needs_destructor = False
-            mono.destructor_name = None
-
-        # for list types: set reftype, synthesize methods
-        # List struct is stack-allocated; only the data buffer is on the heap.
-        if _is_list_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            mono.needs_field_cleanup = True  # data buffer needs cleanup
-            elem_type = _list_element_type(mono)
-            t_u64 = self._resolve_name("u64") or self.t_null
-            # .length / .capacity expose the global u64 type so arithmetic
-            # operators (+, -, <, ...) declared on u64 resolve through
-            # children["+"] etc. when users do `l.length + n`. Synthesising
-            # a fresh empty u64 record here would drop those methods.
-            mono.children["length"] = t_u64
-            mono.children["capacity"] = t_u64
-            if elem_type:
-                # synthesize .append method: function {from: <elem>}
-                append_type = _make_type(f"{mangled}.append", ZTypeType.FUNCTION)
-                append_type.children["from"] = elem_type
-                append_type.param_ownership["from"] = ZParamOwnership.TAKE
-                mono.children["append"] = append_type
-                # synthesize .insert method: function {from: <elem> at: u64}
-                insert_type = _make_type(f"{mangled}.insert", ZTypeType.FUNCTION)
-                insert_type.children["from"] = elem_type
-                insert_type.children["at"] = t_u64
-                insert_type.param_ownership["from"] = ZParamOwnership.TAKE
-                mono.children["insert"] = insert_type
-                # synthesize .extend method: function {from: list_T}
-                extend_type = _make_type(f"{mangled}.extend", ZTypeType.FUNCTION)
-                extend_type.children["from"] = mono
-                extend_type.param_ownership["from"] = ZParamOwnership.TAKE
-                mono.children["extend"] = extend_type
-                # synthesize .get method: function {i: u64} out <elem>
-                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
-                get_type.children["i"] = t_u64
-                get_type.return_type = elem_type
-                get_type.return_ownership = ZParamOwnership.BORROW
-                mono.children["get"] = get_type
-                # synthesize .set method: function {i: u64 val: <elem>} out <elem>
-                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
-                set_type.children["i"] = t_u64
-                set_type.children["val"] = elem_type
-                set_type.return_type = elem_type
-                set_type.param_ownership["val"] = ZParamOwnership.TAKE
-                mono.children["set"] = set_type
-                # synthesize .pop method: function {} out <elem>
-                pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
-                pop_type.return_type = elem_type
-                mono.children["pop"] = pop_type
-                # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
-                # Get or create the monomorphized listview type
-                listview_template = self._resolve_name("ListView")
-                listview_mono = None
-                if listview_template:
-                    lv_defn = self._find_generic_defn(listview_template)
-                    if lv_defn:
-                        listview_mono = self._monomorphize(
-                            listview_template, {"of": elem_type}, lv_defn
-                        )
-                        listview_type = _make_type(
-                            f"{mangled}.listview", ZTypeType.FUNCTION
-                        )
-                        listview_type.return_type = listview_mono
-                        self._carry_native_method_metadata(
-                            template_type, defn, "listview", listview_type
-                        )
-                        mono.children["listview"] = listview_type
-                # synthesize .extend_view method: function {other: listview<elem>}
-                # — copies bytes from a borrowed view (does NOT consume).
-                if listview_mono is not None:
-                    extend_view_type = _make_type(
-                        f"{mangled}.extendView", ZTypeType.FUNCTION
-                    )
-                    extend_view_type.children["other"] = listview_mono
-                    extend_view_type.param_ownership["other"] = ZParamOwnership.BORROW
-                    mono.children["extendView"] = extend_view_type
-                # synthesize .iterate method: function {:this} out (listiter of: elem)
-                # — borrowed-view iterator over the list. Triggers
-                # monomorphization of listiter<elem> so the emitter can
-                # generate the iterator struct + .call function.
-                listiter_template = self._resolve_name("ListIter")
-                if listiter_template:
-                    li_defn = self._find_generic_defn(listiter_template)
-                    if li_defn:
-                        listiter_mono = self._monomorphize(
-                            listiter_template, {"of": elem_type}, li_defn
-                        )
-                        iterate_type = _make_type(
-                            f"{mangled}.iterate", ZTypeType.FUNCTION
-                        )
-                        iterate_type.return_type = listiter_mono
-                        self._carry_native_method_metadata(
-                            template_type, defn, "iterate", iterate_type
-                        )
-                        mono.children["iterate"] = iterate_type
-
-        # for map types: set reftype, synthesize methods
-        # Maps remain heap-allocated for now.
-        if _is_map_type(mono) and not is_partial:
-            mono.is_valtype = False
-            _set_destructor_metadata(mono)
-            mono.is_heap_allocated = True  # map struct is still heap-allocated
-            mono.needs_field_cleanup = True  # data buckets need cleanup
-            key_type = _map_key_type(mono)
-            value_type = _map_value_type(mono)
-            t_u64 = self._resolve_name("u64") or self.t_null
-            t_bool = self._resolve_name("bool") or self.t_null
-            # synthesize .length field (runtime, u64)
-            length_type = _make_type("u64", ZTypeType.RECORD)
-            length_type.is_valtype = True
-            mono.children["length"] = length_type
-            # synthesize .capacity field (runtime, u64)
-            cap_type = _make_type("u64", ZTypeType.RECORD)
-            cap_type.is_valtype = True
-            mono.children["capacity"] = cap_type
-            if key_type and value_type:
-                # synthesize .set method: function {key: K value: V}
-                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
-                set_type.children["key"] = key_type
-                set_type.children["value"] = value_type
-                set_type.param_ownership["key"] = ZParamOwnership.TAKE
-                set_type.param_ownership["value"] = ZParamOwnership.TAKE
-                mono.children["set"] = set_type
-                # synthesize .get method: function {key: K} out option/optionval of: V
-                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
-                get_type.children["key"] = key_type
-                if _is_valtype(value_type):
-                    opt_template = self._resolve_name("optionval")
-                else:
-                    opt_template = self._resolve_name("Option")
-                if opt_template and opt_template.isgeneric:
-                    opt_defn = self._find_generic_defn(opt_template)
-                    if opt_defn:
-                        opt_mono = self._monomorphize(
-                            opt_template, {"t": value_type}, opt_defn
-                        )
-                        get_type.return_type = opt_mono
-                mono.children["get"] = get_type
-                # synthesize .delete method: function {key: K} out bool
-                delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
-                delete_type.children["key"] = key_type
-                delete_type.return_type = t_bool
-                mono.children["delete"] = delete_type
-                # synthesize .has method: function {key: K} out bool
-                has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
-                has_type.children["key"] = key_type
-                has_type.return_type = t_bool
-                mono.children["has"] = has_type
-                # synthesize .iterate method: function {:this} out
-                # (mapkeyiter key: K value: V) — borrowed-key iterator.
-                # Triggers monomorphization of mapkeyiter<K,V> so the
-                # emitter can generate the iterator struct + .call.
-                mki_template = self._resolve_name("MapKeyIter")
-                if mki_template:
-                    mki_defn = self._find_generic_defn(mki_template)
-                    if mki_defn:
-                        mki_mono = self._monomorphize(
-                            mki_template,
-                            {"key": key_type, "value": value_type},
-                            mki_defn,
-                        )
-                        iterate_type = _make_type(
-                            f"{mangled}.iterate", ZTypeType.FUNCTION
-                        )
-                        iterate_type.return_type = mki_mono
-                        self._carry_native_method_metadata(
-                            template_type, defn, "iterate", iterate_type
-                        )
-                        mono.children["iterate"] = iterate_type
-                # synthesize .iterate_items: borrowed-entry iterator
-                # yielding mapentry views. Triggers mapitemiter<K,V> +
-                # mapentry<K,V> monos.
-                mii_template = self._resolve_name("MapItemIter")
-                if mii_template:
-                    mii_defn = self._find_generic_defn(mii_template)
-                    if mii_defn:
-                        mii_mono = self._monomorphize(
-                            mii_template,
-                            {"key": key_type, "value": value_type},
-                            mii_defn,
-                        )
-                        iterate_items_type = _make_type(
-                            f"{mangled}.iterateItems", ZTypeType.FUNCTION
-                        )
-                        iterate_items_type.return_type = mii_mono
-                        self._carry_native_method_metadata(
-                            template_type, defn, "iterateItems", iterate_items_type
-                        )
-                        mono.children["iterateItems"] = iterate_items_type
+        if not is_partial:
+            self._synth_collection_methods(mono, mangled, template_type, defn)
 
         # for classes: rebuild meta_create for the monomorphized class
         if (
@@ -4686,42 +4287,7 @@ class TypeChecker:
             NodeType.UNION,
             NodeType.VARIANT,
         ):
-            # collect method sources from the template definition
-            defn_typed2 = cast(zast.ObjectDef, defn)
-            method_sources: list[tuple[str, zast.Function, str]] = []
-            for mname, mfunc in defn_typed2.as_functions().items():
-                if mfunc.body:
-                    method_sources.append((mname, mfunc, "as_functions"))
-            for mname, mfunc in defn_typed2.functions().items():
-                if mfunc.body:
-                    method_sources.append((mname, mfunc, "functions"))
-
-            # build cloned method dict for each source
-            cloned_methods: dict[str, zast.Function] = {}
-            for mname, mfunc, source_dict in method_sources:
-                qualified = f"{mangled}.{mname}"
-                cloned = clone_function(mfunc)
-
-                # push mono type onto resolving stack so 'this' resolves
-                self._resolving.append((mangled, mono))
-                # push generic context so body checking resolves generic params
-                self._generic_context.append({k: v for k, v in generic_args.items()})
-                self._check_function_body(qualified, cloned)
-                self._generic_context.pop()
-                self._resolving.pop()
-
-                # hash and dedup
-                func_hash = zasthash.hash_function(cloned, self.typing.node_type)
-                if func_hash in self._func_hashes:
-                    canonical_name, canonical_func = self._func_hashes[func_hash]
-                    self._func_aliases[qualified] = canonical_name
-                    cloned_methods[mname] = canonical_func
-                else:
-                    self._func_hashes[func_hash] = (qualified, cloned)
-                    cloned_methods[mname] = cloned
-
-            # store cloned methods for emitter use
-            self._cloned_methods[mangled] = cloned_methods
+            self._clone_mono_methods(mono, mangled, generic_args, defn)
 
         # auto-generate == and != for monomorphized valtypes
         if not is_partial and mono.typetype in (
@@ -4850,6 +4416,471 @@ class TypeChecker:
                     cloned_methods[dname] = cloned
         if cloned_methods:
             self._cloned_methods[mangled] = cloned_methods
+
+    def _synth_collection_methods(
+        self,
+        mono: ZType,
+        mangled: str,
+        template_type: ZType,
+        defn: zast.TypeDefinition,
+    ) -> None:
+        """Synthesise compiler-managed methods for collection-type
+        monomorphisations (array, str, listview, listiter,
+        mapkeyiter, mapentry, mapitemiter, list, map). Caller must
+        only invoke this for non-partial monos."""
+        # for arrays: validate element type, synthesize get/set/length
+        if _is_array_type(mono):
+            elem_type = _array_element_type(mono)
+            arr_len = _array_length(mono)
+            if elem_type and not _is_valtype(elem_type):
+                self._error(
+                    f"Array element type '{elem_type.name}' is not a value type; "
+                    f"arrays require valtype elements"
+                )
+            # synthesize .length constant
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            if arr_len is not None:
+                mono.param_defaults["length"] = str(arr_len)
+            # synthesize .get method: function {i: i64} out <elem>
+            if elem_type:
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["i"] = self._resolve_name("i64") or self.t_null
+                get_type.return_type = elem_type
+                mono.children["get"] = get_type
+                # synthesize .set method: function {i: i64, val: <elem>} out <elem>
+                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
+                set_type.children["i"] = self._resolve_name("i64") or self.t_null
+                set_type.children["val"] = elem_type
+                set_type.return_type = elem_type
+                mono.children["set"] = set_type
+
+        # for str types: set valtype, synthesize length/size/string
+        if _is_str_type(mono):
+            mono.is_valtype = True
+            _set_destructor_metadata(mono)
+            str_cap = _str_capacity(mono)
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            # synthesize .size constant (compile-time)
+            size_type = _make_type("u64", ZTypeType.RECORD)
+            size_type.is_valtype = True
+            mono.children["size"] = size_type
+            if str_cap is not None:
+                mono.param_defaults["size"] = str(str_cap)
+            # synthesize .string method: function {} out string
+            string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
+            string_method.return_type = self._resolve_name("String") or self.t_null
+            mono.children["string"] = string_method
+
+        # for listview types: set reftype, synthesize methods
+        # Listview struct is stack-allocated; no owned data (borrowed from list).
+        if _is_listview_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            elem_type = _listview_element_type(mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            if elem_type:
+                # synthesize .get method: function {i: u64} out <elem>
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["i"] = t_u64
+                get_type.return_type = elem_type
+                get_type.return_ownership = ZParamOwnership.BORROW
+                mono.children["get"] = get_type
+
+        # for listiter types: synthesize the .call method returning
+        # (optionview of: elem). listiter holds a borrowed pointer to
+        # the source list and an index; .call yields a borrowed view
+        # to the element at the current index, or .none when exhausted.
+        if _is_listiter_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            elem_type = _listiter_element_type(mono)
+            if elem_type is not None:
+                ov_template = self._resolve_name("OptionView")
+                if ov_template:
+                    ov_defn = self._find_generic_defn(ov_template)
+                    if ov_defn:
+                        ov_mono = self._monomorphize(
+                            ov_template, {"t": elem_type}, ov_defn
+                        )
+                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
+                        call_type.return_type = ov_mono
+                        mono.children["call"] = call_type
+            # listiter holds a borrowed pointer to its source list; no
+            # owned data, so no runtime destructor is needed.
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
+        # for mapkeyiter types: synthesize the .call method returning
+        # (optionview of: key). Same shape as listiter — the iterator
+        # walks bucket slots and skips empty / deleted ones at runtime.
+        if _is_mapkeyiter_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            key_t = _mapkeyiter_key_type(mono)
+            if key_t is not None:
+                ov_template = self._resolve_name("OptionView")
+                if ov_template:
+                    ov_defn = self._find_generic_defn(ov_template)
+                    if ov_defn:
+                        ov_mono = self._monomorphize(ov_template, {"t": key_t}, ov_defn)
+                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
+                        call_type.return_type = ov_mono
+                        mono.children["call"] = call_type
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
+        # for mapentry types: synthesize .key / .value accessors. mapentry
+        # is a borrow-only view — its C representation is a pointer to a
+        # source bucket; .key / .value emit as field projections through
+        # that pointer. There is no constructor (only iteration yields
+        # mapentry values) and no destructor (no owned data).
+        if _is_mapentry_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            mono.needs_destructor = False
+            mono.destructor_name = None
+            mono.create_disabled = True
+            key_t = _mapentry_key_type(mono)
+            value_t = _mapentry_value_type(mono)
+            if key_t is not None:
+                key_method = _make_type(f"{mangled}.key", ZTypeType.FUNCTION)
+                key_method.return_type = key_t
+                key_method.return_ownership = ZParamOwnership.BORROW
+                mono.children["key"] = key_method
+            if value_t is not None:
+                val_method = _make_type(f"{mangled}.value", ZTypeType.FUNCTION)
+                val_method.return_type = value_t
+                val_method.return_ownership = ZParamOwnership.BORROW
+                mono.children["value"] = val_method
+
+        # for mapitemiter types: synthesize the .call method returning
+        # (optionview of: mapentry). Walks bucket slots and yields a
+        # bucket-pointer view per USED slot.
+        if _is_mapitemiter_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            key_t = _mapitemiter_key_type(mono)
+            value_t = _mapitemiter_value_type(mono)
+            if key_t is not None and value_t is not None:
+                # monomorphise mapentry<K,V> first (the call's payload)
+                me_template = self._resolve_name("MapEntry")
+                me_mono = None
+                if me_template:
+                    me_defn = self._find_generic_defn(me_template)
+                    if me_defn:
+                        me_mono = self._monomorphize(
+                            me_template,
+                            {"key": key_t, "value": value_t},
+                            me_defn,
+                        )
+                # then optionview<mapentry<K,V>>
+                if me_mono is not None:
+                    ov_template = self._resolve_name("OptionView")
+                    if ov_template:
+                        ov_defn = self._find_generic_defn(ov_template)
+                        if ov_defn:
+                            ov_mono = self._monomorphize(
+                                ov_template, {"t": me_mono}, ov_defn
+                            )
+                            call_type = _make_type(
+                                f"{mangled}.call", ZTypeType.FUNCTION
+                            )
+                            call_type.return_type = ov_mono
+                            mono.children["call"] = call_type
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
+        # for list types: set reftype, synthesize methods
+        # List struct is stack-allocated; only the data buffer is on the heap.
+        if _is_list_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            mono.needs_field_cleanup = True  # data buffer needs cleanup
+            elem_type = _list_element_type(mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            # .length / .capacity expose the global u64 type so arithmetic
+            # operators (+, -, <, ...) declared on u64 resolve through
+            # children["+"] etc. when users do `l.length + n`. Synthesising
+            # a fresh empty u64 record here would drop those methods.
+            mono.children["length"] = t_u64
+            mono.children["capacity"] = t_u64
+            if elem_type:
+                # synthesize .append method: function {from: <elem>}
+                append_type = _make_type(f"{mangled}.append", ZTypeType.FUNCTION)
+                append_type.children["from"] = elem_type
+                append_type.param_ownership["from"] = ZParamOwnership.TAKE
+                mono.children["append"] = append_type
+                # synthesize .insert method: function {from: <elem> at: u64}
+                insert_type = _make_type(f"{mangled}.insert", ZTypeType.FUNCTION)
+                insert_type.children["from"] = elem_type
+                insert_type.children["at"] = t_u64
+                insert_type.param_ownership["from"] = ZParamOwnership.TAKE
+                mono.children["insert"] = insert_type
+                # synthesize .extend method: function {from: list_T}
+                extend_type = _make_type(f"{mangled}.extend", ZTypeType.FUNCTION)
+                extend_type.children["from"] = mono
+                extend_type.param_ownership["from"] = ZParamOwnership.TAKE
+                mono.children["extend"] = extend_type
+                # synthesize .get method: function {i: u64} out <elem>
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["i"] = t_u64
+                get_type.return_type = elem_type
+                get_type.return_ownership = ZParamOwnership.BORROW
+                mono.children["get"] = get_type
+                # synthesize .set method: function {i: u64 val: <elem>} out <elem>
+                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
+                set_type.children["i"] = t_u64
+                set_type.children["val"] = elem_type
+                set_type.return_type = elem_type
+                set_type.param_ownership["val"] = ZParamOwnership.TAKE
+                mono.children["set"] = set_type
+                # synthesize .pop method: function {} out <elem>
+                pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
+                pop_type.return_type = elem_type
+                mono.children["pop"] = pop_type
+                # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
+                # Get or create the monomorphized listview type
+                listview_template = self._resolve_name("ListView")
+                listview_mono = None
+                if listview_template:
+                    lv_defn = self._find_generic_defn(listview_template)
+                    if lv_defn:
+                        listview_mono = self._monomorphize(
+                            listview_template, {"of": elem_type}, lv_defn
+                        )
+                        listview_type = _make_type(
+                            f"{mangled}.listview", ZTypeType.FUNCTION
+                        )
+                        listview_type.return_type = listview_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "listview", listview_type
+                        )
+                        mono.children["listview"] = listview_type
+                # synthesize .extend_view method: function {other: listview<elem>}
+                # — copies bytes from a borrowed view (does NOT consume).
+                if listview_mono is not None:
+                    extend_view_type = _make_type(
+                        f"{mangled}.extendView", ZTypeType.FUNCTION
+                    )
+                    extend_view_type.children["other"] = listview_mono
+                    extend_view_type.param_ownership["other"] = ZParamOwnership.BORROW
+                    mono.children["extendView"] = extend_view_type
+                # synthesize .iterate method: function {:this} out (listiter of: elem)
+                # — borrowed-view iterator over the list. Triggers
+                # monomorphization of listiter<elem> so the emitter can
+                # generate the iterator struct + .call function.
+                listiter_template = self._resolve_name("ListIter")
+                if listiter_template:
+                    li_defn = self._find_generic_defn(listiter_template)
+                    if li_defn:
+                        listiter_mono = self._monomorphize(
+                            listiter_template, {"of": elem_type}, li_defn
+                        )
+                        iterate_type = _make_type(
+                            f"{mangled}.iterate", ZTypeType.FUNCTION
+                        )
+                        iterate_type.return_type = listiter_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterate", iterate_type
+                        )
+                        mono.children["iterate"] = iterate_type
+
+        # for map types: set reftype, synthesize methods
+        # Maps remain heap-allocated for now.
+        if _is_map_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            mono.is_heap_allocated = True  # map struct is still heap-allocated
+            mono.needs_field_cleanup = True  # data buckets need cleanup
+            key_type = _map_key_type(mono)
+            value_type = _map_value_type(mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            t_bool = self._resolve_name("bool") or self.t_null
+            # synthesize .length field (runtime, u64)
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            mono.children["length"] = length_type
+            # synthesize .capacity field (runtime, u64)
+            cap_type = _make_type("u64", ZTypeType.RECORD)
+            cap_type.is_valtype = True
+            mono.children["capacity"] = cap_type
+            if key_type and value_type:
+                # synthesize .set method: function {key: K value: V}
+                set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
+                set_type.children["key"] = key_type
+                set_type.children["value"] = value_type
+                set_type.param_ownership["key"] = ZParamOwnership.TAKE
+                set_type.param_ownership["value"] = ZParamOwnership.TAKE
+                mono.children["set"] = set_type
+                # synthesize .get method: function {key: K} out option/optionval of: V
+                get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
+                get_type.children["key"] = key_type
+                if _is_valtype(value_type):
+                    opt_template = self._resolve_name("optionval")
+                else:
+                    opt_template = self._resolve_name("Option")
+                if opt_template and opt_template.isgeneric:
+                    opt_defn = self._find_generic_defn(opt_template)
+                    if opt_defn:
+                        opt_mono = self._monomorphize(
+                            opt_template, {"t": value_type}, opt_defn
+                        )
+                        get_type.return_type = opt_mono
+                mono.children["get"] = get_type
+                # synthesize .delete method: function {key: K} out bool
+                delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
+                delete_type.children["key"] = key_type
+                delete_type.return_type = t_bool
+                mono.children["delete"] = delete_type
+                # synthesize .has method: function {key: K} out bool
+                has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
+                has_type.children["key"] = key_type
+                has_type.return_type = t_bool
+                mono.children["has"] = has_type
+                # synthesize .iterate method: function {:this} out
+                # (mapkeyiter key: K value: V) — borrowed-key iterator.
+                # Triggers monomorphization of mapkeyiter<K,V> so the
+                # emitter can generate the iterator struct + .call.
+                mki_template = self._resolve_name("MapKeyIter")
+                if mki_template:
+                    mki_defn = self._find_generic_defn(mki_template)
+                    if mki_defn:
+                        mki_mono = self._monomorphize(
+                            mki_template,
+                            {"key": key_type, "value": value_type},
+                            mki_defn,
+                        )
+                        iterate_type = _make_type(
+                            f"{mangled}.iterate", ZTypeType.FUNCTION
+                        )
+                        iterate_type.return_type = mki_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterate", iterate_type
+                        )
+                        mono.children["iterate"] = iterate_type
+                # synthesize .iterate_items: borrowed-entry iterator
+                # yielding mapentry views. Triggers mapitemiter<K,V> +
+                # mapentry<K,V> monos.
+                mii_template = self._resolve_name("MapItemIter")
+                if mii_template:
+                    mii_defn = self._find_generic_defn(mii_template)
+                    if mii_defn:
+                        mii_mono = self._monomorphize(
+                            mii_template,
+                            {"key": key_type, "value": value_type},
+                            mii_defn,
+                        )
+                        iterate_items_type = _make_type(
+                            f"{mangled}.iterateItems", ZTypeType.FUNCTION
+                        )
+                        iterate_items_type.return_type = mii_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterateItems", iterate_items_type
+                        )
+                        mono.children["iterateItems"] = iterate_items_type
+
+    def _check_mono_constraints(
+        self, template_type: ZType, generic_args: dict[str, ZType]
+    ) -> None:
+        """Validate concrete generic args against the template's
+        declared `generic_params` constraints (Any.valtype / Any.reftype
+        / union subtype set). Emits errors for mismatches; does not
+        mutate the type. Skips GENERIC_PARAM args (those are checked at
+        final instantiation) and numeric-generic args (validated earlier
+        in `_resolve_numeric_generic_arg`)."""
+        for param_name, concrete_type in generic_args.items():
+            if concrete_type.typetype == ZTypeType.GENERIC_PARAM:
+                continue
+            if param_name in template_type.numeric_generic_params:
+                continue
+            constraint = template_type.generic_params.get(param_name)
+            if not constraint:
+                continue
+            if constraint.name == "Any.valtype":
+                if not _is_valtype(concrete_type):
+                    self._error(
+                        f"Type '{concrete_type.name}' is not a value type; "
+                        f"generic parameter '{param_name}' requires any.valtype"
+                    )
+                continue
+            if constraint.name == "Any.reftype":
+                if _is_valtype(concrete_type):
+                    self._error(
+                        f"Type '{concrete_type.name}' is not a reference type; "
+                        f"generic parameter '{param_name}' requires any.reftype"
+                    )
+                continue
+            if constraint.name == "Any":
+                continue
+            if constraint.typetype != ZTypeType.UNION:
+                continue
+            subtype_names = {
+                k
+                for k, v in constraint.children.items()
+                if k != "tag"
+                and v.typetype != ZTypeType.FUNCTION
+                and v.typetype != ZTypeType.DATA
+                and v.typetype != ZTypeType.TAG
+                and v.typetype != ZTypeType.ENUM
+                and not v.is_tag_generic_origin
+            }
+            if concrete_type.name not in subtype_names:
+                self._error(
+                    f"Type '{concrete_type.name}' does not satisfy constraint "
+                    f"'{constraint.name}' for generic parameter '{param_name}'"
+                )
+
+    def _clone_mono_methods(
+        self,
+        mono: ZType,
+        mangled: str,
+        generic_args: dict[str, ZType],
+        defn: zast.TypeDefinition,
+    ) -> None:
+        """Clone, typecheck, hash, and dedup method bodies of a
+        non-partial monomorphized RECORD / CLASS / UNION / VARIANT.
+        Stores the dedup'd method dict on `self._cloned_methods[mangled]`
+        and records alias entries on `self._func_aliases` for hashes
+        that collapse onto an earlier canonical function."""
+        defn_typed = cast(zast.ObjectDef, defn)
+        method_sources: list[tuple[str, zast.Function]] = []
+        for mname, mfunc in defn_typed.as_functions().items():
+            if mfunc.body:
+                method_sources.append((mname, mfunc))
+        for mname, mfunc in defn_typed.functions().items():
+            if mfunc.body:
+                method_sources.append((mname, mfunc))
+
+        cloned_methods: dict[str, zast.Function] = {}
+        for mname, mfunc in method_sources:
+            qualified = f"{mangled}.{mname}"
+            cloned = clone_function(mfunc)
+            # push mono type onto resolving stack so 'this' resolves
+            self._resolving.append((mangled, mono))
+            self._generic_context.append({k: v for k, v in generic_args.items()})
+            self._check_function_body(qualified, cloned)
+            self._generic_context.pop()
+            self._resolving.pop()
+            # hash and dedup
+            func_hash = zasthash.hash_function(cloned, self.typing.node_type)
+            if func_hash in self._func_hashes:
+                _canonical_name, canonical_func = self._func_hashes[func_hash]
+                self._func_aliases[qualified] = _canonical_name
+                cloned_methods[mname] = canonical_func
+            else:
+                self._func_hashes[func_hash] = (qualified, cloned)
+                cloned_methods[mname] = cloned
+
+        self._cloned_methods[mangled] = cloned_methods
 
     def _partially_instantiate_subunits(
         self, parent: ZType, parent_name: str, args: dict[str, ZType]
