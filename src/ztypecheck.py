@@ -5952,7 +5952,7 @@ class TypeChecker:
         self._build_typed_reassignment(reassign)
 
     def _check_reassignment_inner(self, reassign: zast.Reassignment) -> None:
-        existing = self._check_path(reassign.topath)
+        existing = self._check_path(reassign.topath).ztype
         new_t = self._check_expression(reassign.value).ztype
         self._check_exhaustive_if(reassign.value)
         if existing and new_t and not self._types_compatible(existing, new_t):
@@ -6101,8 +6101,8 @@ class TypeChecker:
         self._build_typed_swap(swap)
 
     def _check_swap_inner(self, swap: zast.Swap) -> None:
-        lhs_t = self._check_path(swap.lhs)
-        rhs_t = self._check_path(swap.rhs)
+        lhs_t = self._check_path(swap.lhs).ztype
+        rhs_t = self._check_path(swap.rhs).ztype
         if lhs_t and rhs_t and lhs_t.name != rhs_t.name:
             self._error(
                 f"Cannot swap {lhs_t.name} with {rhs_t.name}",
@@ -6339,7 +6339,10 @@ class TypeChecker:
             NodeType.EXPRESSION,
             NodeType.LABELVALUE,
         ):
-            t = self._check_path(cast(zast.Path, op))
+            path_result = self._check_path(cast(zast.Path, op))
+            t = path_result.ztype
+            borrow_target = path_result.borrow_target
+            private_access = path_result.private_access
             if (
                 t
                 and t.isgeneric
@@ -6360,36 +6363,31 @@ class TypeChecker:
                     loc=op.start,
                 )
                 t = None
-        # Capture+clear the side-channel for the BINOP / PATH branches.
-        # CALL branch already cleared the flag inside _check_call; the
-        # capture below sees None for it.
-        flag_borrow = self._pending_borrow_lock
-        flag_private = self._pending_private_access
-        self._pending_borrow_lock = None
-        self._pending_private_access = False
-        if borrow_target is None:
-            borrow_target = flag_borrow
-        if not private_access:
-            private_access = flag_private
         return ExprResult(t, borrow_target, private_access)
 
     def _check_path(
         self, path: zast.Path, coerce_method_to_return: bool = True
-    ) -> Optional[ZType]:
+    ) -> ExprResult:
         """Type-check a path expression. When `coerce_method_to_return` is
         True (the default for value-position uses), a dotted path naming a
         no-user-arg method auto-calls — its type is the method's return
         type. `_check_call` passes False so explicit method calls
         (`container.slice c: c`) see the function type and dispatch
         normally instead of falling into construction-of-return-type.
+
+        Returns an ExprResult carrying the resolved ztype plus any
+        borrow_target / private_access intent that the legacy `_pending_*`
+        side-channel was set to during resolution. Captures and clears
+        those flags at the boundary so callers consume intent via the
+        result instead of poking the flags directly.
         """
+        t: Optional[ZType] = None
         if path.nodetype == NodeType.EXPRESSION:
             path_expr = cast(zast.Expression, path)
             t = self._check_expression(path_expr).ztype
             if t and not self._node_type.get(path_expr.nodeid):
                 self._node_type[path_expr.nodeid] = t
-            return t
-        if path.nodetype == NodeType.ATOMSTRING:
+        elif path.nodetype == NodeType.ATOMSTRING:
             path_str = cast(zast.AtomString, path)
             self._check_string_interpolation(path_str)
             has_interp = any(
@@ -6399,15 +6397,19 @@ class TypeChecker:
                 "String" if has_interp else "StringView"
             )
             self._build_typed_atomstring(path_str)
-            return self._node_type.get(path_str.nodeid)
-        if path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-            return self._check_atomid(cast(zast.AtomId, path))
-        if path.nodetype == NodeType.DOTTEDPATH:
-            return self._check_dotted_path(
+            t = self._node_type.get(path_str.nodeid)
+        elif path.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
+            t = self._check_atomid(cast(zast.AtomId, path))
+        elif path.nodetype == NodeType.DOTTEDPATH:
+            t = self._check_dotted_path(
                 cast(zast.DottedPath, path),
                 coerce_method_to_return=coerce_method_to_return,
             )
-        return None
+        borrow_target = self._pending_borrow_lock
+        private_access = self._pending_private_access
+        self._pending_borrow_lock = None
+        self._pending_private_access = False
+        return ExprResult(t, borrow_target, private_access)
 
     def _method_has_no_user_args(self, method: ZType) -> bool:
         """True if the method has no required user-visible parameters
@@ -7085,7 +7087,14 @@ class TypeChecker:
 
         # handle .take compiler method (but not protocol/typedef.take constructor)
         if child_name == "take":
-            parent_type = self._check_path(path.parent)
+            parent_result = self._check_path(path.parent)
+            parent_type = parent_result.ztype
+            # propagate parent's borrow/private intent into the side-channel
+            # so this dotted-path's resolution either inherits it (when no
+            # branch overrides) or replaces it (when .borrow/.lock/.private
+            # below set their own).
+            self._pending_borrow_lock = parent_result.borrow_target
+            self._pending_private_access = parent_result.private_access
             if parent_type:
                 # Resolution-order inversion: a user-defined .take member on
                 # the parent type shadows the intrinsic.
@@ -7143,7 +7152,14 @@ class TypeChecker:
 
         # handle .release compiler method (early scope-exit for a variable)
         if child_name == "release":
-            parent_type = self._check_path(path.parent)
+            parent_result = self._check_path(path.parent)
+            parent_type = parent_result.ztype
+            # propagate parent's borrow/private intent into the side-channel
+            # so this dotted-path's resolution either inherits it (when no
+            # branch overrides) or replaces it (when .borrow/.lock/.private
+            # below set their own).
+            self._pending_borrow_lock = parent_result.borrow_target
+            self._pending_private_access = parent_result.private_access
             if parent_type and "release" not in parent_type.children:
                 # .release only valid on simple variable names
                 if path.parent.nodetype != NodeType.ATOMID:
@@ -7195,7 +7211,14 @@ class TypeChecker:
 
         # handle .borrow compiler method (but not protocol/typedef.borrow constructor)
         if child_name == "borrow":
-            parent_type = self._check_path(path.parent)
+            parent_result = self._check_path(path.parent)
+            parent_type = parent_result.ztype
+            # propagate parent's borrow/private intent into the side-channel
+            # so this dotted-path's resolution either inherits it (when no
+            # branch overrides) or replaces it (when .borrow/.lock/.private
+            # below set their own).
+            self._pending_borrow_lock = parent_result.borrow_target
+            self._pending_private_access = parent_result.private_access
             if parent_type:
                 # Resolution-order inversion: a user-defined .borrow member on
                 # the parent type shadows the intrinsic.
@@ -7226,7 +7249,14 @@ class TypeChecker:
 
         # handle .lock compiler method (alias for .borrow)
         if child_name == "lock":
-            parent_type = self._check_path(path.parent)
+            parent_result = self._check_path(path.parent)
+            parent_type = parent_result.ztype
+            # propagate parent's borrow/private intent into the side-channel
+            # so this dotted-path's resolution either inherits it (when no
+            # branch overrides) or replaces it (when .borrow/.lock/.private
+            # below set their own).
+            self._pending_borrow_lock = parent_result.borrow_target
+            self._pending_private_access = parent_result.private_access
             if parent_type is None:
                 return parent_type
             # Resolution-order inversion: a user-defined .lock member on
@@ -7247,7 +7277,14 @@ class TypeChecker:
 
         # handle .private (friend access)
         if child_name == "private":
-            parent_type = self._check_path(path.parent)
+            parent_result = self._check_path(path.parent)
+            parent_type = parent_result.ztype
+            # propagate parent's borrow/private intent into the side-channel
+            # so this dotted-path's resolution either inherits it (when no
+            # branch overrides) or replaces it (when .borrow/.lock/.private
+            # below set their own).
+            self._pending_borrow_lock = parent_result.borrow_target
+            self._pending_private_access = parent_result.private_access
             if parent_type is None:
                 return parent_type
             # Resolution-order inversion: a user-defined .private member on
@@ -7580,17 +7617,19 @@ class TypeChecker:
         # is for value-position uses; in callable position we want the
         # function so the standard method-call dispatch below fires
         # instead of construction-of-return-type fallthrough.
-        callee_type = self._check_path(call.callable, coerce_method_to_return=False)
+        callee_type = self._check_path(
+            call.callable, coerce_method_to_return=False
+        ).ztype
         if not callee_type:
             return None
         # `_check_path` on a protocol/facet dotted callable (e.g.
-        # `obj.protofield.method`) stamps `_pending_borrow_lock` to the
-        # source path so an assignment like `p: obj.protofield` would
-        # install a borrow-scoped lock on `obj`. In a call context the
-        # receiver lock is installed separately by `_lock_receiver`, so
-        # drop the pending lift here — otherwise the first argument's
-        # processing would see it as if the arg had been a `.lock` /
-        # `.borrow` path and try to re-lock the receiver root.
+        # `obj.protofield.method`) reports a borrow_target on its result,
+        # which we deliberately drop here: in a call context the receiver
+        # lock is installed separately by `_lock_receiver`, so retaining
+        # the lift would make the first argument's processing see it as
+        # if the arg had been a `.lock` / `.borrow` path and try to
+        # re-lock the receiver root. The flag was already cleared by
+        # `_check_path`'s boundary capture; this assignment is defensive.
         self._pending_borrow_lock = None
 
         # handle control flow: return, break, continue, error
@@ -9497,7 +9536,7 @@ class TypeChecker:
 
     def _check_binop_inner(self, binop: zast.BinOp) -> Optional[ZType]:
         lhs_type = self._check_operation(binop.lhs).ztype
-        rhs_type = self._check_path(binop.rhs)
+        rhs_type = self._check_path(binop.rhs).ztype
         if not lhs_type or not rhs_type:
             return None
 
