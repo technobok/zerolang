@@ -360,6 +360,24 @@ def _strip_path_ownership(
 
 
 @dataclass
+class FunctionContext:
+    """Function-body context on `TypeChecker`. Holds the expected
+    return type, parameter-ownership map, return-ownership annotation,
+    plus the enclosing-type and currently-being-checked function
+    stacks. The scalar fields (`return_type`, `func_ownership`,
+    `func_return_ownership`) are saved and restored at function-body
+    boundaries; the stack fields (`enclosing_type`, `body`) are
+    pushed/popped per nested method dispatch rather than swapped
+    wholesale."""
+
+    return_type: "Optional[ZType]" = None
+    func_ownership: "dict[str, ZParamOwnership]" = field(default_factory=dict)
+    func_return_ownership: "Optional[ZParamOwnership]" = None
+    enclosing_type: "list[ZType]" = field(default_factory=list)
+    body: "list[ZType]" = field(default_factory=list)
+
+
+@dataclass
 class MonoState:
     """Monomorphization-related state on `TypeChecker`. Bagged here
     so the cluster has one named home and the pre-relocation 7+ fields
@@ -429,22 +447,9 @@ class TypeChecker:
         # track which file units have been fully resolved (generic params detected)
         self._resolved_file_units: set[str] = set()
 
-        # current function return type (for return statement checking)
-        self._current_return_type: Optional[ZType] = None
-
-        # stack of enclosing types for the function body currently being
-        # type-checked. Pushed when entering a method body, popped on exit.
-        # Used to resolve `meta.create` and to detect constructor recursion.
-        self._enclosing_type_stack: List[ZType] = []
-
-        # stack of function ZTypes currently being type-checked. Used to
-        # detect constructor recursion (calling Type.create either directly
-        # or via bare-name Type ... while inside that very function).
-        self._function_body_stack: List[ZType] = []
-
-        # current function's ownership annotations (for ownership checking)
-        self._current_func_ownership: dict[str, ZParamOwnership] = {}
-        self._current_func_return_ownership: Optional[ZParamOwnership] = None
+        # F5.B.2: function-body context grouped into a single record.
+        # See `FunctionContext` for per-field documentation.
+        self.func_ctx = FunctionContext()
 
         # pending borrow lock: set by deep methods (.borrow, .lock, .stringview,
         # protocol paths), captured and cleared by _check_expression into
@@ -1521,18 +1526,18 @@ class TypeChecker:
                 ctype.children["create"] = create_type
 
             # typecheck method bodies
-            self._enclosing_type_stack.append(ctype)
+            self.func_ctx.enclosing_type.append(ctype)
             for mname, mfunc in cls.functions().items():
                 if mfunc.body:
-                    self._function_body_stack.append(ctype.children[mname])
+                    self.func_ctx.body.append(ctype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
-                    self._function_body_stack.pop()
+                    self.func_ctx.body.pop()
             for mname, mfunc in cls.as_functions().items():
                 if mfunc.body:
-                    self._function_body_stack.append(ctype.children[mname])
+                    self.func_ctx.body.append(ctype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
-                    self._function_body_stack.pop()
-            self._enclosing_type_stack.pop()
+                    self.func_ctx.body.pop()
+            self.func_ctx.enclosing_type.pop()
 
         ctype.public_members = _extract_public_members(cls.as_items)
         priv = _check_private_redefinition(cls.as_items)
@@ -1822,18 +1827,18 @@ class TypeChecker:
             utype.children[mname] = mt
 
         # typecheck method bodies (non-generic only)
-        self._enclosing_type_stack.append(utype)
+        self.func_ctx.enclosing_type.append(utype)
         for mname, mfunc in union_defn.functions().items():
             if mfunc.body:
-                self._function_body_stack.append(utype.children[mname])
+                self.func_ctx.body.append(utype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
-                self._function_body_stack.pop()
+                self.func_ctx.body.pop()
         for mname, mfunc in union_defn.as_functions().items():
             if mfunc.body:
-                self._function_body_stack.append(utype.children[mname])
+                self.func_ctx.body.append(utype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
-                self._function_body_stack.pop()
-        self._enclosing_type_stack.pop()
+                self.func_ctx.body.pop()
+        self.func_ctx.enclosing_type.pop()
 
         utype.public_members = _extract_public_members(union_defn.as_items)
         priv = _check_private_redefinition(union_defn.as_items)
@@ -2077,18 +2082,18 @@ class TypeChecker:
             vtype.children[mname] = mt
 
         # typecheck method bodies (non-generic only — variants don't support generics yet)
-        self._enclosing_type_stack.append(vtype)
+        self.func_ctx.enclosing_type.append(vtype)
         for mname, mfunc in variant_defn.functions().items():
             if mfunc.body:
-                self._function_body_stack.append(vtype.children[mname])
+                self.func_ctx.body.append(vtype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
-                self._function_body_stack.pop()
+                self.func_ctx.body.pop()
         for mname, mfunc in variant_defn.as_functions().items():
             if mfunc.body:
-                self._function_body_stack.append(vtype.children[mname])
+                self.func_ctx.body.append(vtype.children[mname])
                 self._check_function_body(f"{name}.{mname}", mfunc)
-                self._function_body_stack.pop()
-        self._enclosing_type_stack.pop()
+                self.func_ctx.body.pop()
+        self.func_ctx.enclosing_type.pop()
 
         # auto-generate == and != for non-generic variants
         self._synthesize_eq(vtype)
@@ -2347,18 +2352,18 @@ class TypeChecker:
 
         # typecheck method bodies (non-generic only)
         if not rtype.isgeneric:
-            self._enclosing_type_stack.append(rtype)
+            self.func_ctx.enclosing_type.append(rtype)
             for mname, mfunc in rec.functions().items():
                 if mfunc.body:
-                    self._function_body_stack.append(rtype.children[mname])
+                    self.func_ctx.body.append(rtype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
-                    self._function_body_stack.pop()
+                    self.func_ctx.body.pop()
             for mname, mfunc in rec.as_functions().items():
                 if mfunc.body:
-                    self._function_body_stack.append(rtype.children[mname])
+                    self.func_ctx.body.append(rtype.children[mname])
                     self._check_function_body(f"{name}.{mname}", mfunc)
-                    self._function_body_stack.pop()
-            self._enclosing_type_stack.pop()
+                    self.func_ctx.body.pop()
+            self.func_ctx.enclosing_type.pop()
 
         # auto-generate == and != for non-generic records
         if not rtype.isgeneric and not rec.is_native:
@@ -3484,8 +3489,8 @@ class TypeChecker:
             # method body; at top level, falls through to the normal
             # name-resolution path which will error.
             if pname == "meta" and path.child.name == "create":
-                if self._enclosing_type_stack:
-                    enclosing = self._enclosing_type_stack[-1]
+                if self.func_ctx.enclosing_type:
+                    enclosing = self.func_ctx.enclosing_type[-1]
                     raw = enclosing.meta_create
                     if raw is not None:
                         self.typing.node_type[path.nodeid] = raw
@@ -5626,8 +5631,8 @@ class TypeChecker:
         self.symtab.push(f"function:{name}")
 
         # save/restore ownership context
-        prev_func_ownership = self._current_func_ownership
-        prev_func_return_ownership = self._current_func_return_ownership
+        prev_func_ownership = self.func_ctx.func_ownership
+        prev_func_return_ownership = self.func_ctx.func_return_ownership
         # Read ownership from the resolved ZType — it carries both the
         # syntactic annotations AND the inferred BORROW-default for
         # stack-reftype parameters (set during _resolve_function_type).
@@ -5635,18 +5640,18 @@ class TypeChecker:
             f"{self.program.mainunitname}.{name}"
         )
         if ftype is not None and ftype.typetype == ZTypeType.FUNCTION:
-            self._current_func_ownership = dict(ftype.param_ownership)
-            self._current_func_return_ownership = ftype.return_ownership
+            self.func_ctx.func_ownership = dict(ftype.param_ownership)
+            self.func_ctx.func_return_ownership = ftype.return_ownership
         else:
-            self._current_func_ownership = {}
-            self._current_func_return_ownership = None
+            self.func_ctx.func_ownership = {}
+            self.func_ctx.func_return_ownership = None
 
         for pname, ppath in func.parameters.items():
             stripped_ppath, _ = _strip_path_ownership(ppath)
             pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
             if pt:
                 # determine parameter ownership from annotations
-                param_own = self._current_func_ownership.get(pname)
+                param_own = self.func_ctx.func_ownership.get(pname)
                 if param_own == ZParamOwnership.TAKE:
                     ownership = ZOwnership.OWNED
                 elif param_own in (
@@ -5664,32 +5669,32 @@ class TypeChecker:
                 self.symtab.define_var(pname, var, is_receiver=is_receiver)
 
         # set expected return type for return statement checking
-        prev_return_type = self._current_return_type
+        prev_return_type = self.func_ctx.return_type
         if func.returntype:
             stripped_rt, _ = _strip_path_ownership(func.returntype)
-            self._current_return_type = self._resolve_typeref(
+            self.func_ctx.return_type = self._resolve_typeref(
                 cast(zast.Path, stripped_rt)
             )
         else:
-            self._current_return_type = None
+            self.func_ctx.return_type = None
         self._check_statement(func.body)
 
         # implicit return validation: last expression type must match 'out'
-        if self._current_return_type and func.body.statements:
+        if self.func_ctx.return_type and func.body.statements:
             last = func.body.statements[-1]
             last_type = self.typing.node_type.get(last.nodeid)
             if last_type is not None and last_type.typetype != ZTypeType.NEVER:
-                if not self._types_compatible(last_type, self._current_return_type):
+                if not self._types_compatible(last_type, self.func_ctx.return_type):
                     self._error(
                         f"implicit return type '{last_type.name}' does not match "
-                        f"declared return type '{self._current_return_type.name}'",
+                        f"declared return type '{self.func_ctx.return_type.name}'",
                         loc=last.start,
                         err=ERR.TYPEERROR,
                     )
 
-        self._current_return_type = prev_return_type
-        self._current_func_ownership = prev_func_ownership
-        self._current_func_return_ownership = prev_func_return_ownership
+        self.func_ctx.return_type = prev_return_type
+        self.func_ctx.func_ownership = prev_func_ownership
+        self.func_ctx.func_return_ownership = prev_func_return_ownership
         self.symtab.pop()
 
     def _check_statement(self, stmt: zast.Statement) -> None:
@@ -7136,10 +7141,10 @@ class TypeChecker:
         if (
             not callee_is_var
             and callee_type.typetype != ZTypeType.FUNCTION
-            and self._function_body_stack
+            and self.func_ctx.body
         ):
             create_fn = callee_type.children.get("create")
-            if create_fn is self._function_body_stack[-1]:
+            if create_fn is self.func_ctx.body[-1]:
                 self._error(
                     f"cannot call '{callee_type.name}.create' recursively "
                     f"(directly or via bare-name). Use 'meta.create' for the "
@@ -7152,8 +7157,8 @@ class TypeChecker:
         # callable resolves to the function we're currently in.
         if (
             callee_type.typetype == ZTypeType.FUNCTION
-            and self._function_body_stack
-            and callee_type is self._function_body_stack[-1]
+            and self.func_ctx.body
+            and callee_type is self.func_ctx.body[-1]
             and call.callable.nodetype == NodeType.DOTTEDPATH
             and cast(zast.DottedPath, call.callable).child.name == "create"
         ):
@@ -8279,7 +8284,7 @@ class TypeChecker:
                 arg.valtype.nodetype == NodeType.DOTTEDPATH
                 and cast(zast.DottedPath, arg.valtype).child.name == "copy"
             )
-            param_own = self._current_func_ownership.get(arg_path[0])
+            param_own = self.func_ctx.func_ownership.get(arg_path[0])
             # Only fire when the source actually has heap-backed data that
             # would be aliased: string itself, or a struct holding string /
             # other heap-backed fields. A class with only valtype fields
@@ -8588,7 +8593,7 @@ class TypeChecker:
             and call.arguments[0].name is None
             and call.arguments[0].valtype.nodetype == NodeType.ATOMID
             and any(a.name is not None for a in call.arguments[1:])
-            and self._function_body_stack
+            and self.func_ctx.body
         ):
             first = cast(zast.AtomId, call.arguments[0].valtype)
             # only do the recursion check when the first arg refers to a
@@ -8598,7 +8603,7 @@ class TypeChecker:
                 type_ref is not None
                 and type_ref.typetype
                 in (ZTypeType.RECORD, ZTypeType.CLASS, ZTypeType.VARIANT)
-                and type_ref.children.get("create") is self._function_body_stack[-1]
+                and type_ref.children.get("create") is self.func_ctx.body[-1]
             ):
                 self._error(
                     f"cannot construct '{first.name}' inside '{first.name}.create' "
@@ -8617,7 +8622,7 @@ class TypeChecker:
             len(call.arguments) >= 1
             and call.arguments[0].name is None
             and call.arguments[0].valtype.nodetype == NodeType.DOTTEDPATH
-            and self._function_body_stack
+            and self.func_ctx.body
         ):
             dp_first = cast(zast.DottedPath, call.arguments[0].valtype)
             if (
@@ -8628,7 +8633,7 @@ class TypeChecker:
                 type_ref = self._resolve_name(type_name)
                 if (
                     type_ref is not None
-                    and type_ref.children.get("create") is self._function_body_stack[-1]
+                    and type_ref.children.get("create") is self.func_ctx.body[-1]
                 ):
                     self._error(
                         f"cannot call '{type_name}.create' recursively (directly "
@@ -8654,22 +8659,22 @@ class TypeChecker:
                 dp.parent.nodetype == NodeType.ATOMID
                 and cast(zast.AtomId, dp.parent).name == "meta"
                 and dp.child.name == "create"
-                and self._enclosing_type_stack
+                and self.func_ctx.enclosing_type
             ):
-                enclosing = self._enclosing_type_stack[-1]
+                enclosing = self.func_ctx.enclosing_type[-1]
                 # validate the field args by type (no missing-field check yet
                 # — that goes through the meta-create signature in Phase 4)
                 for a in call.arguments[1:]:
                     self._check_operation(a.valtype)
                 self.typing.node_type[call.arguments[0].valtype.nodeid] = enclosing
                 ret_type_meta: Optional[ZType] = enclosing
-                if self._current_return_type and ret_type_meta:
+                if self.func_ctx.return_type and ret_type_meta:
                     if not self._types_compatible(
-                        ret_type_meta, self._current_return_type
+                        ret_type_meta, self.func_ctx.return_type
                     ):
                         self._error(
                             f"return type mismatch: function expects "
-                            f"{self._current_return_type.name}, got "
+                            f"{self.func_ctx.return_type.name}, got "
                             f"{ret_type_meta.name}",
                             loc=call.start,
                             err=ERR.TYPEERROR,
@@ -8717,11 +8722,11 @@ class TypeChecker:
                 ):
                     self._check_aggregate_lock_escape(call, ret_type)
 
-        if self._current_return_type and ret_type:
-            if not self._types_compatible(ret_type, self._current_return_type):
+        if self.func_ctx.return_type and ret_type:
+            if not self._types_compatible(ret_type, self.func_ctx.return_type):
                 self._error(
                     f"return type mismatch: function expects "
-                    f"{self._current_return_type.name}, got {ret_type.name}",
+                    f"{self.func_ctx.return_type.name}, got {ret_type.name}",
                     loc=call.start,
                     err=ERR.TYPEERROR,
                 )
@@ -8761,13 +8766,13 @@ class TypeChecker:
         #     don't survive the call).
         #   * returned root is a local owned variable — its lifetime ends
         #     at function exit; borrow would dangle.
-        ret_own = self._current_func_return_ownership
+        ret_own = self.func_ctx.func_return_ownership
         if ret_own == ZParamOwnership.BORROW and call.arguments:
             arg_op = call.arguments[0].valtype
             arg_name = self._get_arg_root_name(arg_op)
             if arg_name:
                 var = self.symtab.lookup_var(arg_name)
-                param_own = self._current_func_ownership.get(arg_name)
+                param_own = self.func_ctx.func_ownership.get(arg_name)
                 if param_own is not None and param_own != ZParamOwnership.LOCK:
                     self._error(
                         f"Cannot return parameter '{arg_name}' as borrowed: "
@@ -8816,7 +8821,7 @@ class TypeChecker:
         # duplicate (`.copy` on the value), or a borrow return (`out
         # T.borrow` paired with a `.lock` parameter).
         if (
-            self._current_func_return_ownership != ZParamOwnership.BORROW
+            self.func_ctx.func_return_ownership != ZParamOwnership.BORROW
             and call.arguments
             and ret_type is not None
             and ret_type.needs_destructor
@@ -8826,7 +8831,7 @@ class TypeChecker:
             bare_name = self._get_bare_atom_name(arg_op)
             if bare_name is not None:
                 var = self.symtab.lookup_var(bare_name)
-                param_own = self._current_func_ownership.get(bare_name)
+                param_own = self.func_ctx.func_ownership.get(bare_name)
                 if (
                     var is not None
                     and var.ownership == ZOwnership.BORROWED
