@@ -2309,7 +2309,7 @@ class CEmitter:
             params: List[str] = ["void*"]
             spec_type = proto_type.children.get(sname) if proto_type else None
             for pname, ppath in sfunc.parameters.items():
-                if pname == "this":
+                if spec_type is not None and spec_type.this_param_name == pname:
                     continue
                 ptype: Optional[ZType] = self._node_ztype(ppath)
                 if ptype is None and spec_type is not None:
@@ -2390,7 +2390,7 @@ class CEmitter:
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
-                if pname == "this":
+                if spec_type is not None and spec_type.this_param_name == pname:
                     continue
                 ptype: Optional[ZType] = self._node_ztype(ppath)
                 if ptype is None and spec_type is not None:
@@ -2504,12 +2504,14 @@ class CEmitter:
         lines: List[str] = []
 
         # vtable struct — function pointers with void* as first param (same as protocol)
+        facet_type = self._resolved_type(name)
         lines.append("typedef struct {\n")
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
+            spec_type = facet_type.children.get(sname) if facet_type else None
             for pname, ppath in sfunc.parameters.items():
-                if pname == "this":
+                if spec_type is not None and spec_type.this_param_name == pname:
                     continue
                 params.append(_ctype(self._node_ztype(ppath)))
             param_str = ", ".join(params)
@@ -2566,12 +2568,14 @@ class CEmitter:
         lines.append("\n")
 
         # wrapper functions for each spec
+        facet_type = self._resolved_type(facet_name)
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
+            spec_type = facet_type.children.get(sname) if facet_type else None
             for pname, ppath in sfunc.parameters.items():
-                if pname == "this":
+                if spec_type is not None and spec_type.this_param_name == pname:
                     continue
                 pctype = _ctype(self._node_ztype(ppath))
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
@@ -4657,7 +4661,7 @@ class CEmitter:
             ret_ctype = _ctype(ret_type) if ret_type else "void"
             params = ["void*"]
             for pname, ptype in stype.children.items():
-                if pname == "this":
+                if stype.this_param_name == pname:
                     continue
                 params.append(_proto_param_ctype(ptype))
             lines.append(f"    {ret_ctype} (*{sname})({', '.join(params)});\n")
@@ -5813,7 +5817,18 @@ class CEmitter:
             params = list(ftype.children.items())
             # Method calls: `this` is the receiver, prepended at the
             # call site — call.arguments[0] aligns with params[1].
-            offset = 1 if params and params[0][0] == "this" else 0
+            # The literal "this" mirrors _prepend_method_receiver's
+            # early-return predicate (`"this" not in ftype.children`):
+            # the offset must agree with whether the receiver was
+            # prepended, and prepending only happens for canonical
+            # `:this` form, not named-binding `c: this`.
+            offset = (
+                1
+                if params
+                and params[0][0]
+                == "this"  # ztc-string-compare-ok: receiver-prepend predicate
+                else 0
+            )
             for i, arg in enumerate(call.arguments):
                 pi = i + offset
                 if pi < len(params):
@@ -6142,7 +6157,14 @@ class CEmitter:
         method_offset = 0
         if ftype and ftype.typetype == ZTypeType.FUNCTION:
             children_keys = list(ftype.children.keys())
-            if children_keys and children_keys[0] == "this":
+            # Mirror _prepend_method_receiver's early-return predicate
+            # (`"this" not in ftype.children`): only canonical `:this`
+            # form is prepended, so only that form needs an offset here.
+            if (
+                children_keys
+                and children_keys[0]
+                == "this"  # ztc-string-compare-ok: receiver-prepend predicate
+            ):
                 method_offset = 1
         for i, arg in enumerate(call.arguments):
             # skip generic type args (they are compile-time only)
@@ -6187,7 +6209,7 @@ class CEmitter:
                 param_type = ftype.children[param_name]
                 # 'this' receiver: param type matches enclosing class
                 # and the function is a method (dotted name origin)
-                is_this_param = param_name == "this" or (
+                is_this_param = ftype.this_param_name == param_name or (
                     param_type is arg_type and ftype.name and "." in ftype.name
                 )
                 # borrow/lock class params also need &. .take on a
