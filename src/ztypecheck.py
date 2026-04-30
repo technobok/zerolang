@@ -9704,6 +9704,107 @@ class TypeChecker:
         t = self._check_case_inner(casenode)
         return t
 
+    def _apply_case_take_invalidation(
+        self,
+        casenode: zast.Case,
+        subject_taken_in_arm: Optional[str],
+        subject_name: Optional[str],
+        taken_in_any_match_arm: set,
+        saved_match_vars: dict,
+    ) -> None:
+        """Post-arm ownership reconciliation: when an arm body
+        consumed (`.take`) the match subject or any other live owned
+        variable, invalidate it after the match scope pops so
+        post-match code can't reference it. Also stamps
+        `Typing.case_subject_taken` / `Typing.case_taken_vars` for
+        the emitter."""
+        if subject_taken_in_arm and subject_name:
+            self.typing.case_subject_taken[casenode.nodeid] = True
+            take_loc = casenode.subject.start
+            loc_tuple = (
+                (take_loc.lineno, take_loc.colno, take_loc.fsno) if take_loc else None
+            )
+            self.symtab.invalidate(subject_name, loc=loc_tuple)
+            if take_loc:
+                self.symtab.set_taken_location(
+                    subject_name,
+                    (take_loc.lineno, take_loc.colno, take_loc.fsno),
+                )
+        if not taken_in_any_match_arm:
+            return
+        for vname in taken_in_any_match_arm:
+            _, vtype = saved_match_vars[vname]
+            self.typing.case_taken_vars.setdefault(casenode.nodeid, []).append(
+                (vname, vtype)
+            )
+            take_loc = casenode.start
+            loc_tuple = (
+                (take_loc.lineno, take_loc.colno, take_loc.fsno) if take_loc else None
+            )
+            self.symtab.invalidate(vname, loc=loc_tuple)
+            if take_loc:
+                self.symtab.set_taken_location(
+                    vname,
+                    (take_loc.lineno, take_loc.colno, take_loc.fsno),
+                )
+
+    def _compute_case_result_type(
+        self, casenode: zast.Case, is_exhaustive: bool
+    ) -> ZType:
+        """Compute the result type of a `match` expression.
+
+        For non-exhaustive matches the result is `null`. For exhaustive
+        matches (else clause present, or all union/variant subtypes
+        covered), unify the completing arms' types — a NORETURN
+        diverging arm contributes `never`; remaining arms must share
+        a common type.
+
+        Stamps `Typing.node_type[casenode.nodeid]` when a non-null
+        result type is determined."""
+        if not is_exhaustive:
+            return self.t_null
+        branch_types = [
+            self._last_statement_type(clause.statement) for clause in casenode.clauses
+        ]
+        if casenode.elseclause:
+            branch_types.append(self._last_statement_type(casenode.elseclause))
+        completing = [t for t in branch_types if t is not self._NORETURN]
+        if not completing and branch_types:
+            never = self._resolve_name("never")
+            if never:
+                self.typing.node_type[casenode.nodeid] = never
+                return never
+            return self.t_null
+        if not completing:
+            return self.t_null
+        first_raw = completing[0]
+        if first_raw is None or not first_raw.is_ztype:
+            return self.t_null
+        first = cast(ZType, first_raw)
+        all_ok = all(
+            t is not None
+            and t.is_ztype
+            and self._types_compatible(first, cast(ZType, t))
+            for t in completing[1:]
+        )
+        if all_ok:
+            self.typing.node_type[casenode.nodeid] = first
+            return first
+        for t in completing[1:]:
+            if (
+                t is None
+                or not t.is_ztype
+                or not self._types_compatible(first, cast(ZType, t))
+            ):
+                tname = cast(ZType, t).name if t is not None and t.is_ztype else "null"
+                self._error(
+                    f"incompatible branch types in match-expression: "
+                    f"'{first.name}' and '{tname}'",
+                    loc=casenode.start,
+                )
+                break
+        return self.t_null
+
     def _check_case_inner(self, casenode: zast.Case) -> Optional[ZType]:
         self.symtab.push("match")
 
@@ -9961,40 +10062,13 @@ class TypeChecker:
 
         self.symtab.pop_to(match_marker)
 
-        # post-match ownership: if subject was taken in any arm, invalidate it
-        if subject_taken_in_arm and subject_name:
-            self.typing.case_subject_taken[casenode.nodeid] = True
-            take_loc = casenode.subject.start
-            loc_tuple = (
-                (take_loc.lineno, take_loc.colno, take_loc.fsno) if take_loc else None
-            )
-            self.symtab.invalidate(subject_name, loc=loc_tuple)
-            # override the taken message for better error reporting
-            if take_loc:
-                self.symtab.set_taken_location(
-                    subject_name,
-                    (take_loc.lineno, take_loc.colno, take_loc.fsno),
-                )
-
-        # post-match ownership: invalidate non-subject variables taken in any arm
-        if taken_in_any_match_arm:
-            for vname in taken_in_any_match_arm:
-                _, vtype = saved_match_vars[vname]
-                self.typing.case_taken_vars.setdefault(casenode.nodeid, []).append(
-                    (vname, vtype)
-                )
-                take_loc = casenode.start
-                loc_tuple = (
-                    (take_loc.lineno, take_loc.colno, take_loc.fsno)
-                    if take_loc
-                    else None
-                )
-                self.symtab.invalidate(vname, loc=loc_tuple)
-                if take_loc:
-                    self.symtab.set_taken_location(
-                        vname,
-                        (take_loc.lineno, take_loc.colno, take_loc.fsno),
-                    )
+        self._apply_case_take_invalidation(
+            casenode,
+            subject_taken_in_arm,
+            subject_name,
+            taken_in_any_match_arm,
+            saved_match_vars,
+        )
 
         # determine if match is exhaustive (else clause or all subtypes covered)
         is_exhaustive = bool(casenode.elseclause)
@@ -10023,55 +10097,7 @@ class TypeChecker:
             if not (subtypes_for_exhaust - covered_for_exhaust):
                 is_exhaustive = True
 
-        result_type = self.t_null
-
-        # match-as-expression: compute branch types when exhaustive
-        if is_exhaustive:
-            branch_types = [
-                self._last_statement_type(clause.statement)
-                for clause in casenode.clauses
-            ]
-            if casenode.elseclause:
-                branch_types.append(self._last_statement_type(casenode.elseclause))
-
-            completing = [t for t in branch_types if t is not self._NORETURN]
-
-            if not completing and branch_types:
-                never = self._resolve_name("never")
-                if never:
-                    result_type = never
-                    self.typing.node_type[casenode.nodeid] = never
-            elif completing:
-                first_raw = completing[0]
-                if first_raw is not None and first_raw.is_ztype:
-                    first = cast(ZType, first_raw)
-                    all_ok = all(
-                        t is not None
-                        and t.is_ztype
-                        and self._types_compatible(first, cast(ZType, t))
-                        for t in completing[1:]
-                    )
-                    if all_ok:
-                        result_type = first
-                        self.typing.node_type[casenode.nodeid] = first
-                    else:
-                        for t in completing[1:]:
-                            if (
-                                t is None
-                                or not t.is_ztype
-                                or not self._types_compatible(first, cast(ZType, t))
-                            ):
-                                tname = (
-                                    cast(ZType, t).name
-                                    if t is not None and t.is_ztype
-                                    else "null"
-                                )
-                                self._error(
-                                    f"incompatible branch types in match-expression: "
-                                    f"'{first.name}' and '{tname}'",
-                                    loc=casenode.start,
-                                )
-                                break
+        result_type = self._compute_case_result_type(casenode, is_exhaustive)
 
         self.symtab.pop()
 
