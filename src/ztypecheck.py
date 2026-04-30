@@ -4053,234 +4053,26 @@ class TypeChecker:
 
         self._check_mono_constraints(template_type, generic_args)
 
-        # build mangled name
         arg_names = [generic_args[k].name for k in template_type.generic_params]
         mangled = f"{template_type.name}_{'_'.join(arg_names)}"
 
-        # create monomorphized type
-        mono = _make_type(mangled, template_type.typetype)
-        mono.generic_origin = template_type
-        mono.generic_args = dict(generic_args)
-        mono.is_valtype = template_type.is_valtype
-        mono.is_native = template_type.is_native
-        _set_destructor_metadata(mono)
-        self._assign_cname_type(mono)
+        mono = self._make_mono_shell(template_type, generic_args, mangled, is_partial)
+        self._substitute_mono_children(mono, template_type, generic_args, is_partial)
+        self._recompute_mono_typetype_marks(mono, template_type)
 
-        # propagate numeric_generic_params for partial instantiation
-        mono.numeric_generic_params = set(template_type.numeric_generic_params)
-
-        # partial instantiation: result is still generic
-        if is_partial:
-            mono.isgeneric = True
-            for param_name, arg_type in generic_args.items():
-                if arg_type.typetype == ZTypeType.GENERIC_PARAM:
-                    mono.generic_params[arg_type.name] = (
-                        arg_type.parent if arg_type.parent else self.t_null
-                    )
-                    # propagate numeric-ness
-                    if param_name in template_type.numeric_generic_params:
-                        mono.numeric_generic_params.add(arg_type.name)
-
-        # track which numeric params are referenced by children
-        numeric_params_referenced: set[str] = set()
-
-        # substitute generic params in children
-        for child_name, child_type in template_type.children.items():
-            if child_type.typetype == ZTypeType.GENERIC_PARAM:
-                # replace with concrete type
-                param_ref_name = child_type.name
-                concrete = generic_args.get(param_ref_name)
-                if concrete:
-                    # numeric generic param: replace with constraint type, set default
-                    if (
-                        param_ref_name in template_type.numeric_generic_params
-                        and concrete.numeric_value is not None
-                    ):
-                        numeric_params_referenced.add(param_ref_name)
-                        constraint = template_type.generic_params[param_ref_name]
-                        resolved_constraint = self._resolve_name(constraint.name)
-                        if resolved_constraint:
-                            mono.children[child_name] = resolved_constraint
-                        else:
-                            mono.children[child_name] = constraint
-                        mono.param_defaults[child_name] = str(concrete.numeric_value)
-                    else:
-                        mono.children[child_name] = concrete
-                else:
-                    mono.children[child_name] = child_type
-            elif (
-                child_type.isgeneric
-                and child_type.generic_origin is not None
-                and not child_type.is_tag_generic_origin
-                and not is_partial
-                and child_type.typetype != ZTypeType.UNIT
-            ):
-                # partially-instantiated non-unit child — resolve remaining generic params
-                # (UNIT children are handled by _monomorphize_unit)
-                child_args: dict[str, ZType] = {}
-                for gp_name, gp_arg in child_type.generic_args.items():
-                    if (
-                        gp_arg.typetype == ZTypeType.GENERIC_PARAM
-                        and gp_arg.name in generic_args
-                    ):
-                        child_args[gp_name] = generic_args[gp_arg.name]
-                    else:
-                        child_args[gp_name] = gp_arg
-                child_origin = child_type.generic_origin
-                if child_origin is None:
-                    continue
-                child_defn = self._find_generic_defn(child_origin)
-                if child_defn:
-                    mono.children[child_name] = self._monomorphize(
-                        child_origin, child_args, child_defn
-                    )
-                else:
-                    mono.children[child_name] = child_type
-            else:
-                mono.children[child_name] = child_type
-
-        # auto-synthesize fields for numeric params not referenced by any child
-        if not is_partial:
-            for nparam in template_type.numeric_generic_params:
-                if nparam not in numeric_params_referenced:
-                    concrete = generic_args.get(nparam)
-                    if concrete and concrete.numeric_value is not None:
-                        constraint = template_type.generic_params[nparam]
-                        resolved_constraint = self._resolve_name(constraint.name)
-                        if resolved_constraint:
-                            mono.children[nparam] = resolved_constraint
-                        else:
-                            mono.children[nparam] = constraint
-                        mono.param_defaults[nparam] = str(concrete.numeric_value)
-
-        # recompute is_valtype based on concrete types
-        if template_type.typetype == ZTypeType.UNION:
-            mono.is_valtype = False
-        elif template_type.typetype == ZTypeType.VARIANT:
-            mono.is_valtype = True
-        elif template_type.typetype == ZTypeType.RECORD:
-            mono.is_valtype = True
-        elif template_type.typetype == ZTypeType.CLASS:
-            mono.is_valtype = False
-        elif template_type.typetype == ZTypeType.PROTOCOL:
-            mono.is_valtype = False
-        elif template_type.typetype == ZTypeType.FACET:
-            mono.is_valtype = True
-        _set_destructor_metadata(mono)
-
-        # for nullable-ptr option (monomorphized option union): mark as nullable ptr
-        # only when the some type is heap-allocated (pointer-based), e.g. unions, protocols
-        # Stack-allocated types like string cannot use the nullable-ptr optimization
-        if (
-            template_type.typetype == ZTypeType.UNION
-            and template_type.nodeid == self._option_template_nodeid()
-        ):
-            some_child = mono.children.get("some")
-            if some_child and some_child.is_heap_allocated:
-                mono.is_nullable_ptr = True
-
-        # optionview: standard {tag, void*} layout. The .some arm is a
-        # `.lock` reference (always a pointer; the union doesn't own its
-        # payload), .none is NULL. Carry the template's lock_arm_names +
-        # destructor elision through to the monomorphization so the
-        # emitter knows no destructor is needed at all.
-        if (
-            template_type.typetype == ZTypeType.UNION
-            and template_type.nodeid == self._optionview_template_nodeid()
-        ):
-            mono.lock_arm_names = set(template_type.lock_arm_names)
-            mono.needs_destructor = False
-            mono.destructor_name = None
-
-        # for unions: rebuild tag enum with the monomorphized name
-        if template_type.typetype == ZTypeType.UNION:
-            subtype_names = [
-                k
-                for k in mono.children
-                if k != "tag"
-                and mono.children[k].typetype != ZTypeType.FUNCTION
-                and mono.children[k].typetype != ZTypeType.DATA
-                and mono.children[k].typetype != ZTypeType.TAG
-                and mono.children[k].typetype != ZTypeType.ENUM
-                and not mono.children[k].is_tag_generic_origin
-            ]
-            tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            mono.tag_type = tag_type
-            # generate data type for .tag access
-            gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
-            gen_data.is_valtype = False
-            for i, sname in enumerate(subtype_names):
-                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
-            gen_tag.is_valtype = True
-            gen_tag.is_tag_generic_origin = True
-            gen_data.children["tag"] = gen_tag
-            mono.children["tag"] = gen_data
-
-        # for variants: rebuild tag enum with the monomorphized name
-        if template_type.typetype == ZTypeType.VARIANT:
-            subtype_names = [
-                k
-                for k in mono.children
-                if k != "tag"
-                and mono.children[k].typetype != ZTypeType.FUNCTION
-                and mono.children[k].typetype != ZTypeType.DATA
-                and mono.children[k].typetype != ZTypeType.TAG
-                and mono.children[k].typetype != ZTypeType.ENUM
-                and not mono.children[k].is_tag_generic_origin
-            ]
-            tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            mono.tag_type = tag_type
-            gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
-            gen_data.is_valtype = False
-            for i, sname in enumerate(subtype_names):
-                gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
-            gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
-            gen_tag.is_valtype = True
-            gen_tag.is_tag_generic_origin = True
-            gen_data.children["tag"] = gen_tag
-            mono.children["tag"] = gen_data
+        if template_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT):
+            self._rebuild_mono_tag(mono, mangled)
 
         if not is_partial:
             self._synth_collection_methods(mono, mangled, template_type, defn)
 
-        # for classes: rebuild meta_create for the monomorphized class
-        if (
-            template_type.typetype == ZTypeType.CLASS
-            and not _is_list_type(mono)
-            and not _is_map_type(mono)
-        ):
-            is_func_names: set = set()
-            field_names: Optional[set] = None
-            if defn.nodetype == NodeType.CLASS:
-                is_func_names = set(cast(zast.ObjectDef, defn).functions().keys())
-                field_names = set(cast(zast.ObjectDef, defn).is_items.keys())
-            create_type = self._make_meta_create_type(
-                mangled, mono, is_func_names, field_names
-            )
-            mono.meta_create = create_type
-            if "create" not in mono.children:
-                mono.children["create"] = create_type
+        self._setup_mono_meta_create(mono, mangled, template_type, defn)
 
-        # for records: set meta_create to point to the existing create child
-        # so that _build_create_args delegates to the meta-create builder
-        if template_type.typetype == ZTypeType.RECORD:
-            create_child = mono.children.get("create")
-            if create_child and create_child.typetype == ZTypeType.FUNCTION:
-                mono.meta_create = create_child
-
-        # for monomorphized units: all UNIT-specific work in one method
         if not is_partial and defn.nodetype == NodeType.UNIT:
             self._monomorphize_unit(
                 mono, mangled, template_type, generic_args, cast(zast.Unit, defn)
             )
 
-        # clone, typecheck, hash, and dedup method bodies for non-partial monos
-        cloned_defn = defn
         if not is_partial and defn.nodetype in (
             NodeType.CLASS,
             NodeType.RECORD,
@@ -4289,55 +4081,11 @@ class TypeChecker:
         ):
             self._clone_mono_methods(mono, mangled, generic_args, defn)
 
-        # auto-generate == and != for monomorphized valtypes
-        if not is_partial and mono.typetype in (
-            ZTypeType.RECORD,
-            ZTypeType.VARIANT,
-        ):
+        if not is_partial and mono.typetype in (ZTypeType.RECORD, ZTypeType.VARIANT):
             self._synthesize_eq(mono)
 
-        # cache and register
-        _set_field_cleanup_metadata(mono)
-        self._mono_cache[cache_key] = mono
-        if not is_partial:
-            self._mono_types.append((mono, cloned_defn))
-            # register in _resolved so the emitter can find it
-            for unitname in self.program.units:
-                key = f"{unitname}.{mangled}"
-                self._resolved[key] = mono
-                break
-
-        # Compiler-managed collection types (list, map, listview,
-        # listiter, mapkeyiter, mapitemiter, mapentry, array, str)
-        # have every method synthesised inline above via `_make_type`.
-        # Each such method's body is compiler-provided — either as a
-        # runtime helper in `src/zemitterc_runtime.py` or inlined as
-        # struct-field access at emit time — so the corresponding
-        # ZType must carry `is_native=True`. This matches the
-        # underlying `is native` annotation on each method in
-        # `lib/system/{system,collections}.z`. Propagating uniformly
-        # here covers all ~15 synth sites without per-site
-        # assignments. Note: the parent's `is_native` flag itself is
-        # only set when the *class* is declared `is native`
-        # (string, listiter); for collection types whose class body
-        # is not `is native` (list, map, listview, mapkeyiter,
-        # mapitemiter, mapentry) the methods still are.
-        is_compiler_collection = (
-            _is_list_type(mono)
-            or _is_listview_type(mono)
-            or _is_listiter_type(mono)
-            or _is_map_type(mono)
-            or _is_mapkeyiter_type(mono)
-            or _is_mapitemiter_type(mono)
-            or _is_mapentry_type(mono)
-            or _is_array_type(mono)
-            or _is_str_type(mono)
-        )
-        if mono.is_native or is_compiler_collection:
-            for child in mono.children.values():
-                if child.typetype == ZTypeType.FUNCTION:
-                    child.is_native = True
-
+        self._register_mono(mono, cache_key, mangled, defn, is_partial)
+        self._mark_mono_native(mono)
         return mono
 
     def _substitute_func_type(
@@ -4787,6 +4535,267 @@ class TypeChecker:
                             template_type, defn, "iterateItems", iterate_items_type
                         )
                         mono.children["iterateItems"] = iterate_items_type
+
+    def _make_mono_shell(
+        self,
+        template_type: ZType,
+        generic_args: dict[str, ZType],
+        mangled: str,
+        is_partial: bool,
+    ) -> ZType:
+        """Construct the bare ZType for a mono: mangled name, generic-
+        origin/args back-refs, baseline `is_valtype`/`is_native` from
+        the template, destructor metadata, cname assignment, and (for
+        partial instantiation) the residual `generic_params` /
+        `numeric_generic_params` propagation. `_substitute_mono_children`
+        then populates `mono.children`."""
+        mono = _make_type(mangled, template_type.typetype)
+        mono.generic_origin = template_type
+        mono.generic_args = dict(generic_args)
+        mono.is_valtype = template_type.is_valtype
+        mono.is_native = template_type.is_native
+        _set_destructor_metadata(mono)
+        self._assign_cname_type(mono)
+        mono.numeric_generic_params = set(template_type.numeric_generic_params)
+        if is_partial:
+            mono.isgeneric = True
+            for param_name, arg_type in generic_args.items():
+                if arg_type.typetype != ZTypeType.GENERIC_PARAM:
+                    continue
+                mono.generic_params[arg_type.name] = (
+                    arg_type.parent if arg_type.parent else self.t_null
+                )
+                if param_name in template_type.numeric_generic_params:
+                    mono.numeric_generic_params.add(arg_type.name)
+        return mono
+
+    def _setup_mono_meta_create(
+        self,
+        mono: ZType,
+        mangled: str,
+        template_type: ZType,
+        defn: zast.TypeDefinition,
+    ) -> None:
+        """Set `mono.meta_create` for class/record monos. CLASS monos
+        (excluding `list`/`map`, which have their own create paths)
+        get a freshly synthesised `_make_meta_create_type`; RECORD
+        monos point at their existing `create` child."""
+        if (
+            template_type.typetype == ZTypeType.CLASS
+            and not _is_list_type(mono)
+            and not _is_map_type(mono)
+        ):
+            is_func_names: set = set()
+            field_names: Optional[set] = None
+            if defn.nodetype == NodeType.CLASS:
+                is_func_names = set(cast(zast.ObjectDef, defn).functions().keys())
+                field_names = set(cast(zast.ObjectDef, defn).is_items.keys())
+            create_type = self._make_meta_create_type(
+                mangled, mono, is_func_names, field_names
+            )
+            mono.meta_create = create_type
+            if "create" not in mono.children:
+                mono.children["create"] = create_type
+        if template_type.typetype == ZTypeType.RECORD:
+            create_child = mono.children.get("create")
+            if create_child and create_child.typetype == ZTypeType.FUNCTION:
+                mono.meta_create = create_child
+
+    def _register_mono(
+        self,
+        mono: ZType,
+        cache_key: tuple,
+        mangled: str,
+        defn: zast.TypeDefinition,
+        is_partial: bool,
+    ) -> None:
+        """Finalise a mono: refresh field-cleanup metadata, store in
+        the mono cache, and (for non-partial monos) register in the
+        global mono-type list and `_resolved` map under one
+        `<unit>.<mangled>` key."""
+        _set_field_cleanup_metadata(mono)
+        self._mono_cache[cache_key] = mono
+        if not is_partial:
+            self._mono_types.append((mono, defn))
+            # Register the mono in _resolved under the first unit's
+            # qualified name so the emitter can find it. The choice
+            # of "first unit" matches pre-F5.C behaviour.
+            for unitname in self.program.units:
+                self._resolved[f"{unitname}.{mangled}"] = mono
+                break
+
+    def _mark_mono_native(self, mono: ZType) -> None:
+        """Mark the mono's child function ZTypes `is_native=True` when
+        the mono itself is `is_native` (e.g. `is native` class) or is
+        a compiler-managed collection (list, map, listview, listiter,
+        mapkeyiter, mapitemiter, mapentry, array, str). Each such
+        method body is provided by the runtime helper or inlined at
+        emit time; the metadata must match. Covers all ~15 synth
+        sites uniformly."""
+        is_compiler_collection = (
+            _is_list_type(mono)
+            or _is_listview_type(mono)
+            or _is_listiter_type(mono)
+            or _is_map_type(mono)
+            or _is_mapkeyiter_type(mono)
+            or _is_mapitemiter_type(mono)
+            or _is_mapentry_type(mono)
+            or _is_array_type(mono)
+            or _is_str_type(mono)
+        )
+        if not (mono.is_native or is_compiler_collection):
+            return
+        for child in mono.children.values():
+            if child.typetype == ZTypeType.FUNCTION:
+                child.is_native = True
+
+    def _substitute_mono_children(
+        self,
+        mono: ZType,
+        template_type: ZType,
+        generic_args: dict[str, ZType],
+        is_partial: bool,
+    ) -> None:
+        """Walk `template_type.children` and populate `mono.children`,
+        replacing GENERIC_PARAM children with their concrete bindings,
+        recursing into partially-instantiated non-unit children, and
+        passing through structural children unchanged. Also
+        auto-synthesises numeric-param fields not referenced by any
+        child (size constants for str, length for array, etc.)."""
+        numeric_params_referenced: set[str] = set()
+        for child_name, child_type in template_type.children.items():
+            if child_type.typetype == ZTypeType.GENERIC_PARAM:
+                param_ref_name = child_type.name
+                concrete = generic_args.get(param_ref_name)
+                if concrete:
+                    if (
+                        param_ref_name in template_type.numeric_generic_params
+                        and concrete.numeric_value is not None
+                    ):
+                        numeric_params_referenced.add(param_ref_name)
+                        constraint = template_type.generic_params[param_ref_name]
+                        resolved_constraint = self._resolve_name(constraint.name)
+                        mono.children[child_name] = (
+                            resolved_constraint if resolved_constraint else constraint
+                        )
+                        mono.param_defaults[child_name] = str(concrete.numeric_value)
+                    else:
+                        mono.children[child_name] = concrete
+                else:
+                    mono.children[child_name] = child_type
+            elif (
+                child_type.isgeneric
+                and child_type.generic_origin is not None
+                and not child_type.is_tag_generic_origin
+                and not is_partial
+                and child_type.typetype != ZTypeType.UNIT
+            ):
+                # partially-instantiated non-unit child — resolve remaining generic params
+                # (UNIT children are handled by _monomorphize_unit)
+                child_args: dict[str, ZType] = {}
+                for gp_name, gp_arg in child_type.generic_args.items():
+                    if (
+                        gp_arg.typetype == ZTypeType.GENERIC_PARAM
+                        and gp_arg.name in generic_args
+                    ):
+                        child_args[gp_name] = generic_args[gp_arg.name]
+                    else:
+                        child_args[gp_name] = gp_arg
+                child_origin = child_type.generic_origin
+                if child_origin is None:
+                    continue
+                child_defn = self._find_generic_defn(child_origin)
+                if child_defn:
+                    mono.children[child_name] = self._monomorphize(
+                        child_origin, child_args, child_defn
+                    )
+                else:
+                    mono.children[child_name] = child_type
+            else:
+                mono.children[child_name] = child_type
+
+        # auto-synthesize fields for numeric params not referenced by any child
+        if not is_partial:
+            for nparam in template_type.numeric_generic_params:
+                if nparam in numeric_params_referenced:
+                    continue
+                concrete = generic_args.get(nparam)
+                if concrete is None or concrete.numeric_value is None:
+                    continue
+                constraint = template_type.generic_params[nparam]
+                resolved_constraint = self._resolve_name(constraint.name)
+                mono.children[nparam] = (
+                    resolved_constraint if resolved_constraint else constraint
+                )
+                mono.param_defaults[nparam] = str(concrete.numeric_value)
+
+    def _recompute_mono_typetype_marks(self, mono: ZType, template_type: ZType) -> None:
+        """Re-derive `is_valtype` from the typetype (pure typetype-based
+        rule, not template-inherited), refresh destructor metadata, and
+        apply the option / optionview special-case marks."""
+        if template_type.typetype == ZTypeType.UNION:
+            mono.is_valtype = False
+        elif template_type.typetype == ZTypeType.VARIANT:
+            mono.is_valtype = True
+        elif template_type.typetype == ZTypeType.RECORD:
+            mono.is_valtype = True
+        elif template_type.typetype == ZTypeType.CLASS:
+            mono.is_valtype = False
+        elif template_type.typetype == ZTypeType.PROTOCOL:
+            mono.is_valtype = False
+        elif template_type.typetype == ZTypeType.FACET:
+            mono.is_valtype = True
+        _set_destructor_metadata(mono)
+        # Nullable-ptr Option: mark the mono as nullable_ptr when the
+        # some arm is heap-allocated (pointer-based). Stack-allocated
+        # types like string cannot use the nullable-ptr optimisation.
+        if (
+            template_type.typetype == ZTypeType.UNION
+            and template_type.nodeid == self._option_template_nodeid()
+        ):
+            some_child = mono.children.get("some")
+            if some_child and some_child.is_heap_allocated:
+                mono.is_nullable_ptr = True
+        # OptionView: standard {tag, void*} layout. Carry the template's
+        # lock_arm_names through and elide the destructor — the union
+        # doesn't own its payload.
+        if (
+            template_type.typetype == ZTypeType.UNION
+            and template_type.nodeid == self._optionview_template_nodeid()
+        ):
+            mono.lock_arm_names = set(template_type.lock_arm_names)
+            mono.needs_destructor = False
+            mono.destructor_name = None
+
+    def _rebuild_mono_tag(self, mono: ZType, mangled: str) -> None:
+        """Rebuild the tag enum + tag-data ZType for a UNION/VARIANT
+        mono. Call only for monos whose template is UNION or VARIANT.
+        The shape is identical for both kinds; the difference between
+        union and variant is captured by `is_valtype` (already set by
+        `_recompute_mono_typetype_marks`)."""
+        subtype_names = [
+            k
+            for k in mono.children
+            if k != "tag"
+            and mono.children[k].typetype != ZTypeType.FUNCTION
+            and mono.children[k].typetype != ZTypeType.DATA
+            and mono.children[k].typetype != ZTypeType.TAG
+            and mono.children[k].typetype != ZTypeType.ENUM
+            and not mono.children[k].is_tag_generic_origin
+        ]
+        tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
+        for i, sname in enumerate(subtype_names):
+            tag_type.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+        mono.tag_type = tag_type
+        gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
+        gen_data.is_valtype = False
+        for i, sname in enumerate(subtype_names):
+            gen_data.children[sname] = _make_type(str(i), ZTypeType.RECORD)
+        gen_tag = _make_type("tag__i64", ZTypeType.RECORD, parent=gen_data)
+        gen_tag.is_valtype = True
+        gen_tag.is_tag_generic_origin = True
+        gen_data.children["tag"] = gen_tag
+        mono.children["tag"] = gen_data
 
     def _check_mono_constraints(
         self, template_type: ZType, generic_args: dict[str, ZType]
