@@ -224,6 +224,32 @@ class Typing:
             i += 1
         return out
 
+    def child_names_of(self, parent: ZType) -> "List[str]":
+        """`list(parent.children.keys())` equivalent."""
+        out: "List[str]" = []
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid:
+                out.append(row.child_name)
+            i += 1
+        return out
+
+    def child_types_of(self, parent: ZType) -> "List[ZType]":
+        """`list(parent.children.values())` equivalent."""
+        out: "List[ZType]" = []
+        rows = self.type_child
+        n = len(rows)
+        i = 0
+        while i < n:
+            row = rows[i]
+            if row.parent_type_id == parent.nodeid:
+                out.append(row.child_type)
+            i += 1
+        return out
+
     def has_child(self, parent: ZType, name: str) -> bool:
         """`name in parent.children` equivalent."""
         rows = self.type_child

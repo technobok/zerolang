@@ -187,6 +187,9 @@ def _ctype(ztype: Optional[ZType]) -> str:
         return _ctype(ztype.typedef_base)
     # nullable-ptr option: C type is the inner reftype's ctype (already a pointer)
     if ztype.is_nullable_ptr:
+        # F5.H residual: module-level _ctype has no Typing access; uses
+        # the legacy dict directly. F5.H.5 will either method-ify _ctype
+        # or plumb typing through.
         some_type = ztype.children.get("some")
         if some_type:
             return _ctype(some_type)
@@ -239,7 +242,8 @@ def _ctype_func_inline(ztype: ZType) -> str:
     ret = ztype.return_type
     ret_ctype = _ctype(ret) if ret else "void"
     params: List[str] = []
-    for k, v in ztype.children.items():
+    # F5.H residual: module-level helper, see _ctype.
+    for v in ztype.children.values():
         params.append(_ctype(v))
     param_str = ", ".join(params) if params else "void"
     return f"{ret_ctype} (*)({param_str})"
@@ -1482,7 +1486,7 @@ class CEmitter:
             return False
         # A resolved record/class has its fields registered as
         # children with non-None types.
-        if not t.children:
+        if self.typing.child_count(t) == 0:
             return False
         return True
 
@@ -1556,7 +1560,7 @@ class CEmitter:
                     return True
             return False
 
-        for child in mono_type.children.values():
+        for child in self.typing.child_types_of(mono_type):
             if check(child):
                 return True
         for ga in mono_type.generic_args.values():
@@ -1571,7 +1575,7 @@ class CEmitter:
         as the ok-arm payload of a monomorphized result). Avoids
         emitting dead struct definitions for unused types."""
         for mono, _ in self.typing.mono_types:
-            for child in mono.children.values():
+            for child in self.typing.child_types_of(mono):
                 if child.typetype == ZTypeType.RECORD and child.name == name:
                     return True
         return False
@@ -1584,7 +1588,7 @@ class CEmitter:
         if self.needs_io_natives & {"stdin", "stdout", "stderr"}:
             return True
         for mono, _ in self.typing.mono_types:
-            for child in mono.children.values():
+            for child in self.typing.child_types_of(mono):
                 if child.typetype == ZTypeType.CLASS and child.name == "File":
                     return True
         # Scan the main unit AST for `io.<std-stream>` paths; those
@@ -1779,7 +1783,7 @@ class CEmitter:
                 name = mono_type.name
                 field_names_r: List[str] = []
                 field_ctypes_r: List[str] = []
-                for fn, ft in mono_type.children.items():
+                for fn, ft in self.typing.children_of(mono_type):
                     if ft.typetype == ZTypeType.FUNCTION:
                         continue
                     field_names_r.append(fn)
@@ -1802,7 +1806,7 @@ class CEmitter:
                 name = mono_type.name
                 field_names: List[str] = []
                 field_ctypes_list: List[str] = []
-                for fn, ft in mono_type.children.items():
+                for fn, ft in self.typing.children_of(mono_type):
                     if ft.typetype == ZTypeType.FUNCTION:
                         continue
                     field_names.append(fn)
@@ -2133,13 +2137,13 @@ class CEmitter:
         for sname, sfunc in proto.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
-            spec_type = proto_type.children.get(sname) if proto_type else None
+            spec_type = self.typing.child_of(proto_type, sname) if proto_type else None
             for pname, ppath in sfunc.parameters.items():
                 if spec_type is not None and spec_type.this_param_name == pname:
                     continue
                 ptype: Optional[ZType] = self._node_ztype(ppath)
                 if ptype is None and spec_type is not None:
-                    ptype = spec_type.children.get(pname)
+                    ptype = self.typing.child_of(spec_type, pname)
                 params.append(_proto_param_ctype(ptype))
             param_str = ", ".join(params)
             lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
@@ -2212,7 +2216,7 @@ class CEmitter:
             # Collection types travel through the vtable as pointers
             # (see _proto_param_ctype) so they match the native impl's
             # ABI without an extra adaptor.
-            spec_type = proto_type.children.get(sname) if proto_type else None
+            spec_type = self.typing.child_of(proto_type, sname) if proto_type else None
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
             for pname, ppath in sfunc.parameters.items():
@@ -2220,7 +2224,7 @@ class CEmitter:
                     continue
                 ptype: Optional[ZType] = self._node_ztype(ppath)
                 if ptype is None and spec_type is not None:
-                    ptype = spec_type.children.get(pname)
+                    ptype = self.typing.child_of(spec_type, pname)
                 pctype = _proto_param_ctype(ptype)
                 wrapper_params.append(f"{pctype} {_mangle_var(pname)}")
                 call_args.append(_mangle_var(pname))
@@ -2335,7 +2339,7 @@ class CEmitter:
         for sname, sfunc in facet.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
-            spec_type = facet_type.children.get(sname) if facet_type else None
+            spec_type = self.typing.child_of(facet_type, sname) if facet_type else None
             for pname, ppath in sfunc.parameters.items():
                 if spec_type is not None and spec_type.this_param_name == pname:
                     continue
@@ -2399,7 +2403,7 @@ class CEmitter:
             ret_ctype = self._return_ctype(sfunc)
             wrapper_params: List[str] = ["void* _data"]
             call_args: List[str] = []
-            spec_type = facet_type.children.get(sname) if facet_type else None
+            spec_type = self.typing.child_of(facet_type, sname) if facet_type else None
             for pname, ppath in sfunc.parameters.items():
                 if spec_type is not None and spec_type.this_param_name == pname:
                     continue
@@ -2469,7 +2473,7 @@ class CEmitter:
             # to the resolved ZType's children for a concrete type.
             field_type = self._node_ztype(fpath)
             if field_type is None and ztype is not None:
-                field_type = ztype.children.get(fname)
+                field_type = self.typing.child_of(ztype, fname)
             ftype = _ctype(field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
@@ -2526,7 +2530,7 @@ class CEmitter:
         ztype = self._resolved_type(name)
         if not ztype:
             return
-        eq_method = ztype.children.get("==")
+        eq_method = self.typing.child_of(ztype, "==")
         if not eq_method or not eq_method.is_autogen_eq:
             return
 
@@ -2577,7 +2581,7 @@ class CEmitter:
         """
         if not ztype:
             return False
-        eq = ztype.children.get("==")
+        eq = self.typing.child_of(ztype, "==")
         if eq is None:
             return False
         if eq.is_autogen_eq:
@@ -2630,7 +2634,7 @@ class CEmitter:
         if ztype.typetype == ZTypeType.VARIANT:
             # variant: tag enum (4 bytes) + max(subtype sizes)
             max_sub = 0
-            for fname, ftype in ztype.children.items():
+            for fname, ftype in self.typing.children_of(ztype):
                 if ftype.typetype in (
                     ZTypeType.FUNCTION,
                     ZTypeType.TAG,
@@ -2650,7 +2654,7 @@ class CEmitter:
             return 4 + max_sub  # tag + largest union member
         # record: sum of field sizes
         total = 0
-        for fname, ftype in ztype.children.items():
+        for fname, ftype in self.typing.children_of(ztype):
             if ftype.typetype == ZTypeType.FUNCTION:
                 total += 8  # function pointer
                 continue
@@ -2680,7 +2684,7 @@ class CEmitter:
         lines: List[str],
     ) -> None:
         """Emit z_{name}_eq() for a monomorphized record/variant from field_items."""
-        eq_method = mono_type.children.get("==")
+        eq_method = self.typing.child_of(mono_type, "==")
         if not eq_method or not eq_method.is_autogen_eq:
             return
 
@@ -2693,7 +2697,7 @@ class CEmitter:
         else:
             comparisons: List[str] = []
             for fname, ct in field_items:
-                ftype = mono_type.children.get(fname)
+                ftype = self.typing.child_of(mono_type, fname)
                 if ftype and self._needs_eq_call(ftype):
                     tname = ftype.name.replace(".", "_")
                     if ftype.subtype == ZSubType.STRING:
@@ -2740,7 +2744,7 @@ class CEmitter:
             # child for a concrete C type.
             field_type = self._node_ztype(fpath)
             if field_type is None and ztype is not None:
-                field_type = ztype.children.get(fname)
+                field_type = self.typing.child_of(ztype, fname)
             fct = _ctype(field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
@@ -3249,7 +3253,7 @@ class CEmitter:
 
         # collect subtypes (non-special children)
         subtype_items: list[tuple[str, ZType]] = []
-        for sname, stype in mono_type.children.items():
+        for sname, stype in self.typing.children_of(mono_type):
             if sname == "tag":
                 continue
             if stype.typetype in (
@@ -3348,7 +3352,7 @@ class CEmitter:
         """Emit a nullable-ptr option type (no struct, just a destructor)."""
         self.needs_stdlib = True
         name = mono_type.name
-        some_type = mono_type.children.get("some")
+        some_type = self.typing.child_of(mono_type, "some")
         if not some_type:
             return
         inner_ctype = _ctype(some_type)
@@ -3373,7 +3377,7 @@ class CEmitter:
 
         # collect subtypes (non-special children)
         subtype_items: list[tuple[str, ZType]] = []
-        for sname, stype in mono_type.children.items():
+        for sname, stype in self.typing.children_of(mono_type):
             if sname == "tag":
                 continue
             if stype.typetype in (
@@ -3412,7 +3416,7 @@ class CEmitter:
         lines.append(f"}} z_{name}_t;\n\n")
 
         # emit equality function (if auto-generated)
-        eq_method = mono_type.children.get("==")
+        eq_method = self.typing.child_of(mono_type, "==")
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
@@ -3482,7 +3486,7 @@ class CEmitter:
         lines: List[str] = []
         lines.append("typedef struct {\n")
         field_items: list = []
-        for fname, ftype in mono_type.children.items():
+        for fname, ftype in self.typing.children_of(mono_type):
             if ftype.typetype == ZTypeType.FUNCTION:
                 continue
             ct = _ctype(ftype)
@@ -3547,7 +3551,7 @@ class CEmitter:
         # equality body — only emitted when the equality is auto-generated
         # (user-defined == is emitted separately via the method path).
         eq_body_parts: List[str] = []
-        eq_method = mono_type.children.get("==")
+        eq_method = self.typing.child_of(mono_type, "==")
         if eq_method and eq_method.is_autogen_eq:
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
             if self._use_memcmp_eq(name, eq_method):
@@ -3611,7 +3615,7 @@ class CEmitter:
 
         # equality is auto-generated (byte-wise) when enabled; keep the
         # branch here so the template stays uniform across str monos.
-        eq_method = mono_type.children.get("==")
+        eq_method = self.typing.child_of(mono_type, "==")
         eq_body_parts: List[str] = []
         if eq_method and eq_method.is_autogen_eq:
             eq_body_parts.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{")
@@ -3673,7 +3677,7 @@ class CEmitter:
         # listview companion methods — only when the list monomorphization
         # carries a `.listview` child (same first-two-field layout as
         # listview, so the cast is zero-cost).
-        listview_child = mono_type.children.get("listview")
+        listview_child = self.typing.child_of(mono_type, "listview")
         listview_methods = ""
         if listview_child and listview_child.return_type:
             lv_name = listview_child.return_type.name
@@ -3710,7 +3714,7 @@ class CEmitter:
         # when the list mono carries an `.iterate` child returning a
         # listiter mono (set up in the type checker for any list with
         # `.iterate` synthesised — currently every concrete list mono).
-        iterate_child = mono_type.children.get("iterate")
+        iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
             self._emit_listiter_runtime(
                 ctype, name, elem_ctype, iterate_child.return_type
@@ -3731,7 +3735,7 @@ class CEmitter:
         """
         li_name = listiter_mono.name
         li_ctype = f"z_{li_name}_t"
-        call_method = listiter_mono.children.get("call")
+        call_method = self.typing.child_of(listiter_mono, "call")
         if not call_method or not call_method.return_type:
             return
         ov_mono = call_method.return_type
@@ -4049,7 +4053,7 @@ class CEmitter:
         lines.append("}\n\n")
 
         # get method — returns option (nullable ptr for reftype values) or optionval (variant for valtype values)
-        get_type = mono_type.children.get("get")
+        get_type = self.typing.child_of(mono_type, "get")
         ret_type = get_type.return_type if get_type else None
         if ret_type:
             self.needs_stdlib = True
@@ -4183,7 +4187,7 @@ class CEmitter:
 
         # mapkeyiter companion: borrowed-key iterator + .iterate factory.
         # Emitted only when the map mono carries an `.iterate` child.
-        iterate_child = mono_type.children.get("iterate")
+        iterate_child = self.typing.child_of(mono_type, "iterate")
         if iterate_child and iterate_child.return_type:
             self._emit_mapkeyiter_runtime(
                 ctype, name, key_ctype, iterate_child.return_type
@@ -4194,7 +4198,7 @@ class CEmitter:
         # an `.iterate_items` child. mapentry's C representation is a
         # typedef alias for the bucket type; .key / .value emit through
         # the bucket pointer.
-        iterate_items_child = mono_type.children.get("iterateItems")
+        iterate_items_child = self.typing.child_of(mono_type, "iterateItems")
         if iterate_items_child and iterate_items_child.return_type:
             self._emit_mapitemiter_runtime(
                 ctype, name, bucket_type, iterate_items_child.return_type
@@ -4216,7 +4220,7 @@ class CEmitter:
         """
         mki_name = mki_mono.name
         mki_ctype = f"z_{mki_name}_t"
-        call_method = mki_mono.children.get("call")
+        call_method = self.typing.child_of(mki_mono, "call")
         if not call_method or not call_method.return_type:
             return
         ov_mono = call_method.return_type
@@ -4281,7 +4285,7 @@ class CEmitter:
         """
         mii_name = mii_mono.name
         mii_ctype = f"z_{mii_name}_t"
-        call_method = mii_mono.children.get("call")
+        call_method = self.typing.child_of(mii_mono, "call")
         if not call_method or not call_method.return_type:
             return
         ov_mono = call_method.return_type
@@ -4292,7 +4296,7 @@ class CEmitter:
         used_macro = f"Z_{map_name.upper()}_USED"
 
         # mapentry mono: pulled from the optionview's some payload type
-        me_mono = ov_mono.children.get("some")
+        me_mono = self.typing.child_of(ov_mono, "some")
         if me_mono is None:
             return
         me_name = me_mono.name
@@ -4340,8 +4344,8 @@ class CEmitter:
         # by-value copy of the field. For reftype field types, the
         # copy aliases the source's heap data — same caveat as
         # optionview iteration today (see Phase 1b deferral).
-        key_method = me_mono.children.get("key")
-        value_method = me_mono.children.get("value")
+        key_method = self.typing.child_of(me_mono, "key")
+        value_method = self.typing.child_of(me_mono, "value")
         if key_method is not None and key_method.return_type is not None:
             key_ctype = _ctype(key_method.return_type)
             lines.append(f"static {key_ctype} z_{me_name}_key({me_ctype}* _e);\n")
@@ -4368,7 +4372,7 @@ class CEmitter:
         # collect fields (non-special, non-function children)
         field_items = [
             (fn, ft)
-            for fn, ft in mono_type.children.items()
+            for fn, ft in self.typing.children_of(mono_type)
             if ft.typetype != ZTypeType.FUNCTION
         ]
 
@@ -4476,7 +4480,7 @@ class CEmitter:
         # collect spec functions from mono_type.children
         specs = [
             (sn, st)
-            for sn, st in mono_type.children.items()
+            for sn, st in self.typing.children_of(mono_type)
             if st.typetype == ZTypeType.FUNCTION
         ]
 
@@ -4486,7 +4490,7 @@ class CEmitter:
             ret_type = stype.return_type
             ret_ctype = _ctype(ret_type) if ret_type else "void"
             params = ["void*"]
-            for pname, ptype in stype.children.items():
+            for pname, ptype in self.typing.children_of(stype):
                 if stype.this_param_name == pname:
                     continue
                 params.append(_proto_param_ctype(ptype))
@@ -4552,7 +4556,7 @@ class CEmitter:
 
         # emit equality function (if auto-generated)
         vtype = self._resolved_type(name)
-        eq_method = vtype.children.get("==") if vtype else None
+        eq_method = self.typing.child_of(vtype, "==") if vtype else None
         if eq_method and eq_method.is_autogen_eq:
             ctype = f"z_{name}_t"
             lines.append(f"static bool z_{name}_eq({ctype} a, {ctype} b) {{\n")
@@ -5387,7 +5391,7 @@ class CEmitter:
         dp_child_id = self.typing.dp_child_id.get(dp.nodeid, -1)
         spec = parent_type.resolve_child_by_id(dp_child_id)
         spec_params = (
-            [(n, t) for n, t in spec.children.items() if n != "this"]
+            [(n, t) for n, t in self.typing.children_of(spec) if n != "this"]
             if spec is not None
             else []
         )
@@ -5631,11 +5635,11 @@ class CEmitter:
         ftype = self._node_ztype(call.callable)
         emitted_vals = self._last_emitted_arg_vals
         if ftype and ftype.param_ownership:
-            params = list(ftype.children.items())
+            params = self.typing.children_of(ftype)
             # Method calls: `this` is the receiver, prepended at the
             # call site — call.arguments[0] aligns with params[1].
             # The literal "this" mirrors _prepend_method_receiver's
-            # early-return predicate (`"this" not in ftype.children`):
+            # early-return predicate (`not self.typing.has_child(ftype, "this")`):
             # the offset must agree with whether the receiver was
             # prepended, and prepending only happens for canonical
             # `:this` form, not named-binding `c: this`.
@@ -5706,7 +5710,11 @@ class CEmitter:
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result_expr};\n")
                 for fname, tv in take_vars.items():
                     if tv:
-                        ft = enclosing_t.children.get(fname) if enclosing_t else None
+                        ft = (
+                            self.typing.child_of(enclosing_t, fname)
+                            if enclosing_t
+                            else None
+                        )
                         self._temp.decls.append(
                             self._emit_take_invalidation(tv, ft, indent)
                         )
@@ -5731,7 +5739,7 @@ class CEmitter:
                 for fname, tv in take_vars.items():
                     if tv:
                         cls_t = self._resolved_type(fa_name)
-                        ft = cls_t.children.get(fname) if cls_t else None
+                        ft = self.typing.child_of(cls_t, fname) if cls_t else None
                         self._temp.decls.append(
                             self._emit_take_invalidation(tv, ft, indent)
                         )
@@ -5932,7 +5940,7 @@ class CEmitter:
         ftype = self._node_ztype(call.callable)
         if not (ftype and ftype.typetype == ZTypeType.FUNCTION):
             return args
-        if "this" not in ftype.children:
+        if not self.typing.has_child(ftype, "this"):
             return args
         parent_path = cast(zast.DottedPath, call.callable).parent
         receiver = self._emit_path_value(parent_path)
@@ -5971,9 +5979,9 @@ class CEmitter:
         # `this` slot in the callable's param list.
         method_offset = 0
         if ftype and ftype.typetype == ZTypeType.FUNCTION:
-            children_keys = list(ftype.children.keys())
+            children_keys = self.typing.child_names_of(ftype)
             # Mirror _prepend_method_receiver's early-return predicate
-            # (`"this" not in ftype.children`): only canonical `:this`
+            # (`not self.typing.has_child(ftype, "this")`): only canonical `:this`
             # form is prepended, so only that form needs an offset here.
             if (
                 children_keys
@@ -6018,10 +6026,10 @@ class CEmitter:
                 and arg_type.typetype == ZTypeType.CLASS
                 and not val.startswith("&")
                 and ftype
-                and param_idx < len(list(ftype.children.items()))
+                and param_idx < len(self.typing.children_of(ftype))
             ):
-                param_name = list(ftype.children.keys())[param_idx]
-                param_type = ftype.children[param_name]
+                param_name = self.typing.child_names_of(ftype)[param_idx]
+                param_type = self.typing.child_of(ftype, param_name)
                 # 'this' receiver: param type matches enclosing class
                 # and the function is a method (dotted name origin)
                 is_this_param = ftype.this_param_name == param_name or (
@@ -6048,7 +6056,7 @@ class CEmitter:
         # fill defaults for missing trailing params
         ftype = self._node_ztype(call.callable)
         if ftype and ftype.param_defaults:
-            params = list(ftype.children.items())
+            params = self.typing.children_of(ftype)
             for i in range(len(call.arguments), len(params)):
                 pname, _ = params[i]
                 if pname in ftype.param_defaults:
@@ -6087,7 +6095,7 @@ class CEmitter:
         create_fn = None
         meta_fn = None
         if type_obj is not None:
-            create_fn = type_obj.children.get("create")
+            create_fn = self.typing.child_of(type_obj, "create")
             meta_fn = type_obj.meta_create
         # Default case: no user override — delegate to the meta-create builder.
         if (
@@ -6102,7 +6110,7 @@ class CEmitter:
         # the authoritative source.
         param_names: List[str] = []
         param_ctypes: Dict[str, str] = {}
-        for pname, ptype in create_fn.children.items():
+        for pname, ptype in self.typing.children_of(create_fn):
             param_names.append(pname)
             ct = _ctype(ptype)
             # class borrow/lock params are emitted as pointers in C
@@ -6247,7 +6255,7 @@ class CEmitter:
                 ftype = self._node_ztype(atom)
                 if ftype and ftype.param_defaults:
                     # only emit bare call when ALL params have defaults
-                    real_params = list(ftype.children.items())
+                    real_params = self.typing.children_of(ftype)
                     all_defaulted = all(
                         p in ftype.param_defaults for p, _ in real_params
                     )
@@ -6866,7 +6874,7 @@ class CEmitter:
             for fname, tv in take_vars.items():
                 if tv:
                     # get field type for proper invalidation
-                    ft = cls_type.children.get(fname)
+                    ft = self.typing.child_of(cls_type, fname)
                     self._temp.decls.append(
                         self._emit_take_invalidation(tv, ft, indent)
                     )
@@ -6993,7 +7001,9 @@ class CEmitter:
         op = binop.operator.name
         # route == and != through z_{name}_eq() for autogen equality types
         if op in ("==", "!=") and self._node_ztype(binop.lhs):
-            eq_method = cast(ZType, self._node_ztype(binop.lhs)).children.get("==")
+            eq_method = self.typing.child_of(
+                cast(ZType, self._node_ztype(binop.lhs)), "=="
+            )
             if eq_method and eq_method.is_autogen_eq:
                 tname = cast(ZType, self._node_ztype(binop.lhs)).name.replace(".", "_")
                 call = f"z_{tname}_eq({lhs}, {rhs})"
@@ -7312,7 +7322,7 @@ class CEmitter:
                     )
                     has_runtime_params = False
                     if fn_type is not None:
-                        for p in fn_type.children:
+                        for p in self.typing.child_names_of(fn_type):
                             if p != "this":
                                 has_runtime_params = True
                                 break
@@ -7658,7 +7668,9 @@ class CEmitter:
             # `is_native` classes.
             and not cast(ZType, self._node_ztype(path.parent)).is_native
         ):
-            cand = cast(ZType, self._node_ztype(path.parent)).children.get(child)
+            cand = self.typing.child_of(
+                cast(ZType, self._node_ztype(path.parent)), child
+            )
             if (
                 cand is not None
                 and cand.typetype == ZTypeType.FUNCTION
@@ -7781,7 +7793,7 @@ class CEmitter:
             and path.nodetype == NodeType.DOTTEDPATH
         ):
             dp = cast(zast.DottedPath, path)
-            sub = pt.children.get(dp.child.name)
+            sub = self.typing.child_of(pt, dp.child.name)
             if sub and sub.typetype == ZTypeType.CLASS and sub.name == "File":
                 return True
         return False
@@ -7805,7 +7817,7 @@ class CEmitter:
             and path.nodetype == NodeType.DOTTEDPATH
         ):
             dp = cast(zast.DottedPath, path)
-            sub = pt.children.get(dp.child.name)
+            sub = self.typing.child_of(pt, dp.child.name)
             if sub and sub.typetype == ZTypeType.CLASS:
                 if class_name is None or sub.name == class_name:
                     return sub
@@ -7834,13 +7846,13 @@ class CEmitter:
             return (None, None)
         if cls.is_native:
             return (None, None)
-        method = cls.children.get(path.child.name)
+        method = self.typing.child_of(cls, path.child.name)
         if method is None or method.typetype != ZTypeType.FUNCTION:
             return (None, None)
         if method.return_type is None:
             return (None, None)
         recv = method.this_param_name
-        for p in method.children:
+        for p in self.typing.child_names_of(method):
             if p != "this" and p != recv:
                 return (None, None)
         return (cls.name, method)
@@ -8211,7 +8223,7 @@ class CEmitter:
         subtype_ctype_resolved = None
         if call_type and call_type.generic_origin:
             # monomorphized: look up subtype from the mono ZType
-            sub_ztype = call_type.children.get(subtype_name)
+            sub_ztype = self.typing.child_of(call_type, subtype_name)
             if sub_ztype:
                 is_null = sub_ztype.typetype == ZTypeType.NULL
                 if not is_null:
@@ -8514,7 +8526,7 @@ class CEmitter:
         # determine if this is a null subtype — check monomorphized type first
         is_null = False
         if call_type and call_type.generic_origin:
-            sub_ztype = call_type.children.get(subtype_name)
+            sub_ztype = self.typing.child_of(call_type, subtype_name)
             if sub_ztype:
                 is_null = sub_ztype.typetype == ZTypeType.NULL
         else:
@@ -9054,7 +9066,7 @@ class CEmitter:
                     t = self._get_operation_type(cond_op)
                     if t:
                         call_method = (
-                            t.children.get("call")
+                            self.typing.child_of(t, "call")
                             if t.typetype != ZTypeType.FUNCTION
                             else None
                         )
@@ -9062,7 +9074,7 @@ class CEmitter:
                             opt_type = call_method.return_type
                             opt_ctype = _ctype(opt_type)
                             opt_name = opt_type.name
-                            some_type = opt_type.children.get("some")
+                            some_type = self.typing.child_of(opt_type, "some")
                             elem_ctype = _ctype(some_type) if some_type else "int64_t"
                             iter_bindings.append(
                                 (
@@ -9080,7 +9092,7 @@ class CEmitter:
                             opt_type = t
                             opt_ctype = _ctype(t)
                             opt_name = t.name
-                            some_type = t.children.get("some")
+                            some_type = self.typing.child_of(t, "some")
                             elem_ctype = _ctype(some_type) if some_type else "int64_t"
                             iter_bindings.append(
                                 (
