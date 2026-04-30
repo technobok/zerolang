@@ -40,7 +40,8 @@ def parse_and_check(source: str, unitname: str = "test"):
     p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
-    errors = typecheck(program)
+    typing = typecheck(program)
+    errors = typing.errors
     assert errors == [], f"Type errors: {[e.msg for e in errors]}"
     return program
 
@@ -57,15 +58,42 @@ def parse_and_check_uncached(source: str, unitname: str = "test"):
     vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
     program = Parser(vfs, name).parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
-    errors = typecheck(program)
+    typing = typecheck(program)
+    errors = typing.errors
     assert errors == [], f"Type errors: {[e.msg for e in errors]}"
     return program
 
 
+def parse_check_typing(source: str, unitname: str = "test"):
+    """Parse + typecheck and return `(program, typing)`.
+
+    Variant of `parse_and_check` for tests that need direct access to
+    the `Typing` (e.g. to construct a `CEmitter` or call `dump_sql`).
+    """
+    p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
+    program = p.parse()
+    assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
+    typing = typecheck(program)
+    assert typing.errors == [], f"Type errors: {[e.msg for e in typing.errors]}"
+    return program, typing
+
+
+def parse_check_typing_uncached(source: str, unitname: str = "test"):
+    """Uncached variant of `parse_check_typing`. See
+    `parse_and_check_uncached` for the rationale around VFS File_table
+    state."""
+    vfs, name = make_parser_vfs(source, unitname=unitname, src_dir=LIB_DIR)
+    program = Parser(vfs, name).parse()
+    assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
+    typing = typecheck(program)
+    assert typing.errors == [], f"Type errors: {[e.msg for e in typing.errors]}"
+    return program, typing
+
+
 def emit_with_emitter(source: str, unitname: str = "test"):
     """Parse, type-check, and return (c_source, emitter) for inspection."""
-    program = parse_and_check(source, unitname)
-    emitter = zemitterc.CEmitter(program)
+    _program, typing = parse_check_typing(source, unitname)
+    emitter = zemitterc.CEmitter(typing)
     csource = emitter.emit()
     return csource, emitter
 
@@ -661,8 +689,8 @@ class TestFinding11ScopeState:
 
     def test_emitter_uses_scope_stack(self):
         """Emitter should have _scope_stack and _temp_stack."""
-        program = parse_and_check('main: function is { print "hello" }')
-        emitter = zemitterc.CEmitter(program)
+        _program, typing = parse_check_typing('main: function is { print "hello" }')
+        emitter = zemitterc.CEmitter(typing)
         assert hasattr(emitter, "_scope_stack")
         assert hasattr(emitter, "_temp_stack")
         assert len(emitter._scope_stack) == 1
@@ -915,12 +943,12 @@ class TestSqlDump:
         csource, emitter = emit_with_emitter(
             'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
-        program = parse_and_check(
+        _program, typing = parse_check_typing(
             'point: record is { x: f64  y: f64 }\nmain: function is { print "hello" }'
         )
-        emitter2 = zemitterc.CEmitter(program)
+        emitter2 = zemitterc.CEmitter(typing)
         csource2 = emitter2.emit()
-        sql = zsqldump.dump_sql(program, emitter=emitter2, csource=csource2)
+        sql = zsqldump.dump_sql(typing, emitter=emitter2, csource=csource2)
         conn = _load_sql(sql)
         count = conn.execute("SELECT COUNT(*) FROM emitted_lines").fetchone()[0]
         assert count > 0
@@ -933,13 +961,13 @@ class TestSqlDump:
 
     def test_foreign_key_integrity(self):
         """All foreign keys should be valid (no dangling references)."""
-        program = parse_and_check_uncached(
+        _program, typing = parse_check_typing_uncached(
             "Box: class { value: i64 }\n"
             'main: function is {\n    b: Box value: 42\n    print "\\{b.value}"\n}'
         )
-        emitter = zemitterc.CEmitter(program)
+        emitter = zemitterc.CEmitter(typing)
         csource = emitter.emit()
-        sql = zsqldump.dump_sql(program, emitter=emitter, csource=csource)
+        sql = zsqldump.dump_sql(typing, emitter=emitter, csource=csource)
         conn = _load_sql(sql)
         conn.execute("PRAGMA foreign_keys = ON")
 

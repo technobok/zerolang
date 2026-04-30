@@ -30,11 +30,12 @@ typed program.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
 import zast
 from ztypes import ZType, ZOwnership
 from zast import CallKind
+from zsymtab_proto import SymbolTableProto
 
 
 @dataclass
@@ -51,7 +52,35 @@ class Typing:
 
     parsed: zast.Program
 
-    is_error: bool = field(default=False)
+    # Errors collected during typecheck. `is_error` is True iff non-empty.
+    errors: List["zast.Error"] = field(default_factory=list, init=False)
+    is_error: bool = field(default=False, init=False)
+
+    # ----- Aggregate typecheck state (F5.E.3: relocated from zast.Program).
+
+    # monomorphized generic types: list of (mono_ztype, original_ast_node)
+    mono_types: List = field(default_factory=list, init=False)
+    # monomorphized generic functions: list of (mono_ztype, cloned_function)
+    mono_functions: List = field(default_factory=list, init=False)
+    # dedup aliases: {qualified_alias_name: qualified_canonical_name}
+    func_aliases: Dict[str, str] = field(default_factory=dict, init=False)
+    # cloned methods per mono type: {mono_name: {mname: Function}}
+    cloned_methods: Dict[str, Dict[str, "zast.Function"]] = field(
+        default_factory=dict, init=False
+    )
+    # resolved type names: {qualified_name: ZType}
+    resolved: Dict[str, ZType] = field(default_factory=dict, init=False)
+    # Unit AST nodeid → resolved unit ZType (Phase 7d).
+    unit_types_by_id: Dict[int, ZType] = field(default_factory=dict, init=False)
+    # Phase-7c symbol table (scope/entry/variable hierarchy). Typed via
+    # `SymbolTableProto` to keep `ztyping` decoupled from `zenv`.
+    symbol_table: Optional[SymbolTableProto] = field(default=None, init=False)
+    # Step-4-of-typed-tree-migration `TypedProgram` mirror. Transitional
+    # — deleted in F5.E.4 along with the rest of the typed-tree mirror.
+    # Typed as `object` to avoid a circular import (ztypedast imports
+    # zast which would import ztyping if we used a real type here);
+    # consumers cast to `ztypedast.TypedProgram`.
+    typed_program: "Optional[object]" = field(default=None, init=False)
 
     # ----- Component tables (F5.E.2: relocated from zast.Program).
 

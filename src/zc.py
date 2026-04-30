@@ -161,20 +161,20 @@ def main() -> None:
 
     # --- Type check ---
     verbose("type checking...")
-    type_errors = ztypecheck.typecheck(program, full=args.full_typecheck)
-    if type_errors:
-        for err in type_errors:
+    typing = ztypecheck.typecheck(program, full=args.full_typecheck)
+    if typing.errors:
+        for err in typing.errors:
             sys.stderr.write(
                 zast.errortomessage(err=err, vfs=vfs, color=_color_enabled) + "\n\n"
             )
-        n = len(type_errors)
+        n = len(typing.errors)
         sys.stderr.write(f"{n} error{'s' if n != 1 else ''} found\n")
         sys.exit(1)
     verbose("type check passed")
 
     # --- Emit C ---
     verbose("emitting C...")
-    emitter = zemitterc.CEmitter(program)
+    emitter = zemitterc.CEmitter(typing)
     csource = emitter.emit()
     with open(outfn, "w") as f:
         f.write(csource)
@@ -183,7 +183,7 @@ def main() -> None:
     # --- SQL dump (optional) ---
     if args.dump_sql is not None:
         verbose("generating SQL dump...")
-        sql = zsqldump.dump_sql(program, emitter=emitter, csource=csource)
+        sql = zsqldump.dump_sql(typing, emitter=emitter, csource=csource)
         if args.dump_sql == "-":
             sys.stdout.write(sql)
         else:

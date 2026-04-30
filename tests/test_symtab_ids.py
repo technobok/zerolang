@@ -23,10 +23,16 @@ def _make_ztype(name: str, tt: ZTypeType = ZTypeType.RECORD) -> ZType:
 
 
 def _parse_check(src: str, unitname: str = "test"):
-    program = make_parser(src, unitname=unitname, src_dir=LIB_DIR).parse()
-    errors = typecheck(program)
-    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
+    program, _typing = _parse_check_typing(src, unitname)
     return program
+
+
+def _parse_check_typing(src: str, unitname: str = "test"):
+    program = make_parser(src, unitname=unitname, src_dir=LIB_DIR).parse()
+    typing = typecheck(program)
+    errors = typing.errors
+    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
+    return program, typing
 
 
 class TestEntryIdInfrastructure:
@@ -108,8 +114,8 @@ class TestScopeHistory:
 
 class TestSqlDumpSymtab:
     def _compile_and_dump(self, src: str) -> str:
-        program = _parse_check(src)
-        return dump_sql(program)
+        _program, typing = _parse_check_typing(src)
+        return dump_sql(typing)
 
     def test_scopes_and_entries_and_variables_populated(self):
         src = """
@@ -157,11 +163,11 @@ main: function is {
         assert "BLOCK" in kinds
 
     def test_dump_tolerates_no_symbol_table(self):
-        # dump_sql must still work when program.symbol_table is unset.
+        # dump_sql must still work when typing.symbol_table is unset.
         src = "main: function is { x: 1 }"
-        program = _parse_check(src)
-        program.symbol_table = None
-        sql = dump_sql(program)
+        _program, typing = _parse_check_typing(src)
+        typing.symbol_table = None
+        sql = dump_sql(typing)
         con = sqlite3.connect(":memory:")
         con.executescript(sql)
         assert con.execute("SELECT COUNT(*) FROM scope").fetchone()[0] == 0

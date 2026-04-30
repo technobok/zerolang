@@ -10,6 +10,7 @@ from typing import Optional, List, Dict, Tuple, Callable, cast
 
 import zast
 import ztypedast
+import ztyping
 from zast import NodeType
 import zemitterc_runtime as zrt
 import zemitterc_templates as ztmpl
@@ -338,18 +339,42 @@ def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
 
 
 class CEmitter:
-    def __init__(self, program: zast.Program) -> None:
-        self.program = program
+    def __init__(self, typing_or_program) -> None:
+        # F5.E.3 transitional: accept either a `ztyping.Typing`
+        # (canonical) or a `zast.Program` (legacy test corpus). When a
+        # Program is passed, build a Typing-shaped view from its
+        # compat shims so internal reads via `self.typing.<field>`
+        # still hit the right data.
+        if type(typing_or_program) is ztyping.Typing:
+            self.typing: ztyping.Typing = typing_or_program
+        else:
+            program = cast(zast.Program, typing_or_program)
+            self.typing = ztyping.Typing(parsed=program)
+            self.typing.mono_types = program.mono_types
+            self.typing.mono_functions = program.mono_functions
+            self.typing.func_aliases = program.func_aliases
+            self.typing.cloned_methods = program.cloned_methods
+            self.typing.resolved = program.resolved
+            self.typing.symbol_table = program.symbol_table
+            self.typing.unit_types_by_id = program.unit_types_by_id
+            self.typing.typed_program = program.typed_program
+        # Convenience alias: most of the emitter walks the parsed AST
+        # for tree structure (units, function bodies, etc.); routing
+        # those reads through `self.typing.parsed` would be noise.
+        # `self.program` is the parsed `Program`; mutable typecheck
+        # output lives on `self.typing`.
+        self.program = self.typing.parsed
         # Step 4 of the typed-tree migration: hold the typechecker's
         # constructed `TypedProgram` so emit-site reads of
         # typecheck-set fields (`type`, `const_value`, `call_kind`,
         # narrowing stamps, ownership, etc.) can route through the
         # typed mirror instead of reaching for `init=False` fields on
-        # parsed nodes. May be `None` for tests that build a `Program`
+        # parsed nodes. May be `None` for tests that build a `Typing`
         # without running the full typechecker; in that case the
         # emitter falls back to reading parsed-node fields directly.
+        # Transitional — deleted in F5.E.4 along with the typed mirror.
         self.typed_program: Optional[ztypedast.TypedProgram] = cast(
-            Optional[ztypedast.TypedProgram], program.typed_program
+            Optional[ztypedast.TypedProgram], self.typing.typed_program
         )
         self.out: List[str] = []
         self.indent_level = 0
@@ -452,14 +477,14 @@ class CEmitter:
         resolve against their definition unit when the caller writes
         them bare in a mainunit that does not redefine them.
         """
-        t = self.program.resolved.get(name)
+        t = self.typing.resolved.get(name)
         if t is None:
-            t = self.program.resolved.get(f"{self.program.mainunitname}.{name}")
+            t = self.typing.resolved.get(f"{self.program.mainunitname}.{name}")
         if t is None:
             for unitname in self.program.units:
                 if unitname == self.program.mainunitname:
                     continue
-                t = self.program.resolved.get(f"{unitname}.{name}")
+                t = self.typing.resolved.get(f"{unitname}.{name}")
                 if t is not None:
                     break
         return t
@@ -1648,7 +1673,7 @@ class CEmitter:
         fields because its children haven't been type-checked.
         """
         key = f"{unitname}.{name}"
-        t = self.program.resolved.get(key)
+        t = self.typing.resolved.get(key)
         if t is None:
             return False
         # A resolved record/class has its fields registered as
@@ -1741,7 +1766,7 @@ class CEmitter:
         """True when a system io record is used by the program (e.g.
         as the ok-arm payload of a monomorphized result). Avoids
         emitting dead struct definitions for unused types."""
-        for mono, _ in self.program.mono_types:
+        for mono, _ in self.typing.mono_types:
             for child in mono.children.values():
                 if child.typetype == ZTypeType.RECORD and child.name == name:
                     return True
@@ -1754,7 +1779,7 @@ class CEmitter:
         static backing store for io.stdin / io.stdout / io.stderr)."""
         if self.needs_io_natives & {"stdin", "stdout", "stderr"}:
             return True
-        for mono, _ in self.program.mono_types:
+        for mono, _ in self.typing.mono_types:
             for child in mono.children.values():
                 if child.typetype == ZTypeType.CLASS and child.name == "File":
                     return True
@@ -1933,9 +1958,9 @@ class CEmitter:
         self._collect_pre_emission("", mainunit.body)
 
         # register monomorphized type names before emission
-        for mono_type, _ in self.program.mono_types:
+        for mono_type, _ in self.typing.mono_types:
             # register in resolved dict so _typetype_of() works for mono types
-            self.program.resolved[mono_type.name] = mono_type
+            self.typing.resolved[mono_type.name] = mono_type
             if _is_array_type(mono_type):
                 continue
             if _is_str_type(mono_type):
@@ -1994,7 +2019,7 @@ class CEmitter:
                 pass
 
         # emit str mono types early (before regular definitions that may reference them)
-        for mono_type, template_defn in self.program.mono_types:
+        for mono_type, template_defn in self.typing.mono_types:
             if _is_str_type(mono_type):
                 self._emit_mono_str(mono_type)
 
@@ -2023,7 +2048,7 @@ class CEmitter:
         # We split mono emission into "depends only on system types"
         # (pass 1) vs "depends on user types" (pass 3), with user
         # defs between.
-        mono_types_all = list(self.program.mono_types)
+        mono_types_all = list(self.typing.mono_types)
         user_type_names = self._collect_user_type_names(mainunit.body)
         early_monos: list = []
         late_monos: list = []
@@ -2061,7 +2086,7 @@ class CEmitter:
             self._emit_mono_type(mono_type, template_defn)
 
         # emit monomorphized generic functions
-        for mono_ftype, cloned_func in self.program.mono_functions:
+        for mono_ftype, cloned_func in self.typing.mono_functions:
             if cloned_func.body:
                 self._current_node_id = cloned_func.nodeid
                 self._emit_function(mono_ftype.name, cloned_func)
@@ -3381,7 +3406,7 @@ class CEmitter:
     ) -> None:
         """Emit a monomorphized unit: emit its function definitions."""
         mangled = mono_type.name
-        cloned_methods = self.program.cloned_methods.get(mangled, {})
+        cloned_methods = self.typing.cloned_methods.get(mangled, {})
         if template_defn.nodetype != NodeType.UNIT:
             return
         unit_defn = cast(zast.Unit, template_defn)
@@ -3393,7 +3418,7 @@ class CEmitter:
                 func = cloned_methods[dname]
                 qualified = f"{mangled}.{dname}"
                 # check for func alias (deduplication)
-                aliases = self.program.func_aliases
+                aliases = self.typing.func_aliases
                 if qualified in aliases:
                     # already emitted via canonical name; emit typedef alias
                     canonical = aliases[qualified]
@@ -4576,8 +4601,8 @@ class CEmitter:
         self.struct_defs.append("".join(lines))
 
         # emit methods from cloned or template defn with mangled names
-        cloned_methods = self.program.cloned_methods.get(name)
-        func_aliases = self.program.func_aliases
+        cloned_methods = self.typing.cloned_methods.get(name)
+        func_aliases = self.typing.func_aliases
         if template_defn.nodetype == NodeType.CLASS:
             for mname, mfunc in (
                 cast(zast.ObjectDef, template_defn).as_functions().items()
@@ -10277,6 +10302,8 @@ class CEmitter:
         return "".join(parts)
 
 
-def emit(program: zast.Program) -> str:
-    emitter = CEmitter(program)
+def emit(typing_or_program) -> str:
+    """F5.E.3 transitional: accepts `Typing` (canonical) or `Program`
+    (legacy). See `CEmitter.__init__` for compat behaviour."""
+    emitter = CEmitter(typing_or_program)
     return emitter.emit()

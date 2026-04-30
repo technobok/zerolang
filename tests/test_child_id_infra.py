@@ -63,7 +63,8 @@ class TestChildIdInfrastructure:
 
 def _parse_check(source: str, unitname: str = "test"):
     program = make_parser(source, unitname=unitname, src_dir=LIB_DIR).parse()
-    errors = typecheck(program)
+    typing = typecheck(program)
+    errors = typing.errors
     assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
     return program
 

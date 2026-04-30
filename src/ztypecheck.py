@@ -10687,24 +10687,47 @@ class TypeChecker:
         return result_type
 
 
-def typecheck(program: zast.Program, full: bool = False) -> List[zast.Error]:
-    """Top-level entry point: type-check a parsed program."""
+def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
+    """Top-level entry point: type-check a parsed program.
+
+    Returns the populated `Typing` (typecheck-output container).
+    The `Typing` carries the back-reference to the parsed program,
+    the typecheck errors, and every typecheck-derived datum the
+    emitter / SQL dumper / asthash need to read.
+
+    F5.E.3 is transitional: typecheck output is also mirrored onto
+    legacy compat fields on `program` so test code that still reads
+    `program.mono_types` etc. continues to work. The follow-up commit
+    rebases tests, removes the compat fields, and freezes `Program`.
+    """
     tc = TypeChecker(program)
     errors = tc.check(full=full)
-    program.mono_types = tc._mono_types
-    program.mono_functions = tc._mono_functions
-    program.func_aliases = tc._func_aliases
-    program.cloned_methods = tc._cloned_methods
-    program.resolved = dict(tc._resolved)
+    tc.typing.errors = errors
+    tc.typing.is_error = bool(errors)
+    tc.typing.mono_types = tc._mono_types
+    tc.typing.mono_functions = tc._mono_functions
+    tc.typing.func_aliases = tc._func_aliases
+    tc.typing.cloned_methods = tc._cloned_methods
+    tc.typing.resolved = dict(tc._resolved)
     # Phase 7c: expose the symbol table for the SQL dumper.
-    program.symbol_table = tc.symtab
+    tc.typing.symbol_table = tc.symtab
     # Phase 7d: expose the id-keyed unit_types map for the dumper so
     # it can stamp `unit.unit_type_id` when a unit was materialized.
-    program.unit_types_by_id = dict(tc.unit_types_by_id)
+    tc.typing.unit_types_by_id = dict(tc.unit_types_by_id)
     # Step 4 of typed-tree migration: attach the constructed
     # TypedProgram so the emitter and SQL dumper can consume it.
-    program.typed_program = tc.typed_program
-    return errors
+    # Transitional — deleted in F5.E.4.
+    tc.typing.typed_program = tc.typed_program
+    # ----- F5.E.3 compat shims: mirror onto Program too.
+    program.mono_types = tc.typing.mono_types
+    program.mono_functions = tc.typing.mono_functions
+    program.func_aliases = tc.typing.func_aliases
+    program.cloned_methods = tc.typing.cloned_methods
+    program.resolved = dict(tc.typing.resolved)
+    program.symbol_table = tc.typing.symbol_table
+    program.unit_types_by_id = dict(tc.typing.unit_types_by_id)
+    program.typed_program = tc.typing.typed_program
+    return tc.typing
 
 
 def audit_type_annotations(program: zast.Program) -> List[str]:

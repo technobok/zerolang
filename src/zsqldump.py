@@ -9,6 +9,7 @@ from typing import List, Optional, Tuple, cast
 
 import zast
 import ztypedast
+import ztyping
 from zast import NodeType
 from zlexer import Token
 from ztypes import ZType
@@ -273,14 +274,30 @@ def _collect_ast_nodes(program: zast.Program) -> List[Tuple[zast.Node, str]]:
 
 
 def dump_sql(
-    program: zast.Program,
+    typing_or_program,
     emitter: Optional[zemitterc.CEmitter] = None,
     csource: Optional[str] = None,
 ) -> str:
     """Generate SQL statements for the full compiler state.
 
+    Accepts either a `ztyping.Typing` (canonical) or a `zast.Program`
+    (transitional F5.E.3 compat — the test corpus still passes Program
+    via the compat shims set on Program by `typecheck()`). When a
+    Program is passed, its compat shims are read directly via the
+    Typing protocol — same data, different access path.
+
     Returns a string of SQL (schema DDL + INSERT statements).
     """
+    if type(typing_or_program) is ztyping.Typing:
+        typing = typing_or_program
+        program = typing.parsed
+    else:
+        program = cast(zast.Program, typing_or_program)
+        typing = ztyping.Typing(parsed=program)
+        typing.resolved = program.resolved
+        typing.symbol_table = program.symbol_table
+        typing.unit_types_by_id = program.unit_types_by_id
+        typing.typed_program = program.typed_program
     lines: List[str] = []
     lines.append(SCHEMA_SQL)
 
@@ -304,7 +321,7 @@ def dump_sql(
 
     # Stage 3: AST nodes (parser-set fields only — Step 5b)
     ast_nodes = _collect_ast_nodes(program)
-    typed_program = cast(Optional[ztypedast.TypedProgram], program.typed_program)
+    typed_program = cast(Optional[ztypedast.TypedProgram], typing.typed_program)
     for node, name in ast_nodes:
         kind = type(node).__name__
         token_id = _sql_int(node.start.tokenid) if node.start else "NULL"
@@ -338,7 +355,7 @@ def dump_sql(
             _register_type(zt.generic_origin)
 
     # from resolved dict
-    for ztype in program.resolved.values():
+    for ztype in typing.resolved.values():
         _register_type(ztype)
     # from AST node type annotations (route via typed mirror so the
     # parsed `init=False` `.type` field can be retired in Step 6).
@@ -403,7 +420,7 @@ def dump_sql(
     # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
     # unit_type_id is filled from the id-keyed unit_types snapshot; NULL
     # when a unit was never materialized by typecheck.
-    unit_types_map = program.unit_types_by_id
+    unit_types_map = typing.unit_types_by_id
     for unitname, unit_ast in program.units.items():
         utype = unit_types_map.get(unit_ast.nodeid)
         unit_type_id = _sql_int(utype.nodeid) if utype is not None else "NULL"
@@ -418,7 +435,7 @@ def dump_sql(
     # Walks the archived history plus any remaining live scopes. The
     # dumper tolerates a missing symbol_table (e.g. when called without
     # running typecheck): simply emits no rows for the symtab tables.
-    symtab = program.symbol_table
+    symtab = typing.symbol_table
     if symtab is not None:
         scopes_iter = list(symtab._history) + list(symtab._scopes)
         seen_scopes: set[int] = set()

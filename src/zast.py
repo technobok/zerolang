@@ -257,6 +257,12 @@ class Program:
     Program - top level, hold all Units, streams (files), types for the program
     It is not a Node itself.
 
+    F5.E.3 added the canonical home for typecheck output on
+    `ztyping.Typing`. The legacy fields below remain as transitional
+    compat shims (typecheck writes both); they are removed and Program
+    is frozen in a follow-up. The 19 nodeid-keyed component dicts
+    that lived here pre-F5.E.2 are gone — those moved to `Typing`
+    cleanly without a compat shim.
     """
 
     is_error: bool = field(default=False, init=False)
@@ -269,49 +275,19 @@ class Program:
     units: Dict[str, "Unit"]
     mainunitname: str
 
-    # monomorphized generic types: list of (mono_ztype, original_ast_node) tuples
-    # populated by the type checker after monomorphization
+    # ----- F5.E.3 transitional compat shims for typecheck output.
+    # Canonical home is `ztyping.Typing`; these duplicate the data so
+    # tests reading `program.<field>` keep working until the test rebase
+    # in the follow-up commit.
+
     mono_types: typing.List = field(default_factory=list)
-
-    # monomorphized generic functions: list of (mono_ztype, cloned_function) tuples
-    # populated by the type checker after function generic monomorphization
     mono_functions: typing.List = field(default_factory=list)
-
-    # dedup aliases: {qualified_alias_name: qualified_canonical_name}
-    # populated by type checker during monomorphization dedup
     func_aliases: Dict[str, str] = field(default_factory=dict)
-
-    # cloned methods per mono type: {mono_name: {mname: Function}}
     cloned_methods: Dict[str, Dict[str, "Function"]] = field(default_factory=dict)
-
-    # resolved type names: {qualified_name: ZType}
-    # populated by type checker after resolution
     resolved: Dict[str, "ZType"] = field(default_factory=dict)
-
-    # Phase 7c: SymbolTable attached by typecheck() so the SQL dumper can
-    # emit scope/entry/variable rows. Typed via SymbolTableProto (defined
-    # in zsymtab_proto.py) so zast does not need to import zenv.
     symbol_table: "Optional[SymbolTableProto]" = field(default=None, init=False)
-
-    # Phase 7d: Unit AST nodeid → resolved unit ZType. Attached by
-    # typecheck() as a snapshot of TypeChecker.unit_types_by_id. Used by
-    # the SQL dumper to populate `unit.unit_type_id`.
     unit_types_by_id: Dict[int, "ZType"] = field(default_factory=dict, init=False)
-
-    # Step 4 of the typed-tree migration: typecheck() attaches the
-    # constructed `TypedProgram` here so the emitter and SQL dumper
-    # can consume it. Typed as `object` to keep `zast.py` decoupled
-    # from `ztypedast.py` (which imports `zast`); consumers cast to
-    # `ztypedast.TypedProgram`.
     typed_program: "Optional[object]" = field(default=None, init=False)
-
-    # NOTE: the 19 nodeid-keyed component dicts that lived here in F5.D
-    # (`node_type`, `node_const_value`, `call_kind`, ..., `projected_args`)
-    # moved to `ztyping.Typing` in F5.E.2. The typechecker now writes
-    # them to `self.typing.<name>`; the typed-mirror snapshot in
-    # `_build_typed_program_units` sources them from there, and
-    # downstream consumers will switch to reading from `Typing`
-    # directly in F5.E.4 when the typed-tree mirror is removed.
 
 
 def clone_function(func: "Function") -> "Function":

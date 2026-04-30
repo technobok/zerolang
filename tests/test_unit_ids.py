@@ -21,10 +21,16 @@ def _parse(src: str, unitname: str = "test"):
 
 
 def _parse_check(src: str, unitname: str = "test"):
-    program = _parse(src, unitname)
-    errors = typecheck(program)
-    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
+    program, _typing = _parse_check_typing(src, unitname)
     return program
+
+
+def _parse_check_typing(src: str, unitname: str = "test"):
+    program = _parse(src, unitname)
+    typing = typecheck(program)
+    errors = typing.errors
+    assert errors == [], f"unexpected errors: {[e.msg for e in errors]}"
+    return program, typing
 
 
 class TestUnitTypesById:
@@ -49,7 +55,8 @@ class TestUnitTypesById:
 
 class TestUnitSqlDump:
     def _dump(self, src: str) -> str:
-        return dump_sql(_parse_check(src))
+        _program, typing = _parse_check_typing(src)
+        return dump_sql(typing)
 
     def test_unit_table_populated(self):
         sql = self._dump('main: function is { print "hi" }')
@@ -90,9 +97,9 @@ class TestUnitSqlDump:
         assert n == 0, "every unit_id should have a matching ast_nodes row"
 
     def test_dump_tolerates_missing_unit_types_snapshot(self):
-        program = _parse_check('main: function is { print "hi" }')
-        program.unit_types_by_id = {}
-        sql = dump_sql(program)
+        _program, typing = _parse_check_typing('main: function is { print "hi" }')
+        typing.unit_types_by_id = {}
+        sql = dump_sql(typing)
         con = sqlite3.connect(":memory:")
         con.executescript(sql)
         # rows still emitted; unit_type_id is NULL

@@ -34,7 +34,8 @@ def parse_and_check(source: str, unitname: str = "test"):
     p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
-    errors = typecheck(program)
+    typing = typecheck(program)
+    errors = typing.errors
     return program, errors
 
 
@@ -4225,7 +4226,8 @@ class TestLockCheckingExamplePrograms:
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         assert isinstance(program, zast.Program), f"Parse failed for {name}"
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         return errors
 
     def test_hello(self):
@@ -4694,7 +4696,8 @@ class TestUnionMatchExhaustiveness:
         p = make_parser_with_vfs(vfs, "unions")
         program = p.parse()
         assert isinstance(program, zast.Program), "Parse failed"
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
 
 

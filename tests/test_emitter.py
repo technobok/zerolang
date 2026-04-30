@@ -26,9 +26,10 @@ def emit_source(source: str, unitname: str = "test") -> str:
     p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
-    errors = typecheck(program)
+    typing = typecheck(program)
+    errors = typing.errors
     assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-    return zemitterc.emit(program)
+    return zemitterc.emit(typing)
 
 
 def compile_and_run_with_args(csource: str, argv: list[str]) -> str:
@@ -713,9 +714,10 @@ class TestEmitterBasic:
         p = make_parser_with_vfs(vfs, "test")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], [e.msg for e in errors]
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         output = compile_and_run(csource)
         assert output.strip() == "8"
 
@@ -750,9 +752,10 @@ class TestEmitterBasic:
         p = make_parser_with_vfs(vfs, "test")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], [e.msg for e in errors]
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         output = compile_and_run(csource)
         assert output.strip() == "49"
 
@@ -799,9 +802,10 @@ class TestEmitterBasic:
         p = make_parser_with_vfs(vfs, "test")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], [e.msg for e in errors]
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         output = compile_and_run(csource)
         assert output.strip() == "9\n-7"
 
@@ -849,9 +853,10 @@ class TestEmitterExamples:
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         assert isinstance(program, zast.Program), f"Parse failed for {name}"
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], f"Type errors for {name}: {[e.msg for e in errors]}"
-        return zemitterc.emit(program)
+        return zemitterc.emit(typing)
 
     def test_hello(self):
         csource = self._emit_example("hello")
@@ -1090,9 +1095,10 @@ class TestUserMethodStringTake:
         )
         p = make_parser_with_vfs(vfs, "takeprobe")
         program = p.parse()
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         # Under ASan the double-free caused by the pre-fix emission
         # would be caught here.
         result = compile_and_run_asan(csource)
@@ -1182,9 +1188,10 @@ class TestCliUnitEmission:
         p = make_parser_with_vfs(vfs, "cli_basic")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        return zemitterc.emit(program)
+        return zemitterc.emit(typing)
 
     def test_flag_and_positionals(self):
         out = (
@@ -1842,9 +1849,10 @@ class TestEmitterMemorySafety:
         p = make_parser_with_vfs(vfs, "hello")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "Hello, World!" in result.stdout
@@ -1864,9 +1872,10 @@ class TestEmitterMemorySafety:
         p = make_parser_with_vfs(vfs, "strings")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "Welcome to Zero v1" in result.stdout
@@ -2126,9 +2135,10 @@ class TestEmitterClassIntegration:
         p = make_parser_with_vfs(vfs, "classes")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         output = compile_and_run(csource)
         assert "initial = 10" in output
         assert "after 3 increments = 13" in output
@@ -2197,9 +2207,10 @@ class TestEmitterClassMemorySafety:
         p = make_parser_with_vfs(vfs, "classes")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "initial = 10" in result.stdout
@@ -2345,9 +2356,10 @@ class TestEmitterClassDestructorIntegration:
         p = make_parser_with_vfs(vfs, "classes")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "named: test=42" in result.stdout
@@ -2676,9 +2688,10 @@ class TestEmitterUnionIntegration:
         p = make_parser_with_vfs(vfs, "unions")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == [], f"Type errors: {[e.msg for e in errors]}"
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         output = compile_and_run(csource)
         assert "a is ok" in output
         assert "b is error" in output
@@ -2745,9 +2758,10 @@ class TestEmitterUnionMemorySafety:
         p = make_parser_with_vfs(vfs, "unions")
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert errors == []
-        csource = zemitterc.emit(program)
+        csource = zemitterc.emit(typing)
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
         assert "a is ok" in result.stdout
@@ -5964,7 +5978,8 @@ class TestConstantFolding:
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
         assert isinstance(program, zast.Program)
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert any("division by zero" in e.msg.lower() for e in errors)
 
     # -- Float (f64) folding ---
@@ -8808,7 +8823,8 @@ class TestNarrowedFieldAccess:
         )
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert any("shadowed parent" in e.msg for e in errors), (
             f"Expected shadow error, got: {[e.msg for e in errors]}"
         )
@@ -8943,7 +8959,8 @@ class TestNarrowedFullSemantics:
         )
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert any("shadowed parent" in e.msg for e in errors), (
             f"Expected shadow-parent error, got: {[e.msg for e in errors]}"
         )
@@ -8967,7 +8984,8 @@ class TestNarrowedFullSemantics:
         )
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert any(
             "argument type mismatch" in e.msg or "expected u" in e.msg for e in errors
         ), f"Expected type-mismatch error, got: {[e.msg for e in errors]}"
@@ -8991,7 +9009,8 @@ class TestNarrowedFullSemantics:
         )
         p = make_parser_with_vfs(vfs, name)
         program = p.parse()
-        errors = typecheck(program)
+        typing = typecheck(program)
+        errors = typing.errors
         assert any("has no field 'bogus'" in e.msg for e in errors), (
             f"Expected missing-field error, got: {[e.msg for e in errors]}"
         )

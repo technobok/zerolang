@@ -21,7 +21,8 @@ def parse_and_check(source: str, unitname: str = "test"):
     p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
     program = p.parse()
     assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
-    errors = typecheck(program)
+    typing = typecheck(program)
+    errors = typing.errors
     assert errors == [], f"Type errors: {[e.msg for e in errors]}"
     return program
 
