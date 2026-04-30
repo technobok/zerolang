@@ -360,6 +360,20 @@ def _strip_path_ownership(
 
 
 @dataclass
+class TemplateIds:
+    """Cached stdlib generic-template ids on `TypeChecker`. Lazily
+    populated on first use because the system unit may not yet be
+    loaded at `TypeChecker.__init__` time. `-1` means "not yet
+    resolved." Used by hot-path identity checks (option /
+    optionval / optionview discrimination during call dispatch and
+    monomorphization)."""
+
+    option: int = -1
+    optionval: int = -1
+    optionview: int = -1
+
+
+@dataclass
 class FunctionContext:
     """Function-body context on `TypeChecker`. Holds the expected
     return type, parameter-ownership map, return-ownership annotation,
@@ -507,12 +521,9 @@ class TypeChecker:
         # emit compile-time errors (used inside constant-false if branches)
         self._suppress_compile_error: int = 0
 
-        # cached stdlib generic-template ids for hot-path identity checks.
-        # Lazily populated on first use because the system unit may not yet
-        # be loaded at __init__ time. -1 means "not yet resolved".
-        self._option_template_id: int = -1
-        self._optionval_template_id: int = -1
-        self._optionview_template_id: int = -1
+        # F5.B.3: cached stdlib generic-template ids grouped into a
+        # single record. See `TemplateIds` for per-field documentation.
+        self.template_ids = TemplateIds()
 
         # _type_of_definition dispatch table: NodeType -> bound resolver
         # method. Keyed by `defn.nodetype` so the lookup is O(1) and
@@ -9370,27 +9381,27 @@ class TypeChecker:
 
     def _option_template_nodeid(self) -> int:
         """Resolve and cache the stdlib `option` generic-template nodeid."""
-        if self._option_template_id == -1:
+        if self.template_ids.option == -1:
             t = self._resolve_name("Option")
             if t is not None:
-                self._option_template_id = t.nodeid
-        return self._option_template_id
+                self.template_ids.option = t.nodeid
+        return self.template_ids.option
 
     def _optionval_template_nodeid(self) -> int:
         """Resolve and cache the stdlib `optionval` generic-template nodeid."""
-        if self._optionval_template_id == -1:
+        if self.template_ids.optionval == -1:
             t = self._resolve_name("optionval")
             if t is not None:
-                self._optionval_template_id = t.nodeid
-        return self._optionval_template_id
+                self.template_ids.optionval = t.nodeid
+        return self.template_ids.optionval
 
     def _optionview_template_nodeid(self) -> int:
         """Resolve and cache the stdlib `optionview` generic-template nodeid."""
-        if self._optionview_template_id == -1:
+        if self.template_ids.optionview == -1:
             t = self._resolve_name("OptionView")
             if t is not None:
-                self._optionview_template_id = t.nodeid
-        return self._optionview_template_id
+                self.template_ids.optionview = t.nodeid
+        return self.template_ids.optionview
 
     def _is_option_type(self, t: ZType) -> bool:
         """Check if a type is a monomorphized option type."""
