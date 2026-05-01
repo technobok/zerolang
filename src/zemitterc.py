@@ -7220,17 +7220,42 @@ class CEmitter:
         src_ctype = TYPEMAP.get(src_type, "int64_t")
         dst_ctype = TYPEMAP.get(dst_type, "int64_t")
         self.needs_stdint = True
+        if dst_type not in NUMERIC_RANGES:
+            return f"(({dst_ctype}){val})"
+        dst_lo, dst_hi = NUMERIC_RANGES[dst_type]
+        # When src is an integer with a statically-known range, omit
+        # the half of the bounds check that the source type can never
+        # reach — emitting `_v > LLONG_MAX` for an int8_t source would
+        # otherwise produce comparisons outside the src type's range,
+        # which gcc warns about and clang evaluates differently after
+        # integer promotion (real divergent behavior was observed in
+        # generic-unit emit on gcc 13 vs clang 18).
+        needs_lower = True
+        needs_upper = True
+        if src_type in NUMERIC_RANGES:
+            src_lo, src_hi = NUMERIC_RANGES[src_type]
+            if src_lo >= dst_lo:
+                needs_lower = False
+            if src_hi <= dst_hi:
+                needs_upper = False
+        if not needs_lower and not needs_upper:
+            # Widening cast — source range fully contained in dest;
+            # no overflow possible, no runtime check needed.
+            return f"(({dst_ctype}){val})"
         self.needs_stdio = True
         self.needs_stdlib = True
-        if dst_type in NUMERIC_RANGES:
-            lo, hi = NUMERIC_RANGES[dst_type]
-            return (
-                f"({{ {src_ctype} _v = {val}; "
-                f"if (_v < {lo} || _v > {hi})"
-                f' z_panic("numeric cast overflow: {src_type} to {dst_type}"); '
-                f"({dst_ctype})_v; }})"
-            )
-        return f"(({dst_ctype}){val})"
+        parts: List[str] = []
+        if needs_lower:
+            parts.append(f"_v < {dst_lo}")
+        if needs_upper:
+            parts.append(f"_v > {dst_hi}")
+        cond = " || ".join(parts)
+        return (
+            f"({{ {src_ctype} _v = {val}; "
+            f"if ({cond})"
+            f' z_panic("numeric cast overflow: {src_type} to {dst_type}"); '
+            f"({dst_ctype})_v; }})"
+        )
 
     def _extract_unit_path(self, path: zast.Path) -> Optional[str]:
         """If path resolves to an inline unit, return its dotted name. Otherwise None."""
