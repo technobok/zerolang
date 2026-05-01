@@ -6984,25 +6984,34 @@ class CEmitter:
         op = binop.operator.name
         # route == and != through z_{name}_eq() for autogen equality types
         if op in ("==", "!=") and self._node_ztype(binop.lhs):
-            eq_method = self.typing.child_of(
-                cast(ZType, self._node_ztype(binop.lhs)), "=="
-            )
+            lhs_zt = cast(ZType, self._node_ztype(binop.lhs))
+            rhs_zt_obj = self._node_ztype(binop.rhs)
+            rhs_sub = rhs_zt_obj.subtype if rhs_zt_obj else None
+            eq_method = self.typing.child_of(lhs_zt, "==")
             if eq_method and eq_method.is_autogen_eq:
-                tname = cast(ZType, self._node_ztype(binop.lhs)).name.replace(".", "_")
+                tname = lhs_zt.name.replace(".", "_")
                 call = f"z_{tname}_eq({lhs}, {rhs})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
-            # string content comparison (native == on string class)
-            if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRING:
-                call = f"z_String_eq(&{lhs}, &{rhs})"
-                if op == "!=":
-                    return f"(!{call})"
-                return call
-            # stringview content comparison
-            if cast(ZType, self._node_ztype(binop.lhs)).subtype == ZSubType.STRINGVIEW:
+            # String / StringView content comparison. Delegate to
+            # z_StringView_eq over views of both sides — this unifies
+            # the four (S/SV × S/SV) cases and avoids reinterpreting a
+            # 16-byte StringView as a 24-byte String (which silently
+            # produced false at runtime under gcc 13's warning-only
+            # incompatible-pointer-types).
+            str_subs = (ZSubType.STRING, ZSubType.STRINGVIEW)
+            if lhs_zt.subtype in str_subs and rhs_sub in str_subs:
                 self.needs_stringview = True
-                call = f"z_StringView_eq({lhs}, {rhs})"
+                if lhs_zt.subtype == ZSubType.STRINGVIEW:
+                    l_expr = lhs
+                else:
+                    l_expr = f"((z_StringView_t){{ {lhs}.data, {lhs}.size }})"
+                if rhs_sub == ZSubType.STRINGVIEW:
+                    r_expr = rhs
+                else:
+                    r_expr = f"((z_StringView_t){{ {rhs}.data, {rhs}.size }})"
+                call = f"z_StringView_eq({l_expr}, {r_expr})"
                 if op == "!=":
                     return f"(!{call})"
                 return call
