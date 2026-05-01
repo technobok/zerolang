@@ -6,7 +6,7 @@ Type definitions and type checking pass for the AST.
 
 from enum import IntEnum, unique
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, Tuple
 
 
 @unique
@@ -200,7 +200,6 @@ class ZType:
     this_param_name: "Optional[str]" = field(default=None, init=False)
 
     isgeneric: bool = False
-    isliteral: bool = False
 
     # ownership annotations for function parameters and return type
     param_ownership: "dict[str, ZParamOwnership]" = field(
@@ -433,11 +432,6 @@ class Entry:
     # taken state
     is_taken: bool = False
     taken_at: Optional[Tuple[int, int, int]] = None
-    # F4.1: marks the receiver-bound parameter Entry (the parameter whose
-    # declared type is the `this` keyword). Lets the emitter detect the
-    # receiver via Entry instead of comparing the parameter name to the
-    # literal "this".
-    is_receiver: bool = False
 
 
 @dataclass
@@ -476,28 +470,6 @@ class ZVariable:
     # provenance: None for variables declared in user source; pass-name string
     # for variables synthesised by a compiler pass. Surfaces in SQL dumps.
     synth_origin: Optional[str] = None
-
-
-class TypeTable:
-    """
-    TypeTable - table of all types for a program.
-    Single-threaded — no locking needed.
-    """
-
-    def __init__(self) -> None:
-        self._table: List[ZType] = []
-
-    def __getitem__(self, index: int) -> ZType:
-        return self._table[index]
-
-    def _append(self, typeitem: ZType) -> int:
-        idx = len(self._table)
-        self._table.append(typeitem)
-        return idx
-
-    def add(self, name: str, typetype: ZTypeType) -> int:
-        t = ZType(name=name, typetype=typetype, parent=None)
-        return self._append(t)
 
 
 NUMERIC_RANGES: Dict[str, Tuple[int, int]] = {

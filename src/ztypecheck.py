@@ -5727,8 +5727,7 @@ class TypeChecker:
                     # reftypes are referenced — neither invalidates the source)
                     ownership = ZOwnership.BORROWED
                 var = ZVariable(ztype=pt, ownership=ownership, named=ZNaming.NAMED)
-                is_receiver = ftype is not None and ftype.this_param_name == pname
-                self.symtab.define_var(pname, var, is_receiver=is_receiver)
+                self.symtab.define_var(pname, var)
 
         # set expected return type for return statement checking
         prev_return_type = self.func_ctx.return_type

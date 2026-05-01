@@ -801,15 +801,6 @@ class TestFinding12SelfHostingPatterns:
         assert isinstance(v1.variableid, int)
         assert v2.variableid > v1.variableid
 
-    def test_no_threading_in_typetable(self):
-        """TypeTable should not use threading.Lock."""
-        import inspect
-        from ztypes import TypeTable
-
-        source = inspect.getsource(TypeTable)
-        assert "threading" not in source
-        assert "Lock" not in source
-
     def test_no_ordered_dict_in_ztype(self):
         """Remaining dict-typed fields on ZType should be plain dicts
         (not OrderedDict). F5.H.5 removed `children` / `generic_args`
