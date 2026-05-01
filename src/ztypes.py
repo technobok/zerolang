@@ -116,9 +116,6 @@ class ZNaming(IntEnum):
     NAMED = 1
 
 
-# plain int alias for type IDs (replaces NewType for self-hosting simplicity)
-TypeID = int
-
 # module-level counters for auto-incrementing IDs
 _next_type_id: int = 0
 
@@ -338,9 +335,6 @@ class ZType:
     def __repr__(self) -> str:
         return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"
 
-
-# plain int alias for variable IDs (replaces NewType for self-hosting simplicity)
-VariableID = int
 
 _next_variable_id: int = 0
 

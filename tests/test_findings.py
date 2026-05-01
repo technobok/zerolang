@@ -781,14 +781,6 @@ class TestFinding11ScopeState:
 class TestFinding12SelfHostingPatterns:
     """Finding 12: Python-specific patterns replaced with simpler equivalents."""
 
-    def test_type_ids_are_plain_ints(self):
-        """TypeID and VariableID should be plain int aliases, not NewType."""
-        from ztypes import TypeID, VariableID
-
-        # plain int aliases: TypeID is int, VariableID is int
-        assert TypeID is int
-        assert VariableID is int
-
     def test_type_ids_auto_increment(self):
         """ZType.nodeid should auto-increment via _alloc_type_id."""
         from ztypes import ZType, ZTypeType
