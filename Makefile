@@ -1,6 +1,8 @@
 ZC       := uv run python src/zc.py
 CC       := gcc
-CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter
+CFLAGS   := -std=c17 -Wall -Wextra -Wno-unused-function -Wno-unused-parameter \
+            -Werror=implicit-function-declaration -Werror=implicit-int \
+            -Werror=int-conversion
 BUILDDIR := out
 
 # all .z files in examples/ (exclude library-only modules without main)

@@ -59,7 +59,14 @@ def emit_runtime_includes(
     # The panic/x-alloc helpers below need fprintf/stderr, so stdlib implies stdio.
     if needs_stdlib:
         needs_stdio = True
-    parts: list[str] = []
+    # Feature-test macro must precede every standard header so glibc
+    # exposes POSIX.1-2008 declarations (setenv/unsetenv/realpath/...)
+    # under -std=c17. Without this, gcc 14+ rejects implicit
+    # declarations as a hard error; gcc 13 emits a warning that the
+    # build silently linked through. Always-on is fine — the runtime
+    # targets POSIX (Linux/macOS); MSVC ignores the macro and Windows
+    # porting will gate function bodies on `#ifdef _WIN32` regardless.
+    parts: list[str] = ["#define _POSIX_C_SOURCE 200809L\n\n"]
     if needs_stdio:
         parts.append("#include <stdio.h>\n")
     if needs_stdint:

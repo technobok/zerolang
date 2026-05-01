@@ -47,6 +47,9 @@ def compile_and_run_with_args(csource: str, argv: list[str]) -> str:
             "-Wextra",
             "-Wno-unused-function",
             "-Wno-unused-parameter",
+            "-Werror=implicit-function-declaration",
+            "-Werror=implicit-int",
+            "-Werror=int-conversion",
             "-o",
             outpath,
             cpath,
@@ -81,6 +84,9 @@ def compile_and_run(csource: str, extra_cflags: list[str] | None = None) -> str:
             "-Wextra",
             "-Wno-unused-function",
             "-Wno-unused-parameter",
+            "-Werror=implicit-function-declaration",
+            "-Werror=implicit-int",
+            "-Werror=int-conversion",
         ]
         if extra_cflags:
             cmd.extend(extra_cflags)
@@ -121,6 +127,9 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
             "-Wextra",
             "-Wno-unused-function",
             "-Wno-unused-parameter",
+            "-Werror=implicit-function-declaration",
+            "-Werror=implicit-int",
+            "-Werror=int-conversion",
             "-o",
             outpath,
             cpath,
