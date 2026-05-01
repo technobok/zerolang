@@ -20,6 +20,12 @@ pytestmark = [pytest.mark.emitter, pytest.mark.runtime]
 LIB_DIR = os.path.join(os.path.dirname(__file__), "..", "lib")
 EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "examples")
 
+# C compiler used for emitter tests. Override with Z_TEST_CC=clang to
+# exercise the emitted C against a different compiler — useful for
+# catching warnings/errors that gcc tolerates but clang doesn't (or
+# vice versa). Default keeps the gcc-based dev loop unchanged.
+_CC = os.environ.get("Z_TEST_CC", "gcc")
+
 
 def emit_source(source: str, unitname: str = "test") -> str:
     """Parse, type-check, and emit C source for a zerolang program."""
@@ -41,7 +47,7 @@ def compile_and_run_with_args(csource: str, argv: list[str]) -> str:
     outpath = cpath.replace(".c", "")
     try:
         cmd = [
-            "gcc",
+            _CC,
             "-std=c17",
             "-Wall",
             "-Wextra",
@@ -79,7 +85,7 @@ def compile_and_run(csource: str, extra_cflags: list[str] | None = None) -> str:
     outpath = cpath.replace(".c", "")
     try:
         cmd = [
-            "gcc",
+            _CC,
             "-std=c17",
             "-Wall",
             "-Wextra",
@@ -123,7 +129,7 @@ def compile_and_capture(csource: str) -> tuple[int, str, str]:
     outpath = cpath.replace(".c", "")
     try:
         cmd = [
-            "gcc",
+            _CC,
             "-std=c17",
             "-Wall",
             "-Wextra",
@@ -1291,7 +1297,7 @@ def compile_and_run_asan(csource: str) -> subprocess.CompletedProcess:
     try:
         comp = subprocess.run(
             [
-                "gcc",
+                _CC,
                 "-fsanitize=address,undefined",
                 "-fno-omit-frame-pointer",
                 "-Wall",
@@ -3732,7 +3738,7 @@ class TestNumericCasting:
         outpath = cpath.replace(".c", "")
         try:
             result = subprocess.run(
-                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                [_CC, "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -5032,7 +5038,7 @@ class TestArrayEmission:
         outpath = cpath.replace(".c", "")
         try:
             subprocess.run(
-                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                [_CC, "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -5062,7 +5068,7 @@ class TestArrayEmission:
         outpath = cpath.replace(".c", "")
         try:
             subprocess.run(
-                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                [_CC, "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -5639,7 +5645,7 @@ class TestList:
         outpath = cpath.replace(".c", "")
         try:
             subprocess.run(
-                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                [_CC, "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -5665,7 +5671,7 @@ class TestList:
         outpath = cpath.replace(".c", "")
         try:
             subprocess.run(
-                ["gcc", "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
+                [_CC, "-Wall", "-Wno-unused-function", "-o", outpath, cpath],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -8656,7 +8662,7 @@ class TestOsUnit:
         src = tmp_path / "exit.c"
         src.write_text(csource)
         bin_path = tmp_path / "exit"
-        gcc = shutil.which("gcc")
+        gcc = shutil.which(_CC)
         assert gcc is not None
         subprocess.run([gcc, "-o", str(bin_path), str(src)], check=True)
         r = subprocess.run([str(bin_path)], capture_output=True)
@@ -8680,7 +8686,7 @@ class TestOsUnit:
         src = tmp_path / "args.c"
         src.write_text(csource)
         bin_path = tmp_path / "args"
-        gcc = shutil.which("gcc")
+        gcc = shutil.which(_CC)
         assert gcc is not None
         subprocess.run([gcc, "-o", str(bin_path), str(src)], check=True)
         r = subprocess.run(
@@ -8712,7 +8718,7 @@ class TestOsUnit:
         src = tmp_path / "env.c"
         src.write_text(csource)
         bin_path = tmp_path / "env"
-        gcc = shutil.which("gcc")
+        gcc = shutil.which(_CC)
         assert gcc is not None
         subprocess.run([gcc, "-o", str(bin_path), str(src)], check=True)
 

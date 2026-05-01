@@ -10,7 +10,7 @@ SKIP     := mathutil genmath
 EXAMPLES := $(wildcard examples/*.z)
 NAMES    := $(filter-out $(SKIP),$(basename $(notdir $(EXAMPLES))))
 
-.PHONY: check test test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-lf fmt build clean bootstrap-lint
+.PHONY: check test test-clang test-all test-fast test-verbose test-emitter test-typecheck test-parser test-infra test-lf fmt build clean bootstrap-lint
 
 # Patterns that complicate bootstrapping the compiler in zerolang.
 # Each new violation must be reviewed — do not increase the baseline counts.
@@ -88,6 +88,18 @@ bootstrap-lint:
 # Run before every commit.
 test:
 	uv run python -m pytest tests/ -n auto
+
+# Same suite, but the emitter tests compile generated C with clang
+# instead of gcc. Catches warnings/errors that gcc tolerates but clang
+# doesn't (real bugs surface from this in practice — e.g. const-discard
+# on pointer args, sign-compare differences). Run before pushing when
+# changing emitter or runtime code; CI should run this in parallel
+# with `make test`.
+test-clang:
+	Z_TEST_CC=clang $(MAKE) --no-print-directory test
+
+# Convenience: run both gcc and clang test passes sequentially.
+test-all: test test-clang
 
 # Inner-loop dev: skip emitter tests (gcc per-test is the bulk of the time).
 # Use during development; `make test` covers the full suite before commit.
