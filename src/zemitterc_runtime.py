@@ -3181,30 +3181,3 @@ def emit_bounds_check(
     )
     lines.append("        z_panic(_zp_buf);\n")
     lines.append("    }\n")
-
-
-def emit_array_bounds_check(
-    lines: List[str],
-    idx_expr: str,
-    arr_len: int,
-    label: str,
-) -> None:
-    """Emit a signed-index bounds-check for fixed-length arrays via z_panic."""
-    lines.append(f"    if ({idx_expr} < 0 || {idx_expr} >= {arr_len}) {{\n")
-    lines.append("        char _zp_buf[96];\n")
-    lines.append(
-        f'        snprintf(_zp_buf, sizeof(_zp_buf), "{label}: index %ld'
-        f' out of bounds (length {arr_len})", (long){idx_expr});\n'
-    )
-    lines.append("        z_panic(_zp_buf);\n")
-    lines.append("    }\n")
-
-
-def emit_empty_check(
-    lines: List[str],
-    label: str,
-) -> None:
-    """Emit an empty-container check that panics on failure (e.g. list pop)."""
-    lines.append("    if (_this->length == 0) {\n")
-    lines.append(f'        z_panic("{label}");\n')
-    lines.append("    }\n")

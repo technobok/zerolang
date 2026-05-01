@@ -137,12 +137,6 @@ def mapkeyiter_key_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
     return typing.generic_arg_of(base, "key") if base else None
 
 
-def mapkeyiter_value_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
-    """Get the value type of a mapkeyiter type."""
-    base = _unwrap_typedef(ztype)
-    return typing.generic_arg_of(base, "value") if base else None
-
-
 def is_mapitemiter_type(ztype: Optional[ZType]) -> bool:
     """Check if a type is a monomorphized mapitemiter type."""
     ztype = _unwrap_typedef(ztype)
