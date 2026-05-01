@@ -2,26 +2,17 @@
 Synthesis primitives for compiler passes that build AST or symtab
 state beyond what was parsed from source.
 
-Today's consumer is the ANF lowering pass (`AnfRewriter`, lands with
-its first user in a follow-up commit). The same primitives are
-sized to extend cleanly to future passes (e.g. SSA phi insertion,
-generator-style class synthesis). New primitives land here only
-when a pass needs them — no speculative API.
-
 Every node or variable produced through this module carries a
 `synth_origin` tag (e.g. `"anf"`) so SQL dumps and diagnostics can
 distinguish compiler-synthesised state from user source.
 """
 
-from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional
+from typing import Optional
 
-import zast
 from zast import (
     Assignment,
     AtomId,
     Expression,
-    NodeType,
     Operation,
     StatementLine,
 )
@@ -76,51 +67,6 @@ def make_assignment(
     assn = Assignment(name=name, value=expr, start=src_loc, synth_origin=origin)
     line = StatementLine(statementline=assn, start=src_loc, synth_origin=origin)
     return line
-
-
-@dataclass
-class Rewriter:
-    """Bottom-up node-replacing visitor with a per-statement preamble.
-
-    Subclasses override `visit_<NodeType.name>` (matching the
-    `NodeType` enum value) to rewrite specific node kinds. The
-    default `visit` recurses into children and returns the node
-    unchanged when no handler matches.
-
-    The `preamble` list collects synthetic statements that the
-    driver inserts before the current statement. Subclasses call
-    `emit_preamble(stmt_line)` to enqueue.
-
-    SSA phi-insertion and generator-style class synthesis are
-    expected to subclass `Rewriter` rather than reimplement a
-    walker.
-    """
-
-    preamble: List[StatementLine] = field(default_factory=list)
-    # Subclasses populate `handlers` (typically in `__post_init__` or
-    # `__init__`) with `{NodeType.X: self.visit_x}` mappings. The base
-    # `visit` method dispatches via this dict — no `getattr`-by-name.
-    handlers: "Dict[NodeType, Callable[[zast.Node], Optional[zast.Node]]]" = field(
-        default_factory=dict
-    )
-
-    def emit_preamble(self, line: StatementLine) -> None:
-        self.preamble.append(line)
-
-    def take_preamble(self) -> List[StatementLine]:
-        """Detach and clear the preamble buffer; caller inserts it."""
-        out, self.preamble = self.preamble, []
-        return out
-
-    def visit(self, node: Optional[zast.Node]) -> Optional[zast.Node]:
-        """Dispatch to the `handlers[node.nodetype]` callable if
-        registered; otherwise return the node unchanged."""
-        if node is None:
-            return None
-        handler = self.handlers.get(node.nodetype)
-        if handler is not None:
-            return handler(node)
-        return node
 
 
 def register_synth_var(
