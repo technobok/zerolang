@@ -977,6 +977,12 @@ class TestEmitterExamples:
         assert "ppid positive=1" in output
         assert "cwd ok" in output
         assert "set_cwd ok" in output
+        # Mixed-type String == StringView comparison: cr2 (String,
+        # narrowed cwd result) == "/tmp" (StringView literal). Pre-
+        # 50ec3e4 the emit picked z_String_eq with a wrong-typed RHS
+        # pointer and silently returned false at runtime. Asserting
+        # =1 closes the gap so a future regression can't sneak past.
+        assert "cwd is /tmp=1" in output
         assert "user_name nonempty=1" in output
         assert "home_dir nonempty=1" in output
 
