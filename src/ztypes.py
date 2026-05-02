@@ -283,7 +283,11 @@ class ZType:
     # internal metadata: compiler-generated raw allocator for this type
     meta_create: Optional["ZType"] = field(default=None, init=False)
 
-    # internal metadata: element type for data types
+    # internal metadata: element type for DATA types. The DATA's children
+    # are value-carrier RECORDs whose `name` is the literal value (e.g.
+    # the children of `primes: data { 2 3 5 }` are RECORDs with names
+    # "2", "3", "5", not the numeric type itself); element_type is the
+    # only authoritative pointer to the underlying numeric ZType.
     element_type: Optional["ZType"] = field(default=None, init=False)
 
     # C identifier for this type (set by type checker, used by emitter)

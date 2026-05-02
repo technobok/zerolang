@@ -2221,6 +2221,12 @@ class Parser:
             msg = "Expected closing brace '}' for data body"
             return zast.Error(start=lex.acceptany(), err=ERR.BADDATA, msg=msg)
 
+        if not data:
+            # Grammar: data body requires at least one element. The
+            # element type is inferred from the first element.
+            msg = "data definition must have at least one element"
+            return zast.Error(start=start, err=ERR.BADDATA, msg=msg)
+
         datanode = zast.Data(data=data, start=start)
         return NodeX(datanode, extern=extern)
 

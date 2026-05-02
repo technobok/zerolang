@@ -2188,7 +2188,10 @@ class TypeChecker:
         if element_type:
             dtype.element_type = element_type
 
-        # Generate .tag subtype — monomorphized tag(element_type) with parent=data
+        # Generate .tag subtype — monomorphized tag(element_type) with parent=data.
+        # The parser rejects empty data, so element_type is set by the loop
+        # above; the `else "i64"` branch is defensive against partial recovery
+        # from an earlier error.
         et_name = element_type.name if element_type else "i64"
         tag_type = _make_type(f"tag__{et_name}", ZTypeType.RECORD, parent=dtype)
         tag_type.is_valtype = True

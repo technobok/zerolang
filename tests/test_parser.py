@@ -302,6 +302,12 @@ class TestDataDefinition:
         func = body["d"]
         assert isinstance(func, zast.Function)
 
+    def test_data_empty_rejected(self):
+        """data definition must have at least one element (grammar requirement)."""
+        result = parse_unit("foo: data { }\nmain: function is { }")
+        assert isinstance(result, zast.Error)
+        assert "at least one element" in result.msg
+
 
 class TestFunctionInKeyword:
     def test_function_with_in_keyword(self):
