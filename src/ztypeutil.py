@@ -5,7 +5,7 @@ These check properties of monomorphized generic types (array, str, list, map)
 and extract their type parameters.
 """
 
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, cast
 from ztypes import ZType, ZSubType
 
 if TYPE_CHECKING:
@@ -55,8 +55,8 @@ def array_length(typing: "Typing", ztype: ZType) -> Optional[int]:
     if base is None:
         return None
     to_arg = typing.generic_arg_of(base, "to")
-    if to_arg and to_arg.numeric_value is not None:
-        return to_arg.numeric_value
+    if to_arg and to_arg.const_value is not None:
+        return cast(int, to_arg.const_value)
     return None
 
 
@@ -74,8 +74,8 @@ def str_capacity(typing: "Typing", ztype: ZType) -> Optional[int]:
     if base is None:
         return None
     to_arg = typing.generic_arg_of(base, "to")
-    if to_arg and to_arg.numeric_value is not None:
-        return to_arg.numeric_value
+    if to_arg and to_arg.const_value is not None:
+        return cast(int, to_arg.const_value)
     return None
 
 

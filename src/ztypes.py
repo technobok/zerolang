@@ -211,10 +211,11 @@ class ZType:
     # default types for generic params: param name → default ZType
     generic_defaults: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
-    # for numeric generic value-carrying ZTypes: the constant integer value
-    numeric_value: "Optional[int]" = field(default=None, init=False)
-
-    # compile-time constant value (for 'as' section constants)
+    # compile-time constant value. Carries either:
+    #   - the literal value of an as-block constant ('max: 1024'), or
+    #   - the integer value of a numeric generic-arg carrier (e.g.
+    #     the '8' wrapper in 'array<i64, 8>') used both for emit and
+    #     as a monomorphization-key discriminator.
     const_value: "Optional[int | float | str]" = field(default=None, init=False)
 
     # for typedef types: points to the immediate base type being wrapped

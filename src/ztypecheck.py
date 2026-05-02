@@ -273,8 +273,8 @@ def _mono_arg_key(t: "ZType") -> Tuple:
         return ("gp", t.name)
     if _is_primitive_name(t.name):
         return ("p", t.name)
-    if t.numeric_value is not None:
-        return ("nv", t.numeric_value)
+    if t.const_value is not None:
+        return ("nv", t.const_value)
     return ("n", t.nodeid)
 
 
@@ -3418,7 +3418,7 @@ class TypeChecker:
             mangled_name = str(int_value)
 
         zt = _make_type(mangled_name, ZTypeType.RECORD)
-        zt.numeric_value = int_value
+        zt.const_value = int_value
         zt.is_valtype = True
         return zt
 
@@ -3799,7 +3799,7 @@ class TypeChecker:
                     array_defn = self._find_generic_defn(array_template)
                     if array_defn:
                         len_type = _make_type(str(data_len), ZTypeType.RECORD)
-                        len_type.numeric_value = data_len
+                        len_type.const_value = data_len
                         len_type.is_valtype = True
                         mono = self._monomorphize(
                             array_template,
@@ -4736,7 +4736,7 @@ class TypeChecker:
                 if concrete:
                     if (
                         param_ref_name in template_type.numeric_generic_params
-                        and concrete.numeric_value is not None
+                        and concrete.const_value is not None
                     ):
                         numeric_params_referenced.add(param_ref_name)
                         constraint = template_type.generic_params[param_ref_name]
@@ -4746,7 +4746,7 @@ class TypeChecker:
                             child_name,
                             resolved_constraint if resolved_constraint else constraint,
                         )
-                        mono.param_defaults[child_name] = str(concrete.numeric_value)
+                        mono.param_defaults[child_name] = str(concrete.const_value)
                     else:
                         self._set_child(mono, child_name, concrete)
                 else:
@@ -4790,7 +4790,7 @@ class TypeChecker:
                 if nparam in numeric_params_referenced:
                     continue
                 concrete = generic_args.get(nparam)
-                if concrete is None or concrete.numeric_value is None:
+                if concrete is None or concrete.const_value is None:
                     continue
                 constraint = template_type.generic_params[nparam]
                 resolved_constraint = self._resolve_name(constraint.name)
@@ -4799,7 +4799,7 @@ class TypeChecker:
                     nparam,
                     resolved_constraint if resolved_constraint else constraint,
                 )
-                mono.param_defaults[nparam] = str(concrete.numeric_value)
+                mono.param_defaults[nparam] = str(concrete.const_value)
 
     def _recompute_mono_typetype_marks(self, mono: ZType, template_type: ZType) -> None:
         """Re-derive `is_valtype` from the typetype (pure typetype-based
@@ -6771,8 +6771,8 @@ class TypeChecker:
             parent_type = self.typing.node_type.get(path.parent.nodeid)
             if parent_type and self.typing.has_generic_args(parent_type):
                 garg = self.typing.generic_arg_of(parent_type, child_name)
-                if garg and garg.numeric_value is not None:
-                    self.typing.node_const_value[path.nodeid] = garg.numeric_value
+                if garg and garg.const_value is not None:
+                    self.typing.node_const_value[path.nodeid] = garg.const_value
             # Phase 7b: stamp child_id against parent's ZType so the
             # emitter can dispatch by id on hot paths (union/variant
             # arm access, record field, method dispatch). Falls back to
