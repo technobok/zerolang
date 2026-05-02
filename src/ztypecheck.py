@@ -1206,7 +1206,7 @@ class TypeChecker:
                 ) and _is_numeric_id(cast(zast.AtomId, stripped_ppath).name):
                     _, val, err = parse_number(cast(zast.AtomId, stripped_ppath).name)
                     if not err:
-                        ftype.param_defaults[pname] = str(int(val))
+                        self.typing.set_child_default(ftype, pname, str(int(val)))
                 elif stripped_ppath.nodetype == NodeType.DOTTEDPATH:
                     ppath_dp = cast(zast.DottedPath, stripped_ppath)
                     if ppath_dp.parent.nodetype in (
@@ -1218,7 +1218,7 @@ class TypeChecker:
                             cast(zast.AtomId, ppath_dp.parent).name + child_name
                         )
                         if not err:
-                            ftype.param_defaults[pname] = str(int(val))
+                            self.typing.set_child_default(ftype, pname, str(int(val)))
                 elif stripped_ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     defn = self._lookup_definition(
                         cast(zast.AtomId, stripped_ppath).name
@@ -1228,9 +1228,9 @@ class TypeChecker:
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        ftype.param_defaults[pname] = cast(
-                            zast.AtomId, stripped_ppath
-                        ).name
+                        self.typing.set_child_default(
+                            ftype, pname, cast(zast.AtomId, stripped_ppath).name
+                        )
         if generic_ctx:
             self.mono.generic_context.pop()
 
@@ -1476,7 +1476,7 @@ class TypeChecker:
                 ) and _is_numeric_id(cast(zast.AtomId, fpath).name):
                     _, val, err = parse_number(cast(zast.AtomId, fpath).name)
                     if not err:
-                        ctype.param_defaults[fname] = str(int(val))
+                        self.typing.set_child_default(ctype, fname, str(int(val)))
                 elif fpath.nodetype == NodeType.DOTTEDPATH:
                     fpath_dp = cast(zast.DottedPath, fpath)
                     if fpath_dp.parent.nodetype in (
@@ -1488,7 +1488,7 @@ class TypeChecker:
                             cast(zast.AtomId, fpath_dp.parent).name + child_name
                         )
                         if not err:
-                            ctype.param_defaults[fname] = str(int(val))
+                            self.typing.set_child_default(ctype, fname, str(int(val)))
                 elif fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     defn = self._lookup_definition(cast(zast.AtomId, fpath).name)
                     if (
@@ -1496,7 +1496,9 @@ class TypeChecker:
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        ctype.param_defaults[fname] = cast(zast.AtomId, fpath).name
+                        self.typing.set_child_default(
+                            ctype, fname, cast(zast.AtomId, fpath).name
+                        )
         if generic_ctx:
             self.mono.generic_context.pop()
 
@@ -2302,7 +2304,7 @@ class TypeChecker:
                 ) and _is_numeric_id(cast(zast.AtomId, fpath).name):
                     _, val, err = parse_number(cast(zast.AtomId, fpath).name)
                     if not err:
-                        rtype.param_defaults[fname] = str(int(val))
+                        self.typing.set_child_default(rtype, fname, str(int(val)))
                 elif fpath.nodetype == NodeType.DOTTEDPATH:
                     fpath_dp = cast(zast.DottedPath, fpath)
                     if fpath_dp.parent.nodetype in (
@@ -2314,7 +2316,7 @@ class TypeChecker:
                             cast(zast.AtomId, fpath_dp.parent).name + child_name
                         )
                         if not err:
-                            rtype.param_defaults[fname] = str(int(val))
+                            self.typing.set_child_default(rtype, fname, str(int(val)))
                 elif fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     defn = self._lookup_definition(cast(zast.AtomId, fpath).name)
                     if (
@@ -2322,7 +2324,9 @@ class TypeChecker:
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        rtype.param_defaults[fname] = cast(zast.AtomId, fpath).name
+                        self.typing.set_child_default(
+                            rtype, fname, cast(zast.AtomId, fpath).name
+                        )
         if generic_ctx:
             self.mono.generic_context.pop()
         self._check_is_as_name_collision(
@@ -3139,13 +3143,15 @@ class TypeChecker:
                 # only include function-typed children from the 'is' section
                 if is_func_names and fname in is_func_names:
                     self._set_child(ftype, fname, ft)
-                    if fname in parent_type.param_defaults:
-                        ftype.param_defaults[fname] = parent_type.param_defaults[fname]
+                    parent_default = self.typing.child_default(parent_type, fname)
+                    if parent_default is not None:
+                        self.typing.set_child_default(ftype, fname, parent_default)
                 continue
             self._set_child(ftype, fname, ft)
             # propagate field defaults to constructor
-            if fname in parent_type.param_defaults:
-                ftype.param_defaults[fname] = parent_type.param_defaults[fname]
+            parent_default = self.typing.child_default(parent_type, fname)
+            if parent_default is not None:
+                self.typing.set_child_default(ftype, fname, parent_default)
             # reftype fields need .take ownership
             if not _is_valtype(ft):
                 ftype.param_ownership[fname] = ZParamOwnership.TAKE
@@ -4249,7 +4255,7 @@ class TypeChecker:
             length_type.is_valtype = True
             self._set_child(mono, "length", length_type)
             if arr_len is not None:
-                mono.param_defaults["length"] = str(arr_len)
+                self.typing.set_child_default(mono, "length", str(arr_len))
             # synthesize .get method: function {i: i64} out <elem>
             if elem_type:
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
@@ -4277,7 +4283,7 @@ class TypeChecker:
             size_type.is_valtype = True
             self._set_child(mono, "size", size_type)
             if str_cap is not None:
-                mono.param_defaults["size"] = str(str_cap)
+                self.typing.set_child_default(mono, "size", str(str_cap))
             # synthesize .string method: function {} out string
             string_method = _make_type(f"{mangled}.string", ZTypeType.FUNCTION)
             string_method.return_type = self._resolve_name("String") or self.t_null
@@ -4736,7 +4742,9 @@ class TypeChecker:
                             child_name,
                             resolved_constraint if resolved_constraint else constraint,
                         )
-                        mono.param_defaults[child_name] = str(concrete.const_value)
+                        self.typing.set_child_default(
+                            mono, child_name, str(concrete.const_value)
+                        )
                     else:
                         self._set_child(mono, child_name, concrete)
                 else:
@@ -4789,7 +4797,7 @@ class TypeChecker:
                     nparam,
                     resolved_constraint if resolved_constraint else constraint,
                 )
-                mono.param_defaults[nparam] = str(concrete.const_value)
+                self.typing.set_child_default(mono, nparam, str(concrete.const_value))
 
     def _recompute_mono_typetype_marks(self, mono: ZType, template_type: ZType) -> None:
         """Re-derive `is_valtype` from the typetype (pure typetype-based
@@ -5385,9 +5393,8 @@ class TypeChecker:
             if param_name:
                 provided_value_params.add(param_name)
         for pname, ptype in mono_params:
-            if (
-                pname not in provided_value_params
-                and pname not in mono_ftype.param_defaults
+            if pname not in provided_value_params and not self.typing.has_child_default(
+                mono_ftype, pname
             ):
                 self._error(
                     f"missing required argument '{pname}' (type: {ptype.name})",
@@ -5528,7 +5535,8 @@ class TypeChecker:
 
         # copy ownership annotations
         mono.param_ownership = dict(template.param_ownership)
-        mono.param_defaults = dict(template.param_defaults)
+        for cname, cdefault in self.typing.child_defaults_of(template).items():
+            self.typing.set_child_default(mono, cname, cdefault)
 
         # assign cname
         self._assign_cname_type(mono, qualified_name=mangled)
@@ -6236,7 +6244,7 @@ class TypeChecker:
                 and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
             ):
                 for pname, ptype in self.typing.children_of(t):
-                    if pname not in t.param_defaults:
+                    if not self.typing.has_child_default(t, pname):
                         self._error(
                             f"missing required argument '{pname}' (type: {ptype.name})",
                             loc=inner.start,
@@ -6256,7 +6264,7 @@ class TypeChecker:
                     for pname, ptype in self.typing.children_of(create_type):
                         if ptype.typetype == ZTypeType.FUNCTION:
                             continue
-                        if pname not in create_type.param_defaults:
+                        if not self.typing.has_child_default(create_type, pname):
                             self._error(
                                 f"missing required field '{pname}' "
                                 f"(type: {ptype.name})",
@@ -7552,7 +7560,9 @@ class TypeChecker:
         ):
             provided.add(callee_type.this_param_name)
         for pname, ptype in params:
-            if pname not in provided and pname not in callee_type.param_defaults:
+            if pname not in provided and not self.typing.has_child_default(
+                callee_type, pname
+            ):
                 self._error(
                     f"missing required argument '{pname}' (type: {ptype.name})",
                     loc=call.start,
@@ -7650,7 +7660,9 @@ class TypeChecker:
             if arg.name:
                 provided.add(arg.name)
         for pname, ptype in data_params:
-            if pname not in provided and pname not in create_type.param_defaults:
+            if pname not in provided and not self.typing.has_child_default(
+                create_type, pname
+            ):
                 self._error(
                     f"missing required argument '{pname}' (type: {ptype.name})",
                     loc=call.start,

@@ -65,6 +65,7 @@ class TypeChild:
     is_private: bool = False  # field declared with .private modifier
     is_lock_field: bool = False  # class field declared with .lock modifier
     is_lock_arm: bool = False  # union arm declared with .lock modifier
+    default: "Optional[str]" = None  # C-level default expression for the param/field
 
 
 @dataclass
@@ -305,6 +306,34 @@ class Typing:
     def has_any_lock_arm(self, parent: ZType) -> bool:
         for row in self.type_child:
             if row.parent_type_id == parent.nodeid and row.is_lock_arm:
+                return True
+        return False
+
+    def set_child_default(self, parent: ZType, name: str, default: str) -> None:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                row.default = default
+                return
+
+    def child_default(self, parent: ZType, name: str) -> "Optional[str]":
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                return row.default
+        return None
+
+    def has_child_default(self, parent: ZType, name: str) -> bool:
+        return self.child_default(parent, name) is not None
+
+    def child_defaults_of(self, parent: ZType) -> "Dict[str, str]":
+        out: "Dict[str, str]" = {}
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.default is not None:
+                out[row.child_name] = row.default
+        return out
+
+    def has_any_default(self, parent: ZType) -> bool:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.default is not None:
                 return True
         return False
 

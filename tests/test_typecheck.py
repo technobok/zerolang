@@ -5439,7 +5439,7 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "greet")
         assert t is not None
-        assert t.param_defaults == {"a": "0", "b": "42"}
+        assert tc.typing.child_defaults_of(t) == {"a": "0", "b": "42"}
 
     def test_function_ref_default_detected(self):
         """Function reference default detected (function with body)."""
@@ -5455,8 +5455,8 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "apply")
         assert t is not None
-        assert "f" in t.param_defaults
-        assert t.param_defaults["f"] == "add"
+        assert tc.typing.has_child_default(t, "f")
+        assert tc.typing.child_default(t, "f") == "add"
 
     def test_spec_no_default(self):
         """Spec (function without body) does NOT produce a default."""
@@ -5473,7 +5473,7 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "apply")
         assert t is not None
-        assert "f" not in t.param_defaults
+        assert not tc.typing.has_child_default(t, "f")
 
     def test_call_with_missing_defaulted_arg_no_error(self):
         """Call omitting an arg that has a default produces no type error."""
@@ -5495,11 +5495,11 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "myrec")
         assert t is not None
-        assert t.param_defaults == {"y": "0"}
+        assert tc.typing.child_defaults_of(t) == {"y": "0"}
         # defaults propagate to constructor
         create_t = t.meta_create
         assert create_t is not None
-        assert create_t.param_defaults == {"y": "0"}
+        assert tc.typing.child_defaults_of(create_t) == {"y": "0"}
 
     def test_type_name_no_default(self):
         """A type name like 'i64' does NOT produce a default."""
@@ -5511,7 +5511,7 @@ class TestDefaults:
         tc.check()
         t = tc._resolve_unit_name("test", "greet")
         assert t is not None
-        assert "a" not in t.param_defaults
+        assert not tc.typing.has_child_default(t, "a")
 
 
 class TestNumericCasting:
@@ -5558,7 +5558,7 @@ class TestNumericCasting:
         tc.check()
         t = tc._resolve_unit_name("test", "greet")
         assert t is not None
-        assert t.param_defaults == {"a": "0"}
+        assert tc.typing.child_defaults_of(t) == {"a": "0"}
 
     def test_dotted_default_record_field(self):
         """Record with x: 0.u32 field default."""
@@ -5573,7 +5573,7 @@ class TestNumericCasting:
         tc.check()
         t = tc._resolve_unit_name("test", "myrec")
         assert t is not None
-        assert t.param_defaults == {"y": "0"}
+        assert tc.typing.child_defaults_of(t) == {"y": "0"}
 
 
 class TestProtocols:
@@ -8607,7 +8607,7 @@ class TestNumericGenerics:
         # auto-synthesized field
         assert typing.has_child(mono, "size")
         assert typing.child_of(mono, "size").name == "u64"
-        assert mono.param_defaults["size"] == "10"
+        assert typing.child_default(mono, "size") == "10"
 
     def test_numeric_generic_range_check(self):
         """Value 300 for u8 constraint produces error."""
@@ -8630,7 +8630,7 @@ class TestNumericGenerics:
         assert typing.child_of(mono, "payload").name == "i64"
         assert typing.has_child(mono, "size")
         assert typing.child_of(mono, "size").name == "u64"
-        assert mono.param_defaults["size"] == "10"
+        assert typing.child_default(mono, "size") == "10"
 
     def test_numeric_generic_different_values(self):
         """size 10 vs 20 produce different types."""
@@ -8676,7 +8676,7 @@ class TestNumericGenerics:
         monos = [m for m, _ in typing.mono_types if m.name == "myrec_neg5"]
         assert len(monos) == 1
         mono = monos[0]
-        assert mono.param_defaults["off"] == "-5"
+        assert typing.child_default(mono, "off") == "-5"
 
     def test_numeric_generic_auto_field(self):
         """Numeric param auto-creates field when not referenced by Any child."""
@@ -8689,7 +8689,7 @@ class TestNumericGenerics:
         mono = monos[0]
         assert typing.has_child(mono, "n")
         assert typing.child_of(mono, "n").name == "u32"
-        assert mono.param_defaults["n"] == "42"
+        assert typing.child_default(mono, "n") == "42"
 
 
 class TestArrays:
@@ -8759,7 +8759,7 @@ class TestArrays:
         assert len(monos) == 1
         mono = monos[0]
         assert typing.has_child(mono, "length")
-        assert mono.param_defaults.get("length") == "4"
+        assert typing.child_default(mono, "length") == "4"
 
     def test_array_different_lengths_different_types(self):
         """array of: i64 to: 4 and array of: i64 to: 8 are different types."""
@@ -8824,7 +8824,7 @@ class TestStr:
         monos = [m for m, _ in typing.mono_types if m.name == "str_32"]
         mono = monos[0]
         assert typing.has_child(mono, "size")
-        assert mono.param_defaults.get("size") == "32"
+        assert typing.child_default(mono, "size") == "32"
 
     def test_str_string_method(self):
         """.string method is synthesized returning String type."""

@@ -192,9 +192,6 @@ class ZType:
 
     is_valtype: Optional[bool] = field(default=None, init=False)
 
-    # default values for parameters/fields: name -> C-level default expression
-    param_defaults: "dict[str, str]" = field(default_factory=dict, init=False)
-
     # generic type parameters: param name -> constraint ZType (for template types)
     generic_params: "dict[str, ZType]" = field(default_factory=dict, init=False)
 

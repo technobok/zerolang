@@ -1774,7 +1774,7 @@ class CEmitter:
                 self._type_field_names[name] = field_names_r
                 self._type_field_ctypes[name] = field_ctypes_r
                 defaults_r: Dict[str, str] = {}
-                for fn, default_val in mono_type.param_defaults.items():
+                for fn, default_val in self.typing.child_defaults_of(mono_type).items():
                     idx = field_names_r.index(fn) if fn in field_names_r else -1
                     if idx >= 0:
                         ct = field_ctypes_r[idx]
@@ -1797,7 +1797,7 @@ class CEmitter:
                 self._type_field_names[name] = field_names
                 self._type_field_ctypes[name] = field_ctypes_list
                 defaults_c: Dict[str, str] = {}
-                for fn, default_val in mono_type.param_defaults.items():
+                for fn, default_val in self.typing.child_defaults_of(mono_type).items():
                     idx = field_names.index(fn) if fn in field_names else -1
                     if idx >= 0:
                         ct = field_ctypes_list[idx]
@@ -6043,12 +6043,12 @@ class CEmitter:
 
         # fill defaults for missing trailing params
         ftype = self._node_ztype(call.callable)
-        if ftype and ftype.param_defaults:
+        if ftype and self.typing.has_any_default(ftype):
             params = self.typing.children_of(ftype)
             for i in range(len(call.arguments), len(params)):
                 pname, _ = params[i]
-                if pname in ftype.param_defaults:
-                    default = ftype.param_defaults[pname]
+                default = self.typing.child_default(ftype, pname)
+                if default is not None:
                     if self._typetype_of(default) == ZTypeType.FUNCTION:
                         default = _mangle_func(default)
                     parts.append(default)
@@ -6241,17 +6241,19 @@ class CEmitter:
             ):
                 atom = cast(zast.AtomId, inner)
                 ftype = self._node_ztype(atom)
-                if ftype and ftype.param_defaults:
+                if ftype and self.typing.has_any_default(ftype):
                     # only emit bare call when ALL params have defaults
                     real_params = self.typing.children_of(ftype)
                     all_defaulted = all(
-                        p in ftype.param_defaults for p, _ in real_params
+                        self.typing.has_child_default(ftype, p) for p, _ in real_params
                     )
                     if all_defaulted:
                         cname = _mangle_func(atom.name)
                         defaults: List[str] = []
                         for pname, _ in real_params:
-                            d = ftype.param_defaults[pname]
+                            d = self.typing.child_default(ftype, pname)
+                            if d is None:
+                                continue
                             if self._typetype_of(d) == ZTypeType.FUNCTION:
                                 d = _mangle_func(d)
                             defaults.append(d)
