@@ -1780,7 +1780,7 @@ class TypeChecker:
             # detect locked arms: arm declared as `name: t.lock`. Only LOCK is
             # permitted; .take/.borrow on an arm are rejected.
             if arm_own == ZParamOwnership.LOCK:
-                utype.lock_arm_names.add(sname)
+                self.typing.set_child_lock_arm(utype, sname)
             elif arm_own is not None:
                 self._error(
                     f"Only '.lock' is permitted as a union arm modifier; "
@@ -1880,15 +1880,15 @@ class TypeChecker:
         propagates the source path to the assignment target.
 
         Mirrors `_check_protocol_borrow`'s borrow-lift pattern, except the
-        check is keyed on the union arm's `lock_arm_names` membership
+        check is keyed on the union arm's `is_lock_arm` flag
         rather than a `.borrow` constructor name.
         """
         if union_type.typetype != ZTypeType.UNION:
             return
-        if not union_type.lock_arm_names:
+        if not self.typing.has_any_lock_arm(union_type):
             return
         arm_name = callable_dp.child.name
-        if arm_name not in union_type.lock_arm_names:
+        if not self.typing.is_child_lock_arm(union_type, arm_name):
             return
         # locate the from: arg (or the first positional arg if no from:)
         from_arg = None
@@ -1917,7 +1917,7 @@ class TypeChecker:
                 spath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
                 and cast(zast.AtomId, spath).name == "null"
             )
-            is_locked = sname in utype.lock_arm_names
+            is_locked = self.typing.is_child_lock_arm(utype, sname)
             if not (is_null or is_locked):
                 return
         utype.destructor_name = None
@@ -4819,13 +4819,14 @@ class TypeChecker:
             if some_child and some_child.is_heap_allocated:
                 mono.is_nullable_ptr = True
         # OptionView: standard {tag, void*} layout. Carry the template's
-        # lock_arm_names through and elide the destructor — the union
+        # lock-arm flags through and elide the destructor — the union
         # doesn't own its payload.
         if (
             template_type.typetype == ZTypeType.UNION
             and template_type.nodeid == self._optionview_template_nodeid()
         ):
-            mono.lock_arm_names = set(template_type.lock_arm_names)
+            for arm in self.typing.lock_arm_names_of(template_type):
+                self.typing.set_child_lock_arm(mono, arm)
             mono.destructor_name = None
 
     def _rebuild_mono_tag(self, mono: ZType, mangled: str) -> None:

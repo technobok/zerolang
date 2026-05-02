@@ -64,6 +64,7 @@ class TypeChild:
     # ZType — see plans/line-count-increase-is-twinkling-willow.md):
     is_private: bool = False  # field declared with .private modifier
     is_lock_field: bool = False  # class field declared with .lock modifier
+    is_lock_arm: bool = False  # union arm declared with .lock modifier
 
 
 @dataclass
@@ -279,6 +280,31 @@ class Typing:
     def has_any_lock_field(self, parent: ZType) -> bool:
         for row in self.type_child:
             if row.parent_type_id == parent.nodeid and row.is_lock_field:
+                return True
+        return False
+
+    def set_child_lock_arm(self, parent: ZType, name: str) -> None:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                row.is_lock_arm = True
+                return
+
+    def is_child_lock_arm(self, parent: ZType, name: str) -> bool:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                return row.is_lock_arm
+        return False
+
+    def lock_arm_names_of(self, parent: ZType) -> "List[str]":
+        out: "List[str]" = []
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.is_lock_arm:
+                out.append(row.child_name)
+        return out
+
+    def has_any_lock_arm(self, parent: ZType) -> bool:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.is_lock_arm:
                 return True
         return False
 

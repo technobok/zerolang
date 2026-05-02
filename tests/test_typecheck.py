@@ -11092,8 +11092,8 @@ class TestUnionLockedArm:
         tc.check()
         ut = tc._resolved.get("test.myview")
         assert ut is not None
-        assert "some" in ut.lock_arm_names
-        assert "none" not in ut.lock_arm_names
+        assert tc.typing.is_child_lock_arm(ut, "some")
+        assert not tc.typing.is_child_lock_arm(ut, "none")
 
     def test_union_all_null_or_locked_no_destructor(self):
         """A union whose every arm is `null` or `.lock` needs no destructor."""
@@ -11127,7 +11127,7 @@ class TestUnionLockedArm:
         ut = tc._resolved.get("test.mixed")
         assert (ut.destructor_name is not None) is True
         assert ut.destructor_name == "z_mixed_destroy"
-        assert ut.lock_arm_names == {"cached"}
+        assert set(tc.typing.lock_arm_names_of(ut)) == {"cached"}
 
     def test_variant_locked_arm_rejected(self):
         """A variant arm cannot use `.lock` — variants are valtype-only."""
@@ -11165,7 +11165,7 @@ class TestUnionLockedArm:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.wrap")
-        assert ut.lock_arm_names == {"val"}
+        assert set(tc.typing.lock_arm_names_of(ut)) == {"val"}
         assert (ut.destructor_name is not None) is False
 
 
@@ -11184,8 +11184,8 @@ class TestOptionview:
         assert ovt is not None
         assert ovt.typetype == ZTypeType.UNION
         assert ovt.isgeneric
-        assert "some" in ovt.lock_arm_names
-        assert "none" not in ovt.lock_arm_names
+        assert tc.typing.is_child_lock_arm(ovt, "some")
+        assert not tc.typing.is_child_lock_arm(ovt, "none")
         # destructor elision is deferred to monomorphization for generic
         # unions; see test_optionview_mono_no_destructor for the mono case.
 
@@ -11223,7 +11223,7 @@ class TestOptionview:
         assert mono is not None, "OptionView mono not resolved"
         assert (mono.destructor_name is not None) is False
         assert mono.destructor_name is None
-        assert "some" in mono.lock_arm_names
+        assert tc.typing.is_child_lock_arm(mono, "some")
 
     def test_is_iterator_wrapper_recognises_all_three(self):
         """The for-loop dispatch helper accepts Option, optionval, AND

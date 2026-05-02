@@ -248,13 +248,6 @@ class ZType:
     # resolution when public: unit { ... } is declared in the as block.
     public_members: "Optional[dict[str, str]]" = field(default=None, init=False)
 
-    # set of arm names declared with the .lock type modifier on a union -
-    # the arm holds a locked reference into a parent rather than owning its
-    # payload. The destructor releases the lock without freeing the payload;
-    # the union's lifetime cannot exceed the locked source's lifetime.
-    # Unions only - variant arms must be inline-stored valtypes.
-    lock_arm_names: "set[str]" = field(default_factory=set, init=False)
-
     # True if the type's 'create' method is disabled — either by the user
     # writing 'create: null' in the 'as' block, or by the compiler for types
     # where bare-name construction is not meaningful (unions and variants

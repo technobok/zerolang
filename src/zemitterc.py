@@ -3010,8 +3010,8 @@ class CEmitter:
     def _union_lock_arm_names(self, union_defn: zast.ObjectDef) -> set:
         """Return the set of arm names declared as `name: t.lock` on a union.
 
-        Mirrors the type-checker's `lock_arm_names` on the resolved ZType,
-        but read straight off the AST so it's available at emit time without
+        Mirrors the type-checker's `is_lock_arm` flag on TypeChild, but
+        read straight off the AST so it's available at emit time without
         needing a back-reference to the resolved type. The .lock suffix
         rides on the item's path (DottedPath whose leaf is `lock`).
         """
@@ -3266,12 +3266,10 @@ class CEmitter:
         # destructor: collapse to a no-op when every subtype is `null` or
         # a locked arm (locked arms hold a borrowed pointer the union does
         # not own — no cleanup needed).
-        lock_arms_mono = mono_type.lock_arm_names
-
         def _is_no_cleanup_mono(sname: str, stype: ZType) -> bool:
             if stype.typetype == ZTypeType.NULL:
                 return True
-            return sname in lock_arms_mono
+            return self.typing.is_child_lock_arm(mono_type, sname)
 
         all_no_cleanup_mono = all(
             _is_no_cleanup_mono(sname, stype) for sname, stype in subtype_items
@@ -8298,7 +8296,9 @@ class CEmitter:
 
         # determine whether this arm is a locked arm — locked arms hold a
         # borrowed pointer into the source (no ownership, no boxing).
-        is_locked_arm = bool(call_type and subtype_name in call_type.lock_arm_names)
+        is_locked_arm = bool(
+            call_type and self.typing.is_child_lock_arm(call_type, subtype_name)
+        )
 
         if is_null or value_arg is None:
             self._temp.decls.append(f"{indent}{tmp}.data = NULL;\n")
@@ -9246,7 +9246,7 @@ class CEmitter:
                 elif (
                     opt_type
                     and opt_type.typetype == ZTypeType.UNION
-                    and "some" in opt_type.lock_arm_names
+                    and self.typing.is_child_lock_arm(opt_type, "some")
                 ):
                     # optionview: borrowed-view union. data is a pointer to
                     # the source's storage. For valtype payloads (e.g.
