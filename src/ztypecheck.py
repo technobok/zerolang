@@ -1176,8 +1176,6 @@ class TypeChecker:
             stripped_ppath, p_own = _strip_path_ownership(ppath)
             pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
             self.typing.node_type[ppath.nodeid] = pt
-            if p_own is not None:
-                ftype.param_ownership[pname] = p_own
             if (
                 pt
                 and pt.typetype == ZTypeType.GENERIC_PARAM
@@ -1196,6 +1194,8 @@ class TypeChecker:
                 continue
             if pt:
                 self._set_child(ftype, pname, pt)
+                if p_own is not None:
+                    self.typing.set_child_ownership(ftype, pname, p_own)
                 # detect defaults — read from the post-ownership-strip
                 # path so `u8.5.lock` style still resolves the numeric
                 # default while a `.lock`/`.borrow`/`.take` suffix is
@@ -1269,7 +1269,7 @@ class TypeChecker:
         # natives use stringview directly; store-into-receiver natives
         # carry `.take` annotations).
         for pname in func.parameters:
-            if pname in ftype.param_ownership:
+            if self.typing.has_child_ownership(ftype, pname):
                 continue
             pt = self.typing.child_of(ftype, pname)
             if (
@@ -1278,7 +1278,7 @@ class TypeChecker:
                 and not pt.is_heap_allocated
                 and (pt.destructor_name is not None)
             ):
-                ftype.param_ownership[pname] = ZParamOwnership.BORROW
+                self.typing.set_child_ownership(ftype, pname, ZParamOwnership.BORROW)
 
         # validate function signature ownership rules
         self._validate_function_ownership(ftype, func)
@@ -1289,7 +1289,7 @@ class TypeChecker:
 
     def _validate_function_ownership(self, ftype: ZType, func: zast.Function) -> None:
         """Validate ownership rules on a function signature."""
-        own = ftype.param_ownership
+        own = self.typing.child_ownerships_of(ftype)
         has_return = ftype.return_type is not None
         ret_is_borrow = ftype.return_ownership == ZParamOwnership.BORROW
 
@@ -2709,14 +2709,14 @@ class TypeChecker:
             create_type = _make_type(f"{name}.create", ZTypeType.FUNCTION)
             create_type.return_type = rtype
             self._set_child(create_type, "from", base_type)
-            create_type.param_ownership["from"] = ZParamOwnership.TAKE
+            self.typing.set_child_ownership(create_type, "from", ZParamOwnership.TAKE)
             self._set_child(rtype, "create", create_type)
             rtype.meta_create = create_type
 
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
             borrow_type.return_type = rtype
             self._set_child(borrow_type, "from", base_type)
-            borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
+            self.typing.set_child_ownership(borrow_type, "from", ZParamOwnership.LOCK)
             self._set_child(rtype, "borrow", borrow_type)
 
         # typecheck method bodies (non-generic only)
@@ -2988,14 +2988,14 @@ class TypeChecker:
             create_type.return_type = ptype
             # from: parameter — placeholder type (conformance checked in _check_call)
             self._set_child(create_type, "from", self.t_null)
-            create_type.param_ownership["from"] = ZParamOwnership.TAKE
+            self.typing.set_child_ownership(create_type, "from", ZParamOwnership.TAKE)
             self._set_child(ptype, "create", create_type)
 
             # borrow: borrowed protocol creation
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
             borrow_type.return_type = ptype
             self._set_child(borrow_type, "from", self.t_null)
-            borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
+            self.typing.set_child_ownership(borrow_type, "from", ZParamOwnership.LOCK)
             self._set_child(ptype, "borrow", borrow_type)
 
         _set_field_cleanup_metadata(self.typing, ptype)
@@ -3054,7 +3054,7 @@ class TypeChecker:
             borrow_type = _make_type(f"{name}.borrow", ZTypeType.FUNCTION)
             borrow_type.return_type = ftype
             self._set_child(borrow_type, "from", self.t_null)
-            borrow_type.param_ownership["from"] = ZParamOwnership.LOCK
+            self.typing.set_child_ownership(borrow_type, "from", ZParamOwnership.LOCK)
             self._set_child(ftype, "borrow", borrow_type)
 
         _set_field_cleanup_metadata(self.typing, ftype)
@@ -3154,7 +3154,7 @@ class TypeChecker:
                 self.typing.set_child_default(ftype, fname, parent_default)
             # reftype fields need .take ownership
             if not _is_valtype(ft):
-                ftype.param_ownership[fname] = ZParamOwnership.TAKE
+                self.typing.set_child_ownership(ftype, fname, ZParamOwnership.TAKE)
         return ftype
 
     def _resolve_inline_unit_type(
@@ -4170,7 +4170,8 @@ class TypeChecker:
                 new_func.return_type = args[rt.name]
             else:
                 new_func.return_type = rt
-        new_func.param_ownership = func_type.param_ownership.copy()
+        for cname, cown in self.typing.child_ownerships_of(func_type).items():
+            self.typing.set_child_ownership(new_func, cname, cown)
         new_func.return_ownership = func_type.return_ownership
         return new_func
 
@@ -4426,18 +4427,24 @@ class TypeChecker:
                 # synthesize .append method: function {from: <elem>}
                 append_type = _make_type(f"{mangled}.append", ZTypeType.FUNCTION)
                 self._set_child(append_type, "from", elem_type)
-                append_type.param_ownership["from"] = ZParamOwnership.TAKE
+                self.typing.set_child_ownership(
+                    append_type, "from", ZParamOwnership.TAKE
+                )
                 self._set_child(mono, "append", append_type)
                 # synthesize .insert method: function {from: <elem> at: u64}
                 insert_type = _make_type(f"{mangled}.insert", ZTypeType.FUNCTION)
                 self._set_child(insert_type, "from", elem_type)
                 self._set_child(insert_type, "at", t_u64)
-                insert_type.param_ownership["from"] = ZParamOwnership.TAKE
+                self.typing.set_child_ownership(
+                    insert_type, "from", ZParamOwnership.TAKE
+                )
                 self._set_child(mono, "insert", insert_type)
                 # synthesize .extend method: function {from: list_T}
                 extend_type = _make_type(f"{mangled}.extend", ZTypeType.FUNCTION)
                 self._set_child(extend_type, "from", mono)
-                extend_type.param_ownership["from"] = ZParamOwnership.TAKE
+                self.typing.set_child_ownership(
+                    extend_type, "from", ZParamOwnership.TAKE
+                )
                 self._set_child(mono, "extend", extend_type)
                 # synthesize .get method: function {i: u64} out <elem>
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
@@ -4450,7 +4457,7 @@ class TypeChecker:
                 self._set_child(set_type, "i", t_u64)
                 self._set_child(set_type, "val", elem_type)
                 set_type.return_type = elem_type
-                set_type.param_ownership["val"] = ZParamOwnership.TAKE
+                self.typing.set_child_ownership(set_type, "val", ZParamOwnership.TAKE)
                 self._set_child(mono, "set", set_type)
                 # synthesize .pop method: function {} out <elem>
                 pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
@@ -4481,7 +4488,9 @@ class TypeChecker:
                         f"{mangled}.extendView", ZTypeType.FUNCTION
                     )
                     self._set_child(extend_view_type, "other", listview_mono)
-                    extend_view_type.param_ownership["other"] = ZParamOwnership.BORROW
+                    self.typing.set_child_ownership(
+                        extend_view_type, "other", ZParamOwnership.BORROW
+                    )
                     self._set_child(mono, "extendView", extend_view_type)
                 # synthesize .iterate method: function {:this} out (listiter of: elem)
                 # — borrowed-view iterator over the list. Triggers
@@ -4527,8 +4536,8 @@ class TypeChecker:
                 set_type = _make_type(f"{mangled}.set", ZTypeType.FUNCTION)
                 self._set_child(set_type, "key", key_type)
                 self._set_child(set_type, "value", value_type)
-                set_type.param_ownership["key"] = ZParamOwnership.TAKE
-                set_type.param_ownership["value"] = ZParamOwnership.TAKE
+                self.typing.set_child_ownership(set_type, "key", ZParamOwnership.TAKE)
+                self.typing.set_child_ownership(set_type, "value", ZParamOwnership.TAKE)
                 self._set_child(mono, "set", set_type)
                 # synthesize .get method: function {key: K} out option/optionval of: V
                 get_type = _make_type(f"{mangled}.get", ZTypeType.FUNCTION)
@@ -5534,7 +5543,8 @@ class TypeChecker:
                 mono.return_type = template.return_type
 
         # copy ownership annotations
-        mono.param_ownership = dict(template.param_ownership)
+        for cname, cown in self.typing.child_ownerships_of(template).items():
+            self.typing.set_child_ownership(mono, cname, cown)
         for cname, cdefault in self.typing.child_defaults_of(template).items():
             self.typing.set_child_default(mono, cname, cdefault)
 
@@ -5678,7 +5688,7 @@ class TypeChecker:
             f"{self.program.mainunitname}.{name}"
         )
         if ftype is not None and ftype.typetype == ZTypeType.FUNCTION:
-            self.func_ctx.func_ownership = dict(ftype.param_ownership)
+            self.func_ctx.func_ownership = dict(self.typing.child_ownerships_of(ftype))
             self.func_ctx.func_return_ownership = ftype.return_ownership
         else:
             self.func_ctx.func_ownership = {}
@@ -7450,7 +7460,7 @@ class TypeChecker:
                         # Try implicit protocol projection: if the parameter
                         # expects a protocol/facet and the concrete arg
                         # type conforms, synthesise the wrapper.
-                        own = callee_type.param_ownership.get(arg.name)
+                        own = self.typing.child_ownership(callee_type, arg.name)
                         if self._try_protocol_coerce(arg, arg_type, matched, own):
                             arg_type = matched
                         else:
@@ -7474,7 +7484,7 @@ class TypeChecker:
                 # positional argument
                 pname, ptype = params[i]
                 if not self._types_compatible(arg_type, ptype):
-                    own = callee_type.param_ownership.get(pname)
+                    own = self.typing.child_ownership(callee_type, pname)
                     if self._try_protocol_coerce(arg, arg_type, ptype, own):
                         arg_type = ptype
                     else:
@@ -7507,7 +7517,7 @@ class TypeChecker:
             if arg_type and i < len(params):
                 pname, _ = params[i]
                 pname_for_lock = pname
-                param_own = callee_type.param_ownership.get(pname)
+                param_own = self.typing.child_ownership(callee_type, pname)
                 # determine the effective ownership: explicit annotation if
                 # present, otherwise the default for the type (take for
                 # valtypes, borrow for reftypes).
@@ -7586,7 +7596,7 @@ class TypeChecker:
         ret = callee_type.return_type
         lock_param_names = {
             k
-            for k, v in callee_type.param_ownership.items()
+            for k, v in self.typing.child_ownerships_of(callee_type).items()
             if v == ZParamOwnership.LOCK
         }
         for target_path, pname in lock_param_targets:
@@ -8258,7 +8268,7 @@ class TypeChecker:
                 return
         lock_param_names = {
             k
-            for k, v in callee_type.param_ownership.items()
+            for k, v in self.typing.child_ownerships_of(callee_type).items()
             if v == ZParamOwnership.LOCK
         }
         for arg in call.arguments:
@@ -8478,7 +8488,11 @@ class TypeChecker:
         # operates on a bare AtomId — unifies the constructor path with the
         # standard call path.
         create_fn = self.typing.child_of(proto_type, "create")
-        own = create_fn.param_ownership.get("from") if create_fn is not None else None
+        own = (
+            self.typing.child_ownership(create_fn, "from")
+            if create_fn is not None
+            else None
+        )
         if own == ZParamOwnership.TAKE:
             arg_borrow_path = arg_result.borrow_target
             if not self._arg_is_trivial(from_arg):

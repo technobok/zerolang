@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 import zast
-from ztypes import ZType, ZOwnership
+from ztypes import ZType, ZOwnership, ZParamOwnership
 from zast import CallKind
 from zsymtab_proto import SymbolTableProto
 
@@ -66,6 +66,7 @@ class TypeChild:
     is_lock_field: bool = False  # class field declared with .lock modifier
     is_lock_arm: bool = False  # union arm declared with .lock modifier
     default: "Optional[str]" = None  # C-level default expression for the param/field
+    param_ownership: "Optional[ZParamOwnership]" = None  # take/borrow/lock annotation
 
 
 @dataclass
@@ -334,6 +335,36 @@ class Typing:
     def has_any_default(self, parent: ZType) -> bool:
         for row in self.type_child:
             if row.parent_type_id == parent.nodeid and row.default is not None:
+                return True
+        return False
+
+    def set_child_ownership(
+        self, parent: ZType, name: str, ownership: ZParamOwnership
+    ) -> None:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                row.param_ownership = ownership
+                return
+
+    def child_ownership(self, parent: ZType, name: str) -> "Optional[ZParamOwnership]":
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                return row.param_ownership
+        return None
+
+    def has_child_ownership(self, parent: ZType, name: str) -> bool:
+        return self.child_ownership(parent, name) is not None
+
+    def child_ownerships_of(self, parent: ZType) -> "Dict[str, ZParamOwnership]":
+        out: "Dict[str, ZParamOwnership]" = {}
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.param_ownership is not None:
+                out[row.child_name] = row.param_ownership
+        return out
+
+    def has_any_ownership(self, parent: ZType) -> bool:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.param_ownership is not None:
                 return True
         return False
 

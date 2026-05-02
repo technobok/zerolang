@@ -152,9 +152,9 @@ class ZType:
 
     For units, children contains the unit's definitions.
 
-    param_ownership maps parameter names to their
-    ownership annotation (take/borrow/lock). Only populated for
-    FUNCTION types.
+    Per-(parent, child-name) metadata such as param ownership
+    annotations and field defaults lives on TypeChild rows in the
+    `Typing.type_child` table; ZType only carries type-identity data.
 
     is_valtype indicates whether this type is a value type (records,
     numerics, enums, variants) vs a reference type (classes, unions).
@@ -184,11 +184,6 @@ class ZType:
     this_param_name: "Optional[str]" = field(default=None, init=False)
 
     isgeneric: bool = False
-
-    # ownership annotations for function parameters and return type
-    param_ownership: "dict[str, ZParamOwnership]" = field(
-        default_factory=dict, init=False
-    )
 
     is_valtype: Optional[bool] = field(default=None, init=False)
 

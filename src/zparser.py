@@ -1011,7 +1011,7 @@ class Parser:
         either `:name` (label-value shorthand: parameter named after
         its type, used for generics) or `name: typeref` (explicit
         type, with optional `.take`/`.borrow`/`.lock` suffix stripped
-        into `param_ownership`).
+        into the corresponding TypeChild row's `param_ownership`).
 
         Used for both the explicit `in { … }` clause and the implicit
         first-clause `{ … }` form in `_accept_function_definition`.

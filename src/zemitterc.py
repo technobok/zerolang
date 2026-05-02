@@ -4642,7 +4642,6 @@ class CEmitter:
         # both syntactic suffixes and the inferred BORROW-default for
         # stack-reftype params); read them from there.
         ftype = self._resolved_type(name)
-        param_own = ftype.param_ownership if ftype else {}
         params: List[str] = []
         for pname, ppath in func.parameters.items():
             ptype_str = _ctype(self.typing, self._node_ztype(ppath))
@@ -4659,7 +4658,8 @@ class CEmitter:
                 and cast(ZType, self._node_ztype(ppath)).typetype == ZTypeType.CLASS
                 and not cast(ZType, self._node_ztype(ppath)).is_heap_allocated
                 and not ptype_str.endswith("*")
-                and param_own.get(pname)
+                and ftype
+                and self.typing.child_ownership(ftype, pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
@@ -4683,7 +4683,6 @@ class CEmitter:
         # Ownership annotations live on the resolved ZType (carries
         # both syntactic suffixes and inferred BORROW-default).
         ftype = self._resolved_type(name)
-        param_own = ftype.param_ownership if ftype else {}
 
         params: List[str] = []
         pointer_params: List[str] = []
@@ -4703,7 +4702,8 @@ class CEmitter:
                 and cast(ZType, self._node_ztype(ppath)).typetype == ZTypeType.CLASS
                 and not cast(ZType, self._node_ztype(ppath)).is_heap_allocated
                 and not ptype_str.endswith("*")
-                and param_own.get(pname)
+                and ftype
+                and self.typing.child_ownership(ftype, pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ptype_str = f"{ptype_str}*"
@@ -4743,7 +4743,8 @@ class CEmitter:
                 self._node_ztype(ppath)
                 and cast(ZType, self._node_ztype(ppath)).destructor_name is not None
                 and cast(ZType, self._node_ztype(ppath)).destructor_name
-                and param_own.get(pname) == ZParamOwnership.TAKE
+                and ftype
+                and self.typing.child_ownership(ftype, pname) == ZParamOwnership.TAKE
             ):
                 self._scope.cleanup_vars.append(
                     (_mangle_var(pname), self._node_ztype(ppath))
@@ -5622,7 +5623,7 @@ class CEmitter:
         # implicit take: invalidate args passed to .take parameters
         ftype = self._node_ztype(call.callable)
         emitted_vals = self._last_emitted_arg_vals
-        if ftype and ftype.param_ownership:
+        if ftype and self.typing.has_any_ownership(ftype):
             params = self.typing.children_of(ftype)
             # Method calls: `this` is the receiver, prepended at the
             # call site — call.arguments[0] aligns with params[1].
@@ -5642,7 +5643,10 @@ class CEmitter:
                 pi = i + offset
                 if pi < len(params):
                     pname, _ = params[pi]
-                    if ftype.param_ownership.get(pname) == ZParamOwnership.TAKE:
+                    if (
+                        self.typing.child_ownership(ftype, pname)
+                        == ZParamOwnership.TAKE
+                    ):
                         # skip if already invalidated by explicit .take
                         take_var = self._get_take_var(arg.valtype)
                         if not take_var:
@@ -6027,7 +6031,7 @@ class CEmitter:
                 # string param means the callee owns by value — no
                 # `&` should be added (that would pass a pointer to
                 # a by-value parameter).
-                own = ftype.param_ownership.get(param_name)
+                own = self.typing.child_ownership(ftype, param_name)
                 is_borrow_lock = own in (
                     ZParamOwnership.BORROW,
                     ZParamOwnership.LOCK,
@@ -6107,7 +6111,7 @@ class CEmitter:
                 and ptype.typetype == ZTypeType.CLASS
                 and not ptype.is_heap_allocated
                 and not ct.endswith("*")
-                and create_fn.param_ownership.get(pname)
+                and self.typing.child_ownership(create_fn, pname)
                 in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
             ):
                 ct = f"{ct}*"
@@ -8103,7 +8107,9 @@ class CEmitter:
             if arg_type is None:
                 continue
             explicit_own = (
-                ftype.param_ownership.get(arg.name) if ftype and arg.name else None
+                self.typing.child_ownership(ftype, arg.name)
+                if ftype and arg.name
+                else None
             )
             if explicit_own in (ZParamOwnership.BORROW, ZParamOwnership.LOCK):
                 continue

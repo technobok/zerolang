@@ -791,7 +791,7 @@ class TestOwnershipParsing:
             "f: function {a: myclass.borrow} is {}\nmain: function is {}"
         )
         ftype = typing.resolved["test.f"]
-        assert ftype.param_ownership["a"] == ZParamOwnership.BORROW
+        assert typing.child_ownership(ftype, "a") == ZParamOwnership.BORROW
 
     def test_param_take(self):
         """Parameter with .take annotation."""
@@ -799,7 +799,7 @@ class TestOwnershipParsing:
             "f: function {a: i64.take} is {}\nmain: function is {}"
         )
         ftype = typing.resolved["test.f"]
-        assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
+        assert typing.child_ownership(ftype, "a") == ZParamOwnership.TAKE
 
     def test_param_lock(self):
         """Parameter with .lock annotation (requires return value)."""
@@ -809,13 +809,13 @@ class TestOwnershipParsing:
             "main: function is {}"
         )
         ftype = typing.resolved["test.f"]
-        assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
+        assert typing.child_ownership(ftype, "a") == ZParamOwnership.LOCK
 
     def test_param_no_ownership(self):
         """Parameter without annotation should have empty param_ownership."""
         program, typing = check_ok("f: function {a: i64} is {}\nmain: function is {}")
         ftype = typing.resolved["test.f"]
-        assert "a" not in ftype.param_ownership
+        assert not typing.has_child_ownership(ftype, "a")
 
     def test_mixed_params(self):
         """Mix of annotated and unannotated parameters."""
@@ -825,9 +825,9 @@ class TestOwnershipParsing:
             "main: function is {}"
         )
         ftype = typing.resolved["test.f"]
-        assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
-        assert "b" not in ftype.param_ownership
-        assert ftype.param_ownership["c"] == ZParamOwnership.BORROW
+        assert typing.child_ownership(ftype, "a") == ZParamOwnership.TAKE
+        assert not typing.has_child_ownership(ftype, "b")
+        assert typing.child_ownership(ftype, "c") == ZParamOwnership.BORROW
 
     def test_return_type_borrow(self):
         """Return type with .borrow annotation."""
@@ -838,7 +838,7 @@ class TestOwnershipParsing:
         )
         ftype = typing.resolved["test.f"]
         assert ftype.return_ownership == ZParamOwnership.BORROW
-        assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
+        assert typing.child_ownership(ftype, "a") == ZParamOwnership.LOCK
 
     def test_return_type_no_ownership(self):
         """Return type without annotation should not have return_ownership set."""
@@ -863,8 +863,8 @@ class TestOwnershipInZType:
         tc.check()
         ftype = tc._resolved.get("test.f")
         assert ftype is not None
-        assert ftype.param_ownership["a"] == ZParamOwnership.TAKE
-        assert ftype.param_ownership["b"] == ZParamOwnership.BORROW
+        assert tc.typing.child_ownership(ftype, "a") == ZParamOwnership.TAKE
+        assert tc.typing.child_ownership(ftype, "b") == ZParamOwnership.BORROW
 
     def test_return_ownership_on_ztype(self):
         """Return ownership should propagate to ZType."""
@@ -878,7 +878,7 @@ class TestOwnershipInZType:
         ftype = tc._resolved.get("test.f")
         assert ftype is not None
         assert ftype.return_ownership == ZParamOwnership.BORROW
-        assert ftype.param_ownership["a"] == ZParamOwnership.LOCK
+        assert tc.typing.child_ownership(ftype, "a") == ZParamOwnership.LOCK
 
     def test_no_ownership_empty_dict(self):
         """Functions without ownership annotations should have empty param_ownership."""
@@ -889,7 +889,7 @@ class TestOwnershipInZType:
         tc.check()
         ftype = tc._resolved.get("test.f")
         assert ftype is not None
-        assert ftype.param_ownership == {}
+        assert tc.typing.child_ownerships_of(ftype) == {}
 
 
 class TestValTypeTagging:
