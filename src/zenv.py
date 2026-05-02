@@ -11,6 +11,8 @@ from ztypes import (
     ZVariable,
     ZLockState,
     LockInfo,
+    LockHolder,
+    LockHolderKind,
     ScopeKind,
     Entry,
     _alloc_scope_id,
@@ -65,28 +67,6 @@ def _lock_acquire_conflict(
 def _format_path(path: Tuple[str, ...]) -> str:
     """Render a lock path as `root.f1.f2` for error messages."""
     return ".".join(path) if path else "<unknown>"
-
-
-def _format_lock_conflict(
-    requested_path: Tuple[str, ...],
-    requested_type: ZLockState,
-    existing: LockInfo,
-) -> str:
-    """Path-aware conflict message. Mentions the root variable name in
-    quotes so existing test assertions matching `"'name'"` keep working."""
-    root = requested_path[0]
-    req_kind = requested_type.name.lower()
-    held_kind = existing.lock_type.name.lower()
-    req_detail = ""
-    if len(requested_path) > 1:
-        req_detail = f" on '{_format_path(requested_path)}'"
-    held_detail = ""
-    if existing.path != requested_path:
-        held_detail = f" on '{_format_path(existing.path)}'"
-    return (
-        f"Cannot take {req_kind} lock on '{root}'{req_detail}: "
-        f"already has {held_kind} lock{held_detail} held by '{existing.holder}'"
-    )
 
 
 class Scope:
@@ -244,6 +224,45 @@ class SymbolTable:
             i -= 1
         return None
 
+    def lookup_var_by_id(self, vid: int) -> Optional[ZVariable]:
+        """Reverse lookup: walk scopes inner→outer for a variable with the
+        given variableid. Returns the ZVariable or None."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if (
+                    entry.var is not None
+                    and entry.var.variableid == vid
+                    and entry.is_definition
+                ):
+                    return entry.var
+                j -= 1
+            i -= 1
+        return None
+
+    def lookup_var_name_by_id(self, vid: int) -> Optional[str]:
+        """Reverse lookup: walk scopes inner→outer for a variable with the
+        given variableid. Returns the variable's name (the entry.name of
+        its defining entry) or None."""
+        i = len(self._scopes) - 1
+        while i >= 0:
+            scope = self._scopes[i]
+            j = len(scope.entries) - 1
+            while j >= 0:
+                entry = scope.entries[j]
+                if (
+                    entry.var is not None
+                    and entry.var.variableid == vid
+                    and entry.is_definition
+                ):
+                    return entry.name
+                j -= 1
+            i -= 1
+        return None
+
     def lookup_entry(self, name: str) -> Optional[Entry]:
         """Search scopes inner→outer for a name. Returns the Entry or None."""
         i = len(self._scopes) - 1
@@ -324,14 +343,51 @@ class SymbolTable:
             i -= 1
         return False
 
+    # ---- lock holder formatting (reverse-lookup ids for messages) --
+
+    def format_lock_holder(self, holder: LockHolder) -> str:
+        """Render a LockHolder back to its user-facing name. VAR ids
+        reverse-lookup to the variable's name; CALL renders as
+        `call:<nodeid>`; FOR renders as `__for`."""
+        if holder.kind == LockHolderKind.VAR:
+            return self.lookup_var_name_by_id(holder.id) or f"<var:{holder.id}>"
+        if holder.kind == LockHolderKind.CALL:
+            return f"call:{holder.id}"
+        if holder.kind == LockHolderKind.FOR:
+            return "__for"
+        return "__call"
+
+    def _format_lock_conflict(
+        self,
+        requested_path: Tuple[str, ...],
+        requested_type: ZLockState,
+        existing: LockInfo,
+    ) -> str:
+        """Path-aware conflict message. Mentions the root variable name in
+        quotes so existing test assertions matching `"'name'"` keep working."""
+        root = requested_path[0]
+        req_kind = requested_type.name.lower()
+        held_kind = existing.lock_type.name.lower()
+        req_detail = ""
+        if len(requested_path) > 1:
+            req_detail = f" on '{_format_path(requested_path)}'"
+        held_detail = ""
+        if existing.path != requested_path:
+            held_detail = f" on '{_format_path(existing.path)}'"
+        return (
+            f"Cannot take {req_kind} lock on '{root}'{req_detail}: "
+            f"already has {held_kind} lock{held_detail} held by "
+            f"'{self.format_lock_holder(existing.holder)}'"
+        )
+
     # ---- lock operations (scope-based: locks are Entry.lock in scope chain) ----
 
     def try_lock(
         self,
         path: Tuple[str, ...],
         lock_type: ZLockState,
-        holder: str,
-        self_holder: Optional[str] = None,
+        holder: LockHolder,
+        self_holder: Optional[LockHolder] = None,
     ) -> Optional[str]:
         """Try to take a lock on `path`. Returns error message or None on success.
 
@@ -342,10 +398,10 @@ class SymbolTable:
         of the other AND at least one is EXCLUSIVE. SHARED-on-SHARED never
         conflicts; SHARED-on-same-full-path dedupes (no entry added).
 
-        `self_holder` (when set) names a lock holder that should be treated
-        as "the current operation" — existing locks with that holder do not
-        block the new acquisition. Lets a call install receiver + arg
-        locks under one identity without self-conflict.
+        `self_holder` (when set) is treated as "the current operation" —
+        existing locks with that holder do not block the new acquisition.
+        Lets a call install receiver + arg locks under one identity without
+        self-conflict.
 
         On success, appends a lock Entry to the current scope keyed by
         `path[0]` so the existing scope-chain machinery (release on pop,
@@ -375,11 +431,7 @@ class SymbolTable:
                     if not same_call and _lock_acquire_conflict(
                         existing, path, lock_type
                     ):
-                        return _format_lock_conflict(path, lock_type, existing)
-                    # SHARED-on-same-path is idempotent — skip adding a new
-                    # entry to keep the scope chain compact (release stays
-                    # correct since the original entry's holder lives at
-                    # least as long as the redundant request).
+                        return self._format_lock_conflict(path, lock_type, existing)
                     if (
                         existing.path == path
                         and existing.lock_type == ZLockState.SHARED
@@ -422,7 +474,7 @@ class SymbolTable:
 
     def find_exclusive_lock(
         self, path: Tuple[str, ...]
-    ) -> Optional[Tuple[Tuple[str, ...], str]]:
+    ) -> Optional[Tuple[Tuple[str, ...], LockHolder]]:
         """Return `(conflicting_path, holder)` if any EXCLUSIVE lock prefix-
         overlaps with `path`. Used by reassignment / swap / access guards.
 
@@ -479,13 +531,12 @@ class SymbolTable:
             i -= 1
         return None
 
-    def release_held_locks(self, holder_name: str) -> None:
-        """Release all locks whose holder matches holder_name.
+    def release_held_locks(self, holder: LockHolder) -> None:
+        """Release all locks whose holder matches `holder`.
 
         Used before .take/.release to clean up locks before invalidation.
         Searches all scopes and removes matching lock entries.
         """
-        # collect all lock entries held by this holder
         to_remove: List[Tuple[int, int]] = []  # (scope_idx, entry_idx)
         i = len(self._scopes) - 1
         while i >= 0:
@@ -493,11 +544,10 @@ class SymbolTable:
             j = len(scope.entries) - 1
             while j >= 0:
                 entry = scope.entries[j]
-                if entry.lock is not None and entry.lock.holder == holder_name:
+                if entry.lock is not None and entry.lock.holder == holder:
                     to_remove.append((i, j))
                 j -= 1
             i -= 1
-        # remove in reverse order (highest indices first) to keep indices valid
         for si, ei in to_remove:
             self._scopes[si].entries.pop(ei)
 

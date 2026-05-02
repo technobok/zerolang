@@ -24,6 +24,8 @@ from ztypes import (
     ZNaming,
     ZVariable,
     ZLockState,
+    LockHolder,
+    LockHolderKind,
     ControlKind,
     ExprResult,
     NUMERIC_RANGES,
@@ -473,7 +475,7 @@ class TypeChecker:
         # current call's identity. Lets a call freely take overlapping
         # locks on receiver + args (e.g. `f.method bv: f.byteview`)
         # without self-blocking.
-        self._call_id_stack: List[str] = []
+        self._call_id_stack: List[LockHolder] = []
 
         # Per-call argument hoisting (Phase C step 2). FreshNamer hands
         # out monotonic synth names (`_t0`, `_t1`, ...). The preamble
@@ -5882,7 +5884,11 @@ class TypeChecker:
                 # this handles generic monomorphization where .borrow was allowed
                 # at definition but the concrete type is a valtype.
                 if not _is_valtype(t):
-                    self._install_borrow_locks(borrow_target, assign.name, assign.start)
+                    self._install_borrow_locks(
+                        borrow_target,
+                        LockHolder(LockHolderKind.VAR, var.variableid),
+                        assign.start,
+                    )
             else:
                 # new local variables are owned by default.
                 var = ZVariable(
@@ -5994,7 +6000,10 @@ class TypeChecker:
                         if reassign.start
                         else None
                     )
-                    self.symtab.release_held_locks(rhs_root)
+                    if rhs_var is not None:
+                        self.symtab.release_held_locks(
+                            LockHolder(LockHolderKind.VAR, rhs_var.variableid)
+                        )
                     self.symtab.invalidate(rhs_root, loc=take_loc)
 
         # Phase B: .lock fields are immutable after construction.
@@ -6062,7 +6071,7 @@ class TypeChecker:
                             f"cannot store lock-carrying value in field "
                             f"'{'.'.join(target_path)}': '{rhs_path[0]}' holds "
                             f"a lock on '{'.'.join(rhs_lock.path)}' (held by "
-                            f"'{rhs_lock.holder}')",
+                            f"'{self.symtab.format_lock_holder(rhs_lock.holder)}')",
                             loc=reassign.start,
                             err=ERR.OWNERERROR,
                             hint=(
@@ -6485,7 +6494,10 @@ class TypeChecker:
                     loc=path.start,
                 )
             else:
-                self.symtab.release_held_locks(take_parent_name)
+                if var is not None:
+                    self.symtab.release_held_locks(
+                        LockHolder(LockHolderKind.VAR, var.variableid)
+                    )
                 take_loc = (
                     (path.start.lineno, path.start.colno, path.start.fsno)
                     if path.start
@@ -6528,12 +6540,14 @@ class TypeChecker:
                 self._error(
                     f"Cannot release '{release_name}': "
                     f"{lock.lock_type.name.lower()} lock held by "
-                    f"'{lock.holder}'",
+                    f"'{self.symtab.format_lock_holder(lock.holder)}'",
                     loc=path.start,
                     err=ERR.OWNERERROR,
                 )
                 return parent_type
-            self.symtab.release_held_locks(release_name)
+            self.symtab.release_held_locks(
+                LockHolder(LockHolderKind.VAR, var.variableid)
+            )
         # invalidate the variable
         release_loc = (
             (path.start.lineno, path.start.colno, path.start.fsno)
@@ -7006,10 +7020,10 @@ class TypeChecker:
         # push a call scope for call-scoped locking
         call_marker = self.symtab.push_call()
         # push call identity onto the typechecker's stack — locks installed
-        # below carry this string as `holder`, and try_lock skips conflicts
-        # where existing.holder == this id (so receiver + arg locks owned
-        # by the same call merge naturally instead of self-blocking).
-        call_id = f"call:{call.nodeid}"
+        # below carry this LockHolder, and try_lock skips conflicts where
+        # existing.holder == this id (so receiver + arg locks owned by the
+        # same call merge naturally instead of self-blocking).
+        call_id = LockHolder(LockHolderKind.CALL, call.nodeid)
         self._call_id_stack.append(call_id)
 
         lock_param_targets = self._check_call_arguments(call, callee_type, params)
@@ -7681,7 +7695,7 @@ class TypeChecker:
     def _install_borrow_locks(
         self,
         target_path: Tuple[str, ...],
-        holder: str,
+        holder: LockHolder,
         loc: Token,
     ) -> None:
         """Install borrow-scoped locks on the source path of a binding.
@@ -7854,17 +7868,16 @@ class TypeChecker:
         # _check_atomid (it's constructed and pre-typed here).
         return temp_name
 
-    def _current_call_holder(self) -> str:
-        """Holder string for locks installed during the topmost in-flight
-        call. Used both as the `holder` field on new locks and as the
+    def _current_call_holder(self) -> LockHolder:
+        """Holder for locks installed during the topmost in-flight call.
+        Used both as the `holder` field on new locks and as the
         `self_holder` predicate for try_lock so the call's own receiver
-        and arg locks merge instead of self-blocking. Falls back to the
-        legacy `__call` sentinel when no call is in flight (locks taken
-        by call-adjacent helpers like for-loop iterator setup).
-        """
+        and arg locks merge instead of self-blocking. Falls back to a
+        sentinel `LockHolder(CALL, 0)` when no call is in flight (locks
+        taken by call-adjacent helpers like for-loop iterator setup)."""
         if self._call_id_stack:
             return self._call_id_stack[-1]
-        return "__call"
+        return LockHolder(LockHolderKind.CALL, 0)
 
     def _chain_through_synth_temp(self, path: Tuple[str, ...]) -> Tuple[str, ...]:
         """If the path roots at a synth temp (Phase C step 2's `_tN`)
@@ -8408,7 +8421,10 @@ class TypeChecker:
                 err=ERR.OWNERERROR,
             )
             return
-        self.symtab.release_held_locks(arg_root)
+        if var is not None:
+            self.symtab.release_held_locks(
+                LockHolder(LockHolderKind.VAR, var.variableid)
+            )
         take_loc = (
             (arg.start.lineno, arg.start.colno, arg.start.fsno) if arg.start else None
         )
@@ -9557,7 +9573,11 @@ class TypeChecker:
                 # of the binding (lookup_var triggers the lock check on
                 # var-ful definitions).
                 if not _is_valtype(t) and not is_borrowed_view:
-                    self.symtab.try_lock((name,), ZLockState.EXCLUSIVE, "__for")
+                    self.symtab.try_lock(
+                        (name,),
+                        ZLockState.EXCLUSIVE,
+                        LockHolder(LockHolderKind.FOR, fornode.nodeid),
+                    )
         for postcond in fornode.postconditions:
             self._check_operation(postcond)
         elem_type = None
@@ -9685,7 +9705,11 @@ class TypeChecker:
         # Valtype borrows are copies; they do not need a lock at this level
         # (matches function-arg and _check_assignment behavior).
         if borrow_target and not _is_valtype(t):
-            self._install_borrow_locks(borrow_target, withnode.name, withnode.start)
+            self._install_borrow_locks(
+                borrow_target,
+                LockHolder(LockHolderKind.VAR, var.variableid),
+                withnode.start,
+            )
 
         self.typing.with_ownership[withnode.nodeid] = ownership
         self.typing.node_type[withnode.nodeid] = t

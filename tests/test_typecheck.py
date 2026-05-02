@@ -2220,22 +2220,32 @@ class TestLockInfo:
     """Test the LockInfo dataclass."""
 
     def test_lock_info_exclusive(self):
-        from ztypes import LockInfo
+        from ztypes import LockInfo, LockHolder, LockHolderKind
 
-        e = LockInfo(lock_type=ZLockState.EXCLUSIVE, holder="y")
+        h = LockHolder(LockHolderKind.VAR, 7)
+        e = LockInfo(lock_type=ZLockState.EXCLUSIVE, holder=h)
         assert e.lock_type == ZLockState.EXCLUSIVE
-        assert e.holder == "y"
+        assert e.holder == h
 
     def test_lock_info_shared(self):
-        from ztypes import LockInfo
+        from ztypes import LockInfo, LockHolder, LockHolderKind
 
-        e = LockInfo(lock_type=ZLockState.SHARED, holder="parent")
+        h = LockHolder(LockHolderKind.CALL, 42)
+        e = LockInfo(lock_type=ZLockState.SHARED, holder=h)
         assert e.lock_type == ZLockState.SHARED
-        assert e.holder == "parent"
+        assert e.holder == h
 
 
 class TestSymbolTableLocking:
     """Test lock operations on the symbol table."""
+
+    @staticmethod
+    def _h(n: int):
+        """Make a synthetic LockHolder for tests. Distinct n → distinct
+        holder identity."""
+        from ztypes import LockHolder, LockHolderKind
+
+        return LockHolder(LockHolderKind.VAR, n)
 
     def _make_symtab_with_vars(self, *names):
         from zenv import SymbolTable
@@ -2252,7 +2262,7 @@ class TestSymbolTableLocking:
 
     def test_try_lock_exclusive_on_unlocked(self):
         st = self._make_symtab_with_vars("x", "y")
-        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, self._h(1))
         assert err is None
         lock = st.find_lock("x")
         assert lock is not None
@@ -2260,17 +2270,17 @@ class TestSymbolTableLocking:
 
     def test_try_lock_exclusive_on_exclusive_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, self._h(1))
         assert err is None
-        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "z")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, self._h(2))
         assert err is not None
         assert "exclusive" in err.lower()
 
     def test_try_lock_shared_on_shared_ok(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock(("x",), ZLockState.SHARED, "y")
+        err = st.try_lock(("x",), ZLockState.SHARED, self._h(1))
         assert err is None
-        err = st.try_lock(("x",), ZLockState.SHARED, "z")
+        err = st.try_lock(("x",), ZLockState.SHARED, self._h(2))
         assert err is None
         # shared + shared is OK (deduplicated to single entry)
         lock = st.find_lock("x")
@@ -2279,32 +2289,33 @@ class TestSymbolTableLocking:
 
     def test_try_lock_shared_on_exclusive_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, self._h(1))
         assert err is None
-        err = st.try_lock(("x",), ZLockState.SHARED, "z")
+        err = st.try_lock(("x",), ZLockState.SHARED, self._h(2))
         assert err is not None
         assert "exclusive" in err.lower()
 
     def test_try_lock_exclusive_on_shared_fails(self):
         st = self._make_symtab_with_vars("x", "y", "z")
-        err = st.try_lock(("x",), ZLockState.SHARED, "y")
+        err = st.try_lock(("x",), ZLockState.SHARED, self._h(1))
         assert err is None
-        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, "z")
+        err = st.try_lock(("x",), ZLockState.EXCLUSIVE, self._h(2))
         assert err is not None
 
     def test_lock_released_by_scope_pop(self):
         """Locks are released when the scope containing them is popped."""
         st = self._make_symtab_with_vars("x", "y")
-        st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
+        st.try_lock(("x",), ZLockState.EXCLUSIVE, self._h(1))
         assert st.find_lock("x") is not None
         st.pop()
         assert st.find_lock("x") is None
 
     def test_release_held_locks(self):
         st = self._make_symtab_with_vars("x", "y")
-        st.try_lock(("x",), ZLockState.EXCLUSIVE, "y")
+        h = self._h(1)
+        st.try_lock(("x",), ZLockState.EXCLUSIVE, h)
         assert st.find_lock("x") is not None
-        st.release_held_locks("y")
+        st.release_held_locks(h)
         assert st.find_lock("x") is None
 
     # --- path-scoped lock semantics (Commit D) ---
@@ -2313,15 +2324,15 @@ class TestSymbolTableLocking:
         """EXCLUSIVE on (obj, a) and EXCLUSIVE on (obj, b) both succeed —
         sibling paths have no prefix relation and cannot conflict."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
-        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
-        assert st.try_lock(("obj", "b"), ZLockState.EXCLUSIVE, "h2") is None
+        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, self._h(1)) is None
+        assert st.try_lock(("obj", "b"), ZLockState.EXCLUSIVE, self._h(2)) is None
 
     def test_ancestor_exclusive_blocks_descendant_lock(self):
         """EXCLUSIVE on (obj,) owns the whole subtree — Any new lock below
         is rejected with a Path-aware message."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
-        assert st.try_lock(("obj",), ZLockState.EXCLUSIVE, "h1") is None
-        err = st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h2")
+        assert st.try_lock(("obj",), ZLockState.EXCLUSIVE, self._h(1)) is None
+        err = st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, self._h(2))
         assert err is not None
         assert "'obj'" in err
         assert "exclusive" in err.lower()
@@ -2330,8 +2341,8 @@ class TestSymbolTableLocking:
         """A new EXCLUSIVE on an ancestor would absorb Any outstanding
         sub-lock; rejected."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
-        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
-        err = st.try_lock(("obj",), ZLockState.EXCLUSIVE, "h2")
+        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, self._h(1)) is None
+        err = st.try_lock(("obj",), ZLockState.EXCLUSIVE, self._h(2))
         assert err is not None
         assert "'obj'" in err
 
@@ -2341,19 +2352,20 @@ class TestSymbolTableLocking:
         single operation install SHARED on each intermediate prefix and
         EXCLUSIVE on the leaf without self-conflict."""
         st = self._make_symtab_with_vars("obj", "h1")
-        assert st.try_lock(("obj",), ZLockState.SHARED, "h1") is None
-        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, "h1") is None
+        h = self._h(1)
+        assert st.try_lock(("obj",), ZLockState.SHARED, h) is None
+        assert st.try_lock(("obj", "a"), ZLockState.EXCLUSIVE, h) is None
 
     def test_shared_stacking_and_idempotence(self):
         """Two SHARED on the same full Path dedupe (no extra entry); SHARED
         on ancestor and SHARED on descendant both live (distinct entries,
         independent release)."""
         st = self._make_symtab_with_vars("obj", "h1", "h2")
-        assert st.try_lock(("obj",), ZLockState.SHARED, "h1") is None
+        assert st.try_lock(("obj",), ZLockState.SHARED, self._h(1)) is None
         # same path: idempotent, still no conflict, no second entry
-        assert st.try_lock(("obj",), ZLockState.SHARED, "h2") is None
+        assert st.try_lock(("obj",), ZLockState.SHARED, self._h(2)) is None
         # descendant: both live
-        assert st.try_lock(("obj", "a"), ZLockState.SHARED, "h2") is None
+        assert st.try_lock(("obj", "a"), ZLockState.SHARED, self._h(2)) is None
 
 
 class TestLockCheckingBorrow:

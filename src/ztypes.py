@@ -214,7 +214,7 @@ class ZType:
 
     # memory management metadata (set by type checker after resolution).
     # `destructor_name is not None` is the authoritative "needs destructor"
-    # signal — they were always set/cleared in lockstep historically.
+    # signal
     destructor_name: Optional[str] = field(default=None, init=False)
     is_heap_allocated: bool = field(default=False, init=False)
 
@@ -232,6 +232,7 @@ class ZType:
     # native type: compiler-provided implementation (system types like i64, string, etc.)
     is_native: bool = field(default=False, init=False)
 
+    # compiler control kine functions (return|break|continue etc)
     control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
 
     # public/private access control: maps external name -> internal name for
@@ -255,10 +256,10 @@ class ZType:
     # field-by-field) is decided by the emitter based on estimated type size.
     is_simple_eq: bool = field(default=False, init=False)
 
-    # internal metadata: compiler-generated raw allocator for this type
+    # compiler-generated raw allocator for this type
     meta_create: Optional["ZType"] = field(default=None, init=False)
 
-    # internal metadata: element type for DATA types. The DATA's children
+    # element type for DATA types. The DATA's children
     # are value-carrier RECORDs whose `name` is the literal value (e.g.
     # the children of `primes: data { 2 3 5 }` are RECORDs with names
     # "2", "3", "5", not the numeric type itself); element_type is the
@@ -282,6 +283,15 @@ class ZType:
             cid = _alloc_child_id()
             self.children_id_map[name] = cid
         return cid
+
+    def child_name_for(self, cid: int) -> Optional[str]:
+        """Reverse lookup of `child_id_for`: return the name that minted
+        `cid` on this type, or None if no name maps to `cid`. Linear scan
+        over `children_id_map`; per-parent maps are small."""
+        for name, mapped_id in self.children_id_map.items():
+            if mapped_id == cid:
+                return name
+        return None
 
     def __repr__(self) -> str:
         return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"
@@ -307,7 +317,6 @@ class ScopeKind(IntEnum):
     OVERLAY = 2  # per-statement state change
 
 
-# module-level counter for scope IDs
 _next_scope_id: int = 0
 
 
@@ -319,8 +328,6 @@ def _alloc_scope_id() -> int:
     return sid
 
 
-# monotonic counter for symbol-table Entry identities. Globally unique;
-# per-process only (not persisted across compiler invocations).
 _next_entry_id: int = 0
 
 
@@ -332,6 +339,30 @@ def _alloc_entry_id() -> int:
     return eid
 
 
+@unique
+class LockHolderKind(IntEnum):
+    """Categorises what kind of entity holds a lock.
+
+    Each kind maps `LockHolder.id` to a different id-space:
+    - VAR: ZVariable.variableid (a borrow-binding variable)
+    - CALL: AST nodeid of the call expression that acquired the lock
+    - FOR: AST nodeid of the for-loop that owns the iteration lock
+    """
+
+    VAR = 0
+    CALL = 1
+    FOR = 2
+
+
+@dataclass(frozen=True)
+class LockHolder:
+    """Tagged identifier for a lock holder. Replaces the prior free-form
+    string (`variable name | "call:{nodeid}" | "__for"`)."""
+
+    kind: LockHolderKind
+    id: int
+
+
 @dataclass
 class LockInfo:
     """Lock state on a variable — stored on Entry, not on ZVariable.
@@ -340,10 +371,13 @@ class LockInfo:
     `Entry.name` always equals `path[0]` so scope-chain lookup remains a
     simple linear scan keyed by root. The full tuple is consulted to
     apply the prefix-overlap conflict rule.
+
+    `holder` is a tagged `LockHolder` distinguishing a borrow-binding
+    variable, a call site, or a for-loop sentinel.
     """
 
     lock_type: ZLockState  # EXCLUSIVE or SHARED
-    holder: str  # borrow variable name or call identifier
+    holder: LockHolder
     path: Tuple[str, ...] = ()
 
 
@@ -443,6 +477,8 @@ NUMERIC_RANGES: Dict[str, Tuple[int, int]] = {
 def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
     """
     Parse a number identifier returning (type_name, value, error).
+
+    Used in tests only.
     """
     rest = numstr
     numtype: Optional[str] = None
