@@ -1575,8 +1575,8 @@ class TypeChecker:
         """Resolve tag discriminator for a union or variant type.
 
         Scans as_items for a .tag type reference, validates it against
-        subtype_names, and populates ztype.tag_type and
-        self.typing.child_of(ztype, "tag").
+        subtype_names, and installs the resulting DATA wrapper as the
+        type's `"tag"` child.
 
         type_kind is "Union" or "Variant" (for error messages).
         """
@@ -1654,12 +1654,6 @@ class TypeChecker:
                 seen_values[val] = dl
 
             # use custom data values as discriminators
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for sname in subtype_names:
-                child = self.typing.child_of(custom_tag_data, sname)
-                val = child.name if child else str(subtype_names.index(sname))
-                self._set_child(tag_type, sname, _make_type(val, ZTypeType.RECORD))
-            ztype.tag_type = tag_type
             self._set_child(ztype, "tag", custom_tag_data)
 
         elif custom_tag_data and custom_tag_data.typetype == ZTypeType.RECORD:
@@ -1671,10 +1665,6 @@ class TypeChecker:
                     f"exceeds u8 tag capacity (max 256)",
                     loc=loc,
                 )
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                self._set_child(tag_type, sname, _make_type(str(i), ZTypeType.RECORD))
-            ztype.tag_type = tag_type
             gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
@@ -1695,10 +1685,6 @@ class TypeChecker:
                     f"Specify a custom tag type via 'as' block",
                     loc=loc,
                 )
-            tag_type = _make_type(f"{name}:tag", ZTypeType.ENUM)
-            for i, sname in enumerate(subtype_names):
-                self._set_child(tag_type, sname, _make_type(str(i), ZTypeType.RECORD))
-            ztype.tag_type = tag_type
             gen_data = _make_type(f"{name}:tag:data", ZTypeType.DATA)
             gen_data.is_valtype = False
             for i, sname in enumerate(subtype_names):
@@ -4858,10 +4844,6 @@ class TypeChecker:
             if ct.is_tag_generic_origin:
                 continue
             subtype_names.append(k)
-        tag_type = _make_type(f"{mangled}:tag", ZTypeType.ENUM)
-        for i, sname in enumerate(subtype_names):
-            self._set_child(tag_type, sname, _make_type(str(i), ZTypeType.RECORD))
-        mono.tag_type = tag_type
         gen_data = _make_type(f"{mangled}:tag:data", ZTypeType.DATA)
         gen_data.is_valtype = False
         for i, sname in enumerate(subtype_names):
@@ -5515,7 +5497,6 @@ class TypeChecker:
 
         # copy internal metadata fields
         mono.meta_create = template.meta_create
-        mono.tag_type = template.tag_type
         mono.element_type = template.element_type
 
         # substitute generic params in parameter types

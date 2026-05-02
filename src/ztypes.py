@@ -283,9 +283,6 @@ class ZType:
     # internal metadata: compiler-generated raw allocator for this type
     meta_create: Optional["ZType"] = field(default=None, init=False)
 
-    # internal metadata: tag discriminator enum for union/variant types
-    tag_type: Optional["ZType"] = field(default=None, init=False)
-
     # internal metadata: element type for data types
     element_type: Optional["ZType"] = field(default=None, init=False)
 

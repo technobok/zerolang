@@ -4527,20 +4527,6 @@ class TestUnionTypeResolution:
         assert tc.typing.child_of(ut, "b").name == "String"
         assert tc.typing.child_of(ut, "c").name == "null"
 
-    def test_union_tag_type_generated(self):
-        """Union should have a :tag child with enum-like discriminators."""
-        program, typing = check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
-        )
-        tc = TypeChecker(program)
-        tc.check()
-        ut = tc._resolved.get("test.myunion")
-        tag = ut.tag_type
-        assert tag is not None
-        assert tag.typetype == ZTypeType.ENUM
-        assert tc.typing.has_child(tag, "a")
-        assert tc.typing.has_child(tag, "b")
-
     def test_union_null_subtype(self):
         """Null subtypes get a sentinel NULL type."""
         program, typing = check_ok(
@@ -4808,7 +4794,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        tag = ut.tag_type
+        tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         # check that the discriminator values match the data
         assert tc.typing.child_of(tag, "A").name == "10"
@@ -4849,7 +4835,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.priority")
-        tag = ut.tag_type
+        tag = tc.typing.child_of(ut, "tag")
         assert tc.typing.child_of(tag, "CRITICAL").name == "10"
 
     def test_multiple_tag_items_error(self):
@@ -4870,7 +4856,7 @@ class TestUnionCustomTag:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myunion")
-        tag = ut.tag_type
+        tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         assert tc.typing.child_of(tag, "a").name == "0"
         assert tc.typing.child_of(tag, "b").name == "1"
@@ -5173,16 +5159,16 @@ class TestVariantTypeResolution:
         assert tc.typing.child_of(vt, "c").name == "null"
 
     def test_variant_tag_generated(self):
-        """Variant should have a :tag child with enum-like discriminators."""
+        """Variant should have a 'tag' child holding the discriminator."""
         program, typing = check_ok(
             "myvar: variant { a: i64\n b: null }\nmain: function is { x: myvar.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
         vt = tc._resolved.get("test.myvar")
-        tag = vt.tag_type
+        tag = tc.typing.child_of(vt, "tag")
         assert tag is not None
-        assert tag.typetype == ZTypeType.ENUM
+        assert tag.typetype == ZTypeType.DATA
         assert tc.typing.has_child(tag, "a")
         assert tc.typing.has_child(tag, "b")
 
@@ -7724,17 +7710,17 @@ class TestGenerics:
         assert mono.generic_origin is not None
 
     def test_monomorphized_union_has_tag(self):
-        """Monomorphized union has proper :tag enum."""
+        """Monomorphized union has a 'tag' child holding the discriminator."""
         program, typing = check_ok(
             "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is { x: myopt.some 42 }"
         )
         mono, _ = typing.mono_types[0]
-        assert mono.tag_type is not None
-        tag_type = mono.tag_type
-        assert tag_type.typetype == ZTypeType.ENUM
-        assert typing.has_child(tag_type, "some")
-        assert typing.has_child(tag_type, "none")
+        assert typing.has_child(mono, "tag")
+        tag_data = typing.child_of(mono, "tag")
+        assert tag_data.typetype == ZTypeType.DATA
+        assert typing.has_child(tag_data, "some")
+        assert typing.has_child(tag_data, "none")
 
     def test_monomorphized_union_concrete_subtypes(self):
         """Monomorphized union replaces generic param with concrete type."""
