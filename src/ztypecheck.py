@@ -1461,7 +1461,7 @@ class TypeChecker:
                 # Classes are stack-allocated with single-owner semantics,
                 # so they naturally prevent copies that would duplicate locks.
                 if f_own == ZParamOwnership.LOCK:
-                    ctype.lock_field_names.add(fname)
+                    self.typing.set_child_lock_field(ctype, fname)
                 elif f_own is not None:
                     self._error(
                         f"Only '.lock' is permitted as a field type modifier; "
@@ -2287,7 +2287,7 @@ class TypeChecker:
                     self.typing.set_child_private(rtype, fname)
                 # detect .lock field annotation (Phase B)
                 if f_own == ZParamOwnership.LOCK:
-                    rtype.lock_field_names.add(fname)
+                    self.typing.set_child_lock_field(rtype, fname)
                 elif f_own is not None:
                     self._error(
                         f"Only '.lock' is permitted as a field type modifier; "
@@ -2425,10 +2425,11 @@ class TypeChecker:
         this.borrow constructors require single-owner semantics — use a
         class instead.
         """
-        if bool(rtype.lock_field_names):
+        lock_field_names = self.typing.lock_field_names_of(rtype)
+        if lock_field_names:
             self._error(
                 f"Record '{name}' has '.lock' field(s) "
-                f"({', '.join(sorted(rtype.lock_field_names))}); '.lock' "
+                f"({', '.join(sorted(lock_field_names))}); '.lock' "
                 f"fields are only permitted on classes.",
                 loc=rec.start,
                 err=ERR.TYPEERROR,
@@ -5983,7 +5984,7 @@ class TypeChecker:
             dp = cast(zast.DottedPath, reassign.topath)
             parent_t = self.typing.node_type.get(dp.parent.nodeid)
             child_name = dp.child.name
-            if parent_t and child_name in parent_t.lock_field_names:
+            if parent_t and self.typing.is_child_lock_field(parent_t, child_name):
                 self._error(
                     f"Cannot reassign '.lock' field '{child_name}' — lock "
                     f"fields are set at construction time and immutable",

@@ -2447,7 +2447,6 @@ class CEmitter:
 
         self.needs_stdint = True
         ztype = self._resolved_type(name)
-        lock_fields = ztype.lock_field_names if ztype else set()
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in rec.is_paths().items():
@@ -2460,7 +2459,8 @@ class CEmitter:
             ftype = _ctype(self.typing, field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
-                fname in lock_fields
+                ztype
+                and self.typing.is_child_lock_field(ztype, fname)
                 and field_type
                 and field_type.typetype == ZTypeType.CLASS
                 and not field_type.is_heap_allocated
@@ -2716,7 +2716,6 @@ class CEmitter:
         # check lock field names for the type (classes with .lock fields
         # store stack-allocated class fields as pointers)
         ztype = self._resolved_type(name)
-        lock_fields = ztype.lock_field_names if ztype else set()
 
         params: List[str] = []
         field_names: List[str] = []
@@ -2731,7 +2730,8 @@ class CEmitter:
             fct = _ctype(self.typing, field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
-                fname in lock_fields
+                ztype
+                and self.typing.is_child_lock_field(ztype, fname)
                 and field_type
                 and field_type.typetype == ZTypeType.CLASS
                 and not field_type.is_heap_allocated
@@ -2896,14 +2896,14 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdlib = True
         ztype = self._resolved_type(name)
-        lock_fields = ztype.lock_field_names if ztype else set()
         lines: List[str] = []
         lines.append("typedef struct {\n")
         for fname, fpath in cls.is_paths().items():
             ftype = _ctype(self.typing, self._node_ztype(fpath))
             # .lock fields of stack-allocated class type: store as pointer
             if (
-                fname in lock_fields
+                ztype
+                and self.typing.is_child_lock_field(ztype, fname)
                 and self._node_ztype(fpath)
                 and cast(ZType, self._node_ztype(fpath)).typetype == ZTypeType.CLASS
                 and not cast(ZType, self._node_ztype(fpath)).is_heap_allocated
@@ -2923,7 +2923,7 @@ class CEmitter:
             lines.append("    if (!p) return;\n")
             for fname, fpath in cls.is_paths().items():
                 # .lock fields are borrowed references, don't own data
-                if fname in lock_fields:
+                if ztype and self.typing.is_child_lock_field(ztype, fname):
                     continue
                 fpath_t = self._node_ztype(fpath)
                 if fpath_t:
@@ -4364,13 +4364,12 @@ class CEmitter:
         ]
 
         # struct typedef
-        lock_fields = mono_type.lock_field_names
         lines.append("typedef struct {\n")
         for fname, ftype in field_items:
             ct = _ctype(self.typing, ftype)
             # .lock fields of stack-allocated class type: store as pointer
             if (
-                fname in lock_fields
+                self.typing.is_child_lock_field(mono_type, fname)
                 and ftype.typetype == ZTypeType.CLASS
                 and not ftype.is_heap_allocated
                 and not ct.endswith("*")
@@ -4385,7 +4384,7 @@ class CEmitter:
             lines.append("    if (!p) return;\n")
             for fname, ftype in field_items:
                 # .lock fields are borrowed references, don't own data
-                if fname in lock_fields:
+                if self.typing.is_child_lock_field(mono_type, fname):
                     continue
                 lines.append(self._emit_field_cleanup(f"p->{fname}", ftype))
             lines.append("}\n\n")
@@ -7925,9 +7924,10 @@ class CEmitter:
         ):
             dp = cast(zast.DottedPath, path)
             grandparent_type = self._node_ztype(dp.parent)
-            if grandparent_type and grandparent_type.lock_field_names:
-                if dp.child.name in grandparent_type.lock_field_names:
-                    return True
+            if grandparent_type and self.typing.is_child_lock_field(
+                grandparent_type, dp.child.name
+            ):
+                return True
         # local heap-allocated variable tracked for cleanup
         if path.nodetype == NodeType.ATOMID:
             cname = _mangle_var(cast(zast.AtomId, path).name)

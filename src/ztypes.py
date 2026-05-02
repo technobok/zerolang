@@ -248,11 +248,6 @@ class ZType:
     # resolution when public: unit { ... } is declared in the as block.
     public_members: "Optional[dict[str, str]]" = field(default=None, init=False)
 
-    # set of field names declared with the .lock type modifier — the field
-    # stores a locked reference to external data. Lock fields are immutable
-    # after construction and only permitted on classes.
-    lock_field_names: "set[str]" = field(default_factory=set, init=False)
-
     # set of arm names declared with the .lock type modifier on a union -
     # the arm holds a locked reference into a parent rather than owning its
     # payload. The destructor releases the lock without freeing the payload;
