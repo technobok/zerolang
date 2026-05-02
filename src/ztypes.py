@@ -162,7 +162,6 @@ class ZType:
     semantics.
     """
 
-    is_ztype: bool = field(default=True, init=False)
     nodeid: int = field(default_factory=_alloc_type_id, init=False)
 
     name: str

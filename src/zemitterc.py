@@ -5953,11 +5953,7 @@ class CEmitter:
         # determine which arg names are generic type args (to skip in emission)
         generic_param_names: set = set()
         ftype = self._node_ztype(call.callable)
-        if (
-            ftype is not None
-            and ftype.generic_origin is not None
-            and ftype.generic_origin.is_ztype
-        ):
+        if ftype is not None and ftype.generic_origin is not None:
             gp = ftype.generic_origin.generic_params
             if gp:
                 generic_param_names = set(gp.keys())

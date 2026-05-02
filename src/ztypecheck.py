@@ -1027,7 +1027,7 @@ class TypeChecker:
 
         # get type from the taken branch's last expression
         t = self._last_statement_type(taken_stmt)
-        if t is None or not t.is_ztype:
+        if t is None or t.typetype == ZTypeType.NEVER:
             self._error(
                 "unit-level if branch must produce a value",
                 loc=ifnode.start,
@@ -1035,8 +1035,7 @@ class TypeChecker:
             self._resolving.pop()
             return None
 
-        t_ztype = cast(ZType, t)
-        self.typing.node_type[ifnode.nodeid] = t_ztype
+        self.typing.node_type[ifnode.nodeid] = t
 
         # propagate const_value from taken branch if available
         if taken_stmt.statements:
@@ -1057,7 +1056,7 @@ class TypeChecker:
         # mirror has to be built inline. Emitter / SQL-dump consumers
         # read const_value via the typed tree only after Step 6.9.a.
         self._resolving.pop()
-        return t_ztype
+        return t
 
     def _detect_generic_param(
         self, ppath: zast.Path
@@ -6195,10 +6194,10 @@ class TypeChecker:
                 # break makes the do expression type optional
                 if (
                     last_type is not None
-                    and last_type.is_ztype
-                    and cast(ZType, last_type).name != "null"
+                    and last_type.typetype != ZTypeType.NEVER
+                    and last_type.name != "null"
                 ):
-                    opt_t = self._make_optional_type(cast(ZType, last_type))
+                    opt_t = self._make_optional_type(last_type)
                     if opt_t:
                         t = opt_t
                         self.typing.node_type[inner_do.nodeid] = opt_t
@@ -6206,8 +6205,8 @@ class TypeChecker:
                         t = self.t_null
                 else:
                     t = self.t_null
-            elif last_type is not None and last_type.is_ztype:
-                t = cast(ZType, last_type)
+            elif last_type is not None and last_type.typetype != ZTypeType.NEVER:
+                t = last_type
                 self.typing.node_type[inner_do.nodeid] = t
             else:
                 t = self.t_null
@@ -9063,21 +9062,12 @@ class TypeChecker:
             return "".join(parts)
         return "compile-time error"
 
-    # sentinel for branches that don't complete (return/break/continue).
-    # Carries `is_ztype = False` so callers can use `t.is_ztype` to
-    # discriminate sentinel-from-ZType without a getattr probe.
-    class _NoReturnSentinel:
-        is_ztype: bool = False
-
-    _NORETURN = _NoReturnSentinel()
-
-    def _last_statement_type(
-        self, stmt: zast.Statement
-    ) -> "Optional[ZType | _NoReturnSentinel]":
+    def _last_statement_type(self, stmt: zast.Statement) -> Optional[ZType]:
         """Get the type of the last expression in a statement block.
 
-        Returns ZType for value-producing branches, _NORETURN for
-        return/break/continue, or None if no value produced.
+        Returns the resolved `never` ZType for branches that don't
+        complete (return/break/continue/error), a regular ZType for
+        value-producing branches, or None if no value produced.
         """
         if not stmt.statements:
             return None
@@ -9094,7 +9084,7 @@ class TypeChecker:
                 zast.CallKind.CONTINUE,
                 zast.CallKind.ERROR,
             ):
-                return self._NORETURN
+                return self._resolve_name("never")
             # get type from the inner expression node (Expression wrapper .type may be None)
             if self.typing.node_type.get(inner.nodeid) is not None:
                 return self.typing.node_type.get(inner.nodeid)
@@ -9197,7 +9187,9 @@ class TypeChecker:
             branch_types.append(self._last_statement_type(ifnode.elseclause))
 
             # filter out non-completing branches (return/break/continue)
-            completing = [t for t in branch_types if t is not self._NORETURN]
+            completing = [
+                t for t in branch_types if t is None or t.typetype != ZTypeType.NEVER
+            ]
 
             if not completing:
                 # all branches are non-completing (return/break/continue)
@@ -9206,13 +9198,10 @@ class TypeChecker:
                     result_type = never
                     self.typing.node_type[ifnode.nodeid] = never
             elif completing:
-                first_raw = completing[0]
-                if first_raw is not None and first_raw.is_ztype:
-                    first = cast(ZType, first_raw)
+                first = completing[0]
+                if first is not None:
                     all_ok = all(
-                        t is not None
-                        and t.is_ztype
-                        and self._types_compatible(first, cast(ZType, t))
+                        t is not None and self._types_compatible(first, t)
                         for t in completing[1:]
                     )
                     if all_ok:
@@ -9221,16 +9210,8 @@ class TypeChecker:
                     else:
                         # find first incompatible type for error message
                         for t in completing[1:]:
-                            if (
-                                t is None
-                                or not t.is_ztype
-                                or not self._types_compatible(first, cast(ZType, t))
-                            ):
-                                tname = (
-                                    cast(ZType, t).name
-                                    if t is not None and t.is_ztype
-                                    else "null"
-                                )
+                            if t is None or not self._types_compatible(first, t):
+                                tname = t.name if t is not None else "null"
                                 self._error(
                                     f"incompatible branch types in if-expression: "
                                     f"'{first.name}' and '{tname}'",
@@ -9767,24 +9748,25 @@ class TypeChecker:
         result_type = self.t_null
         is_exhaustive = bool(casenode.elseclause) or const_match_taken
         if is_exhaustive:
-            branch_types: "list[Optional[ZType | TypeChecker._NoReturnSentinel]]" = []
+            branch_types: "list[Optional[ZType]]" = []
             for c in casenode.clauses:
                 branch_types.append(self._last_statement_type(c.statement))
             if casenode.elseclause:
                 branch_types.append(self._last_statement_type(casenode.elseclause))
-            completing: "list[Optional[ZType | TypeChecker._NoReturnSentinel]]" = []
-            for bt in branch_types:
-                if bt is not self._NORETURN:
-                    completing.append(bt)
+            completing: "list[Optional[ZType]]" = [
+                bt
+                for bt in branch_types
+                if bt is None or bt.typetype != ZTypeType.NEVER
+            ]
             if not completing and branch_types:
                 never = self._resolve_name("never")
                 if never:
                     result_type = never
                     self.typing.node_type[casenode.nodeid] = never
             elif completing:
-                first_raw = completing[0]
-                if first_raw is not None and first_raw.is_ztype:
-                    result_type = cast(ZType, first_raw)
+                first = completing[0]
+                if first is not None:
+                    result_type = first
                     self.typing.node_type[casenode.nodeid] = result_type
 
         self.symtab.pop()
@@ -9860,7 +9842,9 @@ class TypeChecker:
         ]
         if casenode.elseclause:
             branch_types.append(self._last_statement_type(casenode.elseclause))
-        completing = [t for t in branch_types if t is not self._NORETURN]
+        completing = [
+            t for t in branch_types if t is None or t.typetype != ZTypeType.NEVER
+        ]
         if not completing and branch_types:
             never = self._resolve_name("never")
             if never:
@@ -9869,26 +9853,18 @@ class TypeChecker:
             return self.t_null
         if not completing:
             return self.t_null
-        first_raw = completing[0]
-        if first_raw is None or not first_raw.is_ztype:
+        first = completing[0]
+        if first is None:
             return self.t_null
-        first = cast(ZType, first_raw)
         all_ok = all(
-            t is not None
-            and t.is_ztype
-            and self._types_compatible(first, cast(ZType, t))
-            for t in completing[1:]
+            t is not None and self._types_compatible(first, t) for t in completing[1:]
         )
         if all_ok:
             self.typing.node_type[casenode.nodeid] = first
             return first
         for t in completing[1:]:
-            if (
-                t is None
-                or not t.is_ztype
-                or not self._types_compatible(first, cast(ZType, t))
-            ):
-                tname = cast(ZType, t).name if t is not None and t.is_ztype else "null"
+            if t is None or not self._types_compatible(first, t):
+                tname = t.name if t is not None else "null"
                 self._error(
                     f"incompatible branch types in match-expression: "
                     f"'{first.name}' and '{tname}'",
@@ -10108,7 +10084,7 @@ class TypeChecker:
             # track diverging arms for post-match exclusion
             if target_name and subject_type:
                 arm_type = self._last_statement_type(clause.statement)
-                if arm_type is self._NORETURN:
+                if arm_type is not None and arm_type.typetype == ZTypeType.NEVER:
                     diverging_arms.append(clause.match.name)
 
             self.symtab.pop_to(arm_marker)
@@ -10142,9 +10118,18 @@ class TypeChecker:
 
             # if else clause diverges, all remaining subtypes are excluded
             else_type = self._last_statement_type(casenode.elseclause)
-            if else_type is self._NORETURN and target_name and subject_type:
+            if (
+                else_type is not None
+                and else_type.typetype == ZTypeType.NEVER
+                and target_name
+                and subject_type
+            ):
+
+                def _diverges(t: Optional[ZType]) -> bool:
+                    return t is not None and t.typetype == ZTypeType.NEVER
+
                 all_diverge = all(
-                    self._last_statement_type(c.statement) is self._NORETURN
+                    _diverges(self._last_statement_type(c.statement))
                     for c in casenode.clauses
                 )
                 if all_diverge:
