@@ -17,7 +17,7 @@ class ZTypeType(IntEnum):
 
     NULL = 0  # function that returns nothing
     GENERIC_CALL = 2
-    GENERIC_PARAM = 3  # a generic type parameter (e.g., t in t: any.generic)
+    GENERIC_PARAM = 3  # a generic type parameter (e.g., t in t: Any.generic)
 
     # user defined types
     UNIT = 50
@@ -31,7 +31,7 @@ class ZTypeType(IntEnum):
     FACET = 58
 
     DATA = 60  # constant array data
-    TAG = 61  # tag discriminator type (placeholder until generics)
+    TAG = 61  # tag discriminator type
 
     # system types (set during resolution of native types from system.z)
     NEVER = 70  # never type (non-completing expression)
@@ -53,7 +53,7 @@ class ZSubType(IntEnum):
 
 @unique
 class ControlKind(IntEnum):
-    """Identifies compiler control flow functions (return, break, continue, error)."""
+    """Identifies compiler control flow functions"""
 
     NONE = 0
     RETURN = 1
@@ -66,7 +66,7 @@ class ControlKind(IntEnum):
 @unique
 class ZOwnership(IntEnum):
     """
-    Ownership - 2-state model (v2)
+    Ownership
 
     OWNED: the variable owns the instance and is responsible for its lifetime.
     BORROWED: the variable has a temporary reference; it does not own the instance.
@@ -79,7 +79,7 @@ class ZOwnership(IntEnum):
 @unique
 class ZLockState(IntEnum):
     """
-    Lock state - orthogonal to ownership (v2)
+    Lock state - orthogonal to ownership
 
     UNLOCKED: no lock held.
     EXCLUSIVE: exclusive lock, no other references allowed.
@@ -128,9 +128,7 @@ def _alloc_type_id() -> int:
     return tid
 
 
-# monotonic counter for child-name identities on ZType. Globally unique so a
-# child_id never collides across parents and can be used directly as a SQL key.
-# Per-process only — not persisted across compiler invocations.
+# monotonic counter for child-name identities on ZType. Globally unique
 _next_child_id: int = 0
 
 
@@ -142,23 +140,17 @@ def _alloc_child_id() -> int:
     return cid
 
 
-# Tag-origin types (variant tag discriminator instances) are flagged by
-# `ZType.is_tag_generic_origin = True`. `generic_origin` stays None on
-# those — the boolean is the SQL-shaped marker, replacing the old
-# `_TagOrigin` sentinel that lived in `generic_origin`.
-
-
 @dataclass
 class ZType:
     """
     ZType - describes a type
 
-    For functions, children contains parameters keyed by name.
+    For functions, children contains parameters.
     The return type is stored in the dedicated return_type field.
 
     For records, children contains fields and methods.
 
-    For units, children contains the unit's exported definitions.
+    For units, children contains the unit's definitions.
 
     param_ownership maps parameter names to their
     ownership annotation (take/borrow/lock). Only populated for
@@ -181,22 +173,14 @@ class ZType:
     # parallel name→id map for children. Lazily populated by child_id_for;
     # never pre-seeded. Globally-unique ids consumed by `Typing.type_child`
     # rows and by narrowing entries that reference a child by id rather
-    # than by string. Pre-F5.H this paralleled a `children` dict on the
-    # ZType; F5.H.5 removed that dict — children now live on
-    # `Typing.type_child` and `child_id_for` exists solely as the id
-    # allocator that keeps the SQL row's `child_name_id` stable.
+    # than by string.
     children_id_map: "dict[str, int]" = field(default_factory=dict, init=False)
 
-    # return type for function types (None for non-functions or void functions)
+    # for function types
     return_type: "Optional[ZType]" = field(default=None, init=False)
     # ownership annotation on the return type (if any)
     return_ownership: "Optional[ZParamOwnership]" = field(default=None, init=False)
-    # name of the parameter whose declared TYPE was the `this` keyword —
-    # i.e. the receiver-bound parameter. Set during _resolve_function_type.
-    # Both `:this` (param named "this") and `h: this` (param named "h")
-    # populate this; downstream code checks against this field instead of
-    # hardcoding the literal string "this", so the named-binding form
-    # works equivalently to the unnamed shorthand.
+    # name of the parameter whose declared TYPE was 'this' (receiver)
     this_param_name: "Optional[str]" = field(default=None, init=False)
 
     isgeneric: bool = False
@@ -206,26 +190,20 @@ class ZType:
         default_factory=dict, init=False
     )
 
-    # value type vs reference type classification
     is_valtype: Optional[bool] = field(default=None, init=False)
 
-    # default values for parameters/fields: name → C-level default expression
+    # default values for parameters/fields: name -> C-level default expression
     param_defaults: "dict[str, str]" = field(default_factory=dict, init=False)
 
-    # generic type parameters: param name → constraint ZType (for template types)
+    # generic type parameters: param name -> constraint ZType (for template types)
     generic_params: "dict[str, ZType]" = field(default_factory=dict, init=False)
 
     # for monomorphized types: points to the original template type.
     # None for non-monomorphized types AND for variant-tag discriminator
     # types — the latter are flagged separately via `is_tag_generic_origin`.
     generic_origin: "Optional[ZType]" = field(default=None, init=False)
-    # variant-tag discriminator marker (replaces the old TAG_ORIGIN sentinel
-    # that used to live in `generic_origin`).
+    # variant-tag discriminator marker
     is_tag_generic_origin: bool = field(default=False, init=False)
-
-    # F5.H.5: monomorphized type generic args (param name → concrete ZType)
-    # live on `Typing.type_generic_arg`; query via `typing.generic_arg_of`
-    # / `typing.generic_args_of`.
 
     # names of generic params that are numeric (constraint is a numeric type)
     numeric_generic_params: "set[str]" = field(default_factory=set, init=False)
@@ -242,8 +220,9 @@ class ZType:
     # for typedef types: points to the immediate base type being wrapped
     typedef_base: "Optional[ZType]" = field(default=None, init=False)
 
-    # memory management metadata (set by type checker after resolution)
-    needs_destructor: bool = field(default=False, init=False)
+    # memory management metadata (set by type checker after resolution).
+    # `destructor_name is not None` is the authoritative "needs destructor"
+    # signal — they were always set/cleared in lockstep historically.
     destructor_name: Optional[str] = field(default=None, init=False)
     is_heap_allocated: bool = field(default=False, init=False)
 
@@ -261,10 +240,9 @@ class ZType:
     # native type: compiler-provided implementation (system types like i64, string, etc.)
     is_native: bool = field(default=False, init=False)
 
-    # control flow kind: identifies system control flow functions
     control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
 
-    # public/private access control: maps external name → internal name for
+    # public/private access control: maps external name -> internal name for
     # publicly accessible members. None = all-public (default). Set during type
     # resolution when public: unit { ... } is declared in the as block.
     public_members: "Optional[dict[str, str]]" = field(default=None, init=False)
@@ -278,17 +256,14 @@ class ZType:
     # after construction and only permitted on classes.
     lock_field_names: "set[str]" = field(default_factory=set, init=False)
 
-    # True iff this type has at least one .lock field (classes only).
-    has_lock_fields: bool = field(default=False, init=False)
-
-    # set of arm names declared with the .lock type modifier on a union —
+    # set of arm names declared with the .lock type modifier on a union -
     # the arm holds a locked reference into a parent rather than owning its
     # payload. The destructor releases the lock without freeing the payload;
     # the union's lifetime cannot exceed the locked source's lifetime.
-    # Unions only — variant arms must be inline-stored valtypes.
+    # Unions only - variant arms must be inline-stored valtypes.
     lock_arm_names: "set[str]" = field(default_factory=set, init=False)
 
-    # True iff the type's 'create' method is disabled — either by the user
+    # True if the type's 'create' method is disabled — either by the user
     # writing 'create: null' in the 'as' block, or by the compiler for types
     # where bare-name construction is not meaningful (unions and variants
     # require subtype selection). When set, the unified call dispatch reports

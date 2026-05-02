@@ -215,7 +215,7 @@ class TestFinding3DestructorMetadata:
         name_type = _node_ztype(typing2, box.is_items["name"])
         assert name_type is not None
         assert name_type.name == "String"
-        assert name_type.needs_destructor is True
+        assert (name_type.destructor_name is not None) is True
         assert name_type.destructor_name == "z_String_free"
         assert name_type.is_heap_allocated is False
 
@@ -230,7 +230,7 @@ class TestFinding3DestructorMetadata:
                 t = ztype
                 break
         assert t is not None, "Box type not found in resolved"
-        assert t.needs_destructor is False
+        assert (t.destructor_name is not None) is False
         assert t.is_heap_allocated is False
 
     def test_union_destructor(self):
@@ -244,7 +244,7 @@ class TestFinding3DestructorMetadata:
                 t = ztype
                 break
         assert t is not None, "Result type not found in resolved"
-        assert t.needs_destructor is True
+        assert (t.destructor_name is not None) is True
         assert t.destructor_name == "z_Result_destroy"
         assert t.is_heap_allocated is False
 
@@ -259,7 +259,7 @@ class TestFinding3DestructorMetadata:
                 t = ztype
                 break
         assert t is not None, "point type not found in resolved"
-        assert t.needs_destructor is False
+        assert (t.destructor_name is not None) is False
         assert t.destructor_name is None
         assert t.is_heap_allocated is False
 
@@ -270,7 +270,7 @@ class TestFinding3DestructorMetadata:
         # i64 is a record type with no destructor
         t = typing.resolved.get("system.i64")
         assert t is not None
-        assert t.needs_destructor is False
+        assert (t.destructor_name is not None) is False
         assert t.destructor_name is None
 
 
@@ -765,7 +765,6 @@ class TestFinding11ScopeState:
 
         # verify that a ZType with destructor_name set gets correct cleanup
         t = ZType(name="Box", typetype=ZTypeType.CLASS, parent=None)
-        t.needs_destructor = True
         t.destructor_name = "z_Box_destroy"
         s = ScopeState()
         s.cleanup_vars.append(("myvar", t))

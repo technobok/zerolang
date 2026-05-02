@@ -1576,7 +1576,7 @@ class TestPhaseC3Pins:
         # needs_destructor == True. Pin it.
         temp_t = _node_ztype(typing, temp_assn)
         assert temp_t is not None
-        assert temp_t.needs_destructor is True, (
+        assert (temp_t.destructor_name is not None) is True, (
             f"temp type {temp_t.name} should need a destructor"
         )
 
@@ -6876,7 +6876,7 @@ class TestIoNativeDispatch:
         tc.check(full=True)
         file_type = tc._resolved.get("io.File")
         assert file_type is not None
-        assert file_type.needs_destructor is True
+        assert (file_type.destructor_name is not None) is True
         assert file_type.destructor_name == "z_File_destroy"
 
     def test_file_read_typechecks(self):
@@ -11122,7 +11122,7 @@ class TestUnionLockedArm:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.myview")
-        assert ut.needs_destructor is False
+        assert (ut.destructor_name is not None) is False
         assert ut.destructor_name is None
 
     def test_union_mixed_arms_keeps_destructor(self):
@@ -11139,7 +11139,7 @@ class TestUnionLockedArm:
         tc = TypeChecker(program)
         tc.check()
         ut = tc._resolved.get("test.mixed")
-        assert ut.needs_destructor is True
+        assert (ut.destructor_name is not None) is True
         assert ut.destructor_name == "z_mixed_destroy"
         assert ut.lock_arm_names == {"cached"}
 
@@ -11180,7 +11180,7 @@ class TestUnionLockedArm:
         tc.check()
         ut = tc._resolved.get("test.wrap")
         assert ut.lock_arm_names == {"val"}
-        assert ut.needs_destructor is False
+        assert (ut.destructor_name is not None) is False
 
 
 class TestOptionview:
@@ -11235,7 +11235,7 @@ class TestOptionview:
                     mono = v
                     break
         assert mono is not None, "OptionView mono not resolved"
-        assert mono.needs_destructor is False
+        assert (mono.destructor_name is not None) is False
         assert mono.destructor_name is None
         assert "some" in mono.lock_arm_names
 

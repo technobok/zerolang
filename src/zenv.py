@@ -701,7 +701,7 @@ class SymbolTable:
                 if entry.is_taken:
                     taken.add(entry.name)
                     continue
-                if entry.var is not None and entry.ztype.needs_destructor:
+                if entry.var is not None and (entry.ztype.destructor_name is not None):
                     names.add(entry.name)
             i -= 1
         return names

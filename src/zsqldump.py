@@ -343,7 +343,7 @@ def dump_sql(
             f"{_sql_str(ztype.typetype.name)}, {parent_id}, "
             f"{_sql_bool(ztype.is_valtype)}, {_sql_bool(ztype.isgeneric)}, "
             f"{typedef_id}, {origin_id}, "
-            f"{_sql_bool(ztype.needs_destructor)}, "
+            f"{_sql_bool((ztype.destructor_name is not None))}, "
             f"{_sql_str(ztype.destructor_name)}, "
             f"{_sql_bool(ztype.is_heap_allocated)}, "
             f"{_sql_str(ztype.cname if ztype.cname else None)});"

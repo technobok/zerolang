@@ -184,29 +184,23 @@ def _is_valtype(ztype: ZType) -> bool:
 def _set_destructor_metadata(ztype: ZType) -> None:
     """Set needs_destructor, destructor_name, is_heap_allocated based on type."""
     if ztype.subtype == ZSubType.STRING:
-        ztype.needs_destructor = True
         ztype.destructor_name = "z_String_free"
         ztype.is_heap_allocated = False  # stack struct, heap data buffer
     elif ztype.subtype == ZSubType.STRINGVIEW:
-        ztype.needs_destructor = False
         ztype.destructor_name = None
         ztype.is_heap_allocated = False
     elif ztype.typetype == ZTypeType.CLASS:
         # Classes are stack-allocated. Destructor provisionally set to True;
         # refined by _set_field_cleanup_metadata after children are resolved.
-        ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
         ztype.is_heap_allocated = False
     elif ztype.typetype == ZTypeType.UNION:
-        ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
         ztype.is_heap_allocated = False  # stack struct, heap subtype data
     elif ztype.typetype == ZTypeType.PROTOCOL:
-        ztype.needs_destructor = True
         ztype.destructor_name = f"z_{ztype.name}_destroy"
         ztype.is_heap_allocated = False  # stack struct, heap wrapped data
     else:
-        ztype.needs_destructor = False
         ztype.destructor_name = None
         ztype.is_heap_allocated = False
 
@@ -222,7 +216,7 @@ def _set_field_cleanup_metadata(typing: ztyping.Typing, ztype: ZType) -> None:
     for child_name, child_type in typing.children_of(ztype):
         if child_type.typetype == ZTypeType.FUNCTION:
             continue
-        if child_type.needs_destructor:
+        if child_type.destructor_name is not None:
             ztype.needs_field_cleanup = True
             return
     # io.file: compiler-provided class whose destructor closes the
@@ -230,7 +224,6 @@ def _set_field_cleanup_metadata(typing: ztyping.Typing, ztype: ZType) -> None:
     # need cleanup, so the general rule below would wrongly clear
     # the destructor.
     if ztype.typetype == ZTypeType.CLASS and ztype.name == "File":
-        ztype.needs_destructor = True
         ztype.destructor_name = "z_File_destroy"
         return
 
@@ -246,7 +239,6 @@ def _set_field_cleanup_metadata(typing: ztyping.Typing, ztype: ZType) -> None:
         and not ztype.needs_field_cleanup
         and ztype.subtype != ZSubType.STRING
     ):
-        ztype.needs_destructor = False
         ztype.destructor_name = None
 
 
@@ -1284,7 +1276,7 @@ class TypeChecker:
                 pt is not None
                 and pt.typetype == ZTypeType.CLASS
                 and not pt.is_heap_allocated
-                and pt.needs_destructor
+                and (pt.destructor_name is not None)
             ):
                 ftype.param_ownership[pname] = ZParamOwnership.BORROW
 
@@ -1470,7 +1462,6 @@ class TypeChecker:
                 # so they naturally prevent copies that would duplicate locks.
                 if f_own == ZParamOwnership.LOCK:
                     ctype.lock_field_names.add(fname)
-                    ctype.has_lock_fields = True
                 elif f_own is not None:
                     self._error(
                         f"Only '.lock' is permitted as a field type modifier; "
@@ -1943,7 +1934,6 @@ class TypeChecker:
             is_locked = sname in utype.lock_arm_names
             if not (is_null or is_locked):
                 return
-        utype.needs_destructor = False
         utype.destructor_name = None
 
     def _resolve_variant_type(
@@ -2309,7 +2299,6 @@ class TypeChecker:
                 # detect .lock field annotation (Phase B)
                 if f_own == ZParamOwnership.LOCK:
                     rtype.lock_field_names.add(fname)
-                    rtype.has_lock_fields = True
                 elif f_own is not None:
                     self._error(
                         f"Only '.lock' is permitted as a field type modifier; "
@@ -2447,7 +2436,7 @@ class TypeChecker:
         this.borrow constructors require single-owner semantics — use a
         class instead.
         """
-        if rtype.has_lock_fields:
+        if bool(rtype.lock_field_names):
             self._error(
                 f"Record '{name}' has '.lock' field(s) "
                 f"({', '.join(sorted(rtype.lock_field_names))}); '.lock' "
@@ -2683,11 +2672,9 @@ class TypeChecker:
         # Destructor + heap-allocation state must follow the base so
         # scope cleanup calls the emitted destroy function (the typedef
         # wrapper itself emits no struct / no destructor).
-        if base_type.needs_destructor:
-            rtype.needs_destructor = True
+        if base_type.destructor_name is not None:
             rtype.destructor_name = base_type.destructor_name
         else:
-            rtype.needs_destructor = False
             rtype.destructor_name = None
         rtype.is_heap_allocated = base_type.is_heap_allocated
 
@@ -2807,7 +2794,7 @@ class TypeChecker:
                         ct.subtype = sv_type.subtype
                         ct.const_value = raw
                         ct.is_valtype = True
-                        ct.needs_destructor = False  # static, not freed
+                        ct.destructor_name = None  # static, not freed
                         self.typing.node_type[apath_str.nodeid] = ct
                         self.typing.node_const_value[apath_str.nodeid] = raw
                         self._set_child(rtype, label, ct)
@@ -4346,7 +4333,6 @@ class TypeChecker:
                         self._set_child(mono, "call", call_type)
             # listiter holds a borrowed pointer to its source list; no
             # owned data, so no runtime destructor is needed.
-            mono.needs_destructor = False
             mono.destructor_name = None
 
         # for mapkeyiter types: synthesize the .call method returning
@@ -4365,7 +4351,6 @@ class TypeChecker:
                         call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
                         call_type.return_type = ov_mono
                         self._set_child(mono, "call", call_type)
-            mono.needs_destructor = False
             mono.destructor_name = None
 
         # for mapentry types: synthesize .key / .value accessors. mapentry
@@ -4376,7 +4361,6 @@ class TypeChecker:
         if _is_mapentry_type(mono):
             mono.is_valtype = False
             _set_destructor_metadata(mono)
-            mono.needs_destructor = False
             mono.destructor_name = None
             mono.create_disabled = True
             key_t = _mapentry_key_type(self.typing, mono)
@@ -4426,7 +4410,6 @@ class TypeChecker:
                             )
                             call_type.return_type = ov_mono
                             self._set_child(mono, "call", call_type)
-            mono.needs_destructor = False
             mono.destructor_name = None
 
         # for list types: set reftype, synthesize methods
@@ -4853,7 +4836,6 @@ class TypeChecker:
             and template_type.nodeid == self._optionview_template_nodeid()
         ):
             mono.lock_arm_names = set(template_type.lock_arm_names)
-            mono.needs_destructor = False
             mono.destructor_name = None
 
     def _rebuild_mono_tag(self, mono: ZType, mangled: str) -> None:
@@ -8891,7 +8873,7 @@ class TypeChecker:
             self.func_ctx.func_return_ownership != ZParamOwnership.BORROW
             and call.arguments
             and ret_type is not None
-            and ret_type.needs_destructor
+            and (ret_type.destructor_name is not None)
             and not ret_type.is_heap_allocated
         ):
             arg_op = call.arguments[0].valtype
@@ -9425,7 +9407,6 @@ class TypeChecker:
         if mono:
             mono.is_box = True
             mono.is_heap_allocated = True  # box data is on the heap
-            mono.needs_destructor = True
             mono.destructor_name = f"z_{mono.name}_destroy"
             # copy children from inner type for transparent access
             for cname, ctype in self.typing.children_of(inner_type):

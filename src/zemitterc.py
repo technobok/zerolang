@@ -643,7 +643,7 @@ class CEmitter:
         Returns a C statement string (with newline) or empty string if no cleanup needed.
         For stack-allocated types (non-heap), prepends & to pass address to destructor.
         """
-        if ftype.needs_destructor and ftype.destructor_name:
+        if (ftype.destructor_name is not None) and ftype.destructor_name:
             # Stack-allocated types need & to get a pointer for the destructor
             if not ftype.is_heap_allocated:
                 return f"{indent}{ftype.destructor_name}(&{access});\n"
@@ -3088,7 +3088,7 @@ class CEmitter:
 
         def _arm_body(spath: zast.Path) -> tuple[str, ...]:
             stype = self._node_ztype(spath)
-            if stype and stype.needs_destructor and stype.destructor_name:
+            if stype and (stype.destructor_name is not None) and stype.destructor_name:
                 if stype.is_heap_allocated:
                     cast_expr = f"({_ctype(self.typing, stype)})u->data"
                     return (f"            {stype.destructor_name}({cast_expr});\n",)
@@ -3292,7 +3292,7 @@ class CEmitter:
         ]
 
         def _arm_body_mono(stype: ZType) -> tuple[str, ...]:
-            if stype.needs_destructor and stype.destructor_name:
+            if (stype.destructor_name is not None) and stype.destructor_name:
                 if stype.is_heap_allocated:
                     cast_expr = f"({_ctype(self.typing, stype)})u->data"
                     return (f"            {stype.destructor_name}({cast_expr});\n",)
@@ -3343,7 +3343,7 @@ class CEmitter:
         # emit destructor: if non-null, destroy the inner value
         lines.append(f"static void z_{name}_destroy({inner_ctype} v) {{\n")
         lines.append("    if (!v) return;\n")
-        if some_type.needs_destructor and some_type.destructor_name:
+        if (some_type.destructor_name is not None) and some_type.destructor_name:
             lines.append(f"    {some_type.destructor_name}(v);\n")
         else:
             lines.append("    free(v);\n")
@@ -3448,7 +3448,7 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy({ptr_ctype} v) {{\n")
         lines.append("    if (!v) return;\n")
         # chain inner destructor for types that own heap resources
-        if inner_type.needs_destructor and inner_type.destructor_name:
+        if (inner_type.destructor_name is not None) and inner_type.destructor_name:
             if inner_type.is_heap_allocated:
                 # inner is a pointer type (map, etc.); pass as-is
                 lines.append(f"    {inner_type.destructor_name}(v);\n")
@@ -3646,7 +3646,7 @@ class CEmitter:
 
         # destroy — per-element cleanup loop only when the element type
         # actually needs it.
-        if elem_type.needs_destructor and elem_type.destructor_name:
+        if (elem_type.destructor_name is not None) and elem_type.destructor_name:
             elem_destr = elem_type.destructor_name
             elem_addr = "" if elem_type.is_heap_allocated else "&"
             destroy_elems = (
@@ -3871,7 +3871,11 @@ class CEmitter:
 
         # helper: free a key if it carries a destructor
         def emit_free_key(var: str, indent: str = "    ") -> str:
-            if key_type and key_type.needs_destructor and key_type.destructor_name:
+            if (
+                key_type
+                and (key_type.destructor_name is not None)
+                and key_type.destructor_name
+            ):
                 if not key_type.is_heap_allocated:
                     return f"{indent}{key_type.destructor_name}(&{var});\n"
                 return f"{indent}{key_type.destructor_name}({var});\n"
@@ -3881,7 +3885,7 @@ class CEmitter:
         def emit_free_val(var: str, indent: str = "    ") -> str:
             if (
                 value_type
-                and value_type.needs_destructor
+                and (value_type.destructor_name is not None)
                 and value_type.destructor_name
             ):
                 if not value_type.is_heap_allocated:
@@ -3898,8 +3902,8 @@ class CEmitter:
         lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
         lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
         lines.append("    if (!p) return;\n")
-        key_needs_free = bool(key_type and key_type.needs_destructor)
-        val_needs_free = bool(value_type and value_type.needs_destructor)
+        key_needs_free = bool(key_type and (key_type.destructor_name is not None))
+        val_needs_free = bool(value_type and (value_type.destructor_name is not None))
         if key_needs_free or val_needs_free:
             lines.append("    for (uint64_t i = 0; i < p->capacity; i++) {\n")
             lines.append(
@@ -4740,7 +4744,7 @@ class CEmitter:
         for pname, ppath in func.parameters.items():
             if (
                 self._node_ztype(ppath)
-                and cast(ZType, self._node_ztype(ppath)).needs_destructor
+                and cast(ZType, self._node_ztype(ppath)).destructor_name is not None
                 and cast(ZType, self._node_ztype(ppath)).destructor_name
                 and param_own.get(pname) == ZParamOwnership.TAKE
             ):
@@ -4925,7 +4929,7 @@ class CEmitter:
         self._in_named_assignment = True
         val = self._emit_expression_value(assign.value)
         self._in_named_assignment = False
-        if _assign_ztype and _assign_ztype.needs_destructor:
+        if _assign_ztype and (_assign_ztype.destructor_name is not None):
             if ctype == "z_String_t":
                 self.needs_string = True
             self.needs_stdlib = True
@@ -4969,7 +4973,7 @@ class CEmitter:
         result = ""
         # check if this is a reftype reassignment — free old value first
         lhs_type = self._path_ztype(reassign.topath)
-        if lhs_type and lhs_type.needs_destructor:
+        if lhs_type and (lhs_type.destructor_name is not None):
             result += self._emit_field_cleanup(lhs, lhs_type, indent)
             # the variable now owns the new value — remove from temp frees
             if rhs in self._temp.frees:
@@ -4980,7 +4984,7 @@ class CEmitter:
         # does not free the storage we just moved into the LHS. No-op
         # when the RHS is a fresh constructor (no source name) or a
         # valtype (copy semantics, nothing to invalidate).
-        if lhs_type and lhs_type.needs_destructor:
+        if lhs_type and (lhs_type.destructor_name is not None):
             take_var = self._get_take_var_from_expr(reassign.value)
             if take_var is None:
                 inner = reassign.value.expression
@@ -5087,7 +5091,11 @@ class CEmitter:
             var = self._emit_path_value(dp.parent)
             var_type = self._node_ztype(dp)
             result = ""
-            if var_type and var_type.needs_destructor and var_type.destructor_name:
+            if (
+                var_type
+                and (var_type.destructor_name is not None)
+                and var_type.destructor_name
+            ):
                 if var_type.is_heap_allocated:
                     result += f"{indent}{var_type.destructor_name}({var});\n"
                 else:
@@ -5110,7 +5118,7 @@ class CEmitter:
             # owned reftypes: call destructor
             if (
                 var_type
-                and var_type.needs_destructor
+                and (var_type.destructor_name is not None)
                 and var_type.destructor_name
                 and not is_borrowed
             ):
@@ -6279,7 +6287,7 @@ class CEmitter:
                     tmp = self._temp_name("c")
                     indent = self._indent()
                     self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                    if _call_ztype.needs_destructor:
+                    if _call_ztype.destructor_name is not None:
                         self._temp.frees.append(tmp)
                         self._temp.class_set[tmp] = _call_ztype.name
                     return tmp
@@ -6288,7 +6296,7 @@ class CEmitter:
                     tmp = self._temp_name("c")
                     indent = self._indent()
                     self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                    if _call_ztype.needs_destructor:
+                    if _call_ztype.destructor_name is not None:
                         self._temp.frees.append(tmp)
                         self._temp.class_set[tmp] = _call_ztype.name
                     return tmp
@@ -6861,7 +6869,7 @@ class CEmitter:
                     self._temp.decls.append(
                         self._emit_take_invalidation(tv, ft, indent)
                     )
-            if cls_type.needs_destructor:
+            if cls_type.destructor_name is not None:
                 self._temp.frees.append(tmp)
                 self._temp.class_set[tmp] = cls_type.name
             return tmp
@@ -6890,7 +6898,7 @@ class CEmitter:
                 ctype = f"z_{_call_ztype.name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                if _call_ztype.needs_destructor:
+                if _call_ztype.destructor_name is not None:
                     self._temp.frees.append(tmp)
                     self._temp.class_set[tmp] = _call_ztype.name
                 self._apply_call_implicit_takes(call, indent)
@@ -6904,7 +6912,7 @@ class CEmitter:
                 ctype = f"z_{_call_ztype.name}_t"
                 tmp = self._temp_name("c")
                 self._temp.decls.append(f"{indent}{ctype} {tmp} = {result};\n")
-                if _call_ztype.needs_destructor:
+                if _call_ztype.destructor_name is not None:
                     self._temp.frees.append(tmp)
                     self._temp.class_set[tmp] = _call_ztype.name
                 self._apply_call_implicit_takes(call, indent)
@@ -7194,7 +7202,7 @@ class CEmitter:
             self._temp.decls.append(
                 f"{indent}{ctype} {tmp} = z_{mangled}_create({create_args});\n"
             )
-            if resolved.needs_destructor:
+            if resolved.destructor_name is not None:
                 self._temp.frees.append(tmp)
                 self._temp.class_set[tmp] = mangled
             return tmp
@@ -8049,7 +8057,7 @@ class CEmitter:
         """
         parts: List[str] = []
         for vname, vtype in taken_vars:
-            if vtype and vtype.needs_destructor and vtype.destructor_name:
+            if vtype and (vtype.destructor_name is not None) and vtype.destructor_name:
                 var = _mangle_var(vname)
                 if vtype.is_heap_allocated:
                     parts.append(
@@ -8072,7 +8080,7 @@ class CEmitter:
         """
         if ztype is None:
             return False
-        return bool(ztype.needs_destructor) and not ztype.is_heap_allocated
+        return bool((ztype.destructor_name is not None)) and not ztype.is_heap_allocated
 
     def _apply_call_implicit_takes(self, call: zast.Call, indent: str) -> None:
         """Apply implicit TAKE to ownership-transferring args of a function call.
@@ -8971,7 +8979,7 @@ class CEmitter:
         # track reftype ownership
         if (
             self._node_ztype(ifnode)
-            and cast(ZType, self._node_ztype(ifnode)).needs_destructor
+            and cast(ZType, self._node_ztype(ifnode)).destructor_name is not None
         ):
             self._temp.frees.append(tmp)
             if ctype == "z_String_t":
@@ -8996,7 +9004,7 @@ class CEmitter:
         if elem_type.subtype == ZSubType.STRING:
             self.needs_string = True
             return f"z_String_free(&{var_name});"
-        if not elem_type.needs_destructor:
+        if not (elem_type.destructor_name is not None):
             return None
         destructor = elem_type.destructor_name
         if destructor:
@@ -9856,7 +9864,7 @@ class CEmitter:
         # track reftype ownership
         if (
             self._node_ztype(casenode)
-            and cast(ZType, self._node_ztype(casenode)).needs_destructor
+            and cast(ZType, self._node_ztype(casenode)).destructor_name is not None
         ):
             self._temp.frees.append(tmp)
             if ctype == "z_String_t":
