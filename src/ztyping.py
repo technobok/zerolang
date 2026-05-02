@@ -60,6 +60,10 @@ class TypeChild:
     position: int
     child_type: "ZType"
 
+    # Folded sidecars (formerly per-(parent, child-name) sets/dicts on
+    # ZType — see plans/line-count-increase-is-twinkling-willow.md):
+    is_private: bool = False  # field declared with .private modifier
+
 
 @dataclass
 class TypeGenericArg:
@@ -239,6 +243,18 @@ class Typing:
 
     def has_child(self, parent: ZType, name: str) -> bool:
         return self.child_of(parent, name) is not None
+
+    def set_child_private(self, parent: ZType, name: str) -> None:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                row.is_private = True
+                return
+
+    def is_child_private(self, parent: ZType, name: str) -> bool:
+        for row in self.type_child:
+            if row.parent_type_id == parent.nodeid and row.child_name == name:
+                return row.is_private
+        return False
 
     def children_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
         out: "List[tuple[str, ZType]]" = []

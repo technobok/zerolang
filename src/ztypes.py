@@ -248,10 +248,6 @@ class ZType:
     # resolution when public: unit { ... } is declared in the as block.
     public_members: "Optional[dict[str, str]]" = field(default=None, init=False)
 
-    # fields declared with .private type: set of field names that grant private
-    # access to the referenced type. Set during type resolution.
-    private_fields: "set[str]" = field(default_factory=set, init=False)
-
     # set of field names declared with the .lock type modifier — the field
     # stores a locked reference to external data. Lock fields are immutable
     # after construction and only permitted on classes.

@@ -127,6 +127,7 @@ CREATE TABLE IF NOT EXISTS type_children (
     child_type_id INTEGER NOT NULL REFERENCES types(type_id),
     position      INTEGER NOT NULL,
     child_id      INTEGER,
+    is_private    INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (type_id, child_name)
 );
 
@@ -360,7 +361,8 @@ def dump_sql(
         lines.append(
             f"INSERT OR IGNORE INTO type_children VALUES ("
             f"{row.parent_type_id}, {_sql_str(row.child_name)}, "
-            f"{row.child_type_id}, {row.position}, {row.child_name_id});"
+            f"{row.child_type_id}, {row.position}, {row.child_name_id}, "
+            f"{_sql_bool(row.is_private)});"
         )
 
     # Stage 5: typed nodes — typecheck-set per-node data. Step 5b

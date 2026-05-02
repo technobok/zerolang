@@ -1456,7 +1456,7 @@ class TypeChecker:
                     stripped_fpath.nodetype == NodeType.DOTTEDPATH
                     and cast(zast.DottedPath, stripped_fpath).child.name == "private"
                 ):
-                    ctype.private_fields.add(fname)
+                    self.typing.set_child_private(ctype, fname)
                 # Phase 7: .lock fields are now allowed on classes.
                 # Classes are stack-allocated with single-owner semantics,
                 # so they naturally prevent copies that would duplicate locks.
@@ -2284,7 +2284,7 @@ class TypeChecker:
                     stripped_fpath.nodetype == NodeType.DOTTEDPATH
                     and cast(zast.DottedPath, stripped_fpath).child.name == "private"
                 ):
-                    rtype.private_fields.add(fname)
+                    self.typing.set_child_private(rtype, fname)
                 # detect .lock field annotation (Phase B)
                 if f_own == ZParamOwnership.LOCK:
                     rtype.lock_field_names.add(fname)
@@ -9307,9 +9307,8 @@ class TypeChecker:
                 if path_parent_dp.parent
                 else None
             )
-            if (
-                grandparent_type
-                and path_parent_dp.child.name in grandparent_type.private_fields
+            if grandparent_type and self.typing.is_child_private(
+                grandparent_type, path_parent_dp.child.name
             ):
                 return False
         # external access: check public_members (keys are external names)
