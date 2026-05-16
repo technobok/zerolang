@@ -445,13 +445,16 @@ self.func_ctx = prev` block per record, instead of N parallel
 prologues.
 
 Action items (see plan-list at line 667 for landed-commit citations):
-- [~] Define the five dataclasses above. *(3 of 5 landed: MonoState
-      `fb8360a`, FunctionContext `1224b59`, TemplateIds `3ec7802`.
-      BorrowState substituted with scope-containment via
-      `ExprResult.borrow_target` — F5.A `4e4ba47`/`ebf9638`/`909267d`.
-      ResolverState explicitly deferred — `unit_types` / `_resolved` /
-      `_resolved_file_units` are publicly named on `TypeChecker` and
-      read by ~100 test sites; cosmetic gain doesn't justify churn.)*
+- [x] Define the five dataclasses above. *(Done as scoped: 3 of 5
+      landed as dataclasses — MonoState `fb8360a`, FunctionContext
+      `1224b59`, TemplateIds `3ec7802`. The other two have explicit
+      resolutions: BorrowState substituted with scope-containment
+      via `ExprResult.borrow_target` (F5.A,
+      `4e4ba47`/`ebf9638`/`909267d`) — the cross-cutting flag
+      problem is solved without the record. ResolverState deferred
+      by design — its fields are publicly named on `TypeChecker`
+      and read by ~100 test sites; cosmetic gain doesn't justify
+      the churn.)*
 - [x] Move attributes off `TypeChecker` onto the records, one record
       at a time. *(Done for the three landed records: 8/5/3 fields
       respectively; 59/63/9 access rebases.)*
@@ -683,17 +686,21 @@ Each step depends on the previous one. F4 is the largest.
        `getattr`s. *(Resolved 2026-04-28; count 125 → 4.)*
 2. [x] F3a — add `getattr` baseline to `bootstrap-lint`.
        *(Resolved 2026-04-28; baseline 4.)*
-3. [~] F4 — `Entry.is_receiver`, `BuiltinName`/`BuiltinFunc` enums,
-       replace literal compares. *(Partial 2026-04-30 in commits
-       `94fcb42`, `55246a9`, `9e519b5`: receiver-detection bucket A
-       and String/StringView bucket B done. Buckets C
-       (`parseF64`/`envNames`) and D (~50 meta/method-name literals)
-       deferred — would hurt readability for limited gain; revisit
-       only if a self-hosting port hits a concrete portability
-       blocker.)*
-4. [~] F3b — add `startswith` and `name-literal-compare` baselines.
-       *(Partial: ready to add at the current post-F4-scoped count
-       rather than zero, since buckets C/D leave ~50+ literals.)*
+3. [x] F4 — `Entry.is_receiver`, `BuiltinName`/`BuiltinFunc` enums,
+       replace literal compares. *(Done as scoped 2026-04-30 →
+       2026-05-16 in commits `94fcb42`, `55246a9`, `9e519b5`,
+       `ad262ca`: receiver-detection bucket A, String/StringView
+       bucket B, and `parseF64`/`envNames` bucket C done. Bucket D
+       (~50 meta/method-name literals) deferred by design —
+       single-character role-names are more readable as literals
+       than `BuiltinName.CREATE`; revisit only if a self-hosting
+       port hits a concrete portability blocker.)*
+4. [x] F3b — add `startswith` and `name-literal-compare` baselines.
+       *(Done in commit `3dba278` under the "no new violations"
+       policy. startswith baseline 42, name-literal-compare baseline
+       set at the then-current 272 — post-F4.4 (`ad262ca`) it
+       dropped to 269. Bucket D residuals (~50 literals) remain in
+       the baseline by explicit deferral above.)*
 
 ### Phase 3 — Architecture
 
