@@ -91,14 +91,13 @@ class ZOwnership(IntEnum):
 @unique
 class ZLockState(IntEnum):
     """
-    Lock state - orthogonal to ownership
+    Lock state — set on `LockInfo.lock_type` when an entry holds a lock.
+    Absence of a lock is represented by `Entry.lock = None`.
 
-    UNLOCKED: no lock held.
     EXCLUSIVE: exclusive lock, no other references allowed.
     SHARED: shared lock, other shared references allowed but no mutation.
     """
 
-    UNLOCKED = 0
     EXCLUSIVE = 1
     SHARED = 2
 

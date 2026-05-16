@@ -749,11 +749,10 @@ class TestOwnershipEnums:
         assert ZOwnership.BORROWED == 1
         assert len(ZOwnership) == 2
 
-    def test_zlockstate_three_state(self):
-        assert ZLockState.UNLOCKED == 0
+    def test_zlockstate_two_state(self):
         assert ZLockState.EXCLUSIVE == 1
         assert ZLockState.SHARED == 2
-        assert len(ZLockState) == 3
+        assert len(ZLockState) == 2
 
     def test_zparam_ownership(self):
         assert ZParamOwnership.TAKE == 0
