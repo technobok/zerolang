@@ -1,7 +1,7 @@
 """
 ZeroLang scoped symbol table for the type checker
 
-List-based environment: each scope holds a List[Entry] rather than dicts.
+List-based environment: each scope holds a List[ZEntry] rather than dicts.
 Scopes are small (measured max ~6 entries), so linear scan beats hash lookup.
 """
 
@@ -15,7 +15,7 @@ from ztypes import (
     ZLockHolder,
     ZLockHolderKind,
     ZScopeKind,
-    Entry,
+    ZEntry,
     _alloc_scope_id,
 )
 
@@ -106,10 +106,10 @@ class Scope:
         self.scope_id: int = _alloc_scope_id()
         self.kind = kind
         self.name = name
-        self.entries: List[Entry] = []
+        self.entries: List[ZEntry] = []
         self.unreachable: bool = False
 
-    def find(self, name: str) -> Optional[Entry]:
+    def find(self, name: str) -> Optional[ZEntry]:
         """Find the most recent entry for a name in this scope."""
         i = len(self.entries) - 1
         while i >= 0:
@@ -118,7 +118,7 @@ class Scope:
             i -= 1
         return None
 
-    def append(self, entry: Entry) -> None:
+    def append(self, entry: ZEntry) -> None:
         self.entries.append(entry)
 
 
@@ -223,7 +223,7 @@ class SymbolTable:
             for entry in top.entries:
                 if entry.is_taken and entry.taken_at is not None:
                     if not self._is_taken(entry.name):
-                        taken_entry = Entry(
+                        taken_entry = ZEntry(
                             name=entry.name,
                             ztype=entry.ztype,
                             is_definition=False,
@@ -244,12 +244,12 @@ class SymbolTable:
 
     def define(self, name: str, ztype: ZType) -> None:
         """Define a non-variable name (type, function, control flow)."""
-        entry = Entry(name=name, ztype=ztype, is_definition=True)
+        entry = ZEntry(name=name, ztype=ztype, is_definition=True)
         self._scopes[-1].append(entry)
 
     def define_var(self, name: str, var: ZVariable) -> None:
         """Define a runtime variable with ownership tracking."""
-        entry = Entry(
+        entry = ZEntry(
             name=name,
             ztype=var.ztype,
             is_definition=True,
@@ -330,8 +330,8 @@ class SymbolTable:
             i -= 1
         return None
 
-    def lookup_entry(self, name: str) -> Optional[Entry]:
-        """Search scopes inner→outer for a name. Returns the Entry or None."""
+    def lookup_entry(self, name: str) -> Optional[ZEntry]:
+        """Search scopes inner→outer for a name. Returns the ZEntry or None."""
         i = len(self._scopes) - 1
         while i >= 0:
             entry = self._scopes[i].find(name)
@@ -352,7 +352,7 @@ class SymbolTable:
         if entry is None:
             return False
         # push a taken overlay in the current scope
-        taken_entry = Entry(
+        taken_entry = ZEntry(
             name=name,
             ztype=entry.ztype,
             is_definition=False,
@@ -447,7 +447,7 @@ class SymbolTable:
             f"'{self.format_lock_holder(existing.holder)}'"
         )
 
-    # ---- lock operations (scope-based: locks are Entry.lock in scope chain) ----
+    # ---- lock operations (scope-based: locks are ZEntry.lock in scope chain) ----
 
     def try_lock(
         self,
@@ -470,7 +470,7 @@ class SymbolTable:
         Lets a call install receiver + arg locks under one identity without
         self-conflict.
 
-        On success, appends a lock Entry to the current scope keyed by
+        On success, appends a lock ZEntry to the current scope keyed by
         `path[0]` so the existing scope-chain machinery (release on pop,
         release_held_locks) keeps working unchanged.
         """
@@ -511,7 +511,7 @@ class SymbolTable:
             return None
 
         # add lock entry to current scope
-        lock_entry = Entry(
+        lock_entry = ZEntry(
             name=target_name,
             ztype=target_var.ztype,
             is_definition=False,
@@ -667,7 +667,7 @@ class SymbolTable:
         # Phase 7c: mint narrowed_subtype_id against the outer type so the
         # symbol table exposes an id-addressable handle on the arm.
         nsid = original_type.child_id_for(subtype_name) if subtype_name else None
-        entry = Entry(
+        entry = ZEntry(
             name=name,
             ztype=entry_ztype,
             is_definition=False,
@@ -717,7 +717,7 @@ class SymbolTable:
         # exclude() is only called post-match (for arms that exit the
         # scope); the remaining-scope view of the variable is still
         # whole-program value-typed (no shadow). Keep full_type as ztype.
-        entry = Entry(
+        entry = ZEntry(
             name=name,
             ztype=full_type,
             is_definition=False,
@@ -739,7 +739,7 @@ class SymbolTable:
                 entry = scope.entries[j]
                 if entry.name == name and entry.is_definition:
                     # push overlay that resets narrowing to original type
-                    reset_entry = Entry(
+                    reset_entry = ZEntry(
                         name=name,
                         ztype=entry.ztype,
                         is_definition=False,

@@ -10038,7 +10038,7 @@ class TypeChecker:
             # name resolves directly to the payload type in the arm body,
             # so field access / method dispatch / re-match all work as
             # if the name were the payload. The outer union/variant is
-            # stashed in Entry.original_ztype for the emitter's unwrap.
+            # stashed in ZEntry.original_ztype for the emitter's unwrap.
             if target_name and subject_type:
                 arm_subtype = self.typing.child_of(subject_type, clause.match.name)
                 if arm_subtype:

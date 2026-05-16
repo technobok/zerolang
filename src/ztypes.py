@@ -92,7 +92,7 @@ class ZOwnership(IntEnum):
 class ZLockState(IntEnum):
     """
     Lock state — set on `ZLockInfo.lock_type` when an entry holds a lock.
-    Absence of a lock is represented by `Entry.lock = None`.
+    Absence of a lock is represented by `ZEntry.lock = None`.
 
     EXCLUSIVE: exclusive lock, no other references allowed.
     SHARED: shared lock, other shared references allowed but no mutation.
@@ -361,10 +361,10 @@ class ZLockHolder:
 
 @dataclass
 class ZLockInfo:
-    """Lock state on a variable — stored on Entry, not on ZVariable.
+    """Lock state on a variable — stored on ZEntry, not on ZVariable.
 
     `path` is the addressable lock target as a tuple `(root, f1, f2, ...)`.
-    `Entry.name` always equals `path[0]` so scope-chain lookup remains a
+    `ZEntry.name` always equals `path[0]` so scope-chain lookup remains a
     simple linear scan keyed by root. The full tuple is consulted to
     apply the prefix-overlap conflict rule.
 
@@ -378,7 +378,7 @@ class ZLockInfo:
 
 
 @dataclass
-class Entry:
+class ZEntry:
     """A single entry in a scope's environment.
 
     Represents either a definition (introduces a name) or a shadow/overlay
@@ -434,12 +434,12 @@ class ExprResult:
 @dataclass
 class ZVariable:
     """
-    ZVariable - per-binding ownership info, attached to Entry.var for
+    ZVariable - per-binding ownership info, attached to ZEntry.var for
     named runtime bindings (parameters, locals, with-bindings, for-loop
     iterators, synth temps). Expression-level results are carried on
     ExprResult, not here.
 
-    Lock state is tracked via Entry.lock in the scope chain, not here.
+    Lock state is tracked via ZEntry.lock in the scope chain, not here.
     """
 
     variable_id: int = field(default_factory=_alloc_variable_id, init=False)

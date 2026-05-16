@@ -1,5 +1,5 @@
 """
-Phase 7c: Entry/Variable/Scope id surfaces + SQL dump for the symbol table.
+Phase 7c: ZEntry/Variable/Scope id surfaces + SQL dump for the symbol table.
 """
 
 import os
@@ -11,7 +11,7 @@ import zast
 from conftest import make_parser
 from ztypecheck import typecheck
 from zsqldump import dump_sql
-from ztypes import Entry, ZType, ZTypeType, ZOwnership, ZVariable
+from ztypes import ZEntry, ZType, ZTypeType, ZOwnership, ZVariable
 from ztyping import Typing
 from zenv import SymbolTable
 
@@ -47,20 +47,20 @@ _parse_check_typing = _parse_check
 class TestEntryIdInfrastructure:
     def test_entry_id_is_monotonic(self):
         t = _make_ztype("rec")
-        a = Entry(name="a", ztype=t, is_definition=True)
-        b = Entry(name="b", ztype=t, is_definition=True)
+        a = ZEntry(name="a", ztype=t, is_definition=True)
+        b = ZEntry(name="b", ztype=t, is_definition=True)
         assert a.entry_id < b.entry_id
 
     def test_entry_id_is_distinct(self):
         t = _make_ztype("rec")
         ids = {
-            Entry(name=f"n{i}", ztype=t, is_definition=True).entry_id for i in range(8)
+            ZEntry(name=f"n{i}", ztype=t, is_definition=True).entry_id for i in range(8)
         }
         assert len(ids) == 8
 
     def test_new_id_fields_default_none(self):
         t = _make_ztype("rec")
-        e = Entry(name="x", ztype=t, is_definition=True)
+        e = ZEntry(name="x", ztype=t, is_definition=True)
         assert e.narrowed_subtype_id is None
         assert e.excluded_subtype_ids is None
 
