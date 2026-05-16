@@ -28,7 +28,7 @@ directly; `typed_program.X` survives only for the test corpus.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import zast
 from ztypes import ZType, ZOwnership, ZParamOwnership
@@ -119,9 +119,13 @@ class Typing:
     # ----- Aggregate typecheck state (F5.E.3: relocated from zast.Program).
 
     # monomorphized generic types: list of (mono_ztype, original_ast_node)
-    mono_types: List = field(default_factory=list, init=False)
+    mono_types: List[Tuple[ZType, "zast.TypeDefinition"]] = field(
+        default_factory=list, init=False
+    )
     # monomorphized generic functions: list of (mono_ztype, cloned_function)
-    mono_functions: List = field(default_factory=list, init=False)
+    mono_functions: List[Tuple[ZType, "zast.Function"]] = field(
+        default_factory=list, init=False
+    )
     # dedup aliases: {qualified_alias_name: qualified_canonical_name}
     func_aliases: Dict[str, str] = field(default_factory=dict, init=False)
     # cloned methods per mono type: {mono_name: {mname: Function}}
