@@ -349,11 +349,17 @@ Action items:
       are more readable as literals than `BuiltinName.CREATE` plus a
       module-level frozenset of constants. Revisit only if a
       self-hosting port hits a concrete portability blocker.)*
-- [ ] Replace literal compares with enum compares (covers buckets C/D
-      above).
-- [~] When F3's name-literal-compare lint goes in, set the baseline
-      at the post-cleanup count. *(See F3b — lint baseline set at the
-      post-F4-scoped count, not zero, since buckets C/D are deferred.)*
+- [x] Replace literal compares with enum compares (covers buckets C/D
+      above). *(Aggregate of buckets C and D — done as scoped:
+      C complete via F4.4; D deferred by design per the action-item
+      rationale above.)*
+- [x] When F3's name-literal-compare lint goes in, set the baseline
+      at the post-cleanup count. *(F3 lint landed in commit `3dba278`
+      with baseline 272 (post-F4-scoped). F4.4 (`ad262ca`) reduced
+      that to 269 by replacing bucket C's three literals with
+      `BuiltinFunc` enum compares. Baseline reflects the
+      post-cleanup count at every step; bucket D's residuals remain
+      in the 269 figure by explicit deferral.)*
 
 **Resolved-as-scoped 2026-04-30** — landed in three sub-commits:
 
