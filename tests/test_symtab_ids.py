@@ -11,7 +11,7 @@ import zast
 from conftest import make_parser
 from ztypecheck import typecheck
 from zsqldump import dump_sql
-from ztypes import Entry, ZType, ZTypeType, ZOwnership, ZNaming, ZVariable
+from ztypes import Entry, ZType, ZTypeType, ZOwnership, ZVariable
 from ztyping import Typing
 from zenv import SymbolTable
 
@@ -74,7 +74,7 @@ class TestNarrowStampsIds:
 
         st = SymbolTable(typing=typing)
         st.push("main")
-        v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED)
         st.define_var("r", v)
 
         expected_id = outer.child_id_for("ok")
@@ -95,7 +95,7 @@ class TestNarrowStampsIds:
 
         st = SymbolTable(typing=typing)
         st.push("main")
-        v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED)
         st.define_var("r", v)
 
         st.exclude("r", "ok", outer)

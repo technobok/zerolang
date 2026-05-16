@@ -16,7 +16,6 @@ from ztypes import (
     ZOwnership,
     ZLockState,
     ZVariable,
-    ZNaming,
 )
 import zast
 from zast import NodeType
@@ -766,7 +765,7 @@ class TestOwnershipEnums:
         from ztypes import ZType
 
         t = ZType(name="i64", typetype=ZTypeType.RECORD, parent=None)
-        v = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        v = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
         assert v.ownership == ZOwnership.OWNED
 
     def test_zvariable_borrowed(self):
@@ -776,7 +775,6 @@ class TestOwnershipEnums:
         v = ZVariable(
             ztype=t,
             ownership=ZOwnership.BORROWED,
-            named=ZNaming.NAMED,
         )
         assert v.ownership == ZOwnership.BORROWED
 
@@ -2256,7 +2254,7 @@ class TestSymbolTableLocking:
         t = ZType(name="myclass", typetype=ZTypeType.UNION, parent=None)
         t.is_valtype = False
         for name in names:
-            var = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+            var = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
             st.define_var(name, var)
         return st
 

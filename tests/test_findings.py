@@ -792,11 +792,11 @@ class TestFinding12SelfHostingPatterns:
 
     def test_variable_ids_auto_increment(self):
         """ZVariable.variableid should auto-increment via _alloc_variable_id."""
-        from ztypes import ZVariable, ZType, ZTypeType, ZOwnership, ZNaming
+        from ztypes import ZVariable, ZType, ZTypeType, ZOwnership
 
         t = ZType(name="x", typetype=ZTypeType.RECORD, parent=None)
-        v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
-        v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED)
+        v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
+        v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
         assert isinstance(v1.variableid, int)
         assert v2.variableid > v1.variableid
 

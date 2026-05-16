@@ -17,7 +17,7 @@ from zast import (
     StatementLine,
 )
 from zlexer import Token
-from ztypes import ZNaming, ZOwnership, ZType, ZVariable
+from ztypes import ZOwnership, ZType, ZVariable
 
 
 class FreshNamer:
@@ -89,7 +89,6 @@ def register_synth_var(
     return ZVariable(
         ztype=ztype,
         ownership=ownership,
-        named=ZNaming.NAMED,
         is_private_access=is_private_access,
         borrow_origin=borrow_origin,
         synth_origin=origin,

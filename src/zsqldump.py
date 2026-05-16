@@ -176,7 +176,6 @@ CREATE TABLE IF NOT EXISTS variable (
     variable_id       INTEGER PRIMARY KEY,
     ztype_id          INTEGER REFERENCES types(type_id),
     ownership         TEXT NOT NULL,
-    named             TEXT NOT NULL,
     is_private_access BOOLEAN NOT NULL,
     borrow_origin     TEXT,
     synth_origin      TEXT
@@ -491,7 +490,6 @@ def dump_sql(
                 f"INSERT OR IGNORE INTO variable VALUES ("
                 f"{vid}, {_sql_int(var.ztype.nodeid)}, "  # type: ignore[attr-defined]
                 f"{_sql_str(var.ownership.name)}, "  # type: ignore[attr-defined]
-                f"{_sql_str(var.named.name)}, "  # type: ignore[attr-defined]
                 f"{_sql_bool(var.is_private_access)}, "  # type: ignore[attr-defined]
                 f"{_sql_str(var.borrow_origin)}, "  # type: ignore[attr-defined]
                 f"{_sql_str(var.synth_origin)});"  # type: ignore[attr-defined]

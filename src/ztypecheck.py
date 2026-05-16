@@ -21,7 +21,6 @@ from ztypes import (
     ZSubType,
     ZParamOwnership,
     ZOwnership,
-    ZNaming,
     ZVariable,
     ZLockState,
     LockHolder,
@@ -5727,7 +5726,7 @@ class TypeChecker:
                     # default: borrow for all types (valtypes are copied,
                     # reftypes are referenced — neither invalidates the source)
                     ownership = ZOwnership.BORROWED
-                var = ZVariable(ztype=pt, ownership=ownership, named=ZNaming.NAMED)
+                var = ZVariable(ztype=pt, ownership=ownership)
                 self.symtab.define_var(pname, var)
 
         # set expected return type for return statement checking
@@ -5885,9 +5884,7 @@ class TypeChecker:
                 # the new variable is borrowed and holds an exclusive lock
                 # on the leaf of the source path, plus SHARED on each
                 # intermediate so siblings remain accessible.
-                var = ZVariable(
-                    ztype=t, ownership=ZOwnership.BORROWED, named=ZNaming.NAMED
-                )
+                var = ZVariable(ztype=t, ownership=ZOwnership.BORROWED)
                 var.is_private_access = private_access
                 # borrow_origin records only the root for legacy escape-
                 # analysis / SQL dump consumers; full path lives on the
@@ -5905,9 +5902,7 @@ class TypeChecker:
                     )
             else:
                 # new local variables are owned by default.
-                var = ZVariable(
-                    ztype=t, ownership=ZOwnership.OWNED, named=ZNaming.NAMED
-                )
+                var = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
                 var.is_private_access = private_access
                 self.symtab.define_var(assign.name, var)
             self.typing.node_type[assign.nodeid] = t
@@ -9574,7 +9569,6 @@ class TypeChecker:
                     var = ZVariable(
                         ztype=t,
                         ownership=ZOwnership.BORROWED,
-                        named=ZNaming.NAMED,
                     )
                     var.borrow_origin = src_name
                     self.symtab.define_var(name, var)
@@ -9711,7 +9705,7 @@ class TypeChecker:
 
         # Define the with-bound variable.
         ownership = ZOwnership.BORROWED if borrow_target else ZOwnership.OWNED
-        var = ZVariable(ztype=t, ownership=ownership, named=ZNaming.NAMED)
+        var = ZVariable(ztype=t, ownership=ownership)
         var.is_private_access = result.private_access
         self.symtab.define_var(withnode.name, var)
 

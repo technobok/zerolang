@@ -119,16 +119,6 @@ class ZParamOwnership(IntEnum):
     LOCK = 2
 
 
-@unique
-class ZNaming(IntEnum):
-    """
-    Naming - naming info related to variable/expression
-    """
-
-    ANONYMOUS = 0
-    NAMED = 1
-
-
 # module-level counters for auto-incrementing IDs
 _next_type_id: int = 0
 
@@ -455,14 +445,17 @@ class ExprResult:
 @dataclass
 class ZVariable:
     """
-    ZVariable - type + ownership info for a variable/expression.
+    ZVariable - per-binding ownership info, attached to Entry.var for
+    named runtime bindings (parameters, locals, with-bindings, for-loop
+    iterators, synth temps). Expression-level results are carried on
+    ExprResult, not here.
+
     Lock state is tracked via Entry.lock in the scope chain, not here.
     """
 
     variableid: int = field(default_factory=_alloc_variable_id, init=False)
     ztype: ZType
     ownership: ZOwnership
-    named: ZNaming
     # private access: variable declared with .private type, bypasses public_members
     is_private_access: bool = False
     # escape-analysis: name of the function-local source this variable
