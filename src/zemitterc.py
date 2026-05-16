@@ -2113,7 +2113,6 @@ class CEmitter:
         """Emit vtable struct, instance struct, and destroy function for a protocol."""
         self.needs_stdint = True
         self.needs_stdlib = True
-        lines: List[str] = []
 
         # Prefer the resolved ZType for param types — the AST's
         # `self._node_ztype(ppath)` can remain None for system-library protocols
@@ -2122,8 +2121,9 @@ class CEmitter:
         # fully-resolved parameter types.
         proto_type = self._resolved_type(name)
 
-        # vtable struct — function pointers with void* as first param
-        lines.append("typedef struct {\n")
+        # Build the function-pointer block. One line per spec function,
+        # `void*` first param, `this`-typed param elided.
+        func_lines: List[str] = []
         for sname, sfunc in proto.functions().items():
             ret_ctype = self._return_ctype(sfunc)
             params: List[str] = ["void*"]
@@ -2136,24 +2136,14 @@ class CEmitter:
                     ptype = self.typing.child_of(spec_type, pname)
                 params.append(_proto_param_ctype(self.typing, ptype))
             param_str = ", ".join(params)
-            lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
-        lines.append(f"}} z_{name}_vtable_t;\n\n")
+            func_lines.append(f"    {ret_ctype} (*{sname})({param_str});\n")
 
-        # instance struct — data pointer + vtable pointer + destructor
-        lines.append("typedef struct {\n")
-        lines.append("    void* data;\n")
-        lines.append(f"    z_{name}_vtable_t* vtable;\n")
-        lines.append("    void (*destroy)(void*);\n")
-        lines.append(f"}} z_{name}_t;\n\n")
-
-        # destroy function
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
-        lines.append("    if (!proto) return;\n")
-        lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
-        lines.append("    proto->destroy = NULL;\n")
-        lines.append("}\n\n")
-
-        self.struct_defs.append("".join(lines))
+        self.struct_defs.append(
+            ztmpl.apply(
+                "z_protocol_vtable",
+                {"NAME": name, "VTABLE_FUNCS": "".join(func_lines)},
+            )
+        )
 
     def _emit_protocol_impl(
         self,
@@ -4466,7 +4456,6 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdlib = True
         name = mono_type.name
-        lines: List[str] = []
 
         # collect spec functions from mono_type.children
         specs = [
@@ -4475,8 +4464,10 @@ class CEmitter:
             if st.typetype == ZTypeType.FUNCTION
         ]
 
-        # vtable struct
-        lines.append("typedef struct {\n")
+        # Build the function-pointer block. Shape matches
+        # _emit_protocol; only the function-list source differs
+        # (typing-table walk vs AST walk).
+        func_lines: List[str] = []
         for sname, stype in specs:
             ret_type = stype.return_type
             ret_ctype = _ctype(self.typing, ret_type) if ret_type else "void"
@@ -4485,24 +4476,14 @@ class CEmitter:
                 if stype.this_param_name == pname:
                     continue
                 params.append(_proto_param_ctype(self.typing, ptype))
-            lines.append(f"    {ret_ctype} (*{sname})({', '.join(params)});\n")
-        lines.append(f"}} z_{name}_vtable_t;\n\n")
+            func_lines.append(f"    {ret_ctype} (*{sname})({', '.join(params)});\n")
 
-        # instance struct
-        lines.append("typedef struct {\n")
-        lines.append("    void* data;\n")
-        lines.append(f"    z_{name}_vtable_t* vtable;\n")
-        lines.append("    void (*destroy)(void*);\n")
-        lines.append(f"}} z_{name}_t;\n\n")
-
-        # destroy function
-        lines.append(f"static void z_{name}_destroy(z_{name}_t* proto) {{\n")
-        lines.append("    if (!proto) return;\n")
-        lines.append("    if (proto->destroy) proto->destroy(proto->data);\n")
-        lines.append("    proto->destroy = NULL;\n")
-        lines.append("}\n\n")
-
-        self.struct_defs.append("".join(lines))
+        self.struct_defs.append(
+            ztmpl.apply(
+                "z_protocol_vtable",
+                {"NAME": name, "VTABLE_FUNCS": "".join(func_lines)},
+            )
+        )
 
     def _emit_variant(self, name: str, variant_defn: zast.ObjectDef) -> None:
         self.needs_stdint = True
