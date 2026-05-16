@@ -897,3 +897,72 @@ Step 8 territory.
 
 `make check` clean, `make test-fast` 1373 passing,
 `make test` 1962 passing (full suite incl. emitter+gcc).
+
+## Step 8 — what landed
+
+Step 8's original framing was "typechecker cleanup": defrost
+`Program` and untangle `TypeChecker` state sprawl. Both were
+achieved through the `doc/codereview20260428.md` F5 work rather
+than as a single migration commit.
+
+**Program defrosting** — resolved by F5.E:
+
+- `744620f` F5.E.1: empty `Typing` module introduced.
+- `6dfef80` F5.E.2: 19 component dicts moved off `Program`
+  onto `Typing`.
+- `fd646e4` F5.E.3: aggregate state (`typed_program`,
+  `mono_types`, `mono_functions`, `func_aliases`,
+  `cloned_methods`, `unit_types_by_id`) relocated to `Typing`;
+  `typecheck()` returns `Typing` directly; Program-compat
+  shims added.
+- `1976ccd`/`d061291`/`0199f89` F5.E.4.a-c: emitter consumers
+  routed through `Typing` instead of `Program`.
+- `64ba8a2` F5.E.4.d: parallel typed-tree mirror module
+  deleted (replaced by `TypedProgramView` thin shim);
+  −1828 lines, `ztypecheck.py` 10,777 → 9,995.
+- `1249112` F5.E.5: `zast.Program` becomes
+  `@dataclass(frozen=True)`; 8 typecheck-output compat shims
+  removed; `typing_or_program` dual-accept collapsed to
+  single-arg `Typing` in emitter/sqldump; ~280 test sites
+  rebased to `typing.<field>`.
+
+End state: `zast.Program` carries only parsed-AST fields and
+is frozen. All typecheck output lives in `src/ztyping.py`
+keyed by parsed `nodeid`.
+
+**TypeChecker cleanup** — resolved partially by F5.A/B/D:
+
+- `4e4ba47`/`ebf9638`/`909267d` F5.A: `_pending_borrow_lock` /
+  `_pending_private_access` cross-cutting flags contained.
+  External readers/setters gone; mutation scope-confined to
+  `_check_dotted_path_inner`, `_check_call_inner`, and three
+  helpers; capture happens at `_check_path` / `_check_call` /
+  `_check_operation` boundaries via `ExprResult.borrow_target`.
+  Note: the originally proposed `BorrowState` dataclass was
+  not introduced — scope-containment proved sufficient.
+- `f75c0d5` F5.D: 19 nodeid-keyed side tables relocated off
+  `TypeChecker` (later moved again to `Typing` in F5.E.2).
+- `fb8360a` F5.B.1: MonoState dataclass — 8 mono-related
+  fields, 59 access rebases.
+- `1224b59` F5.B.2: FunctionContext dataclass — 5
+  function-body fields, 63 access rebases.
+- `3ec7802` F5.B.3: TemplateIds dataclass — 3 lazy
+  stdlib template-id fields, 9 access rebases.
+
+End state: 3 of 4 proposed F5.B context records landed.
+ResolverState (the fourth) explicitly deferred — its fields
+(`unit_types`, `_resolved`, `_resolved_file_units`) are
+publicly named on `TypeChecker` and read by ~100 test sites;
+the cosmetic gain doesn't justify the test churn.
+
+**Residual `object.__setattr__`** at `src/ztypecheck.py:7864`
+(replacing a `NamedOperation.valtype` with a synth `AtomId` in
+`_hoist_arg_to_temp` for atomic-call hoisting). Kept as the
+single documented frozen-dataclass escape hatch; rebuilding the
+parent `Call.arguments` would require threading the parent
+through every hoist site. No further action planned.
+
+Step 8 closed. Subsequent migration-shaped work continues
+under codereview20260428 (F6 sqldump table-flat shape, F7 next
+template subsystem, F10/F12 doc/TODO closeout) rather than as
+typed-tree Step 9.
