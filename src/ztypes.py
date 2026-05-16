@@ -290,15 +290,6 @@ class ZType:
             self.children_id_map[name] = cid
         return cid
 
-    def child_name_for(self, cid: int) -> Optional[str]:
-        """Reverse lookup of `child_id_for`: return the name that minted
-        `cid` on this type, or None if no name maps to `cid`. Linear scan
-        over `children_id_map`; per-parent maps are small."""
-        for name, mapped_id in self.children_id_map.items():
-            if mapped_id == cid:
-                return name
-        return None
-
     def __repr__(self) -> str:
         return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"
 
