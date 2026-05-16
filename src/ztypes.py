@@ -336,10 +336,10 @@ def _alloc_entry_id() -> int:
 
 
 @unique
-class LockHolderKind(IntEnum):
+class ZLockHolderKind(IntEnum):
     """Categorises what kind of entity holds a lock.
 
-    Each kind maps `LockHolder.id` to a different id-space:
+    Each kind maps `ZLockHolder.id` to a different id-space:
     - VAR: ZVariable.variable_id (a borrow-binding variable)
     - CALL: AST nodeid of the call expression that acquired the lock
     - FOR: AST nodeid of the for-loop that owns the iteration lock
@@ -351,11 +351,11 @@ class LockHolderKind(IntEnum):
 
 
 @dataclass(frozen=True)
-class LockHolder:
+class ZLockHolder:
     """Tagged identifier for a lock holder. Replaces the prior free-form
     string (`variable name | "call:{nodeid}" | "__for"`)."""
 
-    kind: LockHolderKind
+    kind: ZLockHolderKind
     id: int
 
 
@@ -368,12 +368,12 @@ class LockInfo:
     simple linear scan keyed by root. The full tuple is consulted to
     apply the prefix-overlap conflict rule.
 
-    `holder` is a tagged `LockHolder` distinguishing a borrow-binding
+    `holder` is a tagged `ZLockHolder` distinguishing a borrow-binding
     variable, a call site, or a for-loop sentinel.
     """
 
     lock_type: ZLockState  # EXCLUSIVE or SHARED
-    holder: LockHolder
+    holder: ZLockHolder
     path: Tuple[str, ...] = ()
 
 

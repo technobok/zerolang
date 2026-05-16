@@ -12,8 +12,8 @@ from ztypes import (
     ZVariable,
     ZLockState,
     LockInfo,
-    LockHolder,
-    LockHolderKind,
+    ZLockHolder,
+    ZLockHolderKind,
     ScopeKind,
     Entry,
     _alloc_scope_id,
@@ -412,15 +412,15 @@ class SymbolTable:
 
     # ---- lock holder formatting (reverse-lookup ids for messages) --
 
-    def format_lock_holder(self, holder: LockHolder) -> str:
-        """Render a LockHolder back to its user-facing name. VAR ids
+    def format_lock_holder(self, holder: ZLockHolder) -> str:
+        """Render a ZLockHolder back to its user-facing name. VAR ids
         reverse-lookup to the variable's name; CALL renders as
         `call:<nodeid>`; FOR renders as `__for`."""
-        if holder.kind == LockHolderKind.VAR:
+        if holder.kind == ZLockHolderKind.VAR:
             return self.lookup_var_name_by_id(holder.id) or f"<var:{holder.id}>"
-        if holder.kind == LockHolderKind.CALL:
+        if holder.kind == ZLockHolderKind.CALL:
             return f"call:{holder.id}"
-        if holder.kind == LockHolderKind.FOR:
+        if holder.kind == ZLockHolderKind.FOR:
             return "__for"
         return "__call"
 
@@ -453,8 +453,8 @@ class SymbolTable:
         self,
         path: Tuple[str, ...],
         lock_type: ZLockState,
-        holder: LockHolder,
-        self_holder: Optional[LockHolder] = None,
+        holder: ZLockHolder,
+        self_holder: Optional[ZLockHolder] = None,
     ) -> Optional[str]:
         """Try to take a lock on `path`. Returns error message or None on success.
 
@@ -541,7 +541,7 @@ class SymbolTable:
 
     def find_exclusive_lock(
         self, path: Tuple[str, ...]
-    ) -> Optional[Tuple[Tuple[str, ...], LockHolder]]:
+    ) -> Optional[Tuple[Tuple[str, ...], ZLockHolder]]:
         """Return `(conflicting_path, holder)` if any EXCLUSIVE lock prefix-
         overlaps with `path`. Used by reassignment / swap / access guards.
 
@@ -598,7 +598,7 @@ class SymbolTable:
             i -= 1
         return None
 
-    def release_held_locks(self, holder: LockHolder) -> None:
+    def release_held_locks(self, holder: ZLockHolder) -> None:
         """Release all locks whose holder matches `holder`.
 
         Used before .take/.release to clean up locks before invalidation.

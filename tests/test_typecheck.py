@@ -2217,17 +2217,17 @@ class TestLockInfo:
     """Test the LockInfo dataclass."""
 
     def test_lock_info_exclusive(self):
-        from ztypes import LockInfo, LockHolder, LockHolderKind
+        from ztypes import LockInfo, ZLockHolder, ZLockHolderKind
 
-        h = LockHolder(LockHolderKind.VAR, 7)
+        h = ZLockHolder(ZLockHolderKind.VAR, 7)
         e = LockInfo(lock_type=ZLockState.EXCLUSIVE, holder=h)
         assert e.lock_type == ZLockState.EXCLUSIVE
         assert e.holder == h
 
     def test_lock_info_shared(self):
-        from ztypes import LockInfo, LockHolder, LockHolderKind
+        from ztypes import LockInfo, ZLockHolder, ZLockHolderKind
 
-        h = LockHolder(LockHolderKind.CALL, 42)
+        h = ZLockHolder(ZLockHolderKind.CALL, 42)
         e = LockInfo(lock_type=ZLockState.SHARED, holder=h)
         assert e.lock_type == ZLockState.SHARED
         assert e.holder == h
@@ -2238,11 +2238,11 @@ class TestSymbolTableLocking:
 
     @staticmethod
     def _h(n: int):
-        """Make a synthetic LockHolder for tests. Distinct n → distinct
+        """Make a synthetic ZLockHolder for tests. Distinct n → distinct
         holder identity."""
-        from ztypes import LockHolder, LockHolderKind
+        from ztypes import ZLockHolder, ZLockHolderKind
 
-        return LockHolder(LockHolderKind.VAR, n)
+        return ZLockHolder(ZLockHolderKind.VAR, n)
 
     def _make_symtab_with_vars(self, *names):
         from zenv import SymbolTable
