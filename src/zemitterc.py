@@ -1858,7 +1858,7 @@ class CEmitter:
 
         # Source-map attribution uses the template AST node's id so
         # that emitted_lines cross-reference the program's ast_nodes
-        # table (ZType.nodeid lives in a separate id space and would
+        # table (ZType.type_id lives in a separate id space and would
         # produce orphan foreign-key references).
         for mono_type, template_defn in early_monos:
             self._current_node_id = template_defn.nodeid

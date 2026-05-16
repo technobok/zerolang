@@ -163,7 +163,7 @@ class ZType:
     semantics.
     """
 
-    nodeid: int = field(default_factory=_alloc_type_id, init=False)
+    type_id: int = field(default_factory=_alloc_type_id, init=False)
 
     name: str
     typetype: ZTypeType
@@ -290,7 +290,7 @@ class ZType:
         return cid
 
     def __repr__(self) -> str:
-        return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, nodeid={self.nodeid})"
+        return f"ZType(name={self.name!r}, typetype={self.typetype!r}, cname={self.cname!r}, type_id={self.type_id})"
 
 
 _next_variable_id: int = 0
@@ -340,7 +340,7 @@ class LockHolderKind(IntEnum):
     """Categorises what kind of entity holds a lock.
 
     Each kind maps `LockHolder.id` to a different id-space:
-    - VAR: ZVariable.variableid (a borrow-binding variable)
+    - VAR: ZVariable.variable_id (a borrow-binding variable)
     - CALL: AST nodeid of the call expression that acquired the lock
     - FOR: AST nodeid of the for-loop that owns the iteration lock
     """
@@ -442,7 +442,7 @@ class ZVariable:
     Lock state is tracked via Entry.lock in the scope chain, not here.
     """
 
-    variableid: int = field(default_factory=_alloc_variable_id, init=False)
+    variable_id: int = field(default_factory=_alloc_variable_id, init=False)
     ztype: ZType
     ownership: ZOwnership
     # private access: variable declared with .private type, bypasses public_members

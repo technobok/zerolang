@@ -293,7 +293,7 @@ class SymbolTable:
 
     def lookup_var_by_id(self, vid: int) -> Optional[ZVariable]:
         """Reverse lookup: walk scopes inner→outer for a variable with the
-        given variableid. Returns the ZVariable or None."""
+        given variable_id. Returns the ZVariable or None."""
         i = len(self._scopes) - 1
         while i >= 0:
             scope = self._scopes[i]
@@ -302,7 +302,7 @@ class SymbolTable:
                 entry = scope.entries[j]
                 if (
                     entry.var is not None
-                    and entry.var.variableid == vid
+                    and entry.var.variable_id == vid
                     and entry.is_definition
                 ):
                     return entry.var
@@ -312,7 +312,7 @@ class SymbolTable:
 
     def lookup_var_name_by_id(self, vid: int) -> Optional[str]:
         """Reverse lookup: walk scopes inner→outer for a variable with the
-        given variableid. Returns the variable's name (the entry.name of
+        given variable_id. Returns the variable's name (the entry.name of
         its defining entry) or None."""
         i = len(self._scopes) - 1
         while i >= 0:
@@ -322,7 +322,7 @@ class SymbolTable:
                 entry = scope.entries[j]
                 if (
                     entry.var is not None
-                    and entry.var.variableid == vid
+                    and entry.var.variable_id == vid
                     and entry.is_definition
                 ):
                     return entry.name

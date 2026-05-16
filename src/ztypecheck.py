@@ -277,7 +277,7 @@ def _mono_arg_key(t: "ZType") -> Tuple:
         return ("p", t.name)
     if t.const_value is not None:
         return ("nv", t.const_value)
-    return ("n", t.nodeid)
+    return ("n", t.type_id)
 
 
 def _extract_public_members(as_items: dict) -> Optional[dict[str, str]]:
@@ -605,7 +605,7 @@ class TypeChecker:
         if base_cname not in self.mono.assigned_cnames:
             ztype.cname = base_cname
         else:
-            ztype.cname = f"{base_cname}_{ztype.nodeid}"
+            ztype.cname = f"{base_cname}_{ztype.type_id}"
         self.mono.assigned_cnames.add(ztype.cname)
 
     # Multi-char operator names (checked first, before per-char mangling)
@@ -3981,7 +3981,7 @@ class TypeChecker:
         if a is b:
             return True
         # Fast path: exact id match.
-        if a.nodeid == b.nodeid:
+        if a.type_id == b.type_id:
             return True
         # Generic parameters (e.g., `t` in `f: function {x: t} out t`) are
         # synthetic placeholders that may be re-created by the resolver;
@@ -4007,7 +4007,7 @@ class TypeChecker:
         # is not (the typedef carries intent that the base type lacks).
         base = a.typedef_base
         while base is not None:
-            if base is b or base.nodeid == b.nodeid:
+            if base is b or base.type_id == b.type_id:
                 return True
             base = base.typedef_base
         return False
@@ -4034,7 +4034,7 @@ class TypeChecker:
         while t is not None and id(t) not in seen:
             seen.add(id(t))
             for label, child in self.typing.children_of(t):
-                if child is proto_type or child.nodeid == proto_type.nodeid:
+                if child is proto_type or child.type_id == proto_type.type_id:
                     return label
                 if child.typetype in (
                     ZTypeType.PROTOCOL,
@@ -4117,7 +4117,7 @@ class TypeChecker:
         # value for primitives + generic params + numeric literals
         # (which aren't interned yet).
         cache_key = (
-            template_type.nodeid,
+            template_type.type_id,
             tuple(sorted((k, _mono_arg_key(v)) for k, v in generic_args.items())),
         )
         if cache_key in self.mono.cache:
@@ -4844,7 +4844,7 @@ class TypeChecker:
         # types like string cannot use the nullable-ptr optimisation.
         if (
             template_type.typetype == ZTypeType.UNION
-            and template_type.nodeid == self._option_template_nodeid()
+            and template_type.type_id == self._option_template_type_id()
         ):
             some_child = self.typing.child_of(mono, "some")
             if some_child and some_child.is_heap_allocated:
@@ -4854,7 +4854,7 @@ class TypeChecker:
         # doesn't own its payload.
         if (
             template_type.typetype == ZTypeType.UNION
-            and template_type.nodeid == self._optionview_template_nodeid()
+            and template_type.type_id == self._optionview_template_type_id()
         ):
             for arm in self.typing.lock_arm_names_of(template_type):
                 self.typing.set_child_lock_arm(mono, arm)
@@ -5436,7 +5436,7 @@ class TypeChecker:
         """Monomorphize a generic function with concrete type arguments."""
         # Identity-based cache key (see _monomorphize above for rationale).
         cache_key = (
-            template.nodeid,
+            template.type_id,
             tuple(sorted((k, _mono_arg_key(v)) for k, v in generic_args.items())),
         )
         if cache_key in self.mono.cache:
@@ -5897,7 +5897,7 @@ class TypeChecker:
                 if not _is_valtype(t):
                     self._install_borrow_locks(
                         borrow_target,
-                        LockHolder(LockHolderKind.VAR, var.variableid),
+                        LockHolder(LockHolderKind.VAR, var.variable_id),
                         assign.start,
                     )
             else:
@@ -6011,7 +6011,7 @@ class TypeChecker:
                     )
                     if rhs_var is not None:
                         self.symtab.release_held_locks(
-                            LockHolder(LockHolderKind.VAR, rhs_var.variableid)
+                            LockHolder(LockHolderKind.VAR, rhs_var.variable_id)
                         )
                     self.symtab.invalidate(rhs_root, loc=take_loc)
 
@@ -6505,7 +6505,7 @@ class TypeChecker:
             else:
                 if var is not None:
                     self.symtab.release_held_locks(
-                        LockHolder(LockHolderKind.VAR, var.variableid)
+                        LockHolder(LockHolderKind.VAR, var.variable_id)
                     )
                 take_loc = (
                     (path.start.lineno, path.start.colno, path.start.fsno)
@@ -6555,7 +6555,7 @@ class TypeChecker:
                 )
                 return parent_type
             self.symtab.release_held_locks(
-                LockHolder(LockHolderKind.VAR, var.variableid)
+                LockHolder(LockHolderKind.VAR, var.variable_id)
             )
         # invalidate the variable
         release_loc = (
@@ -8432,7 +8432,7 @@ class TypeChecker:
             return
         if var is not None:
             self.symtab.release_held_locks(
-                LockHolder(LockHolderKind.VAR, var.variableid)
+                LockHolder(LockHolderKind.VAR, var.variable_id)
             )
         take_loc = (
             (arg.start.lineno, arg.start.colno, arg.start.fsno) if arg.start else None
@@ -9433,28 +9433,28 @@ class TypeChecker:
             self.typing.call_kind[call.nodeid] = zast.CallKind.BOX_CREATE
         return mono
 
-    def _option_template_nodeid(self) -> int:
-        """Resolve and cache the stdlib `option` generic-template nodeid."""
+    def _option_template_type_id(self) -> int:
+        """Resolve and cache the stdlib `option` generic-template type id."""
         if self.template_ids.option == -1:
             t = self._resolve_name("Option")
             if t is not None:
-                self.template_ids.option = t.nodeid
+                self.template_ids.option = t.type_id
         return self.template_ids.option
 
-    def _optionval_template_nodeid(self) -> int:
-        """Resolve and cache the stdlib `optionval` generic-template nodeid."""
+    def _optionval_template_type_id(self) -> int:
+        """Resolve and cache the stdlib `optionval` generic-template type id."""
         if self.template_ids.optionval == -1:
             t = self._resolve_name("optionval")
             if t is not None:
-                self.template_ids.optionval = t.nodeid
+                self.template_ids.optionval = t.type_id
         return self.template_ids.optionval
 
-    def _optionview_template_nodeid(self) -> int:
-        """Resolve and cache the stdlib `optionview` generic-template nodeid."""
+    def _optionview_template_type_id(self) -> int:
+        """Resolve and cache the stdlib `optionview` generic-template type id."""
         if self.template_ids.optionview == -1:
             t = self._resolve_name("OptionView")
             if t is not None:
-                self.template_ids.optionview = t.nodeid
+                self.template_ids.optionview = t.type_id
         return self.template_ids.optionview
 
     def _is_option_type(self, t: ZType) -> bool:
@@ -9463,7 +9463,7 @@ class TypeChecker:
             t.typetype == ZTypeType.UNION
             and t.generic_origin is not None
             and not t.is_tag_generic_origin
-            and t.generic_origin.nodeid == self._option_template_nodeid()
+            and t.generic_origin.type_id == self._option_template_type_id()
         )
 
     def _is_optionval_type(self, t: ZType) -> bool:
@@ -9472,7 +9472,7 @@ class TypeChecker:
             t.typetype == ZTypeType.VARIANT
             and t.generic_origin is not None
             and not t.is_tag_generic_origin
-            and t.generic_origin.nodeid == self._optionval_template_nodeid()
+            and t.generic_origin.type_id == self._optionval_template_type_id()
         )
 
     def _is_optionview_type(self, t: ZType) -> bool:
@@ -9481,7 +9481,7 @@ class TypeChecker:
             t.typetype == ZTypeType.UNION
             and t.generic_origin is not None
             and not t.is_tag_generic_origin
-            and t.generic_origin.nodeid == self._optionview_template_nodeid()
+            and t.generic_origin.type_id == self._optionview_template_type_id()
         )
 
     def _is_option_or_optionval_type(self, t: ZType) -> bool:
@@ -9715,7 +9715,7 @@ class TypeChecker:
         if borrow_target and not _is_valtype(t):
             self._install_borrow_locks(
                 borrow_target,
-                LockHolder(LockHolderKind.VAR, var.variableid),
+                LockHolder(LockHolderKind.VAR, var.variable_id),
                 withnode.start,
             )
 

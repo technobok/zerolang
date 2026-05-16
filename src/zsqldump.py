@@ -319,9 +319,9 @@ def dump_sql(
     all_types: dict[int, ZType] = {}
 
     def _register_type(zt: ZType) -> None:
-        if zt.nodeid in all_types:
+        if zt.type_id in all_types:
             return
-        all_types[zt.nodeid] = zt
+        all_types[zt.type_id] = zt
         for ctype in typing.child_types_of(zt):
             _register_type(ctype)
         if zt.return_type:
@@ -344,16 +344,16 @@ def dump_sql(
             _register_type(n_ztype)
 
     for ztype in all_types.values():
-        parent_id = _sql_int(ztype.parent.nodeid) if ztype.parent else "NULL"
+        parent_id = _sql_int(ztype.parent.type_id) if ztype.parent else "NULL"
         typedef_id = (
-            _sql_int(ztype.typedef_base.nodeid) if ztype.typedef_base else "NULL"
+            _sql_int(ztype.typedef_base.type_id) if ztype.typedef_base else "NULL"
         )
         origin_id = "NULL"
         if ztype.generic_origin is not None:
-            origin_id = _sql_int(ztype.generic_origin.nodeid)
+            origin_id = _sql_int(ztype.generic_origin.type_id)
         lines.append(
             f"INSERT OR IGNORE INTO types VALUES ("
-            f"{ztype.nodeid}, {_sql_str(ztype.name)}, "
+            f"{ztype.type_id}, {_sql_str(ztype.name)}, "
             f"{_sql_str(ztype.typetype.name)}, {parent_id}, "
             f"{_sql_bool(ztype.is_valtype)}, {_sql_bool(ztype.isgeneric)}, "
             f"{typedef_id}, {origin_id}, "
@@ -392,7 +392,7 @@ def dump_sql(
         # selector, error sentinel) untouched by typecheck.
         if n_ztype is None and n_const is None:
             continue
-        type_id = _sql_int(n_ztype.nodeid) if n_ztype is not None else "NULL"
+        type_id = _sql_int(n_ztype.type_id) if n_ztype is not None else "NULL"
         cname = _sql_str(n_ztype.cname) if n_ztype and n_ztype.cname else "NULL"
         is_const = _sql_bool(n_const is not None)
         const_val = _sql_str(str(n_const)) if n_const is not None else "NULL"
@@ -407,7 +407,7 @@ def dump_sql(
     unit_types_map = typing.unit_types_by_id
     for unitname, unit_ast in program.units.items():
         utype = unit_types_map.get(unit_ast.nodeid)
-        unit_type_id = _sql_int(utype.nodeid) if utype is not None else "NULL"
+        unit_type_id = _sql_int(utype.type_id) if utype is not None else "NULL"
         lines.append(
             f"INSERT OR IGNORE INTO unit VALUES ("
             f"{unit_ast.nodeid}, {_sql_str(unitname)}, "
@@ -438,12 +438,12 @@ def dump_sql(
             for pos, entry in enumerate(scope.entries):
                 var_id_sql = "NULL"
                 if entry.var is not None:
-                    vid = entry.var.variableid
+                    vid = entry.var.variable_id
                     if vid not in seen_vars:
                         seen_vars[vid] = entry.var
                     var_id_sql = str(vid)
                 orig_id_sql = (
-                    _sql_int(entry.original_ztype.nodeid)
+                    _sql_int(entry.original_ztype.type_id)
                     if entry.original_ztype is not None
                     else "NULL"
                 )
@@ -453,7 +453,7 @@ def dump_sql(
                 lines.append(
                     f"INSERT OR IGNORE INTO entry VALUES ("
                     f"{entry.entry_id}, {scope.scope_id}, {pos}, "
-                    f"{_sql_str(entry.name)}, {entry.ztype.nodeid}, "
+                    f"{_sql_str(entry.name)}, {entry.ztype.type_id}, "
                     f"{_sql_bool(entry.is_definition)}, {var_id_sql}, "
                     f"{orig_id_sql}, "
                     f"{_sql_bool(entry.is_taken)}, "
@@ -488,7 +488,7 @@ def dump_sql(
         for vid, var in seen_vars.items():
             lines.append(
                 f"INSERT OR IGNORE INTO variable VALUES ("
-                f"{vid}, {_sql_int(var.ztype.nodeid)}, "  # type: ignore[attr-defined]
+                f"{vid}, {_sql_int(var.ztype.type_id)}, "  # type: ignore[attr-defined]
                 f"{_sql_str(var.ownership.name)}, "  # type: ignore[attr-defined]
                 f"{_sql_bool(var.is_private_access)}, "  # type: ignore[attr-defined]
                 f"{_sql_str(var.borrow_origin)}, "  # type: ignore[attr-defined]

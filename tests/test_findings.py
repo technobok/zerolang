@@ -781,24 +781,24 @@ class TestFinding12SelfHostingPatterns:
     """Finding 12: Python-specific patterns replaced with simpler equivalents."""
 
     def test_type_ids_auto_increment(self):
-        """ZType.nodeid should auto-increment via _alloc_type_id."""
+        """ZType.type_id should auto-increment via _alloc_type_id."""
         from ztypes import ZType, ZTypeType
 
         t1 = ZType(name="a", typetype=ZTypeType.RECORD, parent=None)
         t2 = ZType(name="b", typetype=ZTypeType.RECORD, parent=None)
-        assert isinstance(t1.nodeid, int)
-        assert isinstance(t2.nodeid, int)
-        assert t2.nodeid > t1.nodeid
+        assert isinstance(t1.type_id, int)
+        assert isinstance(t2.type_id, int)
+        assert t2.type_id > t1.type_id
 
     def test_variable_ids_auto_increment(self):
-        """ZVariable.variableid should auto-increment via _alloc_variable_id."""
+        """ZVariable.variable_id should auto-increment via _alloc_variable_id."""
         from ztypes import ZVariable, ZType, ZTypeType, ZOwnership
 
         t = ZType(name="x", typetype=ZTypeType.RECORD, parent=None)
         v1 = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
         v2 = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
-        assert isinstance(v1.variableid, int)
-        assert v2.variableid > v1.variableid
+        assert isinstance(v1.variable_id, int)
+        assert v2.variable_id > v1.variable_id
 
     def test_no_ordered_dict_in_ztype(self):
         """Remaining dict-typed fields on ZType should be plain dicts

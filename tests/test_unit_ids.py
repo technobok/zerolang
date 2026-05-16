@@ -46,9 +46,9 @@ class TestUnitTypesById:
         system_ast = program.units["system"]
         assert system_ast.nodeid in typing.unit_types_by_id
         system_type = typing.unit_types_by_id[system_ast.nodeid]
-        assert system_type.nodeid >= 0
-        # sanity: Unit AST nodeid is distinct from unit ZType nodeid
-        assert system_ast.nodeid != system_type.nodeid
+        assert system_type.type_id >= 0
+        # sanity: Unit AST nodeid is distinct from unit ZType type_id
+        assert system_ast.nodeid != system_type.type_id
 
 
 class TestUnitSqlDump:

@@ -193,36 +193,36 @@ class Typing:
         name_id = parent.child_id_for(name)
         pos = 0
         for row in self.type_child:
-            if row.parent_type_id != parent.nodeid:
+            if row.parent_type_id != parent.type_id:
                 continue
             if row.child_name_id == name_id:
-                row.child_type_id = child.nodeid
+                row.child_type_id = child.type_id
                 row.child_type = child
                 return
             pos += 1
         self.type_child.append(
-            TypeChild(parent.nodeid, name, name_id, child.nodeid, pos, child)
+            TypeChild(parent.type_id, name, name_id, child.type_id, pos, child)
         )
 
     def set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
         for row in self.type_generic_arg:
-            if row.parent_type_id == parent.nodeid and row.param_name == name:
-                row.arg_type_id = arg.nodeid
+            if row.parent_type_id == parent.type_id and row.param_name == name:
+                row.arg_type_id = arg.type_id
                 row.arg_type = arg
                 return
         self.type_generic_arg.append(
-            TypeGenericArg(parent.nodeid, name, arg.nodeid, arg)
+            TypeGenericArg(parent.type_id, name, arg.type_id, arg)
         )
 
     def child_of(self, parent: ZType, name: str) -> "Optional[ZType]":
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 return row.child_type
         return None
 
     def child_by_id(self, parent: ZType, cid: int) -> "Optional[ZType]":
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name_id == cid:
+            if row.parent_type_id == parent.type_id and row.child_name_id == cid:
                 return row.child_type
         return None
 
@@ -231,75 +231,75 @@ class Typing:
 
     def set_child_private(self, parent: ZType, name: str) -> None:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 row.is_private = True
                 return
 
     def is_child_private(self, parent: ZType, name: str) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 return row.is_private
         return False
 
     def set_child_lock_field(self, parent: ZType, name: str) -> None:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 row.is_lock_field = True
                 return
 
     def is_child_lock_field(self, parent: ZType, name: str) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 return row.is_lock_field
         return False
 
     def lock_field_names_of(self, parent: ZType) -> "List[str]":
         out: "List[str]" = []
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.is_lock_field:
+            if row.parent_type_id == parent.type_id and row.is_lock_field:
                 out.append(row.child_name)
         return out
 
     def has_any_lock_field(self, parent: ZType) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.is_lock_field:
+            if row.parent_type_id == parent.type_id and row.is_lock_field:
                 return True
         return False
 
     def set_child_lock_arm(self, parent: ZType, name: str) -> None:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 row.is_lock_arm = True
                 return
 
     def is_child_lock_arm(self, parent: ZType, name: str) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 return row.is_lock_arm
         return False
 
     def lock_arm_names_of(self, parent: ZType) -> "List[str]":
         out: "List[str]" = []
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.is_lock_arm:
+            if row.parent_type_id == parent.type_id and row.is_lock_arm:
                 out.append(row.child_name)
         return out
 
     def has_any_lock_arm(self, parent: ZType) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.is_lock_arm:
+            if row.parent_type_id == parent.type_id and row.is_lock_arm:
                 return True
         return False
 
     def set_child_default(self, parent: ZType, name: str, default: str) -> None:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 row.default = default
                 return
 
     def child_default(self, parent: ZType, name: str) -> "Optional[str]":
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 return row.default
         return None
 
@@ -309,13 +309,13 @@ class Typing:
     def child_defaults_of(self, parent: ZType) -> "Dict[str, str]":
         out: "Dict[str, str]" = {}
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.default is not None:
+            if row.parent_type_id == parent.type_id and row.default is not None:
                 out[row.child_name] = row.default
         return out
 
     def has_any_default(self, parent: ZType) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.default is not None:
+            if row.parent_type_id == parent.type_id and row.default is not None:
                 return True
         return False
 
@@ -323,13 +323,13 @@ class Typing:
         self, parent: ZType, name: str, ownership: ZParamOwnership
     ) -> None:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 row.param_ownership = ownership
                 return
 
     def child_ownership(self, parent: ZType, name: str) -> "Optional[ZParamOwnership]":
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.child_name == name:
+            if row.parent_type_id == parent.type_id and row.child_name == name:
                 return row.param_ownership
         return None
 
@@ -339,59 +339,59 @@ class Typing:
     def child_ownerships_of(self, parent: ZType) -> "Dict[str, ZParamOwnership]":
         out: "Dict[str, ZParamOwnership]" = {}
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.param_ownership is not None:
+            if row.parent_type_id == parent.type_id and row.param_ownership is not None:
                 out[row.child_name] = row.param_ownership
         return out
 
     def has_any_ownership(self, parent: ZType) -> bool:
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid and row.param_ownership is not None:
+            if row.parent_type_id == parent.type_id and row.param_ownership is not None:
                 return True
         return False
 
     def children_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
         out: "List[tuple[str, ZType]]" = []
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid:
+            if row.parent_type_id == parent.type_id:
                 out.append((row.child_name, row.child_type))
         return out
 
     def child_names_of(self, parent: ZType) -> "List[str]":
         out: "List[str]" = []
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid:
+            if row.parent_type_id == parent.type_id:
                 out.append(row.child_name)
         return out
 
     def child_types_of(self, parent: ZType) -> "List[ZType]":
         out: "List[ZType]" = []
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid:
+            if row.parent_type_id == parent.type_id:
                 out.append(row.child_type)
         return out
 
     def child_count(self, parent: ZType) -> int:
         c = 0
         for row in self.type_child:
-            if row.parent_type_id == parent.nodeid:
+            if row.parent_type_id == parent.type_id:
                 c += 1
         return c
 
     def generic_arg_of(self, parent: ZType, name: str) -> "Optional[ZType]":
         for row in self.type_generic_arg:
-            if row.parent_type_id == parent.nodeid and row.param_name == name:
+            if row.parent_type_id == parent.type_id and row.param_name == name:
                 return row.arg_type
         return None
 
     def generic_args_of(self, parent: ZType) -> "List[tuple[str, ZType]]":
         out: "List[tuple[str, ZType]]" = []
         for row in self.type_generic_arg:
-            if row.parent_type_id == parent.nodeid:
+            if row.parent_type_id == parent.type_id:
                 out.append((row.param_name, row.arg_type))
         return out
 
     def has_generic_args(self, parent: ZType) -> bool:
         for row in self.type_generic_arg:
-            if row.parent_type_id == parent.nodeid:
+            if row.parent_type_id == parent.type_id:
                 return True
         return False
