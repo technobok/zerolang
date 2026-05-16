@@ -27,6 +27,8 @@ check:
 # isinstance:0  comprehension:14  lambda:0  try/except:8  hasattr:16
 # getattr:4 (F2 — defensive duck-typing on heterogeneous unions)
 # name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
+# startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
+# name-literal-compare:272 (F3/F4 — buckets A/B done, C/D deferred)
 bootstrap-lint:
 	@fail=0; \
 	count=$$(grep -rn 'isinstance(' src/*.py | wc -l); \
@@ -80,6 +82,22 @@ bootstrap-lint:
 		echo "  Intentional string compare? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rnE '\.name (==|!=) [a-zA-Z_][a-zA-Z_0-9]*\.name' src/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -rn 'startswith(' src/*.py | wc -l); \
+	if [ $$count -gt 42 ]; then \
+		echo "ERROR: startswith() usage increased ($$count > 42 baseline)"; \
+		echo "  F3: string-prefix tests are bootstrap-hostile; prefer"; \
+		echo "  id-based dispatch (BuiltinName / nodeid / name_id)."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -rn 'startswith(' src/*.py | tail -5; fail=1; \
+	fi; \
+	count=$$(grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' src/*.py | grep -v 'ztc-string-compare-ok' | wc -l); \
+	if [ $$count -gt 272 ]; then \
+		echo "ERROR: literal name compares increased ($$count > 272 baseline)"; \
+		echo "  F3/F4: compare by id (BuiltinName / nodeid / name_id) instead."; \
+		echo "  Intentional? Add '# ztc-string-compare-ok: <reason>' on the same line."; \
+		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
+		grep -rnE '(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"' src/*.py | grep -v 'ztc-string-compare-ok' | tail -5; fail=1; \
 	fi; \
 	if [ $$fail -eq 0 ]; then echo "bootstrap-lint: OK"; fi; \
 	exit $$fail

@@ -259,16 +259,22 @@ Action items:
 - [x] After F2 lands: add `getattr` baseline.
       *(Done in commit `7d34d5a`. Baseline locked at 4. Sanity-checked
       with a synthetic regression in `src/zc.py`.)*
-- [~] After F4 lands: add `startswith` and name-literal-compare
-      baselines. *(F4 landed scoped — buckets A/B done, C/D deferred,
-      so the name-literal-compare count is still ~50+ from the
-      meta/method-name literals. The lint should be added with the
-      current count as the baseline (policy: "no new literal
-      compares") rather than waiting for buckets C/D. The
-      `startswith` baseline is independent and ready to add.)*
-- [~] Update the comment block at `Makefile:24-26` to reflect the
-      expanded set. *(getattr line added; startswith / name-literal
-      pending the lint addition above.)*
+- [x] After F4 lands: add `startswith` and name-literal-compare
+      baselines. *(Both landed without waiting for F4 C/D under the
+      "no new violations" policy. `startswith` baseline locked at 42
+      (no escape hatch — every prefix test is bootstrap-hostile).
+      `name-literal-compare` baseline locked at 272 covering both
+      `==` and `!=` literal compares via
+      `(==|!=) *"[A-Za-z_][A-Za-z0-9_]*"`, reusing the existing
+      `# ztc-string-compare-ok:` escape mechanism. Note: count is
+      higher than the codereview's ~140 rough estimate because the
+      regex covers both directions across all `src/*.py`, not just
+      the emitter buckets the audit focused on. Sanity-checked by
+      running with stricter baselines — both rules trip and emit
+      sample violations.)*
+- [x] Update the comment block at `Makefile:24-26` to reflect the
+      expanded set. *(Added `startswith:42` and
+      `name-literal-compare:272` lines.)*
 
 ### F4. String-literal compares in the C emitter — High (goal 4) \[~partial\]
 
