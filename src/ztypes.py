@@ -16,7 +16,6 @@ class ZTypeType(IntEnum):
     """
 
     NULL = 0  # function that returns nothing
-    GENERIC_CALL = 2
     GENERIC_PARAM = 3  # a generic type parameter (e.g., t in t: Any.generic)
 
     # user defined types
