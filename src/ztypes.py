@@ -154,8 +154,8 @@ class ZType:
     For units, children contains the unit's definitions.
 
     Per-(parent, child-name) metadata such as param ownership
-    annotations and field defaults lives on TypeChild rows in the
-    `Typing.type_child` table; ZType only carries type-identity data.
+    annotations and field defaults lives on ZTypeChild rows in the
+    `ZTyping.type_child` table; ZType only carries type-identity data.
 
     is_valtype indicates whether this type is a value type (records,
     numerics, enums, variants) vs a reference type (classes, unions).
@@ -171,7 +171,7 @@ class ZType:
     subtype: ZSubType = ZSubType.NONE
 
     # parallel name→id map for children. Lazily populated by child_id_for;
-    # never pre-seeded. Globally-unique ids consumed by `Typing.type_child`
+    # never pre-seeded. Globally-unique ids consumed by `ZTyping.type_child`
     # rows and by narrowing entries that reference a child by id rather
     # than by string.
     children_id_map: "dict[str, int]" = field(default_factory=dict, init=False)

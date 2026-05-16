@@ -54,7 +54,7 @@ def _is_collection_param_type(ptype: Optional[ZType]) -> bool:
     return _is_list_type(ptype) or _is_listview_type(ptype) or _is_map_type(ptype)
 
 
-def _proto_param_ctype(typing: ztyping.Typing, ptype: Optional[ZType]) -> str:
+def _proto_param_ctype(typing: ztyping.ZTyping, ptype: Optional[ZType]) -> str:
     """C type for a parameter in a protocol vtable / wrapper signature.
 
     Mutable-collection parameters (list, listview, map — directly or
@@ -181,7 +181,7 @@ C_OPS: Dict[str, str] = {
 }
 
 
-def _ctype(typing: ztyping.Typing, ztype: Optional[ZType]) -> str:
+def _ctype(typing: ztyping.ZTyping, ztype: Optional[ZType]) -> str:
     if not ztype:
         return "void"
     if ztype.typedef_base is not None:
@@ -326,7 +326,7 @@ def _is_definition_name(name: str, emitter: "CEmitter") -> bool:
 
 
 class CEmitter:
-    def __init__(self, typing: ztyping.Typing) -> None:
+    def __init__(self, typing: ztyping.ZTyping) -> None:
         self.typing = typing
         # Convenience alias: most of the emitter walks the parsed AST
         # for tree structure (units, function bodies, etc.); routing
@@ -501,7 +501,7 @@ class CEmitter:
         back to the outer Expression's nodeid (typecheck stamps both
         for some paths). Returns `None` if no entry exists.
 
-        F5.E.4.a: reads `Typing.node_const_value` directly."""
+        F5.E.4.a: reads `ZTyping.node_const_value` directly."""
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression
@@ -518,7 +518,7 @@ class CEmitter:
         record/class fields, in particular, only carry the entry on
         the outer Expression).
 
-        Reads `Typing.node_type` directly."""
+        Reads `ZTyping.node_type` directly."""
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression
@@ -529,13 +529,13 @@ class CEmitter:
 
     def _case_clause_match_child_id(self, clause: zast.CaseClause) -> int:
         """Read the child_id stamped on `clause.match` (the tag selector
-        AtomId of a case arm). F5.E.4.b: reads from Typing directly."""
+        AtomId of a case arm). F5.E.4.b: reads from ZTyping directly."""
         return self.typing.atom_child_id.get(clause.match.nodeid, -1)
 
     def _path_ztype(self, path: zast.Path) -> Optional[ZType]:
         """Resolve the `ZType` of a parser-AST `Path`-shaped node.
 
-        F5.E.4.a: reads `Typing.node_type` directly. Path nodes don't
+        F5.E.4.a: reads `ZTyping.node_type` directly. Path nodes don't
         have an Expression wrapper, so the lookup is a single dict
         get."""
         return self.typing.node_type.get(path.nodeid)
@@ -826,7 +826,7 @@ class CEmitter:
 
         Handles function pointer fields (struct field access) vs regular functions.
         """
-        # F5.E.4.b: read callable's resolved type via Typing.node_type;
+        # F5.E.4.b: read callable's resolved type via ZTyping.node_type;
         # was a typed-mirror lookup with the same fallback.
         ftype = self._node_ztype(call.callable)
         if (
@@ -3005,7 +3005,7 @@ class CEmitter:
     def _union_lock_arm_names(self, union_defn: zast.ObjectDef) -> set:
         """Return the set of arm names declared as `name: t.lock` on a union.
 
-        Mirrors the type-checker's `is_lock_arm` flag on TypeChild, but
+        Mirrors the type-checker's `is_lock_arm` flag on ZTypeChild, but
         read straight off the AST so it's available at emit time without
         needing a back-reference to the resolved type. The .lock suffix
         rides on the item's path (DottedPath whose leaf is `lock`).
@@ -4867,7 +4867,7 @@ class CEmitter:
 
     def _emit_assignment(self, assign: zast.Assignment) -> str:
         indent = self._indent()
-        # F5.E.4.b: read decorations directly from Typing component
+        # F5.E.4.b: read decorations directly from ZTyping component
         # tables. `typed_assign.value.ztype` was the typed mirror's
         # value; the assignment's resolved type lives at
         # `typing.node_type[assign.nodeid]` either way.
@@ -4996,7 +4996,7 @@ class CEmitter:
 
     def _expr_call_kind(self, expr: zast.Expression) -> "zast.CallKind":
         """Look up the Expression-wrapper's control-flow classification.
-        F5.E.4.c: reads `Typing.expr_call_kind` directly (was a
+        F5.E.4.c: reads `ZTyping.expr_call_kind` directly (was a
         `TypedProgram.expr_call_kinds` snapshot — same data)."""
         return self.typing.expr_call_kind.get(expr.nodeid, zast.CallKind.UNKNOWN)
 
@@ -6955,7 +6955,7 @@ class CEmitter:
         return "0"
 
     def _emit_binop_value(self, binop: zast.BinOp) -> str:
-        # F5.E.4.b: BinOp const-value via Typing.
+        # F5.E.4.b: BinOp const-value via ZTyping.
         _binop_const = self.typing.node_const_value.get(binop.nodeid)
         if _binop_const is not None:
             return self._emit_const_value(binop)
@@ -7111,7 +7111,7 @@ class CEmitter:
         name = atom.name
         if _is_numeric_id(name):
             return self._emit_numeric_literal(name)
-        # F5.E.4.b: AtomId decorations from Typing component tables.
+        # F5.E.4.b: AtomId decorations from ZTyping component tables.
         narrowed_subtype = self.typing.atom_narrowed_subtype.get(atom.nodeid)
         original_ztype = self.typing.atom_original_ztype.get(atom.nodeid)
         child_id = self.typing.atom_child_id.get(atom.nodeid, -1)
@@ -8747,7 +8747,7 @@ class CEmitter:
         return self._get_operation_type(op)
 
     def _emit_if(self, ifnode: zast.If) -> str:
-        # F5.E.4.b: If decorations from Typing component tables.
+        # F5.E.4.b: If decorations from ZTyping component tables.
         _if_taken_vars = self.typing.if_taken_vars.get(ifnode.nodeid, [])
         indent = self._indent()
         parts: List[str] = []
@@ -9006,7 +9006,7 @@ class CEmitter:
         return None
 
     def _emit_for(self, fornode: zast.For) -> str:
-        # F5.E.4.b: For decorations from Typing component tables.
+        # F5.E.4.b: For decorations from ZTyping component tables.
         _for_iter_bindings = self.typing.for_iter_bindings.get(fornode.nodeid, set())
         indent = self._indent()
         parts: List[str] = []
@@ -9386,7 +9386,7 @@ class CEmitter:
         return tmp
 
     def _emit_do(self, donode: zast.Do) -> str:
-        # F5.E.4.b: Do decorations from Typing component tables.
+        # F5.E.4.b: Do decorations from ZTyping component tables.
         _do_has_break = self.typing.do_has_break.get(donode.nodeid, False)
         if _do_has_break:
             indent = self._indent()
@@ -9400,7 +9400,7 @@ class CEmitter:
 
     def _emit_do_expression_value(self, donode: zast.Do) -> str:
         """Emit a bare block as an expression, returning the last expression's value."""
-        # F5.E.4.b: Do decorations from Typing component tables.
+        # F5.E.4.b: Do decorations from ZTyping component tables.
         _do_has_break = self.typing.do_has_break.get(donode.nodeid, False)
         _do_ztype = self._node_ztype(donode)
         ctype = _ctype(self.typing, _do_ztype)
@@ -9446,7 +9446,7 @@ class CEmitter:
         is_union = val_type and val_type.typetype == ZTypeType.UNION
         cname = _mangle_var(withnode.name)
 
-        # F5.E.4.b: With decorations from Typing component tables.
+        # F5.E.4.b: With decorations from ZTyping component tables.
         _with_ownership = self.typing.with_ownership.get(withnode.nodeid)
         _with_alias_of = self.typing.with_alias_of.get(withnode.nodeid)
         # BORROW bindings do not own the value — no destructor at scope exit
@@ -9542,10 +9542,10 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_case(self, casenode: zast.Case) -> str:
-        # F5.E.4.b: Case decorations from Typing component tables.
+        # F5.E.4.b: Case decorations from ZTyping component tables.
         _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
         _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
-        # (case decorations already read above from Typing)
+        # (case decorations already read above from ZTyping)
         indent = self._indent()
         parts: List[str] = []
 
@@ -9613,7 +9613,7 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_union_case(self, casenode: zast.Case, union_type: ZType) -> str:
-        # F5.E.4.b: Case decorations from Typing component tables.
+        # F5.E.4.b: Case decorations from ZTyping component tables.
         _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
         _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
         # nullable-ptr option: if (ptr != NULL) / else
@@ -9677,7 +9677,7 @@ class CEmitter:
 
     def _emit_nullable_ptr_case(self, casenode: zast.Case, union_type: ZType) -> str:
         """Emit case matching for nullable-ptr option: if (ptr != NULL) / else."""
-        # F5.E.4.b: Case decorations from Typing component tables.
+        # F5.E.4.b: Case decorations from ZTyping component tables.
         _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
         _case_subject_taken = self.typing.case_subject_taken.get(casenode.nodeid, False)
         indent = self._indent()
@@ -9754,7 +9754,7 @@ class CEmitter:
         return "".join(parts)
 
     def _emit_variant_case(self, casenode: zast.Case, variant_type: ZType) -> str:
-        # F5.E.4.b: Case decorations from Typing component tables.
+        # F5.E.4.b: Case decorations from ZTyping component tables.
         _case_taken_vars = self.typing.case_taken_vars.get(casenode.nodeid, [])
         indent = self._indent()
         parts: List[str] = []
@@ -10100,7 +10100,7 @@ class CEmitter:
         return "".join(parts)
 
 
-def emit(typing: ztyping.Typing) -> str:
-    """Emit C source from a populated `Typing`."""
+def emit(typing: ztyping.ZTyping) -> str:
+    """Emit C source from a populated `ZTyping`."""
     emitter = CEmitter(typing)
     return emitter.emit()

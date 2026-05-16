@@ -207,7 +207,7 @@ def _set_destructor_metadata(ztype: ZType) -> None:
         ztype.is_heap_allocated = False
 
 
-def _set_field_cleanup_metadata(typing: ztyping.Typing, ztype: ZType) -> None:
+def _set_field_cleanup_metadata(typing: ztyping.ZTyping, ztype: ZType) -> None:
     """Set needs_field_cleanup based on whether any non-function children need cleanup.
 
     Must be called after children are fully resolved. Scans fields (non-function
@@ -392,7 +392,7 @@ class MonoState:
     in `TypeChecker.__init__` collapse to a single line. Each field
     is mutable — `TypeChecker` writes through them during typecheck;
     `typecheck()` (the public entry point) snapshots the relevant
-    subset onto `Typing` at the end."""
+    subset onto `ZTyping` at the end."""
 
     # mono dedup cache: key = (template_id, sorted-mono-arg-key tuple)
     cache: "dict[tuple, ZType]" = field(default_factory=dict)
@@ -428,7 +428,7 @@ class TypeChecker:
         # `program` onto here; today it carries only the back-ref
         # to the parsed program and `is_error` so the structure
         # exists for callers and for incremental migration.
-        self.typing = ztyping.Typing(parsed=program)
+        self.typing = ztyping.ZTyping(parsed=program)
         self.errors: List[zast.Error] = []
         self.symtab = ZSymbolTable(typing=self.typing)
 
@@ -9822,7 +9822,7 @@ class TypeChecker:
         consumed (`.take`) the match subject or any other live owned
         variable, invalidate it after the match scope pops so
         post-match code can't reference it. Also stamps
-        `Typing.case_subject_taken` / `Typing.case_taken_vars` for
+        `ZTyping.case_subject_taken` / `ZTyping.case_taken_vars` for
         the emitter."""
         if subject_taken_in_arm and subject_name:
             self.typing.case_subject_taken[casenode.nodeid] = True
@@ -9865,7 +9865,7 @@ class TypeChecker:
         diverging arm contributes `never`; remaining arms must share
         a common type.
 
-        Stamps `Typing.node_type[casenode.nodeid]` when a non-null
+        Stamps `ZTyping.node_type[casenode.nodeid]` when a non-null
         result type is determined."""
         if not is_exhaustive:
             return self.t_null
@@ -10221,11 +10221,11 @@ class TypeChecker:
         return result_type
 
 
-def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
+def typecheck(program: zast.Program, full: bool = False) -> ztyping.ZTyping:
     """Top-level entry point: type-check a parsed program.
 
-    Returns the populated `Typing` (typecheck-output container).
-    `Typing` carries the back-reference to the parsed program, the
+    Returns the populated `ZTyping` (typecheck-output container).
+    `ZTyping` carries the back-reference to the parsed program, the
     typecheck errors, and every typecheck-derived datum the emitter /
     SQL dumper / asthash need to read. `program` is read-only —
     F5.E.5 froze `zast.Program`.
@@ -10244,7 +10244,7 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
     return tc.typing
 
 
-def audit_type_annotations(typing: ztyping.Typing) -> List[str]:
+def audit_type_annotations(typing: ztyping.ZTyping) -> List[str]:
     """Post-type-check validation: find Path nodes missing .type annotations.
 
     Returns a list of diagnostic strings for nodes that should have .type

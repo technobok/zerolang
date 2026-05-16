@@ -117,7 +117,7 @@ def _walk_path_nodes(node, visited=None):
 
 
 def _node_ztype(typing, node):
-    """Look up a parsed node's resolved ZType in `Typing.node_type`."""
+    """Look up a parsed node's resolved ZType in `ZTyping.node_type`."""
     return typing.node_type.get(node.nodeid)
 
 
@@ -385,7 +385,7 @@ class TestFinding8FileIdConsistency:
 class TestFinding7CallKind:
     """Finding 7: type checker should classify calls with CallKind.
 
-    `call_kind` lives on the `Typing` component table; these tests
+    `call_kind` lives on the `ZTyping` component table; these tests
     walk the parsed AST and filter to calls that have a `call_kind`
     entry.
     """
@@ -803,7 +803,7 @@ class TestFinding12SelfHostingPatterns:
     def test_no_ordered_dict_in_ztype(self):
         """Remaining dict-typed fields on ZType should be plain dicts
         (not OrderedDict). F5.H.5 removed `children` / `generic_args`
-        in favour of flat tables on Typing — only `generic_params`
+        in favour of flat tables on ZTyping — only `generic_params`
         survives as a per-ZType dict."""
         from ztypes import ZType, ZTypeType
 
@@ -811,16 +811,16 @@ class TestFinding12SelfHostingPatterns:
         assert type(t.generic_params) is dict
 
     def test_children_table_preserves_order(self):
-        """Typing.type_child rows preserve declaration order via the
+        """ZTyping.type_child rows preserve declaration order via the
         `position` column (and via the order rows are appended). This
         replaces the pre-F5.H test that exercised ZType.children dict
         ordering directly."""
         from ztypes import ZType, ZTypeType
-        from ztyping import Typing
+        from ztyping import ZTyping
         from zvfs import ZVfs
         import zast
 
-        typing = Typing(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
+        typing = ZTyping(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
         parent = ZType(name="rec", typetype=ZTypeType.RECORD, parent=None)
         c1 = ZType(name="x", typetype=ZTypeType.RECORD, parent=parent)
         c2 = ZType(name="y", typetype=ZTypeType.RECORD, parent=parent)

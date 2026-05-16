@@ -9,14 +9,14 @@ import pytest
 from conftest import make_parser
 from ztypecheck import typecheck
 from ztypes import ZType, ZTypeType
-from ztyping import Typing
+from ztyping import ZTyping
 import zast
 
 
-def _empty_typing() -> Typing:
+def _empty_typing() -> ZTyping:
     from zvfs import ZVfs
 
-    return Typing(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
+    return ZTyping(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
 
 
 pytestmark = pytest.mark.infra
@@ -109,7 +109,7 @@ main: function is {
 }
 """
         program, typing = _parse_check(src)
-        # F5.E.4.d: child_id is on `Typing.dp_child_id` keyed by parsed
+        # F5.E.4.d: child_id is on `ZTyping.dp_child_id` keyed by parsed
         # DottedPath nodeid. Walk parsed nodes and check the stamps.
         dp_child_id = typing.dp_child_id
         stamped = 0
@@ -153,7 +153,7 @@ main: function is {
 """
         program, typing = _parse_check(src)
         # F5.E.4.d: child_id for case-clause match selectors lives on
-        # `Typing.atom_child_id` keyed by the parsed `clause.match`
+        # `ZTyping.atom_child_id` keyed by the parsed `clause.match`
         # AtomId's nodeid. Walk parsed clauses and check the stamps.
         atom_child_id = typing.atom_child_id
         stamped = 0

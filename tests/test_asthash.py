@@ -27,7 +27,7 @@ def parse_and_check(source: str, unitname: str = "test"):
 
 
 def _node_types(typing):
-    """Helper: return `Typing.node_type` for `zasthash.hash_function`."""
+    """Helper: return `ZTyping.node_type` for `zasthash.hash_function`."""
     return typing.node_type
 
 

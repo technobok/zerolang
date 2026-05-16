@@ -9,7 +9,7 @@ from typing import Optional, TYPE_CHECKING, cast
 from ztypes import ZType, ZSubType
 
 if TYPE_CHECKING:
-    from ztyping import Typing
+    from ztyping import ZTyping
 
 
 def is_numeric_id(name: str) -> bool:
@@ -43,13 +43,13 @@ def is_array_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "array"
 
 
-def array_element_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def array_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the element type of an array type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "of") if base else None
 
 
-def array_length(typing: "Typing", ztype: ZType) -> Optional[int]:
+def array_length(typing: "ZTyping", ztype: ZType) -> Optional[int]:
     """Get the length of an array type."""
     base = _unwrap_typedef(ztype)
     if base is None:
@@ -68,7 +68,7 @@ def is_str_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "str"
 
 
-def str_capacity(typing: "Typing", ztype: ZType) -> Optional[int]:
+def str_capacity(typing: "ZTyping", ztype: ZType) -> Optional[int]:
     """Get the capacity of a str type."""
     base = _unwrap_typedef(ztype)
     if base is None:
@@ -87,7 +87,7 @@ def is_list_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "List"
 
 
-def list_element_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def list_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the element type of a list type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "of") if base else None
@@ -101,7 +101,7 @@ def is_listview_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "ListView"
 
 
-def listview_element_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def listview_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the element type of a listview type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "of") if base else None
@@ -115,7 +115,7 @@ def is_listiter_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "ListIter"
 
 
-def listiter_element_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def listiter_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the element type of a listiter type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "of") if base else None
@@ -131,7 +131,7 @@ def is_mapkeyiter_type(ztype: Optional[ZType]) -> bool:
     )
 
 
-def mapkeyiter_key_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def mapkeyiter_key_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the key type of a mapkeyiter type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "key") if base else None
@@ -147,13 +147,13 @@ def is_mapitemiter_type(ztype: Optional[ZType]) -> bool:
     )
 
 
-def mapitemiter_key_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def mapitemiter_key_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the key type of a mapitemiter type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "key") if base else None
 
 
-def mapitemiter_value_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def mapitemiter_value_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the value type of a mapitemiter type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "value") if base else None
@@ -167,13 +167,13 @@ def is_mapentry_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "MapEntry"
 
 
-def mapentry_key_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def mapentry_key_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the key type of a mapentry type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "key") if base else None
 
 
-def mapentry_value_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def mapentry_value_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the value type of a mapentry type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "value") if base else None
@@ -187,13 +187,13 @@ def is_map_type(ztype: Optional[ZType]) -> bool:
     return ztype.generic_origin is not None and ztype.generic_origin.name == "Map"
 
 
-def map_key_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def map_key_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the key type of a map type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "key") if base else None
 
 
-def map_value_type(typing: "Typing", ztype: ZType) -> Optional[ZType]:
+def map_value_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     """Get the value type of a map type."""
     base = _unwrap_typedef(ztype)
     return typing.generic_arg_of(base, "value") if base else None

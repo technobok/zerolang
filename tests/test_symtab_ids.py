@@ -12,16 +12,16 @@ from conftest import make_parser
 from ztypecheck import typecheck
 from zsqldump import dump_sql
 from ztypes import ZEntry, ZType, ZTypeType, ZOwnership, ZVariable
-from ztyping import Typing
+from ztyping import ZTyping
 from zenv import ZSymbolTable
 
 
-def _empty_typing() -> Typing:
-    """Construct a minimal Typing for tests that just need the
+def _empty_typing() -> ZTyping:
+    """Construct a minimal ZTyping for tests that just need the
     type_child / type_generic_arg tables."""
     from zvfs import ZVfs
 
-    return Typing(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
+    return ZTyping(parsed=zast.Program(vfs=ZVfs(), units={}, mainunitname=""))
 
 
 pytestmark = pytest.mark.infra
@@ -83,7 +83,7 @@ class TestNarrowStampsIds:
         assert entry is not None
         assert entry.narrowed_subtype == "ok"
         assert entry.narrowed_subtype_id == expected_id
-        # round-trip via Typing.child_by_id
+        # round-trip via ZTyping.child_by_id
         assert typing.child_by_id(outer, entry.narrowed_subtype_id) is ok
 
     def test_exclude_stamps_excluded_subtype_ids(self):

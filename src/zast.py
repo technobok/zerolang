@@ -255,7 +255,7 @@ class Program:
     Program - top level, holds all Units and streams (files).
 
     Frozen as of F5.E.5 — this is parser output and is immutable
-    post-parse. Typecheck output lives on `ztyping.Typing`.
+    post-parse. Typecheck output lives on `ztyping.ZTyping`.
 
     Two siblings carry `is_error: bool` to discriminate parser
     results: `Program.is_error = False`, `Error.is_error = True`.

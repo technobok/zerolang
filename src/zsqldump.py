@@ -32,9 +32,9 @@ _OP_NODETYPES = (
 )
 
 
-def _node_ztype(typing: "ztyping.Typing", node: zast.Node) -> Optional[ZType]:
+def _node_ztype(typing: "ztyping.ZTyping", node: zast.Node) -> Optional[ZType]:
     """Read the resolved `ZType` for `node`, descending through the
-    `Expression` wrapper. F5.E.4.d: reads `Typing.node_type` directly.
+    `Expression` wrapper. F5.E.4.d: reads `ZTyping.node_type` directly.
     Tries the inner-subtype nodeid first and falls back to the outer
     Expression nodeid (typecheck stamps both paths)."""
     target = node
@@ -46,9 +46,9 @@ def _node_ztype(typing: "ztyping.Typing", node: zast.Node) -> Optional[ZType]:
     return typing.node_type.get(node.nodeid)
 
 
-def _node_const_value(typing: "ztyping.Typing", node: zast.Node):
+def _node_const_value(typing: "ztyping.ZTyping", node: zast.Node):
     """Read `const_value` for `node`. Same descent rule as
-    `_node_ztype`. F5.E.4.d: reads `Typing.node_const_value` directly."""
+    `_node_ztype`. F5.E.4.d: reads `ZTyping.node_const_value` directly."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
@@ -269,7 +269,7 @@ def _collect_ast_nodes(program: zast.Program) -> List[Tuple[zast.Node, str]]:
 
 
 def dump_sql(
-    typing: ztyping.Typing,
+    typing: ztyping.ZTyping,
     emitter: Optional[zemitterc.CEmitter] = None,
     csource: Optional[str] = None,
 ) -> str:

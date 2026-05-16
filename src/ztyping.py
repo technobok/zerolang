@@ -1,8 +1,8 @@
 """
-Typing — typecheck-output container.
+ZTyping — typecheck-output container.
 
 The parser produces a `zast.Program` (immutable post-parse). The
-typechecker takes that `Program` and produces a `Typing`: the
+typechecker takes that `Program` and produces a `ZTyping`: the
 container of every typecheck-derived datum the downstream consumers
 (emitter, SQL dumper, asthash) need to read.
 
@@ -10,11 +10,11 @@ Architecturally:
 
     zast.Program (frozen tree of parsed nodes)
         ↓  TypeChecker(...).check()
-    ztyping.Typing (mutable container; component tables)
+    ztyping.ZTyping (mutable container; component tables)
         ↓
     CEmitter / zsqldump / zasthash
 
-`Typing` is owned by the typechecker module conceptually but lives
+`ZTyping` is owned by the typechecker module conceptually but lives
 in its own file so consumers can import it without depending on
 `ztypecheck`. Mirrors the `zast` / `zparser` split: data module
 separate from producer.
@@ -30,14 +30,14 @@ from zsymtab_proto import ZSymbolTableProto
 
 
 @dataclass
-class TypeChild:
+class ZTypeChild:
     """One row of the flat children table (F5.H).
 
     Replaces a `(parent_ztype, name) → child_ztype` entry from
     `ZType.children`. `child_name_id` is the monotonic id minted by
     `ZType.child_id_for(child_name)` (Phase 7b children_id_map);
     `position` preserves declaration order (rows appear in
-    insertion order in `Typing.type_child` per parent).
+    insertion order in `ZTyping.type_child` per parent).
 
     `child_type` is the in-memory ZType reference, kept alongside the
     id for fast resolution during the F5.H transition. SQL dumps
@@ -63,12 +63,12 @@ class TypeChild:
 
 
 @dataclass
-class TypeGenericArg:
+class ZTypeGenericArg:
     """One row of the flat generic-args table (F5.H).
 
     Replaces a `(parent_ztype, param_name) → arg_ztype` entry from
     `ZType.generic_args`. `arg_type` is the in-memory ZType
-    reference (transitional; see TypeChild docstring).
+    reference (transitional; see ZTypeChild docstring).
     """
 
     parent_type_id: int
@@ -78,7 +78,7 @@ class TypeGenericArg:
 
 
 @dataclass
-class Typing:
+class ZTyping:
     """Result of typechecking. See module docstring for context.
 
     The 19 nodeid-keyed component tables below hold typecheck-derived
@@ -180,8 +180,8 @@ class Typing:
     # write site; F5.H.3/4 migrate consumers via the helper methods
     # below; F5.H.5 removes the dicts and the helpers become the
     # only access path.
-    type_child: List[TypeChild] = field(default_factory=list, init=False)
-    type_generic_arg: List[TypeGenericArg] = field(default_factory=list, init=False)
+    type_child: List[ZTypeChild] = field(default_factory=list, init=False)
+    type_generic_arg: List[ZTypeGenericArg] = field(default_factory=list, init=False)
 
     # ---- F5.H children/generic_arg setters + accessors ----
     #
@@ -201,7 +201,7 @@ class Typing:
                 return
             pos += 1
         self.type_child.append(
-            TypeChild(parent.type_id, name, name_id, child.type_id, pos, child)
+            ZTypeChild(parent.type_id, name, name_id, child.type_id, pos, child)
         )
 
     def set_generic_arg(self, parent: ZType, name: str, arg: ZType) -> None:
@@ -211,7 +211,7 @@ class Typing:
                 row.arg_type = arg
                 return
         self.type_generic_arg.append(
-            TypeGenericArg(parent.type_id, name, arg.type_id, arg)
+            ZTypeGenericArg(parent.type_id, name, arg.type_id, arg)
         )
 
     def child_of(self, parent: ZType, name: str) -> "Optional[ZType]":

@@ -146,10 +146,10 @@ class ZSymbolTable:
         # _history + _scopes is gone.
         self.scope_log: List[ZScopeLogRow] = []
         self._seq_counter: int = 0
-        # F5.H.5: bound `Typing` for narrowing/exclude lookups that need
+        # F5.H.5: bound `ZTyping` for narrowing/exclude lookups that need
         # to read the flat type_child table. Typed Any to keep zenv free
         # of an import cycle with ztyping; production callers (TypeChecker)
-        # pass a real Typing.
+        # pass a real ZTyping.
         self._typing: "Any" = typing
 
     def _log_push(self, scope: ZScope) -> None:

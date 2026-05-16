@@ -45,7 +45,7 @@ def check_ok(source: str, unitname: str = "test"):
 
 
 def _node_ztype(typing, node):
-    """Look up a parsed node's resolved ZType in `Typing.node_type`."""
+    """Look up a parsed node's resolved ZType in `ZTyping.node_type`."""
     return typing.node_type.get(node.nodeid)
 
 
@@ -9392,7 +9392,7 @@ class TestConstantFolding:
     def _const_value(typing, parsed_node):
         """Look up `const_value` for a parsed expression. Descends the
         `Expression` wrapper into its inner subtype, then reads from
-        `Typing.node_const_value`."""
+        `ZTyping.node_const_value`."""
         target = parsed_node
         while isinstance(target, zast.Expression):
             target = target.expression
