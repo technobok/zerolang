@@ -123,6 +123,49 @@ class TestScopeHistory:
         assert inner.scope_id in archived
 
 
+class TestScopeLog:
+    def test_log_captures_push_pop_with_parent_and_seq(self):
+        # F6: scope_log records each push and stamps closed_at_seq on pop,
+        # so the SQL dump can reconstruct the full history from one table.
+        st = SymbolTable()
+        outer_marker = st.push_block("outer")
+        st.push("inner")
+        st.pop()  # close inner
+        st.pop_to(outer_marker)  # close outer
+
+        log = st.scope_log
+        # one row per push
+        assert len(log) == 2
+        outer_row, inner_row = log
+        # parent_id is wired correctly: outer has no parent, inner's parent is outer
+        assert outer_row.parent_id is None
+        assert inner_row.parent_id == outer_row.scope_id
+        # both rows got closed_at_seq stamped on pop
+        assert outer_row.closed_at_seq is not None
+        assert inner_row.closed_at_seq is not None
+        # seq is monotonically increasing across both push and pop events
+        assert outer_row.opened_at_seq == 0
+        assert inner_row.opened_at_seq == 1
+        # inner closes before outer; outer closes last
+        assert inner_row.closed_at_seq < outer_row.closed_at_seq
+
+    def test_log_row_matches_archived_scope(self):
+        # While _history is still maintained, every scope_log row with a
+        # closed_at_seq has a matching archived scope. (When _history is
+        # retired, this test goes away.)
+        st = SymbolTable()
+        marker = st.push_block("outer")
+        inner = st.push("inner")
+        st.pop_to(marker)
+        archived_ids = {s.scope_id for s in st._history}
+        closed_log_ids = {
+            row.scope_id for row in st.scope_log if row.closed_at_seq is not None
+        }
+        assert inner.scope_id in archived_ids
+        assert inner.scope_id in closed_log_ids
+        assert archived_ids == closed_log_ids
+
+
 class TestSqlDumpSymtab:
     def _compile_and_dump(self, src: str) -> str:
         _program, typing = _parse_check_typing(src)

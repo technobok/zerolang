@@ -162,11 +162,14 @@ CREATE TABLE IF NOT EXISTS unit (
 );
 
 CREATE TABLE IF NOT EXISTS scope (
-    scope_id    INTEGER PRIMARY KEY,
-    kind        TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    depth       INTEGER NOT NULL,
-    unreachable BOOLEAN NOT NULL
+    scope_id       INTEGER PRIMARY KEY,
+    parent_id      INTEGER REFERENCES scope(scope_id),
+    kind           TEXT NOT NULL,
+    name           TEXT NOT NULL,
+    depth          INTEGER NOT NULL,
+    opened_at_seq  INTEGER NOT NULL,
+    closed_at_seq  INTEGER,
+    unreachable    BOOLEAN NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS variable (
@@ -406,23 +409,24 @@ def dump_sql(
             f"{unit_type_id});"
         )
 
-    # Stage 6a: symbol table (Phase 7c) — scopes, variables, entries.
-    # Walks the archived history plus any remaining live scopes. The
-    # dumper tolerates a missing symbol_table (e.g. when called without
-    # running typecheck): simply emits no rows for the symtab tables.
+    # Stage 6a: symbol table — scopes, variables, entries. Iterates
+    # `symtab.scope_log` (F6: append-only single source of truth for
+    # scope order). Each row carries the live Scope reference so
+    # entries/unreachable read off the row without a lookup. The
+    # dumper tolerates a missing symbol_table (e.g. when called
+    # without running typecheck): simply emits no rows for the
+    # symtab tables.
     symtab = typing.symbol_table
     if symtab is not None:
-        scopes_iter = list(symtab._history) + list(symtab._scopes)
-        seen_scopes: set[int] = set()
         seen_vars: dict[int, object] = {}
-        for depth, scope in enumerate(scopes_iter):
-            if scope.scope_id in seen_scopes:
-                continue
-            seen_scopes.add(scope.scope_id)
+        for depth, row in enumerate(symtab.scope_log):
+            scope = row.scope
             lines.append(
                 f"INSERT OR IGNORE INTO scope VALUES ("
-                f"{scope.scope_id}, {_sql_str(scope.kind.name)}, "
-                f"{_sql_str(scope.name)}, {depth}, "
+                f"{row.scope_id}, {_sql_int(row.parent_id)}, "
+                f"{_sql_str(row.kind.name)}, {_sql_str(row.name)}, "
+                f"{depth}, {row.opened_at_seq}, "
+                f"{_sql_int(row.closed_at_seq)}, "
                 f"{_sql_bool(scope.unreachable)});"
             )
             for pos, entry in enumerate(scope.entries):
