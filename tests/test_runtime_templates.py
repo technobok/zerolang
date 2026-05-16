@@ -197,10 +197,7 @@ def test_protocol_vtable_template_compiles():
     # Mirrors the f-string output that _emit_protocol /
     # _emit_mono_protocol produce: one function-pointer line per
     # spec method, void* first param, this-typed param elided.
-    funcs = (
-        "    int64_t (*read)(void*, int64_t);\n"
-        "    void (*close)(void*);\n"
-    )
+    funcs = "    int64_t (*read)(void*, int64_t);\n    void (*close)(void*);\n"
     body = apply("z_protocol_vtable", {"NAME": "Reader", "VTABLE_FUNCS": funcs})
     rc, err = _gcc_compile(body)
     assert rc == 0, err

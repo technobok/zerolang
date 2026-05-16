@@ -542,12 +542,22 @@ itself a bug — extracting templates is a per-feature project — but
 documenting what's deliberate vs. what's pending helps prioritize.
 
 Action items:
-- [ ] Add a header comment to `zemitterc_templates.py` listing what is
-      currently template-driven and what is ad-hoc.
-- [ ] Pick one well-bounded subsystem as the next template target.
+- [x] Add a header comment to `zemitterc_templates.py` listing what is
+      currently template-driven and what is ad-hoc. *(Commit `4a4dbc5`
+      — header now tabulates the 5 templates with their callers and
+      lists not-yet-templated candidates (`_emit_protocol_impl`,
+      `_emit_mono_map`, `_emit_create_functions`) with deferral
+      rationale.)*
+- [x] Pick one well-bounded subsystem as the next template target.
       Recommendation: **vtable emission** (the dispatch tables for
       protocol conformance) — fixed shape, 100% mechanical, no
-      branching on ad-hoc state.
+      branching on ad-hoc state. *(Commit `ae04b05` —
+      `z_protocol_vtable.c.tmpl` added; `_emit_protocol` and
+      `_emit_mono_protocol` both routed through `ztmpl.apply`. Net
+      −40 / +34 lines in `zemitterc.py`. Byte-identical C across
+      all 86 examples; `make test` 1944 passing.
+      `_emit_protocol_impl` deferred — separate template,
+      future commit.)*
 
 ### F8. `copy.deepcopy(func)` is non-portable — Low (goal 2) \[RESOLVED\]
 
@@ -867,8 +877,13 @@ Larger refactors; do in order.
        truth tables directly.)*
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
        nodeid-keyed variant deferred to F4).
-8. [ ] F7 — pick one subsystem (recommend vtable emission) as the
-       next template target.
+8. [x] F7 — pick one subsystem (recommend vtable emission) as the
+       next template target. *(Closed 2026-05-16. `4a4dbc5`
+       documents the current templated/ad-hoc surface;
+       `ae04b05` extracts the protocol vtable struct to
+       `z_protocol_vtable.c.tmpl`, shared by `_emit_protocol`
+       and `_emit_mono_protocol`. Byte-identical C across 86
+       examples; `make test` 1944 passing.)*
 
 ### Phase 4 — Documentation
 
