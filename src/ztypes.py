@@ -305,7 +305,7 @@ def _alloc_variable_id() -> int:
 
 
 @unique
-class ScopeKind(IntEnum):
+class ZScopeKind(IntEnum):
     """Kind of scope in the symbol table."""
 
     BLOCK = 0  # language construct (function, do, for, if, with, match, arm)

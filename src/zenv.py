@@ -14,7 +14,7 @@ from ztypes import (
     ZLockInfo,
     ZLockHolder,
     ZLockHolderKind,
-    ScopeKind,
+    ZScopeKind,
     Entry,
     _alloc_scope_id,
 )
@@ -39,7 +39,7 @@ class ScopeLogRow:
 
     scope_id: int
     parent_id: Optional[int]
-    kind: ScopeKind
+    kind: ZScopeKind
     name: str
     opened_at_seq: int
     scope: "Scope"
@@ -102,7 +102,7 @@ class Scope:
     Entries are stored in a list (not a dict) for simplicity and cache locality.
     """
 
-    def __init__(self, name: str, kind: ScopeKind) -> None:
+    def __init__(self, name: str, kind: ZScopeKind) -> None:
         self.scope_id: int = _alloc_scope_id()
         self.kind = kind
         self.name = name
@@ -185,7 +185,7 @@ class SymbolTable:
 
     def push(self, name: str) -> Scope:
         """Push a block scope. Returns the scope (marker is self.depth - 1)."""
-        scope = Scope(name, ScopeKind.BLOCK)
+        scope = Scope(name, ZScopeKind.BLOCK)
         self._scopes.append(scope)
         self._log_push(scope)
         return scope
@@ -193,14 +193,14 @@ class SymbolTable:
     def push_block(self, name: str) -> int:
         """Push a block scope. Returns the marker for pop_to."""
         marker = len(self._scopes)
-        scope = Scope(name, ScopeKind.BLOCK)
+        scope = Scope(name, ZScopeKind.BLOCK)
         self._scopes.append(scope)
         self._log_push(scope)
         return marker
 
     def push_overlay(self) -> Scope:
         """Push an overlay scope for per-statement state changes."""
-        scope = Scope("", ScopeKind.OVERLAY)
+        scope = Scope("", ZScopeKind.OVERLAY)
         self._scopes.append(scope)
         self._log_push(scope)
         return scope
@@ -208,7 +208,7 @@ class SymbolTable:
     def push_call(self) -> int:
         """Push a call scope for call-scoped locking. Returns marker for pop_to."""
         marker = len(self._scopes)
-        scope = Scope("", ScopeKind.CALL)
+        scope = Scope("", ZScopeKind.CALL)
         self._scopes.append(scope)
         self._log_push(scope)
         return marker
