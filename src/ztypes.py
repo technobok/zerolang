@@ -51,7 +51,7 @@ class ZSubType(IntEnum):
 
 
 @unique
-class ControlKind(IntEnum):
+class ZControlKind(IntEnum):
     """Identifies compiler control flow functions"""
 
     NONE = 0
@@ -63,7 +63,7 @@ class ControlKind(IntEnum):
 
 
 @unique
-class BuiltinFunc(IntEnum):
+class ZBuiltinFunc(IntEnum):
     """Identifies native functions that need special emitter handling
     beyond standard mangled-name dispatch (e.g. extra header includes,
     runtime-error plumbing). Stamped on the function's ZType at
@@ -234,11 +234,11 @@ class ZType:
     is_native: bool = field(default=False, init=False)
 
     # compiler control kine functions (return|break|continue etc)
-    control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
+    control_kind: ZControlKind = field(default=ZControlKind.NONE, init=False)
 
     # native functions that need special emitter handling
     # (extra header includes etc); stamped in _resolve_function_type.
-    builtin_func: BuiltinFunc = field(default=BuiltinFunc.NONE, init=False)
+    builtin_func: ZBuiltinFunc = field(default=ZBuiltinFunc.NONE, init=False)
 
     # public/private access control: maps external name -> internal name for
     # publicly accessible members. None = all-public (default). Set during type

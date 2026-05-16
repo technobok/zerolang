@@ -25,8 +25,8 @@ from ztypes import (
     ZLockState,
     ZLockHolder,
     ZLockHolderKind,
-    ControlKind,
-    BuiltinFunc,
+    ZControlKind,
+    ZBuiltinFunc,
     ZExprResult,
     NUMERIC_RANGES,
     parse_number,
@@ -1093,22 +1093,22 @@ class TypeChecker:
 
         # tag control flow functions by name (resolved from system.z)
         _CONTROL_KINDS = {
-            "return": ControlKind.RETURN,
-            "break": ControlKind.BREAK,
-            "continue": ControlKind.CONTINUE,
-            "error": ControlKind.ERROR,
-            "panic": ControlKind.PANIC,
+            "return": ZControlKind.RETURN,
+            "break": ZControlKind.BREAK,
+            "continue": ZControlKind.CONTINUE,
+            "error": ZControlKind.ERROR,
+            "panic": ZControlKind.PANIC,
         }
         if func.is_native and name in _CONTROL_KINDS:
             ftype.control_kind = _CONTROL_KINDS[name]
 
         # tag native functions that need special emitter handling
-        # (extra header includes etc) — see BuiltinFunc. Match on the
+        # (extra header includes etc) — see ZBuiltinFunc. Match on the
         # unqualified tail: stringview methods resolve as e.g.
         # "StringView.parseF64", os-unit functions as "os.envNames".
         _BUILTIN_FUNCS = {
-            "parseF64": BuiltinFunc.PARSE_F64,
-            "envNames": BuiltinFunc.ENV_NAMES,
+            "parseF64": ZBuiltinFunc.PARSE_F64,
+            "envNames": ZBuiltinFunc.ENV_NAMES,
         }
         if func.is_native:
             tail = name.rsplit(".", 1)[-1]
@@ -6202,7 +6202,7 @@ class TypeChecker:
             if t_never:
                 break_type = _make_type("break", ZTypeType.FUNCTION)
                 break_type.return_type = t_never
-                break_type.control_kind = ControlKind.BREAK
+                break_type.control_kind = ZControlKind.BREAK
                 self.symtab.define("break", break_type)
             self._break_targets.append(inner_do)
             self._check_statement(inner_do.statement)
@@ -6265,7 +6265,7 @@ class TypeChecker:
             if (
                 t is not None
                 and t.typetype == ZTypeType.FUNCTION
-                and t.control_kind == ControlKind.NONE
+                and t.control_kind == ZControlKind.NONE
                 and inner.nodetype == NodeType.ATOMID
                 and self.typing.child_count(t) > 0
                 and self._lookup_definition(cast(zast.AtomId, inner).name) is not None
@@ -6302,19 +6302,19 @@ class TypeChecker:
         if t is not None:
             self.typing.node_type[expr.nodeid] = t
             # tag control flow expressions using resolved type's control_kind
-            if t.control_kind != ControlKind.NONE:
+            if t.control_kind != ZControlKind.NONE:
                 _CK_MAP = {
-                    ControlKind.RETURN: zast.CallKind.RETURN,
-                    ControlKind.BREAK: zast.CallKind.BREAK,
-                    ControlKind.CONTINUE: zast.CallKind.CONTINUE,
-                    ControlKind.ERROR: zast.CallKind.ERROR,
-                    ControlKind.PANIC: zast.CallKind.PANIC,
+                    ZControlKind.RETURN: zast.CallKind.RETURN,
+                    ZControlKind.BREAK: zast.CallKind.BREAK,
+                    ZControlKind.CONTINUE: zast.CallKind.CONTINUE,
+                    ZControlKind.ERROR: zast.CallKind.ERROR,
+                    ZControlKind.PANIC: zast.CallKind.PANIC,
                 }
                 self.typing.expr_call_kind[expr.nodeid] = _CK_MAP.get(
                     t.control_kind, zast.CallKind.UNKNOWN
                 )
                 # flag enclosing do block if break targets it
-                if t.control_kind == ControlKind.BREAK and self._break_targets:
+                if t.control_kind == ZControlKind.BREAK and self._break_targets:
                     target = self._break_targets[-1]
                     if target is not None:
                         self.typing.do_has_break[target.nodeid] = True
@@ -7049,10 +7049,10 @@ class TypeChecker:
         None when the callable is NOT a control-flow primitive — the
         caller continues with the regular call dispatch."""
         ck = callee_type.control_kind
-        if ck == ControlKind.RETURN:
+        if ck == ZControlKind.RETURN:
             self.typing.call_kind[call.nodeid] = zast.CallKind.RETURN
             return self._check_return_call(call)
-        if ck == ControlKind.BREAK:
+        if ck == ZControlKind.BREAK:
             self.typing.call_kind[call.nodeid] = zast.CallKind.BREAK
             # flag enclosing do block if break targets it (not a for loop)
             if self._break_targets:
@@ -7060,10 +7060,10 @@ class TypeChecker:
                 if target is not None:
                     self.typing.do_has_break[target.nodeid] = True
             return callee_type
-        if ck == ControlKind.CONTINUE:
+        if ck == ZControlKind.CONTINUE:
             self.typing.call_kind[call.nodeid] = zast.CallKind.CONTINUE
             return callee_type
-        if ck == ControlKind.ERROR:
+        if ck == ZControlKind.ERROR:
             self.typing.call_kind[call.nodeid] = zast.CallKind.ERROR
             # type-check the message argument
             for arg in call.arguments:
@@ -7074,7 +7074,7 @@ class TypeChecker:
                 self._error(msg, loc=call.start)
             self.typing.node_type[call.nodeid] = callee_type
             return callee_type
-        if ck == ControlKind.PANIC:
+        if ck == ZControlKind.PANIC:
             self.typing.call_kind[call.nodeid] = zast.CallKind.PANIC
             # type-check the message argument; no compile-time
             # diagnostic (unlike error, panic is a pure runtime
@@ -9511,11 +9511,11 @@ class TypeChecker:
         if t_never:
             break_type = _make_type("break", ZTypeType.FUNCTION)
             break_type.return_type = t_never
-            break_type.control_kind = ControlKind.BREAK
+            break_type.control_kind = ZControlKind.BREAK
             self.symtab.define("break", break_type)
             continue_type = _make_type("continue", ZTypeType.FUNCTION)
             continue_type.return_type = t_never
-            continue_type.control_kind = ControlKind.CONTINUE
+            continue_type.control_kind = ZControlKind.CONTINUE
             self.symtab.define("continue", continue_type)
         # for loops mask do-block break targets (break binds to the for, not enclosing do)
         self._break_targets.append(None)

@@ -17,8 +17,8 @@ from ztypes import (
     ZType,
     ZTypeType,
     ZSubType,
-    BuiltinFunc,
-    ControlKind,
+    ZBuiltinFunc,
+    ZControlKind,
     parse_number,
     ZParamOwnership,
     ZOwnership,
@@ -693,7 +693,7 @@ class CEmitter:
 
         `ftype` is the function's ZType (when available at the call
         site) and carries `builtin_func` for header dispatch on
-        specific natives — see BuiltinFunc."""
+        specific natives — see ZBuiltinFunc."""
         # Splitter / linesiter iterator methods (Phase S3). Track
         # under the stringview natives set so the shared impl struct
         # + call function emit in the correct late slot.
@@ -787,7 +787,7 @@ class CEmitter:
                 self.needs_string = True  # memcmp / strchr live in string.h
                 self.needs_stringview_natives.add(name)
                 # parseF64 uses strtod + errno (ERANGE).
-                if ftype is not None and ftype.builtin_func == BuiltinFunc.PARSE_F64:
+                if ftype is not None and ftype.builtin_func == ZBuiltinFunc.PARSE_F64:
                     self.needs_io = True
             return
         if mangled.startswith("z_io_"):
@@ -818,7 +818,7 @@ class CEmitter:
                 "hostname",
             ):
                 self.needs_io = True
-            if ftype is not None and ftype.builtin_func == BuiltinFunc.ENV_NAMES:
+            if ftype is not None and ftype.builtin_func == ZBuiltinFunc.ENV_NAMES:
                 self.needs_string = True
 
     def _emit_callable_expr(self, call: zast.Call) -> str:
@@ -5500,11 +5500,11 @@ class CEmitter:
         _ck = _call_kind
         if _ck == zast.CallKind.UNKNOWN and self._node_ztype(call.callable):
             _ctrl = cast(ZType, self._node_ztype(call.callable)).control_kind
-            if _ctrl == ControlKind.RETURN:
+            if _ctrl == ZControlKind.RETURN:
                 _ck = zast.CallKind.RETURN
-            elif _ctrl == ControlKind.BREAK:
+            elif _ctrl == ZControlKind.BREAK:
                 _ck = zast.CallKind.BREAK
-            elif _ctrl == ControlKind.CONTINUE:
+            elif _ctrl == ZControlKind.CONTINUE:
                 _ck = zast.CallKind.CONTINUE
 
         if _ck == zast.CallKind.RETURN:
@@ -7565,7 +7565,7 @@ class CEmitter:
             method_ztype = self.typing.child_of(parent_type_dp, child)
             if (
                 method_ztype is not None
-                and method_ztype.builtin_func == BuiltinFunc.PARSE_F64
+                and method_ztype.builtin_func == ZBuiltinFunc.PARSE_F64
             ):
                 self.needs_io = True
             parent = self._emit_path_value(path.parent)
