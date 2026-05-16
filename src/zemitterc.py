@@ -518,9 +518,7 @@ class CEmitter:
         record/class fields, in particular, only carry the entry on
         the outer Expression).
 
-        F5.E.4.a: reads `Typing.node_type` directly. Pre-F5.E.4 this
-        routed through the typed mirror with a fallback to
-        `typed_program.node_types`; both paths read the same data."""
+        Reads `Typing.node_type` directly."""
         target = node
         while target.nodetype == NodeType.EXPRESSION:
             target = cast(zast.Expression, target).expression

@@ -18,13 +18,6 @@ Architecturally:
 in its own file so consumers can import it without depending on
 `ztypecheck`. Mirrors the `zast` / `zparser` split: data module
 separate from producer.
-
-`TypedProgramView` is a thin compat shim exposing a few `Typing`
-component tables under their legacy `typed_program.X` access path.
-Pre-F5.E.4.d this was the full structural typed-tree mirror in
-`ztypedast.py`; F5.E.4.d deleted that hierarchy and replaced it
-with this view object. The canonical access path is `typing.X`
-directly; `typed_program.X` survives only for the test corpus.
 """
 
 from dataclasses import dataclass, field
@@ -85,20 +78,6 @@ class TypeGenericArg:
 
 
 @dataclass
-class TypedProgramView:
-    """Thin compat namespace exposing legacy `typed_program.X` access
-    to a few `Typing` component tables. Each field aliases the
-    corresponding `Typing.X` dict (same object, not a copy)."""
-
-    node_types: Dict[int, "Optional[ZType]"]
-    expr_call_kinds: Dict[int, CallKind]
-    node_const_value: Dict[int, "int | float | bool | str"]
-    call_kind: Dict[int, CallKind]
-    dp_child_id: Dict[int, int]
-    atom_child_id: Dict[int, int]
-
-
-@dataclass
 class Typing:
     """Result of typechecking. See module docstring for context.
 
@@ -139,8 +118,6 @@ class Typing:
     # Phase-7c symbol table (scope/entry/variable hierarchy). Typed via
     # `SymbolTableProto` to keep `ztyping` decoupled from `zenv`.
     symbol_table: Optional[SymbolTableProto] = field(default=None, init=False)
-    # F5.E.4.d compat shim — see `TypedProgramView` docstring.
-    typed_program: Optional[TypedProgramView] = field(default=None, init=False)
 
     # ----- Component tables (F5.E.2: relocated from zast.Program).
 

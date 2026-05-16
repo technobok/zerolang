@@ -10241,18 +10241,6 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.Typing:
     tc.typing.resolved = dict(tc._resolved)
     tc.typing.symbol_table = tc.symtab
     tc.typing.unit_types_by_id = dict(tc.unit_types_by_id)
-    # `TypedProgramView` exposes a handful of `Typing` component
-    # tables under their legacy `typed_program.X` access path for
-    # compatibility with the codereview fields (no consumer in src/
-    # uses it after F5.E.4; one or two tests still do).
-    tc.typing.typed_program = ztyping.TypedProgramView(
-        node_types=tc.typing.node_type,
-        expr_call_kinds=tc.typing.expr_call_kind,
-        node_const_value=tc.typing.node_const_value,
-        call_kind=tc.typing.call_kind,
-        dp_child_id=tc.typing.dp_child_id,
-        atom_child_id=tc.typing.atom_child_id,
-    )
     return tc.typing
 
 

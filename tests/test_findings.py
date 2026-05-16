@@ -385,9 +385,9 @@ class TestFinding8FileIdConsistency:
 class TestFinding7CallKind:
     """Finding 7: type checker should classify calls with CallKind.
 
-    Step 6.8 of the typed-tree migration moved `call_kind` off the
-    parsed `zast.Call` and onto `TypedCall`. These tests now look up
-    each parsed call's typed counterpart via `program.typed_program`.
+    `call_kind` lives on the `Typing` component table; these tests
+    walk the parsed AST and filter to calls that have a `call_kind`
+    entry.
     """
 
     def _typed_calls(self, program, typing):
