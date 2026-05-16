@@ -12,6 +12,40 @@ descriptive error.
 
 Non-templated runtime fragments (z_string.inc, z_stringview.inc)
 go through zemitterc_runtime's `_load_runtime_fragment` instead.
+
+# Templated codegen surface (F7 / codereview20260428)
+
+Templated today (`src/runtime/*.c.tmpl`):
+
+| Template                   | Caller in `zemitterc.py`     | Subsystem                       |
+|----------------------------|------------------------------|---------------------------------|
+| `z_array.c.tmpl`           | `_emit_mono_array`           | fixed-size array                |
+| `z_str.c.tmpl`             | `_emit_mono_str`             | bounded string                  |
+| `z_List.c.tmpl`            | `_emit_mono_list`            | dynamic list                    |
+| `z_ListView.c.tmpl`        | `_emit_mono_listview`        | borrowed list view              |
+| `z_protocol_vtable.c.tmpl` | `_emit_protocol` /           | protocol vtable struct +        |
+|                            | `_emit_mono_protocol`        | instance wrapper + destroy      |
+
+Not yet templated (ad-hoc f-string emission in `zemitterc.py`):
+
+- **Protocol implementation wrappers + static vtable init**
+  (`_emit_protocol_impl`, `:2158-2242+`). Natural next target — same
+  per-method-mechanical shape as the vtable struct but more
+  bookkeeping (per-method wrapper functions plus the static init
+  block). Defer until a concrete need (e.g. ABI change requires
+  centralised audit).
+- **Map containers** (`_emit_mono_map`). Has key/value branching
+  on string vs reftype that doesn't fit the
+  pure-placeholder model; would need either conditional sections
+  in the template format (new feature) or multiple variant
+  templates.
+- **`meta.create` + user constructors** (`_emit_create_functions`).
+  Tightly integrated with caller; not a standalone subsystem.
+
+Adding a new template is just:
+  1. Write `src/runtime/<name>.c.tmpl` using `@@PLACEHOLDER@@`.
+  2. Call `ztmpl.apply("<name>.c.tmpl", {...})` from the emitter.
+  3. Add a smoke test in `tests/test_runtime_templates.py`.
 """
 
 import os
