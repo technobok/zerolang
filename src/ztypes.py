@@ -417,7 +417,7 @@ class ZEntry:
 
 
 @dataclass
-class ExprResult:
+class ZExprResult:
     """Result of checking an expression: the resolved type plus any
     borrow/private intent that the enclosing assignment should consume.
 
@@ -437,7 +437,7 @@ class ZVariable:
     ZVariable - per-binding ownership info, attached to ZEntry.var for
     named runtime bindings (parameters, locals, with-bindings, for-loop
     iterators, synth temps). Expression-level results are carried on
-    ExprResult, not here.
+    ZExprResult, not here.
 
     Lock state is tracked via ZEntry.lock in the scope chain, not here.
     """

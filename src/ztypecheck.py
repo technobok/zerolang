@@ -27,7 +27,7 @@ from ztypes import (
     ZLockHolderKind,
     ControlKind,
     BuiltinFunc,
-    ExprResult,
+    ZExprResult,
     NUMERIC_RANGES,
     parse_number,
 )
@@ -461,11 +461,11 @@ class TypeChecker:
 
         # pending borrow lock: set by deep methods (.borrow, .lock, .stringview,
         # protocol paths), captured and cleared by _check_expression into
-        # ExprResult.borrow_target so it cannot leak between statements. Stored
+        # ZExprResult.borrow_target so it cannot leak between statements. Stored
         # as the addressable path tuple `(root, f1, f2, ...)`.
         self._pending_borrow_lock: Optional[Tuple[str, ...]] = None
         # pending private access: set by .private, captured and cleared by
-        # _check_expression into ExprResult.private_access.
+        # _check_expression into ZExprResult.private_access.
         self._pending_private_access: bool = False
 
         # call-identity stack: pushed in _check_call before arg/receiver
@@ -6177,11 +6177,11 @@ class TypeChecker:
         if target_path:
             self._check_not_locked(target_path, f"Cannot swap {side} operand", loc)
 
-    def _check_expression(self, expr: zast.Expression) -> ExprResult:
+    def _check_expression(self, expr: zast.Expression) -> ZExprResult:
         inner = expr.expression
         t: Optional[ZType] = None
         # borrow_target / private_access flow back from the inner CALL or
-        # OPERATION through their ExprResult; other branches don't carry
+        # OPERATION through their ZExprResult; other branches don't carry
         # borrow intent.
         borrow_target: Optional[Tuple[str, ...]] = None
         private_access: bool = False
@@ -6323,15 +6323,15 @@ class TypeChecker:
                 self.typing.expr_call_kind[expr.nodeid] = self.typing.call_kind.get(
                     inner.nodeid, zast.CallKind.UNKNOWN
                 )
-        return ExprResult(t, borrow_target, private_access)
+        return ZExprResult(t, borrow_target, private_access)
 
-    def _check_operation(self, op: zast.Operation) -> ExprResult:
-        """Type-check an operation. Returns an ExprResult carrying the
+    def _check_operation(self, op: zast.Operation) -> ZExprResult:
+        """Type-check an operation. Returns an ZExprResult carrying the
         resolved ztype plus any borrow_target / private_access intent
         that the inner call or path resolution stamped. The CALL branch
-        receives the intent via _check_call's ExprResult; the BINOP /
+        receives the intent via _check_call's ZExprResult; the BINOP /
         PATH branches still rely on the legacy _pending_* side-channel
-        (cleared at this boundary) until F5.A.3 pushes ExprResult
+        (cleared at this boundary) until F5.A.3 pushes ZExprResult
         through _check_path / _check_dotted_path / _check_atomid.
         """
         t: Optional[ZType] = None
@@ -6375,11 +6375,11 @@ class TypeChecker:
                     loc=op.start,
                 )
                 t = None
-        return ExprResult(t, borrow_target, private_access)
+        return ZExprResult(t, borrow_target, private_access)
 
     def _check_path(
         self, path: zast.Path, coerce_method_to_return: bool = True
-    ) -> ExprResult:
+    ) -> ZExprResult:
         """Type-check a path expression. When `coerce_method_to_return` is
         True (the default for value-position uses), a dotted path naming a
         no-user-arg method auto-calls — its type is the method's return
@@ -6387,7 +6387,7 @@ class TypeChecker:
         (`container.slice c: c`) see the function type and dispatch
         normally instead of falling into construction-of-return-type.
 
-        Returns an ExprResult carrying the resolved ztype plus any
+        Returns an ZExprResult carrying the resolved ztype plus any
         borrow_target / private_access intent that the legacy `_pending_*`
         side-channel was set to during resolution. Captures and clears
         those flags at the boundary so callers consume intent via the
@@ -6420,7 +6420,7 @@ class TypeChecker:
         private_access = self._pending_private_access
         self._pending_borrow_lock = None
         self._pending_private_access = False
-        return ExprResult(t, borrow_target, private_access)
+        return ZExprResult(t, borrow_target, private_access)
 
     def _method_has_no_user_args(self, method: ZType) -> bool:
         """True if the method has no required user-visible parameters
@@ -6969,7 +6969,7 @@ class TypeChecker:
         )
         return None
 
-    def _check_call(self, call: zast.Call) -> ExprResult:
+    def _check_call(self, call: zast.Call) -> ZExprResult:
         """Type-check a call. Thin wrapper that builds the typed-tree
         mirror after the resolution body has populated `self.typing.node_type.get(call.nodeid)`,
         `self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)`, `self.typing.call_callable_type_name.get(call.nodeid)`, and the per-argument
@@ -6981,7 +6981,7 @@ class TypeChecker:
         private_access = self._pending_private_access
         self._pending_borrow_lock = None
         self._pending_private_access = False
-        return ExprResult(t, borrow_target, private_access)
+        return ZExprResult(t, borrow_target, private_access)
 
     def _check_call_inner(self, call: zast.Call) -> Optional[ZType]:
         # Resolve the callable as the function type itself, not its
