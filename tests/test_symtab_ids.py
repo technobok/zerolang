@@ -202,9 +202,7 @@ main: function is {
             "WHERE excluded = 0 AND type_id IS NOT NULL"
         ).fetchone()[0]
         assert n_narrow > 0, "match arms should produce narrowed_subtype rows"
-        assert n_narrow == n_narrow_id, (
-            "every narrowed-to row must carry a type_id"
-        )
+        assert n_narrow == n_narrow_id, "every narrowed-to row must carry a type_id"
 
     def test_scopes_kind_values_expected(self):
         src = """

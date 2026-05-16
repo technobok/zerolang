@@ -498,15 +498,39 @@ in-memory shape because that shape is not yet table-flat:
   depends on the emitter's traversal order, not on a stable model.
 
 Action items:
-- [ ] After F2's `Program` cleanup, drop the `getattr` defaults from
-      the dumper.
-- [ ] Replace `_history + _scopes` dual-walk with an append-only
-      `scope_log` in `SymbolTable`.
-- [ ] Move `excluded_subtypes` from CSV to a child table.
-- [ ] Replace the `zip` at `:424` with `zip(..., strict=True)` and
+- [x] After F2's `Program` cleanup, drop the `getattr` defaults from
+      the dumper. *(Resolved under F2/C — typed `node_children()` /
+      `node_tokens()` helpers replaced reflection-based field probing
+      in `zsqldump.py`. Zero `getattr` calls remain in the dumper.)*
+- [x] Replace `_history + _scopes` dual-walk with an append-only
+      `scope_log` in `SymbolTable`. *(F6 commit `933467e` —
+      `ScopeLogRow` dataclass in `zenv.py` with parent_id +
+      opened_at_seq + closed_at_seq; SymbolTable mints rows on each
+      push and stamps closed_at_seq on pop. `zsqldump.py` iterates
+      `symtab.scope_log` directly; the protocol surface in
+      `zsymtab_proto.py` flipped from `_scopes`/`_history` to
+      `scope_log`. `_history` retirement deferred — orthogonal
+      cleanup.)*
+- [x] Move `excluded_subtypes` from CSV to a child table. *(F6
+      commit `afe685d` — `narrowed_subtype(entry_id, name, type_id,
+      excluded)` table; one row per narrowed-to (excluded=0) or
+      excluded subtype (excluded=1). Removed four CSV/scalar
+      columns from `entry`. In-memory `Entry.narrowed_subtype` /
+      `excluded_subtypes` fields unchanged — typecheck hot path
+      untouched.)*
+- [x] Replace the `zip` at `:424` with `zip(..., strict=True)` and
       assert pre-emission that `len(source_map) == c_lines`.
-- [ ] Build `node_id → emitted_line` index after emission completes;
+      *(Resolved under F13 commit `59ef5eb` — pre-assert at
+      `:481-484` validates length first; `strict=True` on zip at
+      `:485` as belt-to-the-braces.)*
+- [x] Build `node_id → emitted_line` index after emission completes;
       have the dumper read from the index, not from emit-time hooks.
+      *(Spirit met: `source_map` is built post-emission in
+      `zemitterc._build_source_map` via text search over tracked
+      sections, not via emit-time hook callbacks; the dumper at
+      `zsqldump.py:485` reads from a stable list. Index direction
+      is line→node (not node→line) — no consumer wants the
+      inverted shape, so closed as-is.)*
 
 ### F7. `zemitterc_templates.py` underused — Low (goals 1, 2)
 
@@ -832,8 +856,15 @@ Larger refactors; do in order.
        dump (basis for F6's per-table dump rework) — is achieved;
        the line count is the cost of materialising an accessor API
        where dict syntax used to suffice.)*
-6. [ ] F6 — `zsqldump.py` table-flat shape (scope_log,
+6. [x] F6 — `zsqldump.py` table-flat shape (scope_log,
        narrowed_subtype child table, source_map index).
+       *(Closed 2026-05-16. Items 1 and 4 resolved under F2/C and
+       F13 respectively; item 5 satisfied by `_build_source_map`'s
+       post-emission text-search approach. Items 2 and 3 landed
+       fresh: `933467e` (scope_log on SymbolTable),
+       `afe685d` (narrowed_subtype child table). The dumper no
+       longer adapts in-memory shape — it reads single-source-of-
+       truth tables directly.)*
 7. [x] F1 — IO-wrapper natives as a data table (resolved 2026-04-28;
        nodeid-keyed variant deferred to F4).
 8. [ ] F7 — pick one subsystem (recommend vtable emission) as the
