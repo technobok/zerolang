@@ -192,15 +192,18 @@ main: function is {
         assert n_entries > 0, "expected at least one entry row"
         assert n_vars > 0, "expected at least one variable row"
 
+        # F6: narrowing state lives in the narrowed_subtype child
+        # table, one row per narrowed-to or excluded subtype.
         n_narrow = con.execute(
-            "SELECT COUNT(*) FROM entry WHERE narrowed_subtype IS NOT NULL"
+            "SELECT COUNT(*) FROM narrowed_subtype WHERE excluded = 0"
         ).fetchone()[0]
         n_narrow_id = con.execute(
-            "SELECT COUNT(*) FROM entry WHERE narrowed_subtype_id IS NOT NULL"
+            "SELECT COUNT(*) FROM narrowed_subtype "
+            "WHERE excluded = 0 AND type_id IS NOT NULL"
         ).fetchone()[0]
-        assert n_narrow > 0, "match arms should have narrowed entries"
+        assert n_narrow > 0, "match arms should produce narrowed_subtype rows"
         assert n_narrow == n_narrow_id, (
-            "every narrowed entry must carry a narrowed_subtype_id"
+            "every narrowed-to row must carry a type_id"
         )
 
     def test_scopes_kind_values_expected(self):

@@ -190,15 +190,22 @@ CREATE TABLE IF NOT EXISTS entry (
     ztype_id              INTEGER NOT NULL REFERENCES types(type_id),
     is_definition         BOOLEAN NOT NULL,
     variable_id           INTEGER REFERENCES variable(variable_id),
-    narrowed_subtype      TEXT,
-    narrowed_subtype_id   INTEGER,
-    excluded_subtypes     TEXT,
-    excluded_subtype_ids  TEXT,
     original_ztype_id     INTEGER REFERENCES types(type_id),
     is_taken              BOOLEAN NOT NULL,
     taken_at_line         INTEGER,
     taken_at_col          INTEGER,
     taken_at_file         INTEGER
+);
+
+-- F6: per-entry narrowing state. Replaces the four CSV/scalar
+-- columns (narrowed_subtype{,_id}, excluded_subtypes{,_ids}) that
+-- lived on entry pre-2026-05. One row per narrowed-to or excluded
+-- subtype. Singular table name per CLAUDE.md.
+CREATE TABLE IF NOT EXISTS narrowed_subtype (
+    entry_id  INTEGER NOT NULL REFERENCES entry(entry_id),
+    name      TEXT NOT NULL,
+    type_id   INTEGER,
+    excluded  INTEGER NOT NULL  -- 0 = narrowed-to, 1 = excluded
 );
 """
 
@@ -441,15 +448,6 @@ def dump_sql(
                     if entry.original_ztype is not None
                     else "NULL"
                 )
-                ns_id_sql = _sql_int(entry.narrowed_subtype_id)
-                exs = entry.excluded_subtypes
-                exs_sql = _sql_str(",".join(sorted(exs))) if exs else "NULL"
-                exs_ids = entry.excluded_subtype_ids
-                exs_ids_sql = (
-                    _sql_str(",".join(str(i) for i in sorted(exs_ids)))
-                    if exs_ids
-                    else "NULL"
-                )
                 taken_line = _sql_int(entry.taken_at[0]) if entry.taken_at else "NULL"
                 taken_col = _sql_int(entry.taken_at[1]) if entry.taken_at else "NULL"
                 taken_file = _sql_int(entry.taken_at[2]) if entry.taken_at else "NULL"
@@ -458,11 +456,36 @@ def dump_sql(
                     f"{entry.entry_id}, {scope.scope_id}, {pos}, "
                     f"{_sql_str(entry.name)}, {entry.ztype.nodeid}, "
                     f"{_sql_bool(entry.is_definition)}, {var_id_sql}, "
-                    f"{_sql_str(entry.narrowed_subtype)}, {ns_id_sql}, "
-                    f"{exs_sql}, {exs_ids_sql}, {orig_id_sql}, "
+                    f"{orig_id_sql}, "
                     f"{_sql_bool(entry.is_taken)}, "
                     f"{taken_line}, {taken_col}, {taken_file});"
                 )
+                # F6: per-entry narrowing as child rows. One row for
+                # the narrowed-to subtype (excluded=0) when present;
+                # one row per excluded subtype (excluded=1).
+                if entry.narrowed_subtype is not None:
+                    lines.append(
+                        f"INSERT INTO narrowed_subtype VALUES ("
+                        f"{entry.entry_id}, "
+                        f"{_sql_str(entry.narrowed_subtype)}, "
+                        f"{_sql_int(entry.narrowed_subtype_id)}, 0);"
+                    )
+                exs = entry.excluded_subtypes
+                exs_ids = entry.excluded_subtype_ids
+                if exs:
+                    ids_by_name: dict[str, Optional[int]] = {}
+                    if exs_ids is not None and len(exs) == len(exs_ids):
+                        # ids_by_name keyed by name iff cardinalities
+                        # match — same shape the old CSV pair assumed.
+                        for nm, tid in zip(sorted(exs), sorted(exs_ids)):
+                            ids_by_name[nm] = tid
+                    for nm in sorted(exs):
+                        tid_sql = _sql_int(ids_by_name.get(nm))
+                        lines.append(
+                            f"INSERT INTO narrowed_subtype VALUES ("
+                            f"{entry.entry_id}, {_sql_str(nm)}, "
+                            f"{tid_sql}, 1);"
+                        )
         for vid, var in seen_vars.items():
             lines.append(
                 f"INSERT OR IGNORE INTO variable VALUES ("
