@@ -419,14 +419,24 @@ Save/restore at function-body boundaries becomes a single
 self.func_ctx = prev` block per record, instead of N parallel
 prologues.
 
-Action items:
-- [ ] Define the five dataclasses above.
-- [ ] Move attributes off `TypeChecker` onto the records, one record
-      at a time.
-- [ ] Replace each save/restore prologue site (start at
+Action items (see plan-list at line 667 for landed-commit citations):
+- [~] Define the five dataclasses above. *(3 of 5 landed: MonoState
+      `fb8360a`, FunctionContext `1224b59`, TemplateIds `3ec7802`.
+      BorrowState substituted with scope-containment via
+      `ExprResult.borrow_target` — F5.A `4e4ba47`/`ebf9638`/`909267d`.
+      ResolverState explicitly deferred — `unit_types` / `_resolved` /
+      `_resolved_file_units` are publicly named on `TypeChecker` and
+      read by ~100 test sites; cosmetic gain doesn't justify churn.)*
+- [x] Move attributes off `TypeChecker` onto the records, one record
+      at a time. *(Done for the three landed records: 8/5/3 fields
+      respectively; 59/63/9 access rebases.)*
+- [x] Replace each save/restore prologue site (start at
       `src/ztypecheck.py:5437-5483`) with a single record swap.
-- [ ] Each record has stable `*_id` fields where applicable, so
+      *(Done for FunctionContext at function-body boundaries.)*
+- [x] Each record has stable `*_id` fields where applicable, so
       `zsqldump.py` can dump them as one row each (links to F6).
+      *(F5.H landed flat `type_child` / `type_generic_arg` tables;
+      remaining row-shape work for the three records folds into F6.)*
 
 ### F6. `zsqldump.py` exposes the in-memory shape — Med (goals 5, 6)
 
@@ -635,7 +645,7 @@ Independent, low-risk; can be done in any order or in parallel.
 
 - [x] F8 — replace `copy.deepcopy(func)` with explicit clone visitor. *(Resolved 7bb5020.)*
 - [x] F9 — replace last `isinstance`; drop lint baseline 1 → 0. *(Resolved incidentally in `32c779a`.)*
-- [ ] F10 — close out the four `TODO` comments.
+- [x] F10 — close out the four `TODO` comments. *(Resolved; see section F10 for per-TODO citations.)*
 - [x] F11 — `zsynth.py` visitor → `Dict[NodeType, Callable]`. *(Resolved incidentally in `366d0d6`.)*
 - [x] F13 — `_filtereol` accessor, "undercores" typo,
       `zip(..., strict=True)` in `zsqldump.py`. *(Resolved 59ef5eb; remaining items in F13 — `malloc` NULL checks blocked on libzrt.a, examples-coverage audit — out of Phase 1 scope.)*
