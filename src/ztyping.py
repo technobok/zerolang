@@ -26,7 +26,7 @@ from typing import Dict, List, Optional, Tuple
 import zast
 from ztypes import ZType, ZOwnership, ZParamOwnership
 from zast import CallKind
-from zsymtab_proto import SymbolTableProto
+from zsymtab_proto import ZSymbolTableProto
 
 
 @dataclass
@@ -116,8 +116,8 @@ class Typing:
     # Unit AST nodeid → resolved unit ZType (Phase 7d).
     unit_types_by_id: Dict[int, ZType] = field(default_factory=dict, init=False)
     # Phase-7c symbol table (scope/entry/variable hierarchy). Typed via
-    # `SymbolTableProto` to keep `ztyping` decoupled from `zenv`.
-    symbol_table: Optional[SymbolTableProto] = field(default=None, init=False)
+    # `ZSymbolTableProto` to keep `ztyping` decoupled from `zenv`.
+    symbol_table: Optional[ZSymbolTableProto] = field(default=None, init=False)
 
     # ----- Component tables (F5.E.2: relocated from zast.Program).
 

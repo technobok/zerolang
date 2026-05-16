@@ -2233,7 +2233,7 @@ class TestZLockInfo:
         assert e.holder == h
 
 
-class TestSymbolTableLocking:
+class TestZSymbolTableLocking:
     """Test lock operations on the symbol table."""
 
     @staticmethod
@@ -2245,10 +2245,10 @@ class TestSymbolTableLocking:
         return ZLockHolder(ZLockHolderKind.VAR, n)
 
     def _make_symtab_with_vars(self, *names):
-        from zenv import SymbolTable
+        from zenv import ZSymbolTable
         from ztypes import ZType
 
-        st = SymbolTable()
+        st = ZSymbolTable()
         st.push("test")
         t = ZType(name="myclass", typetype=ZTypeType.UNION, parent=None)
         t.is_valtype = False
@@ -2619,7 +2619,7 @@ class TestLockEnforcement:
 
     def test_mutation_ok_after_view_scope_exit(self):
         """After a view in an inner bare block exits, the outer source is
-        mutable. (Fix B: SymbolTable.pop calls release_held_locks.)"""
+        mutable. (Fix B: ZSymbolTable.pop calls release_held_locks.)"""
         check_ok(
             "main: function is {\n"
             '  s: "hello".string\n'

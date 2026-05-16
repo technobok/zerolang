@@ -12,7 +12,7 @@ import zast
 import ztyping
 from zast import ERR, NodeType, clone_function
 from zlexer import Token
-from zenv import SymbolTable
+from zenv import ZSymbolTable
 from zsynth import FreshNamer, make_assignment, make_atom_id, register_synth_var
 import zasthash
 from ztypes import (
@@ -430,7 +430,7 @@ class TypeChecker:
         # exists for callers and for incremental migration.
         self.typing = ztyping.Typing(parsed=program)
         self.errors: List[zast.Error] = []
-        self.symtab = SymbolTable(typing=self.typing)
+        self.symtab = ZSymbolTable(typing=self.typing)
 
         # well-known types (only null/never are standalone — others come from system.z)
         self.t_null = _make_type("null", ZTypeType.NULL)
@@ -509,7 +509,7 @@ class TypeChecker:
         # full set and per-table documentation.
 
         # flow typing is now tracked via scope-based narrowing entries
-        # (TypeState removed — narrowing lives in Scope.entries)
+        # (TypeState removed — narrowing lives in ZScope.entries)
 
         # compile-time error suppression: when > 0, error() calls do not
         # emit compile-time errors (used inside constant-false if branches)

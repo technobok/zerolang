@@ -417,7 +417,7 @@ def dump_sql(
 
     # Stage 6a: symbol table — scopes, variables, entries. Iterates
     # `symtab.scope_log` (F6: append-only single source of truth for
-    # scope order). Each row carries the live Scope reference so
+    # scope order). Each row carries the live ZScope reference so
     # entries/unreachable read off the row without a lookup. The
     # dumper tolerates a missing symbol_table (e.g. when called
     # without running typecheck): simply emits no rows for the

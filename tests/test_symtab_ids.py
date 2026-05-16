@@ -1,5 +1,5 @@
 """
-Phase 7c: ZEntry/Variable/Scope id surfaces + SQL dump for the symbol table.
+Phase 7c: ZEntry/ZVariable/ZScope id surfaces + SQL dump for the symbol table.
 """
 
 import os
@@ -13,7 +13,7 @@ from ztypecheck import typecheck
 from zsqldump import dump_sql
 from ztypes import ZEntry, ZType, ZTypeType, ZOwnership, ZVariable
 from ztyping import Typing
-from zenv import SymbolTable
+from zenv import ZSymbolTable
 
 
 def _empty_typing() -> Typing:
@@ -72,7 +72,7 @@ class TestNarrowStampsIds:
         typing = _empty_typing()
         typing.set_child(outer, "ok", ok)
 
-        st = SymbolTable(typing=typing)
+        st = ZSymbolTable(typing=typing)
         st.push("main")
         v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED)
         st.define_var("r", v)
@@ -93,7 +93,7 @@ class TestNarrowStampsIds:
         typing.set_child(outer, "err", _make_ztype("err_payload", ZTypeType.RECORD))
         typing.set_child(outer, "none", _make_ztype("none", ZTypeType.NULL))
 
-        st = SymbolTable(typing=typing)
+        st = ZSymbolTable(typing=typing)
         st.push("main")
         v = ZVariable(ztype=outer, ownership=ZOwnership.OWNED)
         st.define_var("r", v)
@@ -111,7 +111,7 @@ class TestNarrowStampsIds:
 
 class TestScopeHistory:
     def test_popped_scopes_archived(self):
-        st = SymbolTable()
+        st = ZSymbolTable()
         marker = st.push_block("outer")
         inner = st.push("inner")
         assert inner.scope_id in {s.scope_id for s in st._scopes}
@@ -127,7 +127,7 @@ class TestScopeLog:
     def test_log_captures_push_pop_with_parent_and_seq(self):
         # F6: scope_log records each push and stamps closed_at_seq on pop,
         # so the SQL dump can reconstruct the full history from one table.
-        st = SymbolTable()
+        st = ZSymbolTable()
         outer_marker = st.push_block("outer")
         st.push("inner")
         st.pop()  # close inner
@@ -153,7 +153,7 @@ class TestScopeLog:
         # While _history is still maintained, every scope_log row with a
         # closed_at_seq has a matching archived scope. (When _history is
         # retired, this test goes away.)
-        st = SymbolTable()
+        st = ZSymbolTable()
         marker = st.push_block("outer")
         inner = st.push("inner")
         st.pop_to(marker)

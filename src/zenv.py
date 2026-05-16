@@ -21,8 +21,8 @@ from ztypes import (
 
 
 @dataclass
-class ScopeLogRow:
-    """One row of the append-only scope log on SymbolTable.
+class ZScopeLogRow:
+    """One row of the append-only scope log on ZSymbolTable.
 
     Captures each push/pop pair so the SQL dump can reconstruct the
     full scope history (including parent/child hierarchy and open/close
@@ -32,7 +32,7 @@ class ScopeLogRow:
     `closed_at_seq` is None until the scope is popped. `parent_id` is
     the `scope_id` of the scope that was at the top of the stack when
     this scope was pushed (None for the root). `scope` is the live
-    Scope object (same identity as the one in `_scopes` or `_history`)
+    ZScope object (same identity as the one in `_scopes` or `_history`)
     so consumers can read `entries` and `unreachable` without a
     second lookup.
     """
@@ -42,7 +42,7 @@ class ScopeLogRow:
     kind: ZScopeKind
     name: str
     opened_at_seq: int
-    scope: "Scope"
+    scope: "ZScope"
     closed_at_seq: Optional[int] = None
 
 
@@ -96,7 +96,7 @@ def _format_path(path: Tuple[str, ...]) -> str:
     return ".".join(path) if path else "<unknown>"
 
 
-class Scope:
+class ZScope:
     """
     A single scope level in the symbol table.
     Entries are stored in a list (not a dict) for simplicity and cache locality.
@@ -122,9 +122,9 @@ class Scope:
         self.entries.append(entry)
 
 
-class SymbolTable:
+class ZSymbolTable:
     """
-    Scoped symbol table — a stack of Scope frames.
+    Scoped symbol table — a stack of ZScope frames.
     Lookup searches from innermost scope to outermost.
 
     Three scope kinds:
@@ -134,17 +134,17 @@ class SymbolTable:
     """
 
     def __init__(self, typing: "Optional[Any]" = None) -> None:
-        self._scopes: List[Scope] = []
+        self._scopes: List[ZScope] = []
         # Phase 7c: archive of popped scopes, in pop order. The SQL dumper
         # reads this plus `_scopes` to reconstruct the full scope history.
         # Popped scopes keep their entries/scope_id so an id-based dump is
         # deterministic across runs.
-        self._history: List[Scope] = []
+        self._history: List[ZScope] = []
         # F6: append-only scope log — one row per push, stamped with
         # close_at_seq on pop. Carries parent_id for explicit hierarchy.
         # The SQL dumper reads scope_log alone; the dual-walk over
         # _history + _scopes is gone.
-        self.scope_log: List[ScopeLogRow] = []
+        self.scope_log: List[ZScopeLogRow] = []
         self._seq_counter: int = 0
         # F5.H.5: bound `Typing` for narrowing/exclude lookups that need
         # to read the flat type_child table. Typed Any to keep zenv free
@@ -152,14 +152,14 @@ class SymbolTable:
         # pass a real Typing.
         self._typing: "Any" = typing
 
-    def _log_push(self, scope: Scope) -> None:
+    def _log_push(self, scope: ZScope) -> None:
         """Append a scope_log row for a freshly-pushed scope.
 
         Must be called after the scope is appended to _scopes so
         parent_id reads the *previous* top (the actual parent)."""
         parent_id = self._scopes[-2].scope_id if len(self._scopes) >= 2 else None
         self.scope_log.append(
-            ScopeLogRow(
+            ZScopeLogRow(
                 scope_id=scope.scope_id,
                 parent_id=parent_id,
                 kind=scope.kind,
@@ -170,7 +170,7 @@ class SymbolTable:
         )
         self._seq_counter += 1
 
-    def _log_pop(self, scope: Scope) -> None:
+    def _log_pop(self, scope: ZScope) -> None:
         """Stamp closed_at_seq on the scope's log row.
 
         Walks scope_log from the tail; the matching row is typically
@@ -183,9 +183,9 @@ class SymbolTable:
 
     # ---- scope management ----
 
-    def push(self, name: str) -> Scope:
+    def push(self, name: str) -> ZScope:
         """Push a block scope. Returns the scope (marker is self.depth - 1)."""
-        scope = Scope(name, ZScopeKind.BLOCK)
+        scope = ZScope(name, ZScopeKind.BLOCK)
         self._scopes.append(scope)
         self._log_push(scope)
         return scope
@@ -193,14 +193,14 @@ class SymbolTable:
     def push_block(self, name: str) -> int:
         """Push a block scope. Returns the marker for pop_to."""
         marker = len(self._scopes)
-        scope = Scope(name, ZScopeKind.BLOCK)
+        scope = ZScope(name, ZScopeKind.BLOCK)
         self._scopes.append(scope)
         self._log_push(scope)
         return marker
 
-    def push_overlay(self) -> Scope:
+    def push_overlay(self) -> ZScope:
         """Push an overlay scope for per-statement state changes."""
-        scope = Scope("", ZScopeKind.OVERLAY)
+        scope = ZScope("", ZScopeKind.OVERLAY)
         self._scopes.append(scope)
         self._log_push(scope)
         return scope
@@ -208,12 +208,12 @@ class SymbolTable:
     def push_call(self) -> int:
         """Push a call scope for call-scoped locking. Returns marker for pop_to."""
         marker = len(self._scopes)
-        scope = Scope("", ZScopeKind.CALL)
+        scope = ZScope("", ZScopeKind.CALL)
         self._scopes.append(scope)
         self._log_push(scope)
         return marker
 
-    def pop(self) -> Scope:
+    def pop(self) -> ZScope:
         """Pop the topmost scope. Lock entries vanish naturally with the scope.
         Taken entries are merged into the parent so errors persist."""
         top = self._scopes[-1]
