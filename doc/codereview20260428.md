@@ -658,13 +658,46 @@ current state:
   but typecheck is in `ztypecheck.py`.
 
 Action items:
-- [ ] Pass over `doc/compiler.pdoc` against current implementation;
+- [x] Pass over `doc/compiler.pdoc` against current implementation;
       add sections for monomorphization, demand-driven resolution,
-      lock checking, and ownership.
-- [ ] Mark resolved items in `doc/Design-OPEN.pdoc`.
-- [ ] Verify `doc/roadmap.pdoc` reflects current phase status.
-- [ ] Fix `zparser.py:271-272` docstring.
-- [ ] After F2 lands, tighten the `zemitterc.py:1585-1626` docstring.
+      lock checking, and ownership. *(Verified 2026-05-16:
+      compiler.pdoc has been kept current. All four flagged
+      sections are present — "Demand-Driven Resolution"
+      (`:142`), "Monomorphization" (`:150`), "Ownership and
+      Lifetime" (`:188`), "Lock Checking" (`:236`). No `xxx`
+      placeholders, no `deferred to v2` markers. No edits
+      needed.)*
+- [x] Mark resolved items in `doc/Design-OPEN.pdoc`. *(Commit at
+      F12 close-out — added a status preamble plus inline
+      `#+ RESOLVED:` markers on 11 sections that have landed:
+      function dedup, match-subtype dissect, `is`/`as` clauses,
+      public/private, compiler-generated methods, type alias vs
+      new type, what-can-be-generic, generic protocol, meta
+      namespace (partial — only `meta.create`), ownership/
+      give-take, and how-to-typecheck. Open/think sections left
+      unmarked.)*
+- [x] Verify `doc/roadmap.pdoc` reflects current phase status.
+      *(Verified 2026-05-16: the "Implemented (originally
+      deferred)" block at `:65-82` already lists classes /
+      unions / variants / protocols / facets / generics /
+      typedefs / ownership / lock-checking / os / cli as done;
+      "Still Deferred" (`:83-88`) accurately holds generators /
+      compile-time eval / type coercion. One bookkeeping fix:
+      a duplicate "Phase 48" header at line 2557 was renumbered
+      to Phase 52 — the prior Phase 48 (Implicit return) was
+      already complete and the v2 String Redesign work was
+      appended without a fresh number.)*
+- [x] Fix `zparser.py:271-272` docstring. *(Resolved under F10
+      TODO sweep — current docstring at `:266-274` documents the
+      Parser constructor accurately. No "pass2 is self.typecheck"
+      claim remains.)*
+- [x] After F2 lands, tighten the `zemitterc.py:1585-1626`
+      docstring. *(Verified 2026-05-16: line numbers have
+      shifted; the relevant docstrings are now
+      `_ast_uses_io_names` at `:1655-1657` and `_walk_children`
+      at `:1694-1697`. Both claim "no isinstance / try-except"
+      and "no isinstance / getattr probing" respectively —
+      claims are accurate post-F2. No edits needed.)*
 
 ### F13. Carry-forward audit from `codereview20260322.md` — Low (goal 6) \[Phase 1 RESOLVED\]
 
@@ -889,8 +922,16 @@ Larger refactors; do in order.
 
 Can run in parallel with Phase 3.
 
-9. [ ] F12 — `compiler.pdoc`, `roadmap.pdoc`, `Design-OPEN.pdoc`,
+9. [x] F12 — `compiler.pdoc`, `roadmap.pdoc`, `Design-OPEN.pdoc`,
        `zparser.py:271-272`, `zemitterc.py:1585-1626` docstring.
+       *(Closed 2026-05-16. `compiler.pdoc` and `roadmap.pdoc`
+       had been kept current — verified the flagged drift items
+       are addressed (sections present, no `xxx` placeholders,
+       phase-completion markers accurate). `Design-OPEN.pdoc`
+       got a status preamble + 11 inline `#+ RESOLVED:` markers
+       for landed proposals. `zparser.py` docstring already
+       rewritten under F10. `zemitterc.py` docstring claims
+       verified accurate post-F2.)*
 
 ---
 
