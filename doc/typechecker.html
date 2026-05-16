@@ -91,13 +91,13 @@ Table of Contents</div>
 </li>
 <li><a href="#zvariable-per-binding-ownership-carrier">ZVariable -- per-binding ownership carrier</a>
 </li>
-<li><a href="#entry-a-scope-binding">Entry -- a scope binding</a>
+<li><a href="#zentry-a-scope-binding">ZEntry -- a scope binding</a>
 </li>
-<li><a href="#exprresult-the-result-of-checking-an-expression">ExprResult -- the result of checking an expression</a>
+<li><a href="#zexprresult-the-result-of-checking-an-expression">ZExprResult -- the result of checking an expression</a>
 </li>
-<li><a href="#typing-the-typecheck-output-container">Typing -- the typecheck-output container</a>
+<li><a href="#ztyping-the-typecheck-output-container">ZTyping -- the typecheck-output container</a>
 </li>
-<li><a href="#symboltable-and-scope">SymbolTable and Scope</a>
+<li><a href="#zsymboltable-and-zscope">ZSymbolTable and ZScope</a>
 </li>
 </ul>
 </li>
@@ -161,15 +161,15 @@ section of <code>compiler.pdoc</code>.</p>
 <p>The typechecker sits between the parser and the C emitter:</p>
 <pre><code class="language-text">  zast.Program  (frozen post-parse)
       &#x2193;   TypeChecker(program).check()
-  ztyping.Typing  (mutable, holds all typecheck output)
+  ztyping.ZTyping  (mutable, holds all typecheck output)
       &#x2193;
   CEmitter / zsqldump / zasthash</code></pre>
 <p>The parser hands the typechecker a <code>zast.Program</code> -- an immutable
 tree of <code>Node</code> subclasses, each with a monotonic <code>nodeid</code>. The
 typechecker does not mutate AST nodes; instead it writes its results
-into a single mutable container, <code>ztyping.Typing</code>, keyed by
+into a single mutable container, <code>ztyping.ZTyping</code>, keyed by
 <code>nodeid</code>. After <code>check()</code> returns, the emitter and SQL dumper
-read from both the <code>Program</code> (shape) and the <code>Typing</code> (types,
+read from both the <code>Program</code> (shape) and the <code>ZTyping</code> (types,
 ownership, locks, monomorphisations) without further analysis.</p>
 <p><strong>Demand-driven, single pass.</strong> Resolution starts at <code>main</code> and
 descends only into names that are actually referenced. Names that
@@ -200,7 +200,7 @@ enum) and a set of optional fields.</p>
 for top-level units</li>
 <li><code>children_id_map</code>: per-name monotonic child id,
 minted lazily by <code>child_id_for(name)</code>. The id is the
-authoritative key for children in <code>Typing.type_child</code> rows
+authoritative key for children in <code>ZTyping.type_child</code> rows
 and for narrowing entries that need a numeric subject</li>
 <li><code>return_type</code>, <code>return_ownership</code>, <code>this_param_name</code>:
 populated for function types</li>
@@ -223,7 +223,7 @@ holding the raw allocator</li>
 </ul>
 <p>A <code>ZType</code> carries identity-data only. <em><strong>Per-edge</strong></em> metadata --
 parameter ownership annotations, field defaults, lock/private
-modifiers -- lives on <code>Typing.type_child</code> rows (the flat
+modifiers -- lives on <code>ZTyping.type_child</code> rows (the flat
 children table), not on the parent <code>ZType</code>.</p>
 <h3 id="zvariable-per-binding-ownership-carrier"><a href="#zvariable-per-binding-ownership-carrier">3.2. ZVariable -- per-binding ownership carrier</a></h3>
 <p><code>ZVariable</code> (<code>src/ztypes.py</code>) wraps a <code>ZType</code> with the
@@ -231,9 +231,9 @@ state that is per-variable rather than per-type. A <code>ZVariable</code>
 is created only for <em><strong>named runtime bindings</strong></em> -- function
 parameters, locals introduced by assignment, <code>with</code>-bindings,
 for-loop iterators, and synth temps -- and attached to
-<code>Entry.var</code>. Expression-level results live on <code>ExprResult</code>,
+<code>ZEntry.var</code>. Expression-level results live on <code>ZExprResult</code>,
 not here; type and function definitions also leave
-<code>Entry.var = None</code>.</p>
+<code>ZEntry.var = None</code>.</p>
 <ul>
 <li><code>variableid</code>: monotonic id</li>
 <li><code>ztype</code>: the variable's resolved type</li>
@@ -251,16 +251,16 @@ call temps); <code>None</code> for user-source variables</li>
 </ul>
 <p>Keeping ownership off <code>ZType</code> lets the same type be bound in two
 scopes with different ownership, which is the common case.</p>
-<h3 id="entry-a-scope-binding"><a href="#entry-a-scope-binding">3.3. Entry -- a scope binding</a></h3>
-<p><code>Entry</code> (<code>src/ztypes.py</code>) is the unit of scope state. Every
+<h3 id="zentry-a-scope-binding"><a href="#zentry-a-scope-binding">3.3. ZEntry -- a scope binding</a></h3>
+<p><code>ZEntry</code> (<code>src/ztypes.py</code>) is the unit of scope state. Every
 piece of information the scope chain needs to track about a name
-lives on an <code>Entry</code>:</p>
+lives on an <code>ZEntry</code>:</p>
 <ul>
 <li><code>entry_id</code>: monotonic id</li>
 <li><code>name</code>, <code>ztype</code>, <code>is_definition</code></li>
 <li><code>var</code>: optional <code>ZVariable</code> (absent for
 type/function definitions and lock-only overlays)</li>
-<li><code>lock</code>: optional <code>LockInfo</code> carrying lock type,
+<li><code>lock</code>: optional <code>ZLockInfo</code> carrying lock type,
 holder, and the addressable path tuple <code>(root, f1, f2, ...)</code></li>
 <li><code>narrowed_subtype</code>, <code>narrowed_subtype_id</code>,
 <code>excluded_subtypes</code>, <code>excluded_subtype_ids</code>: type
@@ -276,8 +276,8 @@ outer scope). Definitions live in <code>BLOCK</code> scopes; shadows live
 in <code>OVERLAY</code> or <code>CALL</code> scopes and disappear automatically when
 their scope is popped. See <code>compiler.pdoc:Scope Environment</code> for
 the three scope kinds.</p>
-<h3 id="exprresult-the-result-of-checking-an-expression"><a href="#exprresult-the-result-of-checking-an-expression">3.4. ExprResult -- the result of checking an expression</a></h3>
-<p>Most expression-level helpers return <code>ExprResult</code>
+<h3 id="zexprresult-the-result-of-checking-an-expression"><a href="#zexprresult-the-result-of-checking-an-expression">3.4. ZExprResult -- the result of checking an expression</a></h3>
+<p>Most expression-level helpers return <code>ZExprResult</code>
 (<code>src/ztypes.py</code>), not a bare <code>ZType</code>:</p>
 <ul>
 <li><code>ztype</code>: the inferred type</li>
@@ -291,11 +291,11 @@ site</li>
 </ul>
 <p>The <code>borrow_target</code> mechanism keeps borrow-lock installation
 out of deep expression code: the leaf method that knows the source
-path stamps it onto the <code>ExprResult</code>, and the eventual binding
+path stamps it onto the <code>ZExprResult</code>, and the eventual binding
 site installs the lock. The flow is described under
 <code>ownership.pdoc:Borrow propagation</code>.</p>
-<h3 id="typing-the-typecheck-output-container"><a href="#typing-the-typecheck-output-container">3.5. Typing -- the typecheck-output container</a></h3>
-<p><code>Typing</code> (<code>src/ztyping.py</code>) is the single mutable container
+<h3 id="ztyping-the-typecheck-output-container"><a href="#ztyping-the-typecheck-output-container">3.5. ZTyping -- the typecheck-output container</a></h3>
+<p><code>ZTyping</code> (<code>src/ztyping.py</code>) is the single mutable container
 holding everything the typechecker computes. It is intentionally
 ECS-shaped: instead of decorating parsed AST nodes with
 <code>init=False</code> columns, the typechecker writes into a set of
@@ -312,8 +312,8 @@ definition</li>
 monomorphisation deduplication caches</li>
 <li><code>unit_types_by_id</code>: Unit-AST nodeid &#x2192; resolved unit
 ZType</li>
-<li><code>symbol_table</code>: the live <code>SymbolTable</code> (typed via
-<code>SymbolTableProto</code> to keep <code>ztyping</code> decoupled from
+<li><code>symbol_table</code>: the live <code>ZSymbolTable</code> (typed via
+<code>ZSymbolTableProto</code> to keep <code>ztyping</code> decoupled from
 <code>zenv</code>)</li>
 </ul>
 <p>Component tables (each keyed by parsed-node <code>nodeid</code>):</p>
@@ -341,19 +341,19 @@ per-ZType dict columns</li>
 </ul>
 <p>The SQL dumper writes one row per dict, so every component table
 has a direct SQL representation.</p>
-<h3 id="symboltable-and-scope"><a href="#symboltable-and-scope">3.6. SymbolTable and Scope</a></h3>
-<p><code>SymbolTable</code> (<code>src/zenv.py</code>) is the scope stack the
+<h3 id="zsymboltable-and-zscope"><a href="#zsymboltable-and-zscope">3.6. ZSymbolTable and ZScope</a></h3>
+<p><code>ZSymbolTable</code> (<code>src/zenv.py</code>) is the scope stack the
 typechecker uses for <em><strong>all</strong></em> variable state -- type, ownership,
 lock state, narrowing, taken state. There is no separate flow-
 typing structure: state changes are recorded as new entries in
 overlay scopes; scope pop is the only thing that undoes them.</p>
 <ul>
-<li><code>Scope</code>: holds <code>entries: List[Entry]</code> (linear
+<li><code>ZScope</code>: holds <code>entries: List[ZEntry]</code> (linear
 scan rather than a dict; typical scope has fewer than ten
 entries), a <code>kind</code> (<code>BLOCK</code>, <code>CALL</code>, or <code>OVERLAY</code>),
 a <code>name</code>, an <code>unreachable</code> flag, and a monotonic
 <code>scope_id</code></li>
-<li><code>SymbolTable</code>: stack of <code>Scope</code> frames plus
+<li><code>ZSymbolTable</code>: stack of <code>ZScope</code> frames plus
 <code>_history</code> (popped scopes, retained for SQL dump) and
 <code>scope_log</code> (append-only log of push/pop events with
 parent ids and sequence numbers)</li>
@@ -370,14 +370,14 @@ returns.</li>
 outer scope (new lock, narrowing, taken state).</li>
 </ul>
 <p>Lock state is keyed on a path tuple <code>(root, f1, ..., fn)</code> stored
-on <code>LockInfo</code>. <code>Entry.name</code> always equals <code>path[0]</code> so the
+on <code>ZLockInfo</code>. <code>ZEntry.name</code> always equals <code>path[0]</code> so the
 linear scan stays cheap; the full tuple is consulted only by the
-prefix-overlap rule. Key APIs (all on <code>SymbolTable</code>):</p>
+prefix-overlap rule. Key APIs (all on <code>ZSymbolTable</code>):</p>
 <ul>
 <li><code>lookup</code>, <code>lookup_var</code>, <code>lookup_var_by_id</code>,
 <code>lookup_entry</code> -- name &#x2192; type / variable / entry resolution</li>
 <li><code>try_lock</code> -- attempt to install a lock; returns
-<code>LockInfo</code> or a conflict description. Multi-granularity
+<code>ZLockInfo</code> or a conflict description. Multi-granularity
 rule is in <code>_lock_acquire_conflict</code></li>
 <li><code>find_exclusive_lock</code>, <code>is_path_locked</code> -- access-
 site enforcement (used by lock-escape checks)</li>
@@ -511,7 +511,7 @@ Lifetime</code>) is enforced at the assignment and call sites:</p>
 <ul>
 <li><code>_check_assignment</code> -- definition site. Records the
 new variable's ownership in a fresh <code>ZVariable</code>, consumes
-any <code>ExprResult.borrow_target</code> by installing a borrow
+any <code>ZExprResult.borrow_target</code> by installing a borrow
 lock.</li>
 <li><code>_check_reassignment</code> -- enforces that the LHS variable
 is currently <code>OWNED</code> and that the RHS provides the
@@ -524,7 +524,7 @@ callee's parameter.</li>
 </ul>
 <p>Parameters default to <code>.borrow</code>; <code>.take</code> and <code>.lock</code> are
 the opt-in transfers. The annotations live on
-<code>Typing.type_child.param_ownership</code>, not on the parameter
+<code>ZTyping.type_child.param_ownership</code>, not on the parameter
 <code>ZType</code>.</p>
 <h3 id="lock-checking"><a href="#lock-checking">7.2. Lock checking</a></h3>
 <p>The typechecker chooses <em><strong>when</strong></em> to install a lock; <code>zenv.py</code>
@@ -549,13 +549,13 @@ the scope chain to reject a write/return that would let a locked
 value escape its scope.</p>
 <p>Self-overlap during a single call (e.g.
 <code>f.method bv: f.byteview</code>) is permitted via the call-identity
-stack (<code>_call_id_stack</code> + <code>LockHolder</code> tagging): <code>try_lock</code>
+stack (<code>_call_id_stack</code> + <code>ZLockHolder</code> tagging): <code>try_lock</code>
 skips the conflict check when the existing holder matches the
 current call's identity.</p>
 <h3 id="borrow-correctness-for-parameters"><a href="#borrow-correctness-for-parameters">7.3. Borrow correctness for parameters</a></h3>
 <p>Deep methods that take a borrow into a return value record the
 source path on <code>_pending_borrow_lock</code>, which
-<code>_check_expression</code> captures into <code>ExprResult.borrow_target</code>
+<code>_check_expression</code> captures into <code>ZExprResult.borrow_target</code>
 and clears so it cannot leak across statements. The binding site
 (<code>_check_assignment</code> or <code>_check_call_arguments</code>) then
 installs the borrow lock against the actual destination scope.
@@ -574,7 +574,7 @@ instantiation. Builds a deduplication key via
 <code>_mono_arg_key</code> (a tuple over arg <code>(name, const_value)</code>
 pairs so numeric generics also dedupe), reuses an existing
 instantiation if present, otherwise clones and registers
-into <code>Typing.mono_types</code>.</li>
+into <code>ZTyping.mono_types</code>.</li>
 <li><code>_monomorphize_function</code> -- per-function variant.
 Clones the function AST, binds generic params, typechecks
 the clone with the mono context in scope.</li>
@@ -597,7 +597,7 @@ child-lookup path.</p>
 <h3 id="type-narrowing"><a href="#type-narrowing">7.5. Type narrowing</a></h3>
 <p>Narrowing for <code>union</code> and <code>variant</code> subjects in match arms
 is implemented via overlay entries. When a match arm narrows
-subject <code>s</code> to subtype <code>ok</code>, an overlay <code>Entry</code> with
+subject <code>s</code> to subtype <code>ok</code>, an overlay <code>ZEntry</code> with
 <code>narrowed_subtype: "ok"</code> is pushed onto the arm's scope.
 Inside the arm, name lookup for <code>s</code> finds this entry first and
 returns the narrowed type. The arm scope is popped at end of
@@ -660,16 +660,15 @@ to decide whether to proceed to emission.</p>
 <p>Module boundaries the typechecker relies on:</p>
 <ul>
 <li><code>src/ztypes.py</code> -- <code>ZType</code>, <code>ZVariable</code>,
-<code>Entry</code>, <code>ExprResult</code>, <code>LockInfo</code>, <code>LockHolder</code>,
+<code>ZEntry</code>, <code>ZExprResult</code>, <code>ZLockInfo</code>, <code>ZLockHolder</code>,
 plus the <code>ZTypeType</code> / <code>ZOwnership</code> /
-<code>ZParamOwnership</code> / <code>ZLockState</code> / <code>ScopeKind</code> /
-<code>ZSubType</code> / <code>ControlKind</code> / <code>BuiltinFunc</code> /
-<code>ZNaming</code> / <code>LockHolderKind</code> enums</li>
-<li><code>src/ztyping.py</code> -- the <code>Typing</code> container,
-<code>TypeChild</code> / <code>TypeGenericArg</code> flat-table rows,
-<code>TypedProgramView</code> compat shim</li>
-<li><code>src/zenv.py</code> -- <code>SymbolTable</code>, <code>Scope</code>,
-<code>ScopeLogRow</code>, the lock-conflict logic
+<code>ZParamOwnership</code> / <code>ZLockState</code> / <code>ZScopeKind</code> /
+<code>ZSubType</code> / <code>ZControlKind</code> / <code>ZBuiltinFunc</code> /
+<code>ZLockHolderKind</code> enums</li>
+<li><code>src/ztyping.py</code> -- the <code>ZTyping</code> container,
+<code>ZTypeChild</code> / <code>ZTypeGenericArg</code> flat-table rows</li>
+<li><code>src/zenv.py</code> -- <code>ZSymbolTable</code>, <code>ZScope</code>,
+<code>ZScopeLogRow</code>, the lock-conflict logic
 (<code>_lock_acquire_conflict</code>, <code>_paths_overlap</code>), narrowing
 / exclusion installers</li>
 <li><code>src/ztypeutil.py</code> -- collection-type predicates
@@ -680,7 +679,7 @@ plus the <code>ZTypeType</code> / <code>ZOwnership</code> /
 <code>register_synth_var</code>) used by per-call hoisting and
 auto-generated equality</li>
 <li><code>src/zsymtab_proto.py</code> -- the duck-typed
-<code>SymbolTableProto</code> that breaks the
+<code>ZSymbolTableProto</code> that breaks the
 <code>zast</code> &#x2194; <code>zenv</code> import cycle</li>
 <li><code>src/zasthash.py</code> -- structural hashing used by the
 monomorphisation dedup key</li>
@@ -691,7 +690,7 @@ order:</p>
 <ol>
 <li><code>src/ztypes.py</code> -- the dataclass definitions in this
 file are the vocabulary for everything else.</li>
-<li><code>src/ztyping.py</code> -- the <code>Typing</code> container makes the
+<li><code>src/ztyping.py</code> -- the <code>ZTyping</code> container makes the
 component-table architecture concrete.</li>
 <li><code>src/zenv.py</code> -- the scope stack and the lock-conflict
 rule. The semantics of "what makes two locks conflict" lives
