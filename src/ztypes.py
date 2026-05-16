@@ -64,6 +64,19 @@ class ControlKind(IntEnum):
 
 
 @unique
+class BuiltinFunc(IntEnum):
+    """Identifies native functions that need special emitter handling
+    beyond standard mangled-name dispatch (e.g. extra header includes,
+    runtime-error plumbing). Stamped on the function's ZType at
+    typecheck time; read by zemitterc to decide what to pull in.
+    """
+
+    NONE = 0
+    PARSE_F64 = 1  # stringview.parseF64 — needs errno.h / stdlib.h (strtod)
+    ENV_NAMES = 2  # os.envNames — needs string.h (strchr / strlen)
+
+
+@unique
 class ZOwnership(IntEnum):
     """
     Ownership
@@ -234,6 +247,10 @@ class ZType:
 
     # compiler control kine functions (return|break|continue etc)
     control_kind: ControlKind = field(default=ControlKind.NONE, init=False)
+
+    # native functions that need special emitter handling
+    # (extra header includes etc); stamped in _resolve_function_type.
+    builtin_func: BuiltinFunc = field(default=BuiltinFunc.NONE, init=False)
 
     # public/private access control: maps external name -> internal name for
     # publicly accessible members. None = all-public (default). Set during type

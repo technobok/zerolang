@@ -27,6 +27,7 @@ from ztypes import (
     LockHolder,
     LockHolderKind,
     ControlKind,
+    BuiltinFunc,
     ExprResult,
     NUMERIC_RANGES,
     parse_number,
@@ -1101,6 +1102,19 @@ class TypeChecker:
         }
         if func.is_native and name in _CONTROL_KINDS:
             ftype.control_kind = _CONTROL_KINDS[name]
+
+        # tag native functions that need special emitter handling
+        # (extra header includes etc) — see BuiltinFunc. Match on the
+        # unqualified tail: stringview methods resolve as e.g.
+        # "StringView.parseF64", os-unit functions as "os.envNames".
+        _BUILTIN_FUNCS = {
+            "parseF64": BuiltinFunc.PARSE_F64,
+            "envNames": BuiltinFunc.ENV_NAMES,
+        }
+        if func.is_native:
+            tail = name.rsplit(".", 1)[-1]
+            if tail in _BUILTIN_FUNCS:
+                ftype.builtin_func = _BUILTIN_FUNCS[tail]
 
         # pass 1: detect generic params from 'as' clause
         generic_ctx: dict[str, ZType] = {}

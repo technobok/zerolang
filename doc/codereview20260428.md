@@ -331,10 +331,18 @@ Action items:
       `ztype.subtype == ZSubType.STRING/STRINGVIEW`. The bare-class
       disambiguator follows the surrounding record-case idiom
       (`atom_ztype.name == name`).)*
-- [ ] **Bucket C — `parseF64` / `envNames`** at `src/zemitterc.py:967, 998`.
-      *(Deferred from F4. Two sites; needs a `BuiltinFunc` enum or
-      similar id-tag at type-check time. Worth doing alongside the
-      meta/method-name sweep below since they share the same shape.)*
+- [x] **Bucket C — `parseF64` / `envNames`** at `src/zemitterc.py:785, 816, 7578`.
+      *(F4.4: `BuiltinFunc(IntEnum)` added to `ztypes.py` alongside
+      `ZSubType`/`ControlKind`; `ZType.builtin_func` field stamped in
+      `_resolve_function_type` via the same name-table pattern as
+      `_CONTROL_KINDS`. Three emitter literal compares replaced —
+      `_track_stdlib_unit_native` now takes an optional `ftype`
+      threaded from its three callers; the stringview dotted-path
+      site reads via `typing.child_of(parent_type_dp, child)`.
+      name-literal-compare baseline 272 → 269; sanity-checked by
+      tripping with stricter baseline. Codereview's draft enum name
+      `BuiltinName` not used — `BuiltinFunc` is more precise for the
+      function-only scope.)*
 - [ ] **Bucket D — meta / method names**: `create`, `take`, `borrow`,
       `box`, `main`, `copy`, `length`, `private`, `lock`, `release`
       (~50 sites). *(Deferred from F4. Single-character role-names
@@ -362,10 +370,15 @@ Action items:
 - `9e519b5` (F4.3): `_ctype` String/StringView dispatch and
   `_emit_atom` bare-class branch use `ztype.subtype == ZSubType.*`.
   Byte-identical C output verified.
+- F4.4 (this entry): bucket C done via `BuiltinFunc` enum.
+  Three sites in `zemitterc.py` (header-dispatch for `parseF64` /
+  `envNames`) now use `ftype.builtin_func == BuiltinFunc.*`.
+  Stamping mirrors the `_CONTROL_KINDS` pattern in
+  `_resolve_function_type`. `make test` 1943+ passing; byte-identical
+  C verified.
 
-Buckets C and D remain open; F3b's name-literal-compare baseline
-should be set at the current count rather than zero (~50+
-remaining literals).
+Bucket D remains open by design (see action item: ~50 syntax-keyword
+sites where literals are more readable than enum constants).
 
 ### F5. TypeChecker state sprawl — Med (goals 1, 5)
 

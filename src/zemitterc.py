@@ -17,6 +17,7 @@ from ztypes import (
     ZType,
     ZTypeType,
     ZSubType,
+    BuiltinFunc,
     ControlKind,
     parse_number,
     ZParamOwnership,
@@ -682,13 +683,19 @@ class CEmitter:
             return _mangle_func(name)
         return _mangle_var(name)
 
-    def _track_stdlib_unit_native(self, mangled: str) -> None:
+    def _track_stdlib_unit_native(
+        self, mangled: str, ftype: "Optional[ZType]" = None
+    ) -> None:
         """Record use of an io- or os-unit native so emit_runtime_io /
         emit_runtime_os includes its C body. Per-name granularity keeps
         unused helpers out of every compiled program. Called from every
         path that turns a callable AST node into a C name, not just
         `_emit_callable_expr` — definition-name dotted paths are
-        short-circuited earlier and would otherwise miss tracking."""
+        short-circuited earlier and would otherwise miss tracking.
+
+        `ftype` is the function's ZType (when available at the call
+        site) and carries `builtin_func` for header dispatch on
+        specific natives — see BuiltinFunc."""
         # Splitter / linesiter iterator methods (Phase S3). Track
         # under the stringview natives set so the shared impl struct
         # + call function emit in the correct late slot.
@@ -781,8 +788,8 @@ class CEmitter:
                 self.needs_stringview = True
                 self.needs_string = True  # memcmp / strchr live in string.h
                 self.needs_stringview_natives.add(name)
-                # parse_f64 uses strtod + errno (ERANGE).
-                if name == "parseF64":
+                # parseF64 uses strtod + errno (ERANGE).
+                if ftype is not None and ftype.builtin_func == BuiltinFunc.PARSE_F64:
                     self.needs_io = True
             return
         if mangled.startswith("z_io_"):
@@ -813,7 +820,7 @@ class CEmitter:
                 "hostname",
             ):
                 self.needs_io = True
-            if name == "envNames":
+            if ftype is not None and ftype.builtin_func == BuiltinFunc.ENV_NAMES:
                 self.needs_string = True
 
     def _emit_callable_expr(self, call: zast.Call) -> str:
@@ -844,11 +851,11 @@ class CEmitter:
                 # (handles subunit functions like mymod.helper.square)
                 if "." in func_name:
                     mangled = _mangle_func(func_name)
-                    self._track_stdlib_unit_native(mangled)
+                    self._track_stdlib_unit_native(mangled, ftype)
                     return mangled
         callable_name = self._get_callable_name(call.callable)
         mangled = self._mangle_callable(callable_name)
-        self._track_stdlib_unit_native(mangled)
+        self._track_stdlib_unit_native(mangled, self._node_ztype(call.callable))
         return mangled
 
     def _qualify(self, prefix: str, name: str) -> str:
@@ -7352,7 +7359,7 @@ class CEmitter:
                                 break
                     if not has_runtime_params:
                         mangled = _mangle_func(f"{pname}.{child}")
-                        self._track_stdlib_unit_native(mangled)
+                        self._track_stdlib_unit_native(mangled, fn_type)
                         if pname == "io":
                             self.needs_stdio = True
                         return f"{mangled}()"
@@ -7575,8 +7582,12 @@ class CEmitter:
             self.needs_stringview = True
             self.needs_string = True
             self.needs_stringview_natives.add(child)
-            if child == "parseF64":
-                # strtod + errno (ERANGE) — pull in errno.h / stdlib.h.
+            # strtod + errno (ERANGE) — pull in errno.h / stdlib.h.
+            method_ztype = self.typing.child_of(parent_type_dp, child)
+            if (
+                method_ztype is not None
+                and method_ztype.builtin_func == BuiltinFunc.PARSE_F64
+            ):
                 self.needs_io = True
             parent = self._emit_path_value(path.parent)
             if not parent.startswith("&"):
