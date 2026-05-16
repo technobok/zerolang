@@ -2213,22 +2213,22 @@ class TestImplicitConstruction:
 # ---- Phase 4d: Lock Checking Tests ----
 
 
-class TestLockInfo:
-    """Test the LockInfo dataclass."""
+class TestZLockInfo:
+    """Test the ZLockInfo dataclass."""
 
     def test_lock_info_exclusive(self):
-        from ztypes import LockInfo, ZLockHolder, ZLockHolderKind
+        from ztypes import ZLockInfo, ZLockHolder, ZLockHolderKind
 
         h = ZLockHolder(ZLockHolderKind.VAR, 7)
-        e = LockInfo(lock_type=ZLockState.EXCLUSIVE, holder=h)
+        e = ZLockInfo(lock_type=ZLockState.EXCLUSIVE, holder=h)
         assert e.lock_type == ZLockState.EXCLUSIVE
         assert e.holder == h
 
     def test_lock_info_shared(self):
-        from ztypes import LockInfo, ZLockHolder, ZLockHolderKind
+        from ztypes import ZLockInfo, ZLockHolder, ZLockHolderKind
 
         h = ZLockHolder(ZLockHolderKind.CALL, 42)
-        e = LockInfo(lock_type=ZLockState.SHARED, holder=h)
+        e = ZLockInfo(lock_type=ZLockState.SHARED, holder=h)
         assert e.lock_type == ZLockState.SHARED
         assert e.holder == h
 

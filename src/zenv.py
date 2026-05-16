@@ -11,7 +11,7 @@ from ztypes import (
     ZType,
     ZVariable,
     ZLockState,
-    LockInfo,
+    ZLockInfo,
     ZLockHolder,
     ZLockHolderKind,
     ScopeKind,
@@ -53,7 +53,7 @@ def _paths_overlap(p1: Tuple[str, ...], p2: Tuple[str, ...]) -> bool:
 
 
 def _lock_acquire_conflict(
-    existing: LockInfo,
+    existing: ZLockInfo,
     req_path: Tuple[str, ...],
     req_type: ZLockState,
 ) -> bool:
@@ -428,7 +428,7 @@ class SymbolTable:
         self,
         requested_path: Tuple[str, ...],
         requested_type: ZLockState,
-        existing: LockInfo,
+        existing: ZLockInfo,
     ) -> str:
         """Path-aware conflict message. Mentions the root variable name in
         quotes so existing test assertions matching `"'name'"` keep working."""
@@ -515,14 +515,14 @@ class SymbolTable:
             name=target_name,
             ztype=target_var.ztype,
             is_definition=False,
-            lock=LockInfo(lock_type=lock_type, holder=holder, path=path),
+            lock=ZLockInfo(lock_type=lock_type, holder=holder, path=path),
         )
         self._scopes[-1].append(lock_entry)
         return None
 
-    def find_lock(self, name: str) -> Optional[LockInfo]:
+    def find_lock(self, name: str) -> Optional[ZLockInfo]:
         """Search scope chain for any lock rooted at `name`. Returns the
-        innermost LockInfo or None.
+        innermost ZLockInfo or None.
 
         Name-based wrapper for legacy callers (e.g. .release checks). For
         precise prefix-overlap queries use `find_exclusive_lock(path)`.
@@ -569,8 +569,8 @@ class SymbolTable:
             i -= 1
         return None
 
-    def is_path_locked(self, path: Tuple[str, ...]) -> Optional[LockInfo]:
-        """Read-only query: return the innermost LockInfo whose path
+    def is_path_locked(self, path: Tuple[str, ...]) -> Optional[ZLockInfo]:
+        """Read-only query: return the innermost ZLockInfo whose path
         prefix-overlaps `path`, regardless of lock type (SHARED or
         EXCLUSIVE). Returns None if no lock is held.
 

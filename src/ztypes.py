@@ -91,7 +91,7 @@ class ZOwnership(IntEnum):
 @unique
 class ZLockState(IntEnum):
     """
-    Lock state — set on `LockInfo.lock_type` when an entry holds a lock.
+    Lock state — set on `ZLockInfo.lock_type` when an entry holds a lock.
     Absence of a lock is represented by `Entry.lock = None`.
 
     EXCLUSIVE: exclusive lock, no other references allowed.
@@ -360,7 +360,7 @@ class ZLockHolder:
 
 
 @dataclass
-class LockInfo:
+class ZLockInfo:
     """Lock state on a variable — stored on Entry, not on ZVariable.
 
     `path` is the addressable lock target as a tuple `(root, f1, f2, ...)`.
@@ -396,7 +396,7 @@ class Entry:
     # for runtime variables (None for type/function definitions and lock-only overlays)
     var: "Optional[ZVariable]" = None
     # lock state (one lock per variable per scope)
-    lock: Optional[LockInfo] = None
+    lock: Optional[ZLockInfo] = None
     # narrowing state (for match/if arms)
     narrowed_subtype: Optional[str] = None  # "ok", "err" — narrowed in match arm
     # Phase 7c: id parallel to narrowed_subtype. Minted via the outer
