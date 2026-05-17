@@ -725,12 +725,25 @@ Phase 1 sweep (resolved 2026-04-30):
       with a descriptive message, plus `zip(..., strict=True)`.
       A length mismatch now raises with a clear message rather
       than silently dropping rows.
-- [ ] **Generated-C `malloc` NULL checks** (20260322 finding 2) —
-      still open; blocked on the `libzrt.a` runtime library work
-      (Phase 40 in the roadmap).
-- [ ] **12 examples not exercised through the emitter** (20260322
-      finding) — confirm current state by running `make build` and
-      cross-checking against `tests/test_emitter.py` coverage.
+- [x] **Generated-C `malloc` NULL checks** (20260322 finding 2) —
+      resolved. Every allocation in emitted C routes through
+      `z_xmalloc` / `z_xcalloc` / `z_xrealloc` (defined in
+      `src/zemitterc_runtime.py`), which check the returned pointer
+      and route NULL through `z_panic("out of memory")`. No raw
+      `malloc()` calls remain in the emitter or the
+      `src/runtime/*.c.tmpl` templates. The separate `libzrt.a`
+      extraction is tracked under Phase 47.3 stage 2 in
+      `doc/roadmap.pdoc` — it's a build-system cleanup (extract
+      runtime to a static archive), not a correctness gap.
+- [x] **12 examples not exercised through the emitter** (20260322
+      finding) — resolved. `tests/test_emitter.py::TestEmitterExamples`
+      now has per-example tests for `arrays`, `facets`, `generics`,
+      `lists`, `maps`, `numeric_generics`, `protocols`, `specs`,
+      `str`, `typedefs`, and `variants` (11 of the 12; `mathutil`
+      is library-only and has no main, so it stays in the `make
+      build` SKIP list — covered indirectly through `multimod.z`
+      which imports it). All compile, link, and run; output is
+      pinned to distinctive lines.
 
 ---
 

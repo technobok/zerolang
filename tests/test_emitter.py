@@ -1083,6 +1083,107 @@ class TestEmitterExamples:
         assert lines[9] == "e.empty=1"
         assert lines[10] == "e.ascii=1"
 
+    def test_arrays(self):
+        csource = self._emit_example("arrays")
+        output = compile_and_run(csource)
+        assert "initial: 0 0 0 0 0" in output
+        assert "after set: 10 20 30 40 50" in output
+        assert "set index 2 to 99, previous was: 30" in output
+        assert "primes: 2 3 5 7 11" in output
+
+    def test_facets(self):
+        csource = self._emit_example("facets")
+        output = compile_and_run(csource)
+        assert "point measure: 15" in output
+        assert "color measure: 30" in output
+        assert "use_facet point: 15" in output
+        assert "use_facet color: 30" in output
+
+    def test_generics(self):
+        csource = self._emit_example("generics")
+        output = compile_and_run(csource)
+        assert "created option.some i64" in output
+        assert "created option.none i32" in output
+        assert "a is some" in output
+        assert "b is none" in output
+        assert "created MyBox i64" in output
+
+    def test_lists(self):
+        csource = self._emit_example("lists")
+        output = compile_and_run(csource)
+        assert "empty list length: 0" in output
+        assert "after appends: length=3" in output
+        assert "replaced 20 with 99 at index 1" in output
+        assert "after insert 42 at 1: 10 42 99" in output
+        assert "after extend: length=5" in output
+        assert "preallocated capacity: 100, length: 0" in output
+
+    def test_maps(self):
+        csource = self._emit_example("maps")
+        output = compile_and_run(csource)
+        assert "entries: 3" in output
+        assert "has alice: 1" in output
+        assert "has dave: 0" in output
+        assert "found bob" in output
+        assert "deleted bob: 1, length: 2" in output
+        assert "preallocated: capacity=64 length=0" in output
+
+    def test_numeric_generics(self):
+        csource = self._emit_example("numeric_generics")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines == ["42", "10", "99", "20", "100", "0", "ok"]
+
+    def test_protocols(self):
+        csource = self._emit_example("protocols")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines == ["15", "25"]
+
+    def test_specs(self):
+        csource = self._emit_example("specs")
+        output = compile_and_run(csource)
+        lines = output.strip().split("\n")
+        assert lines == [
+            "13",
+            "7",
+            "30",
+            "12",
+            "35",
+            "3",
+            "7",
+            "300",
+            "20000",
+            "30",
+            "-10",
+            "0",
+            "1",
+        ]
+
+    def test_str(self):
+        csource = self._emit_example("str")
+        output = compile_and_run(csource)
+        assert "hello" in output
+        assert "greeting is: hello" in output
+
+    def test_typedefs(self):
+        csource = self._emit_example("typedefs")
+        output = compile_and_run(csource)
+        assert "meters value: 42" in output
+        assert "doubled: 84" in output
+        assert "add_one: 43" in output
+        assert "height value: 100" in output
+        assert "height add_one: 101" in output
+
+    def test_variants(self):
+        csource = self._emit_example("variants")
+        output = compile_and_run(csource)
+        assert "a is ok" in output
+        assert "b is none" in output
+        assert "shape is point" in output
+        assert "item created" in output
+        assert "mode is read" in output
+
 
 class TestUserMethodStringTake:
     """Regression test for C4: user class methods with `String.take`
