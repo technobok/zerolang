@@ -336,6 +336,18 @@ class CEmitter:
         self.program = self.typing.parsed
         self.out: List[str] = []
         self.indent_level = 0
+        # Generator state-machine codegen context (G4). Non-None while
+        # emitting the body of a synthesised `.call` method (those have
+        # `func.synth_origin == "generator-call"`). Carries the
+        # yield-to-state-number map, the return-wrapper monoclass name
+        # (e.g. `optionval_i32`), and SOME/NONE tag identifiers. Yield
+        # expressions encountered during body emission consult this
+        # context and emit the suspension fragment in place. Outside
+        # generator-call emission the context stays None and yields
+        # produce no special output (the typechecker / desugarer keeps
+        # yields out of non-generator code, so this should never fire
+        # there in a green compile).
+        self._generator_ctx: Optional[Dict[str, object]] = None
         self.needs_stdio = False
         self.needs_stdint = False
         self.needs_stdlib = False
@@ -4653,6 +4665,16 @@ class CEmitter:
         self.needs_stdint = True
         cname = _mangle_func(name)
 
+        # G4: synthesised generator `.call` body — wire up the
+        # state-machine context before normal function emission. The
+        # context tells `_emit_expression_stmt` (and friends) how to
+        # lower each `yield <expr>` into a suspension fragment, and
+        # provides the wrapper-type tag names for `OPTION_SOME` /
+        # `OPTION_NONE` emission.
+        is_generator_call = func.synth_origin == "generator-call"
+        if is_generator_call:
+            self._setup_generator_ctx(func)
+
         ret_ctype = self._return_ctype(func)
 
         # Class methods pass the `this` receiver by pointer so mutations via
@@ -4733,7 +4755,16 @@ class CEmitter:
         lines: List[str] = []
         lines.append(f"{ret_ctype} {cname}({param_str}) {{\n")
         self.indent_level = 1
-        if func.body:
+        if is_generator_call:
+            # Prologue: switch dispatch + L_entry label. The body emits
+            # its yields as suspension fragments (set state, return
+            # OPT_SOME, label-for-resume) via `_emit_yield_fragment`.
+            lines.append(self._emit_generator_prologue())
+            if func.body:
+                lines.append(self._emit_statement(func.body))
+            # Epilogue: terminal-state landing, single OPT_NONE return.
+            lines.append(self._emit_generator_epilogue())
+        elif func.body:
             implicit = self._is_implicit_return(func)
             if implicit:
                 # emit all statements except the last
@@ -4757,6 +4788,8 @@ class CEmitter:
         self._scope_stack.pop()
         self._current_enclosing_type_name = prev_enclosing
         self._alias_map = prev_alias_map
+        if is_generator_call:
+            self._generator_ctx = None
 
     def _is_implicit_return(self, func: zast.Function) -> bool:
         """Check if the function's last statement is an implicit return candidate."""
@@ -4823,6 +4856,137 @@ class CEmitter:
         for sline in stmt.statements:
             parts.append(self._emit_statement_line(sline))
         return "".join(parts)
+
+    # ---- Generator state-machine codegen (G4) -------------------------
+
+    def _setup_generator_ctx(self, func: zast.Function) -> None:
+        """Build the per-call generator state-machine context: walks
+        `func.body` to assign incrementing state numbers to each
+        Yield node, and records the return-wrapper's mono name + tag
+        identifiers so the emitter can build `OPT_SOME` / `OPT_NONE`
+        return fragments inline.
+
+        State numbering:
+          - 0: entry (first call, dispatches to L_entry)
+          - 1..N: post-yield resume points (L_resume_K)
+          - -1: terminal (any further call returns OPT_NONE)
+        """
+        yield_states: Dict[int, int] = {}
+
+        def walk(n: zast.Node) -> None:
+            if n.nodetype == NodeType.YIELD:
+                # Allocate next state number (length+1 since 0 is entry).
+                yield_states[n.nodeid] = len(yield_states) + 1
+                # descend into the yield's expr too (it might
+                # theoretically contain another yield — rejected at
+                # parse, but defensive)
+            if n.nodetype == NodeType.FUNCTION:
+                return  # nested function literal — not our yields
+            for child in zast.node_children(n):
+                walk(child)
+
+        if func.body is not None:
+            walk(func.body)
+
+        # Look at the resolved return type to derive the OPT wrapper
+        # tag names. The synthesized `.call` returns one of
+        # `optionval_T`, `Option_T`, or `OptionView_T` — we read the
+        # ZType name and uppercase it.
+        ret_zt = self._node_ztype(func.returntype) if func.returntype else None
+        ret_ctype = self._return_ctype(func)
+        wrapper_name = ret_zt.name if ret_zt is not None else ""
+        upper = wrapper_name.upper()
+        self._generator_ctx = {
+            "yield_states": yield_states,
+            "wrapper_ctype": ret_ctype,
+            "some_tag": f"Z_{upper}_TAG_SOME",
+            "none_tag": f"Z_{upper}_TAG_NONE",
+            "n_yields": len(yield_states),
+        }
+
+    def _emit_generator_prologue(self) -> str:
+        """Switch-table dispatch + entry label. Emitted right after
+        the function's opening brace."""
+        assert self._generator_ctx is not None
+        ctx = self._generator_ctx
+        n = cast(int, ctx["n_yields"])
+        indent = self._indent()
+        lines: List[str] = []
+        lines.append(f"{indent}switch (this->state) {{\n")
+        # entry: first invocation, dispatched only when state==0.
+        lines.append(f"{indent}    case 0: goto L_entry;\n")
+        for k in range(1, n + 1):
+            lines.append(f"{indent}    case {k}: goto L_resume_{k};\n")
+        # Terminal-state dispatch: state==-1 falls through to L_done
+        # via the default arm.
+        lines.append(f"{indent}    default: goto L_done;\n")
+        lines.append(f"{indent}}}\n")
+        lines.append("L_entry:;\n")
+        return "".join(lines)
+
+    def _emit_generator_epilogue(self) -> str:
+        """Terminal-state label + single OPT_NONE return. Reached
+        when the body falls through (last yield's resume returned to
+        end-of-body) AND when `state==-1` is dispatched."""
+        assert self._generator_ctx is not None
+        ctx = self._generator_ctx
+        wrapper_ctype = cast(str, ctx["wrapper_ctype"])
+        none_tag = cast(str, ctx["none_tag"])
+        indent = self._indent()
+        lines: List[str] = []
+        lines.append(f"{indent}/* fallthrough = end of generator body */\n")
+        lines.append("L_done:;\n")
+        lines.append(f"{indent}this->state = -1;\n")
+        lines.append(f"{indent}{wrapper_ctype} _r_done = {{0}};\n")
+        lines.append(f"{indent}_r_done.tag = {none_tag};\n")
+        lines.append(f"{indent}return _r_done;\n")
+        return "".join(lines)
+
+    def _emit_yield_fragment(self, yield_node: zast.Yield) -> str:
+        """Emit the suspension fragment for one `yield <expr>`:
+
+            this->state = N;
+            <wrapper>_t _ry = {0};
+            _ry.tag = TAG_SOME;
+            _ry.data.some = <expr>;
+            return _ry;
+        L_resume_N:;
+
+        The state number `N` was pre-assigned by `_setup_generator_ctx`
+        (yield_states[yield_node.nodeid])."""
+        assert self._generator_ctx is not None
+        ctx = self._generator_ctx
+        yield_states = cast(Dict[int, int], ctx["yield_states"])
+        wrapper_ctype = cast(str, ctx["wrapper_ctype"])
+        some_tag = cast(str, ctx["some_tag"])
+        state_num = yield_states.get(yield_node.nodeid, 0)
+        indent = self._indent()
+        # Evaluate the yielded expression. The yield's `.expr` is an
+        # Expression wrapper; emit its value through the regular path.
+        val = self._emit_expression_value(yield_node.expr)
+        # Drain temp decls accumulated by the expression emission.
+        # `_emit_statement_line` already wraps callers in a TempState
+        # push/pop; we're called from within that, so just splice the
+        # decls in before the suspension code.
+        decls = "".join(self._temp.decls)
+        self._temp.decls.clear()
+        lines: List[str] = []
+        lines.append(decls)
+        lines.append(f"{indent}this->state = {state_num};\n")
+        # Build the return wrapper inline. Free name `_ry_<state>` so
+        # multiple yields in one function don't collide if they end up
+        # in the same scope.
+        ry = f"_ry_{state_num}"
+        lines.append(f"{indent}{wrapper_ctype} {ry} = {{0}};\n")
+        lines.append(f"{indent}{ry}.tag = {some_tag};\n")
+        lines.append(f"{indent}{ry}.data.some = {val};\n")
+        lines.append(f"{indent}return {ry};\n")
+        # Resume label sits at function scope (column 0) so C `goto`
+        # from the switch can reach it across nested blocks. The
+        # trailing `;` makes the label a null statement, valid before
+        # any closing brace.
+        lines.append(f"L_resume_{state_num}:;\n")
+        return "".join(lines)
 
     def _emit_statement_line(self, sline: zast.StatementLine) -> str:
         # save temp state for this statement
@@ -4992,6 +5156,25 @@ class CEmitter:
     def _emit_expression_stmt(self, expr: zast.Expression) -> str:
         indent = self._indent()
         inner = expr.expression
+        # Generator yield as a statement: emit the suspension fragment
+        # (set state, return OPT_SOME, label-for-resume). Only fires
+        # inside a generator-call body, which is the only place
+        # yields legally appear.
+        if inner.nodetype == NodeType.YIELD and self._generator_ctx is not None:
+            return self._emit_yield_fragment(cast(zast.Yield, inner))
+        # Bare `return` inside a generator-call body terminates the
+        # generator: jump to the terminal label, which sets
+        # `this->state = -1` and returns OPT_NONE. The parser models
+        # bare `return` as a plain AtomId reference to the `return`
+        # function — without args, it's not a value-return call but a
+        # terminator marker for us.
+        if (
+            self._generator_ctx is not None
+            and inner.nodetype == NodeType.ATOMID
+            and cast(zast.AtomId, inner).name
+            == "return"  # ztc-string-compare-ok: return keyword
+        ):
+            return f"{indent}goto L_done;\n"
         # handle break/continue as standalone statements
         ck = self._expr_call_kind(expr)
         if ck == zast.CallKind.BREAK:

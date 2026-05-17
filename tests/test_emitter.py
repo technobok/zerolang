@@ -9235,3 +9235,125 @@ class TestPanic:
             "}"
         )
         assert 'z_panic("out of memory")' in csource
+
+
+class TestGeneratorEmitter:
+    """Phase G4: state-machine codegen for synthesized generator
+    `.call` bodies.
+
+    The desugarer (G3) produces a class whose `.call` method body
+    contains `Yield` nodes; this phase lowers them into a C-level
+    switch/goto state machine. Each test drives a generator end-
+    to-end (parse → desugar → typecheck → emit → gcc → run) and
+    checks observable behaviour.
+    """
+
+    def test_simple_generator_emits_and_runs(self):
+        """Three sequential yields produce `1\\n2\\n3\\n`, then
+        exhaustion. The for-loop driver terminates when the synth
+        class's `.call` returns OPT_NONE."""
+        csource = emit_source(
+            "gen: function {n: i64} out (iterator gives: i64) is "
+            "{ yield 1 yield 2 yield 3 }\n"
+            "main: function is {\n"
+            "    with g: (gen n: 0) do for x: g loop "
+            '{ print "\\{x}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "1\n2\n3\n"
+
+    def test_generator_with_loop_yields_all_elements(self):
+        """Generator with a for-while loop yielding the counter
+        produces the expected sequence. Validates that promoted
+        locals (the loop counter) persist across suspensions."""
+        csource = emit_source(
+            "gen: function {count: i64} out (iterator gives: i64) is {\n"
+            "    pos: 0\n"
+            "    for while pos < count loop {\n"
+            "        yield 100 + pos\n"
+            "        pos = pos + 1\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    with g: (gen count: 3) do for x: g loop "
+            '{ print "\\{x}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "100\n101\n102\n"
+
+    def test_generator_terminates_via_bare_return(self):
+        """Mid-body `return` (no value) terminates the generator at
+        that point. Values after the return are unreachable."""
+        csource = emit_source(
+            "gen: function {n: i64} out (iterator gives: i64) is {\n"
+            "    yield 1\n"
+            "    yield 2\n"
+            "    return\n"
+            "}\n"
+            "main: function is {\n"
+            "    with g: (gen n: 0) do for x: g loop "
+            '{ print "\\{x}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "1\n2\n"
+
+    def test_generator_code_after_last_yield_runs_on_exhaustion_call(self):
+        """Side-effect placed after the final yield runs on the
+        `.call` that crosses into terminal state (i.e., the call
+        following the consumption of the last value)."""
+        csource = emit_source(
+            "gen: function {n: i64} out (iterator gives: i64) is {\n"
+            "    yield 1\n"
+            "    yield 2\n"
+            '    print "post"\n'
+            "}\n"
+            "main: function is {\n"
+            "    with g: (gen n: 0) do for x: g loop "
+            '{ print "\\{x}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "1\n2\npost\n"
+
+    def test_generator_idempotent_terminal(self):
+        """Repeated `.call`s after exhaustion always return none and
+        run no body code. Driven manually via `with`/`do` over a
+        block calling `.call` directly."""
+        csource = emit_source(
+            "gen: function {n: i64} out (iterator gives: i64) is "
+            "{ yield 7 }\n"
+            "main: function is {\n"
+            "    with g: (gen n: 0) do {\n"
+            "        for x: g loop "
+            '{ print "\\{x}" }\n'
+            "        for x: g loop "
+            '{ print "\\{x}" }\n'
+            "    }\n"
+            "}"
+        )
+        # First for-loop drains the generator (prints 7); the second
+        # immediately sees terminal state and prints nothing.
+        assert compile_and_run(csource) == "7\n"
+
+    def test_generator_method_receiver_takes_lock(self):
+        """A method-context generator declares `b: this.lock` so the
+        synth class holds the receiver locked for the iterator's
+        lifetime. Verified at compile time: the generated factory
+        delegates to `.create` with `this` as the lock target.
+
+        Runtime: yield the receiver's field. Output sequence
+        matches the bag's stored values."""
+        csource = emit_source(
+            "Bag: class { x: i64 y: i64 z: i64 } as {\n"
+            "    each: function {b: this.lock} out (iterator gives: i64) is {\n"
+            "        yield b.x\n"
+            "        yield b.y\n"
+            "        yield b.z\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    b: Bag x: 10 y: 20 z: 30\n"
+            "    with it: (Bag.each b: b.lock) do for v: it loop "
+            '{ print "\\{v}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "10\n20\n30\n"

@@ -5789,7 +5789,16 @@ class TypeChecker:
         self._check_statement(func.body)
 
         # implicit return validation: last expression type must match 'out'
-        if self.func_ctx.return_type and func.body.statements:
+        # — skipped for synthesised generator `.call` bodies, where the
+        # last statement is typically a `yield` (no value flowing back)
+        # or a bare `return` reference (terminator). The emitter's
+        # state-machine wrap supplies the actual OPT_NONE return at
+        # end-of-body; no implicit value-return is in flight.
+        if (
+            self.func_ctx.return_type
+            and func.body.statements
+            and func.synth_origin != "generator-call"
+        ):
             last = func.body.statements[-1]
             last_type = self.typing.node_type.get(last.nodeid)
             if last_type is not None and last_type.typetype != ZTypeType.NEVER:

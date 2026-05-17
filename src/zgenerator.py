@@ -487,6 +487,71 @@ def _collect_assigned_locals(body: Statement) -> List[str]:
     return order
 
 
+def _collect_local_assignments(body: Statement) -> Dict[str, zast.Node]:
+    """Walk the body collecting each first `name: <expr>` assignment,
+    returning a dict from name → first-RHS expression. Used by the
+    promote-locals path to seed field-type inference.
+
+    Skips nested function literals (their assignments are not the
+    generator's locals)."""
+    first: Dict[str, zast.Node] = {}
+
+    def walk(node: zast.Node) -> None:
+        nt = node.nodetype
+        if nt == NodeType.FUNCTION:
+            return
+        if nt == NodeType.ASSIGNMENT:
+            assn = cast(zast.Assignment, node)
+            if assn.name not in first:
+                first[assn.name] = assn.value
+        for c in zast.node_children(node):
+            walk(c)
+
+    walk(body)
+    return first
+
+
+# Numeric-literal suffix → declared field type. Local assignments
+# whose RHS is a bare integer literal (or one of the typed-literal
+# `.u8` / `.i32` forms) get the matching type; everything else falls
+# back to `i64` — the existing default integer type and a safe
+# accumulator default.
+def _infer_local_field_type(rhs: zast.Node, loc: Token) -> zast.Path:
+    """Cheap field-type inference for a promoted-local field. Heuristic:
+
+    - RHS is `Expression(AtomId(<numeric-literal>))` → i64 (the
+      default integer type for bare literals).
+    - RHS is `Expression(DottedPath(<num>.<type>))` → `<type>`.
+    - RHS is `Expression(AtomId(<param-name>))` and the param's path
+      is known → the param's type (handled by caller via the
+      parameter map; here we fall back to i64 by default).
+    - Everything else → i64.
+
+    Field types are unconditionally `i64`-shaped in v1 because the
+    common cross-yield locals (loop counters, accumulators) are
+    integers. The G7 liveness pass will revisit with real type info."""
+    target: zast.Node = rhs
+    if target.nodetype == NodeType.EXPRESSION:
+        target = cast(Expression, target).expression
+    if target.nodetype == NodeType.DOTTEDPATH:
+        dp = cast(DottedPath, target)
+        # `5.i32` → child name is i32
+        if dp.parent.nodetype == NodeType.ATOMID and dp.child.name in {
+            "i8",
+            "i16",
+            "i32",
+            "i64",
+            "u8",
+            "u16",
+            "u32",
+            "u64",
+            "f32",
+            "f64",
+        }:
+            return AtomId(name=dp.child.name, start=loc, synth_origin=_SYNTH_ORIGIN)
+    return AtomId(name="i64", start=loc, synth_origin=_SYNTH_ORIGIN)
+
+
 # ---- Body rewrite: AtomId(X) -> this.X for promoted names --------
 
 
@@ -793,13 +858,15 @@ def _build_generator(
         # gives form unrecognised — typechecker already complained
         return None, None
 
-    # 4. Promotion (v1): parameters only. Locals stay on the C stack
-    # inside the synthesised `.call` body for G3. The emitter
-    # (G4) and the liveness pass (G7) will revisit local promotion
-    # once the actual state-machine codegen needs to preserve
-    # cross-suspension locals as struct fields.
+    # 4. Promotion (v1):
+    #    - parameters: always (factory passes them to meta.create).
+    #    - locals: every assigned local gets promoted to a field. A
+    #      cross-yield analysis (G7) would narrow this; v1 takes the
+    #      simpler promote-everything route so the state machine
+    #      preserves locals across suspensions automatically.
     param_names = list(func.parameters.keys())
-    promoted = set(param_names)
+    local_assignments = _collect_local_assignments(func.body)
+    promoted = set(param_names) | set(local_assignments.keys())
 
     # 5. build the synthesized class body
     class_fields: Dict[str, zast.Node] = {}
@@ -816,6 +883,16 @@ def _build_generator(
         if field_name is None or field_path is None:
             continue
         class_fields[field_name] = field_path
+    # Local fields: type inferred from the first assignment's RHS
+    # by a lightweight pattern match (numeric literal -> matching int
+    # type; otherwise i64). Real type inference for promoted locals
+    # is G7 territory; the heuristic here covers the common loop-
+    # counter / accumulator pattern.
+    for lname, first_rhs in local_assignments.items():
+        if lname in class_fields:
+            continue  # parameter shadows; param wins
+        field_type = _infer_local_field_type(first_rhs, func.start)
+        class_fields[lname] = field_type
 
     # 6. build the `create` method
     create_method = _build_create_method(
@@ -938,24 +1015,46 @@ def _build_create_method(
                 name=pname, valtype=lv, start=loc, synth_origin=_SYNTH_ORIGIN
             )
         )
-    create_call = Call(
-        callable=meta_create,
-        arguments=args,
+    # Parser flattens `return meta.create x: 1 y: 2` into one Call:
+    #   callable = "return"
+    #   arguments = [meta.create (positional), x: 1, y: 2, ...]
+    # The emitter's `_emit_return` special-case keys off this shape
+    # (DottedPath first arg). Match it exactly.
+    flattened_args: List[NamedOperation] = [
+        NamedOperation(
+            name=None,
+            valtype=meta_create,
+            start=loc,
+            synth_origin=_SYNTH_ORIGIN,
+        )
+    ]
+    flattened_args.extend(args)
+    return_call = Call(
+        callable=AtomId(name="return", start=loc, synth_origin=_SYNTH_ORIGIN),
+        arguments=flattened_args,
         start=loc,
         synth_origin=_SYNTH_ORIGIN,
     )
     create_expr = Expression(
-        expression=create_call, start=loc, synth_origin=_SYNTH_ORIGIN
+        expression=return_call, start=loc, synth_origin=_SYNTH_ORIGIN
     )
-    # body: `{ meta.create ... }` — single expression statement
+    # body: `{ return meta.create ... }` — single expression statement
     line = StatementLine(
         statementline=create_expr, start=loc, synth_origin=_SYNTH_ORIGIN
     )
     body = Statement(statements=[line], start=loc, synth_origin=_SYNTH_ORIGIN)
 
     this_return = AtomId(name="this", start=loc, synth_origin=_SYNTH_ORIGIN)
-    # Clone the param paths so they're independent from the factory's.
-    create_params: Dict[str, Path] = dict(params)
+    # Rewrite parameter types: inside the synth class's `create`
+    # method, `this` refers to the synth class (e.g. Bag_each_iter),
+    # not to the original receiver (Bag). For method-context
+    # generators (`receiver_type` set), parameter types written as
+    # `this.lock` / `this.private.lock` need to become
+    # `<receiver_type>.lock` / `<receiver_type>.private.lock` so the
+    # create method accepts the receiver as the caller sees it.
+    create_params: Dict[str, Path] = {}
+    for pname, ppath in params.items():
+        create_params[pname] = _rewrite_this_in_param_type(ppath, receiver_type, loc)
     return Function(
         returntype=this_return,
         parameters=create_params,
@@ -965,6 +1064,44 @@ def _build_create_method(
         start=loc,
         synth_origin=_SYNTH_ORIGIN,
     )
+
+
+def _rewrite_this_in_param_type(
+    ppath: Path, receiver_type: Optional[str], loc: Token
+) -> Path:
+    """If `ppath` is `this.lock` / `this.private.lock`, rewrite the
+    `this` head to the named receiver type. Leaves all other paths
+    untouched."""
+    if receiver_type is None:
+        return ppath
+    if ppath.nodetype != NodeType.DOTTEDPATH:
+        return ppath
+    dp = cast(DottedPath, ppath)
+    # Walk down to the head and detect a `this` / `this.private`.
+    if _is_this_path(dp.parent):
+        return DottedPath(
+            parent=AtomId(name=receiver_type, start=loc, synth_origin=_SYNTH_ORIGIN),
+            child=dp.child,
+            start=loc,
+            synth_origin=_SYNTH_ORIGIN,
+        )
+    if _is_this_private_path(dp.parent):
+        # dp.parent is `this.private`; rebuild as `<receiver_type>.private`.
+        type_atom = AtomId(name=receiver_type, start=loc, synth_origin=_SYNTH_ORIGIN)
+        priv_atom = AtomId(name="private", start=loc, synth_origin=_SYNTH_ORIGIN)
+        new_parent = DottedPath(
+            parent=type_atom,
+            child=priv_atom,
+            start=loc,
+            synth_origin=_SYNTH_ORIGIN,
+        )
+        return DottedPath(
+            parent=new_parent,
+            child=dp.child,
+            start=loc,
+            synth_origin=_SYNTH_ORIGIN,
+        )
+    return ppath
 
 
 def _build_call_method(
@@ -1018,42 +1155,43 @@ def _build_factory(
     """
     loc = func.start
     synth_atom = AtomId(name=synth_name, start=loc, synth_origin=_SYNTH_ORIGIN)
-    # Body: `<synth>.create p1: p1 p2: p2 ...`
-    create_path = DottedPath(
-        parent=synth_atom,
-        child=AtomId(name="create", start=loc, synth_origin=_SYNTH_ORIGIN),
-        start=loc,
-        synth_origin=_SYNTH_ORIGIN,
-    )
-    args: List[NamedOperation] = []
+    # Body: `return <synth_name> p1: p1 p2: p2 ...` — the emitter's
+    # `return <ClassName> field: val ...` special-case routes through
+    # `_build_create_args`, which respects the user-defined `.create`
+    # parameter order and handles lock/borrow class params without
+    # spurious `&` insertion. The same shape is used by
+    # examples/listiter.z's hand-written factory (`return BagIter
+    # target: b.private`).
+    forwarded: List[NamedOperation] = []
     for pname, ppath in func.parameters.items():
         if _is_this_path(ppath) or _is_this_private_path(ppath):
-            # bare receiver — shouldn't survive validation, skip.
+            # bare `:this` — rejected by validation; defensive skip.
             continue
-        base, leaf = _split_path_leaf(ppath)
-        if _is_this_path(base) or _is_this_private_path(base):
-            # Forward the receiver — the param name on the function
-            # came from `:this` / `:this.private`, so on the call
-            # side we forward `this` directly under the same
-            # synth-class field name (which is `pname`).
-            valtype: zast.Operation = AtomId(
-                name="this", start=loc, synth_origin=_SYNTH_ORIGIN
-            )
-        else:
-            valtype = AtomId(name=pname, start=loc, synth_origin=_SYNTH_ORIGIN)
-        args.append(
+        valtype = AtomId(name=pname, start=loc, synth_origin=_SYNTH_ORIGIN)
+        forwarded.append(
             NamedOperation(
                 name=pname, valtype=valtype, start=loc, synth_origin=_SYNTH_ORIGIN
             )
         )
-    factory_call = Call(
-        callable=create_path,
-        arguments=args,
+    # The parser flattens `return TypeName field: val` into one Call
+    # (`callable = return`, `arguments = [TypeName, field: val, ...]`).
+    return_args: List[NamedOperation] = [
+        NamedOperation(
+            name=None,
+            valtype=synth_atom,
+            start=loc,
+            synth_origin=_SYNTH_ORIGIN,
+        )
+    ]
+    return_args.extend(forwarded)
+    return_call = Call(
+        callable=AtomId(name="return", start=loc, synth_origin=_SYNTH_ORIGIN),
+        arguments=return_args,
         start=loc,
         synth_origin=_SYNTH_ORIGIN,
     )
     body_expr = Expression(
-        expression=factory_call, start=loc, synth_origin=_SYNTH_ORIGIN
+        expression=return_call, start=loc, synth_origin=_SYNTH_ORIGIN
     )
     body_line = StatementLine(
         statementline=body_expr, start=loc, synth_origin=_SYNTH_ORIGIN
