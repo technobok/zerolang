@@ -466,7 +466,7 @@ Action items (see plan-list at line 667 for landed-commit citations):
       *(F5.H landed flat `type_child` / `type_generic_arg` tables;
       remaining row-shape work for the three records folds into F6.)*
 
-### F6. `zsqldump.py` exposes the in-memory shape — Med (goals 5, 6)
+### F6. `zsqldump.py` exposes the in-memory shape — Med (goals 5, 6) \[RESOLVED\]
 
 `zsqldump.py` does more than write rows — it has to *adapt* the
 in-memory shape because that shape is not yet table-flat:
