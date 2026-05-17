@@ -11390,3 +11390,161 @@ class TestIteratorReturnType:
         assert any(".lock" in e.msg for e in errors), (
             f"Expected an error mentioning .lock, got: {[e.msg for e in errors]}"
         )
+
+
+class TestGeneratorDesugaring:
+    """Phase G3: desugar generator functions into a synthesized
+    iterator class + factory pair.
+
+    A *generator* is any function whose declared return type is
+    `iterator gives: T (takes: U)` AND whose body contains at least
+    one `yield`. The pass walks the parsed program before type
+    resolution; the resulting AST is ordinary class+function code
+    that the rest of the typechecker validates with no further
+    generator-specific machinery.
+    """
+
+    def test_simple_generator_desugars_to_class(self):
+        """A no-parameter generator produces a class named
+        `<funcname>_iter` with a `state` field, a `create` static,
+        and an instance `call` method. The original function is
+        rewritten as a factory whose return type is the synth
+        class and whose body builds an instance via
+        `<synth>.create`."""
+        program, _typing = check_ok(
+            "gen: function out (iterator gives: i32) is { yield 1 }"
+        )
+        body = program.units["test"].body
+        assert "gen_iter" in body, f"Expected synth class 'gen_iter', got: {list(body)}"
+        synth = body["gen_iter"]
+        assert synth.nodetype == zast.NodeType.CLASS
+        assert "state" in synth.is_items
+        assert "create" in synth.as_items
+        assert "call" in synth.as_items
+        gen = body["gen"]
+        assert isinstance(gen, zast.Function)
+        stmts = gen.body.statements
+        assert len(stmts) == 1
+        sl = stmts[0].statementline
+        assert isinstance(sl, zast.Expression)
+        assert sl.expression.nodetype == zast.NodeType.CALL
+
+    def test_generator_with_parameter_take_captured(self):
+        """A `.take` parameter becomes an owned field on the synth
+        class (the `.take` is the ownership-transfer at the
+        factory's call site; the class itself stores the value
+        directly)."""
+        program, _typing = check_ok(
+            "gen: function {s: String.take} out (iterator gives: i32) is { yield 1 }"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        assert "s" in synth.is_items
+        field = synth.is_items["s"]
+        assert field.nodetype == zast.NodeType.ATOMID and field.name == "String"
+
+    def test_generator_with_parameter_lock_captured(self):
+        """A `.lock` parameter becomes a lock field so the iterator
+        holds the lock for its lifetime."""
+        program, _typing = check_ok(
+            "holdgen: function {b: Bytes.lock} out (iterator gives: i32) "
+            "is { yield 1 }\n"
+            "main: function is { b: (Bytes) "
+            "with g: (holdgen b: b.lock) do { } }"
+        )
+        synth = program.units["test"].body["holdgen_iter"]
+        assert "b" in synth.is_items
+        assert synth.is_items["b"].nodetype == zast.NodeType.DOTTEDPATH
+
+    def test_generator_borrow_param_rejected(self):
+        """Bare `.borrow` on a generator parameter is rejected with
+        a message pointing at the legal alternatives."""
+        errors = check_errors(
+            "gen: function {s: String.borrow} out (iterator gives: i32) is { yield 1 }"
+        )
+        assert any(
+            "borrow" in e.msg and (".lock" in e.msg or ".take" in e.msg) for e in errors
+        ), f"Expected a borrow-rejection message, got: {[e.msg for e in errors]}"
+
+    def test_generator_method_receiver_lock_captured(self):
+        """A method on a class typed `b: this.lock` becomes a
+        receiver-lock field on the synth class."""
+        program, _typing = check_ok(
+            "Bag: class { x: i64 } as {\n"
+            "    each: function {b: this.lock} out (iterator gives: i32) "
+            "is { yield b.x }\n"
+            "}"
+        )
+        synth = program.units["test"].body["Bag_each_iter"]
+        assert "b" in synth.is_items
+        assert synth.is_items["b"].nodetype == zast.NodeType.DOTTEDPATH
+
+    def test_generator_method_this_bare_rejected(self):
+        """Bare `:this` on a generator method is rejected; the
+        iterator outlives the factory call so the receiver needs
+        an explicit lock."""
+        errors = check_errors(
+            "Bag: class { x: i64 } as {\n"
+            "    each: function {:this} out (iterator gives: i32) "
+            "is { yield 1 }\n"
+            "}"
+        )
+        assert any("':this.lock'" in e.msg or "this.lock" in e.msg for e in errors), (
+            f"Expected a :this rejection message, got: {[e.msg for e in errors]}"
+        )
+
+    def test_generator_method_private_lock_captured(self):
+        """A method receiver typed `b: this.private.lock` captures
+        the friend-access lock — the synth class's field is a
+        `Type.private.lock` dotted path."""
+        program, _typing = check_ok(
+            "Bag: class { x: i64 } as {\n"
+            "    each: function {b: this.private.lock} out "
+            "(iterator gives: i32) is { yield b.x }\n"
+            "}"
+        )
+        synth = program.units["test"].body["Bag_each_iter"]
+        assert "b" in synth.is_items
+
+    def test_generator_return_with_value_rejected(self):
+        """`return <value>` inside a generator body is a compile
+        error — yielded values exit via `yield`."""
+        errors = check_errors(
+            "gen: function out (iterator gives: i32) is {\n    yield 1\n    return 5\n}"
+        )
+        assert any(
+            "'return <value>'" in e.msg
+            or ("return" in e.msg.lower() and "generator" in e.msg.lower())
+            for e in errors
+        ), f"Expected a return-rejection message, got: {[e.msg for e in errors]}"
+
+    def test_generator_no_yield_in_body_accepted_as_factory(self):
+        """Open question A settled toward (i): an iterator-return
+        function with no `yield` in its body is an ordinary
+        factory; no synth class is generated."""
+        program, _typing = check_ok("gen: function out (iterator gives: i32) is { }")
+        body = program.units["test"].body
+        assert "gen_iter" not in body
+        assert "gen" in body
+
+    def test_yield_in_nested_function_rejected_at_parse(self):
+        """Already enforced by the parser (G1 rule 10); re-asserted
+        here to lock the boundary down at the desugaring layer
+        too (the parser surfaces this as a parse error, before
+        desugaring ever runs)."""
+        result = make_parser(
+            "gen: function out (iterator gives: i32) is { yield 1 } "
+            "as { helper: function is { yield 9 } }",
+            unitname="test",
+            src_dir=LIB_DIR,
+        ).parse()
+        assert isinstance(result, zast.Error)
+
+    def test_for_loop_over_generator_synthesizes_class_call(self):
+        """A for-loop drives the synth class's `.call`; the
+        end-to-end pipeline (parse → desugar → type-check) finishes
+        without errors."""
+        check_ok(
+            "gen: function out (iterator gives: i32) is "
+            "{ yield 1 yield 2 yield 3 }\n"
+            "main: function is { with it: gen do for x: it loop { } }"
+        )

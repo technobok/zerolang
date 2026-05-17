@@ -10,6 +10,7 @@ from typing import Callable, Optional, List, Tuple, cast
 
 import zast
 import ztyping
+import zgenerator
 from zast import ERR, NodeType, clone_function
 from zlexer import Token
 from zenv import ZSymbolTable
@@ -422,11 +423,17 @@ class TypeChecker:
     """
 
     def __init__(self, program: zast.Program) -> None:
+        # Generator desugaring runs first, before any type
+        # resolution: it rewrites generator-shaped functions into a
+        # synthesized class + a factory function and appends any
+        # validation errors to `self.errors` below. The transformed
+        # AST flows through the rest of the typechecker unchanged.
+        gen_errors = zgenerator.desugar_generators(program)
         self.program = program
         # Typecheck-output container — holds the component tables and
         # aggregate state populated during checking.
         self.typing = ztyping.ZTyping(parsed=program)
-        self.errors: List[zast.Error] = []
+        self.errors: List[zast.Error] = list(gen_errors)
         self.symtab = ZSymbolTable(typing=self.typing)
 
         # well-known types (only null/never are standalone — others come from system.z)
@@ -6282,6 +6289,21 @@ class TypeChecker:
         elif inner.nodetype == NodeType.SWAP:
             self._check_swap(cast(zast.Swap, inner))
             t = self.t_null
+        elif inner.nodetype == NodeType.YIELD:
+            # `yield <expr>` is a suspension point inside a generator
+            # function (the parser only allows it directly in a
+            # function body; the desugarer leaves yields in place
+            # inside the synthesized `.call` method for the emitter
+            # to lower into a state machine in G4). Type-check the
+            # inner expression so users still get diagnostics for
+            # malformed yielded values; leave the yield's own type
+            # unset (None) so the implicit-return-type check at the
+            # tail of a generator's `.call` body — which has yields
+            # as terminator expressions, not value returns — skips
+            # the comparison.
+            yield_node = cast(zast.Yield, inner)
+            self._check_expression(yield_node.expr)
+            t = None
         elif inner.nodetype in (
             NodeType.BINOP,
             NodeType.DOTTEDPATH,
