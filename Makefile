@@ -24,7 +24,7 @@ check:
 	@$(MAKE) --no-print-directory bootstrap-lint
 
 # Baseline counts of existing violations (update when migrating away)
-# isinstance:0  comprehension:14  lambda:0  try/except:8  hasattr:16
+# isinstance:0  comprehension:8  lambda:0  try/except:8  hasattr:6
 # getattr:4 (F2 — defensive duck-typing on heterogeneous unions)
 # name-compare:14 (Phase 7e — cross-structure .name ==/!= in src/*.py)
 # startswith:42 (F3 — string-prefix tests; prefer id-based dispatch)
@@ -38,14 +38,14 @@ bootstrap-lint:
 		grep -rn 'isinstance(' src/*.py | tail -5; fail=1; \
 	fi; \
 	count=$$(grep -rn '\[.*\bfor\b.*\bin\b' src/*.py | wc -l); \
-	if [ $$count -gt 14 ]; then \
-		echo "ERROR: list comprehension usage increased ($$count > 14 baseline)"; \
+	if [ $$count -gt 8 ]; then \
+		echo "ERROR: list comprehension usage increased ($$count > 8 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn '\[.*\bfor\b.*\bin\b' src/*.py | tail -5; fail=1; \
 	fi; \
 	count=$$(grep -rn 'lambda ' src/*.py | wc -l); \
 	if [ $$count -gt 0 ]; then \
-		echo "ERROR: lambda usage increased ($$count > 1 baseline)"; \
+		echo "ERROR: lambda usage increased ($$count > 0 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn 'lambda ' src/*.py | tail -5; fail=1; \
 	fi; \
@@ -62,8 +62,8 @@ bootstrap-lint:
 		grep -rn '\byield\b' src/*.py | tail -5; fail=1; \
 	fi; \
 	count=$$(grep -rn 'hasattr(' src/*.py | wc -l); \
-	if [ $$count -gt 16 ]; then \
-		echo "ERROR: hasattr() usage increased ($$count > 16 baseline)"; \
+	if [ $$count -gt 6 ]; then \
+		echo "ERROR: hasattr() usage increased ($$count > 6 baseline)"; \
 		echo $(BOOTSTRAP_MSG); echo $(BOOTSTRAP_MSG2); \
 		grep -rn 'hasattr(' src/*.py | tail -5; fail=1; \
 	fi; \
