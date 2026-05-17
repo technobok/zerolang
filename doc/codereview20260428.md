@@ -532,7 +532,7 @@ Action items:
       is line→node (not node→line) — no consumer wants the
       inverted shape, so closed as-is.)*
 
-### F7. `zemitterc_templates.py` underused — Low (goals 1, 2)
+### F7. `zemitterc_templates.py` underused — Low (goals 1, 2) \[RESOLVED\]
 
 `src/zemitterc_templates.py` is 60 lines, with 4 callers in
 `zemitterc.py` (`apply()` for `z_array.c.tmpl`, `z_str.c.tmpl`,
