@@ -25,9 +25,8 @@ class ZScopeLogRow:
     """One row of the append-only scope log on ZSymbolTable.
 
     Captures each push/pop pair so the SQL dump can reconstruct the
-    full scope history (including parent/child hierarchy and open/close
-    ordering) from a single table iteration instead of a dual-walk
-    over live and archived scope lists. F6 (codereview20260428).
+    full scope history (parent/child hierarchy + open/close ordering)
+    from a single table iteration.
 
     `closed_at_seq` is None until the scope is popped. `parent_id` is
     the `scope_id` of the scope that was at the top of the stack when
@@ -135,21 +134,19 @@ class ZSymbolTable:
 
     def __init__(self, typing: "Optional[Any]" = None) -> None:
         self._scopes: List[ZScope] = []
-        # Phase 7c: archive of popped scopes, in pop order. The SQL dumper
-        # reads this plus `_scopes` to reconstruct the full scope history.
-        # Popped scopes keep their entries/scope_id so an id-based dump is
-        # deterministic across runs.
+        # Archive of popped scopes in pop order. Popped scopes keep
+        # their entries/scope_id so an id-based dump is deterministic
+        # across runs.
         self._history: List[ZScope] = []
-        # F6: append-only scope log — one row per push, stamped with
-        # close_at_seq on pop. Carries parent_id for explicit hierarchy.
-        # The SQL dumper reads scope_log alone; the dual-walk over
-        # _history + _scopes is gone.
+        # Append-only scope log — one row per push, stamped with
+        # close_at_seq on pop. Carries parent_id for explicit
+        # hierarchy. The SQL dumper reads this list alone.
         self.scope_log: List[ZScopeLogRow] = []
         self._seq_counter: int = 0
-        # F5.H.5: bound `ZTyping` for narrowing/exclude lookups that need
-        # to read the flat type_child table. Typed Any to keep zenv free
-        # of an import cycle with ztyping; production callers (TypeChecker)
-        # pass a real ZTyping.
+        # Bound `ZTyping` for narrowing/exclude lookups that need to
+        # read the flat type_child table. Typed Any to keep zenv free
+        # of an import cycle with ztyping; production callers
+        # (TypeChecker) pass a real ZTyping.
         self._typing: "Any" = typing
 
     def _log_push(self, scope: ZScope) -> None:
@@ -664,8 +661,8 @@ class ZSymbolTable:
                 entry_ztype = payload
         else:
             entry_ztype = original_type
-        # Phase 7c: mint narrowed_subtype_id against the outer type so the
-        # symbol table exposes an id-addressable handle on the arm.
+        # Mint narrowed_subtype_id against the outer type so the symbol
+        # table exposes an id-addressable handle on the arm.
         nsid = original_type.child_id_for(subtype_name) if subtype_name else None
         entry = ZEntry(
             name=name,
@@ -710,7 +707,7 @@ class ZSymbolTable:
             sname, _ = next(iter(remaining.items()))
             narrowed_sub = sname
 
-        # Phase 7c: mint id parallels against the full outer type.
+        # Mint id parallels against the full outer type.
         narrowed_sub_id = full_type.child_id_for(narrowed_sub) if narrowed_sub else None
         excluded_ids = frozenset(full_type.child_id_for(s) for s in new_excluded)
 

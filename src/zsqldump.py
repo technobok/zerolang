@@ -34,9 +34,9 @@ _OP_NODETYPES = (
 
 def _node_ztype(typing: "ztyping.ZTyping", node: zast.Node) -> Optional[ZType]:
     """Read the resolved `ZType` for `node`, descending through the
-    `Expression` wrapper. F5.E.4.d: reads `ZTyping.node_type` directly.
-    Tries the inner-subtype nodeid first and falls back to the outer
-    Expression nodeid (typecheck stamps both paths)."""
+    `Expression` wrapper. Tries the inner-subtype nodeid first and
+    falls back to the outer Expression nodeid (typecheck stamps both
+    paths)."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
@@ -48,7 +48,7 @@ def _node_ztype(typing: "ztyping.ZTyping", node: zast.Node) -> Optional[ZType]:
 
 def _node_const_value(typing: "ztyping.ZTyping", node: zast.Node):
     """Read `const_value` for `node`. Same descent rule as
-    `_node_ztype`. F5.E.4.d: reads `ZTyping.node_const_value` directly."""
+    `_node_ztype`."""
     target = node
     while target.nodetype == NodeType.EXPRESSION:
         target = cast(zast.Expression, target).expression
@@ -196,10 +196,8 @@ CREATE TABLE IF NOT EXISTS entry (
     taken_at_file         INTEGER
 );
 
--- F6: per-entry narrowing state. Replaces the four CSV/scalar
--- columns (narrowed_subtype{,_id}, excluded_subtypes{,_ids}) that
--- lived on entry pre-2026-05. One row per narrowed-to or excluded
--- subtype. Singular table name per CLAUDE.md.
+-- Per-entry narrowing state. One row per narrowed-to or excluded
+-- subtype (singular table name per CLAUDE.md).
 CREATE TABLE IF NOT EXISTS narrowed_subtype (
     entry_id  INTEGER NOT NULL REFERENCES entry(entry_id),
     name      TEXT NOT NULL,
@@ -363,9 +361,8 @@ def dump_sql(
             f"{_sql_str(ztype.cname if ztype.cname else None)});"
         )
 
-    # type_children (F5.H.3.c: dumped directly from the flat
-    # typing.type_child table, which is now the authoritative form).
-    # Rows belonging to types unreachable from `all_types` (e.g.
+    # type_children: dumped directly from the flat typing.type_child
+    # table. Rows belonging to types unreachable from `all_types` (e.g.
     # discarded mono shells, transient builders) are filtered out so
     # the dump stays in sync with the `types` table.
     for row in typing.type_child:
@@ -401,9 +398,9 @@ def dump_sql(
             f"{node.nodeid}, {type_id}, {cname}, {is_const}, {const_val});"
         )
 
-    # Stage 5b: units (Phase 7d). unit_id is the Unit AST's Node.nodeid.
-    # unit_type_id is filled from the id-keyed unit_types snapshot; NULL
-    # when a unit was never materialized by typecheck.
+    # Stage 5b: units. unit_id is the Unit AST's Node.nodeid. unit_type_id
+    # comes from the id-keyed unit_types snapshot; NULL when a unit was
+    # never materialised by typecheck.
     unit_types_map = typing.unit_types_by_id
     for unitname, unit_ast in program.units.items():
         utype = unit_types_map.get(unit_ast.nodeid)
@@ -416,8 +413,8 @@ def dump_sql(
         )
 
     # Stage 6a: symbol table — scopes, variables, entries. Iterates
-    # `symtab.scope_log` (F6: append-only single source of truth for
-    # scope order). Each row carries the live ZScope reference so
+    # `symtab.scope_log` (append-only single source of truth for scope
+    # order). Each row carries the live ZScope reference so
     # entries/unreachable read off the row without a lookup. The
     # dumper tolerates a missing symbol_table (e.g. when called
     # without running typecheck): simply emits no rows for the
@@ -459,9 +456,9 @@ def dump_sql(
                     f"{_sql_bool(entry.is_taken)}, "
                     f"{taken_line}, {taken_col}, {taken_file});"
                 )
-                # F6: per-entry narrowing as child rows. One row for
-                # the narrowed-to subtype (excluded=0) when present;
-                # one row per excluded subtype (excluded=1).
+                # Per-entry narrowing as child rows: one row for the
+                # narrowed-to subtype (excluded=0) when present, one
+                # row per excluded subtype (excluded=1).
                 if entry.narrowed_subtype is not None:
                     lines.append(
                         f"INSERT INTO narrowed_subtype VALUES ("
