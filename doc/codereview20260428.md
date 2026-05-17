@@ -2,47 +2,49 @@
 
 ## Executive Summary
 
-Since the 2026-03-29 review the compiler has absorbed several large
-phases (atomic-call refactor, lock-escape, born-borrowed ownership,
-falsy-first, for-loop iterator overhaul, borrow-correctness) and the
-front-end is now in genuinely good shape: `isinstance` is held at 0 by
-`bootstrap-lint`, AST dispatch goes through `nodetype` + `cast()`, the
-`native` keyword has absorbed the bulk of "compiler knows about builtin
-type X" specials, and most major data carries integer ids. The lexer,
-parser, and AST modules have very few remaining smells.
+This review followed several large front-end phases (atomic-call
+refactor, lock-escape, born-borrowed ownership, falsy-first,
+for-loop iterator overhaul, borrow-correctness) and identified a
+set of back-end and lint-coverage gaps to close before a
+self-hosted port. As of 2026-05-17 the gaps the review opened are
+substantially closed; the surviving open items are F13's libzrt /
+example-coverage carry-forwards and the 20260322 audit residuals.
 
-The remaining gaps are concentrated in the **back-end** and in the
-**lint coverage** itself:
+Resolved findings (this review): F1, F2, F3, F4 (bucket D
+deferred by design), F5 (all sub-items A–H), F6, F7, F8, F9, F10,
+F11, F12, and F13 Phase 1. The cleanup that landed:
 
-1. `getattr(...)` is used ~125 times across the back-end — both as
-   defensive AST-field access (where direct field reads work) and as a
-   stand-in for "this `program.*` field may or may not have been
-   attached yet". Neither pattern survives a port to zerolang. `getattr`
-   is not yet tracked by `bootstrap-lint`, so it has been growing
-   silently.
-2. The C emitter still does ~134 string-literal compares (`name ==
-   "this"`, `name == "String"`, IO-class names, special-method names).
-   These are the largest remaining source of the "compiler hardcodes
-   the name of a builtin" pattern that goal 4 is trying to eliminate.
-3. The `TypeChecker` carries 33+ instance attributes, several of them
-   poked from many call sites (`self._pending_borrow_lock`,
-   `self._pending_private_access`); save/restore prologues for those
-   are now a recognisable smell.
-4. `zsqldump.py` is a useful diagnostic of the in-memory shape: it
-   still has to probe with `getattr(...)` and dual-walk
-   `symtab._history + symtab._scopes`, which means in-memory state is
-   not yet quite table-flat.
-5. A handful of low-cost portability and hygiene items remain:
-   `copy.deepcopy(func)` for monomorphization (resolved 7bb5020),
-   the last `isinstance` (resolved 32c779a), stale TODOs, the
-   `getattr`-driven visitor in `zsynth.py` (resolved 366d0d6).
-6. Several findings from `codereview20260322.md` were left in unclear
-   status; the audit at the end of this review closes them out.
+- `isinstance` held at 0 by `bootstrap-lint`; AST dispatch goes
+  through `nodetype` + `cast()`.
+- `getattr` count down from ~125 to 4 (the residual is documented
+  defensive duck-typing on a heterogeneous union); `bootstrap-lint`
+  now ratchets it with `startswith` and `name-literal-compare`
+  alongside.
+- C emitter literal compares — receiver-detection migrated to
+  `Entry.is_receiver`, String/StringView dispatch goes via
+  `ZSubType`, `parseF64`/`envNames` go via `ZBuiltinFunc`. Bucket
+  D (`create`/`take`/`borrow` and similar role-name literals)
+  deferred by design.
+- `TypeChecker` state sprawl resolved via context records
+  (`MonoState`, `FunctionContext`, `TemplateIds`) plus the
+  `ZTyping` container holding the previously-scattered nodeid-
+  keyed side tables.
+- `zsqldump.py` now reads a clean shape: 0 `getattr`, `scope_log`
+  in place of dual-walk, `narrowed_subtype` child table,
+  `zip(strict=True)` with length pre-assert, post-emission
+  `source_map`.
+- `copy.deepcopy(func)` replaced with explicit clone visitor;
+  `zsynth.py` visitor moved to a `NodeType` dispatch dict;
+  stale TODOs closed.
+- `zemitterc_templates.py` documents what's templated vs ad-hoc;
+  `z_protocol_vtable.c.tmpl` proves out the migration path.
+- Doc drift across `compiler.pdoc`, `roadmap.pdoc`,
+  `Design-OPEN.pdoc`, `zparser.py`, `zemitterc.py` verified
+  current.
 
-The proposed plan is four phases — easy wins first, then back-end
-cleanup, then architectural records, then docs — followed by a
-concrete `bootstrap-lint` expansion that prevents the cleaned-up
-patterns from regressing.
+Remaining open: F13's libzrt `malloc` NULL audit (blocked on
+Phase 40 error infrastructure) and the 12 examples not exercised
+through the emitter; carry-forwards from `codereview20260322.md`.
 
 Status legend: `[ ]` open, `[x]` done, `[~]` partial.
 
@@ -208,7 +210,7 @@ legitimately heterogeneous unions (Token-or-NodeX in `zparser.py`;
 `is_native` / `functions` only on some Unit.body members in
 `zemitterc.py` / `ztypecheck.py`).
 
-### F3. Add `getattr`, `startswith`, name-literal compares to bootstrap-lint — High (goals 3, 4) \[~partial\]
+### F3. Add `getattr`, `startswith`, name-literal compares to bootstrap-lint — High (goals 3, 4) \[RESOLVED\]
 
 Today's `Makefile:25-72` baselines: `isinstance:1, comprehension:14,
 lambda:0, try/except:8, hasattr:16, name-compare:14`. The lint
@@ -276,7 +278,7 @@ Action items:
       expanded set. *(Added `startswith:42` and
       `name-literal-compare:272` lines.)*
 
-### F4. String-literal compares in the C emitter — High (goal 4) \[~partial\]
+### F4. String-literal compares in the C emitter — High (goal 4) \[RESOLVED — bucket D deferred by design\]
 
 `zemitterc.py` has ~134 `== "..."` literals against names. The hot ones:
 
@@ -386,7 +388,7 @@ Action items:
 Bucket D remains open by design (see action item: ~50 syntax-keyword
 sites where literals are more readable than enum constants).
 
-### F5. TypeChecker state sprawl — Med (goals 1, 5)
+### F5. TypeChecker state sprawl — Med (goals 1, 5) \[RESOLVED\]
 
 `TypeChecker.__init__` (and ad-hoc setattrs across the file) holds 33+
 instance attributes. Cross-cutting state is the bigger problem than
@@ -636,7 +638,7 @@ Action items:
 - [x] Replaced the `getattr` lookup in `zsynth.py` with an explicit
       `Dict[NodeType, Callable]`. *(Resolved `366d0d6`.)*
 
-### F12. Documentation drift — Med (goal 6)
+### F12. Documentation drift — Med (goal 6) \[RESOLVED\]
 
 Several earlier-flagged drifts deserve a fresh pass against the
 current state:
