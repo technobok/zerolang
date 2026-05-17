@@ -11548,3 +11548,49 @@ class TestGeneratorDesugaring:
             "{ yield 1 yield 2 yield 3 }\n"
             "main: function is { with it: gen do for x: it loop { } }"
         )
+
+    def test_generator_field_promotion_only_for_yield_crossing_locals(self):
+        """G7 liveness: only locals that cross a yield are promoted
+        to class fields. Non-crossing locals (defined and used
+        between two yields, with no suspension in the middle) stay
+        on the C stack inside the synth `.call` body.
+
+        Sample shape:
+            crossing:     defined before yield, used after  → field
+            non_crossing: defined and used between yields   → stack
+            counter:      loop counter with a yield in body → field
+                                                                (yielding-loop rule)
+        """
+        program, _typing = check_ok(
+            "gen: function {n: i64} out (iterator gives: i64) is {\n"
+            "    crossing: 100\n"
+            "    yield 1\n"
+            "    yield crossing\n"
+            "    non_crossing: 200\n"
+            "    yield non_crossing\n"
+            "    counter: 0\n"
+            "    for while counter < n loop {\n"
+            "        yield counter\n"
+            "        counter = counter + 1\n"
+            "    }\n"
+            "}"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        fields = set(synth.is_items.keys())
+        # Always-present fields: state cursor + captured params.
+        assert "state" in fields
+        assert "n" in fields  # parameter — always promoted
+        # Cross-yield locals are promoted.
+        assert "crossing" in fields, (
+            f"`crossing` (def before yield, use after) should be a "
+            f"field; got fields={fields}"
+        )
+        assert "counter" in fields, (
+            f"`counter` (loop counter with yield in body) should be a "
+            f"field; got fields={fields}"
+        )
+        # Non-crossing local stays off the synth class.
+        assert "non_crossing" not in fields, (
+            f"`non_crossing` (def + use between two yields, no cross) "
+            f"should NOT be a field; got fields={fields}"
+        )

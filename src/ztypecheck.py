@@ -6305,14 +6305,17 @@ class TypeChecker:
             # inside the synthesized `.call` method for the emitter
             # to lower into a state machine in G4). Type-check the
             # inner expression so users still get diagnostics for
-            # malformed yielded values; leave the yield's own type
-            # unset (None) so the implicit-return-type check at the
-            # tail of a generator's `.call` body — which has yields
-            # as terminator expressions, not value returns — skips
-            # the comparison.
+            # malformed yielded values. For bidirectional
+            # generators (`takes != null`), the yield's value type
+            # is the takes type — synthesized as the `.call`
+            # method's `value:` parameter by the desugarer (G6), so
+            # we look it up here. Out-only generators leave the
+            # type unset (None) so the body's implicit-return
+            # check skips the yield-as-terminator comparison.
             yield_node = cast(zast.Yield, inner)
             self._check_expression(yield_node.expr)
-            t = None
+            takes_t = self.symtab.lookup("value")
+            t = takes_t if takes_t is not None else None
         elif inner.nodetype in (
             NodeType.BINOP,
             NodeType.DOTTEDPATH,

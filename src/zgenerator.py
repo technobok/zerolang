@@ -608,6 +608,106 @@ def _validate_first_yield_not_expression_form(
     return True
 
 
+def _crossing_locals(body: Statement, param_names: Set[str]) -> Set[str]:
+    """Return the subset of body-assigned local names that *cross a
+    yield* and therefore must be promoted to class fields on the
+    synth class. The complement set is kept as ordinary C-stack
+    locals inside the `.call` method.
+
+    The analysis is structural rather than CFG-driven (Zerolang's
+    AST has structured control flow only). Two rules suffice to
+    flag every crossing case correctly; non-crossing locals are a
+    strict subset of "doesn't trip either rule":
+
+      (1) **Yield-count rule** — track how many yields have been
+          *passed* at each visited node (pre-bump for the yield's
+          own expr). If, for some local, `max_use_yc > first_def_yc`,
+          the def-to-use path crosses a yield in straight-line code.
+      (2) **Yielding-loop rule** — if any reference (def or use) to
+          a local sits inside the body (or a nested body) of a
+          `for` loop whose body contains a yield, that local crosses
+          implicitly: the next iteration starts after the current
+          iteration's yield, and any reuse of the local then is
+          past a suspension point.
+
+    Both rules are conservative — when in doubt, promote. Parameters
+    are always promoted independently (the factory hands them to
+    `meta.create`); the analysis here only classifies *locals*.
+    """
+    first_def_yc: Dict[str, int] = {}
+    max_use_yc: Dict[str, int] = {}
+    in_yielding_loop: Set[str] = set()
+    yield_count = [0]  # list-wrapped so the inner closure can mutate
+
+    def has_yield_in_subtree(node: zast.Node) -> bool:
+        if node.nodetype == NodeType.YIELD:
+            return True
+        if node.nodetype == NodeType.FUNCTION:
+            return False  # nested function literal — its yields are
+            # not the enclosing generator's (parser rule 10).
+        for c in zast.node_children(node):
+            if has_yield_in_subtree(c):
+                return True
+        return False
+
+    def walk(node: zast.Node, in_yielding_loop_now: bool) -> None:
+        nt = node.nodetype
+        if nt == NodeType.FUNCTION:
+            return
+        if nt == NodeType.YIELD:
+            # The yield's expr evaluates *before* the suspension; uses
+            # in it see the pre-bump count.
+            walk(cast(Yield, node).expr, in_yielding_loop_now)
+            yield_count[0] += 1
+            return
+        if nt == NodeType.ASSIGNMENT:
+            assn = cast(zast.Assignment, node)
+            # RHS evaluates before the binding takes effect — walk it
+            # first at the pre-def yield count.
+            walk(assn.value, in_yielding_loop_now)
+            name = assn.name
+            if name not in param_names and name not in first_def_yc:
+                first_def_yc[name] = yield_count[0]
+            if in_yielding_loop_now and name not in param_names:
+                in_yielding_loop.add(name)
+            return
+        if nt == NodeType.ATOMID:
+            name = cast(AtomId, node).name
+            if name in first_def_yc and name not in param_names:
+                yc = yield_count[0]
+                if name not in max_use_yc or yc > max_use_yc[name]:
+                    max_use_yc[name] = yc
+                if in_yielding_loop_now:
+                    in_yielding_loop.add(name)
+            return
+        if nt == NodeType.FOR:
+            fornode = cast(zast.For, node)
+            body_yields = fornode.loop is not None and has_yield_in_subtree(
+                fornode.loop
+            )
+            sub_in_loop = in_yielding_loop_now or body_yields
+            for c in fornode.conditions.values():
+                walk(c, sub_in_loop)
+            if fornode.loop is not None:
+                walk(fornode.loop, sub_in_loop)
+            for pc in fornode.postconditions:
+                walk(pc, sub_in_loop)
+            return
+        for c in zast.node_children(node):
+            walk(c, in_yielding_loop_now)
+
+    walk(body, False)
+
+    crossing: Set[str] = set()
+    for name, def_yc in first_def_yc.items():
+        use_yc = max_use_yc.get(name)
+        if use_yc is not None and use_yc > def_yc:
+            crossing.add(name)
+        elif name in in_yielding_loop:
+            crossing.add(name)
+    return crossing
+
+
 def _collect_local_assignments(body: Statement) -> Dict[str, zast.Node]:
     """Walk the body collecting each first `name: <expr>` assignment,
     returning a dict from name → first-RHS expression. Used by the
@@ -990,15 +1090,17 @@ def _build_generator(
         if not _validate_first_yield_not_expression_form(func.body, errors):
             return None, None
 
-    # 4. Promotion (v1):
+    # 4. Promotion (G7):
     #    - parameters: always (factory passes them to meta.create).
-    #    - locals: every assigned local gets promoted to a field. A
-    #      cross-yield analysis (G7) would narrow this; v1 takes the
-    #      simpler promote-everything route so the state machine
-    #      preserves locals across suspensions automatically.
+    #    - locals: only those that cross a yield. `_crossing_locals`
+    #      runs the structural liveness analysis; the locals it
+    #      flags become class fields, the rest stay on the C stack
+    #      inside the synth `.call` body.
     param_names = list(func.parameters.keys())
     local_assignments = _collect_local_assignments(func.body)
-    promoted = set(param_names) | set(local_assignments.keys())
+    param_name_set = set(param_names)
+    crossing_local_names = _crossing_locals(func.body, param_name_set)
+    promoted = param_name_set | crossing_local_names
 
     # 5. build the synthesized class body
     class_fields: Dict[str, zast.Node] = {}
@@ -1015,12 +1117,14 @@ def _build_generator(
         if field_name is None or field_path is None:
             continue
         class_fields[field_name] = field_path
-    # Local fields: type inferred from the first assignment's RHS
-    # by a lightweight pattern match (numeric literal -> matching int
-    # type; otherwise i64). Real type inference for promoted locals
-    # is G7 territory; the heuristic here covers the common loop-
-    # counter / accumulator pattern.
+    # Local fields: only crossing locals (G7 liveness). Field-type
+    # inference is the cheap heuristic from G4 — typed numeric
+    # literal (`5.i32`) keeps its type, everything else defaults to
+    # `i64`. Real type-aware promotion (P2) is still tracked under
+    # Deferred work.
     for lname, first_rhs in local_assignments.items():
+        if lname not in crossing_local_names:
+            continue  # non-crossing local — stays on the C stack
         if lname in class_fields:
             continue  # parameter shadows; param wins
         field_type = _infer_local_field_type(first_rhs, func.start)
