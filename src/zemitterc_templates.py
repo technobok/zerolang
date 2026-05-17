@@ -13,7 +13,7 @@ descriptive error.
 Non-templated runtime fragments (z_string.inc, z_stringview.inc)
 go through zemitterc_runtime's `_load_runtime_fragment` instead.
 
-# Templated codegen surface (F7 / codereview20260428)
+# Templated codegen surface
 
 Templated today (`src/runtime/*.c.tmpl`):
 

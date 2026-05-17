@@ -5,10 +5,9 @@ Produces a deterministic hash of a Function AST node based on its structure
 and resolved types, excluding function name and 'this' parameter type name.
 Used during monomorphization to detect identical function bodies.
 
-After Step 6.9.b stripped `Node.type`, the per-node resolved types are
-read from a `node_types: Dict[int, ZType]` dict threaded through every
-helper. The TypeChecker passes `program.node_type` (the F5.D
-Program-owned side-table) at call time.
+Per-node resolved types are read from a `node_types: Dict[int, ZType]`
+dict threaded through every helper; the TypeChecker passes
+`typing.node_type` at call time.
 """
 
 import hashlib

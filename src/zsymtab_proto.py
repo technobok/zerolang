@@ -5,9 +5,7 @@ typechecker just to declare the AST). zenv.ZSymbolTable structurally
 satisfies this Protocol; ty (the type checker) verifies the match.
 
 Only the surface that the SQL dumper consumes is captured here —
-the append-only `scope_log` (F6). `_scopes`/`_history` remain on
-the concrete `ZSymbolTable` for typecheck-side lookup/archival but
-are no longer part of the dumper's contract.
+the append-only `scope_log`.
 """
 
 from typing import Protocol, List

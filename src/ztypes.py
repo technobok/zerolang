@@ -384,8 +384,8 @@ class ZEntry:
     Represents either a definition (introduces a name) or a shadow/overlay
     (modifies state of a name from an outer scope).
 
-    `entry_id` is a monotonic per-process identity (Phase 7c) for SQL
-    dumps and future hot-path migrations.
+    `entry_id` is a monotonic per-process identity used as the SQL primary
+    key and as the hot-path identity for the scope chain.
     """
 
     entry_id: int = field(default_factory=_alloc_entry_id, init=False)
@@ -399,13 +399,11 @@ class ZEntry:
     lock: Optional[ZLockInfo] = None
     # narrowing state (for match/if arms)
     narrowed_subtype: Optional[str] = None  # "ok", "err" — narrowed in match arm
-    # Phase 7c: id parallel to narrowed_subtype. Minted via the outer
-    # union/variant's child_id_for(subtype_name). String remains
-    # authoritative; id is the hot-path key for future migrations.
+    # id parallel to narrowed_subtype, minted via the outer
+    # union/variant's child_id_for(subtype_name).
     narrowed_subtype_id: Optional[int] = None
     excluded_subtypes: "Optional[frozenset[str]]" = None  # subtypes ruled out
-    # Phase 7c: id parallel to excluded_subtypes. Same cardinality as the
-    # string set by construction (child_id_for is globally monotonic).
+    # id parallel to excluded_subtypes; same cardinality by construction.
     excluded_subtype_ids: "Optional[frozenset[int]]" = None
     # original union/variant type when ztype is the narrowed payload — the
     # emitter uses this to generate the C-level unwrap (original is still the
