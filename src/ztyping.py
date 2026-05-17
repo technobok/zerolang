@@ -31,19 +31,17 @@ from zsymtab_proto import ZSymbolTableProto
 
 @dataclass
 class ZTypeChild:
-    """One row of the flat children table (F5.H).
+    """One row of the flat children table.
 
-    Replaces a `(parent_ztype, name) → child_ztype` entry from
-    `ZType.children`. `child_name_id` is the monotonic id minted by
-    `ZType.child_id_for(child_name)` (Phase 7b children_id_map);
-    `position` preserves declaration order (rows appear in
-    insertion order in `ZTyping.type_child` per parent).
+    Each row represents a `(parent_ztype, child_name) → child_ztype`
+    edge. `child_name_id` is the monotonic id minted by
+    `ZType.child_id_for(child_name)`; `position` preserves
+    declaration order (rows appear in insertion order in
+    `ZTyping.type_child` per parent).
 
     `child_type` is the in-memory ZType reference, kept alongside the
-    id for fast resolution during the F5.H transition. SQL dumps
-    write `child_type_id` only; in-memory consumers read `child_type`.
-    A future refactor (post-F5.H) can drop the ref once a global
-    nodeid → ZType registry is in place.
+    id for fast resolution. SQL dumps write `child_type_id` only;
+    in-memory consumers read `child_type`.
     """
 
     parent_type_id: int
@@ -53,8 +51,7 @@ class ZTypeChild:
     position: int
     child_type: "ZType"
 
-    # Folded sidecars (formerly per-(parent, child-name) sets/dicts on
-    # ZType — see plans/line-count-increase-is-twinkling-willow.md):
+    # Per-(parent, child-name) sidecars carried alongside the edge.
     is_private: bool = False  # field declared with .private modifier
     is_lock_field: bool = False  # class field declared with .lock modifier
     is_lock_arm: bool = False  # union arm declared with .lock modifier
@@ -64,11 +61,11 @@ class ZTypeChild:
 
 @dataclass
 class ZTypeGenericArg:
-    """One row of the flat generic-args table (F5.H).
+    """One row of the flat generic-args table.
 
-    Replaces a `(parent_ztype, param_name) → arg_ztype` entry from
-    `ZType.generic_args`. `arg_type` is the in-memory ZType
-    reference (transitional; see ZTypeChild docstring).
+    Each row represents a `(parent_ztype, param_name) → arg_ztype`
+    edge. `arg_type` is the in-memory ZType reference (carried
+    alongside the id for fast resolution).
     """
 
     parent_type_id: int
@@ -81,12 +78,10 @@ class ZTypeGenericArg:
 class ZTyping:
     """Result of typechecking. See module docstring for context.
 
-    The 19 nodeid-keyed component tables below hold typecheck-derived
-    data that used to live as `init=False` columns on parsed AST
-    nodes (Step 6.x of the typed-tree migration). Each table is one
-    row per parsed node — a future SQL representation has one column
-    per dict (or one child table when the value is a list/set),
-    keyed by `node_id`.
+    The nodeid-keyed component tables below hold typecheck-derived
+    data; each table is one row per parsed node. A future SQL
+    representation maps each dict to one column (or one child table
+    when the value is a list/set), keyed by `node_id`.
     """
 
     parsed: zast.Program
@@ -95,7 +90,7 @@ class ZTyping:
     errors: List["zast.Error"] = field(default_factory=list, init=False)
     is_error: bool = field(default=False, init=False)
 
-    # ----- Aggregate typecheck state (F5.E.3: relocated from zast.Program).
+    # ----- Aggregate typecheck state.
 
     # monomorphized generic types: list of (mono_ztype, original_ast_node)
     mono_types: List[Tuple[ZType, "zast.TypeDefinition"]] = field(
@@ -113,77 +108,64 @@ class ZTyping:
     )
     # resolved type names: {qualified_name: ZType}
     resolved: Dict[str, ZType] = field(default_factory=dict, init=False)
-    # Unit AST nodeid → resolved unit ZType (Phase 7d).
+    # Unit AST nodeid → resolved unit ZType.
     unit_types_by_id: Dict[int, ZType] = field(default_factory=dict, init=False)
-    # Phase-7c symbol table (scope/entry/variable hierarchy). Typed via
+    # Symbol table (scope/entry/variable hierarchy). Typed via
     # `ZSymbolTableProto` to keep `ztyping` decoupled from `zenv`.
     symbol_table: Optional[ZSymbolTableProto] = field(default=None, init=False)
 
-    # ----- Component tables (F5.E.2: relocated from zast.Program).
+    # ----- Per-node component tables, keyed by parsed-AST nodeid.
 
-    # Per-Node resolved type (was `zast.Node.type`, stripped in Step 6.9.b).
+    # Per-Node resolved type.
     node_type: Dict[int, "Optional[ZType]"] = field(default_factory=dict, init=False)
-    # Per-Node compile-time constant value (was `zast.Node.const_value`,
-    # stripped in Step 6.9.a). Values are int / float / bool / str.
+    # Per-Node compile-time constant value (int / float / bool / str).
     node_const_value: Dict[int, "int | float | bool | str"] = field(
         default_factory=dict, init=False
     )
-    # Per-Call classification (was `zast.Call.call_kind` /
-    # `.callable_type_name`).
+    # Per-Call classification + resolved callable's type name.
     call_kind: Dict[int, CallKind] = field(default_factory=dict, init=False)
     call_callable_type_name: Dict[int, str] = field(default_factory=dict, init=False)
-    # Per-Expression wrapper control-flow classification (was
-    # `zast.Expression.call_kind`, stripped in Step 6.10).
+    # Per-Expression wrapper control-flow classification.
     expr_call_kind: Dict[int, CallKind] = field(default_factory=dict, init=False)
-    # Per-Do break flag (was `zast.Do.has_break`).
+    # Per-Do break flag.
     do_has_break: Dict[int, bool] = field(default_factory=dict, init=False)
-    # Per-Case subject-taken flag (was `zast.Case.subject_taken`).
+    # Per-Case subject-taken flag.
     case_subject_taken: Dict[int, bool] = field(default_factory=dict, init=False)
-    # Per-For iterator-binding names (was `zast.For.iterator_bindings`).
+    # Per-For iterator-binding names.
     for_iter_bindings: Dict[int, "set[str]"] = field(default_factory=dict, init=False)
-    # Per-If / per-Case post-block ownership cleanup (was
-    # `zast.If.taken_vars` / `zast.Case.taken_vars`).
+    # Per-If / per-Case post-block ownership cleanup.
     if_taken_vars: Dict[int, "list[tuple[str, Optional[ZType]]]"] = field(
         default_factory=dict, init=False
     )
     case_taken_vars: Dict[int, "list[tuple[str, Optional[ZType]]]"] = field(
         default_factory=dict, init=False
     )
-    # Per-AtomId narrowing stamps (was `zast.AtomId.narrowed_subtype`
-    # / `.original_ztype` / `.child_id`).
+    # Per-AtomId narrowing stamps.
     atom_narrowed_subtype: Dict[int, str] = field(default_factory=dict, init=False)
     atom_original_ztype: Dict[int, ZType] = field(default_factory=dict, init=False)
     atom_child_id: Dict[int, int] = field(default_factory=dict, init=False)
-    # Per-DottedPath stamps (was `zast.DottedPath.parent_tagged_type`
-    # / `.child_id`).
+    # Per-DottedPath stamps.
     dp_parent_tagged_type: Dict[int, ZType] = field(default_factory=dict, init=False)
     dp_child_id: Dict[int, int] = field(default_factory=dict, init=False)
-    # Per-With binding ownership + alias target (was `zast.With.ownership`
-    # / `.alias_of`).
+    # Per-With binding ownership + alias target.
     with_ownership: Dict[int, ZOwnership] = field(default_factory=dict, init=False)
     with_alias_of: Dict[int, "Optional[str]"] = field(default_factory=dict, init=False)
-    # Per-Assignment alias target (was `zast.Assignment.alias_of`).
+    # Per-Assignment alias target.
     assign_alias_of: Dict[int, "Optional[str]"] = field(
         default_factory=dict, init=False
     )
-    # Per-argument protocol projection stamps (was
-    # `zast.NamedOperation.projected_*`).
+    # Per-argument protocol projection stamps.
     projected_args: Dict[
         int,
         "tuple[Optional[ZType], Optional[str], Optional[str]]",
     ] = field(default_factory=dict, init=False)
 
-    # ----- Flat ZType.children / generic_args tables (F5.H).
-    #
-    # F5.H.1: introduced empty alongside the existing `ZType.children`
-    # / `ZType.generic_args` dicts. F5.H.2 populates them at every
-    # write site; F5.H.3/4 migrate consumers via the helper methods
-    # below; F5.H.5 removes the dicts and the helpers become the
-    # only access path.
+    # ----- Flat children / generic_args tables (relational form of
+    # the per-type edges that used to be dicts on `ZType`).
     type_child: List[ZTypeChild] = field(default_factory=list, init=False)
     type_generic_arg: List[ZTypeGenericArg] = field(default_factory=list, init=False)
 
-    # ---- F5.H children/generic_arg setters + accessors ----
+    # ---- children / generic_arg setters + accessors ----
     #
     # `set_*` is idempotent on the (parent, name) key — repeat call
     # updates the existing row in place. Reads scan linearly; per-parent
