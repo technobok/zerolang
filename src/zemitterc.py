@@ -4896,22 +4896,40 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         wrapper_name = ret_zt.name if ret_zt is not None else ""
         upper = wrapper_name.upper()
+        # Bidirectional discriminator: if the function has a `value`
+        # parameter, this is a `takes != null` generator. The
+        # prologue stores `value` into `this->_resume_input`; the
+        # expression-form yield path (Yield as Reassignment/Assignment
+        # RHS) consults this flag and emits the post-resume read.
+        is_bidirectional = "value" in func.parameters
         self._generator_ctx = {
             "yield_states": yield_states,
             "wrapper_ctype": ret_ctype,
             "some_tag": f"Z_{upper}_TAG_SOME",
             "none_tag": f"Z_{upper}_TAG_NONE",
             "n_yields": len(yield_states),
+            "is_bidirectional": is_bidirectional,
         }
 
     def _emit_generator_prologue(self) -> str:
         """Switch-table dispatch + entry label. Emitted right after
-        the function's opening brace."""
+        the function's opening brace.
+
+        For bidirectional generators, prepends `this->_resume_input
+        = value;` so each `.call` invocation refreshes the resume
+        slot before the body dispatches. On the very first call the
+        resume slot was zero-initialised by `meta.create` and the
+        parser/desugarer reject reading it via expression-form
+        yield, so over-writing it with the caller's default value
+        is harmless."""
         assert self._generator_ctx is not None
         ctx = self._generator_ctx
         n = cast(int, ctx["n_yields"])
+        is_bidirectional = cast(bool, ctx["is_bidirectional"])
         indent = self._indent()
         lines: List[str] = []
+        if is_bidirectional:
+            lines.append(f"{indent}this->_resume_input = value;\n")
         lines.append(f"{indent}switch (this->state) {{\n")
         # entry: first invocation, dispatched only when state==0.
         lines.append(f"{indent}    case 0: goto L_entry;\n")
@@ -6381,6 +6399,19 @@ class CEmitter:
 
     def _emit_expression_value(self, expr: zast.Expression) -> str:
         inner = expr.expression
+        # Generator yield as a value (RHS of `x: yield v` /
+        # `this.x = yield v`): emit the suspension fragment as a
+        # preamble (set state, return OPT_SOME, label-for-resume),
+        # then return `this->_resume_input` as the value the
+        # surrounding assignment binds. Only fires for bidirectional
+        # generators — the desugarer rejects expression-form yield
+        # as the *first* reachable yield (rule 11), so by the time
+        # the assignment lands `this->_resume_input` has been
+        # written by the caller's `.call value: ...` arg.
+        if inner.nodetype == NodeType.YIELD and self._generator_ctx is not None:
+            fragment = self._emit_yield_fragment(cast(zast.Yield, inner))
+            self._temp.decls.append(fragment)
+            return "this->_resume_input"
         if inner.nodetype == zast.NodeType.CALL:
             return self._emit_call_value(cast(zast.Call, inner))
         if inner.nodetype in (

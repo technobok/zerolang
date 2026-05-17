@@ -240,6 +240,44 @@ def _gives_form(rt: Path) -> Tuple[Optional[Path], Optional[str]]:
     return None, None
 
 
+def _takes_type(rt: Path) -> Optional[Path]:
+    """Return the `takes:` argument's type path if specified
+    *and* non-null. Returns None for the out-only case (no
+    `takes:` argument, or `takes: null` explicitly). Caller must
+    have verified `_returntype_is_iterator` first.
+
+    A non-None result signals a *bidirectional* generator — the
+    desugarer adds a `_resume_input` field on the synth class
+    and the `.call` method gains a `value: U` parameter.
+    """
+    if rt.nodetype != NodeType.EXPRESSION:
+        return None
+    inner = cast(Expression, rt).expression
+    if inner.nodetype != NodeType.CALL:
+        return None
+    call = cast(Call, inner)
+    for arg in call.arguments:
+        if arg.name == "takes":  # ztc-string-compare-ok: iterator protocol param name
+            val = arg.valtype
+            # `takes: null` is the out-only sentinel; treat it
+            # the same as omitting the argument.
+            if (
+                val.nodetype == NodeType.ATOMID
+                and cast(AtomId, val).name == "null"  # ztc-string-compare-ok: null type
+            ):
+                return None
+            if val.nodetype in (
+                NodeType.ATOMID,
+                NodeType.LABELVALUE,
+                NodeType.DOTTEDPATH,
+                NodeType.ATOMSTRING,
+                NodeType.EXPRESSION,
+            ):
+                return cast(Path, val)
+            return None
+    return None
+
+
 def _option_wrapper_for_gives(rt: Path) -> Optional[Call]:
     """Synthesise the `.call` return-type AST for a generator
     whose `gives:` argument has the form recognised in `_gives_form`.
@@ -485,6 +523,89 @@ def _collect_assigned_locals(body: Statement) -> List[str]:
 
     walk(body)
     return order
+
+
+def _find_first_yield(body: Statement) -> Optional[Tuple[Yield, bool]]:
+    """Find the first reachable Yield in `body` (source order).
+    Returns `(yield_node, is_expression_form)` or None if no yield
+    is reachable. A yield is in expression form iff it sits as the
+    value of an Assignment (parser models `x: yield v` as such);
+    statement form is everything else.
+
+    Descent skips nested function literals — their yields belong
+    to that inner function, not the enclosing generator (rule 10).
+
+    Implementation uses a list+index walker rather than throw/catch
+    to keep the module free of new `try/except` (bootstrap-lint
+    ratchet)."""
+    work: List[Tuple[zast.Node, bool]] = [(body, False)]
+    while work:
+        node, in_assn = work.pop(0)
+        nt = node.nodetype
+        if nt == NodeType.FUNCTION:
+            continue
+        if nt == NodeType.YIELD:
+            return cast(Yield, node), in_assn
+        if nt == NodeType.ASSIGNMENT:
+            assn = cast(zast.Assignment, node)
+            val = assn.value
+            # The assignment's RHS may *be* a yield (`x: yield v`)
+            # or merely contain one (`x: 1 + (yield 2)` — illegal
+            # in practice but defensive). The first case is the
+            # one we flag.
+            if val.nodetype == NodeType.EXPRESSION:
+                inner = val.expression
+                if inner.nodetype == NodeType.YIELD:
+                    return cast(Yield, inner), True
+            # Otherwise descend into the value expression in case
+            # a yield is buried elsewhere; the parent context is
+            # no longer the assignment-RHS slot, so the yield
+            # would be statement-form-equivalent.
+            work.insert(0, (val, False))
+            continue
+        # Push children in source order to the front so the
+        # traversal is depth-first left-to-right.
+        children = zast.node_children(node)
+        for i, c in enumerate(children):
+            work.insert(i, (c, False))
+    return None
+
+
+def _validate_first_yield_not_expression_form(
+    body: Statement, errors: List[zast.Error]
+) -> bool:
+    """For a bidirectional generator (rule 11): the first reachable
+    yield in the body must be in statement form, not expression
+    form — `this->_resume_input` is uninitialised before the first
+    `.call value: <V>`.
+
+    Returns True if validation passed (no first-expression-form
+    yield); False otherwise (errors appended).
+    """
+    found = _find_first_yield(body)
+    if found is None:
+        # No yield at all — `_is_generator_function` would have
+        # rejected this earlier, so this branch is defensive.
+        return True
+    _yield_node, is_expression_form = found
+    if is_expression_form:
+        errors.append(
+            zast.Error(
+                start=body.start,
+                err=ERR.BADSTATEMENT,
+                msg=(
+                    "the first reachable yield in a bidirectional "
+                    "generator (takes != null) cannot be in "
+                    "expression form ('x: yield v'); the caller "
+                    "drives the first .call with no value, so "
+                    "this->_resume_input is uninitialised. Use a "
+                    "statement-form yield first, then expression-"
+                    "form yields after."
+                ),
+            )
+        )
+        return False
+    return True
 
 
 def _collect_local_assignments(body: Statement) -> Dict[str, zast.Node]:
@@ -858,6 +979,17 @@ def _build_generator(
         # gives form unrecognised — typechecker already complained
         return None, None
 
+    # 3b. bidirectional shape: takes: U (U != null) makes this a
+    # bidirectional generator. The synth class gets a
+    # `_resume_input` field of type U and the `.call` method
+    # gains a `value: U` parameter. The body's first reachable
+    # yield must not be in expression form (no resume value
+    # exists on the first call) — rule 11.
+    takes_path = _takes_type(cast(Path, func.returntype))
+    if takes_path is not None:
+        if not _validate_first_yield_not_expression_form(func.body, errors):
+            return None, None
+
     # 4. Promotion (v1):
     #    - parameters: always (factory passes them to meta.create).
     #    - locals: every assigned local gets promoted to a field. A
@@ -893,6 +1025,12 @@ def _build_generator(
             continue  # parameter shadows; param wins
         field_type = _infer_local_field_type(first_rhs, func.start)
         class_fields[lname] = field_type
+    # Bidirectional: the resume-input slot holds the most recent
+    # `value:` argument from `.call value: <U>`. Each `.call`
+    # entry copies the new value in; the body's expression-form
+    # yields (`x: yield v`) read it on resumption.
+    if takes_path is not None:
+        class_fields["_resume_input"] = takes_path
 
     # 6. build the `create` method
     create_method = _build_create_method(
@@ -900,7 +1038,9 @@ def _build_generator(
     )
 
     # 7. build the `call` method (body rewritten in terms of `this`)
-    call_method = _build_call_method(func.body, call_return, promoted, func.start)
+    call_method = _build_call_method(
+        func.body, call_return, promoted, func.start, takes_path
+    )
 
     # 8. assemble the class
     class_as_items: Dict[str, zast.Node] = {
@@ -1109,31 +1249,33 @@ def _build_call_method(
     call_return: Call,
     promoted: Set[str],
     loc: Token,
+    takes_path: Optional[Path] = None,
 ) -> Function:
     """Build the synthesised `.call` method.
 
     Body is the original body with every reference to a promoted
     name (parameter or assigned local) rewritten as `this.<name>`.
-    The Function carries `is_generator_call_body = True` (stored on
-    its `synth_origin` as a discriminator) so the emitter can route
-    it through the state-machine codegen in G4.
+    The Function carries `synth_origin = "generator-call"` so the
+    emitter can route it through the state-machine codegen in G4.
 
-    For now we attach the marker via the function's `synth_origin`
-    string: `"generator-call"`. A dedicated boolean on Function is
-    nicer but Function is frozen and adding a field is a wider
-    AST churn — pinning the discriminator on `synth_origin` keeps
-    G3 self-contained.
+    For bidirectional generators (`takes_path` non-None), the
+    method gains a `value: U` parameter — the resume input. The
+    emitter prepends an entry-time store of this value into
+    `this->_resume_input` so expression-form yields can read it
+    on resumption.
     """
     rewritten = cast(Statement, _rewrite_to_this(original_body, promoted))
-    this_param: Dict[str, Path] = {
+    params: Dict[str, Path] = {
         "this": AtomId(name="this", start=loc, synth_origin=_SYNTH_ORIGIN)
     }
+    if takes_path is not None:
+        params["value"] = takes_path
     call_return_expr = Expression(
         expression=call_return, start=loc, synth_origin=_SYNTH_ORIGIN
     )
     return Function(
         returntype=call_return_expr,
-        parameters=this_param,
+        parameters=params,
         body=rewritten,
         is_native=False,
         as_items={},

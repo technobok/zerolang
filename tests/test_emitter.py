@@ -9357,3 +9357,89 @@ class TestGeneratorEmitter:
             "}"
         )
         assert compile_and_run(csource) == "10\n20\n30\n"
+
+    # ---- G6: bidirectional generators -----------------------------
+
+    def test_bidirectional_generator_round_trip(self):
+        """Bidirectional generator driven manually: each `.call
+        value: <v>` sends `v` back into the generator; on resumption
+        an expression-form yield (`x: yield ...`) binds `x` to that
+        received value. Verified end-to-end by gating the third
+        yield behind `x`."""
+        csource = emit_source(
+            "gen: function {n: i64} out "
+            "(iterator gives: i64 takes: bool) is {\n"
+            "    yield 1\n"
+            "    x: yield 2\n"
+            "    if x then yield 99\n"
+            "}\n"
+            "main: function is {\n"
+            "    with g: (gen n: 0) do {\n"
+            "        a: g.call value: false\n"
+            "        match (a) case some then "
+            '{ print "\\{a}" } case none then { print "(none)" }\n'
+            "        b: g.call value: false\n"
+            "        match (b) case some then "
+            '{ print "\\{b}" } case none then { print "(none)" }\n'
+            "        c: g.call value: true\n"
+            "        match (c) case some then "
+            '{ print "\\{c}" } case none then { print "(none)" }\n'
+            "        d: g.call value: false\n"
+            "        match (d) case some then "
+            '{ print "\\{d}" } case none then { print "(none)" }\n'
+            "    }\n"
+            "}"
+        )
+        # Expected sequence:
+        #   call 1 (value=false) -> yield 1
+        #   call 2 (value=false) -> yield 2
+        #   call 3 (value=true)  -> x = true, if x -> yield 99
+        #   call 4 (value=false) -> terminal (state == -1) -> none
+        assert compile_and_run(csource) == "1\n2\n99\n(none)\n"
+
+    def test_for_loop_over_bidirectional_generator_rejected(self):
+        """A for-loop has no way to provide the `.call value:`
+        argument, so iterating a bidirectional generator with `for`
+        is a compile error with a clear redirect to manual driving."""
+        from conftest import make_parser as _mp
+
+        program = _mp(
+            "gen: function {n: i64} out "
+            "(iterator gives: i64 takes: bool) is {\n"
+            "    yield 1\n"
+            "    x: yield 2\n"
+            "}\n"
+            'main: function is { for x: (gen n: 0) loop { print "\\{x}" } }',
+            unitname="test",
+            src_dir=LIB_DIR,
+        ).parse()
+        assert isinstance(program, zast.Program)
+        typing = typecheck(program)
+        msgs = [e.msg for e in typing.errors]
+        assert any("bidirectional" in m and "manually" in m for m in msgs), (
+            f"Expected a bidirectional-rejection message, got: {msgs}"
+        )
+
+    def test_first_yield_expression_form_rejected(self):
+        """For a `takes != null` generator, the very first reachable
+        yield must be in statement form — `this->_resume_input` is
+        uninitialised before the first `.call value:`. Reading it
+        via `x: yield v` as the opening yield is a compile error
+        (rule 11)."""
+        from conftest import make_parser as _mp
+
+        program = _mp(
+            "gen: function {n: i64} out "
+            "(iterator gives: i64 takes: bool) is {\n"
+            "    x: yield 1\n"
+            "}\n"
+            "main: function is {}",
+            unitname="test",
+            src_dir=LIB_DIR,
+        ).parse()
+        assert isinstance(program, zast.Program)
+        typing = typecheck(program)
+        msgs = [e.msg for e in typing.errors]
+        assert any(
+            "first reachable yield" in m and "expression form" in m for m in msgs
+        ), f"Expected a first-yield rejection message, got: {msgs}"

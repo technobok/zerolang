@@ -9616,6 +9616,31 @@ class TypeChecker:
                         and call_method.return_type
                         and self._is_iterator_wrapper(call_method.return_type)
                     ):
+                        # Bidirectional generators: their `.call`
+                        # signature is `{:this value: U}`. A for-loop
+                        # has no way to supply `value:` per
+                        # iteration, so it isn't a legal driver —
+                        # the user must drive manually via
+                        # `<g>.call value: <v>` inside a `with`/`do`
+                        # block. Reject here with a clear pointer
+                        # (rule 9). We key off the presence of a
+                        # `value:` child — that's the desugarer's
+                        # bidirectional-marker parameter name and
+                        # avoids tripping on hand-written iterators
+                        # whose receiver param happens to be named
+                        # something other than `this`.
+                        if self.typing.has_child(
+                            call_method,
+                            "value",  # ztc-string-compare-ok: bidirectional marker
+                        ):
+                            self._error(
+                                "for-loop cannot drive a bidirectional "
+                                "generator (its `.call` takes a `value:` "
+                                "argument). Drive manually via "
+                                "`<iter>.call value: <v>` inside a "
+                                "`with`/`do` block.",
+                                loc=cond_op.start,
+                            )
                         iter_option_type = call_method.return_type
 
                 if iter_option_type:
