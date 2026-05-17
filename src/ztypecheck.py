@@ -2,7 +2,7 @@
 ZeroLang type checking pass — single depth-first pass
 
 Starts at main function, resolves names on demand, detects cycles.
-Includes ownership checking (Phase 4c).
+Includes ownership and lock checking.
 """
 
 from dataclasses import dataclass, field
@@ -423,11 +423,8 @@ class TypeChecker:
 
     def __init__(self, program: zast.Program) -> None:
         self.program = program
-        # F5.E.1: typecheck-output container. F5.E.2 onwards
-        # relocates component tables and aggregate state off
-        # `program` onto here; today it carries only the back-ref
-        # to the parsed program and `is_error` so the structure
-        # exists for callers and for incremental migration.
+        # Typecheck-output container — holds the component tables and
+        # aggregate state populated during checking.
         self.typing = ztyping.ZTyping(parsed=program)
         self.errors: List[zast.Error] = []
         self.symtab = ZSymbolTable(typing=self.typing)
@@ -444,10 +441,9 @@ class TypeChecker:
 
         # unit types (for dotted path resolution like mathutil.square)
         self.unit_types: dict[str, ZType] = {}
-        # Phase 7d: id-keyed parallel cache. Keyed by unit_ast.nodeid (the
-        # Unit AST node's monotonic id from Phase 7a). Populated alongside
-        # `unit_types` via `_register_unit_type`. Safe to be incomplete —
-        # id-first readers always fall back to the name cache.
+        # Id-keyed parallel cache, keyed by Unit AST nodeid. Populated
+        # alongside `unit_types` via `_register_unit_type`. Safe to be
+        # incomplete — id-first readers fall back to the name cache.
         self.unit_types_by_id: dict[int, ZType] = {}
         for unitname, unit_ast in self.program.units.items():
             t = _make_type(unitname, ZTypeType.UNIT)
@@ -455,8 +451,7 @@ class TypeChecker:
         # track which file units have been fully resolved (generic params detected)
         self._resolved_file_units: set[str] = set()
 
-        # F5.B.2: function-body context grouped into a single record.
-        # See `FunctionContext` for per-field documentation.
+        # Function-body context. See `FunctionContext` for per-field documentation.
         self.func_ctx = FunctionContext()
 
         # pending borrow lock: set by deep methods (.borrow, .lock, .stringview,
@@ -493,30 +488,25 @@ class TypeChecker:
         # maps implementor type name -> list of (label, protocol ZType)
         self._protocol_labels: dict[str, list[tuple[str, ZType]]] = {}
 
-        # F5.B.1: monomorphization-related state grouped into a
-        # single record. See `MonoState` for per-field documentation.
+        # Monomorphization state. See `MonoState` for per-field documentation.
         self.mono = MonoState()
 
         # break target stack: tracks which construct a break binds to
         # Do node = break targets this do block; None = break targets a for loop
         self._break_targets: list[Optional[zast.Do]] = []
 
-        # Step 6 (typed-tree migration): typecheck-set decoration fields
-        # used to live on parsed AST nodes as `init=False` columns; in
-        # F5.D they moved off TypeChecker onto `Program` as ECS-shaped
-        # component dicts (`program.node_type`, `program.call_kind`,
-        # `program.atom_*`, ...). See `Program` in `zast.py` for the
-        # full set and per-table documentation.
+        # Per-node decoration state lives on `self.typing` as ECS-shaped
+        # component dicts (`typing.node_type`, `typing.call_kind`,
+        # `typing.atom_*`, ...). See `ZTyping` in `ztyping.py`.
 
-        # flow typing is now tracked via scope-based narrowing entries
-        # (TypeState removed — narrowing lives in ZScope.entries)
+        # Flow typing is tracked via scope-based narrowing entries
+        # (narrowing lives in ZScope.entries).
 
         # compile-time error suppression: when > 0, error() calls do not
         # emit compile-time errors (used inside constant-false if branches)
         self._suppress_compile_error: int = 0
 
-        # F5.B.3: cached stdlib generic-template ids grouped into a
-        # single record. See `TemplateIds` for per-field documentation.
+        # Cached stdlib generic-template ids. See `TemplateIds`.
         self.template_ids = TemplateIds()
 
         # _type_of_definition dispatch table: NodeType -> bound resolver
@@ -1054,9 +1044,6 @@ class TypeChecker:
                     self.typing.node_const_value[defn.nodeid] = inner_cv
                     self.typing.node_const_value[ifnode.nodeid] = inner_cv
 
-        # Unit-level ifs don't go through `_check_if`, so the typed
-        # mirror has to be built inline. Emitter / SQL-dump consumers
-        # read const_value via the typed tree only after Step 6.9.a.
         self._resolving.pop()
         return t
 
@@ -1471,9 +1458,9 @@ class TypeChecker:
                     and cast(zast.DottedPath, stripped_fpath).child.name == "private"
                 ):
                     self.typing.set_child_private(ctype, fname)
-                # Phase 7: .lock fields are now allowed on classes.
-                # Classes are stack-allocated with single-owner semantics,
-                # so they naturally prevent copies that would duplicate locks.
+                # `.lock` fields are allowed on classes. Classes are
+                # stack-allocated with single-owner semantics, so they
+                # naturally prevent copies that would duplicate locks.
                 if f_own == ZParamOwnership.LOCK:
                     self.typing.set_child_lock_field(ctype, fname)
                 elif f_own is not None:
@@ -2769,10 +2756,6 @@ class TypeChecker:
                     else:
                         self.typing.node_type[apath.nodeid] = at
                         self._set_child(rtype, label, at)
-                    # As-items don't go through `_check_atomid`, so build
-                    # the typed mirror inline; emitter / SQL-dump consumers
-                    # read const_value via the typed tree only after
-                    # Step 6.9.a.
                 continue
 
             # string constant in 'as' section (pure literal, no interpolation)
@@ -2888,11 +2871,6 @@ class TypeChecker:
                             defn_cv = self.typing.node_const_value.get(defn.nodeid)
                             if defn_cv is not None:
                                 self.typing.node_const_value[apath.nodeid] = defn_cv
-                    # As-items don't go through `_check_atomid` /
-                    # `_check_dotted_path`; build the typed mirror inline
-                    # F5.E.4.d: typed-mirror registration removed; the
-                    # data the emitter/sqldump need is already on
-                    # `self.typing.node_type` and friends.
 
     def _check_protocol_signature(
         self,
@@ -3241,7 +3219,7 @@ class TypeChecker:
         unit_ast: "Optional[zast.Unit]",
         t: ZType,
     ) -> None:
-        """Phase 7d: record a unit's ZType in both name- and id-keyed caches.
+        """Record a unit's ZType in both name- and id-keyed caches.
 
         `unit_ast` may be None when the caller only has a name (e.g. a
         monomorphization-registration loop re-registering a synthetic
@@ -3589,10 +3567,9 @@ class TypeChecker:
                     hint=f"did you mean '{suggestion}'?" if suggestion else None,
                 )
                 return None, True
-            # Inline unit member lookup. Phase 7d: prefer id-keyed
-            # cache when an inline unit AST handle is reachable via
-            # the unit-context stack; fall back to name lookup
-            # otherwise.
+            # Inline unit member lookup: prefer id-keyed cache when an
+            # inline unit AST handle is reachable via the unit-context
+            # stack; fall back to name lookup otherwise.
             inline_unit_type: Optional[ZType] = None
             for _ctx_name, ctx_unit in reversed(self._unit_context):
                 inline = ctx_unit.body.get(pname)
@@ -4072,10 +4049,8 @@ class TypeChecker:
             kind = "borrow"
         else:
             kind = "take"
-        # Step 6: stamps live in the typechecker-side side-table now,
-        # not on the parsed `NamedOperation` node. `_build_typed_call`
-        # picks them up from this table when constructing the typed
-        # mirror.
+        # Protocol-projection stamps for `NamedOperation` arguments live
+        # on `typing.projected_args`, keyed by parsed nodeid.
         self.typing.projected_args[arg.nodeid] = (formal_type, label, kind)
         return True
 
@@ -4703,8 +4678,7 @@ class TypeChecker:
         if not is_partial:
             self.mono.types.append((mono, defn))
             # Register the mono in _resolved under the first unit's
-            # qualified name so the emitter can find it. The choice
-            # of "first unit" matches pre-F5.C behaviour.
+            # qualified name so the emitter can find it.
             for unitname in self.program.units:
                 self._resolved[f"{unitname}.{mangled}"] = mono
                 break
@@ -6326,13 +6300,12 @@ class TypeChecker:
         return ZExprResult(t, borrow_target, private_access)
 
     def _check_operation(self, op: zast.Operation) -> ZExprResult:
-        """Type-check an operation. Returns an ZExprResult carrying the
+        """Type-check an operation. Returns a ZExprResult carrying the
         resolved ztype plus any borrow_target / private_access intent
         that the inner call or path resolution stamped. The CALL branch
         receives the intent via _check_call's ZExprResult; the BINOP /
-        PATH branches still rely on the legacy _pending_* side-channel
-        (cleared at this boundary) until F5.A.3 pushes ZExprResult
-        through _check_path / _check_dotted_path / _check_atomid.
+        PATH branches still funnel it through the `_pending_*`
+        side-channel, cleared at this boundary.
         """
         t: Optional[ZType] = None
         borrow_target: Optional[Tuple[str, ...]] = None
@@ -6710,8 +6683,6 @@ class TypeChecker:
                     )
                     return None
                 self.typing.node_type[path.nodeid] = resolved_child
-                # Typed mirror: this branch never types `path.parent`
-                # F5.E.4.d: typed-mirror registration removed.
                 return resolved_child
 
         # regular dotted path resolution
@@ -6746,8 +6717,8 @@ class TypeChecker:
                     self.typing.atom_original_ztype[parent_atom.nodeid] = (
                         entry.original_ztype
                     )
-                    # Phase 7b: stamp narrowed-subtype child_id against the
-                    # outer union/variant (mirrors _check_atomid path).
+                    # Stamp narrowed-subtype child_id against the outer
+                    # union/variant (mirrors the _check_atomid path).
                     if self.typing.atom_child_id.get(parent_atom.nodeid, -1) == -1:
                         self.typing.atom_child_id[parent_atom.nodeid] = (
                             entry.original_ztype.child_id_for(entry.narrowed_subtype)
@@ -6799,10 +6770,10 @@ class TypeChecker:
                 garg = self.typing.generic_arg_of(parent_type, child_name)
                 if garg and garg.const_value is not None:
                     self.typing.node_const_value[path.nodeid] = garg.const_value
-            # Phase 7b: stamp child_id against parent's ZType so the
-            # emitter can dispatch by id on hot paths (union/variant
-            # arm access, record field, method dispatch). Falls back to
-            # name lookup when child_id stays -1.
+            # Stamp child_id against parent's ZType so the emitter can
+            # dispatch by id on hot paths (union/variant arm access,
+            # record field, method dispatch). Falls back to name lookup
+            # when child_id stays -1.
             if (
                 parent_type is not None
                 and self.typing.dp_child_id.get(path.nodeid, -1) == -1
@@ -6925,8 +6896,8 @@ class TypeChecker:
             if entry and entry.narrowed_subtype and entry.original_ztype is not None:
                 self.typing.atom_narrowed_subtype[atom.nodeid] = entry.narrowed_subtype
                 self.typing.atom_original_ztype[atom.nodeid] = entry.original_ztype
-                # Phase 7b: stamp child_id of narrowed subtype against the
-                # outer union/variant so the emitter's payload-unwrap can
+                # Stamp child_id of narrowed subtype against the outer
+                # union/variant so the emitter's payload-unwrap can
                 # dispatch by id.
                 if self.typing.atom_child_id.get(atom.nodeid, -1) == -1:
                     self.typing.atom_child_id[atom.nodeid] = (
@@ -8747,8 +8718,8 @@ class TypeChecker:
                 and self.func_ctx.enclosing_type
             ):
                 enclosing = self.func_ctx.enclosing_type[-1]
-                # validate the field args by type (no missing-field check yet
-                # — that goes through the meta-create signature in Phase 4)
+                # validate the field args by type (missing-field check
+                # is handled via the meta-create signature).
                 for a in call.arguments[1:]:
                     self._check_operation(a.valtype)
                 self.typing.node_type[call.arguments[0].valtype.nodeid] = enclosing
@@ -9773,8 +9744,6 @@ class TypeChecker:
 
         # mark the match as a generic type switch for the emitter
         self.typing.node_const_value[casenode.subject.nodeid] = concrete_name
-        # Re-stamp the subject's typed mirror so it picks up the
-        # F5.E.4.d: typed-mirror rebuild removed.
 
         # compute result type for match-as-expression
         result_type = self.t_null
@@ -10048,9 +10017,9 @@ class TypeChecker:
                         clause.match.name,
                         shadow=True,
                     )
-            # Phase 7b: stamp arm-name child id against the scrutinee's
-            # union/variant type so the emitter can read clause.match.child_id
-            # without another name→id resolution pass.
+            # Stamp arm-name child id against the scrutinee's
+            # union/variant type so the emitter can read
+            # `clause.match.child_id` without another name→id pass.
             if (
                 subject_type is not None
                 and subject_type.typetype in (ZTypeType.UNION, ZTypeType.VARIANT)
@@ -10227,8 +10196,7 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.ZTyping:
     Returns the populated `ZTyping` (typecheck-output container).
     `ZTyping` carries the back-reference to the parsed program, the
     typecheck errors, and every typecheck-derived datum the emitter /
-    SQL dumper / asthash need to read. `program` is read-only —
-    F5.E.5 froze `zast.Program`.
+    SQL dumper / asthash need to read. `program` is read-only.
     """
     tc = TypeChecker(program)
     errors = tc.check(full=full)
