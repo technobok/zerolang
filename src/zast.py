@@ -254,8 +254,8 @@ class Program:
     """
     Program - top level, holds all Units and streams (files).
 
-    Frozen as of F5.E.5 — this is parser output and is immutable
-    post-parse. Typecheck output lives on `ztyping.ZTyping`.
+    Parser output, immutable post-parse (`@dataclass(frozen=True)`).
+    Typecheck output lives on `ztyping.ZTyping`.
 
     Two siblings carry `is_error: bool` to discriminate parser
     results: `Program.is_error = False`, `Error.is_error = True`.
@@ -266,11 +266,9 @@ class Program:
 
     is_error: bool = field(default=False, init=False)
     vfs: zvfs.ZVfs  # vfs for reading source files. Needed to report errors
-    # File-level units, keyed by unit name. `mainunitname` points at the
-    # entry. A future simplification could collapse this into a single
-    # entry unit with submodules nested in its body — flagged in
-    # doc/codereview20260428.md (F12 / docs sweep). For now keep the
-    # dict shape: it's how the parser materialises imports today.
+    # File-level units, keyed by unit name. `mainunitname` points at
+    # the entry unit. The dict shape mirrors how the parser
+    # materialises imports.
     units: Dict[str, "Unit"]
     mainunitname: str
 
@@ -279,17 +277,13 @@ def clone_function(func: "Function") -> "Function":
     """Deep clone a Function AST subtree for monomorphization.
 
     Walks the parsed-AST per `NodeType` and reconstructs every node
-    via its dataclass constructor; each clone gets a fresh `nodeid`
-    via the default_factory. `synth_origin` is preserved as a
-    constructor kwarg. Tokens (`start`) are shared by reference —
-    they are immutable enough for source-location reuse and re-issuing
-    them would break diagnostics that point at the original source.
-
-    Replaces the previous `copy.deepcopy(func)` (codereview20260428
-    F8): the explicit walk is portable to a self-hosted zerolang and
-    the fresh nodeids prevent collisions in `Program.node_*`
-    side-tables when multiple monos of the same generic function are
-    materialised."""
+    via its dataclass constructor. Each clone gets a fresh `nodeid`
+    via the default_factory so it does not collide with the original
+    in nodeid-keyed side-tables. `synth_origin` is preserved as a
+    constructor kwarg. Tokens (`start`) are shared by reference;
+    re-issuing them would break diagnostics that point at the
+    original source.
+    """
     return cast("Function", _clone_node(func))
 
 
@@ -577,26 +571,13 @@ class Node:
         init=False,
     )
     nodetype: NodeType
-    # `type` used to live here as an `init=False` typecheck-set field.
-    # After Step 6.9.b it lives on `TypedExpression.ztype` (for typed
-    # mirrors) and on `Program.node_type` / `TypedProgram.node_types`
-    # (for parsed-node-keyed lookup, including typeref Path nodes inside
-    # parameters / returntypes / field declarations whose typed mirror
-    # is reachable through TypedFunction / TypedObjectDef but the
-    # emitter and SQL-dump often hold the parsed Path directly).
-    # `const_value` used to live here as an `init=False` typecheck-set
-    # field. After Step 6.9.a it lives on `TypedExpression.const_value`
-    # only; the typechecker records compile-time constants via
-    # `Program.node_const_value` (a side-table keyed by parsed
-    # `nodeid`) and the typed-mirror builders read from there.
     start: Token  # start location in the source for this Node
-    # provenance: None for nodes parsed from user source; pass-name string
-    # for nodes synthesised by a compiler pass. Surfaces in SQL dumps.
-    # `kw_only=True` so synthesis passes can pass it via the constructor
-    # without disturbing the positional argument order of Node
-    # subclasses (Step 7 prerequisite: frozen Node forbids
-    # post-construction reassignment, so synth-origin must land at
-    # construction time).
+    # provenance: None for nodes parsed from user source; pass-name
+    # string for nodes synthesised by a compiler pass. Surfaces in
+    # SQL dumps. `kw_only=True` so synthesis passes can set it via
+    # the constructor without disturbing the positional argument
+    # order of Node subclasses — Node is frozen, so synth_origin
+    # must land at construction time.
     synth_origin: Optional[str] = field(default=None, kw_only=True)
 
 
@@ -821,13 +802,6 @@ class Expression(Atom):
 
     nodetype: NodeType = field(default=NodeType.EXPRESSION, init=False)
     expression: ExpressionSubTypes
-    # `call_kind` used to live here as an `init=False` typecheck-set
-    # field for control-flow expressions (break/continue/return/
-    # error/panic). After Step 6.10 the typechecker records it via
-    # `Program.expr_call_kind` (a side-table keyed by parsed
-    # `Expression.nodeid`) and snapshots the dict onto
-    # `TypedProgram.expr_call_kinds`; emitter consumers use the
-    # `CEmitter._expr_call_kind(expr)` helper to read it.
 
 
 @dataclass(frozen=True)
@@ -839,11 +813,6 @@ class If(Node):
     nodetype: NodeType = field(default=NodeType.IF, init=False)
     clauses: typing.List["IfClause"]
     elseclause: Optional["Statement"]
-    # `taken_vars` used to live here as an `init=False` field populated
-    # by `_check_if_inner` (variables consumed in some arm so the
-    # emitter can destruct on the merge path). After Step 6 it lives on
-    # `TypedIf` only; the typechecker records it via
-    # `Program.if_taken_vars` and `_build_typed_if` reads it.
 
 
 @dataclass(frozen=True)
@@ -867,11 +836,6 @@ class NamedOperation(Node):
     nodetype: NodeType = field(default=NodeType.NAMEDOPERATION, init=False)
     name: Optional[str]  # start points here if provided
     valtype: "Operation"
-    # Protocol auto-projection stamps used to live here as `init=False`
-    # fields populated by `_check_call`. After Step 6 of the typed-tree
-    # migration they live on `TypedNamedOperation` only; the typecheck
-    # records them via `Program.projected_args` (a side-table keyed
-    # by parsed `nodeid`) and the typed-mirror builder reads from there.
 
 
 @dataclass(frozen=True)
@@ -885,11 +849,6 @@ class Case(Node):
     subject: "Operation"
     clauses: typing.List["CaseClause"]
     elseclause: Optional["Statement"]
-    # `subject_taken` and `taken_vars` used to live here as `init=False`
-    # fields populated by `_check_case_inner`. After Step 6 they live on
-    # `TypedCase` only; the typechecker records them via
-    # `Program.case_subject_taken` / `_case_taken_vars` and
-    # `_build_typed_case` reads them.
 
 
 @dataclass(frozen=True)
@@ -921,12 +880,6 @@ class For(Node):
     # can be empty, no bindings, Operation - must be bool condition
     postconditions: typing.List["Operation"]
 
-    # `iterator_bindings` used to live here as an `init=False` field
-    # populated by `_check_for_inner` (named bindings whose operation
-    # returns option, re-evaluated each iteration). After Step 6 it
-    # lives on `TypedFor` only; the typechecker records it via
-    # `Program.for_iter_bindings` and `_build_typed_for` reads it.
-
 
 @dataclass(frozen=True)
 class Do(Node):
@@ -936,12 +889,6 @@ class Do(Node):
 
     nodetype: NodeType = field(default=NodeType.DO, init=False)
     statement: "Statement"
-
-    # `has_break` used to live here as an `init=False` field set by
-    # the type checker when a break inside the block targets this Do.
-    # After Step 6 it lives on `TypedDo` only; the typechecker records
-    # it via `Program.do_has_break` (side-table keyed by parsed
-    # `nodeid`) and `_build_typed_do` reads it.
 
 
 @dataclass(frozen=True)
@@ -955,11 +902,6 @@ class With(Node):
     name: str
     value: "Expression"
     doexpr: "Expression"
-    # `ownership` and `alias_of` used to live here as `init=False`
-    # fields populated by `_check_with_inner`. After Step 6 they live
-    # only on `TypedWith`; the typechecker records them in
-    # `Program.with_ownership` / `_with_alias_of` (side-tables
-    # keyed by parsed `nodeid`) and `_build_typed_with` reads them.
 
 
 @unique
@@ -1005,12 +947,6 @@ class Call(Operation):
     # requires at least one argument (otherwise it is an operation
     # even though it could still be a call with 0 args)
     arguments: typing.List["NamedOperation"]
-
-    # `call_kind` and `callable_type_name` used to live here as
-    # `init=False` typecheck-set fields. After Step 6.8 they live on
-    # `TypedCall` only; the typechecker records them via
-    # `Program.call_kind` / `_call_callable_type_name` (side-tables
-    # keyed by parsed `nodeid`) and `_build_typed_call` reads them.
 
 
 @dataclass(frozen=True)
@@ -1077,11 +1013,6 @@ class Assignment(Node):
     nodetype: NodeType = field(default=NodeType.ASSIGNMENT, init=False)
     name: str  # also in start     # xxTypeDefinition?
     value: "Expression"  # source expression
-    # `alias_of` used to live here as an `init=False` field populated
-    # by `_check_assignment_inner`. After Step 6 it lives on
-    # `TypedAssignment` only; the typechecker records it in
-    # `Program.assign_alias_of` (side-table keyed by parsed
-    # `nodeid`) and `_build_typed_assignment` reads it.
 
 
 @dataclass(frozen=True)
@@ -1116,13 +1047,6 @@ class DottedPath(Path):
     nodetype: NodeType = field(default=NodeType.DOTTEDPATH, init=False)
     parent: "Path"
     child: "AtomId"
-    # `parent_tagged_type`, `narrowed_subtype`, and `child_id` used to
-    # live here as `init=False` typecheck-set fields. After Step 6 they
-    # live on `TypedDottedPath` only; `parent_tagged_type` and
-    # `child_id` are recorded in `Program.dp_parent_tagged_type` /
-    # `_dp_child_id` (side-tables keyed by parsed `nodeid`), while
-    # `narrowed_subtype` was effectively unused on parsed DottedPath
-    # (no writer) and is left None on the typed mirror.
 
 
 @dataclass(frozen=True)
@@ -1133,15 +1057,6 @@ class AtomId(Atom):
 
     nodetype: NodeType = field(default=NodeType.ATOMID, init=False)
     name: str  # this is also in the start token
-    # `narrowed_subtype` / `original_ztype` / `child_id` used to live
-    # here as `init=False` fields populated by the typechecker. After
-    # Step 6 they live on `TypedAtomId` only; the typechecker records
-    # them via `Program.atom_narrowed_subtype` /
-    # `_atom_original_ztype` / `_atom_child_id` (side-tables keyed by
-    # parsed `nodeid`). The two `TypedAtomId` constructor sites
-    # (`_build_typed_atomid` and `_typed_path_from_parsed`) plus the
-    # `CaseClause.match` selector in `_build_typed_case` read the
-    # side-tables.
 
 
 @dataclass(frozen=True)
