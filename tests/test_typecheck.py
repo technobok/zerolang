@@ -11341,3 +11341,52 @@ class TestOptionviewBorrowEscape:
         # accept any error that blocks the transfer; the exact
         # diagnostic path may evolve as borrow tracking matures.
         assert errors
+
+
+class TestIteratorReturnType:
+    """Phase G2: `out (iterator gives: T (takes: U))` return type.
+
+    The body is left empty here — full generator-body handling (yield
+    suspension points, terminal return, etc.) lands in G3. What G2
+    verifies is that the structural return-type pattern parses,
+    resolves, and that the `gives:` argument's ownership modifier is
+    validated against the legal yield forms."""
+
+    def test_iterator_return_type_parses_and_resolves(self):
+        """`out (iterator gives: i32)` resolves to a monomorphized
+        iterator protocol with `gives=i32` and the defaulted
+        `takes=null`."""
+        program, typing = check_ok("g: function out (iterator gives: i32) is { }")
+        g = program.units["test"].body["g"]
+        rt_zt = typing.node_type.get(g.returntype.nodeid)
+        assert rt_zt is not None
+        assert rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "iterator"
+
+    def test_iterator_return_type_takes_parses(self):
+        """`out (iterator gives: i32 takes: bool)` — both generic
+        params explicit — type-checks cleanly."""
+        program, typing = check_ok(
+            "g: function out (iterator gives: i32 takes: bool) is { }"
+        )
+        g = program.units["test"].body["g"]
+        rt_zt = typing.node_type.get(g.returntype.nodeid)
+        assert rt_zt is not None
+        assert rt_zt.generic_origin is not None
+        assert rt_zt.generic_origin.name == "iterator"
+
+    def test_iterator_return_type_borrow_form(self):
+        """`gives: T.borrow` is accepted (yields a borrowed view)."""
+        check_ok("g: function out (iterator gives: String.borrow) is { }")
+
+    def test_iterator_return_type_take_form(self):
+        """`gives: T.take` is accepted (yields an owned reftype)."""
+        check_ok("g: function out (iterator gives: String.take) is { }")
+
+    def test_iterator_return_type_bad_gives_form_rejected(self):
+        """`gives: T.lock` is rejected — `.lock` is parameter-only
+        ownership and has no corresponding yield-wrapper form."""
+        errors = check_errors("g: function out (iterator gives: String.lock) is { }")
+        assert any(".lock" in e.msg for e in errors), (
+            f"Expected an error mentioning .lock, got: {[e.msg for e in errors]}"
+        )

@@ -1173,6 +1173,19 @@ class TypeChecker:
                     ftype.return_type = rt
             if ret_own is not None:
                 ftype.return_ownership = ret_own
+            # Iterator-return-type validation: when the function declares
+            # `out (iterator gives: T (takes: U))`, the ownership form of
+            # the `gives:` argument must be one of bare / `.take` /
+            # `.borrow` (mapping to optionval / Option / OptionView in
+            # the synthesized `.call` return). `.lock` is parameter-only
+            # and rejected here.
+            if (
+                rt
+                and rt.generic_origin is not None
+                and rt.generic_origin.name
+                == "iterator"  # ztc-string-compare-ok: stdlib iterator protocol marker
+            ):
+                self._validate_iterator_gives_form(func)
         for pname, ppath in func.parameters.items():
             stripped_ppath, p_own = _strip_path_ownership(ppath)
             pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
@@ -1373,6 +1386,48 @@ class TypeChecker:
                     f"'{mname}' is defined in both 'is' and 'as' sections of '{name}'",
                     loc=loc,
                 )
+
+    def _validate_iterator_gives_form(self, func: zast.Function) -> None:
+        """Check the ownership form of the `gives:` argument in an
+        iterator-return-type declaration.
+
+        Legal forms (map to `.call` return wrappers in G3):
+            T           valtype copy out      -> optionval(T)
+            T.take      reftype owned out     -> Option(T)
+            T.borrow    reftype borrowed view -> OptionView(T)
+
+        `T.lock` is parameter-only ownership and is rejected. The
+        function is called only when the resolved return type's
+        generic origin is `iterator`.
+        """
+        rt_path: Optional[zast.Operation] = func.returntype
+        if rt_path is None or rt_path.nodetype != NodeType.EXPRESSION:
+            return
+        inner = cast(zast.Expression, rt_path).expression
+        if inner.nodetype != NodeType.CALL:
+            return
+        call_node = cast(zast.Call, inner)
+        gives_arg: Optional[zast.NamedOperation] = None
+        for arg in call_node.arguments:
+            if arg.name == "gives":  # noqa: E501  ztc-string-compare-ok: iterator gives arg name
+                gives_arg = arg
+                break
+        if gives_arg is None:
+            return
+        gives_val = gives_arg.valtype
+        if gives_val.nodetype != NodeType.DOTTEDPATH:
+            return  # bare T or other shape — nothing to reject here
+        dp = cast(zast.DottedPath, gives_val)
+        leaf = dp.child.name
+        if leaf == "lock":  # ztc-string-compare-ok: ownership suffix string
+            self._error(
+                "'gives: T.lock' is not a legal iterator yield form; "
+                "use T (valtype copy), T.take (owned reftype), or "
+                "T.borrow (borrowed view) — .lock is parameter-only "
+                "ownership.",
+                loc=gives_val.start,
+                err=ERR.OWNERERROR,
+            )
 
     def _resolve_class_type(
         self, unitname: str, name: str, cls: zast.ObjectDef
@@ -2948,10 +3003,15 @@ class TypeChecker:
         _set_destructor_metadata(ptype)
         self._assign_cname_type(ptype)
 
-        # pass 1: detect generic params from protocol parameters
+        # pass 1: detect generic params from protocol parameters.
+        # `_detect_generic_param` understands both the bare
+        # `t: Any.generic` form and the call form
+        # `t: (Any.generic default: T)` for parameters with a default
+        # type — needed by the `iterator` protocol's `takes` param,
+        # which defaults to `null` for the out-only case.
         generic_ctx: dict[str, ZType] = {}
         for pname, ppath in proto.is_paths().items():
-            pt = self._resolve_typeref(ppath)
+            pt, default_type = self._detect_generic_param(ppath)
             if (
                 pt
                 and pt.typetype == ZTypeType.GENERIC_PARAM
@@ -2963,6 +3023,8 @@ class TypeChecker:
                 generic_ctx[pname] = constraint
                 if constraint.name in NUMERIC_RANGES:
                     ptype.numeric_generic_params.add(pname)
+                if default_type:
+                    ptype.generic_defaults[pname] = default_type
 
         # pass 2: resolve specs with generic context
         if generic_ctx:
@@ -3453,6 +3515,11 @@ class TypeChecker:
 
         for param_name in template.generic_params:
             if param_name not in generic_args:
+                # missing arg with a declared default: fill it in
+                default = template.generic_defaults.get(param_name)
+                if default is not None:
+                    generic_args[param_name] = default
+                    continue
                 if has_unresolved:
                     return None  # arg provided but not yet resolvable (pass 1)
                 self._error(
