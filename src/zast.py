@@ -194,6 +194,7 @@ class NodeType(IntEnum):
     # ARRAY = 38
     # LIST = 39
     DATA = 40
+    YIELD = 41
     # SEQUENCEITEM = 40
     # OPERATION = 41
     NAMEDOPERATION = 42
@@ -458,6 +459,13 @@ def _clone_node(node: "Node") -> "Node":
         return Data(
             data=cast("typing.List[NamedOperation]", _clone_list(dn.data)),
             start=dn.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.YIELD:
+        y = cast(Yield, node)
+        return Yield(
+            expr=cast(Expression, _clone_node(y.expr)),
+            start=y.start,
             synth_origin=so,
         )
     if nt == NodeType.BINOP:
@@ -758,6 +766,7 @@ ExpressionSubTypes = typing.Union[
     "Call",  # "Array", "List"
     "Reassignment",
     "Swap",
+    "Yield",
 ]
 
 
@@ -957,6 +966,23 @@ class Data(Node):
 
     nodetype: NodeType = field(default=NodeType.DATA, init=False)
     data: typing.List["NamedOperation"]  # data, change to dict?
+
+
+@dataclass(frozen=True)
+class Yield(Node):
+    """Yield Node — a suspension point in a generator function.
+
+    Statement form:
+        yield <expr>            # StatementLine wraps Expression(Yield)
+    Expression form:
+        <name>: yield <expr>    # Assignment(value = Expression(Yield))
+
+    The wrapping context distinguishes the two forms; the Yield node
+    itself is identical. `expr` carries the value being yielded out.
+    """
+
+    nodetype: NodeType = field(default=NodeType.YIELD, init=False)
+    expr: "Expression"
 
 
 @dataclass(frozen=True)
@@ -1185,6 +1211,9 @@ def node_children(node: "Node") -> "typing.List[Node]":
         return out
     if nt == NodeType.DATA:
         out.extend(cast(Data, node).data)
+        return out
+    if nt == NodeType.YIELD:
+        out.append(cast(Yield, node).expr)
         return out
     if nt == NodeType.BINOP:
         bo = cast(BinOp, node)

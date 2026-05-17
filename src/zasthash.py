@@ -144,6 +144,8 @@ def _hash_expression(node: zast.Expression, node_types: NodeTypes) -> str:
         h.update(_hash_data(cast(zast.Data, inner), node_types).encode())
     elif inner.nodetype == NodeType.WITH:
         h.update(_hash_with(cast(zast.With, inner), node_types).encode())
+    elif inner.nodetype == NodeType.YIELD:
+        h.update(_hash_yield(cast(zast.Yield, inner), node_types).encode())
     else:
         h.update(_hash_operation(cast(zast.Operation, inner), node_types).encode())
     return h.hexdigest()
@@ -262,6 +264,13 @@ def _hash_with(node: zast.With, node_types: NodeTypes) -> str:
     return h.hexdigest()
 
 
+def _hash_yield(node: zast.Yield, node_types: NodeTypes) -> str:
+    h = hashlib.sha256()
+    h.update(b"YIELD")
+    h.update(_hash_expression(node.expr, node_types).encode())
+    return h.hexdigest()
+
+
 def _hash_binop(node: zast.BinOp, node_types: NodeTypes) -> str:
     h = hashlib.sha256()
     h.update(b"BINOP")
@@ -324,4 +333,5 @@ _node_handlers = {
     NodeType.NAMEDOPERATION: _hash_namedop,
     NodeType.SWAP: _hash_swap,
     NodeType.REASSIGNMENT: _hash_reassignment,
+    NodeType.YIELD: _hash_yield,
 }

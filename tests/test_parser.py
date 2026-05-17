@@ -861,3 +861,70 @@ class TestNativeKeyword:
         rec = body["r"]
         assert rec.nodetype == zast.NodeType.RECORD
         assert rec.is_native is False
+
+
+class TestGeneratorYieldParsing:
+    """Phase G1: lexer + AST + parser for the `yield` keyword.
+
+    The parser stays context-free with respect to whether the
+    enclosing function is iterator-returning — that check is in G3.
+    What the parser does enforce here is the lexical position rule:
+    `yield` is valid only directly inside one function body
+    (depth == 1), never at top level or inside a nested function
+    literal.
+    """
+
+    def test_yield_statement_parses(self):
+        """`yield <expr>` is a statement form — wrapped as StatementLine
+        carrying Expression(Yield(...))."""
+        result = parse_unit("g: function is { yield 42 }")
+        body = get_unit_body(result)
+        func = body["g"]
+        assert isinstance(func, zast.Function)
+        assert func.body is not None
+        stmts = func.body.statements
+        assert len(stmts) == 1
+        sl = stmts[0].statementline
+        assert isinstance(sl, zast.Expression)
+        assert sl.expression.nodetype == zast.NodeType.YIELD
+        y = sl.expression
+        assert isinstance(y, zast.Yield)
+        # the yielded value is wrapped in an Expression
+        assert isinstance(y.expr, zast.Expression)
+
+    def test_yield_expression_form_parses(self):
+        """`x: yield <expr>` binds `x` on resumption — the parser
+        materialises it as an Assignment whose value is
+        Expression(Yield(...))."""
+        result = parse_unit("g: function is { x: yield 42 }")
+        body = get_unit_body(result)
+        func = body["g"]
+        assert isinstance(func, zast.Function)
+        assert func.body is not None
+        stmts = func.body.statements
+        assert len(stmts) == 1
+        sl = stmts[0].statementline
+        assert isinstance(sl, zast.Assignment)
+        assert sl.name == "x"
+        assert isinstance(sl.value, zast.Expression)
+        assert sl.value.expression.nodetype == zast.NodeType.YIELD
+
+    def test_yield_outside_function_rejected(self):
+        """Top-level `yield` is a parse error (no enclosing function
+        body)."""
+        result = parse_unit("yield 42")
+        assert isinstance(result, zast.Error)
+
+    def test_yield_in_record_initializer_rejected(self):
+        """A record field initializer slot accepts a path/type, not an
+        expression — `yield` does not parse there."""
+        result = parse_unit("r: record { x: yield 1 }")
+        assert isinstance(result, zast.Error)
+
+    def test_yield_nested_in_function_literal_rejected(self):
+        """`yield` inside a function nested in another function's
+        `as` block belongs to neither — reject at parse time
+        (rule 10)."""
+        source = "g: function is { yield 1 } as { helper: function is { yield 2 } }"
+        result = parse_unit(source)
+        assert isinstance(result, zast.Error)

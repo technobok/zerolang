@@ -68,6 +68,7 @@ class TT(IntEnum):
     WITH = 138
     FACET = 139
     NATIVE = 140
+    YIELD = 141
     EQUALS = 135
 
     LABEL = 200  # Identifier/Number followed by a ':'
@@ -103,6 +104,7 @@ TTKWMAP = {
     "with": TT.WITH,
     "facet": TT.FACET,
     "native": TT.NATIVE,
+    "yield": TT.YIELD,
 }
 
 # Reserved words — syntax error if used as identifiers

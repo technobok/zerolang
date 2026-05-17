@@ -277,6 +277,14 @@ class Parser:
         self._verbose_fn = verbose_fn
         self._prebuilt: Dict[str, zast.Unit] = prebuilt or {}
 
+        # Nesting depth of the function body the parser is currently
+        # inside. Bumped around the `is { ... }` body in
+        # `_accept_function_definition`. Used to validate that `yield`
+        # appears only directly inside a function body (depth == 1),
+        # never at top level (depth == 0) or inside a nested function
+        # literal (depth > 1) — per generator rule 10.
+        self._function_body_depth: int = 0
+
         # self.nodetable: zast.NodeTable = zast.NodeTable()
         # self.environment = Environment()
         # self.environment: ParserEnvironment  # initialised below in parse()
@@ -703,6 +711,8 @@ class Parser:
             node = self._accept_with_expression(lex)
         elif tt == TT.BRACEOPEN:
             node = self._accept_bareblock(lex)
+        elif tt == TT.YIELD:
+            node = self._accept_yield_expression(lex)
         else:
             oplist, err = self._operation_paths(lex)
             if err is not None:
@@ -1094,6 +1104,26 @@ class Parser:
         if not lex.accept(TT.FUNCTION):
             return None
 
+        # `yield` belongs to the lexically-enclosing function definition.
+        # Bumping the depth around this entire definition (not just the
+        # `is` body) means a nested function literal inside this
+        # function's `as` block sees depth >= 2 and `yield` there is
+        # rejected per generator rule 10. Errors are returned as
+        # `zast.Error` values (not raised), so an explicit pair of
+        # increment/decrement around the call is sufficient — no
+        # try/finally needed.
+        self._function_body_depth += 1
+        result = self._accept_function_definition_inner(lex, start)
+        self._function_body_depth -= 1
+        return result
+
+    def _accept_function_definition_inner(
+        self, lex: Lexer, start: Token
+    ) -> Union[NodeX[zast.Function], zast.Error]:
+        """Body of `_accept_function_definition` after the `function`
+        keyword has been consumed and the yield-depth counter has been
+        bumped. Returning out of here (success or error) goes through
+        the wrapper's `finally` which restores the counter."""
         returntype: Optional[zast.Path] = None
         parameters: Dict[str, zast.Path] = {}
         # externs from 'accept' function parameters
@@ -2070,6 +2100,47 @@ class Parser:
             name=name, value=valuex.node, doexpr=doexprx.node, start=start
         )
         return NodeX(withnode, extern=extern)
+
+    def _accept_yield_expression(
+        self, lex: Lexer
+    ) -> Union[NodeX[zast.Yield], zast.Error, None]:
+        """
+        Accept a yield expression:
+
+            "yield" expression
+
+        Returns a Yield, an Error, or None for no 'yield' keyword.
+
+        `yield` is only valid directly inside a function body (depth
+        == 1). Top-level (depth == 0) and nested function literals
+        (depth > 1) are rejected here. Whether the enclosing function
+        is actually a generator (iterator-returning) is checked later
+        by the typechecker / desugaring pass.
+        """
+        start = lex.peek()
+        if not lex.accept(TT.YIELD):
+            return None
+
+        if self._function_body_depth == 0:
+            msg = "'yield' is only valid inside a function body"
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+        if self._function_body_depth > 1:
+            msg = (
+                "'yield' is not allowed inside a nested function literal; "
+                "it only belongs to the lexically-enclosing generator"
+            )
+            return zast.Error(start=start, err=ERR.BADSTATEMENT, msg=msg)
+
+        exprx = self._accept_expression(lex)
+        if exprx is not None and exprx.is_error:
+            return cast(zast.Error, exprx)
+        if not exprx:
+            msg = "Expected expression after 'yield'"
+            return zast.Error(start=lex.peek(), err=ERR.EXPECTEDEXP, msg=msg)
+        exprx = cast(NodeX[zast.Expression], exprx)
+
+        ynode = zast.Yield(expr=exprx.node, start=start)
+        return NodeX(node=ynode, extern=exprx.extern)
 
     def _accept_primary_expression(
         self, lex: Lexer
