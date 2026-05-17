@@ -1,0 +1,37 @@
+# generator_listiter.z -- container iterator written as a generator.
+#
+# This is the same shape as listiter.z's bag-with-iterator demo, but
+# the iterator is implemented as a one-line generator method instead
+# of a hand-rolled BagIter class. Observable output must match
+# listiter.z's iter-line sequence byte-for-byte
+# (see tests/test_generator_validation.py).
+#
+# What the desugarer (G3) builds underneath:
+#   - A class `Bag_iterate_iter` with `state: i64` and a captured
+#     `b: Bag.lock` field.
+#   - A factory function `Bag.iterate` that constructs an instance.
+#   - The class's `.call` method implements the iterator protocol
+#     structurally via a switch/goto state machine (G4) — what you
+#     would have written by hand as a BagIter class.
+
+Bag: class { a: i64 b: i64 c: i64 count: i64 } as {
+    # Generator method. `b: this.lock` captures the bag locked for
+    # the iterator's lifetime. The body looks straight-line; the
+    # compiler turns it into the state machine.
+    iterate: function {b: this.lock} out (iterator gives: i64) is {
+        yield b.a
+        yield b.b
+        yield b.c
+    }
+}
+
+main: function is {
+    b: Bag a: 10 b: 20 c: 30 count: 3
+    print "Bag count: \{b.count}"
+
+    with iter: (Bag.iterate b: b.lock) do for x: iter loop {
+        print "iter: \{x}"
+    }
+
+    print "done"
+}
