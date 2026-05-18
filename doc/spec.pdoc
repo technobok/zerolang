@@ -3608,28 +3608,27 @@ the manual #~"with"/#~".call value:" pattern.
   }
   """
 
-Generators are designed to compose through existing constructs:
+Generators compose through existing constructs:
 
 #ul:
-  [#*: #b:"Delegation" -- yield everything from a sub-generator with a
-      for-loop relay: #~"for x: subgen loop { yield x }". The
-      synthesised class captures the inner iterator as a #~".lock"
-      field and forwards one value per #~".call".]
+  [#*: #b:"Delegation" -- bind the sub-iterator to a local first,
+      then relay through a for-loop: #~"inner: (subgen ...)" then
+      #~"for x: inner loop { yield x }". The local crosses a yield
+      (via the yielding-loop rule) so the desugarer promotes it to
+      a field of the synth class, and the inner iterator persists
+      across suspensions.]
   [#*: #b:"Chaining" -- sequential for-loops in the same body run
-      consecutively; each drains its source before the next starts.]
+      consecutively; each drains its source before the next starts
+      (see #~"examples/generator_chain.z").]
   [#*: #b:"Pipelining" -- each stage is a generator taking another
       iterator parameter. Function composition produces the pipeline;
       each stage's synthesised class holds a #~".lock" on the previous
       stage and existing lock-escape rules keep the chain sound.]
 
-#b:"Implementation status (v1):" the inner-iterator promotion that
-makes for-loop relay sound across yields is not yet wired through
-the desugaring pass. Generators that drive a sub-iterator inside a
-yielding loop currently compile but stop after the first yielded
-value because the sub-iterator binding is recreated on each
-#~".call" rather than persisting as a synth-class field. Until that
-gap closes, compose by inlining the work or by stacking yields
-directly.
+#b:"Note:" inline form #~"for x: (subgen ...) loop { yield x }"
+without the explicit binding does not yet relay correctly across
+yields -- the for-loop's iterable RHS is a C-stack local that
+doesn't survive suspension. Use the explicit binding form above.
 
 The synthesised class is otherwise an ordinary class: visible in
 compiler error messages as #~"<funcname>_iter" (or

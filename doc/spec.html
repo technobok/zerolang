@@ -3157,27 +3157,26 @@ with g: (grep pat: "foo") do {
         next = g.call value: keep
     }
 }</code></pre>
-<p>Generators are designed to compose through existing constructs:</p>
+<p>Generators compose through existing constructs:</p>
 <ul>
-<li><strong>Delegation</strong> -- yield everything from a sub-generator with a
-for-loop relay: <code>for x: subgen loop { yield x }</code>. The
-synthesised class captures the inner iterator as a <code>.lock</code>
-field and forwards one value per <code>.call</code>.</li>
+<li><strong>Delegation</strong> -- bind the sub-iterator to a local first,
+then relay through a for-loop: <code>inner: (subgen ...)</code> then
+<code>for x: inner loop { yield x }</code>. The local crosses a yield
+(via the yielding-loop rule) so the desugarer promotes it to
+a field of the synth class, and the inner iterator persists
+across suspensions.</li>
 <li><strong>Chaining</strong> -- sequential for-loops in the same body run
-consecutively; each drains its source before the next starts.</li>
+consecutively; each drains its source before the next starts
+(see <code>examples/generator_chain.z</code>).</li>
 <li><strong>Pipelining</strong> -- each stage is a generator taking another
 iterator parameter. Function composition produces the pipeline;
 each stage's synthesised class holds a <code>.lock</code> on the previous
 stage and existing lock-escape rules keep the chain sound.</li>
 </ul>
-<p><strong>Implementation status (v1):</strong> the inner-iterator promotion that
-makes for-loop relay sound across yields is not yet wired through
-the desugaring pass. Generators that drive a sub-iterator inside a
-yielding loop currently compile but stop after the first yielded
-value because the sub-iterator binding is recreated on each
-<code>.call</code> rather than persisting as a synth-class field. Until that
-gap closes, compose by inlining the work or by stacking yields
-directly.</p>
+<p><strong>Note:</strong> inline form <code>for x: (subgen ...) loop { yield x }</code>
+without the explicit binding does not yet relay correctly across
+yields -- the for-loop's iterable RHS is a C-stack local that
+doesn't survive suspension. Use the explicit binding form above.</p>
 <p>The synthesised class is otherwise an ordinary class: visible in
 compiler error messages as <code>&lt;funcname&gt;_iter</code> (or
 <code>&lt;typename&gt;.&lt;methodname&gt;_iter</code> for methods), goes through the same

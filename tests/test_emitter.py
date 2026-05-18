@@ -9383,6 +9383,43 @@ class TestGeneratorEmitter:
         )
         assert compile_and_run(csource) == "10\n20\n30\n"
 
+    def test_generator_relay_via_explicit_inner_binding(self):
+        """P9: a generator can drive a sub-iterator across yield
+        suspensions provided the inner iterator is held in an
+        explicit named local. The desugarer sees the local as
+        yield-crossing (yielding-loop rule), promotes it to a
+        synth-class field, and the meta_create struct-default
+        carve-out initialises the field to `(z_<inner>_t){0}` so
+        the create signature accepts a struct param.
+
+        Inline `for x: (subgen ...)` -- without the explicit
+        binding -- does not yet relay correctly; the for-loop's
+        iterable RHS would be a C-stack local that doesn't survive
+        suspension. The spec's Composability subsection flags the
+        gap and prescribes the explicit-binding form, which this
+        test pins."""
+        csource = emit_source(
+            "intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {\n"
+            "    i: lo\n"
+            "    for while i < hi loop {\n"
+            "        yield i\n"
+            "        i = i + 1\n"
+            "    }\n"
+            "}\n"
+            "chained: function {a_lo: i64 a_hi: i64 b_lo: i64 b_hi: i64}\n"
+            "                  out (iterator gives: i64) is {\n"
+            "    inner1: (intrange lo: a_lo hi: a_hi)\n"
+            "    for x: inner1 loop { yield x }\n"
+            "    inner2: (intrange lo: b_lo hi: b_hi)\n"
+            "    for x: inner2 loop { yield x }\n"
+            "}\n"
+            "main: function is {\n"
+            "    for v: (chained a_lo: 10 a_hi: 13 b_lo: 100 b_hi: 102) loop "
+            '{ print "\\{v}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "10\n11\n12\n100\n101\n"
+
     # ---- G6: bidirectional generators -----------------------------
 
     def test_bidirectional_generator_round_trip(self):

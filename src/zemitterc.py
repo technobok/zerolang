@@ -6377,10 +6377,22 @@ class CEmitter:
             elif fname in field_defaults:
                 parts.append(field_defaults[fname])
             else:
-                # zero value based on C type
+                # zero value based on C type. Struct-typed fields
+                # (anything starting with `z_` and ending with `_t`
+                # that's neither a pointer nor a primitive numeric
+                # alias) need a compound literal `(ctype){0}` --
+                # passing a literal `0` would fail the function
+                # signature's struct-typed parameter. Falls through
+                # for `int64_t` and similar numeric aliases.
                 fct = field_ctypes[i] if i < len(field_ctypes) else "int64_t"
                 if fct.endswith("*"):
                     parts.append("NULL")
+                elif (
+                    fct[:2] == "z_"  # ztc-string-compare-ok: emitted ctype prefix
+                    and fct.endswith("_t")
+                    and not fct.endswith("_ft")
+                ):
+                    parts.append(f"({fct}){{0}}")
                 else:
                     parts.append("0")
 

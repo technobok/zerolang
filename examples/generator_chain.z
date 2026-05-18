@@ -1,0 +1,48 @@
+# generator_chain.z -- composing generators via sequential
+# for-loops in a single body.
+#
+# Two intrange iterators are concatenated by an outer generator
+# `chained` that drives each in turn. Each sub-iterator is held in
+# a named local so the desugarer (G3) sees it, recognises it as
+# yield-crossing (yielding-loop rule, G7), and promotes it to a
+# field on the synthesised `chained_iter` class. The field type is
+# the callee's synth class (`intrange_iter`) so the typechecker
+# can route through the right destructor / lock metadata.
+#
+# Cross-generator field-type inference (P2 partial) and the
+# struct-default-init fix to `_build_meta_create_args` (the synth
+# class's `meta_create` initialises non-trivial-typed local fields
+# with `{0}` rather than the integer literal `0`) make this work
+# end-to-end.
+#
+# Inline `for x: (subgen ...) loop { yield x }` without the
+# explicit binding does not yet work -- the for-loop's iterable
+# RHS would be a C-stack local that doesn't survive suspension.
+# See doc/spec.pdoc Generator functions / Composability for the
+# note.
+
+intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {
+    i: lo
+    for while i < hi loop {
+        yield i
+        i = i + 1
+    }
+}
+
+# `inner1` and `inner2` are yield-crossing locals (they're touched
+# inside a yielding loop) -- the desugarer captures each as a
+# `intrange_iter` field on `chained_iter`.
+chained: function {a_lo: i64 a_hi: i64 b_lo: i64 b_hi: i64}
+                 out (iterator gives: i64) is {
+    inner1: (intrange lo: a_lo hi: a_hi)
+    for x: inner1 loop { yield x }
+    inner2: (intrange lo: b_lo hi: b_hi)
+    for x: inner2 loop { yield x }
+}
+
+main: function is {
+    for v: (chained a_lo: 10 a_hi: 13 b_lo: 100 b_hi: 102) loop {
+        print "v: \{v}"
+    }
+    print "done"
+}

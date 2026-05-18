@@ -75,12 +75,30 @@ def _desugar_unit(unit: zast.Unit, errors: List[zast.Error]) -> None:
     # the synthesized class without disturbing iteration.
     additions: Dict[str, zast.TypeDefinition] = {}
     replacements: Dict[str, Function] = {}
+    # Pre-pass: allocate every top-level generator's synth-class name
+    # so a generator that captures another generator's iterator into
+    # a promoted local can refer to the callee's synth class by name
+    # at field-type inference time (rather than seeing the structural
+    # `iterator gives: T` return type, which the typechecker won't
+    # unify with the concrete synth class).
+    gen_synth_names: Dict[str, str] = {}
+    for name, defn in unit.body.items():
+        if defn.nodetype == NodeType.FUNCTION and _is_generator_function(
+            cast(Function, defn)
+        ):
+            gen_synth_names[name] = _synth_class_name(name, additions, unit.body)
     for name, defn in list(unit.body.items()):
         if defn.nodetype == NodeType.FUNCTION:
             func = cast(Function, defn)
             if _is_generator_function(func):
-                synth_name = _synth_class_name(name, additions, unit.body)
-                synth_class, factory = _build_generator(synth_name, func, errors)
+                synth_name = gen_synth_names[name]
+                synth_class, factory = _build_generator(
+                    synth_name,
+                    func,
+                    errors,
+                    unit_body=unit.body,
+                    gen_synth_names=gen_synth_names,
+                )
                 if synth_class is None or factory is None:
                     # validation rejected this generator; original
                     # function stays in place so downstream passes
@@ -97,7 +115,14 @@ def _desugar_unit(unit: zast.Unit, errors: List[zast.Error]) -> None:
             NodeType.FACET,
             NodeType.ENUM,
         ):
-            _desugar_object_def(name, cast(ObjectDef, defn), unit, errors, additions)
+            _desugar_object_def(
+                name,
+                cast(ObjectDef, defn),
+                unit,
+                errors,
+                additions,
+                gen_synth_names,
+            )
 
     for name, fn in replacements.items():
         unit.body[name] = fn
@@ -111,6 +136,7 @@ def _desugar_object_def(
     unit: zast.Unit,
     errors: List[zast.Error],
     unit_additions: Dict[str, zast.TypeDefinition],
+    gen_synth_names: Optional[Dict[str, str]] = None,
 ) -> None:
     """Desugar generator methods on a type.
 
@@ -134,7 +160,12 @@ def _desugar_object_def(
                 f"{type_name}_{mname}", unit_additions, unit.body
             )
             synth_class, factory = _build_generator(
-                synth_name, mfunc, errors, receiver_type=type_name
+                synth_name,
+                mfunc,
+                errors,
+                receiver_type=type_name,
+                unit_body=unit.body,
+                gen_synth_names=gen_synth_names,
             )
             if synth_class is None or factory is None:
                 continue
@@ -751,22 +782,30 @@ def _collect_local_assignments(body: Statement) -> Dict[str, zast.Node]:
 # `.u8` / `.i32` forms) get the matching type; everything else falls
 # back to `i64` — the existing default integer type and a safe
 # accumulator default.
-def _infer_local_field_type(rhs: zast.Node, loc: Token) -> zast.Path:
-    """Cheap field-type inference for a promoted-local field. Heuristic:
+def _infer_local_field_type(
+    rhs: zast.Node,
+    loc: Token,
+    unit_body: Optional[Dict[str, zast.TypeDefinition]] = None,
+    gen_synth_names: Optional[Dict[str, str]] = None,
+) -> zast.Path:
+    """Field-type inference for a promoted-local field.
 
-    - RHS is `Expression(AtomId(<numeric-literal>))` → i64 (the
-      default integer type for bare literals).
-    - RHS is `Expression(DottedPath(<num>.<type>))` → `<type>`.
-    - RHS is `Expression(AtomId(<param-name>))` and the param's path
-      is known → the param's type (handled by caller via the
-      parameter map; here we fall back to i64 by default).
-    - Everything else → i64.
-
-    Field types are unconditionally `i64`-shaped in v1 because the
-    common cross-yield locals (loop counters, accumulators) are
-    integers. The G7 liveness pass will revisit with real type info."""
+    Rules, in order:
+    - Typed numeric-literal projection (`5.i32`) -> matching int
+      type. Bare integers fall through to the i64 default below.
+    - Call to a generator function in the same unit -> the callee's
+      synth class name (looked up via `gen_synth_names`). Lets a
+      generator capture a sub-iterator into a class field whose
+      type is the concrete synth class -- the typechecker handles
+      that like any class binding.
+    - Call to any other function in the same unit -> the callee's
+      declared return-type AST, used verbatim. Simple wins for
+      `Bytes` constructors, hand-written iterator factories, etc.
+    - Anything else -> `i64` (the v1 fallback, safe for counters /
+      accumulators, which are the common cross-yield locals).
+    """
     target: zast.Node = rhs
-    if target.nodetype == NodeType.EXPRESSION:
+    while target.nodetype == NodeType.EXPRESSION:
         target = cast(Expression, target).expression
     if target.nodetype == NodeType.DOTTEDPATH:
         dp = cast(DottedPath, target)
@@ -784,6 +823,28 @@ def _infer_local_field_type(rhs: zast.Node, loc: Token) -> zast.Path:
             "f64",
         }:
             return AtomId(name=dp.child.name, start=loc, synth_origin=_SYNTH_ORIGIN)
+    if target.nodetype == NodeType.CALL and unit_body is not None:
+        called = cast(Call, target).callable
+        if called.nodetype == NodeType.ATOMID:
+            fn_name = cast(AtomId, called).name
+            # Generator-to-generator dependency: use the callee's
+            # synth class name so the typechecker binds the field to
+            # the concrete class type (which carries the destructor /
+            # lock metadata needed for the surrounding iterator's
+            # lifetime).
+            if gen_synth_names is not None and fn_name in gen_synth_names:
+                return AtomId(
+                    name=gen_synth_names[fn_name],
+                    start=loc,
+                    synth_origin=_SYNTH_ORIGIN,
+                )
+            defn = unit_body.get(fn_name)
+            if (
+                defn is not None
+                and defn.nodetype == NodeType.FUNCTION
+                and cast(Function, defn).returntype is not None
+            ):
+                return cast(Path, cast(Function, defn).returntype)
     return AtomId(name="i64", start=loc, synth_origin=_SYNTH_ORIGIN)
 
 
@@ -1069,6 +1130,8 @@ def _build_generator(
     func: Function,
     errors: List[zast.Error],
     receiver_type: Optional[str] = None,
+    unit_body: Optional[Dict[str, zast.TypeDefinition]] = None,
+    gen_synth_names: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[ObjectDef], Optional[Function]]:
     """Build the synthesized class and rewritten factory for one
     generator. Returns `(None, None)` if validation rejected the
@@ -1141,7 +1204,9 @@ def _build_generator(
             continue  # non-crossing local — stays on the C stack
         if lname in class_fields:
             continue  # parameter shadows; param wins
-        field_type = _infer_local_field_type(first_rhs, func.start)
+        field_type = _infer_local_field_type(
+            first_rhs, func.start, unit_body, gen_synth_names
+        )
         class_fields[lname] = field_type
     # Bidirectional: the resume-input slot holds the most recent
     # `value:` argument from `.call value: <U>`. Each `.call`
