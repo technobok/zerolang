@@ -37,7 +37,6 @@ from zast import (
     ERR,
     NodeType,
     AtomId,
-    AtomString,
     Call,
     DottedPath,
     Expression,
@@ -778,341 +777,25 @@ def _collect_local_assignments(body: Statement) -> Dict[str, zast.Node]:
     return first
 
 
-_NUMERIC_LITERAL_SUFFIXES = {
-    "i8",
-    "i16",
-    "i32",
-    "i64",
-    "u8",
-    "u16",
-    "u32",
-    "u64",
-    "f32",
-    "f64",
-}
-_OBJECTDEF_NODETYPES = (
-    NodeType.CLASS,
-    NodeType.RECORD,
-    NodeType.UNION,
-    NodeType.VARIANT,
-    NodeType.PROTOCOL,
-    NodeType.FACET,
-    NodeType.ENUM,
-)
+def _typeof_field(rhs: zast.Node, loc: Token) -> zast.TypeOfExpr:
+    """Wrap a promoted local's first-assignment RHS in a
+    `TypeOfExpr` AST node. The typechecker resolves the field's
+    declared type from this expression once the synth `.call`
+    body has been typed (the RHS references parameters and other
+    locals that only acquire types during body type-checking).
 
-
-def _infer_local_field_type(
-    rhs: zast.Node,
-    loc: Token,
-    unit_body: Optional[Dict[str, zast.TypeDefinition]] = None,
-    gen_synth_names: Optional[Dict[str, str]] = None,
-    func_params: Optional[Dict[str, Path]] = None,
-    local_assignments: Optional[Dict[str, zast.Node]] = None,
-    receiver_type: Optional[str] = None,
-) -> zast.Path:
-    """Field-type inference for a promoted-local field.
-
-    Rules, in order:
-    - Typed numeric-literal projection (`5.i32`) -> matching int
-      type. Bare integers fall through to the i64 default below.
-    - String literal RHS:
-      - `"hello"` (no interp) -> StringView; with interp -> String.
-      - `"hello".string` -> String; `"hello".stringview` -> StringView.
-    - Call to a generator function in the same unit -> the callee's
-      synth class name. Lets a generator capture a sub-iterator
-      into a class field whose type is the concrete synth class.
-    - Call to a record/class/etc. constructor in the same unit ->
-      the type name itself (e.g. `r: Bag x: 10` -> `Bag`).
-    - Call to any other function in the same unit -> the callee's
-      declared return-type AST, used verbatim.
-    - Method-on-param dotted path (`x.method`) where `x` is a
-      parameter -> the method's declared return-type AST. Catches
-      the auto-call-coerced container-method pattern, e.g.
-      `src: x.each` where `x: ints.lock`.
-    - Method-on-local dotted path (`x.method`) where `x` is itself
-      a local whose first RHS resolves to an in-unit type -> the
-      method's declared return-type AST.
-    - `this.field.method` in a generator method where the receiver
-      type is known -> the method's declared return-type AST,
-      looked up on the field's declared type.
-    - Anything else -> `i64` (the v1 fallback, safe for counters /
-      accumulators, which are the common cross-yield locals).
-    """
-    target: zast.Node = rhs
-    while target.nodetype == NodeType.EXPRESSION:
-        target = cast(Expression, target).expression
-
-    # Bare string literal: StringView (no interp) / String (interp).
-    if target.nodetype == NodeType.ATOMSTRING:
-        return AtomId(
-            name=_string_literal_type_name(cast(AtomString, target)),
-            start=loc,
-            synth_origin=_SYNTH_ORIGIN,
-        )
-
-    if target.nodetype == NodeType.DOTTEDPATH:
-        dp = cast(DottedPath, target)
-        # `5.i32` → child name is i32
-        if (
-            dp.parent.nodetype == NodeType.ATOMID
-            and dp.child.name in _NUMERIC_LITERAL_SUFFIXES
-        ):
-            return AtomId(name=dp.child.name, start=loc, synth_origin=_SYNTH_ORIGIN)
-        # `"hello".string` / `"hello".stringview` -> the projection
-        # target type.
-        if dp.parent.nodetype == NodeType.ATOMSTRING and dp.child.name in (
-            "string",
-            "stringview",
-        ):
-            return AtomId(
-                name="String"
-                if dp.child.name
-                == "string"  # ztc-string-compare-ok: stringview-projection leaf
-                else "StringView",
-                start=loc,
-                synth_origin=_SYNTH_ORIGIN,
-            )
-        if dp.parent.nodetype == NodeType.ATOMID and unit_body is not None:
-            recv_name = cast(AtomId, dp.parent).name
-            # `x.method` where `x` is a parameter.
-            if func_params is not None and recv_name in func_params:
-                base_type_name = _param_type_name(
-                    func_params.get(recv_name), receiver_type
-                )
-                if base_type_name is not None:
-                    method_rt = _method_return_type(
-                        base_type_name, dp.child.name, unit_body
-                    )
-                    if method_rt is not None:
-                        return method_rt
-            # `x.method` where `x` is a local: resolve `x`'s type
-            # name from its first assignment's RHS, then look up
-            # the method on it. Single-level only (no recursion).
-            if (
-                local_assignments is not None
-                and recv_name in local_assignments
-                and (func_params is None or recv_name not in func_params)
-            ):
-                local_type_name = _local_rhs_type_name(
-                    local_assignments[recv_name], unit_body, gen_synth_names
-                )
-                if local_type_name is not None:
-                    method_rt = _method_return_type(
-                        local_type_name, dp.child.name, unit_body
-                    )
-                    if method_rt is not None:
-                        return method_rt
-        # `<base>.field.method` where the parent is a 2-deep dotted
-        # path. Resolve `<base>` to a type name via three roots:
-        #   - `this` (only inside a generator method) -> receiver_type
-        #   - a parameter name                          -> _base_type_name
-        #   - a local name                              -> first-RHS type
-        # Then look up `field` on that type to get the field's type,
-        # and look up `method` on the field's type.
-        if dp.parent.nodetype == NodeType.DOTTEDPATH and unit_body is not None:
-            parent_dp = cast(DottedPath, dp.parent)
-            if parent_dp.parent.nodetype == NodeType.ATOMID:
-                root_name = cast(AtomId, parent_dp.parent).name
-                base_type_name: Optional[str] = None
-                if (
-                    receiver_type is not None
-                    and root_name
-                    == "this"  # ztc-string-compare-ok: receiver-root marker
-                ):
-                    base_type_name = receiver_type
-                elif func_params is not None and root_name in func_params:
-                    base_type_name = _param_type_name(
-                        func_params.get(root_name), receiver_type
-                    )
-                elif local_assignments is not None and root_name in local_assignments:
-                    base_type_name = _local_rhs_type_name(
-                        local_assignments[root_name], unit_body, gen_synth_names
-                    )
-                if base_type_name is not None:
-                    field_type_path = _field_type(
-                        base_type_name, parent_dp.child.name, unit_body
-                    )
-                    field_type_name = _base_type_name(field_type_path)
-                    if field_type_name is not None:
-                        method_rt = _method_return_type(
-                            field_type_name, dp.child.name, unit_body
-                        )
-                        if method_rt is not None:
-                            return method_rt
-
-    if target.nodetype == NodeType.CALL and unit_body is not None:
-        called = cast(Call, target).callable
-        if called.nodetype == NodeType.ATOMID:
-            fn_name = cast(AtomId, called).name
-            # Generator-to-generator dependency: use the callee's
-            # synth class name so the typechecker binds the field to
-            # the concrete class type (which carries the destructor /
-            # lock metadata needed for the surrounding iterator's
-            # lifetime).
-            if gen_synth_names is not None and fn_name in gen_synth_names:
-                return AtomId(
-                    name=gen_synth_names[fn_name],
-                    start=loc,
-                    synth_origin=_SYNTH_ORIGIN,
-                )
-            defn = unit_body.get(fn_name)
-            if defn is not None:
-                if defn.nodetype == NodeType.FUNCTION:
-                    fn_defn = cast(Function, defn)
-                    if fn_defn.returntype is not None:
-                        return fn_defn.returntype
-                elif defn.nodetype in _OBJECTDEF_NODETYPES:
-                    # `r: Bag x: 10 y: 20` — constructing a record /
-                    # class / etc. The field type is the type name.
-                    return AtomId(name=fn_name, start=loc, synth_origin=_SYNTH_ORIGIN)
-    return AtomId(name="i64", start=loc, synth_origin=_SYNTH_ORIGIN)
-
-
-def _string_literal_type_name(atom: AtomString) -> str:
-    """Bare string literals are StringView when they have no
-    interpolation parts and String when they do — matches the
-    type-resolver's ATOMSTRING parent rule."""
-    has_interp = any(p.nodetype != NodeType.STRINGCHUNK for p in atom.stringparts)
-    return "String" if has_interp else "StringView"
-
-
-def _local_rhs_type_name(
-    rhs: zast.Node,
-    unit_body: Dict[str, zast.TypeDefinition],
-    gen_synth_names: Optional[Dict[str, str]],
-) -> Optional[str]:
-    """Resolve the underlying type *name* of a local's first RHS,
-    used to look up methods on locals. Mirrors a subset of
-    `_infer_local_field_type` but returns a string instead of a
-    Path AST; deliberately single-level to avoid recursion."""
-    target: zast.Node = rhs
-    while target.nodetype == NodeType.EXPRESSION:
-        target = cast(Expression, target).expression
-    if target.nodetype == NodeType.ATOMSTRING:
-        return _string_literal_type_name(cast(AtomString, target))
-    if target.nodetype == NodeType.DOTTEDPATH:
-        dp = cast(DottedPath, target)
-        if dp.parent.nodetype == NodeType.ATOMSTRING and dp.child.name in (
-            "string",
-            "stringview",
-        ):
-            return (
-                "String"
-                if dp.child.name
-                == "string"  # ztc-string-compare-ok: stringview-projection leaf
-                else "StringView"
-            )
-    if target.nodetype == NodeType.CALL:
-        called = cast(Call, target).callable
-        if called.nodetype == NodeType.ATOMID:
-            fn_name = cast(AtomId, called).name
-            if gen_synth_names is not None and fn_name in gen_synth_names:
-                return gen_synth_names[fn_name]
-            defn = unit_body.get(fn_name)
-            if defn is not None:
-                if defn.nodetype in _OBJECTDEF_NODETYPES:
-                    return fn_name
-                if defn.nodetype == NodeType.FUNCTION:
-                    fn_defn = cast(Function, defn)
-                    return _base_type_name(cast(Path, fn_defn.returntype))
-    return None
-
-
-def _field_type(
-    type_name: str,
-    field_name: str,
-    unit_body: Dict[str, zast.TypeDefinition],
-) -> Optional[Path]:
-    """Look up a field's declared type AST on an in-unit type.
-    Searches `is_items` (where fields conventionally live), then
-    `as_items`. Returns None if the type isn't an ObjectDef or
-    the field isn't defined or isn't a bare Path member."""
-    defn = unit_body.get(type_name)
-    if defn is None or defn.nodetype not in _OBJECTDEF_NODETYPES:
-        return None
-    objdef = cast(ObjectDef, defn)
-    for items in (objdef.is_items, objdef.as_items):
-        member = items.get(field_name)
-        if member is None:
-            continue
-        if member.nodetype == NodeType.FUNCTION:
-            continue
-        if member.nodetype in (NodeType.ATOMID, NodeType.DOTTEDPATH):
-            return cast(Path, member)
-    return None
-
-
-def _param_type_name(
-    path: Optional[Path], receiver_type: Optional[str]
-) -> Optional[str]:
-    """Like `_base_type_name`, but maps `this[.private].lock` /
-    `this.take` / `this.borrow` to `receiver_type` when we are
-    inside a generator method on a known receiver. Returns None
-    if the path isn't recognised as a parameter-type shape."""
-    if path is None:
-        return None
-    base = _base_type_name(path)
-    if (
-        base == "this"  # ztc-string-compare-ok: receiver-root marker
-        and receiver_type is not None
-    ):
-        return receiver_type
-    if base is None and path.nodetype == NodeType.DOTTEDPATH:
-        # `this.private.lock` (and any other 3-deep this-rooted
-        # path with an ownership leaf): strip the leaf, then unwrap
-        # to the head AtomId.
-        dp = cast(DottedPath, path)
-        if dp.child.name in _OWNERSHIP_LEAVES:
-            inner = dp.parent
-            if inner.nodetype == NodeType.DOTTEDPATH:
-                inner_dp = cast(DottedPath, inner)
-                if (
-                    inner_dp.parent.nodetype == NodeType.ATOMID
-                    and cast(AtomId, inner_dp.parent).name
-                    == "this"  # ztc-string-compare-ok: receiver-root marker
-                    and receiver_type is not None
-                ):
-                    return receiver_type
-    return base
-
-
-def _base_type_name(path: Optional[Path]) -> Optional[str]:
-    """Extract the underlying type name from a parameter type path,
-    stripping a trailing `.lock` / `.take` / `.borrow` ownership
-    leaf if present. Returns None if the path's head isn't a bare
-    AtomId (so excludes `this`-rooted or more complex type
-    expressions)."""
-    if path is None:
-        return None
-    if path.nodetype == NodeType.ATOMID:
-        return cast(AtomId, path).name
-    if path.nodetype == NodeType.DOTTEDPATH:
-        dp = cast(DottedPath, path)
-        if dp.parent.nodetype == NodeType.ATOMID and dp.child.name in _OWNERSHIP_LEAVES:
-            return cast(AtomId, dp.parent).name
-    return None
-
-
-def _method_return_type(
-    type_name: str,
-    method_name: str,
-    unit_body: Dict[str, zast.TypeDefinition],
-) -> Optional[Path]:
-    """Look up a method's declared return-type AST on an in-unit
-    type. Searches `as_items` first (where methods conventionally
-    live), then `is_items`. Returns None if the type isn't an
-    ObjectDef or the method isn't defined."""
-    defn = unit_body.get(type_name)
-    if defn is None or defn.nodetype not in _OBJECTDEF_NODETYPES:
-        return None
-    objdef = cast(ObjectDef, defn)
-    for items in (objdef.as_items, objdef.is_items):
-        member = items.get(method_name)
-        if member is not None and member.nodetype == NodeType.FUNCTION:
-            mfunc = cast(Function, member)
-            if mfunc.returntype is not None:
-                return mfunc.returntype
-    return None
+    Replaces the prior heuristic family
+    (`_infer_local_field_type` and its helpers) -- there is no
+    shape-by-shape guessing here, just deferral to the
+    typechecker."""
+    inner: zast.Node = rhs
+    while inner.nodetype == NodeType.EXPRESSION:
+        inner = cast(Expression, inner).expression
+    return zast.TypeOfExpr(
+        source=cast(zast.Operation, inner),
+        start=loc,
+        synth_origin=_SYNTH_ORIGIN,
+    )
 
 
 # ---- Body rewrite: AtomId(X) -> this.X for promoted names --------
@@ -1389,8 +1072,8 @@ def _promote_suspending_for_iterables(body: Statement) -> Statement:
     synthetic `_iter_N: <non-trivial>` assignment and replace the
     loop's iterable with `_iter_N`. The synthetic local is then
     visible to `_crossing_locals` (the yielding-loop rule promotes
-    it) and to `_infer_local_field_type` (which resolves its type
-    via the callee's synth class or declared return type).
+    it) and to `_typeof_field` (which wraps its first-RHS
+    expression so the typechecker can resolve its type).
 
     Recurses into nested Statement bodies but stops at nested
     function literals -- per rule 10 the inner literal's
@@ -1630,26 +1313,16 @@ def _build_generator(
         if field_name is None or field_path is None:
             continue
         class_fields[field_name] = field_path
-    # Local fields: only crossing locals (G7 liveness). Field-type
-    # inference is the cheap heuristic from G4 — typed numeric
-    # literal (`5.i32`) keeps its type, everything else defaults to
-    # `i64`. Real type-aware promotion (P2) is still tracked under
-    # Deferred work.
+    # Local fields: only crossing locals (G7 liveness). The field
+    # type AST is a `TypeOfExpr` wrapping the local's first-RHS
+    # expression; the typechecker resolves the actual declared
+    # type once the synth `.call` body has been typed.
     for lname, first_rhs in local_assignments.items():
         if lname not in crossing_local_names:
             continue  # non-crossing local — stays on the C stack
         if lname in class_fields:
             continue  # parameter shadows; param wins
-        field_type = _infer_local_field_type(
-            first_rhs,
-            func.start,
-            unit_body,
-            gen_synth_names,
-            func_params=func.parameters,
-            local_assignments=local_assignments,
-            receiver_type=receiver_type,
-        )
-        class_fields[lname] = field_type
+        class_fields[lname] = _typeof_field(first_rhs, func.start)
     # Bidirectional: the resume-input slot holds the most recent
     # `value:` argument from `.call value: <U>`. Each `.call`
     # entry copies the new value in; the body's expression-form

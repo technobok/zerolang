@@ -3423,6 +3423,26 @@ class TypeChecker:
                 if t:
                     self.typing.node_type[path.nodeid] = t
                 return t
+        if path.nodetype == NodeType.TYPEOFEXPR:
+            # Generator-desugarer field-type marker: the field's
+            # real type is the type of the embedded source
+            # expression, but the source references function-body
+            # locals/params that aren't bound until the synth
+            # `.call` body is typed. Bind a placeholder ZType now;
+            # `_check_reassignment_inner` swaps every reference to
+            # the resolved type on the first `this.<field> = <rhs>`
+            # assignment in the body. The placeholder carries the
+            # source path's nodeid so the swap can also update
+            # `node_type[<that-nodeid>]` (read by the emitter when
+            # walking class field-type ASTs).
+            cached = self.typing.node_type.get(path.nodeid)
+            if cached is not None:
+                return cached
+            placeholder = _make_type("?typeof", ZTypeType.NULL)
+            placeholder.is_typeof_placeholder = True
+            placeholder.typeof_source_nodeid = path.nodeid
+            self.typing.node_type[path.nodeid] = placeholder
+            return placeholder
         return None
 
     def _resolve_numeric_generic_arg(
@@ -6023,7 +6043,32 @@ class TypeChecker:
         existing = self._check_path(reassign.topath).ztype
         new_t = self._check_expression(reassign.value).ztype
         self._check_exhaustive_if(reassign.value)
-        if existing and new_t and not self._types_compatible(existing, new_t):
+        # Generator-desugarer TypeOfExpr field: the LHS resolved to a
+        # placeholder because the field's declared type is "type of
+        # the first RHS." Swap every reference to the placeholder
+        # for the resolved RHS type, then skip the compatibility
+        # check. We update three places: the class's child row
+        # (`_set_child`), the original TypeOfExpr AST node's stamped
+        # `node_type` (consulted by the emitter when walking class
+        # field-type ASTs), and the LHS node's stamped type
+        # (consulted within this same reassignment's downstream
+        # checks). The placeholder ZType is left orphaned -- nothing
+        # references it after this swap.
+        if (
+            existing is not None
+            and existing.is_typeof_placeholder
+            and new_t is not None
+            and reassign.topath.nodetype == NodeType.DOTTEDPATH
+        ):
+            dp = cast(zast.DottedPath, reassign.topath)
+            parent_t = self.typing.node_type.get(dp.parent.nodeid)
+            if parent_t is not None:
+                self._set_child(parent_t, dp.child.name, new_t)
+                if existing.typeof_source_nodeid >= 0:
+                    self.typing.node_type[existing.typeof_source_nodeid] = new_t
+                self.typing.node_type[reassign.topath.nodeid] = new_t
+                existing = new_t
+        elif existing and new_t and not self._types_compatible(existing, new_t):
             self._error(
                 f"Cannot assign {new_t.name} to variable of type {existing.name}",
                 loc=reassign.start,

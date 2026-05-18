@@ -9520,6 +9520,27 @@ class TestGeneratorEmitter:
         )
         assert compile_and_run(csource) == "10\n11\n12\n"
 
+    def test_generator_promoted_local_binop_resolves_via_typeof(self):
+        """Promoted-local field whose first RHS is a BinOp: the
+        desugarer emits a TypeOfExpr placeholder for the field; the
+        typechecker resolves the placeholder to the BinOp's result
+        type (u32 here) when typing the first `this.c = a + b`
+        reassignment in the synth `.call` body. The heuristic the
+        TypeOfExpr replaced would have fallen back to i64 and the
+        u32 -> i64 mismatch would have failed type-check."""
+        csource = emit_source(
+            "gen: function {a: u32 b: u32} out (iterator gives: u32) is {\n"
+            "    c: a + b\n"
+            "    yield c\n"
+            "    yield c\n"
+            "}\n"
+            "main: function is {\n"
+            "    with g: (gen a: 10.u32 b: 5.u32) do "
+            'for v: g loop { print "\\{v}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "15\n15\n"
+
     def test_no_arg_generator_for_loop_auto_invokes(self):
         """P3: a for-loop on a bare reference to a 0-arg function
         returning an iter-class auto-invokes the function once and

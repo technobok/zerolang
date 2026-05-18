@@ -264,6 +264,19 @@ class ZType:
     # compiler-generated raw allocator for this type
     meta_create: Optional["ZType"] = field(default=None, init=False)
 
+    # internal marker: this ZType is a placeholder produced when the
+    # type checker first encounters a `zast.TypeOfExpr` (an AST node
+    # the generator desugarer emits for promoted-local field types in
+    # synth classes). The placeholder is bound as the class's field
+    # type until the first `this.field = <rhs>` reassignment in the
+    # synth `.call` body, where `_check_reassignment_inner` swaps
+    # every reference to the resolved RHS type. Carries the source
+    # TypeOfExpr's nodeid so the typechecker can update
+    # `node_type[<that-nodeid>]` at swap time. Never set on types
+    # that originate from user-written source.
+    is_typeof_placeholder: bool = field(default=False, init=False)
+    typeof_source_nodeid: int = field(default=-1, init=False)
+
     # element type for DATA types. The DATA's children
     # are value-carrier RECORDs whose `name` is the literal value (e.g.
     # the children of `primes: data { 2 3 5 }` are RECORDs with names

@@ -214,6 +214,12 @@ class NodeType(IntEnum):
     # BINOPARG = 61
     # ASARG = 62
 
+    # Type-position node. Internal-only -- produced by the
+    # generator desugarer in src/zgenerator.py to defer a synth-
+    # class field's declared type to the typechecker. Never
+    # produced by the parser.
+    TYPEOFEXPR = 70
+
     # ATOM's:
     # ATOM = 80
     # ATOMEXPR = 81
@@ -475,6 +481,13 @@ def _clone_node(node: "Node") -> "Node":
             operator=cast(AtomId, _clone_node(bo.operator)),
             rhs=cast(Path, _clone_node(bo.rhs)),
             start=bo.start,
+            synth_origin=so,
+        )
+    if nt == NodeType.TYPEOFEXPR:
+        toe = cast(TypeOfExpr, node)
+        return TypeOfExpr(
+            source=cast(Operation, _clone_node(toe.source)),
+            start=toe.start,
             synth_origin=so,
         )
     if nt == NodeType.STATEMENT:
@@ -999,6 +1012,28 @@ class BinOp(Operation):
 
 
 @dataclass(frozen=True)
+class TypeOfExpr(Path):
+    """
+    TypeOfExpr - type-position node whose declared type is the
+    resolved type of the embedded `source` expression.
+
+    Internal-only. Produced by the generator desugarer in
+    src/zgenerator.py to declare a yield-crossing local's
+    synth-class field type without pre-typecheck guessing. Never
+    produced by the parser; users cannot write this directly.
+
+    The embedded source references locals/parameters in the
+    enclosing function body, so resolution is deferred until the
+    typechecker has typed that body. Treated as a Path for AST
+    purposes (it appears in the same syntactic slot as a class
+    field's declared type).
+    """
+
+    nodetype: NodeType = field(default=NodeType.TYPEOFEXPR, init=False)
+    source: "Operation"
+
+
+@dataclass(frozen=True)
 class Statement(Node):
     """
     Statement Node
@@ -1220,6 +1255,9 @@ def node_children(node: "Node") -> "typing.List[Node]":
         out.append(bo.lhs)
         out.append(bo.operator)
         out.append(bo.rhs)
+        return out
+    if nt == NodeType.TYPEOFEXPR:
+        out.append(cast(TypeOfExpr, node).source)
         return out
     if nt == NodeType.STATEMENT:
         out.extend(cast(Statement, node).statements)

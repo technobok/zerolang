@@ -56,6 +56,33 @@ def check_errors(source: str, unitname: str = "test"):
     return errors
 
 
+def _resolve_synth_field_type(
+    source: str, *, synth_name: str, field_name: str, unitname: str = "test"
+):
+    """Helper for the TypeOfExpr-resolution tests: parse, type-check,
+    and walk down `tc.unit_types[unitname] -> <synth class>` to fetch
+    the *resolved* ZType of the named field. The desugarer emits a
+    `TypeOfExpr` placeholder for promoted-local fields; the
+    typechecker fills in the real type when it walks the synth
+    `.call` body. Returns the resolved ZType or None.
+    """
+    p = make_parser(source, unitname=unitname, src_dir=LIB_DIR)
+    program = p.parse()
+    assert isinstance(program, zast.Program), f"Parse failed: {program!r}"
+    tc = TypeChecker(program)
+    tc.check()
+    assert tc.typing.errors == [], (
+        f"unexpected typecheck errors: {[e.msg for e in tc.typing.errors]}"
+    )
+    unit_t = tc.unit_types.get(unitname)
+    assert unit_t is not None, f"unit '{unitname}' not registered"
+    synth_t = tc.typing.child_of(unit_t, synth_name)
+    assert synth_t is not None, (
+        f"synth class '{synth_name}' not registered on unit '{unitname}'"
+    )
+    return tc.typing.child_of(synth_t, field_name)
+
+
 def find_user_monos(typing, *, origin_name: Optional[str] = None):
     """Filter `typing.mono_types` to entries triggered by user code.
 
@@ -11764,54 +11791,55 @@ class TestGeneratorDesugaring:
 
     def test_generator_local_field_infers_record_construction(self):
         """`r: Bag x: 10 y: 20` as a yield-crossing local promotes to
-        a synth-class field of type `Bag`, not the default i64."""
-        program, _typing = check_ok(
+        a synth-class field of type `Bag`. The desugarer emits a
+        `TypeOfExpr` field-type marker; the typechecker resolves
+        the actual ZType from the RHS at the first `this.r = ...`
+        reassignment in the synth `.call` body."""
+        field_t = _resolve_synth_field_type(
             "Bag: record { x: i64 y: i64 }\n"
             "gen: function out (iterator gives: i64) is {\n"
             "    r: Bag x: 10 y: 20\n"
             "    yield 1\n"
             "    yield r.x\n"
-            "}"
+            "}",
+            synth_name="gen_iter",
+            field_name="r",
         )
-        synth = program.units["test"].body["gen_iter"]
-        field = synth.is_items["r"]
-        assert field.nodetype == zast.NodeType.ATOMID and field.name == "Bag", (
-            f"expected `r` field type AtomId('Bag'), got "
-            f"{field.nodetype} name={getattr(field, 'name', None)}"
+        assert field_t is not None and field_t.name == "Bag", (
+            f"expected `r` resolved to Bag, got {field_t!r}"
         )
 
     def test_generator_local_field_infers_string_literal(self):
-        """Bare `sv: "hello"` -> StringView; an interpolated literal
-        promotes to String."""
-        program, _typing = check_ok(
+        """Bare `sv: "hello"` -> StringView. The TypeOfExpr-resolution
+        path types the string literal RHS as StringView."""
+        field_t = _resolve_synth_field_type(
             "gen: function out (iterator gives: i64) is {\n"
             '    sv: "hello"\n'
             "    yield 1\n"
             "    yield sv.length\n"
-            "}"
+            "}",
+            synth_name="gen_iter",
+            field_name="sv",
         )
-        synth = program.units["test"].body["gen_iter"]
-        sv_field = synth.is_items["sv"]
-        assert sv_field.nodetype == zast.NodeType.ATOMID
-        assert sv_field.name == "StringView", f"got {sv_field.name}"
+        assert field_t is not None and field_t.name == "StringView", f"got {field_t!r}"
 
     def test_generator_local_field_infers_string_projection(self):
-        """`s: "hello".string` projects literal -> field type String."""
-        program, _typing = check_ok(
+        """`s: "hello".string` -> field type String."""
+        field_t = _resolve_synth_field_type(
             "gen: function out (iterator gives: i64) is {\n"
             '    s: "hello".string\n'
             "    yield 1\n"
             "    yield s.length\n"
-            "}"
+            "}",
+            synth_name="gen_iter",
+            field_name="s",
         )
-        synth = program.units["test"].body["gen_iter"]
-        field = synth.is_items["s"]
-        assert field.nodetype == zast.NodeType.ATOMID and field.name == "String"
+        assert field_t is not None and field_t.name == "String", f"got {field_t!r}"
 
     def test_generator_local_field_infers_method_on_local(self):
-        """`x: <ctor>; y: x.method` — y's field type is the method's
-        declared return type, looked up via x's local-RHS type."""
-        program, _typing = check_ok(
+        """`bag: Bag x: 10; d: bag.doubled` -> d's field type is the
+        method's return type (i32 here), not the default i64."""
+        field_t = _resolve_synth_field_type(
             "Bag: record { x: i64 } as {\n"
             "    doubled: function {b: this} out i32 is { return 2.i32 }\n"
             "}\n"
@@ -11820,21 +11848,17 @@ class TestGeneratorDesugaring:
             "    d: bag.doubled\n"
             "    yield 1.i32\n"
             "    yield d\n"
-            "}"
+            "}",
+            synth_name="gen_iter",
+            field_name="d",
         )
-        synth = program.units["test"].body["gen_iter"]
-        # `d` crosses the yield, so it's promoted; its type should
-        # be i32 (the return type of Bag.doubled), not the default i64.
-        d_field = synth.is_items["d"]
-        assert d_field.nodetype == zast.NodeType.ATOMID
-        assert d_field.name == "i32", f"got {d_field.name}"
+        assert field_t is not None and field_t.name == "i32", f"got {field_t!r}"
 
     def test_generator_local_field_infers_field_method_via_receiver_param(self):
-        """`<recv>.<field>.<method>` in a generator method: resolve
-        the receiver param's type (mapping `this.lock` ->
-        receiver_type), look up the field's declared type on it,
-        then look up the method's return type on the field type."""
-        program, _typing = check_ok(
+        """`<recv>.<field>.<method>` in a generator method: the
+        typechecker resolves `o.inner.sized` (where `o: this.lock`
+        and `Outer.inner: Inner`) to Inner.sized's return type u32."""
+        field_t = _resolve_synth_field_type(
             "Inner: record { v: i64 } as {\n"
             "    sized: function {i: this} out u32 is { return 4.u32 }\n"
             "}\n"
@@ -11844,13 +11868,28 @@ class TestGeneratorDesugaring:
             "        yield 0.u32\n"
             "        yield sz\n"
             "    }\n"
-            "}"
+            "}\n"
+            "main: function is {\n"
+            "    o: Outer inner: (Inner v: 1)\n"
+            "    with it: (Outer.each o: o.lock) do for v: it loop { }\n"
+            "}",
+            synth_name="Outer_each_iter",
+            field_name="sz",
         )
-        # `o` is typed `this.lock` (receiver_type=Outer threaded in
-        # for the method), `Outer.inner` has type `Inner`, and
-        # `Inner.sized` returns `u32`. The synth class's `sz` field
-        # should be declared as u32, not the i64 default.
-        synth = program.units["test"].body["Outer_each_iter"]
-        sz_field = synth.is_items["sz"]
-        assert sz_field.nodetype == zast.NodeType.ATOMID
-        assert sz_field.name == "u32", f"got {sz_field.name}"
+        assert field_t is not None and field_t.name == "u32", f"got {field_t!r}"
+
+    def test_generator_local_field_infers_binop(self):
+        """A promoted local whose first RHS is a BinOp (`c: a + b`)
+        resolves through the typechecker's binop type rule. Previously
+        fell through to the i64 fallback; now resolves to the
+        operands' resolved type (u32 here)."""
+        field_t = _resolve_synth_field_type(
+            "gen: function {a: u32 b: u32} out (iterator gives: u32) is {\n"
+            "    c: a + b\n"
+            "    yield 0.u32\n"
+            "    yield c\n"
+            "}",
+            synth_name="gen_iter",
+            field_name="c",
+        )
+        assert field_t is not None and field_t.name == "u32", f"got {field_t!r}"
