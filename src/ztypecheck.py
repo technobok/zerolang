@@ -9841,7 +9841,9 @@ class TypeChecker:
         if fornode.loop:
             self._check_statement(fornode.loop)
             # for-as-expression: if the last statement in the loop body is an
-            # expression, the for-expression returns a list of that type
+            # expression, the for-expression returns a list of that type.
+            # Skip control-flow tails (break/continue/return/error/panic) and
+            # `never` — those don't produce a value to collect.
             if fornode.loop.statements:
                 last = fornode.loop.statements[-1].statementline
                 if last.nodetype == NodeType.EXPRESSION:
@@ -9849,7 +9851,11 @@ class TypeChecker:
                     inner_type = self.typing.node_type.get(
                         last_expr2.nodeid
                     ) or self.typing.node_type.get(last_expr2.expression.nodeid)
-                    if inner_type:
+                    if (
+                        inner_type
+                        and inner_type.control_kind == ZControlKind.NONE
+                        and inner_type is not t_never
+                    ):
                         elem_type = inner_type
         # for-loop locks are released when the for scope is popped
         self._break_targets.pop()

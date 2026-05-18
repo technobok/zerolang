@@ -430,6 +430,26 @@ class TestEmitterBasic:
         output = compile_and_run(csource)
         assert output.strip() == "2\n3\n4"
 
+    def test_for_iterate_with_break_in_body(self):
+        """break inside a `for x: n.iterate` body must not leak its
+        function-type into a generic-arg slot. Regression: the for-as-
+        expression code was picking up `break`'s ZType as the list
+        element type and monomorphising `List<break>` / `ListView<break>`."""
+        csource = emit_source(
+            "main: function is {\n"
+            "  for x: 5.iterate loop {\n"
+            '    print "x: \\{x}"\n'
+            "    break\n"
+            "  }\n"
+            '  print "done"\n'
+            "}"
+        )
+        assert "z_break_ft" not in csource
+        assert "z_List_break" not in csource
+        assert "z_ListView_break" not in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "x: 0\ndone"
+
     def test_for_iterate_emits_tight_c_loop(self):
         """The `.iterate` peephole produces the same tight C `for` as `.each`."""
         csource = emit_source(
