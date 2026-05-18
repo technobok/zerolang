@@ -1,0 +1,47 @@
+# generator_map_filter.z -- a two-stage generator pipeline.
+#
+# `intrange` produces a finite stream of integers; `doubled`
+# transforms each one (the map stage); `greater_than` keeps only
+# the values above a threshold (the filter stage); `main` drives
+# the composed pipeline.
+#
+# Each stage is a generator that takes parameters and constructs
+# the next stage inline as the for-loop's iterable. The P9
+# inline-iterable promotion (`_promote_suspending_for_iterables`
+# in src/zgenerator.py) auto-extracts each non-trivial for-loop
+# RHS into a synthetic local, so the sub-iterator persists as a
+# field of the outer iterator's synthesised class. Existing
+# lock-escape rules apply through the captured-field machinery.
+#
+# Pipeline shape:
+#   intrange  --(yields)-->  doubled  --(yields)-->  greater_than
+#
+# For `lo: 1, hi: 6` the inner intrange yields 1..5; doubled
+# emits 2/4/6/8/10; greater_than(threshold: 5) keeps 6/8/10.
+# See doc/spec.pdoc Generator functions / Composability.
+
+intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {
+    i: lo
+    for while i < hi loop {
+        yield i
+        i = i + 1
+    }
+}
+
+doubled: function {lo: i64 hi: i64} out (iterator gives: i64) is {
+    for x: (intrange lo: lo hi: hi) loop { yield x + x }
+}
+
+greater_than: function {lo: i64 hi: i64 threshold: i64}
+                       out (iterator gives: i64) is {
+    for x: (doubled lo: lo hi: hi) loop {
+        if x > threshold then yield x
+    }
+}
+
+main: function is {
+    for v: (greater_than lo: 1 hi: 6 threshold: 5) loop {
+        print "v: \{v}"
+    }
+    print "done"
+}
