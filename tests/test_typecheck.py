@@ -1357,6 +1357,13 @@ class TestReturnLockPropagation:
           (a) explicit-arg method call: `container.slice c: c`
           (b) implicit-receiver value access: `c.slice`
         Both must bind to `cview`.
+
+        Each binding retains the lock on `c` for its scope, so the
+        two forms are exercised in sibling inner blocks rather than
+        side-by-side in the outer scope -- two concurrent
+        `cview source: container.private.lock` borrows of the same
+        source `c` would themselves conflict (exclusive lock on
+        `(c,)`).
         """
         program, typing = check_ok(
             "container: class { x: i64 } as { public: unit { :slice }\n"
@@ -1374,27 +1381,132 @@ class TestReturnLockPropagation:
             "main: function is {\n"
             "  c: container x: 7\n"
             "  v1: container.slice c: c\n"
+            "}\n"
+            "other: function is {\n"
+            "  c: container x: 7\n"
             "  v2: c.slice\n"
             "}"
         )
-        # Walk main's body to locate v1 and v2 assignments and confirm
-        # both bind to cview (and not, say, a function pointer or a
-        # construction failure).
-        main_func = program.units[program.mainunitname].body["main"]
-        assert main_func.body is not None
+        # Walk each function's body separately -- each binding holds an
+        # exclusive lock on its `c` for the rest of the function scope,
+        # so the two forms are exercised in sibling functions to avoid
+        # the (legitimate) lock conflict that two side-by-side
+        # `cview source: ...` borrows of the same source would produce.
         bindings = {}
-        for stmt in main_func.body.statements:
-            sline = stmt.statementline
-            if (
-                sline.nodetype == NodeType.ASSIGNMENT
-                and getattr(sline, "value", None) is not None
-                and _node_ztype(typing, sline.value) is not None
-            ):
-                bindings[sline.name] = _node_ztype(typing, sline.value)
+        for fn_name in ("main", "other"):
+            fn = program.units[program.mainunitname].body[fn_name]
+            assert fn.body is not None
+            for stmt in fn.body.statements:
+                sline = stmt.statementline
+                if (
+                    sline.nodetype == NodeType.ASSIGNMENT
+                    and getattr(sline, "value", None) is not None
+                    and _node_ztype(typing, sline.value) is not None
+                ):
+                    bindings[sline.name] = _node_ztype(typing, sline.value)
         assert "v1" in bindings, list(bindings.keys())
         assert "v2" in bindings, list(bindings.keys())
         assert bindings["v1"].name == "cview", bindings["v1"].name
         assert bindings["v2"].name == "cview", bindings["v2"].name
+
+
+class TestClassConstructionLockEscape:
+    """Pins for the lock-escape gap that allowed mutation of a source
+    while a class instance holding a `Type.lock` field on it was alive.
+
+    Before the fix in `_dispatch_call_construction`, plain class
+    construction (`BagIter target: b.lock`) and any
+    `Type.method <name>: <var>.lock` style invocation bypassed the
+    `_finalize_call` lock-transfer logic, so the receiving binding did
+    not retain the source lock. The receiver-as-`.lock`-param block in
+    `_finalize_call` also overwrote the per-arg target with the dotted
+    callable's parent path when that parent was a *type name* (a
+    namespace marker, not a value), wiping out the actual source-arg
+    lock. `_check_path` further dropped `borrow_target` when an
+    iterator-binding expression was parenthesised. Each of the four
+    cases below would have type-checked clean pre-fix.
+    """
+
+    def test_class_factory_with_lock_field_arg_retains_source_lock(self):
+        """`BagIter target: b.lock` -- plain class construction with a
+        `.lock`-annotated field. The binding `it` must hold an
+        exclusive lock on `b` for its scope; a subsequent
+        `b.x = ...` mutation is rejected."""
+        errors = check_errors(
+            "Bag: class { x: i64 }\n"
+            "BagIter: class { target: Bag.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is "
+            "{ return meta.create :target }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: Bag x: 10\n"
+            "  it: BagIter target: b.lock\n"
+            "  b.x = 99\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'b'" in e.msg for e in errors)
+
+    def test_static_method_call_with_lock_arg_retains_source_lock(self):
+        """`Bag.iterate b: b.lock` -- static-style method-name call
+        whose dotted receiver is a *type* (Bag), not a variable.
+        Before the fix, the receiver-as-`.lock`-param block in
+        `_finalize_call` clobbered the per-arg lock target with the
+        type-name path; after the fix it only fires when the
+        dotted-receiver root is actually a variable."""
+        errors = check_errors(
+            "Bag: class { x: i64 } as {\n"
+            "  iterate: function {b: this.lock} out BagIter is "
+            "{ return BagIter target: b }\n"
+            "}\n"
+            "BagIter: class { target: Bag.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is "
+            "{ return meta.create :target }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: Bag x: 10\n"
+            "  it: Bag.iterate b: b.lock\n"
+            "  b.x = 99\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'b'" in e.msg for e in errors)
+
+    def test_with_block_class_factory_retains_source_lock(self):
+        """`with it: (BagIter target: b.lock) do { ... }` -- the
+        parenthesised iterator-binding expression must propagate
+        `borrow_target` out through `_check_path` so the with-bound
+        variable installs the source lock. Mutation inside the do
+        body is rejected."""
+        errors = check_errors(
+            "Bag: class { x: i64 }\n"
+            "BagIter: class { target: Bag.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is "
+            "{ return meta.create :target }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: Bag x: 10\n"
+            "  with it: (BagIter target: b.lock) do {\n"
+            "    b.x = 99\n"
+            "  }\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'b'" in e.msg for e in errors)
+
+    def test_lock_released_after_class_factory_binding_drops(self):
+        """The lock the class-factory binding retains is scoped, not
+        permanent. Once the binding's scope exits, the source is
+        mutable again."""
+        check_ok(
+            "Bag: class { x: i64 }\n"
+            "BagIter: class { target: Bag.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is "
+            "{ return meta.create :target }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: Bag x: 10\n"
+            "  { it: BagIter target: b.lock }\n"
+            "  b.x = 99\n"
+            "}"
+        )
 
 
 class TestPhaseC3Pins:

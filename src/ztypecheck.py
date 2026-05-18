@@ -6470,7 +6470,17 @@ class TypeChecker:
         t: Optional[ZType] = None
         if path.nodetype == NodeType.EXPRESSION:
             path_expr = cast(zast.Expression, path)
-            t = self._check_expression(path_expr).ztype
+            expr_result = self._check_expression(path_expr)
+            t = expr_result.ztype
+            # Parenthesised expressions wrap an inner CALL whose
+            # `_check_call` already returned a `borrow_target` --
+            # surface it through the side-channel so the surrounding
+            # binding (`with name: (Cls field: src.lock) do { ... }`)
+            # retains the source lock for the binding's scope.
+            if expr_result.borrow_target is not None:
+                self._pending_borrow_lock = expr_result.borrow_target
+            if expr_result.private_access:
+                self._pending_private_access = True
             if t and not self.typing.node_type.get(path_expr.nodeid):
                 self.typing.node_type[path_expr.nodeid] = t
         elif path.nodetype == NodeType.ATOMSTRING:
@@ -7383,14 +7393,20 @@ class TypeChecker:
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
                     self._check_aggregate_lock_escape(call, mono_type)
+                    self._transfer_class_construction_locks(call, mono_type)
                     return True, mono_type, callee_type
                 return True, None, callee_type
+            arg_borrow_paths: List[Optional[Tuple[str, ...]]] = []
             for arg in call.arguments:
-                self._check_operation(arg.valtype)
+                arg_result = self._check_operation(arg.valtype)
+                arg_borrow_paths.append(arg_result.borrow_target)
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
             self._check_missing_create_args(callee_type, call)
             self._check_aggregate_lock_escape(call, callee_type)
+            self._transfer_class_construction_locks(
+                call, callee_type, arg_borrow_paths=arg_borrow_paths
+            )
             return True, callee_type, callee_type
 
         # handle union construction: union.subtype expr
@@ -7708,7 +7724,11 @@ class TypeChecker:
         # binding so the source slot stays locked for the borrowed
         # return's lifetime. The receiver's call-scoped lock (taken
         # by `_lock_receiver`) lives outside `lock_param_targets`,
-        # so add the propagation here.
+        # so add the propagation here. Restrict to receivers that
+        # resolve to a *variable* -- static-style method calls
+        # `Type.method <name>: <var>.lock` have a type-name as the
+        # receiver (a namespace marker, not a value), and the real
+        # source already flowed in through `lock_param_targets`.
         recv_param = callee_type.this_param_name
         if (
             recv_param is not None
@@ -7718,7 +7738,11 @@ class TypeChecker:
             receiver = cast(zast.DottedPath, call.callable).parent
             recv_path = self._get_dotted_path_tuple(cast(zast.Operation, receiver))
             if recv_path is not None:
-                self._pending_borrow_lock = self._chain_through_synth_temp(recv_path)
+                root_var = self.symtab.lookup_var(recv_path[0])
+                if root_var is not None:
+                    self._pending_borrow_lock = self._chain_through_synth_temp(
+                        recv_path
+                    )
         # pop the call scope — all call-scoped locks vanish
         self.symtab.pop_to(call_marker)
         self._call_id_stack.pop()
@@ -8331,6 +8355,70 @@ class TypeChecker:
                     loc=arg.start,
                     err=ERR.OWNERERROR,
                 )
+
+    def _transfer_class_construction_locks(
+        self,
+        call: zast.Call,
+        class_type: ZType,
+        arg_borrow_paths: Optional[List[Optional[Tuple[str, ...]]]] = None,
+    ) -> None:
+        """Plain `Cls field: val` construction does not flow through
+        `_finalize_call`, so the lock-param transfer logic that
+        ordinary function calls use is missing. Mirror it here: for
+        each arg whose target field on the class's `create` is
+        `.lock`-annotated, set `_pending_borrow_lock` to the arg's
+        source path so the receiving binding's scope retains the
+        lock on the source.
+
+        Closes the soundness gap where a class instance holding a
+        `Bag.lock` field (e.g. `BagIter target: b.lock`) did not
+        block mutation of `b` while the iterator was alive.
+
+        `arg_borrow_paths`, when supplied, is the per-arg
+        `_check_operation(...).borrow_target` captured by the caller
+        (the non-generic class-construction path needs to evaluate
+        args itself). When omitted, the helper re-evaluates each
+        arg -- safe but redundant for callers that already did so.
+        """
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_call = cast(zast.DottedPath, call.callable)
+            if dp_call.child.name in ("borrow", "take", "lock"):
+                # Cls.borrow / Cls.take / Cls.lock route through
+                # ownership-transfer paths, not aggregate storage --
+                # the lock semantics there are handled separately.
+                return
+        create_type = self.typing.child_of(class_type, "create")
+        if create_type is None or create_type.typetype != ZTypeType.FUNCTION:
+            return
+        lock_param_names = {
+            k
+            for k, v in self.typing.child_ownerships_of(create_type).items()
+            if v == ZParamOwnership.LOCK
+        }
+        if not lock_param_names:
+            return
+        param_order = [
+            pname
+            for pname, ptype in self.typing.children_of(create_type)
+            if ptype.typetype != ZTypeType.FUNCTION
+        ]
+        for i, arg in enumerate(call.arguments):
+            if arg.name:
+                pname = arg.name
+            elif i < len(param_order):
+                pname = param_order[i]
+            else:
+                continue
+            if pname not in lock_param_names:
+                continue
+            if arg_borrow_paths is not None and i < len(arg_borrow_paths):
+                src_path = arg_borrow_paths[i]
+            else:
+                src_path = self._check_operation(arg.valtype).borrow_target
+            if src_path is None:
+                src_path = self._get_dotted_path_tuple(arg.valtype)
+            if src_path:
+                self._pending_borrow_lock = self._chain_through_synth_temp(src_path)
 
     def _check_aggregate_lock_escape(self, call: zast.Call, callee_type: ZType) -> None:
         """Reject arguments carrying outstanding locks from escaping into an
