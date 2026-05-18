@@ -7413,7 +7413,15 @@ class CEmitter:
             ):
                 create_args = "0"
             else:
-                create_args = self._zero_args_for_ctypes(mangled)
+                # Route through `_build_create_args` so classes with a
+                # user-defined `create` (which may have fewer or
+                # different params than the full field list -- e.g.
+                # the synth class for a generator factory whose
+                # `create` takes only the captured params, not the
+                # internal `state`) get the right arg shape. Falls
+                # back to the field-zero meta-create args for classes
+                # without a user override.
+                create_args, _ = self._build_create_args(mangled, resolved, [])
             tmp = self._temp_name("c")
             indent = self._indent()
             self._temp.decls.append(

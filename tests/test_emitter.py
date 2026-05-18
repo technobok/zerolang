@@ -9500,6 +9500,30 @@ class TestGeneratorEmitter:
         )
         assert compile_and_run(csource) == "10\n11\n12\n"
 
+    def test_no_arg_generator_for_loop_auto_invokes(self):
+        """P3: a for-loop on a bare reference to a 0-arg function
+        returning an iter-class auto-invokes the function once and
+        drives the result. Pre-fix, the for-loop saw `gen` as a
+        function value (not a callable iterator) and the dispatch
+        missed; users had to wrap with a dummy parameter (`gen
+        n: i64`) or write `for x: (gen) loop` -- both of which
+        compiled identically to the bare form but still produced
+        the same emitter mishandling.
+
+        The typechecker rewrites the condition to a synthetic
+        `Call(callable=gen, arguments=[])` wrapped in an
+        Expression before re-dispatching, so the callable-object
+        path (case 3) handles everything downstream including the
+        emitter's standard CLASS_CREATE-of-return-type shape."""
+        csource = emit_source(
+            "gen: function out (iterator gives: i64) is "
+            "{ yield 1 yield 2 yield 3 }\n"
+            "main: function is {\n"
+            '    for x: gen loop { print "\\{x}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "1\n2\n3\n"
+
     # ---- G6: bidirectional generators -----------------------------
 
     def test_bidirectional_generator_round_trip(self):

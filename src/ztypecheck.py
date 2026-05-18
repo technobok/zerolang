@@ -9679,6 +9679,67 @@ class TypeChecker:
             self.symtab.define("continue", continue_type)
         # for loops mask do-block break targets (break binds to the for, not enclosing do)
         self._break_targets.append(None)
+        # First pass: a 0-arg function returning an iter-class (a
+        # class with `.call` returning a wrapper) is auto-invoked --
+        # the for-loop calls the function once and then drives the
+        # result. Rewrite the condition's value to a synthetic
+        # `Call(callable=<orig>, arguments=[])` so the existing
+        # callable-object dispatch (the `elif t.typetype != FUNCTION`
+        # arm below) handles the rest. Applies to all "no required
+        # user params" callees (this catches generator factories
+        # with no parameters, the motivating P3 case).
+        for name in list(fornode.conditions.keys()):
+            if name.startswith(" "):  # ztc-string-compare-ok: while-form marker
+                continue
+            cond_op = fornode.conditions[name]
+            probe_t = self._check_operation(cond_op).ztype
+            self._pending_borrow_lock = None
+            if (
+                probe_t is None
+                or probe_t.typetype != ZTypeType.FUNCTION
+                or probe_t.return_type is None
+                or probe_t.return_type.typetype != ZTypeType.CLASS
+                or self._is_iterator_wrapper(probe_t.return_type)
+            ):
+                continue
+            ret_call = self.typing.child_of(probe_t.return_type, "call")
+            if (
+                ret_call is None
+                or ret_call.typetype != ZTypeType.FUNCTION
+                or ret_call.return_type is None
+                or not self._is_iterator_wrapper(ret_call.return_type)
+            ):
+                continue
+            # Skip if the function requires user-visible args -- the
+            # auto-invoke convention only fires when calling with no
+            # arguments makes sense.
+            has_required_param = False
+            for pname, ptype in self.typing.children_of(probe_t):
+                if pname == "this" or ptype.typetype == ZTypeType.FUNCTION:
+                    continue
+                has_required_param = True
+                break
+            if has_required_param:
+                continue
+            # Build the synthetic Call node wrapped in an Expression
+            # (so `_emit_operation_value` dispatches through the
+            # path-value path that handles inner Call evaluation) and
+            # stamp the iter-class return type on both nodes.
+            synth_call = zast.Call(
+                callable=cast(zast.Path, cond_op),
+                arguments=[],
+                start=cond_op.start,
+                synth_origin="for-auto-invoke",
+            )
+            synth_expr = zast.Expression(
+                expression=synth_call,
+                start=cond_op.start,
+                synth_origin="for-auto-invoke",
+            )
+            self.typing.node_type[synth_call.nodeid] = probe_t.return_type
+            self.typing.node_type[synth_expr.nodeid] = probe_t.return_type
+            fornode.conditions[name] = synth_expr
+
         for name, cond_op in fornode.conditions.items():
             t = self._check_operation(cond_op).ztype
             if t and not name.startswith(" "):
