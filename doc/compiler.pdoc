@@ -130,6 +130,140 @@ the type checker.
 The Parser will return the first syntax error found immediately. It does not
 attempt to reset and continue compilation.
 
+#--: Generator Desugaring
+
+A function whose declared return type is #~"iterator gives: T (takes: U)"
+and whose body contains at least one #~"yield" is a #b:"generator". The
+generator desugaring pass (#~"src/zgenerator.py") rewrites every such
+function into a pair: a synthesised class implementing the iterator
+protocol and a factory function that constructs an instance with all
+parameters captured. The pass runs as the first step of
+#~"TypeChecker.__init__" -- it operates on the parsed AST before
+resolution -- so the rest of the typechecker sees only ordinary
+class + function code.
+
+Pipeline placement:
+
+#code: """
+  Lex -> Parse -> [Generator desugaring] -> Typecheck -> Emit
+"""
+
+#---: Synthesised class shape
+
+For a generator #~"F: function {p1: T1 ...} out (iterator gives: G takes: K) is {
+... body ... }" the pass produces approximately
+
+#code language=zerolang: """
+  F_iter: class {
+      state: i64               # state-machine cursor
+      p1: T1                   # captured params (with original ownership)
+      <crossing-locals>: ...   # locals whose live range crosses a yield
+      _resume_input: K         # only when takes is non-null
+  } as {
+      create: function {p1: T1 ...} out this is {
+          return meta.create state: 0 :p1 ... <local-defaults>
+      }
+      call: function {:this} out (option-wrapper-for-G) is {
+          # original body, references to promoted names rewritten to this.<n>;
+          # carries synth_origin = "generator-call" so the emitter routes it
+          # through the state-machine codegen below.
+      }
+  }
+
+  # original F is replaced with a factory of the same signature:
+  F: function {p1: T1 ...} out F_iter is { return F_iter :p1 ... }
+"""
+
+The synthesised class name is #~"<funcname>_iter" for standalone
+generators and #~"<typename>_<methodname>_iter" for methods.
+Numeric suffix on collision.
+
+#---: Liveness (which locals get promoted)
+
+A local must become a class field iff its live range crosses a yield --
+otherwise its C-stack slot in #~".call" is gone between invocations.
+#~"_crossing_locals(body, param_names)" in #~"src/zgenerator.py"
+runs a structural traversal applying two rules:
+
+#ul:
+  [#*: #b:"Yield-count rule" -- track a running yield counter
+      (pre-bump for the yield's own expr). For each local, record
+      #~"first_def_yc" and #~"max_use_yc". If
+      #~"max_use_yc > first_def_yc", the def-to-use path crosses
+      a suspension.]
+  [#*: #b:"Yielding-loop rule" -- any reference to a local inside the
+      body of a #~"for" loop whose body contains a yield is treated as
+      crossing (the next iteration's read sits "after" the previous
+      iteration's yield).]
+
+Parameters are always promoted (the factory captures them into the
+synth class). Non-crossing locals stay as ordinary C locals inside the
+generated #~".call" body.
+
+#---: State-machine codegen
+
+The emitter (#~"src/zemitterc.py") routes any function whose
+#~"synth_origin == \"generator-call\"" through a dedicated state-machine
+path. Helpers #~"_setup_generator_ctx", #~"_emit_generator_prologue",
+#~"_emit_yield_fragment", and #~"_emit_generator_epilogue" assign one
+state number per yield (entry = 0, terminal = -1) and emit:
+
+#code: """
+  switch (this->state) {
+      case 0:  goto L_entry;
+      case 1:  goto L_resume_1;
+      ...
+      default: goto L_done;
+  }
+  L_entry:
+      /* original code up to first yield */
+      this->state = 1;
+      return OPTION_SOME(<yield expr>);
+  L_resume_1:
+      /* if takes != null: bind local from this->_resume_input */
+      ...
+  L_done:
+      this->state = -1;
+      return OPTION_NONE;
+"""
+
+C17 #~"goto" plus #~"switch" arbitrates cleanly; no GCC extensions.
+The yield-state numbers are pre-allocated in
+#~"_setup_generator_ctx" so the prologue, body fragments, and
+epilogue agree.
+
+#---: Termination + bidirectional value flow
+
+A bare #~"return" anywhere in the body or fall-through past the last
+yield transitions to the terminal absorbing state. #~"return <value>"
+is rejected during desugaring (#~"_validate_no_return_value"). Code
+placed after the last yield runs on the call that crosses into terminal;
+it does not run on early drop, where class destruction releases
+locks and destroys owned fields via the standard class-lifetime path.
+
+For #~"takes: K" generators, #~"_build_call_method" adds a
+#~"value: K" parameter; #~"_setup_generator_ctx" emits an
+entry-time store of #~"value" into #~"this->_resume_input"
+(destroying any prior owned value first). Expression-form yield
+(#~"x: yield v") in the body reads #~"this->_resume_input" after
+the resume label so #~"x" binds to the caller's most recent input.
+The first reachable yield must be statement form -- the
+desugarer rejects expression-form first-yields
+(#~"_validate_first_yield_not_expression_form"), reflecting that
+the resume-input slot is undefined before the first
+#~".call value:" arrives.
+
+#---: Known gaps
+
+The for-loop relay pattern (#~"for x: (subgen ...) loop { yield x }")
+compiles today but stops after the first inner value, because the
+synthesised for-loop iterator is a C-stack local in #~".call" that
+doesn't survive yield-suspension. Closing the gap requires either a
+desugarer-side synthetic local for each yielding-for-loop iterable
+(so #~"_crossing_locals" sees it and promotes it) or an emitter-side
+carve-out that promotes the for-loop iterator into a synth-class
+field. Tracked in the generator plan as deferred item P9.
+
 #--: Semantic Analyser (Type/Ownership/Lock checking)
 
 The Semantic Analyser assigns a type to each node in the AST. It compares
