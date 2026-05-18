@@ -11651,6 +11651,45 @@ class TestGeneratorDesugaring:
         ).parse()
         assert isinstance(result, zast.Error)
 
+    def test_generator_method_locks_receiver_for_iter_lifetime(self):
+        """A generator method declaring `b: this.lock` causes the
+        synth iterator class to hold an exclusive lock on the
+        receiver for the iterator's lifetime. Mutation of the
+        receiver inside the for-loop body is rejected at type-check
+        time. (Originally G4's deferred soundness exercise; landed
+        once the broader class-construction lock-transfer gap was
+        closed in commit 4e0123d.)"""
+        errors = check_errors(
+            "Bag: class { x: i64 } as {\n"
+            "    each: function {b: this.lock} out (iterator gives: i64) is "
+            "{ yield b.x }\n"
+            "}\n"
+            "main: function is {\n"
+            "    b: Bag x: 10\n"
+            "    with it: (Bag.each b: b.lock) do for v: it loop {\n"
+            "        b.x = 99\n"
+            "    }\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'b'" in e.msg for e in errors)
+
+    def test_generator_receiver_lock_released_after_iter_scope(self):
+        """The receiver lock the synth iterator holds is scoped to
+        the `with` binding -- once the iterator falls out of scope
+        the receiver is mutable again. Pins the symmetric positive
+        case alongside the rejection above."""
+        check_ok(
+            "Bag: class { x: i64 } as {\n"
+            "    each: function {b: this.lock} out (iterator gives: i64) is "
+            "{ yield b.x }\n"
+            "}\n"
+            "main: function is {\n"
+            "    b: Bag x: 10\n"
+            "    with it: (Bag.each b: b.lock) do for v: it loop { }\n"
+            "    b.x = 99\n"
+            "}"
+        )
+
     def test_for_loop_over_generator_synthesizes_class_call(self):
         """A for-loop drives the synth class's `.call`; the
         end-to-end pipeline (parse → desugar → type-check) finishes
