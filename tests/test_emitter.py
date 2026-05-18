@@ -9420,6 +9420,32 @@ class TestGeneratorEmitter:
         )
         assert compile_and_run(csource) == "10\n11\n12\n100\n101\n"
 
+    def test_generator_relay_via_inline_iterable(self):
+        """P9 inline form: the desugarer auto-extracts a yielding
+        for-loop's non-trivial iterable RHS into a synthetic local
+        before the loop, so `for x: (subgen ...) loop { yield x }`
+        works without the user writing the explicit binding. The
+        synth local then follows the same path as P9's explicit
+        binding -- promoted to a synth-class field, struct-default
+        initialised, retained across suspensions."""
+        csource = emit_source(
+            "intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {\n"
+            "    i: lo\n"
+            "    for while i < hi loop {\n"
+            "        yield i\n"
+            "        i = i + 1\n"
+            "    }\n"
+            "}\n"
+            "chained: function {a: i64 b: i64} out (iterator gives: i64) is {\n"
+            "    for x: (intrange lo: a hi: b) loop { yield x }\n"
+            "}\n"
+            "main: function is {\n"
+            "    for v: (chained a: 10 b: 13) loop "
+            '{ print "\\{v}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "10\n11\n12\n"
+
     # ---- G6: bidirectional generators -----------------------------
 
     def test_bidirectional_generator_round_trip(self):

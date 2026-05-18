@@ -1103,6 +1103,163 @@ def _make_this_dotted(name: str, loc: Token) -> DottedPath:
     )
 
 
+# ---- Inline-iterable promotion (P9) ------------------------------
+
+
+def _is_trivial_iterable(op: zast.Node) -> bool:
+    """An iterable RHS is *trivial* when it's already a bare named
+    reference (`for x: y`) -- no synthetic binding needed because
+    the name itself is in scope and (if it crosses a suspension)
+    will already be promoted by the existing liveness pass."""
+    while op.nodetype == NodeType.EXPRESSION:
+        op = cast(Expression, op).expression
+    return op.nodetype == NodeType.ATOMID
+
+
+def _promote_suspending_for_iterables(body: Statement) -> Statement:
+    """Tree rewrite: for each `for x: <non-trivial> loop { ... }`
+    whose loop body contains a suspension point, prepend a
+    synthetic `_iter_N: <non-trivial>` assignment and replace the
+    loop's iterable with `_iter_N`. The synthetic local is then
+    visible to `_crossing_locals` (the yielding-loop rule promotes
+    it) and to `_infer_local_field_type` (which resolves its type
+    via the callee's synth class or declared return type).
+
+    Recurses into nested Statement bodies but stops at nested
+    function literals -- per rule 10 the inner literal's
+    suspensions belong to a different generator, not this one.
+    """
+    counter = [0]
+
+    def fresh_name() -> str:
+        n = counter[0]
+        counter[0] += 1
+        return f"_iter{n}"
+
+    def rewrite_stmt(stmt: Statement) -> Statement:
+        new_lines: List[StatementLine] = []
+        for line in stmt.statements:
+            extra_pre = rewrite_in_statementline(line, new_lines)
+            if extra_pre is not None:
+                # rewrite_in_statementline returned the replacement
+                # StatementLine; the prepended synth assignments are
+                # already appended to new_lines.
+                new_lines.append(extra_pre)
+                continue
+            new_lines.append(line)
+        return Statement(
+            statements=new_lines, start=stmt.start, synth_origin=stmt.synth_origin
+        )
+
+    def rewrite_in_statementline(
+        line: StatementLine, prepend_to: List[StatementLine]
+    ) -> Optional[StatementLine]:
+        sl = line.statementline
+        if sl.nodetype != NodeType.EXPRESSION:
+            return None
+        expr = cast(Expression, sl)
+        inner = expr.expression
+        if inner.nodetype == NodeType.FOR:
+            new_for = rewrite_for(cast(zast.For, inner), prepend_to)
+            if new_for is inner:
+                return None
+            new_expr = Expression(
+                expression=cast(zast.ExpressionSubTypes, new_for),
+                start=expr.start,
+                synth_origin=expr.synth_origin,
+            )
+            return StatementLine(
+                statementline=new_expr,
+                start=line.start,
+                synth_origin=line.synth_origin,
+            )
+        return None
+
+    def rewrite_for(fornode: zast.For, prepend_to: List[StatementLine]) -> zast.Node:
+        # First recurse into the loop body and postconditions --
+        # nested for-loops with their own suspensions need the
+        # same treatment. Conditions (the iterable RHS) are NOT
+        # walked here; we rewrite them in this frame.
+        new_loop = fornode.loop
+        if new_loop is not None and new_loop.nodetype == NodeType.STATEMENT:
+            new_loop = rewrite_stmt(new_loop)
+        # Decide per-binding whether to extract.
+        if new_loop is None or not _body_contains_yield(new_loop):
+            if new_loop is fornode.loop:
+                return fornode
+            return zast.For(
+                conditions=dict(fornode.conditions),
+                loop=new_loop,
+                postconditions=list(fornode.postconditions),
+                start=fornode.start,
+                synth_origin=fornode.synth_origin,
+            )
+        new_conditions: Dict[str, zast.Operation] = {}
+        for name, cond_op in fornode.conditions.items():
+            # while-form conditions (name starts with space) aren't
+            # iterables; leave them alone.
+            if name[:1] == " ":  # ztc-string-compare-ok: while-form marker
+                new_conditions[name] = cond_op
+                continue
+            if _is_trivial_iterable(cond_op):
+                new_conditions[name] = cond_op
+                continue
+            synth_name = fresh_name()
+            # Build `_iterN: <cond_op>` as a StatementLine and
+            # prepend it.
+            synth_assign = zast.Assignment(
+                name=synth_name,
+                value=_wrap_as_expression(cond_op),
+                start=cond_op.start,
+                synth_origin=_SYNTH_ORIGIN,
+            )
+            synth_line = StatementLine(
+                statementline=synth_assign,
+                start=cond_op.start,
+                synth_origin=_SYNTH_ORIGIN,
+            )
+            prepend_to.append(synth_line)
+            new_conditions[name] = AtomId(
+                name=synth_name, start=cond_op.start, synth_origin=_SYNTH_ORIGIN
+            )
+        if new_conditions == fornode.conditions and new_loop is fornode.loop:
+            return fornode
+        return zast.For(
+            conditions=new_conditions,
+            loop=new_loop,
+            postconditions=list(fornode.postconditions),
+            start=fornode.start,
+            synth_origin=fornode.synth_origin,
+        )
+
+    return rewrite_stmt(body)
+
+
+def _wrap_as_expression(op: zast.Operation) -> Expression:
+    """Wrap an Operation in an Expression node if it isn't already."""
+    if op.nodetype == NodeType.EXPRESSION:
+        return cast(Expression, op)
+    return Expression(
+        expression=cast(zast.ExpressionSubTypes, op),
+        start=op.start,
+        synth_origin=_SYNTH_ORIGIN,
+    )
+
+
+def _replace_func_body(func: Function, new_body: Statement) -> Function:
+    """Return a new Function identical to `func` except with the
+    body replaced. Used after the inline-iterable promotion pass."""
+    return Function(
+        returntype=func.returntype,
+        parameters=dict(func.parameters),
+        body=new_body,
+        is_native=func.is_native,
+        as_items=dict(func.as_items),
+        start=func.start,
+        synth_origin=func.synth_origin,
+    )
+
+
 # ---- Synthesized class / factory assembly ------------------------
 
 
@@ -1166,6 +1323,18 @@ def _build_generator(
     if takes_path is not None:
         if not _validate_first_yield_not_expression_form(func.body, errors):
             return None, None
+
+    # 3c. Inline-iterable promotion: rewrite each suspending
+    # `for x: <non-trivial-expr> loop { ... }` to insert a
+    # synthetic `_iter_N: <expr>` binding before the loop and
+    # reference `_iter_N` in the loop's iterable position. Without
+    # this rewrite, the for-loop's iterable would be a C-stack
+    # local that doesn't survive a suspension point, so the inner
+    # iterator would be re-created on each `.call` and only emit
+    # its first value.
+    rewritten_body = _promote_suspending_for_iterables(func.body)
+    func = _replace_func_body(func, rewritten_body)
+    assert func.body is not None
 
     # 4. Promotion (G7):
     #    - parameters: always (factory passes them to meta.create).
