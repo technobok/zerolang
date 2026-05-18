@@ -11761,3 +11761,96 @@ class TestGeneratorDesugaring:
             f"`non_crossing` (def + use between two yields, no cross) "
             f"should NOT be a field; got fields={fields}"
         )
+
+    def test_generator_local_field_infers_record_construction(self):
+        """`r: Bag x: 10 y: 20` as a yield-crossing local promotes to
+        a synth-class field of type `Bag`, not the default i64."""
+        program, _typing = check_ok(
+            "Bag: record { x: i64 y: i64 }\n"
+            "gen: function out (iterator gives: i64) is {\n"
+            "    r: Bag x: 10 y: 20\n"
+            "    yield 1\n"
+            "    yield r.x\n"
+            "}"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        field = synth.is_items["r"]
+        assert field.nodetype == zast.NodeType.ATOMID and field.name == "Bag", (
+            f"expected `r` field type AtomId('Bag'), got "
+            f"{field.nodetype} name={getattr(field, 'name', None)}"
+        )
+
+    def test_generator_local_field_infers_string_literal(self):
+        """Bare `sv: "hello"` -> StringView; an interpolated literal
+        promotes to String."""
+        program, _typing = check_ok(
+            "gen: function out (iterator gives: i64) is {\n"
+            '    sv: "hello"\n'
+            "    yield 1\n"
+            "    yield sv.length\n"
+            "}"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        sv_field = synth.is_items["sv"]
+        assert sv_field.nodetype == zast.NodeType.ATOMID
+        assert sv_field.name == "StringView", f"got {sv_field.name}"
+
+    def test_generator_local_field_infers_string_projection(self):
+        """`s: "hello".string` projects literal -> field type String."""
+        program, _typing = check_ok(
+            "gen: function out (iterator gives: i64) is {\n"
+            '    s: "hello".string\n'
+            "    yield 1\n"
+            "    yield s.length\n"
+            "}"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        field = synth.is_items["s"]
+        assert field.nodetype == zast.NodeType.ATOMID and field.name == "String"
+
+    def test_generator_local_field_infers_method_on_local(self):
+        """`x: <ctor>; y: x.method` — y's field type is the method's
+        declared return type, looked up via x's local-RHS type."""
+        program, _typing = check_ok(
+            "Bag: record { x: i64 } as {\n"
+            "    doubled: function {b: this} out i32 is { return 2.i32 }\n"
+            "}\n"
+            "gen: function out (iterator gives: i32) is {\n"
+            "    bag: Bag x: 10\n"
+            "    d: bag.doubled\n"
+            "    yield 1.i32\n"
+            "    yield d\n"
+            "}"
+        )
+        synth = program.units["test"].body["gen_iter"]
+        # `d` crosses the yield, so it's promoted; its type should
+        # be i32 (the return type of Bag.doubled), not the default i64.
+        d_field = synth.is_items["d"]
+        assert d_field.nodetype == zast.NodeType.ATOMID
+        assert d_field.name == "i32", f"got {d_field.name}"
+
+    def test_generator_local_field_infers_field_method_via_receiver_param(self):
+        """`<recv>.<field>.<method>` in a generator method: resolve
+        the receiver param's type (mapping `this.lock` ->
+        receiver_type), look up the field's declared type on it,
+        then look up the method's return type on the field type."""
+        program, _typing = check_ok(
+            "Inner: record { v: i64 } as {\n"
+            "    sized: function {i: this} out u32 is { return 4.u32 }\n"
+            "}\n"
+            "Outer: class { inner: Inner } as {\n"
+            "    each: function {o: this.lock} out (iterator gives: u32) is {\n"
+            "        sz: o.inner.sized\n"
+            "        yield 0.u32\n"
+            "        yield sz\n"
+            "    }\n"
+            "}"
+        )
+        # `o` is typed `this.lock` (receiver_type=Outer threaded in
+        # for the method), `Outer.inner` has type `Inner`, and
+        # `Inner.sized` returns `u32`. The synth class's `sz` field
+        # should be declared as u32, not the i64 default.
+        synth = program.units["test"].body["Outer_each_iter"]
+        sz_field = synth.is_items["sz"]
+        assert sz_field.nodetype == zast.NodeType.ATOMID
+        assert sz_field.name == "u32", f"got {sz_field.name}"
