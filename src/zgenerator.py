@@ -352,6 +352,20 @@ def _is_this_private_path(p: zast.Operation) -> bool:
     )
 
 
+def _is_this_private_lock(p: zast.Operation) -> bool:
+    """True for a `this.private.lock` path -- a friend-access lock
+    on the receiver. The factory unwraps this asymmetrically so the
+    external signature stays callable from outside the type's
+    privacy boundary."""
+    if p.nodetype != NodeType.DOTTEDPATH:
+        return False
+    dp = cast(DottedPath, p)
+    return (
+        _is_this_private_path(dp.parent)
+        and dp.child.name == "lock"  # ztc-string-compare-ok: lock suffix
+    )
+
+
 def _validate_parameter(
     name: str, ppath: Path, start: Token, errors: List[zast.Error]
 ) -> bool:
@@ -1394,29 +1408,38 @@ def _build_factory(
     """Rewrite the original generator function as a factory that
     forwards its parameters to the synthesized class's `.create`.
 
-    The factory's signature mirrors the original generator's
-    (parameters and parameter ownership) — the only thing that
-    changes is the body, which now constructs a synth-class
-    instance and returns it.
+    Most parameters flow through unchanged. The one asymmetric case
+    is `b: this.private.lock`: the synth class needs a private-lock
+    field (so the iterator can read the receiver's private state),
+    but exposing `this.private.lock` on the factory itself makes the
+    call site fail privacy checks from outside Bag's boundary. The
+    factory keeps a public `b: this.lock` parameter and projects
+    `b.private` when forwarding — the same trick the hand-written
+    `examples/listiter.z`'s `iterate` method uses (`return BagIter
+    target: b.private`). The factory body sits inside the receiver
+    type's `as` block, where `.private` access is legal.
     """
     loc = func.start
     synth_atom = AtomId(name=synth_name, start=loc, synth_origin=_SYNTH_ORIGIN)
-    # Body: `return <synth_name> p1: p1 p2: p2 ...` — the emitter's
-    # `return <ClassName> field: val ...` special-case routes through
-    # `_build_create_args`, which respects the user-defined `.create`
-    # parameter order and handles lock/borrow class params without
-    # spurious `&` insertion. The same shape is used by
-    # examples/listiter.z's hand-written factory (`return BagIter
-    # target: b.private`).
     forwarded: List[NamedOperation] = []
     for pname, ppath in func.parameters.items():
         if _is_this_path(ppath) or _is_this_private_path(ppath):
             # bare `:this` — rejected by validation; defensive skip.
             continue
-        valtype = AtomId(name=pname, start=loc, synth_origin=_SYNTH_ORIGIN)
+        forward_value: Path = AtomId(name=pname, start=loc, synth_origin=_SYNTH_ORIGIN)
+        if _is_this_private_lock(ppath):
+            forward_value = DottedPath(
+                parent=forward_value,
+                child=AtomId(name="private", start=loc, synth_origin=_SYNTH_ORIGIN),
+                start=loc,
+                synth_origin=_SYNTH_ORIGIN,
+            )
         forwarded.append(
             NamedOperation(
-                name=pname, valtype=valtype, start=loc, synth_origin=_SYNTH_ORIGIN
+                name=pname,
+                valtype=forward_value,
+                start=loc,
+                synth_origin=_SYNTH_ORIGIN,
             )
         )
     # The parser flattens `return TypeName field: val` into one Call
@@ -1449,9 +1472,23 @@ def _build_factory(
     new_returntype: Path = AtomId(
         name=synth_name, start=loc, synth_origin=_SYNTH_ORIGIN
     )
+    # Expose `this.private.lock` params as public `this.lock` on the
+    # factory itself so callers outside the type's privacy boundary
+    # can invoke it. The .private projection lives in the body above.
+    factory_params: Dict[str, Path] = {}
+    for pname, ppath in func.parameters.items():
+        if _is_this_private_lock(ppath):
+            factory_params[pname] = DottedPath(
+                parent=AtomId(name="this", start=loc, synth_origin=_SYNTH_ORIGIN),
+                child=AtomId(name="lock", start=loc, synth_origin=_SYNTH_ORIGIN),
+                start=loc,
+                synth_origin=_SYNTH_ORIGIN,
+            )
+        else:
+            factory_params[pname] = ppath
     new_func = Function(
         returntype=new_returntype,
-        parameters=dict(func.parameters),
+        parameters=factory_params,
         body=factory_body,
         is_native=False,
         as_items=dict(func.as_items),

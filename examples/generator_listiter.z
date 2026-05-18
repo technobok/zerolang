@@ -1,24 +1,33 @@
 # generator_listiter.z -- container iterator written as a generator.
 #
-# This is the same shape as listiter.z's bag-with-iterator demo, but
-# the iterator is implemented as a one-line generator method instead
-# of a hand-rolled BagIter class. Observable output must match
-# listiter.z's iter-line sequence byte-for-byte
-# (see tests/test_generator_validation.py).
+# Same shape as listiter.z's bag-with-iterator demo, but the
+# iterator is implemented as a one-line generator method instead
+# of a hand-rolled BagIter class. Observable output matches
+# listiter.z byte-for-byte (see tests/test_generator_validation.py).
 #
-# What the desugarer (G3) builds underneath:
-#   - A class `Bag_iterate_iter` with `state: i64` and a captured
-#     `b: Bag.lock` field.
-#   - A factory function `Bag.iterate` that constructs an instance.
+# Encapsulation: `public: unit { :count :iterate }` hides the
+# private fields a/b/c; the generator method takes the receiver as
+# `b: this.private.lock` so the synth class can read those private
+# fields. The factory's external signature is `b: this.lock`
+# (public) -- the desugarer (P7) projects `.private` when
+# forwarding to the synth-class instance, the same trick the
+# hand-written `examples/listiter.z` uses
+# (`return BagIter target: b.private`).
+#
+# What the desugarer builds underneath:
+#   - A class `Bag_iterate_iter` with `state: i64` and a
+#     `b: Bag.private.lock` field.
+#   - A factory function `Bag.iterate` with `b: this.lock`
+#     externally; body projects `.private` on the forward.
 #   - The class's `.call` method implements the iterator protocol
-#     structurally via a switch/goto state machine (G4) — what you
-#     would have written by hand as a BagIter class.
+#     structurally via a switch/goto state machine.
 
 Bag: class { a: i64 b: i64 c: i64 count: i64 } as {
-    # Generator method. `b: this.lock` captures the bag locked for
-    # the iterator's lifetime. The body looks straight-line; the
-    # compiler turns it into the state machine.
-    iterate: function {b: this.lock} out (iterator gives: i64) is {
+    public: unit { :count :iterate }
+
+    # Generator method. `b: this.private.lock` captures the bag
+    # with private access locked for the iterator's lifetime.
+    iterate: function {b: this.private.lock} out (iterator gives: i64) is {
         yield b.a
         yield b.b
         yield b.c

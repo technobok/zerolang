@@ -9358,6 +9358,31 @@ class TestGeneratorEmitter:
         )
         assert compile_and_run(csource) == "10\n20\n30\n"
 
+    def test_generator_method_private_receiver_lock(self):
+        """A generator method declared `b: this.private.lock` reads
+        the receiver's private fields. The factory's external param
+        is exposed as the public `this.lock` so the call site
+        (outside the type's privacy boundary) is accepted; the
+        desugarer projects `.private` when forwarding to the synth
+        class, which holds a `Bag.private.lock` field internally."""
+        csource = emit_source(
+            "Bag: class { x: i64 y: i64 z: i64 } as {\n"
+            "    public: unit { :each }\n"
+            "    each: function {b: this.private.lock} out "
+            "(iterator gives: i64) is {\n"
+            "        yield b.x\n"
+            "        yield b.y\n"
+            "        yield b.z\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            "    b: Bag x: 10 y: 20 z: 30\n"
+            "    with it: (Bag.each b: b.lock) do for v: it loop "
+            '{ print "\\{v}" }\n'
+            "}"
+        )
+        assert compile_and_run(csource) == "10\n20\n30\n"
+
     # ---- G6: bidirectional generators -----------------------------
 
     def test_bidirectional_generator_round_trip(self):
