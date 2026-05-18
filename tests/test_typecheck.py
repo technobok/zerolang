@@ -344,6 +344,22 @@ class TestControlFlow:
             "}"
         )
 
+    def test_for_loop_rejects_non_iterable_binding(self):
+        """`for x: <int> loop { ... }` is not a valid form — the bound
+        expression must be iterable, or paired with a while-clause for
+        a C-style counter loop. Silent acceptance previously emitted a
+        `while(1) { x = 3; body }` infinite loop."""
+        errors = check_errors("main: function is { for x: 3 loop { break } }")
+        assert any("iterable" in e.msg or "while" in e.msg for e in errors), (
+            f"got: {[e.msg for e in errors]}"
+        )
+
+    def test_for_loop_accepts_iterate_binding(self):
+        check_ok("main: function is { for x: 3.iterate loop { break } }")
+
+    def test_for_loop_accepts_cstyle_init_with_while(self):
+        check_ok("main: function is {\n  for i: 0 while i < 3 loop { i = i + 1 }\n}")
+
 
 class TestTypeResolution:
     def test_numeric_types_resolve(self):

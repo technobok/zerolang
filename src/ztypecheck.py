@@ -9743,6 +9743,15 @@ class TypeChecker:
             self.typing.node_type[synth_expr.nodeid] = probe_t.return_type
             fornode.conditions[name] = synth_expr
 
+        # C-style for-init (`for i: 0 while i < 10 loop { ... }`) is
+        # only legal when paired with a while-clause; a bare binding
+        # like `for x: 3 loop { ... }` with no termination condition
+        # would emit a `while(1) { x = 3; body }` and run forever.
+        has_while_clause = any(
+            k[:1] == " "
+            for k in fornode.conditions  # ztc-string-compare-ok: while-form marker
+        )
+
         for name, cond_op in fornode.conditions.items():
             t = self._check_operation(cond_op).ztype
             if t and not name.startswith(" "):
@@ -9798,6 +9807,17 @@ class TypeChecker:
                             )
                         iter_option_type = call_method.return_type
 
+                if iter_option_type is None and not has_while_clause:
+                    self._error(
+                        f"`for {name}: <expr> loop` requires <expr> to be "
+                        f"iterable (e.g. `<int>.iterate`, a list, or a "
+                        f"callable iterator) or to be paired with a "
+                        f"`while` clause for a C-style counter loop "
+                        f"(`for {name}: 0 while {name} < n loop {{ "
+                        f"{name} = {name} + 1 }}`)",
+                        loc=cond_op.start,
+                        err=ERR.TYPEERROR,
+                    )
                 if iter_option_type:
                     some_type = self.typing.child_of(iter_option_type, "some")
                     if some_type:
