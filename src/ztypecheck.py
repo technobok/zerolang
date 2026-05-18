@@ -9689,7 +9689,7 @@ class TypeChecker:
         # user params" callees (this catches generator factories
         # with no parameters, the motivating P3 case).
         for name in list(fornode.conditions.keys()):
-            if name.startswith(" "):  # ztc-string-compare-ok: while-form marker
+            if name[:1] == " ":  # ztc-string-compare-ok: while-form marker
                 continue
             cond_op = fornode.conditions[name]
             probe_t = self._check_operation(cond_op).ztype
@@ -9715,7 +9715,10 @@ class TypeChecker:
             # arguments makes sense.
             has_required_param = False
             for pname, ptype in self.typing.children_of(probe_t):
-                if pname == "this" or ptype.typetype == ZTypeType.FUNCTION:
+                if (
+                    pname == "this"  # ztc-string-compare-ok: receiver-param marker
+                    or ptype.typetype == ZTypeType.FUNCTION
+                ):
                     continue
                 has_required_param = True
                 break

@@ -787,6 +787,7 @@ def _infer_local_field_type(
     loc: Token,
     unit_body: Optional[Dict[str, zast.TypeDefinition]] = None,
     gen_synth_names: Optional[Dict[str, str]] = None,
+    func_params: Optional[Dict[str, Path]] = None,
 ) -> zast.Path:
     """Field-type inference for a promoted-local field.
 
@@ -794,13 +795,15 @@ def _infer_local_field_type(
     - Typed numeric-literal projection (`5.i32`) -> matching int
       type. Bare integers fall through to the i64 default below.
     - Call to a generator function in the same unit -> the callee's
-      synth class name (looked up via `gen_synth_names`). Lets a
-      generator capture a sub-iterator into a class field whose
-      type is the concrete synth class -- the typechecker handles
-      that like any class binding.
+      synth class name. Lets a generator capture a sub-iterator
+      into a class field whose type is the concrete synth class.
     - Call to any other function in the same unit -> the callee's
-      declared return-type AST, used verbatim. Simple wins for
-      `Bytes` constructors, hand-written iterator factories, etc.
+      declared return-type AST, used verbatim.
+    - Method-on-param dotted path (`x.method`) where `x` is a
+      parameter whose type resolves to a class in the unit -> the
+      method's declared return-type AST. Catches the
+      auto-call-coerced container-method pattern inside a
+      generator body, e.g. `src: x.each` where `x: ints.lock`.
     - Anything else -> `i64` (the v1 fallback, safe for counters /
       accumulators, which are the common cross-yield locals).
     """
@@ -823,6 +826,27 @@ def _infer_local_field_type(
             "f64",
         }:
             return AtomId(name=dp.child.name, start=loc, synth_origin=_SYNTH_ORIGIN)
+        # `x.method` where `x` is a parameter and `method` is a
+        # member of the param's class type. The desugarer runs
+        # before typecheck, so we cannot ask the typechecker --
+        # instead, peek at `func_params` to read the param type
+        # path (`ints.lock` or just `ints`), strip the
+        # ownership-suffix leaf if present, and look up the
+        # method on the underlying class in `unit_body`.
+        if (
+            dp.parent.nodetype == NodeType.ATOMID
+            and func_params is not None
+            and unit_body is not None
+        ):
+            recv_name = cast(AtomId, dp.parent).name
+            recv_type_path = func_params.get(recv_name)
+            base_type_name = _base_type_name(recv_type_path)
+            if base_type_name is not None:
+                method_rt = _method_return_type(
+                    base_type_name, dp.child.name, unit_body
+                )
+                if method_rt is not None:
+                    return method_rt
     if target.nodetype == NodeType.CALL and unit_body is not None:
         called = cast(Call, target).callable
         if called.nodetype == NodeType.ATOMID:
@@ -846,6 +870,53 @@ def _infer_local_field_type(
             ):
                 return cast(Path, cast(Function, defn).returntype)
     return AtomId(name="i64", start=loc, synth_origin=_SYNTH_ORIGIN)
+
+
+def _base_type_name(path: Optional[Path]) -> Optional[str]:
+    """Extract the underlying type name from a parameter type path,
+    stripping a trailing `.lock` / `.take` / `.borrow` ownership
+    leaf if present. Returns None if the path's head isn't a bare
+    AtomId (so excludes `this`-rooted or more complex type
+    expressions)."""
+    if path is None:
+        return None
+    if path.nodetype == NodeType.ATOMID:
+        return cast(AtomId, path).name
+    if path.nodetype == NodeType.DOTTEDPATH:
+        dp = cast(DottedPath, path)
+        if dp.parent.nodetype == NodeType.ATOMID and dp.child.name in _OWNERSHIP_LEAVES:
+            return cast(AtomId, dp.parent).name
+    return None
+
+
+def _method_return_type(
+    type_name: str,
+    method_name: str,
+    unit_body: Dict[str, zast.TypeDefinition],
+) -> Optional[Path]:
+    """Look up a method's declared return-type AST on an in-unit
+    type. Searches `as_items` first (where methods conventionally
+    live), then `is_items`. Returns None if the type isn't an
+    ObjectDef or the method isn't defined."""
+    defn = unit_body.get(type_name)
+    if defn is None or defn.nodetype not in (
+        NodeType.CLASS,
+        NodeType.RECORD,
+        NodeType.UNION,
+        NodeType.VARIANT,
+        NodeType.PROTOCOL,
+        NodeType.FACET,
+        NodeType.ENUM,
+    ):
+        return None
+    objdef = cast(ObjectDef, defn)
+    for items in (objdef.as_items, objdef.is_items):
+        member = items.get(method_name)
+        if member is not None and member.nodetype == NodeType.FUNCTION:
+            mfunc = cast(Function, member)
+            if mfunc.returntype is not None:
+                return mfunc.returntype
+    return None
 
 
 # ---- Body rewrite: AtomId(X) -> this.X for promoted names --------
@@ -1374,7 +1445,11 @@ def _build_generator(
         if lname in class_fields:
             continue  # parameter shadows; param wins
         field_type = _infer_local_field_type(
-            first_rhs, func.start, unit_body, gen_synth_names
+            first_rhs,
+            func.start,
+            unit_body,
+            gen_synth_names,
+            func_params=func.parameters,
         )
         class_fields[lname] = field_type
     # Bidirectional: the resume-input slot holds the most recent
