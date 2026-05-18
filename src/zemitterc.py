@@ -4902,6 +4902,20 @@ class CEmitter:
         # expression-form yield path (Yield as Reassignment/Assignment
         # RHS) consults this flag and emits the post-resume read.
         is_bidirectional = "value" in func.parameters
+        # If `value`'s type has a destructor (i.e. reftype `takes`),
+        # the prologue must destroy the previous `_resume_input`
+        # before overwriting -- otherwise sending a second value
+        # leaks the first one. zero-initialised structs are safe to
+        # destroy because the standard destructors are NULL-guarded
+        # (`z_String_free` checks `s->data`; class destructors are
+        # similarly defensive), so we can unconditionally call it
+        # on every entry, including state 0.
+        resume_destructor: Optional[str] = None
+        if is_bidirectional:
+            value_path = func.parameters.get("value")
+            value_zt = self._node_ztype(value_path) if value_path is not None else None
+            if value_zt is not None and value_zt.destructor_name:
+                resume_destructor = value_zt.destructor_name
         self._generator_ctx = {
             "yield_states": yield_states,
             "wrapper_ctype": ret_ctype,
@@ -4909,6 +4923,7 @@ class CEmitter:
             "none_tag": f"Z_{upper}_TAG_NONE",
             "n_yields": len(yield_states),
             "is_bidirectional": is_bidirectional,
+            "resume_destructor": resume_destructor,
         }
 
     def _emit_generator_prologue(self) -> str:
@@ -4926,9 +4941,13 @@ class CEmitter:
         ctx = self._generator_ctx
         n = cast(int, ctx["n_yields"])
         is_bidirectional = cast(bool, ctx["is_bidirectional"])
+        resume_destructor = cast(Optional[str], ctx.get("resume_destructor"))
         indent = self._indent()
         lines: List[str] = []
         if is_bidirectional:
+            if resume_destructor is not None:
+                # destroy the previous value before overwriting
+                lines.append(f"{indent}{resume_destructor}(&this->_resume_input);\n")
             lines.append(f"{indent}this->_resume_input = value;\n")
         lines.append(f"{indent}switch (this->state) {{\n")
         # entry: first invocation, dispatched only when state==0.
@@ -9718,12 +9737,25 @@ class CEmitter:
         # doexpr may reference the with variable, so its temps must be
         # declared inside the block (not prepended to the outer statement)
         self._temp_stack.append(TempState())
+        # Snapshot cleanup_vars so any user-visible bindings created
+        # inside the do-body (notably typecheck-hoisted synth temps
+        # `_tN`) get freed at *this* block's scope-exit rather than
+        # leaking to function-exit, where they'd reference an
+        # out-of-scope C local.
+        saved_cleanup_len = len(self._scope.cleanup_vars)
 
         doexpr_code = self._emit_expression_stmt(withnode.doexpr)
 
         # emit doexpr temps inside the with block
         parts.append("".join(self._temp.decls))
         parts.append(doexpr_code)
+        # Block-local user bindings (anything cleanup_vars grew during
+        # the doexpr) are destroyed here in reverse order, then
+        # removed from the function-level list.
+        block_local_vars = self._scope.cleanup_vars[saved_cleanup_len:]
+        for var_name, var_type in reversed(block_local_vars):
+            parts.append(self._emit_field_cleanup(var_name, var_type, inner_indent))
+        del self._scope.cleanup_vars[saved_cleanup_len:]
         for t in self._temp.frees:
             if t in self._temp.string_set:
                 parts.append(f"{inner_indent}z_String_free(&{t});\n")

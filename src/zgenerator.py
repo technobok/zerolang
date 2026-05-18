@@ -1380,9 +1380,17 @@ def _build_generator(
     # Bidirectional: the resume-input slot holds the most recent
     # `value:` argument from `.call value: <U>`. Each `.call`
     # entry copies the new value in; the body's expression-form
-    # yields (`x: yield v`) read it on resumption.
+    # `name: yield v` reads it on resumption. Strip a `.take`
+    # ownership annotation -- fields store owned values directly,
+    # without the suffix; the synth class destructor handles the
+    # per-iterator-lifetime destruction.
     if takes_path is not None:
-        class_fields["_resume_input"] = takes_path
+        field_path, leaf = _split_path_leaf(cast(zast.Operation, takes_path))
+        class_fields["_resume_input"] = (
+            cast(Path, field_path)
+            if leaf == "take"  # ztc-string-compare-ok: ownership-suffix marker
+            else takes_path
+        )
 
     # 6. build the `create` method
     create_method = _build_create_method(

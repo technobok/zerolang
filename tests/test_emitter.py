@@ -7376,6 +7376,60 @@ class TestTakeInArmMemorySafety:
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
 
+class TestWithBlockScopeCleanup:
+    """Pins the scope-tracking fix for `with`-block bodies.
+
+    `_emit_with` snapshots `cleanup_vars` length on entry to the
+    do-body and emits destructor calls for any user-visible
+    bindings that were added during the doexpr (notably the
+    typecheck-hoisted `_tN` synth temps from `.take` arguments).
+    Before the fix, those temps were tracked at function scope, so
+    `z_String_free(&_tN)` was emitted after the with-block's
+    closing brace -- referencing an out-of-scope C local. gcc
+    rejected the resulting code with `_tN undeclared`.
+    """
+
+    def test_take_arg_in_with_block_compiles(self):
+        """`.take`-argument hoisted temp inside a `with`-do body
+        compiles cleanly. Pre-fix, the cleanup landed at function
+        scope after the with-block closed, triggering
+        `_tN undeclared`."""
+        csource = emit_source(
+            "Sink: class { last: String } as {\n"
+            "    add: function {:this s: String.take} is "
+            "{ this.last = s }\n"
+            "}\n"
+            "main: function is {\n"
+            '    sk: Sink last: "init".string\n'
+            "    with t: 0 do {\n"
+            '        sk.add s: "hello".string\n'
+            '        print "stored: \\{sk.last}"\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "stored: hello\n"
+
+    def test_take_arg_in_with_block_asan_clean(self):
+        """ASan run: the per-take temp lives only for the with
+        block; on exit it's nullified (its data was transferred
+        into `sk.last`) so the destructor is a no-op and no
+        double-free / use-after-free."""
+        csource = emit_source(
+            "Sink: class { last: String } as {\n"
+            "    add: function {:this s: String.take} is "
+            "{ this.last = s }\n"
+            "}\n"
+            "main: function is {\n"
+            '    sk: Sink last: "init".string\n'
+            "    with t: 0 do {\n"
+            '        sk.add s: "hello".string\n'
+            "    }\n"
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0, f"ASan error:\n{result.stderr}"
+
+
 class TestAliasBinding:
     """Phase B: binding alias optimization.
 
@@ -9484,6 +9538,45 @@ class TestGeneratorEmitter:
         #   call 3 (value=true)  -> x = true, if x -> yield 99
         #   call 4 (value=false) -> terminal (state == -1) -> none
         assert compile_and_run(csource) == "1\n2\n99\n(none)\n"
+
+    def test_bidirectional_generator_string_takes(self):
+        """P6: reftype `takes: String.take`. The synth class stores
+        the resume-input as an owned String field (the desugarer
+        strips the `.take` annotation -- fields hold owned values
+        directly), and the emitter's prologue calls the
+        appropriate destructor before each per-call overwrite so
+        the previous value's heap data is freed. The standard
+        `z_String_free` is NULL-guarded so the destructor call is
+        safe even on the first call where the field is
+        zero-initialised.
+
+        This also pins the wider `with`-block scope-cleanup fix:
+        the typecheck-hoisted `_tN` temps for `.take` args inside
+        the do-body now get destroyed at block exit instead of
+        leaking to function-exit, where they'd reference an
+        out-of-scope C local."""
+        csource = emit_source(
+            "gen: function {n: i64} out "
+            "(iterator gives: i64 takes: String.take) is {\n"
+            "    yield 1\n"
+            "    s: yield 2\n"
+            "    yield 99\n"
+            "}\n"
+            "main: function is {\n"
+            "    with g: (gen n: 0) do {\n"
+            '        a: g.call value: "first".string\n'
+            "        match (a) case some then "
+            '{ print "a: \\{a}" } case none then { print "(none)" }\n'
+            '        b: g.call value: "second".string\n'
+            "        match (b) case some then "
+            '{ print "b: \\{b}" } case none then { print "(none)" }\n'
+            '        c: g.call value: "third".string\n'
+            "        match (c) case some then "
+            '{ print "c: \\{c}" } case none then { print "(none)" }\n'
+            "    }\n"
+            "}"
+        )
+        assert compile_and_run(csource) == "a: 1\nb: 2\nc: 99\n"
 
     def test_for_loop_over_bidirectional_generator_rejected(self):
         """A for-loop has no way to provide the `.call value:`
