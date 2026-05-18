@@ -2652,7 +2652,9 @@ argument for the current iteration.
 
 #----: yield
 
-The builtin yield function.
+The builtin yield function. #~"yield" is only legal inside a generator
+function (one whose #~"out" type is #~"iterator gives: ..."); see
+#> to=generator-functions: Generator functions for the full surface.
 
 #code language=zerolang: """
   # effective signature
@@ -2664,6 +2666,10 @@ The builtin yield function.
   t_out     |Yes/Gen |Generic type for value being passed out to caller
   t_in      |No      |Generic type for value being passed in from caller
   result    |Yes     |Return operation, optional, returns null if missing
+
+Statement form #~"yield v" produces no binding; expression form
+#~"x: yield v" binds #~"x" to the value the caller supplied on
+resumption (only valid in a generator whose #~"takes" is non-#~"null").
 
 #----: return
 
@@ -3181,7 +3187,8 @@ The function keyword defines a:
   object
 - a method: defined within an object and has a #~"this" receiver as the first
   argument
-- iterator function: using #~"yield"
+- generator function: a function (or method) whose body contains
+  #~"yield"; see #> to=generator-functions: Generator functions
 - 'spec': a signature only; no body (only at unit level)
 
 It may also be generic by having generic parameters.
@@ -3490,6 +3497,134 @@ the iterator's lifetime; the iterator falls out of scope at the end of the
 single-owner (cannot be copied), which is what makes the #~".lock" field safe.
 See #~"examples/ListIter.z" for the canonical pattern and
 #~"doc/ownership.pdoc" for the lock-lifecycle walkthrough.
+
+#----: Generator functions
+
+A #b:"generator function" is one whose body contains at least one
+#~"yield" expression. Its declared return type must be
+#~"iterator gives: T" (optionally with #~"takes: U"). The compiler
+synthesises a class implementing the iterator protocol; calling the
+generator returns an instance of that class with all parameters
+captured. The body, written straight-line, is lowered into a state
+machine whose #~".call" method drives one step per invocation.
+
+A function declaring #~"out (iterator gives: T)" #b:"without" a #~"yield"
+in its body is an ordinary factory (an unsynthesised function returning
+an iterator built by hand); it is not an error.
+
+#code language=zerolang: """
+  # out-only generator with captured state
+  intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {
+      i: lo
+      for while i < hi loop {
+          yield i
+          i = i + 1
+      }
+  }
+
+  # call site -- the for-loop drives the synthesised .call
+  for x: (intrange lo: 0 hi: 3) loop { print "\{x}" }
+  """
+
+The shape of the #~".call" return type is determined by the form of
+#~"gives:"
+
+#table cols="2 2 3":
+  gives form         |.call returns        |Yielded value ownership
+  #~"T" (valtype)    |#~"optionval(T)"     |Copy out
+  #~"T.take"         |#~"Option(T)"        |Owned out to caller
+  #~"T.borrow"       |#~"OptionView(T)"    |Borrowed view (tied to iterator's lock)
+
+A reftype #~"T" without modifier defaults to #~".take".
+
+Because the synthesised iterator outlives the factory call, every
+parameter must declare ownership/locking explicitly. A bare #~".borrow"
+or bare #~":this" is rejected -- the borrow's lifetime would be the
+factory call, but the iterator outlives that call.
+
+#table cols="3 2 4":
+  Parameter form                       |Verdict        |Stored as
+  #~"arg: T.take" (reftype)            |OK             |Owned field; destroyed on iterator destruction
+  #~"arg: T.lock" (reftype)            |OK             |Locked field; released on iterator destruction
+  #~"arg: T.borrow", bare #~"arg: T"   |Compile error  |(use #~".lock" or #~".take")
+  #~"arg: T" (valtype)                 |OK             |Value field
+  #~":this" (method)                   |Compile error  |(use #~":this.lock" or #~":this.private.lock")
+  #~":this.lock", #~":this.private.lock" |OK           |Locked receiver field
+
+A generator method defined inside the receiver type's #~"as" block
+captures the receiver as a #~"Type.lock" field; no #~".private" needed
+(it is inside the privacy boundary). A generator function defined
+outside the receiver type may take #~":this.private.lock" for friend
+access, subject to the same exposure rule that governs hand-written
+iterator classes.
+
+#~"yield" outside a function whose #~"out" type is
+#~"iterator gives: ..." is a compile error. #~"yield" inside a nested
+function literal is rejected -- #~"yield" only belongs to the
+lexically-enclosing generator. #~"return <value>" inside a generator is
+a compile error; bare #~"return" terminates the generator.
+
+After termination the synthesised class enters an absorbing terminal
+state: #~".call" returns #~".none" forever after, idempotently. Code
+placed after the last #~"yield" runs on the #~".call" that crosses
+into terminal state (i.e. the call after the final value is consumed).
+It does #b:"not" run when the iterator is dropped early (for-loop
+break, scope exit before exhaustion). Lock release and owned-field
+destruction happen on class destruction along both paths. Generators do
+not have an explicit cleanup block; resource cleanup is RAII -- hold
+the resource as a field of an object whose destructor handles it.
+
+When #~"takes: U" is declared, callers send values back into the
+generator. Inside the body, expression-form yield (#~"x: yield v")
+binds #~"x" to the most recent caller-supplied value on resumption.
+The first #~".call" on a bidirectional generator receives no value, so
+the first reachable yield must be statement form (#~"yield v"). The
+for-loop only drives generators whose #~"takes" is #~"null"; applying
+#~"for" to a bidirectional generator is a compile error pointing at
+the manual #~"with"/#~".call value:" pattern.
+
+#code language=zerolang: """
+  # bidirectional: caller sends a bool back after each yielded line
+  grep: function {pat: String.take} out
+                 (iterator gives: String.borrow takes: bool) is {
+      for line: stdin.lines loop {
+          if line contains: pat then {
+              keep: yield line
+              if keep then store_match line
+          }
+      }
+  }
+
+  # manual driving -- for-loop cannot supply .call value:
+  with g: (grep pat: "foo") do {
+      next: g.call
+      while next is some then {
+          keep: my_check (some next)
+          next = g.call value: keep
+      }
+  }
+  """
+
+Generators compose through existing constructs:
+
+#ul:
+  [#*: #b:"Delegation" -- yield everything from a sub-generator with a
+      for-loop relay: #~"for x: subgen loop { yield x }". The
+      synthesised class captures the inner iterator as a #~".lock"
+      field and forwards one value per #~".call".]
+  [#*: #b:"Chaining" -- sequential for-loops in the same body run
+      consecutively; each drains its source before the next starts.]
+  [#*: #b:"Pipelining" -- each stage is a generator taking another
+      iterator parameter. Function composition produces the pipeline;
+      each stage's synthesised class holds a #~".lock" on the previous
+      stage and existing lock-escape rules keep the chain sound.]
+
+The synthesised class is otherwise an ordinary class: visible in
+compiler error messages as #~"<funcname>_iter" (or
+#~"<typename>.<methodname>_iter" for methods), goes through the same
+ownership / lock / monomorphisation paths as any user-written class,
+and is indistinguishable from a hand-written iterator at the call
+site.
 
 #----: Methods
 

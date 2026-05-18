@@ -2359,7 +2359,9 @@ continue: function {t: Any result: t} out never</code></pre>
     #...
 }</code></pre>
 <h4 id="yield"><a href="#yield">5.3.14. yield</a></h4>
-<p>The builtin yield function.</p>
+<p>The builtin yield function. <code>yield</code> is only legal inside a generator
+function (one whose <code>out</code> type is <code>iterator gives: ...</code>); see
+<a href="#generator-functions">Generator functions for the full surface.</a></p>
 <pre><code class="language-zerolang"># effective signature
 yield: function {t_out: Any t_in: Any result: t_out} out t_in</code></pre>
 <table>
@@ -2377,6 +2379,9 @@ yield: function {t_out: Any t_in: Any result: t_out} out t_in</code></pre>
 <tr><td>result</td><td>Yes</td><td>Return operation, optional, returns null if missing</td></tr>
 </tbody>
 </table>
+<p>Statement form <code>yield v</code> produces no binding; expression form
+<code>x: yield v</code> binds <code>x</code> to the value the caller supplied on
+resumption (only valid in a generator whose <code>takes</code> is non-<code>null</code>).</p>
 <h4 id="return"><a href="#return">5.3.15. return</a></h4>
 <p>The return builtin function. Exits the current function returning the value of
 the <code>is</code> expression, if provided.  The return value must match the return type
@@ -2784,7 +2789,8 @@ A string is an immutable refcounted reference type. (???) NOPE</p>
   object
 - a method: defined within an object and has a <code>this</code> receiver as the first
   argument
-- iterator function: using <code>yield</code>
+- generator function: a function (or method) whose body contains
+  <code>yield</code>; see <a href="#generator-functions">Generator functions</a>
 - 'spec': a signature only; no body (only at unit level)</p>
 <p>It may also be generic by having generic parameters.</p>
 <p>Functions are structurally equivalent. Two function types are considered
@@ -3039,7 +3045,135 @@ the iterator's lifetime; the iterator falls out of scope at the end of the
 single-owner (cannot be copied), which is what makes the <code>.lock</code> field safe.
 See <code>examples/ListIter.z</code> for the canonical pattern and
 <code>doc/ownership.pdoc</code> for the lock-lifecycle walkthrough.</p>
-<h4 id="methods"><a href="#methods">5.11.6. Methods</a></h4>
+<h4 id="generator-functions"><a href="#generator-functions">5.11.6. Generator functions</a></h4>
+<p>A <strong>generator function</strong> is one whose body contains at least one
+<code>yield</code> expression. Its declared return type must be
+<code>iterator gives: T</code> (optionally with <code>takes: U</code>). The compiler
+synthesises a class implementing the iterator protocol; calling the
+generator returns an instance of that class with all parameters
+captured. The body, written straight-line, is lowered into a state
+machine whose <code>.call</code> method drives one step per invocation.</p>
+<p>A function declaring <code>out (iterator gives: T)</code> <strong>without</strong> a <code>yield</code>
+in its body is an ordinary factory (an unsynthesised function returning
+an iterator built by hand); it is not an error.</p>
+<pre><code class="language-zerolang"># out-only generator with captured state
+intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {
+    i: lo
+    for while i &lt; hi loop {
+        yield i
+        i = i + 1
+    }
+}
+
+# call site -- the for-loop drives the synthesised .call
+for x: (intrange lo: 0 hi: 3) loop { print "\{x}" }</code></pre>
+<p>The shape of the <code>.call</code> return type is determined by the form of
+<code>gives:</code></p>
+<table>
+<colgroup>
+<col style="width: 28%">
+<col style="width: 28%">
+<col style="width: 42%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">gives form</th><th style="text-align: left">.call returns</th><th style="text-align: left">Yielded value ownership</th></tr>
+</thead>
+<tbody>
+<tr><td><code>T</code> (valtype)</td><td><code>optionval(T)</code></td><td>Copy out</td></tr>
+<tr><td><code>T.take</code></td><td><code>Option(T)</code></td><td>Owned out to caller</td></tr>
+<tr><td><code>T.borrow</code></td><td><code>OptionView(T)</code></td><td>Borrowed view (tied to iterator's lock)</td></tr>
+</tbody>
+</table>
+<p>A reftype <code>T</code> without modifier defaults to <code>.take</code>.</p>
+<p>Because the synthesised iterator outlives the factory call, every
+parameter must declare ownership/locking explicitly. A bare <code>.borrow</code>
+or bare <code>:this</code> is rejected -- the borrow's lifetime would be the
+factory call, but the iterator outlives that call.</p>
+<table>
+<colgroup>
+<col style="width: 33%">
+<col style="width: 22%">
+<col style="width: 44%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Parameter form</th><th style="text-align: left">Verdict</th><th style="text-align: left">Stored as</th></tr>
+</thead>
+<tbody>
+<tr><td><code>arg: T.take</code> (reftype)</td><td>OK</td><td>Owned field; destroyed on iterator destruction</td></tr>
+<tr><td><code>arg: T.lock</code> (reftype)</td><td>OK</td><td>Locked field; released on iterator destruction</td></tr>
+<tr><td><code>arg: T.borrow</code>, bare <code>arg: T</code></td><td>Compile error</td><td>(use <code>.lock</code> or <code>.take</code>)</td></tr>
+<tr><td><code>arg: T</code> (valtype)</td><td>OK</td><td>Value field</td></tr>
+<tr><td><code>:this</code> (method)</td><td>Compile error</td><td>(use <code>:this.lock</code> or <code>:this.private.lock</code>)</td></tr>
+<tr><td><code>:this.lock</code>, <code>:this.private.lock</code></td><td>OK</td><td>Locked receiver field</td></tr>
+</tbody>
+</table>
+<p>A generator method defined inside the receiver type's <code>as</code> block
+captures the receiver as a <code>Type.lock</code> field; no <code>.private</code> needed
+(it is inside the privacy boundary). A generator function defined
+outside the receiver type may take <code>:this.private.lock</code> for friend
+access, subject to the same exposure rule that governs hand-written
+iterator classes.</p>
+<p><code>yield</code> outside a function whose <code>out</code> type is
+<code>iterator gives: ...</code> is a compile error. <code>yield</code> inside a nested
+function literal is rejected -- <code>yield</code> only belongs to the
+lexically-enclosing generator. <code>return &lt;value&gt;</code> inside a generator is
+a compile error; bare <code>return</code> terminates the generator.</p>
+<p>After termination the synthesised class enters an absorbing terminal
+state: <code>.call</code> returns <code>.none</code> forever after, idempotently. Code
+placed after the last <code>yield</code> runs on the <code>.call</code> that crosses
+into terminal state (i.e. the call after the final value is consumed).
+It does <strong>not</strong> run when the iterator is dropped early (for-loop
+break, scope exit before exhaustion). Lock release and owned-field
+destruction happen on class destruction along both paths. Generators do
+not have an explicit cleanup block; resource cleanup is RAII -- hold
+the resource as a field of an object whose destructor handles it.</p>
+<p>When <code>takes: U</code> is declared, callers send values back into the
+generator. Inside the body, expression-form yield (<code>x: yield v</code>)
+binds <code>x</code> to the most recent caller-supplied value on resumption.
+The first <code>.call</code> on a bidirectional generator receives no value, so
+the first reachable yield must be statement form (<code>yield v</code>). The
+for-loop only drives generators whose <code>takes</code> is <code>null</code>; applying
+<code>for</code> to a bidirectional generator is a compile error pointing at
+the manual <code>with</code>/<code>.call value:</code> pattern.</p>
+<pre><code class="language-zerolang"># bidirectional: caller sends a bool back after each yielded line
+grep: function {pat: String.take} out
+               (iterator gives: String.borrow takes: bool) is {
+    for line: stdin.lines loop {
+        if line contains: pat then {
+            keep: yield line
+            if keep then store_match line
+        }
+    }
+}
+
+# manual driving -- for-loop cannot supply .call value:
+with g: (grep pat: "foo") do {
+    next: g.call
+    while next is some then {
+        keep: my_check (some next)
+        next = g.call value: keep
+    }
+}</code></pre>
+<p>Generators compose through existing constructs:</p>
+<ul>
+<li><strong>Delegation</strong> -- yield everything from a sub-generator with a
+for-loop relay: <code>for x: subgen loop { yield x }</code>. The
+synthesised class captures the inner iterator as a <code>.lock</code>
+field and forwards one value per <code>.call</code>.</li>
+<li><strong>Chaining</strong> -- sequential for-loops in the same body run
+consecutively; each drains its source before the next starts.</li>
+<li><strong>Pipelining</strong> -- each stage is a generator taking another
+iterator parameter. Function composition produces the pipeline;
+each stage's synthesised class holds a <code>.lock</code> on the previous
+stage and existing lock-escape rules keep the chain sound.</li>
+</ul>
+<p>The synthesised class is otherwise an ordinary class: visible in
+compiler error messages as <code>&lt;funcname&gt;_iter</code> (or
+<code>&lt;typename&gt;.&lt;methodname&gt;_iter</code> for methods), goes through the same
+ownership / lock / monomorphisation paths as any user-written class,
+and is indistinguishable from a hand-written iterator at the call
+site.</p>
+<h4 id="methods"><a href="#methods">5.11.7. Methods</a></h4>
 <p>Methods are a specialised form of function. They are defined similar to a
 normal, named function call but they must be defined in the namespace of the
 receiver definition and the first argument must be of type <code>this</code>.</p>
@@ -3060,7 +3194,7 @@ type. They do not change the type itself. They must also not collide with
 existing methods on the type. This may cause a maintenance burden (changes to
 the external type may cause code that previously compiled correctly to now
 fail) so should be used with caution.</p>
-<h4 id="constructor"><a href="#constructor">5.11.7. Constructor</a></h4>
+<h4 id="constructor"><a href="#constructor">5.11.8. Constructor</a></h4>
 <p>There is only one true low-level constructor for an object and it is
 <code>meta.create</code> -- the compiler-internal raw allocator. <code>meta.create</code>
 reserves the memory for the instance and sets each member directly from
@@ -3187,7 +3321,7 @@ myobject: class {
         # ...
     }
 }</code></pre>
-<h4 id="finalizer"><a href="#finalizer">5.11.8. Finalizer</a></h4>
+<h4 id="finalizer"><a href="#finalizer">5.11.9. Finalizer</a></h4>
 <p>TODO: change this section. No Destructors, only finalizers. Only reftypes can
 have finalizers (valtypes are copy by value so don't want finalizer to run on
 every instance???? Maybe have finalizers on all objects anyway but warn about
@@ -3226,7 +3360,7 @@ Is there any point in having destructors?</p>
 # destroys the instance and returns the subcomponent which the caller now owns
 # myreftypeinstance is invalid after this call
 mysubtype: myreftype.destroy s: myreftypeinstance</code></pre>
-<h4 id="function-references"><a href="#function-references">5.11.9. Function References</a></h4>
+<h4 id="function-references"><a href="#function-references">5.11.10. Function References</a></h4>
 <p>A function reference is a variable that stores a pointer to a function. It may
 be called with the same syntax as used when calling a standard function. It may
 be reassigned to a reference to an equivalent function (one with the same
