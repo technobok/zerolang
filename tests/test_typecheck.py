@@ -5677,6 +5677,87 @@ class TestDefaults:
         assert t is not None
         assert not tc.typing.has_child_default(t, "a")
 
+    def test_variant_subtype_default_on_field(self):
+        """`field: VariantType.arm` (qualified, null-payload arm) sets
+        the field's stored type to the variant and stores the arm as a
+        tagged-default string."""
+        program, typing = check_ok(
+            "direction: variant {\n"
+            "    north: null\n"
+            "    south: null\n"
+            "} as { tag: u8.tag }\n"
+            "mystate: record {\n"
+            "    dir: direction.north\n"
+            "}\n"
+            "main: function is { s: mystate }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "mystate")
+        assert t is not None
+        # field stored type is the variant, not the null arm
+        dir_t = tc.typing.child_of(t, "dir")
+        assert dir_t is not None
+        assert dir_t.name == "direction"
+        # default carries the structured #variant tag
+        assert tc.typing.child_default(t, "dir") == "#variant:north"
+
+    def test_variant_subtype_default_on_param(self):
+        """Function param with a variant subtype default resolves the
+        param type to the variant and stores the tagged default."""
+        program, typing = check_ok(
+            "color: variant {\n"
+            "    red: null\n"
+            "    green: null\n"
+            "    blue: null\n"
+            "} as { tag: u8.tag }\n"
+            "paint: function {c: color.red} out i64 is { return 0 }\n"
+            "main: function is { x: paint }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        f = tc._resolve_unit_name("test", "paint")
+        assert f is not None
+        c_t = tc.typing.child_of(f, "c")
+        assert c_t is not None and c_t.name == "color"
+        assert tc.typing.child_default(f, "c") == "#variant:red"
+
+    def test_union_subtype_default_on_class_field(self):
+        """Union null-payload subtype works the same as variant. Classes
+        can hold union fields; records cannot (separate reftype rule)."""
+        program, typing = check_ok(
+            "event: union {\n"
+            "    idle: null\n"
+            "    busy: null\n"
+            "}\n"
+            "machine: class {\n"
+            "    e: event.idle\n"
+            "}\n"
+            "main: function is { m: machine }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "machine")
+        assert t is not None
+        e_t = tc.typing.child_of(t, "e")
+        assert e_t is not None and e_t.name == "event"
+        assert tc.typing.child_default(t, "e") == "#variant:idle"
+
+    def test_variant_payload_arm_rejected_as_default(self):
+        """Defaulting to a payload-carrying arm is a typecheck error --
+        a default expression can't supply constructor arguments."""
+        errors = check_errors(
+            "result: variant {\n"
+            "    ok: i64\n"
+            "    fail: null\n"
+            "} as { tag: u8.tag }\n"
+            "myrec: record {\n"
+            "    r: result.ok\n"
+            "}\n"
+            "main: function is { v: myrec }"
+        )
+        assert any("not defaultable" in e.msg for e in errors), [e.msg for e in errors]
+
 
 class TestNumericCasting:
     def test_dotted_numeric_u32(self):

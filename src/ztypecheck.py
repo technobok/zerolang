@@ -1113,6 +1113,61 @@ class TypeChecker:
         pt = self._resolve_typeref(ppath)
         return pt, None
 
+    def _detect_variant_subtype_default(
+        self, stripped_ppath: zast.Operation
+    ) -> "Optional[tuple[ZType, str]]":
+        """If `stripped_ppath` is a `DottedPath` of the form `T.subtype`
+        where `T` resolves to a variant or union and `subtype` names a
+        null-payload arm of `T`, return `(T, subtype_name)`. Otherwise
+        return `None`.
+
+        Used by the field / param default-detection paths to recognise
+        the case-A form: `direction: myenum.north`. The caller substitutes
+        the field's stored type with `T` and stores `#variant:<arm>` as
+        the default.
+
+        Rejects non-null-payload arms with a typecheck error so users get
+        a clear "this arm carries data, cannot default" message instead
+        of a silent fallthrough.
+        """
+        if stripped_ppath.nodetype != NodeType.DOTTEDPATH:
+            return None
+        dp = cast(zast.DottedPath, stripped_ppath)
+        if dp.parent.nodetype not in (NodeType.ATOMID, NodeType.LABELVALUE):
+            return None
+        parent_name = cast(zast.AtomId, dp.parent).name
+        # numeric DottedPath (e.g. `0.u32`) is handled by the existing
+        # numeric branch -- skip here.
+        if _is_numeric_id(parent_name):
+            return None
+        parent_type = self._resolve_name(parent_name)
+        if parent_type is None:
+            return None
+        if parent_type.typetype not in (ZTypeType.VARIANT, ZTypeType.UNION):
+            return None
+        arm_name = dp.child.name
+        arm_type = self.typing.child_of(parent_type, arm_name)
+        if arm_type is None:
+            return None
+        # Reject method / function children (treat them as call references,
+        # not subtype arms).
+        if arm_type.typetype == ZTypeType.FUNCTION:
+            return None
+        # Only null-payload arms are defaultable: a payload-carrying arm
+        # would require constructor arguments that a bare default cannot
+        # express.
+        if arm_type.typetype != ZTypeType.NULL:
+            self._error(
+                f"'{parent_name}.{arm_name}' is not defaultable: "
+                f"the arm carries a payload of type '{arm_type.name}' "
+                f"and a default cannot supply constructor arguments. "
+                f"Only null-payload arms of a variant or union are "
+                f"valid default values.",
+                loc=stripped_ppath.start,
+            )
+            return None
+        return (parent_type, arm_name)
+
     def _resolve_function_type(
         self, unitname: str, name: str, func: zast.Function
     ) -> ZType:
@@ -1234,6 +1289,16 @@ class TypeChecker:
             stripped_ppath, p_own = _strip_path_ownership(ppath)
             pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
             self.typing.node_type[ppath.nodeid] = pt
+            # Case A: `param: VariantType.arm` -- detect and lift `pt`
+            # from the null-payload arm to the parent variant / union
+            # before the non-runtime-type check fires. The arm's type
+            # would otherwise look like a bare `null` and trip
+            # `_check_non_runtime_type`.
+            variant_default = self._detect_variant_subtype_default(stripped_ppath)
+            if variant_default is not None:
+                pt = variant_default[0]
+                self.typing.node_type[stripped_ppath.nodeid] = pt
+                self.typing.node_type[ppath.nodeid] = pt
             if (
                 pt
                 and pt.typetype == ZTypeType.GENERIC_PARAM
@@ -1258,13 +1323,17 @@ class TypeChecker:
                 # path so `u8.5.lock` style still resolves the numeric
                 # default while a `.lock`/`.borrow`/`.take` suffix is
                 # off the table.
-                if stripped_ppath.nodetype in (
+                if variant_default is not None:
+                    self.typing.set_default_variant_arm(
+                        ftype, pname, variant_default[1]
+                    )
+                elif stripped_ppath.nodetype in (
                     NodeType.ATOMID,
                     NodeType.LABELVALUE,
                 ) and _is_numeric_id(cast(zast.AtomId, stripped_ppath).name):
                     _, val, err = parse_number(cast(zast.AtomId, stripped_ppath).name)
                     if not err:
-                        self.typing.set_child_default(ftype, pname, str(int(val)))
+                        self.typing.set_default_numeric(ftype, pname, int(val))
                 elif stripped_ppath.nodetype == NodeType.DOTTEDPATH:
                     ppath_dp = cast(zast.DottedPath, stripped_ppath)
                     if ppath_dp.parent.nodetype in (
@@ -1276,7 +1345,7 @@ class TypeChecker:
                             cast(zast.AtomId, ppath_dp.parent).name + child_name
                         )
                         if not err:
-                            self.typing.set_child_default(ftype, pname, str(int(val)))
+                            self.typing.set_default_numeric(ftype, pname, int(val))
                 elif stripped_ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     defn = self._lookup_definition(
                         cast(zast.AtomId, stripped_ppath).name
@@ -1286,7 +1355,7 @@ class TypeChecker:
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        self.typing.set_child_default(
+                        self.typing.set_default_function(
                             ftype, pname, cast(zast.AtomId, stripped_ppath).name
                         )
         if generic_ctx:
@@ -1549,6 +1618,18 @@ class TypeChecker:
                 )
                 continue
             if ft:
+                # Case A: `field: VariantType.arm` -- override the stored
+                # field type with the parent variant and store the arm
+                # name as the default. Re-stamp the path's node_type so
+                # the emitter's `_collect_field_params` sees the variant
+                # type, not the original arm subtype.
+                variant_default = self._detect_variant_subtype_default(
+                    cast(zast.Path, stripped_fpath)
+                )
+                if variant_default is not None:
+                    ft = variant_default[0]
+                    self.typing.node_type[stripped_fpath.nodeid] = ft
+                    self.typing.node_type[fpath.nodeid] = ft
                 self._set_child(ctype, fname, ft)
                 # detect .private field type (friend access) on the
                 # post-ownership-strip path
@@ -1570,13 +1651,17 @@ class TypeChecker:
                         err=ERR.TYPEERROR,
                     )
                 # detect field defaults
-                if fpath.nodetype in (
+                if variant_default is not None:
+                    self.typing.set_default_variant_arm(
+                        ctype, fname, variant_default[1]
+                    )
+                elif fpath.nodetype in (
                     NodeType.ATOMID,
                     NodeType.LABELVALUE,
                 ) and _is_numeric_id(cast(zast.AtomId, fpath).name):
                     _, val, err = parse_number(cast(zast.AtomId, fpath).name)
                     if not err:
-                        self.typing.set_child_default(ctype, fname, str(int(val)))
+                        self.typing.set_default_numeric(ctype, fname, int(val))
                 elif fpath.nodetype == NodeType.DOTTEDPATH:
                     fpath_dp = cast(zast.DottedPath, fpath)
                     if fpath_dp.parent.nodetype in (
@@ -1588,7 +1673,7 @@ class TypeChecker:
                             cast(zast.AtomId, fpath_dp.parent).name + child_name
                         )
                         if not err:
-                            self.typing.set_child_default(ctype, fname, str(int(val)))
+                            self.typing.set_default_numeric(ctype, fname, int(val))
                 elif fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     defn = self._lookup_definition(cast(zast.AtomId, fpath).name)
                     if (
@@ -1596,7 +1681,7 @@ class TypeChecker:
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        self.typing.set_child_default(
+                        self.typing.set_default_function(
                             ctype, fname, cast(zast.AtomId, fpath).name
                         )
         if generic_ctx:
@@ -2379,6 +2464,18 @@ class TypeChecker:
                 )
                 continue
             if ft:
+                # Case A: `field: VariantType.arm` -- override the stored
+                # field type with the parent variant and store the arm
+                # name as the default. Re-stamp the path's node_type so
+                # the emitter's `_collect_field_params` sees the variant
+                # type, not the original arm subtype.
+                variant_default = self._detect_variant_subtype_default(
+                    cast(zast.Path, stripped_fpath)
+                )
+                if variant_default is not None:
+                    ft = variant_default[0]
+                    self.typing.node_type[stripped_fpath.nodeid] = ft
+                    self.typing.node_type[fpath.nodeid] = ft
                 self._set_child(rtype, fname, ft)
                 # detect .private field type (friend access) on the
                 # post-ownership-strip path
@@ -2398,13 +2495,17 @@ class TypeChecker:
                         err=ERR.TYPEERROR,
                     )
                 # detect field defaults
-                if fpath.nodetype in (
+                if variant_default is not None:
+                    self.typing.set_default_variant_arm(
+                        rtype, fname, variant_default[1]
+                    )
+                elif fpath.nodetype in (
                     NodeType.ATOMID,
                     NodeType.LABELVALUE,
                 ) and _is_numeric_id(cast(zast.AtomId, fpath).name):
                     _, val, err = parse_number(cast(zast.AtomId, fpath).name)
                     if not err:
-                        self.typing.set_child_default(rtype, fname, str(int(val)))
+                        self.typing.set_default_numeric(rtype, fname, int(val))
                 elif fpath.nodetype == NodeType.DOTTEDPATH:
                     fpath_dp = cast(zast.DottedPath, fpath)
                     if fpath_dp.parent.nodetype in (
@@ -2416,7 +2517,7 @@ class TypeChecker:
                             cast(zast.AtomId, fpath_dp.parent).name + child_name
                         )
                         if not err:
-                            self.typing.set_child_default(rtype, fname, str(int(val)))
+                            self.typing.set_default_numeric(rtype, fname, int(val))
                 elif fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
                     defn = self._lookup_definition(cast(zast.AtomId, fpath).name)
                     if (
@@ -2424,7 +2525,7 @@ class TypeChecker:
                         and defn.nodetype == NodeType.FUNCTION
                         and cast(zast.Function, defn).body is not None
                     ):
-                        self.typing.set_child_default(
+                        self.typing.set_default_function(
                             rtype, fname, cast(zast.AtomId, fpath).name
                         )
         if generic_ctx:
@@ -5912,6 +6013,17 @@ class TypeChecker:
         for pname, ppath in func.parameters.items():
             stripped_ppath, _ = _strip_path_ownership(ppath)
             pt = self._resolve_typeref(cast(zast.Path, stripped_ppath))
+            # Case A: re-apply the variant subtype override so the body
+            # scope sees the parameter as the parent variant, not the
+            # null arm. The first pass in `_check_function` already
+            # stored the override on `ftype`'s child; re-resolving here
+            # via `_resolve_typeref` would otherwise stamp the arm
+            # subtype back onto `node_type[ppath.nodeid]`.
+            variant_default = self._detect_variant_subtype_default(stripped_ppath)
+            if variant_default is not None:
+                pt = variant_default[0]
+                self.typing.node_type[stripped_ppath.nodeid] = pt
+                self.typing.node_type[ppath.nodeid] = pt
             if pt:
                 # determine parameter ownership from annotations
                 param_own = self.func_ctx.func_ownership.get(pname)

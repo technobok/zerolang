@@ -2787,22 +2787,37 @@ class CEmitter:
                     cast(zast.AtomId, fpath).name
                 )
             elif fpath.nodetype == NodeType.DOTTEDPATH:
-                if cast(
-                    zast.DottedPath, fpath
-                ).parent.nodetype == NodeType.ATOMID and _is_numeric_id(
-                    cast(zast.AtomId, cast(zast.DottedPath, fpath).parent).name
+                dp = cast(zast.DottedPath, fpath)
+                if dp.parent.nodetype == NodeType.ATOMID and _is_numeric_id(
+                    cast(zast.AtomId, dp.parent).name
                 ):
-                    child_name = cast(zast.DottedPath, fpath).child.name
+                    child_name = dp.child.name
                     dct = TYPEMAP.get(child_name, "int64_t")
                     typename, value, err = parse_number(
-                        cast(zast.AtomId, cast(zast.DottedPath, fpath).parent).name
-                        + child_name
+                        cast(zast.AtomId, dp.parent).name + child_name
                     )
                     if not err:
                         if typename.startswith("f"):
                             field_defaults[fname] = f"(({dct}){value})"
                         else:
                             field_defaults[fname] = f"(({dct}){int(value)})"
+                elif dp.parent.nodetype == NodeType.ATOMID:
+                    # Case A: variant / union subtype default --
+                    # `field: VariantType.arm` emits a tag-only compound
+                    # literal. Typecheck has already validated that the
+                    # arm is null-payload.
+                    parent_name = cast(zast.AtomId, dp.parent).name
+                    parent_type = self._resolved_type(parent_name)
+                    if parent_type is not None and parent_type.typetype in (
+                        ZTypeType.VARIANT,
+                        ZTypeType.UNION,
+                    ):
+                        arm_name = dp.child.name
+                        arm_type = self.typing.child_of(parent_type, arm_name)
+                        if arm_type is not None and arm_type.typetype == ZTypeType.NULL:
+                            ctype = _ctype(self.typing, parent_type)
+                            tag = f"Z_{parent_type.name.upper()}_TAG_{arm_name.upper()}"
+                            field_defaults[fname] = f"({ctype}){{.tag = {tag}}}"
             elif (
                 fpath.nodetype == NodeType.ATOMID
                 and self._typetype_of(cast(zast.AtomId, fpath).name)
@@ -6704,22 +6719,60 @@ class CEmitter:
         if ftype and self.typing.has_any_default(ftype):
             params = self.typing.children_of(ftype)
             for i in range(len(call.arguments), len(params)):
-                pname, _ = params[i]
+                pname, ptype = params[i]
                 default = self.typing.child_default(ftype, pname)
                 if default is not None:
-                    if self._typetype_of(default) == ZTypeType.FUNCTION:
-                        default = _mangle_func(default)
-                    parts.append(default)
+                    parts.append(self._render_default(default, ptype))
 
         return ", ".join(parts)
 
+    def _render_default(self, default: str, target_type: ZType) -> str:
+        """Render a stored default string as a C expression.
+
+        Numeric / function-ref defaults pass through unchanged (modulo
+        the existing function-name mangling). Tagged defaults are
+        encoded `#<kind>:<payload>` and dispatched on `<kind>` --
+        currently only `variant` (case-A variant / union null-payload
+        subtype default) needs a structured render.
+        """
+        if default and default[0] == "#":
+            sep = default.find(":")
+            if sep > 0:
+                kind = default[1:sep]
+                payload = default[sep + 1 :]
+                if kind == "variant":  # ztc-string-compare-ok: default-kind tag
+                    ctype = _ctype(self.typing, target_type)
+                    tag = f"Z_{target_type.name.upper()}_TAG_{payload.upper()}"
+                    return f"({ctype}){{.tag = {tag}}}"
+        if self._typetype_of(default) == ZTypeType.FUNCTION:
+            return _mangle_func(default)
+        return default
+
     def _zero_args_for_ctypes(self, type_name: str) -> str:
-        """Build zero-value argument list using stored field C types."""
+        """Build a zero-default argument list for bare-name construction.
+
+        Each field uses its declared default if one was registered; falls
+        back to `0` / `NULL` for fields that don't carry an explicit
+        default. Struct-typed fields with no default get a `{0}` compound
+        literal so the C signature stays type-correct.
+        """
         field_ctypes = self._type_field_ctypes.get(type_name, [])
+        field_names = self._type_field_names.get(type_name, [])
+        field_defaults = self._type_field_defaults.get(type_name, {})
         parts: List[str] = []
-        for fct in field_ctypes:
+        for i, fct in enumerate(field_ctypes):
+            fname = field_names[i] if i < len(field_names) else None
+            if fname is not None and fname in field_defaults:
+                parts.append(field_defaults[fname])
+                continue
             if fct.endswith("*"):
                 parts.append("NULL")
+            elif (
+                fct[:2] == "z_"  # ztc-string-compare-ok: emitted ctype prefix
+                and fct.endswith("_t")
+                and not fct.endswith("_ft")
+            ):
+                parts.append(f"({fct}){{0}}")
             else:
                 parts.append("0")
         return ", ".join(parts)
@@ -6933,13 +6986,11 @@ class CEmitter:
                     if all_defaulted:
                         cname = _mangle_func(atom.name)
                         defaults: List[str] = []
-                        for pname, _ in real_params:
+                        for pname, ptype in real_params:
                             d = self.typing.child_default(ftype, pname)
                             if d is None:
                                 continue
-                            if self._typetype_of(d) == ZTypeType.FUNCTION:
-                                d = _mangle_func(d)
-                            defaults.append(d)
+                            defaults.append(self._render_default(d, ptype))
                         return f"{cname}({', '.join(defaults)})"
             return self._emit_operation_value(cast(zast.Operation, inner))
         if inner.nodetype == zast.NodeType.WITH:

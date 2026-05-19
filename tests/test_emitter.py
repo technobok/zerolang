@@ -3803,6 +3803,95 @@ class TestDefaults:
         assert lines[0] == "1"
         assert lines[1] == "10"
 
+    def test_variant_subtype_default_field_zero_arg_construction(self):
+        """Bare-name record construction (`r: myrec`) fills a variant
+        default field with the tag-only compound literal."""
+        csource = emit_source(
+            "direction: variant {\n"
+            "    north: null\n"
+            "    south: null\n"
+            "    east: null\n"
+            "    west: null\n"
+            "} as { tag: u8.tag }\n"
+            "mystate: record {\n"
+            "    dir: direction.north\n"
+            "    count: 0\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: mystate\n"
+            '    match (s.dir) case north then { print "north" }'
+            '    case south then { print "south" }'
+            '    case east then { print "east" }'
+            '    case west then { print "west" }\n'
+            '    print "count: \\{s.count}"\n'
+            "}"
+        )
+        # the compound literal is in the call site
+        assert "Z_DIRECTION_TAG_NORTH" in csource
+        out = compile_and_run(csource).strip().splitlines()
+        assert out == ["north", "count: 0"]
+
+    def test_variant_subtype_default_field_overridden(self):
+        """Construction supplying the field overrides the default."""
+        csource = emit_source(
+            "direction: variant {\n"
+            "    north: null\n"
+            "    south: null\n"
+            "} as { tag: u8.tag }\n"
+            "mystate: record {\n"
+            "    dir: direction.north\n"
+            "}\n"
+            "main: function is {\n"
+            "    s: mystate dir: direction.south\n"
+            '    match (s.dir) case north then { print "north" }'
+            '    case south then { print "south" }\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "south"
+
+    def test_variant_subtype_default_param(self):
+        """A function param defaults to the variant arm; calling without
+        the param uses the default."""
+        csource = emit_source(
+            "color: variant {\n"
+            "    red: null\n"
+            "    green: null\n"
+            "    blue: null\n"
+            "} as { tag: u8.tag }\n"
+            "name: function {c: color.red} out i64 is {\n"
+            "    r: 0\n"
+            "    match (c) case red then { r = 1 }"
+            "    case green then { r = 2 }"
+            "    case blue then { r = 3 }\n"
+            "    return r\n"
+            "}\n"
+            "main: function is {\n"
+            '    print "\\{name}"\n'
+            '    print "\\{name c: color.blue}"\n'
+            "}"
+        )
+        out = compile_and_run(csource).strip().splitlines()
+        assert out == ["1", "3"]
+
+    def test_union_subtype_default_on_class_field(self):
+        """Union default works on a class field (records reject union
+        fields entirely for unrelated reftype reasons)."""
+        csource = emit_source(
+            "event: union {\n"
+            "    idle: null\n"
+            "    busy: null\n"
+            "}\n"
+            "machine: class {\n"
+            "    e: event.idle\n"
+            "}\n"
+            "main: function is {\n"
+            "    m: machine\n"
+            '    match (m.e) case idle then { print "idle" }'
+            '    case busy then { print "busy" }\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "idle"
+
 
 class TestNumericCasting:
     def test_dotted_numeric_emits_cast(self):

@@ -279,6 +279,22 @@ class ZTyping:
                 row.default = default
                 return
 
+    def set_default_numeric(self, parent: ZType, name: str, value: "int | str") -> None:
+        """Stash a numeric-literal default. Stored as the value's
+        string form -- the emitter dumps it verbatim into C."""
+        self.set_child_default(parent, name, str(value))
+
+    def set_default_function(self, parent: ZType, name: str, funcname: str) -> None:
+        """Stash a function-reference default. Stored as the zerolang
+        function name; the emitter mangles to `z_<name>` at use."""
+        self.set_child_default(parent, name, funcname)
+
+    def set_default_variant_arm(self, parent: ZType, name: str, arm_name: str) -> None:
+        """Stash a variant / union null-payload subtype default.
+        Stored as `#variant:<arm>`; the emitter renders the struct
+        literal at use using the param / field's declared type."""
+        self.set_child_default(parent, name, f"#variant:{arm_name}")
+
     def child_default(self, parent: ZType, name: str) -> "Optional[str]":
         for row in self.type_child:
             if row.parent_type_id == parent.type_id and row.child_name == name:
