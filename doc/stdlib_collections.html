@@ -95,6 +95,10 @@ Table of Contents</div>
 </li>
 <li><a href="#map">map</a>
 </li>
+<li><a href="#set">set</a>
+</li>
+<li><a href="#setiter">setiter</a>
+</li>
 <li><a href="#string-join">string_join</a>
 </li>
 </ul>
@@ -141,6 +145,7 @@ it across a function boundary unless the source is a
 <li><a href="#list"><strong>List</strong> -- <code>class as { of: Any.generic }</code></a></li>
 <li><a href="#listview"><strong>ListView</strong> -- <code>class as { of: Any.generic }</code></a></li>
 <li><a href="#map"><strong>Map</strong> -- <code>class as { key: Any.generic  value: Any.generic }</code></a></li>
+<li><a href="#set"><strong>Set</strong> -- <code>class as { of: Any.generic }</code></a></li>
 </ul>
 <p><strong>Free functions</strong></p>
 <ul>
@@ -372,7 +377,67 @@ Capacity starts at 8 on first insert and doubles on resize.
 Deleted entries leave tombstones; tombstones are reclaimed on
 resize. When the map falls out of scope, all owned keys and
 values are destroyed.</p>
-<h2 id="string-join"><a href="#string-join">8. string_join</a></h2>
+<h2 id="set"><a href="#set">8. set</a></h2>
+<pre><code class="language-zerolang">  set: class {
+      add:      function {:this item: of} out bool       is native
+      has:      function {:this item: of} out bool       is native
+      delete:   function {:this item: of} out bool       is native
+      length:   function {:this} out u64                 is native
+      capacity: function {:this} out u64                 is native
+      iterate:  function {t: this.lock} out (SetIter of: of).borrow is native
+      create:   function {} out type                     is native
+  } as {
+      of: Any.generic
+  }</code></pre>
+<p>Hash-table set keyed on element value. Heap-allocated and
+growable, with open-addressing + linear probing -- the same
+hash-table primitive used by <code>map</code>, with the value column
+excised. Different element types produce different
+monomorphised types (<code>set_i64</code>, <code>set_string</code>).</p>
+<p><strong>Constraints.</strong></p>
+<ul>
+<li><code>of</code> -- numeric types or <code>String</code> (hashability is
+enforced at monomorphisation; reftypes other than String are
+rejected)</li>
+</ul>
+<p><strong>Construction.</strong></p>
+<pre><code class="language-zerolang">  s: (Set of: i64)
+  t: (Set of: String) capacity: 32.u64    # pre-size</code></pre>
+<p><strong>Methods.</strong></p>
+<ul>
+<li><code>add item: x</code> -- inserts. Returns <code>true</code> if a new
+element was added, <code>false</code> if <code>x</code> was already present.
+Takes ownership of <code>x</code>; on the duplicate path the caller's
+copy is destroyed.</li>
+<li><code>has item: x</code> -- borrowed lookup. <code>bool</code>.</li>
+<li><code>delete item: x</code> -- removes. Returns <code>true</code> if an
+element was removed. Destroys the stored copy on removal.</li>
+<li><code>length</code> -- current element count.</li>
+<li><code>capacity</code> -- current bucket-table size.</li>
+<li><code>iterate</code> -- returns a borrowed <code>SetIter</code> yielding
+each element. Holds an EXCLUSIVE lock on the source for the
+iterator's lifetime, same convention as <code>map.iterate</code>.</li>
+</ul>
+<p><strong>Iteration order.</strong> Bucket layout, not insertion order. If
+you need a stable order, collect into a list and sort there.</p>
+<p><strong>Load factor and resize.</strong> Same 2/3 load factor as <code>map</code>.
+Capacity starts at 8 on first insert and doubles on resize.
+Tombstones from <code>delete</code> are reclaimed on resize. When the set
+falls out of scope, all owned items are destroyed.</p>
+<h2 id="setiter"><a href="#setiter">9. setiter</a></h2>
+<pre><code class="language-zerolang">  SetIter: class is native as {
+      of: Any.generic
+      call: function {:this} out (OptionView t: of) is native
+  }</code></pre>
+<p>Borrowed iterator over a <code>Set</code>. Yields <code>optionview.some</code>
+pointing into a bucket's item for each USED bucket,
+<code>optionview.none</code> when exhausted. Mirrors <code>MapKeyIter</code>.</p>
+<p>Created via <code>Set.iterate</code> -- never instantiated directly --
+and consumed by the standard iterator-driver shape:</p>
+<pre><code class="language-zerolang">  with it: s.iterate do for x: it loop {
+      print "x: \\{x}"
+  }</code></pre>
+<h2 id="string-join"><a href="#string-join">10. string_join</a></h2>
 <pre><code class="language-zerolang">  stringJoin: function {parts: (List of: String) sep: StringView} out String is native</code></pre>
 <p>Concatenate every string in <code>parts</code> with <code>sep</code> between each.
 Returns a fresh owned <code>String</code>. One allocation, bulk memcpy

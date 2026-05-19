@@ -2597,6 +2597,74 @@ Files: #~"src/zemitterc.py", #~"src/zemitterc_runtime.py",
 #~"examples/strview.z"
 
 
+#---: Phase 53: Set \[COMPLETE\]
+
+Set is a heap-allocated reftype hash table, generic over element type.
+Mirrors Map (Phase 36) with the value column excised. Foundation for the
+self-host port -- the Python compiler uses #~"set[int]" extensively for
+visited-node traversals.
+
+Completed substeps:
+
+#ol:
+  [#*: #+ #~"set" and #~"SetIter" class definitions in
+  #~"lib/system/collections.z", aliases in #~"lib/system/core.z"]
+  [#*: #+ type checker: #~"is_set_type" / #~"is_setiter_type" +
+  #~"set_element_type" / #~"setiter_element_type" helpers in
+  #~"ztypeutil.py"]
+  [#*: #+ type checker: set synthesis in
+  #~"_synth_collection_methods" -- #~"is_valtype=False",
+  #~"length", #~"capacity", #~"add" (returns bool), #~"has"
+  (returns bool), #~"delete" (returns bool), #~"iterate"
+  (returns borrowed SetIter)]
+  [#*: #+ type checker: setiter synthesis -- #~".call"
+  returning #~"OptionView(of)"]
+  [#*: #+ type checker: skip generic class meta.create for set
+  types in #~"_check_missing_create_args"]
+  [#*: #+ emitter: set type registration as class name (skip
+  field pre-registration like map)]
+  [#*: #+ emitter: #~"_emit_mono_set()" -- bucket struct
+  {state, hash, item}, hash function (splitmix64 for integer
+  elements, FNV-1a for string/str elements), item equality,
+  destroy, create, grow/resize, find, add, has, delete]
+  [#*: #+ emitter: #~"_emit_setiter_runtime()" -- borrowed
+  iterator struct + #~".call" walking USED buckets yielding
+  #~"OptionView.some"]
+  [#*: #+ emitter: set construction interception (capacity
+  argument), method call interception (#~"add" / #~"has" /
+  #~"delete" with #~"item:" arg), #~".length" / #~".capacity"
+  field access]
+  [#*: #+ emitter: scope cleanup via #~"_class_names" /
+  #~"_emit_class_free"]
+  [#*: #+ #~"_is_collection_param_type" extended so set is
+  passed by pointer across protocol boundaries (matches
+  map / list)]
+  [#*: #+ Tests: 8 type checker tests in #~"TestSet",
+  10 emitter tests in #~"TestSet"]
+  [#*: #+ #~"examples/set_uniq.z" demonstration program]
+  [#*: #+ documentation: #~"stdlib_collections.pdoc",
+  #~"spec.pdoc", #~"stdlib_index.pdoc", #~"roadmap.pdoc"]
+
+Design decisions:
+
+#ul:
+  [#*: Shares Map's hash table primitive (open-addressing,
+  linear probing, 2/3 load factor, splitmix64/FNV-1a hash
+  dispatch).]
+  [#*: Bucket layout iteration order -- not insertion order.
+  Stable iteration deferred.]
+  [#*: #~".add" returns #~"bool" (true on new insert, false
+  on duplicate); take-on-add semantics with duplicate-path
+  cleanup so the caller never has to think about double-free.]
+
+Files: #~"src/ztypeutil.py", #~"src/ztypecheck.py",
+#~"src/zemitterc.py", #~"lib/system/collections.z",
+#~"lib/system/core.z", #~"tests/test_typecheck.py",
+#~"tests/test_emitter.py", #~"examples/set_uniq.z",
+#~"doc/stdlib_collections.pdoc", #~"doc/spec.pdoc",
+#~"doc/stdlib_index.pdoc"
+
+
 #--: Verification
 
 #ul:

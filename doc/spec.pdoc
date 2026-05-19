@@ -3173,6 +3173,48 @@ of two, starting at 8 and doubling on resize. Deleted entries leave tombstones
 that are reclaimed during resize. Different key/value type combinations produce
 different monomorphized types.
 
+#---: set
+
+#~"Set" is a hash-table reftype, generic over element type. It shares the
+open-addressing + linear-probing hash table with #~"Map", with the value
+column excised — a #~"Set" is a #~"Map" without per-key payload.
+
+The constructor is #~"(Set of: <element_type>)" for an empty set, or
+#~"(Set of: T) capacity: <u64>" to pre-allocate buckets.
+
+#code language=zerolang: """
+  # create an empty set
+  s: (Set of: i64)
+
+  # add elements; .add returns true on first insert, false on duplicate
+  s.add item: 1
+  s.add item: 2
+  s.add item: 1        # returns false; caller's copy is destroyed
+
+  # has / delete (both return bool)
+  print s.has item: 1
+  deleted: s.delete item: 1
+
+  # field access
+  n: s.length          # u64, current element count
+  c: s.capacity        # u64, current bucket count
+
+  # iteration via with/do — the iterator holds an EXCLUSIVE lock on the
+  # source for its lifetime
+  with it: s.iterate do for x: it loop {
+      print "x: \\{x}"
+  }
+"""
+
+Element types must be numeric or #~"String" (hashability is enforced at
+monomorphization). The set takes ownership of items on #~"add"; on a
+duplicate-add the caller's copy is destroyed so the take-on-add contract
+holds. On #~"delete" the stored item is destroyed.
+
+Iteration is in bucket order, not insertion order. The table grows when
+the load factor exceeds 2/3; capacity starts at 8 and doubles on resize.
+Tombstones from #~"delete" are reclaimed during resize.
+
 #---: string
 
 TODO:

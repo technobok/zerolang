@@ -235,6 +235,8 @@ Table of Contents</div>
 </li>
 <li><a href="#phase-52-string-redesign-v2-types-and-mutable-operations-complete">Phase 52: String Redesign &#x2014; v2 Types and Mutable Operations [COMPLETE]</a>
 </li>
+<li><a href="#phase-53-set-complete">Phase 53: Set [COMPLETE]</a>
+</li>
 </ul>
 </li>
 <li><a href="#verification">Verification</a>
@@ -2538,6 +2540,68 @@ string operations.</li>
 <code>lib/system/system.z</code>, <code>lib/system/core.z</code>,
 <code>tests/test_emitter.py</code>, <code>doc/strings.pdoc</code>,
 <code>examples/strview.z</code></p>
+<h3 id="phase-53-set-complete"><a href="#phase-53-set-complete">5.63. Phase 53: Set [COMPLETE]</a></h3>
+<p>Set is a heap-allocated reftype hash table, generic over element type.
+Mirrors Map (Phase 36) with the value column excised. Foundation for the
+self-host port -- the Python compiler uses <code>set[int]</code> extensively for
+visited-node traversals.</p>
+<p>Completed substeps:</p>
+<ol>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>set</code> and <code>SetIter</code> class definitions in
+<code>lib/system/collections.z</code>, aliases in <code>lib/system/core.z</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> type checker: <code>is_set_type</code> / <code>is_setiter_type</code> +
+<code>set_element_type</code> / <code>setiter_element_type</code> helpers in
+<code>ztypeutil.py</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> type checker: set synthesis in
+<code>_synth_collection_methods</code> -- <code>is_valtype=False</code>,
+<code>length</code>, <code>capacity</code>, <code>add</code> (returns bool), <code>has</code>
+(returns bool), <code>delete</code> (returns bool), <code>iterate</code>
+(returns borrowed SetIter)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> type checker: setiter synthesis -- <code>.call</code>
+returning <code>OptionView(of)</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> type checker: skip generic class meta.create for set
+types in <code>_check_missing_create_args</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> emitter: set type registration as class name (skip
+field pre-registration like map)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> emitter: <code>_emit_mono_set()</code> -- bucket struct
+{state, hash, item}, hash function (splitmix64 for integer
+elements, FNV-1a for string/str elements), item equality,
+destroy, create, grow/resize, find, add, has, delete</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> emitter: <code>_emit_setiter_runtime()</code> -- borrowed
+iterator struct + <code>.call</code> walking USED buckets yielding
+<code>OptionView.some</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> emitter: set construction interception (capacity
+argument), method call interception (<code>add</code> / <code>has</code> /
+<code>delete</code> with <code>item:</code> arg), <code>.length</code> / <code>.capacity</code>
+field access</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> emitter: scope cleanup via <code>_class_names</code> /
+<code>_emit_class_free</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>_is_collection_param_type</code> extended so set is
+passed by pointer across protocol boundaries (matches
+map / list)</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> Tests: 8 type checker tests in <code>TestSet</code>,
+10 emitter tests in <code>TestSet</code></li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> <code>examples/set_uniq.z</code> demonstration program</li>
+<li><input type="checkbox" disabled checked class="task-list-item-checkbox"> documentation: <code>stdlib_collections.pdoc</code>,
+<code>spec.pdoc</code>, <code>stdlib_index.pdoc</code>, <code>roadmap.pdoc</code></li>
+</ol>
+<p>Design decisions:</p>
+<ul>
+<li>Shares Map's hash table primitive (open-addressing,
+  linear probing, 2/3 load factor, splitmix64/FNV-1a hash
+  dispatch).</li>
+<li>Bucket layout iteration order -- not insertion order.
+  Stable iteration deferred.</li>
+<li><code>.add</code> returns <code>bool</code> (true on new insert, false
+on duplicate); take-on-add semantics with duplicate-path
+cleanup so the caller never has to think about double-free.</li>
+</ul>
+<p>Files: <code>src/ztypeutil.py</code>, <code>src/ztypecheck.py</code>,
+<code>src/zemitterc.py</code>, <code>lib/system/collections.z</code>,
+<code>lib/system/core.z</code>, <code>tests/test_typecheck.py</code>,
+<code>tests/test_emitter.py</code>, <code>examples/set_uniq.z</code>,
+<code>doc/stdlib_collections.pdoc</code>, <code>doc/spec.pdoc</code>,
+<code>doc/stdlib_index.pdoc</code></p>
 <h2 id="verification"><a href="#verification">6. Verification</a></h2>
 <ul>
 <li>Walk through each contradiction and confirm resolution in spec/FAQ.</li>
