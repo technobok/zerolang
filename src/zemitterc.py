@@ -3726,6 +3726,12 @@ class CEmitter:
         if contains_child is not None:
             self._emit_list_contains(name, ctype, elem_ctype, elem_type)
 
+        # sort companion: stable in-place mergesort with comparator
+        # hardcoded by element type.
+        sort_child = self.typing.child_of(mono_type, "sort")
+        if sort_child is not None:
+            self._emit_list_sort(name, ctype, elem_ctype, elem_type)
+
         # listiter companion: iterator + .iterate factory. Emitted only
         # when the list mono carries an `.iterate` child returning a
         # listiter mono (set up in the type checker for any list with
@@ -3771,6 +3777,89 @@ class CEmitter:
             lines.append("        if (_this->data[i] == _item) return 1;\n")
         lines.append("    }\n")
         lines.append("    return 0;\n")
+        lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _emit_list_sort(
+        self,
+        name: str,
+        ctype: str,
+        elem_ctype: str,
+        elem_type: ZType,
+    ) -> None:
+        """Emit `static void z_<name>_sort(...)` -- stable in-place
+        mergesort with hardcoded comparator. Numeric: `<`. String
+        (`z_String_t`): z_String_cmp. `str` valtype: byte-lex memcmp
+        with shorter-prefix-loses tie-break."""
+        elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
+        cmp_fn = f"z_{name}_sort_lt"
+        merge_fn = f"z_{name}_sort_merge"
+        msort_fn = f"z_{name}_sort_rec"
+        lines: List[str] = []
+        # element-type comparator: returns 1 if a < b, else 0. The merge
+        # step uses `!cmp(b, a)` for the "take from left" predicate so
+        # equal elements keep their original order (stability).
+        lines.append(f"static int {cmp_fn}({elem_ctype} _a, {elem_ctype} _b);\n")
+        lines.append(f"static int {cmp_fn}({elem_ctype} _a, {elem_ctype} _b) {{\n")
+        if elem_is_string:
+            lines.append("    return z_String_cmp(&_a, &_b) < 0;\n")
+        elif _is_str_type(elem_type):
+            lines.append("    uint64_t n = _a.len < _b.len ? _a.len : _b.len;\n")
+            lines.append("    int c = n > 0 ? memcmp(_a.data, _b.data, n) : 0;\n")
+            lines.append("    if (c != 0) return c < 0;\n")
+            lines.append("    return _a.len < _b.len;\n")
+        else:
+            lines.append("    return _a < _b;\n")
+        lines.append("}\n\n")
+        # merge two adjacent runs [lo, mid) and [mid, hi) using `scratch`
+        # as auxiliary storage.
+        lines.append(
+            f"static void {merge_fn}({elem_ctype}* data, {elem_ctype}* scratch, "
+            "uint64_t lo, uint64_t mid, uint64_t hi);\n"
+        )
+        lines.append(
+            f"static void {merge_fn}({elem_ctype}* data, {elem_ctype}* scratch, "
+            "uint64_t lo, uint64_t mid, uint64_t hi) {\n"
+        )
+        lines.append("    uint64_t i = lo, j = mid, k = lo;\n")
+        lines.append("    while (i < mid && j < hi) {\n")
+        # !cmp(b, a) means a <= b — pick from the left to preserve order.
+        lines.append(
+            f"        if (!{cmp_fn}(data[j], data[i])) scratch[k++] = data[i++];\n"
+        )
+        lines.append("        else scratch[k++] = data[j++];\n")
+        lines.append("    }\n")
+        lines.append("    while (i < mid) scratch[k++] = data[i++];\n")
+        lines.append("    while (j < hi) scratch[k++] = data[j++];\n")
+        lines.append(
+            "    memcpy(&data[lo], &scratch[lo], (hi - lo) * sizeof(*data));\n"
+        )
+        lines.append("}\n\n")
+        # recursive top-down split.
+        lines.append(
+            f"static void {msort_fn}({elem_ctype}* data, {elem_ctype}* scratch, "
+            "uint64_t lo, uint64_t hi);\n"
+        )
+        lines.append(
+            f"static void {msort_fn}({elem_ctype}* data, {elem_ctype}* scratch, "
+            "uint64_t lo, uint64_t hi) {\n"
+        )
+        lines.append("    if (hi - lo <= 1) return;\n")
+        lines.append("    uint64_t mid = lo + (hi - lo) / 2;\n")
+        lines.append(f"    {msort_fn}(data, scratch, lo, mid);\n")
+        lines.append(f"    {msort_fn}(data, scratch, mid, hi);\n")
+        lines.append(f"    {merge_fn}(data, scratch, lo, mid, hi);\n")
+        lines.append("}\n\n")
+        # public entry: allocate scratch once, drive the recursion.
+        lines.append(f"static void z_{name}_sort({ctype}* _this);\n")
+        lines.append(f"static void z_{name}_sort({ctype}* _this) {{\n")
+        lines.append("    if (_this->length < 2) return;\n")
+        lines.append(
+            f"    {elem_ctype}* scratch = ({elem_ctype}*)z_xmalloc("
+            f"_this->length * sizeof({elem_ctype}));\n"
+        )
+        lines.append(f"    {msort_fn}(_this->data, scratch, 0, _this->length);\n")
+        lines.append("    free(scratch);\n")
         lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
@@ -7360,6 +7449,8 @@ class CEmitter:
                         item_arg = call.arguments[0]
                     item_val = self._emit_operation_value(item_arg.valtype)
                     return f"z_{list_type_name}_contains({parent_val}, {item_val})"
+                if method_name == "sort":  # ztc-string-compare-ok: stdlib mthd
+                    return f"z_{list_type_name}_sort({parent_val})"
                 if method_name == "listview":
                     return f"z_{list_type_name}_listview({parent_val})"
 

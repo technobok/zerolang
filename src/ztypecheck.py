@@ -283,6 +283,24 @@ def _is_contains_eligible(ztype: "ZType") -> bool:
     return _is_str_type(ztype)
 
 
+# List.sort needs `<` plus equality on the element type. Booleans
+# lack a meaningful ordering, but numerics + the String/str/StringView
+# family all do; the eligibility set matches `_is_contains_eligible`
+# minus `bool`.
+_SORT_NAMES: frozenset[str] = frozenset(NUMERIC_RANGES.keys()) | frozenset(
+    {"f32", "f64", "f128", "String", "StringView"}
+)
+
+
+def _is_sort_eligible(ztype: "ZType") -> bool:
+    """True when an element type supports List.sort -- numerics or
+    the String/StringView/str family. bool lists are excluded
+    (sorting bools has no obvious user payoff)."""
+    if ztype.name in _SORT_NAMES:
+        return True
+    return _is_str_type(ztype)
+
+
 def _mono_arg_key(t: "ZType") -> Tuple:
     """Identity key for a monomorphization argument. ZType interning
     hasn't landed yet, so primitives (u64, i32, bool, ...), generic
@@ -4579,6 +4597,13 @@ class TypeChecker:
                     self._set_child(contains_type, "item", elem_type)
                     contains_type.return_type = t_bool
                     self._set_child(mono, "contains", contains_type)
+                # synthesize .sort method: function {:this}. Stable
+                # in-place mergesort; comparator hardcoded by element
+                # type (numeric `<`, String/str/view byte-lex). Only
+                # emitted when the element type has a meaningful order.
+                if _is_sort_eligible(elem_type):
+                    sort_type = _make_type(f"{mangled}.sort", ZTypeType.FUNCTION)
+                    self._set_child(mono, "sort", sort_type)
                 # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
                 # Get or create the monomorphized listview type
                 listview_template = self._resolve_name("ListView")

@@ -9337,6 +9337,35 @@ class TestList:
             "}"
         )
 
+    def test_list_sort_method(self):
+        """.sort is synthesized as a zero-arg function on numeric and
+        String element lists."""
+        for ofty in ("i64", "u64", "f64", "String"):
+            program, typing = check_ok(f"main: function is {{ l: (List of: {ofty}) }}")
+            mono = [m for m, _ in typing.mono_types if m.name == f"List_{ofty}"][0]
+            assert typing.has_child(mono, "sort"), f"List_{ofty} missing .sort"
+            sort = typing.child_of(mono, "sort")
+            assert sort.typetype == ZTypeType.FUNCTION
+
+    def test_list_sort_call(self):
+        """`l.sort` typechecks for numeric and String element types."""
+        check_ok(
+            "main: function is {\n"
+            "    l: (List of: i64)\n"
+            "    l.append from: 3\n"
+            "    l.append from: 1\n"
+            "    l.sort\n"
+            "}"
+        )
+        check_ok(
+            "main: function is {\n"
+            "    l: (List of: String)\n"
+            '    l.append from: "b".string\n'
+            '    l.append from: "a".string\n'
+            "    l.sort\n"
+            "}"
+        )
+
     def test_list_insert_method(self):
         """.insert is synthesized with from: and at: parameters."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")

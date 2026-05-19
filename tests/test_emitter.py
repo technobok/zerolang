@@ -5699,6 +5699,86 @@ class TestList:
         )
         assert compile_and_run(csource).strip() == "0"
 
+    def test_list_sort_numeric(self):
+        """`l.sort` sorts numeric lists ascending in place."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (List of: i64)\n"
+            "    l.append from: 3\n"
+            "    l.append from: 1\n"
+            "    l.append from: 4\n"
+            "    l.append from: 1\n"
+            "    l.append from: 5\n"
+            "    l.append from: 9\n"
+            "    l.append from: 2\n"
+            "    l.append from: 6\n"
+            "    l.sort\n"
+            '    print "\\{l.get i: 0.u64} \\{l.get i: 1.u64} \\{l.get i: 2.u64}'
+            " \\{l.get i: 3.u64} \\{l.get i: 4.u64} \\{l.get i: 5.u64}"
+            ' \\{l.get i: 6.u64} \\{l.get i: 7.u64}"\n'
+            "}"
+        )
+        assert "z_List_i64_sort" in csource
+        assert compile_and_run(csource).strip() == "1 1 2 3 4 5 6 9"
+
+    def test_list_sort_string_lex(self):
+        """`l.sort` on String elements is byte-wise lexicographic;
+        shorter prefix sorts before its longer extension."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (List of: String)\n"
+            '    l.append from: "banana".string\n'
+            '    l.append from: "apple".string\n'
+            '    l.append from: "cherry".string\n'
+            '    l.append from: "app".string\n'
+            "    l.sort\n"
+            '    print "\\{l.get i: 0.u64}"\n'
+            '    print "\\{l.get i: 1.u64}"\n'
+            '    print "\\{l.get i: 2.u64}"\n'
+            '    print "\\{l.get i: 3.u64}"\n'
+            "}"
+        )
+        assert "z_List_String_sort" in csource
+        assert compile_and_run(csource).strip().splitlines() == [
+            "app",
+            "apple",
+            "banana",
+            "cherry",
+        ]
+
+    def test_list_sort_empty_and_single(self):
+        """Sort on a 0- or 1-element list is a no-op (no panic, no
+        out-of-bounds write)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    a: (List of: i64)\n"
+            "    a.sort\n"
+            "    b: (List of: i64)\n"
+            "    b.append from: 42\n"
+            "    b.sort\n"
+            '    print "\\{a.length} \\{b.length} \\{b.get i: 0.u64}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "0 1 42"
+
+    def test_list_sort_already_sorted_keeps_order(self):
+        """An already-sorted list comes out unchanged (and a stable
+        mergesort wouldn't reorder equal keys; we verify the no-op
+        for the strictly-sorted case)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (List of: i64)\n"
+            "    l.append from: 1\n"
+            "    l.append from: 2\n"
+            "    l.append from: 3\n"
+            "    l.append from: 4\n"
+            "    l.sort\n"
+            '    print "\\{l.get i: 0.u64} \\{l.get i: 1.u64}'
+            ' \\{l.get i: 2.u64} \\{l.get i: 3.u64}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "1 2 3 4"
+
     def test_list_pop_returns_last(self):
         """Pop returns last element."""
         csource = emit_source(
