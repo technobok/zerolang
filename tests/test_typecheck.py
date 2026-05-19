@@ -9517,6 +9517,80 @@ class TestMap:
         )
 
 
+class TestSet:
+    """Tests for Set type resolution and monomorphization."""
+
+    def test_set_creation(self):
+        """`(Set of: i64)` creates a monomorphized set."""
+        program, typing = check_ok("main: function is { s: (Set of: i64) }")
+        monos = [m for m, _ in typing.mono_types if "Set" in m.name]
+        assert any(m.name == "Set_i64" for m in monos)
+
+    def test_set_is_reftype(self):
+        program, typing = check_ok("main: function is { s: (Set of: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Set_i64"][0]
+        assert mono.is_valtype is False
+        assert mono.is_heap_allocated is True
+
+    def test_set_length_and_capacity_fields(self):
+        program, typing = check_ok("main: function is { s: (Set of: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Set_i64"][0]
+        assert typing.has_child(mono, "length")
+        assert typing.child_of(mono, "length").name == "u64"
+        assert typing.has_child(mono, "capacity")
+        assert typing.child_of(mono, "capacity").name == "u64"
+
+    def test_set_methods_synthesized(self):
+        """.add / .has / .delete / .iterate synthesized with `item:` arg
+        and bool return where applicable."""
+        program, typing = check_ok("main: function is { s: (Set of: i64) }")
+        mono = [m for m, _ in typing.mono_types if m.name == "Set_i64"][0]
+        for mname in ("add", "has", "delete"):
+            assert typing.has_child(mono, mname), f"missing {mname}"
+            m = typing.child_of(mono, mname)
+            assert m.typetype == ZTypeType.FUNCTION
+            assert typing.has_child(m, "item")
+            assert m.return_type is not None
+            assert m.return_type.name == "bool"
+        assert typing.has_child(mono, "iterate")
+
+    def test_set_iter_mono_created(self):
+        """SetIter<of> is monomorphized alongside the source Set."""
+        program, typing = check_ok("main: function is { s: (Set of: i64) }")
+        names = [m.name for m, _ in typing.mono_types]
+        assert "SetIter_i64" in names
+
+    def test_set_different_element_types(self):
+        program, typing = check_ok(
+            "main: function is {\n    a: (Set of: i64)\n    b: (Set of: String)\n}"
+        )
+        names = [m.name for m, _ in typing.mono_types if "Set" in m.name]
+        assert "Set_i64" in names
+        assert "Set_String" in names
+
+    def test_set_add_has_delete_typecheck(self):
+        """Round-trip .add / .has / .delete with i64 element."""
+        check_ok(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 1\n"
+            "    s.add item: 2\n"
+            "    h: s.has item: 1\n"
+            "    d: s.delete item: 1\n"
+            "}"
+        )
+
+    def test_set_iterate_via_with_do(self):
+        """`with it: s.iterate do for x: it loop` drives the iterator."""
+        check_ok(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 1\n"
+            "    with it: s.iterate do for x: it loop { }\n"
+            "}"
+        )
+
+
 class TestConstantFolding:
     """Tests for constant folding (Phase 41)."""
 

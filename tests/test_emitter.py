@@ -5987,6 +5987,126 @@ class TestMap:
         compile_and_run(csource)
 
 
+class TestSet:
+    """Tests for Set type emission and runtime behavior."""
+
+    def test_set_struct_emitted(self):
+        """Set monomorphizes to a hash-table struct with bucket layout."""
+        csource = emit_source("main: function is { s: (Set of: i64) }")
+        assert "z_Set_i64_t" in csource
+        assert "z_Set_i64_bucket_t" in csource
+        assert "uint64_t capacity;" in csource
+        assert "uint64_t length;" in csource
+
+    def test_set_create_destroy_emitted(self):
+        csource = emit_source("main: function is { s: (Set of: i64) }")
+        assert "z_Set_i64_create" in csource
+        assert "z_Set_i64_destroy" in csource
+
+    def test_set_add_and_length(self):
+        """`.add` inserts and `.length` reflects the count; duplicates
+        do not increase length."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 1\n"
+            "    s.add item: 2\n"
+            "    s.add item: 1\n"
+            '    print "\\{s.length}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "2"
+
+    def test_set_add_returns_bool(self):
+        """`.add` returns true on first insert, false on duplicate."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    a: s.add item: 1\n"
+            "    b: s.add item: 1\n"
+            '    print "a: \\{a} b: \\{b}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "a: 1 b: 0"
+
+    def test_set_has(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 42\n"
+            '    print "\\{s.has item: 42}"\n'
+            '    print "\\{s.has item: 99}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "1\n0"
+
+    def test_set_delete(self):
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 1\n"
+            "    s.add item: 2\n"
+            '    print "\\{s.delete item: 1}"\n'
+            '    print "\\{s.length}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "1\n1"
+
+    def test_set_iterate_via_with_do(self):
+        """`with it: s.iterate do for x: it loop` yields the inserted
+        items (in bucket order)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 1\n"
+            "    s.add item: 2\n"
+            "    s.add item: 3\n"
+            "    total: 0\n"
+            "    with it: s.iterate do for x: it loop {\n"
+            "        total = total + x\n"
+            "    }\n"
+            '    print "total: \\{total}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "total: 6"
+
+    def test_set_with_string_elements(self):
+        """Set of: String -- string hashing + equality work end-to-end."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: String)\n"
+            '    s.add item: "alice".string\n'
+            '    s.add item: "bob".string\n'
+            '    s.add item: "alice".string\n'
+            '    print "len: \\{s.length}"\n'
+            '    print "has alice: \\{s.has item: "alice".string}"\n'
+            '    print "has carol: \\{s.has item: "carol".string}"\n'
+            "}"
+        )
+        out = compile_and_run(csource)
+        assert "len: 2" in out
+        assert "has alice: 1" in out
+        assert "has carol: 0" in out
+
+    def test_set_scope_cleanup(self):
+        """Set is destroyed on scope exit."""
+        csource = emit_source("main: function is { s: (Set of: i64) }")
+        assert "z_Set_i64_destroy(s)" in csource
+        compile_and_run(csource)
+
+    def test_set_capacity_preallocation(self):
+        """`capacity: N` pre-allocates."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64) capacity: 32.u64\n"
+            '    print "\\{s.capacity}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "32"
+
+
 class TestConstantFolding:
     """Tests for constant folding in emitter (Phase 41)."""
 

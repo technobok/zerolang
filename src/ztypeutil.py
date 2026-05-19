@@ -199,6 +199,42 @@ def map_value_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
     return typing.generic_arg_of(base, "value") if base else None
 
 
+def is_set_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized set type."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin.name
+        == "Set"  # ztc-string-compare-ok: stdlib generic-origin discriminator
+    )
+
+
+def set_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
+    """Get the element type of a set type."""
+    base = _unwrap_typedef(ztype)
+    return typing.generic_arg_of(base, "of") if base else None
+
+
+def is_setiter_type(ztype: Optional[ZType]) -> bool:
+    """Check if a type is a monomorphized setiter type."""
+    ztype = _unwrap_typedef(ztype)
+    if not ztype:
+        return False
+    return (
+        ztype.generic_origin is not None
+        and ztype.generic_origin.name
+        == "SetIter"  # ztc-string-compare-ok: stdlib generic-origin discriminator
+    )
+
+
+def setiter_element_type(typing: "ZTyping", ztype: ZType) -> Optional[ZType]:
+    """Get the element type of a setiter type."""
+    base = _unwrap_typedef(ztype)
+    return typing.generic_arg_of(base, "of") if base else None
+
+
 def is_stringview_type(ztype: Optional[ZType]) -> bool:
     """Check if a type is the stringview type."""
     ztype = _unwrap_typedef(ztype)

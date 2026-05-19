@@ -77,6 +77,7 @@ it across a function boundary unless the source is a
   [#*: #> to=list: #b:"List" -- #~"class as { of: Any.generic }"]
   [#*: #> to=listview: #b:"ListView" -- #~"class as { of: Any.generic }"]
   [#*: #> to=map: #b:"Map" -- #~"class as { key: Any.generic  value: Any.generic }"]
+  [#*: #> to=set: #b:"Set" -- #~"class as { of: Any.generic }"]
 
 #p: #b:"Free functions"
 
@@ -375,6 +376,90 @@ Capacity starts at 8 on first insert and doubles on resize.
 Deleted entries leave tombstones; tombstones are reclaimed on
 resize. When the map falls out of scope, all owned keys and
 values are destroyed.
+
+
+#--: set
+
+#code language=zerolang: """
+  set: class {
+      add:      function {:this item: of} out bool       is native
+      has:      function {:this item: of} out bool       is native
+      delete:   function {:this item: of} out bool       is native
+      length:   function {:this} out u64                 is native
+      capacity: function {:this} out u64                 is native
+      iterate:  function {t: this.lock} out (SetIter of: of).borrow is native
+      create:   function {} out type                     is native
+  } as {
+      of: Any.generic
+  }
+"""
+
+Hash-table set keyed on element value. Heap-allocated and
+growable, with open-addressing + linear probing -- the same
+hash-table primitive used by #~"map", with the value column
+excised. Different element types produce different
+monomorphised types (#~"set_i64", #~"set_string").
+
+#b:"Constraints."
+
+#ul:
+  [#*: #~"of" -- numeric types or #~"String" (hashability is
+    enforced at monomorphisation; reftypes other than String are
+    rejected)]
+
+#b:"Construction."
+
+#code language=zerolang: """
+  s: (Set of: i64)
+  t: (Set of: String) capacity: 32.u64    # pre-size
+"""
+
+#b:"Methods."
+
+#ul:
+  [#*: #~"add item: x" -- inserts. Returns #~"true" if a new
+    element was added, #~"false" if #~"x" was already present.
+    Takes ownership of #~"x"; on the duplicate path the caller's
+    copy is destroyed.]
+  [#*: #~"has item: x" -- borrowed lookup. #~"bool".]
+  [#*: #~"delete item: x" -- removes. Returns #~"true" if an
+    element was removed. Destroys the stored copy on removal.]
+  [#*: #~"length" -- current element count.]
+  [#*: #~"capacity" -- current bucket-table size.]
+  [#*: #~"iterate" -- returns a borrowed #~"SetIter" yielding
+    each element. Holds an EXCLUSIVE lock on the source for the
+    iterator's lifetime, same convention as #~"map.iterate".]
+
+#b:"Iteration order." Bucket layout, not insertion order. If
+you need a stable order, collect into a list and sort there.
+
+#b:"Load factor and resize." Same 2/3 load factor as #~"map".
+Capacity starts at 8 on first insert and doubles on resize.
+Tombstones from #~"delete" are reclaimed on resize. When the set
+falls out of scope, all owned items are destroyed.
+
+
+#--: setiter
+
+#code language=zerolang: """
+  SetIter: class is native as {
+      of: Any.generic
+      call: function {:this} out (OptionView t: of) is native
+  }
+"""
+
+Borrowed iterator over a #~"Set". Yields #~"optionview.some"
+pointing into a bucket's item for each USED bucket,
+#~"optionview.none" when exhausted. Mirrors #~"MapKeyIter".
+
+Created via #~"Set.iterate" -- never instantiated directly --
+and consumed by the standard iterator-driver shape:
+
+#code language=zerolang: """
+  with it: s.iterate do for x: it loop {
+      print "x: \\{x}"
+  }
+"""
 
 
 #--: string_join

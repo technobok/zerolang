@@ -42,16 +42,24 @@ from ztypeutil import (
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
+    is_set_type as _is_set_type,
+    set_element_type as _set_element_type,
+    is_setiter_type as _is_setiter_type,
     is_stringview_type as _is_stringview_type,
     _unwrap_typedef,
 )
 
 
 def _is_collection_param_type(ptype: Optional[ZType]) -> bool:
-    """True for list / listview / map (directly or via typedef) —
+    """True for list / listview / map / set (directly or via typedef) —
     the types that must be passed by pointer across a protocol
     boundary so in-place mutation stays visible."""
-    return _is_list_type(ptype) or _is_listview_type(ptype) or _is_map_type(ptype)
+    return (
+        _is_list_type(ptype)
+        or _is_listview_type(ptype)
+        or _is_map_type(ptype)
+        or _is_set_type(ptype)
+    )
 
 
 def _proto_param_ctype(typing: ztyping.ZTyping, ptype: Optional[ZType]) -> str:
@@ -1772,6 +1780,8 @@ class CEmitter:
                 continue
             if _is_map_type(mono_type):
                 continue
+            if _is_set_type(mono_type):
+                continue
             if mono_type.typetype == ZTypeType.RECORD:
                 # pre-register field info so _build_meta_create_args works
                 # during function body emission (before mono type emission)
@@ -3178,6 +3188,13 @@ class CEmitter:
         if _is_map_type(mono_type):
             self._emit_mono_map(mono_type)
             return
+        if _is_setiter_type(mono_type):
+            # setiter: struct + .call factory emitted as part of
+            # `_emit_mono_set` for the source set.
+            return
+        if _is_set_type(mono_type):
+            self._emit_mono_set(mono_type)
+            return
         if mono_type.typetype == ZTypeType.UNION:
             self._emit_mono_union(mono_type, template_defn)
         elif mono_type.typetype == ZTypeType.VARIANT:
@@ -4344,6 +4361,329 @@ class CEmitter:
             lines.append(f"static {val_ctype} z_{me_name}_value({me_ctype}* _e) {{\n")
             lines.append("    return _e->value;\n")
             lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
+
+    def _emit_mono_set(self, mono_type: ZType) -> None:
+        """Emit a monomorphized set type. A set is a hash table without
+        the value column -- bucket = {state, hash, item}. Structure
+        mirrors `_emit_mono_map`."""
+        self.needs_stdint = True
+        self.needs_stdlib = True
+        self.needs_stdio = True
+        self.needs_string = True
+        name = mono_type.name
+        ctype = f"z_{name}_t"
+        elem_type = _set_element_type(self.typing, mono_type)
+        if elem_type is None:
+            return
+        elem_ctype = _ctype(self.typing, elem_type)
+        elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
+        bucket_type = f"z_{name}_bucket_t"
+        lines: List[str] = []
+
+        # bucket state macros
+        lines.append(f"#define Z_{name.upper()}_EMPTY 0\n")
+        lines.append(f"#define Z_{name.upper()}_DELETED 1\n")
+        lines.append(f"#define Z_{name.upper()}_USED 2\n\n")
+
+        # bucket struct (state, hash, item -- no value column)
+        lines.append("typedef struct {\n")
+        lines.append("    uint8_t state;\n")
+        lines.append("    uint64_t hash;\n")
+        lines.append(f"    {elem_ctype} item;\n")
+        lines.append(f"}} {bucket_type};\n\n")
+
+        # set struct
+        lines.append("typedef struct {\n")
+        lines.append("    uint64_t capacity;\n")
+        lines.append("    uint64_t length;\n")
+        lines.append(f"    {bucket_type}* buckets;\n")
+        lines.append(f"}} {ctype};\n\n")
+
+        # hash function -- same dispatch as map
+        hash_fn = f"z_{name}_hash_item"
+        lines.append(f"static uint64_t {hash_fn}({elem_ctype} _key);\n")
+        lines.append(f"static uint64_t {hash_fn}({elem_ctype} _key) {{\n")
+        if elem_is_string:
+            lines.append("    uint64_t h = 14695981039346656037ULL;\n")
+            lines.append("    uint64_t len = _key.size;\n")
+            lines.append("    for (uint64_t i = 0; i < len; i++) {\n")
+            lines.append("        h ^= (uint8_t)_key.data[i];\n")
+            lines.append("        h *= 1099511628211ULL;\n")
+            lines.append("    }\n")
+            lines.append("    return h;\n")
+        elif _is_str_type(elem_type):
+            lines.append("    uint64_t h = 14695981039346656037ULL;\n")
+            lines.append("    for (uint64_t i = 0; i < _key.len; i++) {\n")
+            lines.append("        h ^= (uint8_t)_key.data[i];\n")
+            lines.append("        h *= 1099511628211ULL;\n")
+            lines.append("    }\n")
+            lines.append("    return h;\n")
+        else:
+            lines.append("    uint64_t h = (uint64_t)_key;\n")
+            lines.append("    h ^= h >> 30;\n")
+            lines.append("    h *= 0xbf58476d1ce4e5b9ULL;\n")
+            lines.append("    h ^= h >> 27;\n")
+            lines.append("    h *= 0x94d049bb133111ebULL;\n")
+            lines.append("    h ^= h >> 31;\n")
+            lines.append("    return h;\n")
+        lines.append("}\n\n")
+
+        # equality function
+        eq_fn = f"z_{name}_items_equal"
+        lines.append(f"static int {eq_fn}({elem_ctype} _a, {elem_ctype} _b);\n")
+        lines.append(f"static int {eq_fn}({elem_ctype} _a, {elem_ctype} _b) {{\n")
+        if elem_is_string:
+            lines.append(
+                "    return _a.size == _b.size "
+                "&& memcmp(_a.data, _b.data, _a.size) == 0;\n"
+            )
+        elif _is_str_type(elem_type):
+            lines.append(
+                "    return _a.len == _b.len "
+                "&& memcmp(_a.data, _b.data, _a.len) == 0;\n"
+            )
+        else:
+            lines.append("    return _a == _b;\n")
+        lines.append("}\n\n")
+
+        # helper: free an item if it carries a destructor
+        def emit_free_item(var: str, indent: str = "    ") -> str:
+            if (
+                elem_type
+                and (elem_type.destructor_name is not None)
+                and elem_type.destructor_name
+            ):
+                if not elem_type.is_heap_allocated:
+                    return f"{indent}{elem_type.destructor_name}(&{var});\n"
+                return f"{indent}{elem_type.destructor_name}({var});\n"
+            return ""
+
+        item_needs_free = bool(elem_type and (elem_type.destructor_name is not None))
+
+        # destroy
+        lines.append(f"static void z_{name}_destroy({ctype}* p);\n")
+        lines.append(f"static void z_{name}_destroy({ctype}* p) {{\n")
+        lines.append("    if (!p) return;\n")
+        if item_needs_free:
+            lines.append("    for (uint64_t i = 0; i < p->capacity; i++) {\n")
+            lines.append(
+                f"        if (p->buckets[i].state == Z_{name.upper()}_USED) {{\n"
+            )
+            lines.append(emit_free_item("p->buckets[i].item", "            "))
+            lines.append("        }\n")
+            lines.append("    }\n")
+        lines.append("    free(p->buckets);\n")
+        lines.append("    free(p);\n")
+        lines.append("}\n\n")
+
+        # create
+        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity);\n")
+        lines.append(f"static {ctype}* z_{name}_create(uint64_t _capacity) {{\n")
+        lines.append(f"    {ctype}* _this = ({ctype}*)z_xmalloc(sizeof({ctype}));\n")
+        lines.append(f"    *_this = ({ctype}){{0}};\n")
+        lines.append("    if (_capacity < 8) _capacity = 0;\n")
+        lines.append("    _this->capacity = _capacity;\n")
+        lines.append("    if (_capacity > 0) {\n")
+        lines.append(
+            f"        _this->buckets = ({bucket_type}*)z_xcalloc(_capacity, sizeof({bucket_type}));\n"
+        )
+        lines.append("    }\n")
+        lines.append("    return _this;\n")
+        lines.append("}\n\n")
+
+        # grow/resize
+        grow_fn = f"z_{name}_grow"
+        lines.append(f"static void {grow_fn}({ctype}* _this);\n")
+        lines.append(f"static void {grow_fn}({ctype}* _this) {{\n")
+        lines.append("    uint64_t old_cap = _this->capacity;\n")
+        lines.append("    uint64_t new_cap = old_cap == 0 ? 8 : old_cap * 2;\n")
+        lines.append(f"    {bucket_type}* old_buckets = _this->buckets;\n")
+        lines.append(
+            f"    {bucket_type}* new_buckets = ({bucket_type}*)z_xcalloc(new_cap, sizeof({bucket_type}));\n"
+        )
+        lines.append("    for (uint64_t i = 0; i < old_cap; i++) {\n")
+        lines.append(f"        if (old_buckets[i].state == Z_{name.upper()}_USED) {{\n")
+        lines.append(
+            "            uint64_t idx = old_buckets[i].hash & (new_cap - 1);\n"
+        )
+        lines.append(
+            f"            while (new_buckets[idx].state == Z_{name.upper()}_USED) {{\n"
+        )
+        lines.append("                idx = (idx + 1) & (new_cap - 1);\n")
+        lines.append("            }\n")
+        lines.append("            new_buckets[idx] = old_buckets[i];\n")
+        lines.append("        }\n")
+        lines.append("    }\n")
+        lines.append("    free(old_buckets);\n")
+        lines.append("    _this->buckets = new_buckets;\n")
+        lines.append("    _this->capacity = new_cap;\n")
+        lines.append("}\n\n")
+
+        # find_bucket helper
+        find_fn = f"z_{name}_find"
+        lines.append(
+            f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, uint64_t _hash);\n"
+        )
+        lines.append(
+            f"static int64_t {find_fn}({ctype}* _this, {elem_ctype} _item, uint64_t _hash) {{\n"
+        )
+        lines.append("    if (_this->capacity == 0) return -1;\n")
+        lines.append("    uint64_t idx = _hash & (_this->capacity - 1);\n")
+        lines.append("    for (uint64_t i = 0; i < _this->capacity; i++) {\n")
+        lines.append(
+            f"        if (_this->buckets[idx].state == Z_{name.upper()}_EMPTY) return -1;\n"
+        )
+        lines.append(
+            f"        if (_this->buckets[idx].state == Z_{name.upper()}_USED "
+            f"&& _this->buckets[idx].hash == _hash "
+            f"&& {eq_fn}(_this->buckets[idx].item, _item)) return (int64_t)idx;\n"
+        )
+        lines.append("        idx = (idx + 1) & (_this->capacity - 1);\n")
+        lines.append("    }\n")
+        lines.append("    return -1;\n")
+        lines.append("}\n\n")
+
+        # add method -- returns true if a new element was inserted,
+        # false if the item was already present (caller's copy is freed
+        # in the false case to maintain the take-on-add contract).
+        lines.append(f"static int z_{name}_add({ctype}* _this, {elem_ctype} _item);\n")
+        lines.append(
+            f"static int z_{name}_add({ctype}* _this, {elem_ctype} _item) {{\n"
+        )
+        lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
+        lines.append(f"    int64_t existing = {find_fn}(_this, _item, h);\n")
+        lines.append("    if (existing >= 0) {\n")
+        lines.append(emit_free_item("_item", "        "))
+        lines.append("        return 0;\n")
+        lines.append("    }\n")
+        lines.append(
+            "    if (_this->capacity == 0 || (_this->length + 1) * 3 >= _this->capacity * 2) {\n"
+        )
+        lines.append(f"        {grow_fn}(_this);\n")
+        lines.append("    }\n")
+        lines.append("    uint64_t idx = h & (_this->capacity - 1);\n")
+        lines.append("    int64_t first_deleted = -1;\n")
+        lines.append("    for (uint64_t i = 0; i < _this->capacity; i++) {\n")
+        lines.append(
+            f"        if (_this->buckets[idx].state == Z_{name.upper()}_EMPTY) {{\n"
+        )
+        lines.append(
+            "            if (first_deleted >= 0) idx = (uint64_t)first_deleted;\n"
+        )
+        lines.append("            break;\n")
+        lines.append("        }\n")
+        lines.append(
+            f"        if (_this->buckets[idx].state == Z_{name.upper()}_DELETED "
+            "&& first_deleted < 0) {\n"
+        )
+        lines.append("            first_deleted = (int64_t)idx;\n")
+        lines.append("        }\n")
+        lines.append("        idx = (idx + 1) & (_this->capacity - 1);\n")
+        lines.append("    }\n")
+        lines.append(
+            "    if (first_deleted >= 0 "
+            f"&& _this->buckets[idx].state != Z_{name.upper()}_EMPTY) "
+            "idx = (uint64_t)first_deleted;\n"
+        )
+        lines.append(f"    _this->buckets[idx].state = Z_{name.upper()}_USED;\n")
+        lines.append("    _this->buckets[idx].hash = h;\n")
+        lines.append("    _this->buckets[idx].item = _item;\n")
+        lines.append("    _this->length++;\n")
+        lines.append("    return 1;\n")
+        lines.append("}\n\n")
+
+        # has method
+        lines.append(f"static int z_{name}_has({ctype}* _this, {elem_ctype} _item);\n")
+        lines.append(
+            f"static int z_{name}_has({ctype}* _this, {elem_ctype} _item) {{\n"
+        )
+        lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
+        lines.append(f"    return {find_fn}(_this, _item, h) >= 0;\n")
+        lines.append("}\n\n")
+
+        # delete method
+        lines.append(
+            f"static int z_{name}_delete({ctype}* _this, {elem_ctype} _item);\n"
+        )
+        lines.append(
+            f"static int z_{name}_delete({ctype}* _this, {elem_ctype} _item) {{\n"
+        )
+        lines.append(f"    uint64_t h = {hash_fn}(_item);\n")
+        lines.append(f"    int64_t idx = {find_fn}(_this, _item, h);\n")
+        lines.append("    if (idx < 0) return 0;\n")
+        lines.append(emit_free_item("_this->buckets[idx].item", "    "))
+        lines.append(f"    _this->buckets[idx].state = Z_{name.upper()}_DELETED;\n")
+        lines.append("    _this->length--;\n")
+        lines.append("    return 1;\n")
+        lines.append("}\n\n")
+
+        self.struct_defs.append("".join(lines))
+
+        # setiter companion: emitted only when the set carries an
+        # `.iterate` child (it always does, but be defensive).
+        iterate_child = self.typing.child_of(mono_type, "iterate")
+        if iterate_child and iterate_child.return_type:
+            self._emit_setiter_runtime(
+                ctype, name, elem_ctype, iterate_child.return_type
+            )
+
+    def _emit_setiter_runtime(
+        self,
+        set_ctype: str,
+        set_name: str,
+        elem_ctype: str,
+        si_mono: ZType,
+    ) -> None:
+        """Emit the runtime implementation of a setiter monomorphization.
+
+        Layout: { source set pointer, current bucket index }. Each .call
+        scans forward through buckets, returning the next USED bucket's
+        item wrapped in optionview.some, or optionview.none when no
+        more USED buckets remain.
+        """
+        si_name = si_mono.name
+        si_ctype = f"z_{si_name}_t"
+        call_method = self.typing.child_of(si_mono, "call")
+        if not call_method or not call_method.return_type:
+            return
+        ov_mono = call_method.return_type
+        ov_name = ov_mono.name
+        ov_ctype = f"z_{ov_name}_t"
+        ov_some_tag = f"Z_{ov_name.upper()}_TAG_SOME"
+        ov_none_tag = f"Z_{ov_name.upper()}_TAG_NONE"
+        used_macro = f"Z_{set_name.upper()}_USED"
+
+        lines: List[str] = []
+        lines.append(f"/* setiter<{elem_ctype}> runtime layout */\n")
+        lines.append("typedef struct {\n")
+        lines.append(f"    {set_ctype}* s;\n")
+        lines.append("    uint64_t idx;\n")
+        lines.append(f"}} {si_ctype};\n\n")
+        lines.append(f"static {ov_ctype} z_{si_name}_call({si_ctype}* _it);\n")
+        lines.append(f"static {ov_ctype} z_{si_name}_call({si_ctype}* _it) {{\n")
+        lines.append(f"    {ov_ctype} _out = {{0}};\n")
+        lines.append("    while (_it->idx < _it->s->capacity) {\n")
+        lines.append(
+            f"        if (_it->s->buckets[_it->idx].state == {used_macro}) {{\n"
+        )
+        lines.append(f"            _out.tag = {ov_some_tag};\n")
+        lines.append("            _out.data = &_it->s->buckets[_it->idx].item;\n")
+        lines.append("            _it->idx++;\n")
+        lines.append("            return _out;\n")
+        lines.append("        }\n")
+        lines.append("        _it->idx++;\n")
+        lines.append("    }\n")
+        lines.append(f"    _out.tag = {ov_none_tag};\n")
+        lines.append("    return _out;\n")
+        lines.append("}\n\n")
+        lines.append(f"static {si_ctype} z_{set_name}_iterate({set_ctype}* _this);\n")
+        lines.append(f"static {si_ctype} z_{set_name}_iterate({set_ctype}* _this) {{\n")
+        lines.append(f"    {si_ctype} _it = {{0}};\n")
+        lines.append("    _it.s = _this;\n")
+        lines.append("    _it.idx = 0;\n")
+        lines.append("    return _it;\n")
+        lines.append("}\n\n")
         self.struct_defs.append("".join(lines))
 
     def _emit_mono_class(
@@ -5773,6 +6113,15 @@ class CEmitter:
                         arg_t = self._get_operation_type(arg.valtype)
                         code += self._emit_take_invalidation(take_var, arg_t, indent)
                 return code
+            if dp_parent_type and _is_set_type(dp_parent_type):
+                val = self._emit_call_value(call)
+                code = f"{indent}{val};\n"
+                for arg in call.arguments:
+                    take_var = self._get_take_var(arg.valtype)
+                    if take_var:
+                        arg_t = self._get_operation_type(arg.valtype)
+                        code += self._emit_take_invalidation(take_var, arg_t, indent)
+                return code
 
         # string class mutating methods: .append, .reserve, .shrink
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -6697,6 +7046,21 @@ class CEmitter:
                 return f"z_{map_name}_create({cap_val})"
             return f"z_{map_name}_create(0)"
 
+        # set construction: (set of: T) or with capacity:
+        if self._node_ztype(call.callable) and _is_set_type(
+            self._node_ztype(call.callable)
+        ):
+            set_name = _mono_name(self._node_ztype(call.callable))
+            cap_arg = None
+            for arg in call.arguments:
+                if arg.name == "capacity":  # ztc-string-compare-ok: stdlib arg
+                    cap_arg = arg
+                    break
+            if cap_arg is not None:
+                cap_val = self._emit_operation_value(cap_arg.valtype)
+                return f"z_{set_name}_create({cap_val})"
+            return f"z_{set_name}_create(0)"
+
         # array method calls: .get and .set
         if call.callable.nodetype == NodeType.DOTTEDPATH:
             dp_parent_type = self._node_ztype(
@@ -7034,6 +7398,32 @@ class CEmitter:
                 if method_name == "has" and call.arguments:
                     key_val = self._emit_operation_value(call.arguments[0].valtype)
                     return f"z_{map_type_name}_has({parent_val}, {key_val})"
+
+            # set method calls: .add / .has / .delete
+            if dp_parent_type and _is_set_type(dp_parent_type):
+                method_name = cast(zast.DottedPath, call.callable).child.name
+                parent_val = self._emit_path_value(
+                    cast(zast.DottedPath, call.callable).parent
+                )
+                set_type_name = _mono_name(dp_parent_type)
+                # Set has three mutating methods that all follow the
+                # same `item:` arg shape: add / has / delete. Look up
+                # the named `item` arg (or fall back to positional),
+                # emit `z_<set>_<method>(parent, item)`.
+                _SET_METHODS = ("add", "has", "delete")
+                if method_name in _SET_METHODS and call.arguments:
+                    item_arg = None
+                    for arg in call.arguments:
+                        if arg.name == "item":  # ztc-string-compare-ok: stdlib arg
+                            item_arg = arg
+                            break
+                    if item_arg is None:
+                        item_arg = call.arguments[0]
+                    item_val = self._emit_operation_value(item_arg.valtype)
+                    if method_name == "add":  # ztc-string-compare-ok: stdlib mthd
+                        indent = self._indent()
+                        self._transfer_implicit_take(item_val, item_arg.valtype, indent)
+                    return f"z_{set_type_name}_{method_name}({parent_val}, {item_val})"
 
         if (
             self._node_ztype(call.callable)
@@ -7409,7 +7799,12 @@ class CEmitter:
             if (
                 base is not None
                 and base is not resolved
-                and (_is_list_type(base) or _is_map_type(base) or _is_str_type(base))
+                and (
+                    _is_list_type(base)
+                    or _is_map_type(base)
+                    or _is_set_type(base)
+                    or _is_str_type(base)
+                )
             ):
                 create_args = "0"
             else:
@@ -7836,6 +8231,14 @@ class CEmitter:
         if parent_type_dp and _is_map_type(parent_type_dp) and child == "capacity":
             parent = self._emit_path_value(path.parent)
             return f"{parent}->capacity"
+        # set: .length / .capacity field access
+        if (
+            parent_type_dp
+            and _is_set_type(parent_type_dp)
+            and child in ("length", "capacity")
+        ):
+            parent = self._emit_path_value(path.parent)
+            return f"{parent}->{child}"
         # data.array: copy data into new array
         if (
             parent_type_dp

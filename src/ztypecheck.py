@@ -56,6 +56,10 @@ from ztypeutil import (
     is_map_type as _is_map_type,
     map_key_type as _map_key_type,
     map_value_type as _map_value_type,
+    is_set_type as _is_set_type,
+    set_element_type as _set_element_type,
+    is_setiter_type as _is_setiter_type,
+    setiter_element_type as _setiter_element_type,
     is_stringview_type as _is_stringview_type,
 )
 
@@ -4595,6 +4599,81 @@ class TypeChecker:
                         )
                         self._set_child(mono, "iterate", iterate_type)
 
+        # for setiter types: synthesize the .call method returning
+        # (optionview of: item). Same shape as mapkeyiter -- the
+        # iterator walks bucket slots and skips empty / deleted ones
+        # at runtime.
+        if _is_setiter_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            elem_t = _setiter_element_type(self.typing, mono)
+            if elem_t is not None:
+                ov_template = self._resolve_name("OptionView")
+                if ov_template:
+                    ov_defn = self._find_generic_defn(ov_template)
+                    if ov_defn:
+                        ov_mono = self._monomorphize(
+                            ov_template, {"t": elem_t}, ov_defn
+                        )
+                        call_type = _make_type(f"{mangled}.call", ZTypeType.FUNCTION)
+                        call_type.return_type = ov_mono
+                        self._set_child(mono, "call", call_type)
+            mono.destructor_name = None
+
+        # for set types: set reftype, synthesize methods.
+        # Sets are maps without the value column -- heap-allocated
+        # hash tables keyed by `of`.
+        if _is_set_type(mono):
+            mono.is_valtype = False
+            _set_destructor_metadata(mono)
+            mono.is_heap_allocated = True
+            mono.needs_field_cleanup = True
+            elem_type = _set_element_type(self.typing, mono)
+            t_u64 = self._resolve_name("u64") or self.t_null
+            t_bool = self._resolve_name("bool") or self.t_null
+            length_type = _make_type("u64", ZTypeType.RECORD)
+            length_type.is_valtype = True
+            self._set_child(mono, "length", length_type)
+            cap_type = _make_type("u64", ZTypeType.RECORD)
+            cap_type.is_valtype = True
+            self._set_child(mono, "capacity", cap_type)
+            if elem_type:
+                # synthesize .add method: function {item: of} out bool
+                add_type = _make_type(f"{mangled}.add", ZTypeType.FUNCTION)
+                self._set_child(add_type, "item", elem_type)
+                self.typing.set_child_ownership(add_type, "item", ZParamOwnership.TAKE)
+                add_type.return_type = t_bool
+                self._set_child(mono, "add", add_type)
+                # synthesize .has method: function {item: of} out bool
+                has_type = _make_type(f"{mangled}.has", ZTypeType.FUNCTION)
+                self._set_child(has_type, "item", elem_type)
+                has_type.return_type = t_bool
+                self._set_child(mono, "has", has_type)
+                # synthesize .delete method: function {item: of} out bool
+                delete_type = _make_type(f"{mangled}.delete", ZTypeType.FUNCTION)
+                self._set_child(delete_type, "item", elem_type)
+                delete_type.return_type = t_bool
+                self._set_child(mono, "delete", delete_type)
+                # synthesize .iterate method: function {:this} out
+                # (setiter of: T). Triggers monomorphization of
+                # setiter<of> so the emitter can generate the
+                # iterator struct + .call function.
+                si_template = self._resolve_name("SetIter")
+                if si_template:
+                    si_defn = self._find_generic_defn(si_template)
+                    if si_defn:
+                        si_mono = self._monomorphize(
+                            si_template, {"of": elem_type}, si_defn
+                        )
+                        iterate_type = _make_type(
+                            f"{mangled}.iterate", ZTypeType.FUNCTION
+                        )
+                        iterate_type.return_type = si_mono
+                        self._carry_native_method_metadata(
+                            template_type, defn, "iterate", iterate_type
+                        )
+                        self._set_child(mono, "iterate", iterate_type)
+
         # for map types: set reftype, synthesize methods
         # Maps remain heap-allocated for now.
         if _is_map_type(mono):
@@ -7815,6 +7894,7 @@ class TypeChecker:
             or _is_array_type(type_def)
             or _is_list_type(type_def)
             or _is_map_type(type_def)
+            or _is_set_type(type_def)
         ):
             return
         create_type = self.typing.child_of(type_def, "create")
