@@ -363,6 +363,11 @@ class CEmitter:
         self.needs_stringview = False
         self.needs_io = False
         self.needs_os = False
+        # SipHash runtime + per-process seed init. Set whenever a Map
+        # or Set mono is emitted (their bucket dispatch routes through
+        # z_siphash_string / z_hash_u64) or when String.hash /
+        # StringView.hash is referenced.
+        self.needs_hash = False
         # per-native flags; the runtime emits a helper only when its
         # flag is set, so unused natives do not pull in types the user
         # never monomorphized.
@@ -1925,6 +1930,7 @@ class CEmitter:
                 needs_stringview=self.needs_stringview,
                 needs_io=self.needs_io,
                 needs_pwd="userName" in self.needs_os_natives,
+                needs_hash=self.needs_hash,
             )
         )
         parts.append(zrt.emit_static_stringviews(self._string_literals))
@@ -2035,6 +2041,9 @@ class CEmitter:
             # to thread argc/argv through z_main.
             parts.append("    z_os_argc_g = argc;\n")
             parts.append("    z_os_argv_g = argv;\n")
+        if self.needs_hash:
+            # Seed SipHash before user code touches Map / Set / String.hash.
+            parts.append("    z_siphash_init();\n")
         parts.append("    z_main();\n")
         parts.append("    return 0;\n")
         parts.append("}\n")
@@ -3847,6 +3856,9 @@ class CEmitter:
         self.needs_stdlib = True
         self.needs_stdio = True
         self.needs_string = True
+        # Bucket dispatch routes through z_siphash_string / z_hash_u64;
+        # pull the SipHash runtime in.
+        self.needs_hash = True
         name = mono_type.name
         ctype = f"z_{name}_t"
         key_type = _map_key_type(self.typing, mono_type)
@@ -3881,36 +3893,19 @@ class CEmitter:
         lines.append(f"    {bucket_type}* buckets;\n")
         lines.append(f"}} {ctype};\n\n")
 
-        # hash function
+        # hash function -- thin wrapper over the shared SipHash / splitmix64
+        # helpers in the runtime preamble. String / str / view keys feed
+        # raw bytes into z_siphash_bytes; numeric keys cast to u64 and
+        # run through z_hash_u64 (splitmix64 finalizer).
         hash_fn = f"z_{name}_hash_key"
         lines.append(f"static uint64_t {hash_fn}({key_ctype} _key);\n")
         lines.append(f"static uint64_t {hash_fn}({key_ctype} _key) {{\n")
         if key_is_string:
-            # FNV-1a for strings
-            lines.append("    uint64_t h = 14695981039346656037ULL;\n")
-            lines.append("    uint64_t len = _key.size;\n")
-            lines.append("    for (uint64_t i = 0; i < len; i++) {\n")
-            lines.append("        h ^= (uint8_t)_key.data[i];\n")
-            lines.append("        h *= 1099511628211ULL;\n")
-            lines.append("    }\n")
-            lines.append("    return h;\n")
+            lines.append("    return z_siphash_string(_key);\n")
         elif _is_str_type(key_type):
-            # FNV-1a for str valtypes
-            lines.append("    uint64_t h = 14695981039346656037ULL;\n")
-            lines.append("    for (uint64_t i = 0; i < _key.len; i++) {\n")
-            lines.append("        h ^= (uint8_t)_key.data[i];\n")
-            lines.append("        h *= 1099511628211ULL;\n")
-            lines.append("    }\n")
-            lines.append("    return h;\n")
+            lines.append("    return z_siphash_bytes(_key.data, _key.len);\n")
         else:
-            # splitmix64 finalizer for integer keys
-            lines.append("    uint64_t h = (uint64_t)_key;\n")
-            lines.append("    h ^= h >> 30;\n")
-            lines.append("    h *= 0xbf58476d1ce4e5b9ULL;\n")
-            lines.append("    h ^= h >> 27;\n")
-            lines.append("    h *= 0x94d049bb133111ebULL;\n")
-            lines.append("    h ^= h >> 31;\n")
-            lines.append("    return h;\n")
+            lines.append("    return z_hash_u64((uint64_t)_key);\n")
         lines.append("}\n\n")
 
         # key equality function
@@ -4416,6 +4411,7 @@ class CEmitter:
         self.needs_stdlib = True
         self.needs_stdio = True
         self.needs_string = True
+        self.needs_hash = True
         name = mono_type.name
         ctype = f"z_{name}_t"
         elem_type = _set_element_type(self.typing, mono_type)
@@ -4445,33 +4441,17 @@ class CEmitter:
         lines.append(f"    {bucket_type}* buckets;\n")
         lines.append(f"}} {ctype};\n\n")
 
-        # hash function -- same dispatch as map
+        # hash function -- same dispatch as map; thin wrapper over the
+        # shared SipHash / splitmix64 helpers in the runtime preamble.
         hash_fn = f"z_{name}_hash_item"
         lines.append(f"static uint64_t {hash_fn}({elem_ctype} _key);\n")
         lines.append(f"static uint64_t {hash_fn}({elem_ctype} _key) {{\n")
         if elem_is_string:
-            lines.append("    uint64_t h = 14695981039346656037ULL;\n")
-            lines.append("    uint64_t len = _key.size;\n")
-            lines.append("    for (uint64_t i = 0; i < len; i++) {\n")
-            lines.append("        h ^= (uint8_t)_key.data[i];\n")
-            lines.append("        h *= 1099511628211ULL;\n")
-            lines.append("    }\n")
-            lines.append("    return h;\n")
+            lines.append("    return z_siphash_string(_key);\n")
         elif _is_str_type(elem_type):
-            lines.append("    uint64_t h = 14695981039346656037ULL;\n")
-            lines.append("    for (uint64_t i = 0; i < _key.len; i++) {\n")
-            lines.append("        h ^= (uint8_t)_key.data[i];\n")
-            lines.append("        h *= 1099511628211ULL;\n")
-            lines.append("    }\n")
-            lines.append("    return h;\n")
+            lines.append("    return z_siphash_bytes(_key.data, _key.len);\n")
         else:
-            lines.append("    uint64_t h = (uint64_t)_key;\n")
-            lines.append("    h ^= h >> 30;\n")
-            lines.append("    h *= 0xbf58476d1ce4e5b9ULL;\n")
-            lines.append("    h ^= h >> 27;\n")
-            lines.append("    h *= 0x94d049bb133111ebULL;\n")
-            lines.append("    h ^= h >> 31;\n")
-            lines.append("    return h;\n")
+            lines.append("    return z_hash_u64((uint64_t)_key);\n")
         lines.append("}\n\n")
 
         # equality function
@@ -6994,6 +6974,10 @@ class CEmitter:
                     self.needs_stringview = True
                     self.needs_stdint = True
                     return f"z_StringView_cmp({parent_val}, {rhs_val})"
+                if method_name == "hash":  # ztc-string-compare-ok: stdlib mthd
+                    self.needs_stringview = True
+                    self.needs_hash = True
+                    return f"z_siphash_stringview({parent_val})"
 
         # string and str method calls: .stringview (both), .length / .capacity (string)
         if call.callable.nodetype == NodeType.DOTTEDPATH:
@@ -7039,6 +7023,14 @@ class CEmitter:
                     is_pointer_path = self._is_class_pointer_path(dp.parent)
                     arg = parent_val if is_pointer_path else f"&{parent_val}"
                     return self._alloc_temp(f"z_String_copy({arg})")
+                # fmt: off
+                if is_string and method_name == "hash":  # ztc-string-compare-ok: stdlib mthd
+                    # fmt: on
+                    self.needs_string = True
+                    self.needs_hash = True
+                    is_pointer_path = self._is_class_pointer_path(dp.parent)
+                    arg = f"*{parent_val}" if is_pointer_path else parent_val
+                    return f"z_siphash_string({arg})"
 
         # string construction: string or string capacity: N
         if (
@@ -8151,6 +8143,25 @@ class CEmitter:
             parent = self._emit_path_value(path.parent)
             arg = parent if self._is_class_pointer_path(path.parent) else f"&{parent}"
             return self._alloc_temp(f"z_String_copy({arg})")
+        # string: .hash — SipHash-1-3 of the byte contents (per-process seed)
+        # fmt: off
+        if (
+            parent_type_dp
+            and parent_type_dp.subtype == ZSubType.STRING
+            and child == "hash"  # ztc-string-compare-ok: stdlib mthd
+        ):
+            self.needs_string = True
+            self.needs_hash = True
+            parent = self._emit_path_value(path.parent)
+            arg = f"*{parent}" if self._is_class_pointer_path(path.parent) else parent
+            return f"z_siphash_string({arg})"
+        # stringview: .hash — SipHash-1-3 of the viewed bytes (per-process seed)
+        if parent_type_dp and _is_stringview_type(parent_type_dp) and child == "hash":  # ztc-string-compare-ok: stdlib mthd
+            # fmt: on
+            self.needs_stringview = True
+            self.needs_hash = True
+            parent = self._emit_path_value(path.parent)
+            return f"z_siphash_stringview({parent})"
         # .stringview conversion at path-access position, for both `string`
         # (reftype) and `str_N` (valtype). Only str differs in the length
         # field name (`len` vs `size`); pointer-vs-value access depends on

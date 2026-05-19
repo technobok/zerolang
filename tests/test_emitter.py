@@ -7327,6 +7327,132 @@ class TestStringOrdering:
         assert output.strip().splitlines() == ["eq", "le", "ge"]
 
 
+class TestStringHash:
+    """`String.hash` / `StringView.hash` natives. Both wrap SipHash-1-3
+    over the byte contents using a per-process random seed initialised
+    once at startup, so values are non-deterministic across runs but
+    stable within a run."""
+
+    def test_string_hash_emits_siphash_init(self):
+        """The hash native pulls in the SipHash runtime + seed init."""
+        csource = emit_source(
+            'main: function is {\n  s: "hello".string\n  h: s.hash\n  print "\\{h}"\n}'
+        )
+        assert "z_siphash_init" in csource
+        assert "z_siphash_string" in csource
+        # init gets called from main before z_main
+        main_body = csource[csource.index("int main(") :]
+        assert main_body.index("z_siphash_init();") < main_body.index("z_main();")
+        # exercise the binary to confirm it links + runs
+        compile_and_run(csource)
+
+    def test_string_hash_stable_within_run(self):
+        """Identical strings hash to the same value inside one process."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "hello world".string\n'
+            '  b: "hello world".string\n'
+            "  ha: a.hash\n"
+            "  hb: b.hash\n"
+            '  if ha == hb then print "equal" else print "differ"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "equal"
+
+    def test_string_hash_differs_for_distinct_inputs(self):
+        """Two distinct strings almost certainly hash to different
+        values (one SipHash collision is astronomically unlikely)."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  a: "alice".string\n'
+            '  b: "bob".string\n'
+            "  ha: a.hash\n"
+            "  hb: b.hash\n"
+            '  if ha == hb then print "collide" else print "distinct"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "distinct"
+
+    def test_stringview_hash_matches_string_hash(self):
+        """`s.hash` on a String and `s.stringview.hash` on the matching
+        view see the same bytes, so they must produce the same value
+        (within a single run)."""
+        csource = emit_source(
+            "main: function is {\n"
+            '  s: "abcd".string\n'
+            "  hs: s.hash\n"
+            "  with sv: s.stringview do {\n"
+            "    hv: sv.hash\n"
+            '    if hs == hv then print "match" else print "mismatch"\n'
+            "  }\n"
+            "}"
+        )
+        assert "z_siphash_stringview" in csource
+        assert compile_and_run(csource).strip() == "match"
+
+    def test_string_hash_differs_across_runs(self):
+        """Random per-process seed: two independent invocations of the
+        same program produce different hashes for the same input. The
+        probability of an accidental collision is 2^-64, so this test
+        is robust enough in practice."""
+        csource = emit_source(
+            'main: function is {\n  s: "deterministic".string\n  print "\\{s.hash}"\n}'
+        )
+        out1 = compile_and_run(csource).strip()
+        out2 = compile_and_run(csource).strip()
+        assert out1 != out2
+
+
+class TestMapSipHash:
+    """Map / Set bucket dispatch routes through the shared SipHash /
+    splitmix64 helpers rather than per-mono inline FNV-1a /
+    splitmix64. The functional contract (set / get / has / delete)
+    is unchanged."""
+
+    def test_map_string_keys_round_trip(self):
+        """String-keyed Map.set / .has / .delete still work end-to-end
+        through SipHash dispatch."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    m: (Map key: String value: i64)\n"
+            '    m.set key: "alpha".string value: 1\n'
+            '    m.set key: "beta".string value: 2\n'
+            '    a: m.has key: "alpha".string\n'
+            '    b: m.has key: "beta".string\n'
+            '    c: m.has key: "carol".string\n'
+            "    n: m.length\n"
+            '    print "n: \\{n} a: \\{a} b: \\{b} c: \\{c}"\n'
+            "}"
+        )
+        # inline FNV-1a is gone -- look for the SipHash wrapper call
+        assert "z_siphash_string" in csource
+        assert "14695981039346656037ULL" not in csource
+        assert compile_and_run(csource).strip() == "n: 2 a: 1 b: 1 c: 0"
+
+    def test_set_integer_keys_round_trip(self):
+        """Numeric-keyed Set still works; splitmix64 routes through z_hash_u64."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    s: (Set of: i64)\n"
+            "    s.add item: 1\n"
+            "    s.add item: 2\n"
+            "    s.add item: 1\n"
+            '    print "len: \\{s.length}"\n'
+            '    print "has1: \\{s.has item: 1}"\n'
+            '    print "has3: \\{s.has item: 3}"\n'
+            "}"
+        )
+        assert "z_hash_u64" in csource
+        # splitmix64 constants are now centralised in the runtime preamble,
+        # not inlined in the mono.
+        struct_body = csource[csource.index("z_Set_i64_hash_item") :]
+        assert "0xbf58476d1ce4e5b9ULL" not in struct_body[: struct_body.index("\n\n")]
+        out = compile_and_run(csource)
+        assert "len: 2" in out
+        assert "has1: 1" in out
+        assert "has3: 0" in out
+
+
 class TestBoxRefinements:
     """Phase 10: Box(class) and Box(String) heap-allocate a copy; no leaks.
 

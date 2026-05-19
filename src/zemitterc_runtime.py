@@ -43,6 +43,7 @@ def emit_runtime_includes(
     needs_string: bool,
     needs_io: bool = False,
     needs_pwd: bool = False,
+    needs_hash: bool = False,
 ) -> str:
     """Emit #include directives for required C standard headers.
 
@@ -55,10 +56,18 @@ def emit_runtime_includes(
     of returning NULL. All emitter-generated unrecoverable exit sites
     (OOM, bounds, cast overflow, user `panic()`) funnel through
     `z_panic`, which prints `zpanic: <msg>\\n` to stderr and exits(1).
+
+    `needs_hash` pulls in <sys/random.h> + <sys/syscall.h> + <unistd.h>
+    + <errno.h> so z_siphash_init can call getrandom (or fall back via
+    syscall(SYS_getrandom)) and read /dev/urandom on failure.
     """
     # The panic/x-alloc helpers below need fprintf/stderr, so stdlib implies stdio.
     if needs_stdlib:
         needs_stdio = True
+    # z_siphash_init needs fopen, syscall, errno -- pull stdio + stdlib in.
+    if needs_hash:
+        needs_stdio = True
+        needs_string = True
     # Feature-test macro must precede every standard header so glibc
     # exposes POSIX.1-2008 declarations (setenv/unsetenv/realpath/...)
     # under -std=c17. Without this, gcc 14+ rejects implicit
@@ -66,7 +75,14 @@ def emit_runtime_includes(
     # build silently linked through. Always-on is fine — the runtime
     # targets POSIX (Linux/macOS); MSVC ignores the macro and Windows
     # porting will gate function bodies on `#ifdef _WIN32` regardless.
-    parts: list[str] = ["#define _POSIX_C_SOURCE 200809L\n\n"]
+    parts: list[str] = ["#define _POSIX_C_SOURCE 200809L\n"]
+    # _DEFAULT_SOURCE exposes <sys/random.h>'s getrandom under -std=c17
+    # in addition to the POSIX.1-2008 declarations the _POSIX_C_SOURCE
+    # macro selects. Only set when the hash runtime is on so unrelated
+    # programs aren't pulled into the glibc default-feature surface.
+    if needs_hash:
+        parts.append("#define _DEFAULT_SOURCE\n")
+    parts.append("\n")
     if needs_stdio:
         parts.append("#include <stdio.h>\n")
     if needs_stdint:
@@ -83,6 +99,12 @@ def emit_runtime_includes(
         parts.append("#include <sys/stat.h>\n")
         parts.append("#include <sys/types.h>\n")
         parts.append("#include <dirent.h>\n")
+    if needs_hash and not needs_io:
+        parts.append("#include <unistd.h>\n")
+        parts.append("#include <errno.h>\n")
+    if needs_hash:
+        parts.append("#include <sys/random.h>\n")
+        parts.append("#include <sys/syscall.h>\n")
     if needs_pwd:
         parts.append("#include <pwd.h>\n")
     if parts:
@@ -126,6 +148,10 @@ def _z_stringview_runtime() -> str:
     return _load_runtime_fragment("z_StringView.inc")
 
 
+def _z_hash_runtime() -> str:
+    return _load_runtime_fragment("z_hash.inc")
+
+
 def emit_runtime_z_string(*, needs_string: bool, needs_stdio: bool) -> str:
     """Emit z_String_t struct and helper functions.
 
@@ -143,6 +169,20 @@ def emit_runtime_z_stringview(*, needs_stringview: bool) -> str:
     """
     if needs_stringview:
         return _z_stringview_runtime()
+    return ""
+
+
+def emit_runtime_z_hash(*, needs_hash: bool) -> str:
+    """Emit SipHash + splitmix64 helpers + z_siphash_init.
+
+    Source lives in src/runtime/z_hash.inc. Lands after z_String /
+    z_StringView so the helpers can take those types by value;
+    references syscall(SYS_getrandom) / getrandom + /dev/urandom so
+    the runtime preamble also pulls <sys/random.h>, <sys/syscall.h>,
+    <unistd.h>, and <errno.h> when this is enabled.
+    """
+    if needs_hash:
+        return _z_hash_runtime()
     return ""
 
 
@@ -3117,11 +3157,17 @@ def emit_runtime(
     needs_stringview: bool = False,
     needs_io: bool = False,
     needs_pwd: bool = False,
+    needs_hash: bool = False,
 ) -> str:
     """Return all runtime support code (includes + types + helper functions)."""
     # z_String_t runtime uses malloc/free (stdlib.h) and strlen/memcpy
     # (string.h). <stdbool.h> is always included (see emit_runtime_includes).
     has_z_string = needs_string or needs_stdio
+    # The hash runtime references z_String_t / z_StringView_t by value;
+    # pull both in whenever it's enabled.
+    if needs_hash:
+        needs_string = True
+        needs_stringview = True
     return (
         emit_runtime_includes(
             needs_stdio=needs_stdio or needs_io,
@@ -3130,9 +3176,11 @@ def emit_runtime(
             needs_string=needs_string or has_z_string or needs_stringview,
             needs_io=needs_io,
             needs_pwd=needs_pwd,
+            needs_hash=needs_hash,
         )
         + emit_runtime_z_string(needs_string=needs_string, needs_stdio=needs_stdio)
         + emit_runtime_z_stringview(needs_stringview=needs_stringview)
+        + emit_runtime_z_hash(needs_hash=needs_hash)
         # io helpers are NOT emitted here — they reference compiler-generated
         # struct names (z_IoError_t, z_Result_String_IoError_t, ...) that
         # only exist after struct_defs. The emitter calls emit_runtime_io

@@ -11290,6 +11290,31 @@ class TestStringEquality:
         assert any("No operator '=='" in e.msg for e in errors)
 
 
+class TestStringHash:
+    """`String.hash` / `StringView.hash` natives type-check and produce
+    a `u64` value usable in arithmetic / equality."""
+
+    def test_string_hash_returns_u64(self):
+        program, typing = check_ok(
+            'main: function is {\n  s: "hello".string\n  h: s.hash\n}'
+        )
+        main = program.units[program.mainunitname].body["main"]
+        # the binding's RHS resolves to u64
+        h_decl = main.body.statements[1].statementline
+        rhs_type = typing.node_type.get(h_decl.value.nodeid)
+        assert rhs_type is not None
+        assert rhs_type.name == "u64"
+
+    def test_stringview_hash_returns_u64(self):
+        check_ok(
+            "main: function is {\n"
+            '  sv: "abc"\n'
+            "  h: sv.hash\n"
+            "  if h == 0u64 then return 0\n"
+            "}"
+        )
+
+
 class TestTakeInArm:
     """Test that .take inside if/match arms invalidates the variable after."""
 

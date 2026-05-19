@@ -337,6 +337,7 @@ not do runtime type tagging at that level.</p>
       reserve:    function {:this n: u64}
       shrink:     function {:this}
       copy:       function {:this} out String
+      hash:       function {:this} out u64
   }</code></pre>
 <p>Mutable, owned, heap-allocated UTF-8 text. Primary string type
 for building and modifying text. A two-word struct: size (current
@@ -373,6 +374,12 @@ original (and vice versa). Use when you have a borrowed
 that requires ownership (a constructor field, a list/map
 insert) &#x2014; see <code>ownership.pdoc</code> for the borrow
 escape rules</li>
+<li><code>hash</code> -- 64-bit SipHash-1-3 of the byte contents using a
+per-process random seed initialised at program start. The same
+bytes hash to the same value inside one run, but the value
+changes across runs (DoS resistance, matching Python / Rust /
+Swift). Not suitable for content-addressed storage; pair it
+with a deterministic hash for that use case</li>
 </ul>
 <p><strong>Ordering.</strong> <code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code> are byte-wise
 lexicographic on the UTF-8 bytes. A shorter string is less than a
@@ -423,6 +430,9 @@ destroys.</p>
       parseI64:         function {:this} out (Result t: i64 e: parseerror)
       parseU64:         function {:this} out (Result t: u64 e: parseerror)
       parseF64:         function {:this} out (Result t: f64 e: parseerror)
+
+      # hashing
+      hash:              function {:this} out u64
   }</code></pre>
 <p>Readonly borrowed view over UTF-8 text. A 16-byte
 <code>(pointer, length)</code> pair that can point into a <code>String</code>'s
@@ -475,6 +485,10 @@ whitespace. Failures come back as <code>parseerror</code>: <code>empty</code>,
 <code>invalidDigit</code>, <code>overflow</code>. For more flexible parsing,
 <code>.trim</code> first and split the sign off manually.</p>
 <p><strong>Ordering.</strong> Same byte-wise lexicographic rule as <code>String</code>.</p>
+<p><strong>Hashing.</strong> <code>.hash</code> returns a 64-bit SipHash-1-3 of the
+viewed bytes using a per-process random seed. Same contract as
+<code>String.hash</code> -- stable within a run, randomised across runs,
+not a content hash.</p>
 <p><strong>#~":text" conformance.</strong> <code>StringView</code> is the trivial
 implementor of the <code>Text</code> protocol -- its <code>.stringview</code>
 method returns itself. This lets any <code>Text</code>-constrained
