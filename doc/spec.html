@@ -167,6 +167,8 @@ Table of Contents</div>
 </li>
 <li><a href="#is-and-as-sections">'is' and 'as' Sections</a>
 </li>
+<li><a href="#default-values">Default values</a>
+</li>
 <li><a href="#protocol">protocol</a>
 </li>
 <li><a href="#facet">facet</a>
@@ -3642,7 +3644,73 @@ main: function is {
     print "\{config.buffer_size}" # prints 16384
     # config.max_val = 200      # compile error: cannot reassign static constant
 }</code></pre>
-<h3 id="protocol"><a href="#protocol">5.16. protocol</a></h3>
+<h3 id="default-values"><a href="#default-values">5.16. Default values</a></h3>
+<p>Default values may be supplied on function/method parameters and on
+fields of <code>record</code>, <code>class</code>, <code>variant</code>, and <code>union</code> types.
+Field defaults propagate to the auto-generated <code>meta.create</code>
+constructor so the type can be created without supplying every
+argument.</p>
+<p>The default form is <code>name: &lt;value-expression&gt;</code>. The value
+expression's type determines the parameter / field's stored type --
+there is no separate <code>name: T = default</code> syntax.</p>
+<p><strong>Eligible value forms.</strong></p>
+<ul>
+<li>Numeric literal -- bare (<code>42</code>) or typed
+(<code>0.u32</code>). Field / parameter type is the inferred numeric
+type.</li>
+<li>Function reference -- a module-level function with a
+body. The parameter / field's type is the function's signature
+and the default value is the named function. Specs (functions
+without a body) are not eligible as defaults.</li>
+<li>Variant or union null-payload subtype -- qualified
+<code>&lt;Type&gt;.&lt;subtype&gt;</code> form. The chosen subtype must have a
+<code>null</code> payload; other subtypes of the same type may carry
+data, only the chosen one must be null-payload. Bare-name
+forms like <code>north</code> (without the <code>&lt;Type&gt;.</code> prefix) are
+intentionally disallowed -- zerolang has no separate
+type / value namespace and the field-type context cannot
+disambiguate a bare identifier the way Rust does.</li>
+<li>Generic parameter type (in the <code>as</code> block) --
+<code>name: (&lt;constraint&gt;.generic default: &lt;T&gt;)</code> supplies the
+type to bind when the parameter is omitted at the
+monomorphization site. The default type must satisfy the
+parameter's constraint (the same check user-supplied
+bindings face), validated at declaration time.</li>
+</ul>
+<p><strong>Examples.</strong></p>
+<pre><code class="language-zerolang">  # Numeric parameter default
+  inc: function {a: 0} out i64 is { return a + 1 }
+
+  # Function-reference default (callback)
+  add: function {a: i64 b: i64} out i64 is { return a + b }
+  apply: function {a: i64 b: i64 f: add} out i64 is {
+      return f a: a b: b
+  }
+
+  # Variant subtype default on a field
+  direction: variant {
+      north: null
+      south: null
+      east: null
+      west: null
+  } as { tag: u8.tag }
+  state: record {
+      dir: direction.north    # default arm
+      count: 0
+  }
+
+  # Generic-param type default (in an `as` block)
+  iterator: protocol {
+      gives: Any.generic
+      takes: (Any.generic default: null)
+  }</code></pre>
+<p><strong>Restrictions.</strong> Default values must be expressible without
+constructor arguments. A reftype value (heap-allocated string,
+list, map, user class) is not a valid default at this layer; for
+those, supply the value at construction time. Defaulting to an
+arm that carries a non-null payload is rejected for the same
+reason.</p>
+<h3 id="protocol"><a href="#protocol">5.17. protocol</a></h3>
 <p>A protocol is defined as a list of function specs. Each spec must include a
 <code>this</code> parameter (the receiver). Static methods can also be part of a
 protocol. A protocol cannot include constructors or destructors because they
@@ -3677,7 +3745,7 @@ writer: protocol {
 #     read: function {:this b: buffer} out boolean
 #     write: function {:this b: buffer} out boolean
 # }</code></pre>
-<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.16.1. Protocol Instance Creation</a></h4>
+<h4 id="protocol-instance-creation"><a href="#protocol-instance-creation">5.17.1. Protocol Instance Creation</a></h4>
 <p>Fields, variables and parameters can be declared to be instances of a named
 protocol. Protocol instances can then be assigned to those fields, variables or
 call arguments.</p>
@@ -3762,7 +3830,7 @@ main: function is {
 
     print "\{use_reader r}"  # prints 15
 }</code></pre>
-<h3 id="facet"><a href="#facet">5.17. facet</a></h3>
+<h3 id="facet"><a href="#facet">5.18. facet</a></h3>
 <p>A facet is the value-type equivalent of a protocol. Where protocol instances
 contain a pointer to the underlying data, facet instances contain a copy of the
 data itself, making them value types.</p>
@@ -3772,7 +3840,7 @@ implement. Only value types (records, variants) can implement facets.</p>
 <pre><code class="language-zerolang">measurable: facet {
     measure: function {:this b: i64} out i64
 }</code></pre>
-<h4 id="conformance"><a href="#conformance">5.17.1. Conformance</a></h4>
+<h4 id="conformance"><a href="#conformance">5.18.1. Conformance</a></h4>
 <p>A value type declares conformance to a facet via a labeled entry in its
 <code>as</code> section, the same pattern used for protocols:</p>
 <pre><code class="language-zerolang">point: record { x: i64 } as {
@@ -3785,7 +3853,7 @@ implement. Only value types (records, variants) can implement facets.</p>
 matching signatures (parameter names, types, and return type).</p>
 <p>Only value types may implement facets. Attempting to implement a facet on
 a class or union produces a compile-time error.</p>
-<h4 id="constructors"><a href="#constructors">5.17.2. Constructors</a></h4>
+<h4 id="constructors"><a href="#constructors">5.18.2. Constructors</a></h4>
 <p>The compiler generates three constructors for non-generic facets:</p>
 <ul>
 <li><code>create</code> and <code>take</code> copy the source value into the facet
@@ -3797,7 +3865,7 @@ Signature: <code>borrow: function {from: T.lock} out facettype.borrow</code></li
 <p>Although the data is always copied, <code>borrow</code> still locks the source to
 maintain consistent ownership semantics with protocols. This is important
 when facets and protocols are used interchangeably in generic code.</p>
-<h4 id="runtime-layout"><a href="#runtime-layout">5.17.3. Runtime layout</a></h4>
+<h4 id="runtime-layout"><a href="#runtime-layout">5.18.3. Runtime layout</a></h4>
 <p>Facet instances are stack-allocated value types. The C representation is:</p>
 <ul>
 <li>A pointer to the vtable (constant offset, first field)</li>
@@ -3807,15 +3875,15 @@ when facets and protocols are used interchangeably in generic code.</p>
 the vtable, the same as protocols.</p>
 <pre><code class="language-zerolang">f: measurable.create from: p
 r: f.measure b: 10    # dispatches through vtable</code></pre>
-<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.17.4. Facets as generic constraints</a></h4>
+<h4 id="facets-as-generic-constraints"><a href="#facets-as-generic-constraints">5.18.4. Facets as generic constraints</a></h4>
 <p>Facets can be used as generic constraints, the same as protocols. A
 generic parameter constrained by a facet accepts any type that conforms
 to that facet.</p>
-<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.17.5. Facets as typedef base</a></h4>
+<h4 id="facets-as-typedef-base"><a href="#facets-as-typedef-base">5.18.5. Facets as typedef base</a></h4>
 <p>A record typedef can wrap a facet type, just as a class typedef can wrap
 a protocol type. Both are kind-compatible (record wraps facet because
 both are value types).</p>
-<h3 id="union"><a href="#union">5.18. union</a></h3>
+<h3 id="union"><a href="#union">5.19. union</a></h3>
 <p>For controlling the discriminator, see also the <a href="#tag">tag</a> type.</p>
 <p>Unions are sum-types that can hold exactly one of their child types at any
 given time. A discriminator (tag) is auto-generated for each subtype. A union
@@ -3852,7 +3920,7 @@ providing a name and a type.</p>
     u4: String
     u5: myclass    # a class defined elsewhere
 }</code></pre>
-<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.18.1. Constructing union instances</a></h4>
+<h4 id="constructing-union-instances"><a href="#constructing-union-instances">5.19.1. Constructing union instances</a></h4>
 <p>After a union type has been defined, instances are constructed using a
 per-subtype constructor accessed via dot notation: <code>myunion.subtype expr</code>.
 Each subtype automatically gets a constructor. Null subtypes take no argument.
@@ -3870,7 +3938,7 @@ c: Result.none                      # null subtype: no argument
 
 # named argument form
 d: Result.err from: mystr.take      # explicit .take transfers ownership</code></pre>
-<h4 id="ownership-2"><a href="#ownership-2">5.18.2. Ownership</a></h4>
+<h4 id="ownership-2"><a href="#ownership-2">5.19.2. Ownership</a></h4>
 <p>Union instances are owned reference types. The same ownership rules that apply
 to classes also apply to unions:</p>
 <ul>
@@ -3883,7 +3951,7 @@ to classes also apply to unions:</p>
 <p>The compiler generates a per-union destructor that switches on the tag to
 correctly free each subtype's payload: <code>free()</code> for boxed valtypes,
 the appropriate destructor for reftype payloads, and nothing for null subtypes.</p>
-<h4 id="match-on-unions"><a href="#match-on-unions">5.18.3. Match on unions</a></h4>
+<h4 id="match-on-unions"><a href="#match-on-unions">5.19.3. Match on unions</a></h4>
 <p>The <code>match</code> statement dispatches on the union's tag. All subtypes must be
 covered by case clauses, or an <code>else</code> clause must be present. Inside a case
 clause, the payload is accessed via dotted path on the union variable.</p>
@@ -3906,7 +3974,7 @@ clause, the payload is accessed via dotted path on the union variable.</p>
 }</code></pre>
 <p>Accessing subtype data outside of a <code>match</code> clause is a compile error &#x2014;
 the union must be narrowed first.</p>
-<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.18.4. Creating sum-type instances</a></h4>
+<h4 id="creating-sum-type-instances"><a href="#creating-sum-type-instances">5.19.4. Creating sum-type instances</a></h4>
 <p>Creating/setting a union value:</p>
 <pre><code class="language-zerolang">myclass: class {a: u32 b: u32}
 
@@ -3936,7 +4004,7 @@ myvariant: variant {
 system defined union that includes all possible types used in the current
 program.</p>
 <pre><code class="language-zerolang">smallint: union { i8: null u8: null }</code></pre>
-<h3 id="variant"><a href="#variant">5.19. variant</a></h3>
+<h3 id="variant"><a href="#variant">5.20. variant</a></h3>
 <p>Variants are sum-types that can contain only one of it's child types at any
 given time. A descriminator is usually generated or set for each case. A
 variant is a value type and all child types must be value types. A variant is
@@ -3958,7 +4026,7 @@ always as large as its largest containing type plus the descriminator.</p>
 </table>
 <p>See also the <a href="#union">union</a> section. Other than variants being a value type, all
 other instructions for a union also apply to a variant.</p>
-<h4 id="enumerated-types"><a href="#enumerated-types">5.19.1. Enumerated Types</a></h4>
+<h4 id="enumerated-types"><a href="#enumerated-types">5.20.1. Enumerated Types</a></h4>
 <p>TODO: enums are also variants/unions... Fix this section.... Move it within union and variant</p>
 <p>A variant or union without additional data on each variation creates an
 enumerated type based on an underlying numeric type. To specify that there is
@@ -4024,7 +4092,7 @@ operators.</p>
 boolean: variant { FALSE TRUE }
 true: boolean.TRUE
 false: boolean.FALSE</code></pre>
-<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.19.2. Using sum-type instances</a></h4>
+<h4 id="using-sum-type-instances"><a href="#using-sum-type-instances">5.20.2. Using sum-type instances</a></h4>
 <p>A sum type instance can be tested to see if it is a specific subtype. A
 predicate <code>method</code> is generated for each member named as the member name
 followed by a question mark. The method returns a boolean. </p>
@@ -4059,14 +4127,14 @@ if y: x.t2 then {
 if y: x.t3 then {    # ERROR: syntax error, cannot assign myunion.t3 to y
     # ...
 }</code></pre>
-<h3 id="operations-2"><a href="#operations-2">5.20. Operations</a></h3>
-<h4 id="constants-and-variables"><a href="#constants-and-variables">5.20.1. Constants and Variables</a></h4>
+<h3 id="operations-2"><a href="#operations-2">5.21. Operations</a></h3>
+<h4 id="constants-and-variables"><a href="#constants-and-variables">5.21.1. Constants and Variables</a></h4>
 <p>Literals
 Top level definitions</p>
 <p>Names - identifiers</p>
 <p>Declaration and Initialisation (happen at the same time, must be initialised)
 Includes functions definitions/literals.</p>
-<h4 id="binary-operations"><a href="#binary-operations">5.20.2. Binary operations</a></h4>
+<h4 id="binary-operations"><a href="#binary-operations">5.21.2. Binary operations</a></h4>
 <p>All operations are binary. There are no unary operations. Operation syntax is
 an alternate function call syntax for methods with a receiver and a single
 parameter.</p>
@@ -4074,7 +4142,7 @@ parameter.</p>
 precedence.</p>
 <p>Operator names are simply method names. Identifiers used for method names can
 include the usual mathematical operator names eg. <code>+ - / *</code></p>
-<h3 id="auto-generated-equality"><a href="#auto-generated-equality">5.21. Auto-Generated Equality</a></h3>
+<h3 id="auto-generated-equality"><a href="#auto-generated-equality">5.22. Auto-Generated Equality</a></h3>
 <p>All value types (records, variants, arrays, str) automatically receive
 <code>==</code> and <code>!=</code> operators. This is structural equality: records compare
 all fields, variants compare the discriminator tag and then the payload,
@@ -4102,7 +4170,7 @@ to use <code>==</code> on such a type produces a compile error:</p>
 <p><strong>Float Fields.</strong></p>
 <p>Records containing float fields (<code>f32</code>, <code>f64</code>) use IEEE 754 comparison:
 <code>NaN != NaN</code>. This matches the behaviour of C, Rust, and Go.</p>
-<h3 id="reference-type-equality"><a href="#reference-type-equality">5.22. Reference Type Equality</a></h3>
+<h3 id="reference-type-equality"><a href="#reference-type-equality">5.23. Reference Type Equality</a></h3>
 <p>Reference types (classes, unions) do not have a default <code>==</code> operator.
 Using <code>==</code> on a reference type without explicitly defining it is a compile
 error.</p>

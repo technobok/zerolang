@@ -4192,6 +4192,82 @@ Integer constants in the #~"as" section are type-level immutable values:
   """
 
 
+#---: Default values
+
+Default values may be supplied on function/method parameters and on
+fields of #~"record", #~"class", #~"variant", and #~"union" types.
+Field defaults propagate to the auto-generated #~"meta.create"
+constructor so the type can be created without supplying every
+argument.
+
+The default form is #~"name: <value-expression>". The value
+expression's type determines the parameter / field's stored type --
+there is no separate #~"name: T = default" syntax.
+
+#b:"Eligible value forms."
+
+#ul:
+  [#*: #_b:"Numeric literal" -- bare (#~"42") or typed
+    (#~"0.u32"). Field / parameter type is the inferred numeric
+    type.]
+  [#*: #_b:"Function reference" -- a module-level function with a
+    body. The parameter / field's type is the function's signature
+    and the default value is the named function. Specs (functions
+    without a body) are not eligible as defaults.]
+  [#*: #_b:"Variant or union null-payload subtype" -- qualified
+    #~"<Type>.<subtype>" form. The chosen subtype must have a
+    #~"null" payload; other subtypes of the same type may carry
+    data, only the chosen one must be null-payload. Bare-name
+    forms like #~"north" (without the #~"<Type>." prefix) are
+    intentionally disallowed -- zerolang has no separate
+    type / value namespace and the field-type context cannot
+    disambiguate a bare identifier the way Rust does.]
+  [#*: #_b:"Generic parameter type" (in the #~"as" block) --
+    #~"name: (<constraint>.generic default: <T>)" supplies the
+    type to bind when the parameter is omitted at the
+    monomorphization site. The default type must satisfy the
+    parameter's constraint (the same check user-supplied
+    bindings face), validated at declaration time.]
+
+#b:"Examples."
+
+#code language=zerolang: """
+  # Numeric parameter default
+  inc: function {a: 0} out i64 is { return a + 1 }
+
+  # Function-reference default (callback)
+  add: function {a: i64 b: i64} out i64 is { return a + b }
+  apply: function {a: i64 b: i64 f: add} out i64 is {
+      return f a: a b: b
+  }
+
+  # Variant subtype default on a field
+  direction: variant {
+      north: null
+      south: null
+      east: null
+      west: null
+  } as { tag: u8.tag }
+  state: record {
+      dir: direction.north    # default arm
+      count: 0
+  }
+
+  # Generic-param type default (in an `as` block)
+  iterator: protocol {
+      gives: Any.generic
+      takes: (Any.generic default: null)
+  }
+"""
+
+#b:"Restrictions." Default values must be expressible without
+constructor arguments. A reftype value (heap-allocated string,
+list, map, user class) is not a valid default at this layer; for
+those, supply the value at construction time. Defaulting to an
+arm that carries a non-null payload is rejected for the same
+reason.
+
+
 #---: protocol
 
 A protocol is defined as a list of function specs. Each spec must include a
