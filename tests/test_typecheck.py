@@ -9307,6 +9307,36 @@ class TestList:
         assert ret is not None
         assert ret.name == "i64"
 
+    def test_list_contains_method(self):
+        """.contains is synthesized with item: param and bool return."""
+        program, typing = check_ok("main: function is { l: (List of: i64) }")
+        monos = [m for m, _ in typing.mono_types if m.name == "List_i64"]
+        mono = monos[0]
+        assert typing.has_child(mono, "contains")
+        contains = typing.child_of(mono, "contains")
+        assert contains.typetype == ZTypeType.FUNCTION
+        assert typing.has_child(contains, "item")
+        assert contains.return_type is not None
+        assert contains.return_type.name == "bool"
+
+    def test_list_contains_call(self):
+        """`l.contains item: x` typechecks for numeric and String element
+        types."""
+        check_ok(
+            "main: function is {\n"
+            "    l: (List of: i64)\n"
+            "    l.append from: 1\n"
+            "    b: l.contains item: 1\n"
+            "}"
+        )
+        check_ok(
+            "main: function is {\n"
+            "    l: (List of: String)\n"
+            '    l.append from: "x".string\n'
+            '    b: l.contains item: "x".string\n'
+            "}"
+        )
+
     def test_list_insert_method(self):
         """.insert is synthesized with from: and at: parameters."""
         program, typing = check_ok("main: function is { l: (List of: i64) }")

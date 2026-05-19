@@ -3710,6 +3710,13 @@ class CEmitter:
             )
         )
 
+        # contains companion: linear scan with hardcoded equality dispatch
+        # by element type. Mirrors the Map-key / Set-item equality logic
+        # (numeric ==, String size+memcmp, str len+memcmp).
+        contains_child = self.typing.child_of(mono_type, "contains")
+        if contains_child is not None:
+            self._emit_list_contains(name, ctype, elem_ctype, elem_type)
+
         # listiter companion: iterator + .iterate factory. Emitted only
         # when the list mono carries an `.iterate` child returning a
         # listiter mono (set up in the type checker for any list with
@@ -3719,6 +3726,44 @@ class CEmitter:
             self._emit_listiter_runtime(
                 ctype, name, elem_ctype, iterate_child.return_type
             )
+
+    def _emit_list_contains(
+        self,
+        name: str,
+        ctype: str,
+        elem_ctype: str,
+        elem_type: ZType,
+    ) -> None:
+        """Emit `static int z_<name>_contains(...)` -- linear scan with
+        equality dispatch by element type. Numeric: `_a == _b`. String
+        (`z_String_t`): size + memcmp. `str` valtype: len + memcmp."""
+        elem_is_string = elem_ctype == "z_String_t"  # ztc-string-compare-ok: ctype
+        lines: List[str] = []
+        lines.append(
+            f"static int z_{name}_contains({ctype}* _this, {elem_ctype} _item);\n"
+        )
+        lines.append(
+            f"static int z_{name}_contains({ctype}* _this, {elem_ctype} _item) {{\n"
+        )
+        lines.append("    for (uint64_t i = 0; i < _this->length; i++) {\n")
+        if elem_is_string:
+            lines.append(
+                "        if (_this->data[i].size == _item.size "
+                "&& memcmp(_this->data[i].data, _item.data, _item.size) == 0) "
+                "return 1;\n"
+            )
+        elif _is_str_type(elem_type):
+            lines.append(
+                "        if (_this->data[i].len == _item.len "
+                "&& memcmp(_this->data[i].data, _item.data, _item.len) == 0) "
+                "return 1;\n"
+            )
+        else:
+            lines.append("        if (_this->data[i] == _item) return 1;\n")
+        lines.append("    }\n")
+        lines.append("    return 0;\n")
+        lines.append("}\n\n")
+        self.struct_defs.append("".join(lines))
 
     def _emit_listiter_runtime(
         self,
@@ -7311,6 +7356,18 @@ class CEmitter:
                     return f"z_{list_type_name}_set({parent_val}, {idx_val}, {val_val})"
                 if method_name == "pop":
                     return f"z_{list_type_name}_pop({parent_val})"
+                # fmt: off
+                if method_name == "contains" and call.arguments:  # ztc-string-compare-ok: stdlib mthd
+                    # fmt: on
+                    item_arg = None
+                    for arg in call.arguments:
+                        if arg.name == "item":  # ztc-string-compare-ok: stdlib arg
+                            item_arg = arg
+                            break
+                    if item_arg is None:
+                        item_arg = call.arguments[0]
+                    item_val = self._emit_operation_value(item_arg.valtype)
+                    return f"z_{list_type_name}_contains({parent_val}, {item_val})"
                 if method_name == "listview":
                     return f"z_{list_type_name}_listview({parent_val})"
 

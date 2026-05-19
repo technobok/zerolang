@@ -268,6 +268,21 @@ def _is_primitive_name(name: str) -> bool:
     return name in _PRIMITIVE_TYPE_NAMES
 
 
+_CONTAINS_NAMES: frozenset[str] = frozenset(NUMERIC_RANGES.keys()) | frozenset(
+    {"bool", "f32", "f64", "f128", "String", "StringView"}
+)
+
+
+def _is_contains_eligible(ztype: "ZType") -> bool:
+    """True when an element type supports List.contains' hardcoded
+    equality dispatch -- numerics, bool, the String/StringView/str
+    family. Mirrors the hashability constraint applied to Map keys
+    and Set items."""
+    if ztype.name in _CONTAINS_NAMES:
+        return True
+    return _is_str_type(ztype)
+
+
 def _mono_arg_key(t: "ZType") -> Tuple:
     """Identity key for a monomorphization argument. ZType interning
     hasn't landed yet, so primitives (u64, i32, bool, ...), generic
@@ -4550,6 +4565,20 @@ class TypeChecker:
                 pop_type = _make_type(f"{mangled}.pop", ZTypeType.FUNCTION)
                 pop_type.return_type = elem_type
                 self._set_child(mono, "pop", pop_type)
+                # synthesize .contains method: function {item: <elem>} out bool.
+                # Linear scan over the list buffer; equality dispatch by
+                # element type mirrors Map keys / Set items (numeric ==,
+                # String / str size+memcmp). Only emitted for element
+                # types the equality dispatch can handle -- numerics,
+                # bool, and the String/StringView/str family.
+                if _is_contains_eligible(elem_type):
+                    t_bool = self._resolve_name("bool") or self.t_null
+                    contains_type = _make_type(
+                        f"{mangled}.contains", ZTypeType.FUNCTION
+                    )
+                    self._set_child(contains_type, "item", elem_type)
+                    contains_type.return_type = t_bool
+                    self._set_child(mono, "contains", contains_type)
                 # synthesize .listview method: function {:this.lock} out (listview of: <elem>)
                 # Get or create the monomorphized listview type
                 listview_template = self._resolve_name("ListView")

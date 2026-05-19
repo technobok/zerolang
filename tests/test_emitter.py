@@ -5655,6 +5655,50 @@ class TestList:
         assert lines[0] == "10"
         assert lines[1] == "77"
 
+    def test_list_contains_numeric(self):
+        """`l.contains item: x` returns 1 when present, 0 when absent
+        for numeric element types (== dispatch)."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (List of: i64)\n"
+            "    l.append from: 10\n"
+            "    l.append from: 20\n"
+            "    l.append from: 30\n"
+            "    a: l.contains item: 20\n"
+            "    b: l.contains item: 99\n"
+            '    print "a: \\{a} b: \\{b}"\n'
+            "}"
+        )
+        assert "z_List_i64_contains" in csource
+        assert compile_and_run(csource).strip() == "a: 1 b: 0"
+
+    def test_list_contains_string(self):
+        """`l.contains item: s` uses size+memcmp for String elements."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (List of: String)\n"
+            '    l.append from: "alice".string\n'
+            '    l.append from: "bob".string\n'
+            '    a: l.contains item: "alice".string\n'
+            '    b: l.contains item: "carol".string\n'
+            '    print "a: \\{a} b: \\{b}"\n'
+            "}"
+        )
+        assert "z_List_String_contains" in csource
+        assert "memcmp" in csource
+        assert compile_and_run(csource).strip() == "a: 1 b: 0"
+
+    def test_list_contains_empty(self):
+        """`l.contains` on an empty list returns 0 without scanning."""
+        csource = emit_source(
+            "main: function is {\n"
+            "    l: (List of: i64)\n"
+            "    a: l.contains item: 1\n"
+            '    print "\\{a}"\n'
+            "}"
+        )
+        assert compile_and_run(csource).strip() == "0"
+
     def test_list_pop_returns_last(self):
         """Pop returns last element."""
         csource = emit_source(
