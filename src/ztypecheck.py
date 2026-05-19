@@ -1113,6 +1113,51 @@ class TypeChecker:
         pt = self._resolve_typeref(ppath)
         return pt, None
 
+    def _resolve_function_ref_default(self, name: str) -> "Optional[zast.Function]":
+        """Find a function definition usable as a function-reference default.
+
+        Walks the `_resolving` stack innermost-first for enclosing
+        class / record / variant / union AST nodes; for each, returns
+        the function (or `as`-function) with a matching name and a
+        body. Falls back to `_lookup_definition` for module-level
+        functions.
+
+        The lookup order mirrors zerolang's general name-resolution
+        rule (nearest-enclosing scope first), fixing the bug where the
+        default-value resolver only saw module-level definitions.
+        """
+        for key, _rtype in reversed(self._resolving):
+            if "." in key:
+                unitname, tname = key.rsplit(".", 1)
+            else:
+                unitname, tname = self.program.mainunitname, key
+            unit = self.program.units.get(unitname)
+            if unit is None:
+                continue
+            defn = unit.body.get(tname)
+            if defn is None:
+                continue
+            if defn.nodetype not in (
+                NodeType.CLASS,
+                NodeType.RECORD,
+                NodeType.VARIANT,
+                NodeType.UNION,
+            ):
+                continue
+            obj_defn = cast(zast.ObjectDef, defn)
+            method = obj_defn.functions().get(name)
+            if method is not None and method.body is not None:
+                return method
+            as_method = obj_defn.as_functions().get(name)
+            if as_method is not None and as_method.body is not None:
+                return as_method
+        # Module-level fall-back (inline-unit context + main unit body)
+        fallback = self._lookup_definition(name)
+        if fallback is None or fallback.nodetype != NodeType.FUNCTION:
+            return None
+        fn = cast(zast.Function, fallback)
+        return fn if fn.body is not None else None
+
     def _detect_variant_subtype_default(
         self, stripped_ppath: zast.Operation
     ) -> "Optional[tuple[ZType, str]]":
@@ -1347,14 +1392,10 @@ class TypeChecker:
                         if not err:
                             self.typing.set_default_numeric(ftype, pname, int(val))
                 elif stripped_ppath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                    defn = self._lookup_definition(
+                    ref_fn = self._resolve_function_ref_default(
                         cast(zast.AtomId, stripped_ppath).name
                     )
-                    if (
-                        defn is not None
-                        and defn.nodetype == NodeType.FUNCTION
-                        and cast(zast.Function, defn).body is not None
-                    ):
+                    if ref_fn is not None:
                         self.typing.set_default_function(
                             ftype, pname, cast(zast.AtomId, stripped_ppath).name
                         )
@@ -1675,12 +1716,10 @@ class TypeChecker:
                         if not err:
                             self.typing.set_default_numeric(ctype, fname, int(val))
                 elif fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                    defn = self._lookup_definition(cast(zast.AtomId, fpath).name)
-                    if (
-                        defn is not None
-                        and defn.nodetype == NodeType.FUNCTION
-                        and cast(zast.Function, defn).body is not None
-                    ):
+                    ref_fn = self._resolve_function_ref_default(
+                        cast(zast.AtomId, fpath).name
+                    )
+                    if ref_fn is not None:
                         self.typing.set_default_function(
                             ctype, fname, cast(zast.AtomId, fpath).name
                         )
@@ -2519,12 +2558,10 @@ class TypeChecker:
                         if not err:
                             self.typing.set_default_numeric(rtype, fname, int(val))
                 elif fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE):
-                    defn = self._lookup_definition(cast(zast.AtomId, fpath).name)
-                    if (
-                        defn is not None
-                        and defn.nodetype == NodeType.FUNCTION
-                        and cast(zast.Function, defn).body is not None
-                    ):
+                    ref_fn = self._resolve_function_ref_default(
+                        cast(zast.AtomId, fpath).name
+                    )
+                    if ref_fn is not None:
                         self.typing.set_default_function(
                             rtype, fname, cast(zast.AtomId, fpath).name
                         )
