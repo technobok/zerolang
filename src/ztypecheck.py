@@ -1261,9 +1261,8 @@ class TypeChecker:
                 generic_ctx[pname] = constraint
                 if constraint.name in NUMERIC_RANGES:
                     ftype.numeric_generic_params.add(pname)
-                # store and validate default type
                 if default_type:
-                    ftype.generic_defaults[pname] = default_type
+                    self._record_generic_default(ftype, pname, default_type, constraint)
 
         # check: methods (functions with a parameter of type 'this') cannot have 'as'
         if generic_ctx and func.as_items:
@@ -1617,7 +1616,7 @@ class TypeChecker:
                 if constraint.name in NUMERIC_RANGES:
                     ctype.numeric_generic_params.add(fname)
                 if default_type:
-                    ctype.generic_defaults[fname] = default_type
+                    self._record_generic_default(ctype, fname, default_type, constraint)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -1949,7 +1948,7 @@ class TypeChecker:
                 if constraint.name in NUMERIC_RANGES:
                     utype.numeric_generic_params.add(sname)
                 if default_type:
-                    utype.generic_defaults[sname] = default_type
+                    self._record_generic_default(utype, sname, default_type, constraint)
         self._release_template_cname(utype)
 
         # typedef detection: single item with .typedef type
@@ -2181,7 +2180,7 @@ class TypeChecker:
                 if constraint.name in NUMERIC_RANGES:
                     vtype.numeric_generic_params.add(sname)
                 if default_type:
-                    vtype.generic_defaults[sname] = default_type
+                    self._record_generic_default(vtype, sname, default_type, constraint)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -2461,7 +2460,7 @@ class TypeChecker:
                 if constraint.name in NUMERIC_RANGES:
                     rtype.numeric_generic_params.add(fname)
                 if default_type:
-                    rtype.generic_defaults[fname] = default_type
+                    self._record_generic_default(rtype, fname, default_type, constraint)
 
         # typedef detection: single item with .typedef type
         typedef_base_type, typedef_field = self._detect_typedef(
@@ -3206,7 +3205,7 @@ class TypeChecker:
                 if constraint.name in NUMERIC_RANGES:
                     ptype.numeric_generic_params.add(pname)
                 if default_type:
-                    ptype.generic_defaults[pname] = default_type
+                    self._record_generic_default(ptype, pname, default_type, constraint)
 
         # pass 2: resolve specs with generic context
         if generic_ctx:
@@ -5246,39 +5245,94 @@ class TypeChecker:
             constraint = template_type.generic_params.get(param_name)
             if not constraint:
                 continue
-            if constraint.name == "Any.valtype":
-                if not _is_valtype(concrete_type):
-                    self._error(
-                        f"Type '{concrete_type.name}' is not a value type; "
-                        f"generic parameter '{param_name}' requires any.valtype"
-                    )
-                continue
-            if constraint.name == "Any.reftype":
-                if _is_valtype(concrete_type):
-                    self._error(
-                        f"Type '{concrete_type.name}' is not a reference type; "
-                        f"generic parameter '{param_name}' requires any.reftype"
-                    )
-                continue
-            if constraint.name == "Any":
-                continue
-            if constraint.typetype != ZTypeType.UNION:
-                continue
-            subtype_names = {
-                k
-                for k, v in self.typing.children_of(constraint)
-                if k != "tag"
-                and v.typetype != ZTypeType.FUNCTION
-                and v.typetype != ZTypeType.DATA
-                and v.typetype != ZTypeType.TAG
-                and v.typetype != ZTypeType.ENUM
-                and not v.is_tag_generic_origin
-            }
-            if concrete_type.name not in subtype_names:
+            self._check_generic_arg_satisfies_constraint(
+                concrete_type, constraint, param_name
+            )
+
+    def _check_generic_arg_satisfies_constraint(
+        self,
+        concrete_type: ZType,
+        constraint: ZType,
+        param_name: str,
+    ) -> bool:
+        """Single-arg version of the constraint check used by
+        `_check_mono_constraints`. Returns True when `concrete_type`
+        satisfies `constraint` and False otherwise (emitting a
+        targeted error for the failure mode). Shared between mono
+        argument validation at call sites and generic-default
+        validation at declaration sites (`_record_generic_default`).
+
+        Constraint shapes:
+          - `Any` / null sentinel: accepts everything.
+          - `Any.valtype`: requires `_is_valtype(concrete_type)`.
+          - `Any.reftype`: requires the inverse.
+          - union: requires `concrete_type.name` to be one of the
+            union's non-tag, non-function subtypes.
+          - anything else: accepted (no constraint to enforce).
+        """
+        if constraint.name == "Any.valtype":
+            if not _is_valtype(concrete_type):
                 self._error(
-                    f"Type '{concrete_type.name}' does not satisfy constraint "
-                    f"'{constraint.name}' for generic parameter '{param_name}'"
+                    f"Type '{concrete_type.name}' is not a value type; "
+                    f"generic parameter '{param_name}' requires any.valtype"
                 )
+                return False
+            return True
+        if constraint.name == "Any.reftype":
+            if _is_valtype(concrete_type):
+                self._error(
+                    f"Type '{concrete_type.name}' is not a reference type; "
+                    f"generic parameter '{param_name}' requires any.reftype"
+                )
+                return False
+            return True
+        if constraint.name == "Any":
+            return True
+        if constraint.typetype != ZTypeType.UNION:
+            return True
+        subtype_names = {
+            k
+            for k, v in self.typing.children_of(constraint)
+            if k != "tag"
+            and v.typetype != ZTypeType.FUNCTION
+            and v.typetype != ZTypeType.DATA
+            and v.typetype != ZTypeType.TAG
+            and v.typetype != ZTypeType.ENUM
+            and not v.is_tag_generic_origin
+        }
+        if concrete_type.name not in subtype_names:
+            self._error(
+                f"Type '{concrete_type.name}' does not satisfy constraint "
+                f"'{constraint.name}' for generic parameter '{param_name}'"
+            )
+            return False
+        return True
+
+    def _record_generic_default(
+        self,
+        parent: ZType,
+        param_name: str,
+        default_type: ZType,
+        constraint: ZType,
+    ) -> None:
+        """Centralised setter for generic-param type defaults.
+
+        Validates that `default_type` satisfies the param's
+        `constraint` (same check user-supplied bindings run through
+        at call sites). On success, stores `default_type` on the
+        parent's `generic_defaults` dict; on failure, emits an error
+        and does not store, so the failure surfaces immediately and
+        downstream monomorphization doesn't propagate the bad type.
+
+        Replaces six copy-pasted `parent.generic_defaults[name] = dt`
+        assignments across the function / class / record / union /
+        variant / protocol resolvers so all sites enforce the check
+        uniformly.
+        """
+        if self._check_generic_arg_satisfies_constraint(
+            default_type, constraint, param_name
+        ):
+            parent.generic_defaults[param_name] = default_type
 
     def _clone_mono_methods(
         self,

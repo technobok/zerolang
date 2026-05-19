@@ -7896,6 +7896,21 @@ class TestGenerics:
         assert "t" in ftype.generic_defaults
         assert ftype.generic_defaults["t"].name == "i64"
 
+    def test_generic_default_violates_valtype_constraint(self):
+        """A reftype default for an `Any.valtype` slot is rejected at
+        declaration time (same check user-supplied bindings get at
+        call sites)."""
+        errors = check_errors(
+            "id: function as { t: (Any.valtype default: String) }\n"
+            "  in { val: t } out t is { return val }\n"
+            "main: function is { x: id 1 }"
+        )
+        # The default `String` is a reftype, not a valtype.
+        assert any(
+            "any.valtype" in e.msg.lower() or "value type" in e.msg.lower()
+            for e in errors
+        ), [e.msg for e in errors]
+
     def test_option_some_infers_i64(self):
         """Option.some 42 infers t=i64."""
         program, typing = check_ok(
