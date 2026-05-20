@@ -66,8 +66,10 @@ production code -- line feeds are the natural terminator.
 
 #---: Braces, Parentheses and Line Continuation
 
-Parentheses suspend line-feed termination; braces (in code) reenable it. The
-following rules cover wrapping:
+Inside code, parentheses suspend line-feed termination; braces reenable it.
+Line continuation matters in expressions and statements; definitions filter
+line feeds inside their value parse automatically and do not need this
+treatment. The following rules cover wrapping in code:
 
 #ul:
   [#*: An opening brace follows immediately after its related
@@ -90,15 +92,14 @@ following rules cover wrapping:
   for example, one parameter per line.]
 
 #code language=zerolang: """
-  # single-line clause: no internal padding
-  point: (record x: i64 y: i64)
+  # single-line clause: no padding inside the parens
+  result: (format value: 42 width: 6)
 
   # multi-line clause: contents indented one step beyond the delimiters
-  config: (
-      record
-      host: String
-      port: u16
-      timeout: u32
+  result: (format
+      value: 42
+      width: 6
+      pad: "0"
   )
   """
 
@@ -138,12 +139,13 @@ their types. Aligned columns are noisy under diff and brittle under rename.
 
 Parentheses are used for precedence enforcement, for clarity in dense
 expressions, and for the multi-line wrapping case above. Do not parenthesise
-the conditions of #~"if" or #~"for", and do not parenthesise the arguments of
-a top-level call.
+the conditions of #~"if" or #~"for", the subject of a single-line #~"match"
+(see #> to=match-and-case: Match and Case), or the arguments of a top-level
+call.
 
-There is one exception that catches readers off-guard: when a #_+"top-level"
-call takes an argument that is itself a call with named arguments, that
-argument call must be parenthesised so it is evaluated before the outer call.
+One exception applies when a #_+"top-level" call takes an argument that is
+itself a call with named arguments: the argument call must be parenthesised
+so it is evaluated before the outer call.
 
 #code language=zerolang: """
   # bare top-level call: no parentheses needed
@@ -173,25 +175,28 @@ Typed literals use the dot suffix form: #~"65.u8", not #~"65u8".
 
 #--: Match and Case
 
-Place the subject expression in parentheses on its own line. Each #~"case"
-and the optional #~"else" begins at column 3, immediately after the closing
-delimiter of the previous arm.
+When the entire #~"match" fits comfortably on one line, write it on one
+line and omit the parentheses around the subject. Use this form only when
+every arm is a short statement.
+
+#code language=zerolang: """
+  match r case some then { print "found" } case none then { print "missing" }
+  """
+
+When the match spans multiple lines so each arm sits on its own line, place
+the subject in parentheses on its own line. The parentheses let the subject
+align with the case arms below it. Each #~"case" and the optional #~"else"
+sits at the parent indent, immediately after the closing delimiter of the
+previous arm.
 
 #code language=zerolang: """
   match (
-      Result
+      result
   ) case ok then {
       print "value=\{result.value}"
   } case err then {
       print "failed: \{result.detail}"
   }
-  """
-
-When the entire #~"match" fits comfortably on one line, write it on one line.
-Use this form only when every arm is a short statement.
-
-#code language=zerolang: """
-  match (r) case some then { print "found" } case none then { print "missing" }
   """
 
 
@@ -213,8 +218,13 @@ for a single word. If the name needs more than one word, run the words
 together without underscores.
 
 #code language=zerolang: """
-  point: (record x: i64 y: i64)
-  filekind: (variant tag: File dir symlink)
+  point: record { x: i64 y: i64 }
+  filekind: variant {
+      file: null
+      dir: null
+      symlink: null
+      other: null
+  }
   """
 
 #---: Reftype Definitions
@@ -236,12 +246,16 @@ The predefined reftypes built into the language follow the same rule:
 
 #---: Variant Tags
 
-Variant tags are values, not types, and are written lowercase. Aim for a
-single word; if more is needed, use #~"lowerCamelCase".
+Variant arm names are values, not types, and are written lowercase. Aim for
+a single word; if more is needed, use #~"lowerCamelCase".
 
 #code language=zerolang: """
-  result: (variant tag: ok err)
-  filekind: (variant tag: regularFile dir symlink)
+  filekind: variant {
+      file: null
+      dir: null
+      symlink: null
+      other: null
+  }
   """
 
 #---: Functions, Methods and Fields
@@ -306,7 +320,11 @@ the wider ecosystem (Linux, Rust, Go, package metadata) outweighs the
 in-language consistency cost.
 
 #code language=zerolang: """
-  arch: (variant tag: x86_64 arm64 riscv64)
+  archkind: variant {
+      x86_64: null
+      aarch64: null
+      other: null
+  }
   """
 
 
@@ -336,14 +354,19 @@ receiver and method name.
 
 #--: Item Definitions
 
-When an item is generic, the generic parameters appear first in the #~"as"
-section of the item definition.
+When an item is generic, declare each generic parameter in the #~"as"
+section as #~"name: <Constraint>.generic". Place the generic declarations
+first in #~"as", before any conformances or static members. Instance
+fields go in the #~"is" body, where they may reference the parameter
+names directly.
 
 #code language=zerolang: """
-  Pair: class as {
-      generic a b
+  Pair: class {
       first: a
       second: b
+  } as {
+      a: Any.generic
+      b: Any.generic
   }
   """
 

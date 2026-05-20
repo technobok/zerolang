@@ -193,8 +193,10 @@ Treat 100 as a guideline, not a hard fail.</p>
 permitted by the grammar as line separators but should not appear in
 production code -- line feeds are the natural terminator.</p>
 <h3 id="braces-parentheses-and-line-continuation"><a href="#braces-parentheses-and-line-continuation">1.5. Braces, Parentheses and Line Continuation</a></h3>
-<p>Parentheses suspend line-feed termination; braces (in code) reenable it. The
-following rules cover wrapping:</p>
+<p>Inside code, parentheses suspend line-feed termination; braces reenable it.
+Line continuation matters in expressions and statements; definitions filter
+line feeds inside their value parse automatically and do not need this
+treatment. The following rules cover wrapping in code:</p>
 <ul>
 <li>An opening brace follows immediately after its related
   statement or expression on the same line.</li>
@@ -215,15 +217,14 @@ following rules cover wrapping:</p>
   parameter lists), introduce newlines wherever they improve readability --
   for example, one parameter per line.</li>
 </ul>
-<pre><code class="language-zerolang"># single-line clause: no internal padding
-point: (record x: i64 y: i64)
+<pre><code class="language-zerolang"># single-line clause: no padding inside the parens
+result: (format value: 42 width: 6)
 
 # multi-line clause: contents indented one step beyond the delimiters
-config: (
-    record
-    host: String
-    port: u16
-    timeout: u32
+result: (format
+    value: 42
+    width: 6
+    pad: "0"
 )</code></pre>
 <h3 id="whitespace-around-identifiers"><a href="#whitespace-around-identifiers">1.6. Whitespace Around Identifiers</a></h3>
 <p>A single space separates identifiers that would otherwise abut and parse as a
@@ -249,11 +250,12 @@ timeout: u32
 <h3 id="parentheses-for-precedence-only"><a href="#parentheses-for-precedence-only">1.8. Parentheses for Precedence Only</a></h3>
 <p>Parentheses are used for precedence enforcement, for clarity in dense
 expressions, and for the multi-line wrapping case above. Do not parenthesise
-the conditions of <code>if</code> or <code>for</code>, and do not parenthesise the arguments of
-a top-level call.</p>
-<p>There is one exception that catches readers off-guard: when a top-level
-call takes an argument that is itself a call with named arguments, that
-argument call must be parenthesised so it is evaluated before the outer call.</p>
+the conditions of <code>if</code> or <code>for</code>, the subject of a single-line <code>match</code>
+(see <a href="#match-and-case">Match and Case), or the arguments of a top-level</a>
+call.</p>
+<p>One exception applies when a top-level call takes an argument that is
+itself a call with named arguments: the argument call must be parenthesised
+so it is evaluated before the outer call.</p>
 <pre><code class="language-zerolang"># bare top-level call: no parentheses needed
 print "hello"
 
@@ -271,19 +273,22 @@ mask: 0xFFFF_FFFF
 marker: 0b1010_0101
 byte: 65.u8</code></pre>
 <h2 id="match-and-case"><a href="#match-and-case">2. Match and Case</a></h2>
-<p>Place the subject expression in parentheses on its own line. Each <code>case</code>
-and the optional <code>else</code> begins at column 3, immediately after the closing
-delimiter of the previous arm.</p>
+<p>When the entire <code>match</code> fits comfortably on one line, write it on one
+line and omit the parentheses around the subject. Use this form only when
+every arm is a short statement.</p>
+<pre><code class="language-zerolang">match r case some then { print "found" } case none then { print "missing" }</code></pre>
+<p>When the match spans multiple lines so each arm sits on its own line, place
+the subject in parentheses on its own line. The parentheses let the subject
+align with the case arms below it. Each <code>case</code> and the optional <code>else</code>
+sits at the parent indent, immediately after the closing delimiter of the
+previous arm.</p>
 <pre><code class="language-zerolang">match (
-    Result
+    result
 ) case ok then {
     print "value=\{result.value}"
 } case err then {
     print "failed: \{result.detail}"
 }</code></pre>
-<p>When the entire <code>match</code> fits comfortably on one line, write it on one line.
-Use this form only when every arm is a short statement.</p>
-<pre><code class="language-zerolang">match (r) case some then { print "found" } case none then { print "missing" }</code></pre>
 <h2 id="naming"><a href="#naming">3. Naming</a></h2>
 <h3 id="units"><a href="#units">3.1. Units</a></h3>
 <p>Unit names are lowercase printable ASCII with no whitespace; this is mandated
@@ -296,8 +301,13 @@ by the language for filesystem compatibility. In addition:</p>
 <p><code>record</code>, <code>variant</code> and <code>facet</code> definitions use a lowercase name. Aim
 for a single word. If the name needs more than one word, run the words
 together without underscores.</p>
-<pre><code class="language-zerolang">point: (record x: i64 y: i64)
-filekind: (variant tag: File dir symlink)</code></pre>
+<pre><code class="language-zerolang">point: record { x: i64 y: i64 }
+filekind: variant {
+    file: null
+    dir: null
+    symlink: null
+    other: null
+}</code></pre>
 <h3 id="reftype-definitions"><a href="#reftype-definitions">3.3. Reftype Definitions</a></h3>
 <p><code>class</code>, <code>union</code> and <code>protocol</code> definitions use PascalCase. The
 casing distinguishes reftypes from valtypes at the point of use. Compound
@@ -310,10 +320,14 @@ names split on word boundaries: <code>BufWriter</code>, not <code>Bufwriter</cod
 ListView: class { ... }
 ReadStream: protocol { ... }</code></pre>
 <h3 id="variant-tags"><a href="#variant-tags">3.4. Variant Tags</a></h3>
-<p>Variant tags are values, not types, and are written lowercase. Aim for a
-single word; if more is needed, use <code>lowerCamelCase</code>.</p>
-<pre><code class="language-zerolang">result: (variant tag: ok err)
-filekind: (variant tag: regularFile dir symlink)</code></pre>
+<p>Variant arm names are values, not types, and are written lowercase. Aim for
+a single word; if more is needed, use <code>lowerCamelCase</code>.</p>
+<pre><code class="language-zerolang">filekind: variant {
+    file: null
+    dir: null
+    symlink: null
+    other: null
+}</code></pre>
 <h3 id="functions-methods-and-fields"><a href="#functions-methods-and-fields">3.5. Functions, Methods and Fields</a></h3>
 <p>Aim for a single lowercase word. If the name needs more than one word, use
 <code>lowerCamelCase</code>.</p>
@@ -358,7 +372,11 @@ ListView: class { ... } as {
 spelling and are exempt from the no-underscores rule. Identifiability across
 the wider ecosystem (Linux, Rust, Go, package metadata) outweighs the
 in-language consistency cost.</p>
-<pre><code class="language-zerolang">arch: (variant tag: x86_64 arm64 riscv64)</code></pre>
+<pre><code class="language-zerolang">archkind: variant {
+    x86_64: null
+    aarch64: null
+    other: null
+}</code></pre>
 <h2 id="calls"><a href="#calls">4. Calls</a></h2>
 <p>When a function or method call has exactly one argument and that argument is
 the leading parameter, omit the argument name.</p>
@@ -374,12 +392,17 @@ List.append item
 # bare argument's role is not obvious -- name it
 buf.write from: chunk</code></pre>
 <h2 id="item-definitions"><a href="#item-definitions">5. Item Definitions</a></h2>
-<p>When an item is generic, the generic parameters appear first in the <code>as</code>
-section of the item definition.</p>
-<pre><code class="language-zerolang">Pair: class as {
-    generic a b
+<p>When an item is generic, declare each generic parameter in the <code>as</code>
+section as <code>name: &lt;Constraint&gt;.generic</code>. Place the generic declarations
+first in <code>as</code>, before any conformances or static members. Instance
+fields go in the <code>is</code> body, where they may reference the parameter
+names directly.</p>
+<pre><code class="language-zerolang">Pair: class {
     first: a
     second: b
+} as {
+    a: Any.generic
+    b: Any.generic
 }</code></pre>
 <h2 id="functions"><a href="#functions">6. Functions</a></h2>
 <h3 id="guard-clauses-and-early-return"><a href="#guard-clauses-and-early-return">6.1. Guard Clauses and Early Return</a></h3>
