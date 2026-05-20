@@ -1530,6 +1530,11 @@ class Parser:
                         if label.tokstr in items:
                             msg = f"Duplicate item name: {label.tokstr}"
                             return zast.Error(start=label, err=ERR.BADITEM, msg=msg)
+                        # Sibling methods are visible as locals so a later
+                        # field declaration that defaults to one (e.g.
+                        # `instancemethod: method1`) doesn't promote the
+                        # method name to an extern.
+                        local.add(label.tokstr)
                         items[label.tokstr] = funcx.node
                         # add directly to extern.. these cannot refer locally, except via 'this'
                         promoteexterns(

@@ -1644,6 +1644,10 @@ class TypeChecker:
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self.mono.generic_context.append(generic_ctx)
+        # Case C: `field: siblingMethod` -- the sibling method's
+        # FUNCTION type is not built until the method-resolution pass
+        # below, so defer these fields and bind them in a post-pass.
+        deferred_fn_ref_fields: list[tuple[str, zast.Path]] = []
         for fname, fpath in cls.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
@@ -1657,6 +1661,16 @@ class TypeChecker:
                     loc=cls.start,
                 )
                 continue
+            if (
+                ft is None
+                and not ctype.isgeneric
+                and fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                and stripped_fpath is fpath
+            ):
+                ref_name = cast(zast.AtomId, fpath).name
+                if self._resolve_function_ref_default(ref_name) is not None:
+                    deferred_fn_ref_fields.append((fname, fpath))
+                    continue
             if ft:
                 # Case A: `field: VariantType.arm` -- override the stored
                 # field type with the parent variant and store the arm
@@ -1743,6 +1757,19 @@ class TypeChecker:
             for mname, mfunc in cls.as_functions().items():
                 mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
                 self._set_child(ctype, mname, mt)
+
+            # drain deferred sibling-method-ref field bindings now that
+            # the method FUNCTION types are installed. Re-stamp the
+            # field path's node_type so downstream emitter consumers
+            # (struct decl, meta_create param signature) see the
+            # resolved FUNCTION type rather than None.
+            for fname, fpath in deferred_fn_ref_fields:
+                ref_name = cast(zast.AtomId, fpath).name
+                method_type = self.typing.child_of(ctype, ref_name)
+                if method_type is not None:
+                    self._set_child(ctype, fname, method_type)
+                    self.typing.node_type[fpath.nodeid] = method_type
+                    self.typing.set_default_function(ctype, fname, ref_name)
 
             # as_items: protocol satisfaction — must run before method body
             # check so create_disabled flag is set before body-check.
@@ -2488,6 +2515,9 @@ class TypeChecker:
         # pass 2: resolve non-generic fields with generic context
         if generic_ctx:
             self.mono.generic_context.append(generic_ctx)
+        # Case C: `field: siblingMethod` -- defer to a post-pass that
+        # runs after method resolution. See _resolve_class_type.
+        deferred_fn_ref_fields: list[tuple[str, zast.Path]] = []
         for fname, fpath in rec.is_paths().items():
             stripped_fpath, f_own = _strip_path_ownership(fpath)
             ft = self._resolve_typeref(cast(zast.Path, stripped_fpath))
@@ -2501,6 +2531,16 @@ class TypeChecker:
                     loc=rec.start,
                 )
                 continue
+            if (
+                ft is None
+                and not rtype.isgeneric
+                and fpath.nodetype in (NodeType.ATOMID, NodeType.LABELVALUE)
+                and stripped_fpath is fpath
+            ):
+                ref_name = cast(zast.AtomId, fpath).name
+                if self._resolve_function_ref_default(ref_name) is not None:
+                    deferred_fn_ref_fields.append((fname, fpath))
+                    continue
             if ft:
                 # Case A: `field: VariantType.arm` -- override the stored
                 # field type with the parent variant and store the arm
@@ -2581,6 +2621,17 @@ class TypeChecker:
         for mname, mfunc in rec.as_functions().items():
             mt = self._resolve_function_type(unitname, f"{name}.{mname}", mfunc)
             self._set_child(rtype, mname, mt)
+
+        # drain deferred sibling-method-ref field bindings. See
+        # _resolve_class_type for the rationale; rationale applies
+        # equally to records.
+        for fname, fpath in deferred_fn_ref_fields:
+            ref_name = cast(zast.AtomId, fpath).name
+            method_type = self.typing.child_of(rtype, ref_name)
+            if method_type is not None:
+                self._set_child(rtype, fname, method_type)
+                self.typing.node_type[fpath.nodeid] = method_type
+                self.typing.set_default_function(rtype, fname, ref_name)
 
         # Records cannot have .lock fields or this.borrow constructors —
         # use a class instead (classes have identity and single-owner semantics).
@@ -3375,8 +3426,13 @@ class TypeChecker:
             if ft.name == "tag" and fname == "tag":
                 continue
             if ft.typetype == ZTypeType.FUNCTION:
-                # only include function-typed children from the 'is' section
-                if is_func_names and fname in is_func_names:
+                # include FUNCTION-typed children from the 'is' section:
+                # both bodied methods (`method1: function ... is { ... }`,
+                # tracked in is_func_names) and fields whose type was
+                # borrowed from a sibling method via a default
+                # (`instancemethod: method1`, in is_paths but not in
+                # is_func_names). field_names covers both.
+                if field_names is None or fname in field_names:
                     self._set_child(ftype, fname, ft)
                     parent_default = self.typing.child_default(parent_type, fname)
                     if parent_default is not None:

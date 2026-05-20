@@ -3606,6 +3606,86 @@ class TestSpecs:
         assert result.returncode == 0
         assert result.stdout.strip() == "7"
 
+    def test_class_sibling_method_ref_default_struct(self):
+        """Class field defaulted to a sibling method emits the slot
+        with inline notation matching the referenced method's C
+        signature, and uses a forward-declared typedef so the self-
+        reference compiles."""
+        csource = emit_source(
+            "c: class {\n"
+            "    val: i64\n"
+            "    method1: function {t: this} out i64 is { return 1 }\n"
+            "    instancemethod: method1\n"
+            "}\n"
+            "main: function is { obj: c val: 0 }"
+        )
+        assert "typedef struct z_c_t z_c_t;" in csource
+        assert "int64_t (*instancemethod)(z_c_t*);" in csource
+
+    def test_class_sibling_method_ref_default_invoke(self):
+        """Default invocation calls the referenced method via the
+        struct slot; reassignment to a sibling method swaps the hook."""
+        csource = emit_source(
+            "c: class {\n"
+            "    val: i64\n"
+            "    method1: function {t: this} out i64 is { return 1 }\n"
+            "    method2: function {t: this} out i64 is { return 2 }\n"
+            "    instancemethod: method1\n"
+            "}\n"
+            "main: function is {\n"
+            "  obj: c val: 0\n"
+            '  print "\\{obj.instancemethod}"\n'
+            "  obj.instancemethod = c.method2\n"
+            '  print "\\{obj.instancemethod}"\n'
+            "}"
+        )
+        # field-slot dispatch, not a non-existent z_c_instancemethod
+        assert "z_c_instancemethod(" not in csource
+        assert "obj.instancemethod(&obj)" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "1\n2"
+
+    def test_class_sibling_method_ref_construct_override(self):
+        """Construction can override the default with a sibling method."""
+        csource = emit_source(
+            "c: class {\n"
+            "    val: i64\n"
+            "    method1: function {t: this} out i64 is { return 10 }\n"
+            "    method2: function {t: this} out i64 is { return 20 }\n"
+            "    instancemethod: method1\n"
+            "}\n"
+            "main: function is {\n"
+            "  obj1: c val: 0\n"
+            '  print "\\{obj1.instancemethod}"\n'
+            "  obj2: c val: 0 instancemethod: c.method2\n"
+            '  print "\\{obj2.instancemethod}"\n'
+            "}"
+        )
+        output = compile_and_run(csource)
+        assert output.strip() == "10\n20"
+
+    def test_record_sibling_method_ref_default(self):
+        """Record fields support the same sibling-method default form.
+        Records pass `this` by value, so the field slot omits the
+        pointer translation but still needs the forward typedef so
+        the self-reference parses."""
+        csource = emit_source(
+            "mrec: record {\n"
+            "    val: i64\n"
+            "    transform1: function {r: this} out i64 is { return r.val + 100 }\n"
+            "    transform2: function {r: this} out i64 is { return r.val * 10 }\n"
+            "    hook: transform1\n"
+            "}\n"
+            "main: function is {\n"
+            "  r: mrec val: 5\n"
+            '  print "\\{r.hook r: r}"\n'
+            "}"
+        )
+        assert "typedef struct z_mrec_t z_mrec_t;" in csource
+        assert "int64_t (*hook)(z_mrec_t);" in csource
+        output = compile_and_run(csource)
+        assert output.strip() == "105"
+
 
 class TestAsConstants:
     """Constants defined in 'as' sections of records and classes."""

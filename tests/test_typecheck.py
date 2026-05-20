@@ -5677,6 +5677,57 @@ class TestDefaults:
         assert t is not None
         assert not tc.typing.has_child_default(t, "a")
 
+    def test_class_sibling_method_ref_default(self):
+        """Class field that defaults to a sibling method binds the
+        field's type to the method's FUNCTION type and stores the
+        method name as the default."""
+        program, typing = check_ok(
+            "c: class {\n"
+            "    val: i64\n"
+            "    method1: function {t: this} out i64 is { return 1 }\n"
+            "    method2: function {t: this} out i64 is { return 2 }\n"
+            "    instancemethod: method1\n"
+            "}\n"
+            "main: function is { obj: c val: 0 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "c")
+        assert t is not None
+        # field type matches the method's FUNCTION type
+        field_t = tc.typing.child_of(t, "instancemethod")
+        method_t = tc.typing.child_of(t, "method1")
+        assert field_t is not None and method_t is not None
+        assert field_t is method_t
+        # default carries the sibling method's name
+        assert tc.typing.child_default(t, "instancemethod") == "method1"
+        # default propagates to the meta.create constructor; calling
+        # with no `instancemethod:` arg is therefore allowed.
+        create_t = t.meta_create
+        assert create_t is not None
+        assert tc.typing.child_default(create_t, "instancemethod") == "method1"
+
+    def test_record_sibling_method_ref_default(self):
+        """Record field defaulted to a sibling method behaves the
+        same as the class case."""
+        program, typing = check_ok(
+            "mrec: record {\n"
+            "    val: i64\n"
+            "    transform1: function {r: this} out i64 is { return r.val + 1 }\n"
+            "    hook: transform1\n"
+            "}\n"
+            "main: function is { r: mrec val: 5 }"
+        )
+        tc = TypeChecker(program)
+        tc.check()
+        t = tc._resolve_unit_name("test", "mrec")
+        assert t is not None
+        field_t = tc.typing.child_of(t, "hook")
+        method_t = tc.typing.child_of(t, "transform1")
+        assert field_t is not None and method_t is not None
+        assert field_t is method_t
+        assert tc.typing.child_default(t, "hook") == "transform1"
+
     def test_variant_subtype_default_on_field(self):
         """`field: VariantType.arm` (qualified, null-payload arm) sets
         the field's stored type to the variant and stores the arm as a

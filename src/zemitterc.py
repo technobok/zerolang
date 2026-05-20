@@ -413,6 +413,11 @@ class CEmitter:
         self._proto_conformance: Dict[tuple, str] = {}
         # qualified names like "calculator.op" for func pointer fields in 'is' sections
         self._is_func_fields: set[str] = set()
+        # set briefly while emitting a reassignment LHS so function-
+        # pointer fields fall through to plain struct-slot access
+        # instead of the zero-arg auto-call coercion used in value
+        # position (`obj.instancemethod = X` vs `print obj.instancemethod`).
+        self._lhs_mode: bool = False
         self.spec_typedefs: List[str] = []
         self.func_typedefs: List[str] = []  # typedefs for functions (after struct defs)
         # field info per type name (for meta.create calls)
@@ -2468,8 +2473,15 @@ class CEmitter:
 
         self.needs_stdint = True
         ztype = self._resolved_type(name)
+        # see _emit_class for the self-reference rationale.
+        needs_forward_typedef = self._class_needs_forward_typedef(name, rec, ztype)
+        struct_id = f"z_{name}_t"
         lines: List[str] = []
-        lines.append("typedef struct {\n")
+        if needs_forward_typedef:
+            lines.append(f"typedef struct {struct_id} {struct_id};\n")
+            lines.append(f"struct {struct_id} {{\n")
+        else:
+            lines.append("typedef struct {\n")
         for fname, fpath in rec.is_paths().items():
             # System-unit records may reach the emitter before the
             # typechecker has attached types to AST paths; fall back
@@ -2477,6 +2489,15 @@ class CEmitter:
             field_type = self._node_ztype(fpath)
             if field_type is None and ztype is not None:
                 field_type = self.typing.child_of(ztype, fname)
+            # function-pointer field defaulted to a sibling method ref:
+            # render inline so the slot's C type matches the referenced
+            # method's signature exactly.
+            if field_type and field_type.typetype == ZTypeType.FUNCTION:
+                decl = self._func_pointer_field_decl_from_ztype(
+                    fname, field_type, ztype
+                )
+                lines.append(f"    {decl};\n")
+                continue
             ftype = _ctype(self.typing, field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
@@ -2493,7 +2514,10 @@ class CEmitter:
         for mname, mfunc in rec.functions().items():
             decl = self._func_pointer_field_decl(name, mname, mfunc)
             lines.append(f"    {decl};\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        if needs_forward_typedef:
+            lines.append("};\n\n")
+        else:
+            lines.append(f"}} {struct_id};\n\n")
 
         self.struct_defs.append("".join(lines))
 
@@ -2720,14 +2744,83 @@ class CEmitter:
         self, parent_name: str, mname: str, mfunc: zast.Function
     ) -> str:
         """Get the full C struct field declaration for a function pointer in an 'is' section.
-        Returns e.g. 'int64_t (*callback)(int64_t, int64_t)'"""
+        Returns e.g. 'int64_t (*callback)(int64_t, int64_t)'.
+
+        For class methods the `this` receiver is emitted as
+        `<parent>*` and any stack-allocated class params are also
+        emitted as pointers so the slot's C signature matches the
+        function it will be assigned to (see `_emit_function`).
+        Record methods pass `this` by value (records are valtypes).
+        """
         ret_ctype = self._return_ctype(mfunc)
+        parent_type = self._resolved_type(parent_name) if parent_name else None
+        parent_ctype = f"z_{parent_name}_t" if parent_name else ""
+        parent_is_class = (
+            parent_type is not None and parent_type.typetype == ZTypeType.CLASS
+        )
         params: List[str] = []
         for pname, ppath in mfunc.parameters.items():
-            ptype_str = _ctype(self.typing, self._node_ztype(ppath))
+            ptype = self._node_ztype(ppath)
+            if parent_type is not None and ptype is parent_type and parent_ctype:
+                params.append(f"{parent_ctype}*" if parent_is_class else parent_ctype)
+                continue
+            ptype_str = _ctype(self.typing, ptype)
+            if (
+                ptype is not None
+                and ptype.typetype == ZTypeType.CLASS
+                and not ptype.is_heap_allocated
+                and not ptype_str.endswith("*")
+            ):
+                ptype_str = f"{ptype_str}*"
             params.append(ptype_str)
         param_str = ", ".join(params) if params else "void"
         return f"{ret_ctype} (*{mname})({param_str})"
+
+    def _method_pointer_param_str(
+        self, method_ztype: ZType, parent_ztype: "Optional[ZType]"
+    ) -> str:
+        """Inline param signature for a function-pointer slot whose type
+        is borrowed from a method. For class methods the `this` receiver
+        is emitted as `<parent>*` (classes are single-owner reference
+        types); record methods pass `this` by value (records are
+        copyable). Stack-allocated class params with borrow/lock
+        ownership also pass by pointer, matching the C ABI produced by
+        `_emit_function`."""
+        parent_ctype = _ctype(self.typing, parent_ztype) if parent_ztype else ""
+        parent_is_class = (
+            parent_ztype is not None and parent_ztype.typetype == ZTypeType.CLASS
+        )
+        parts: "List[str]" = []
+        this_name = method_ztype.this_param_name
+        for pname in self.typing.child_names_of(method_ztype):
+            ptype = self.typing.child_of(method_ztype, pname)
+            if pname == this_name and parent_ctype:
+                parts.append(f"{parent_ctype}*" if parent_is_class else parent_ctype)
+                continue
+            ptype_str = _ctype(self.typing, ptype)
+            own = self.typing.child_ownership(method_ztype, pname)
+            if (
+                ptype is not None
+                and ptype.typetype == ZTypeType.CLASS
+                and not ptype.is_heap_allocated
+                and not ptype_str.endswith("*")
+                and own in (ZParamOwnership.BORROW, ZParamOwnership.LOCK)
+            ):
+                ptype_str = f"{ptype_str}*"
+            parts.append(ptype_str)
+        return ", ".join(parts) if parts else "void"
+
+    def _func_pointer_field_decl_from_ztype(
+        self, field_name: str, method_ztype: ZType, parent_ztype: "Optional[ZType]"
+    ) -> str:
+        """Inline function-pointer field decl built from a resolved
+        FUNCTION ZType. Used when an `is`-section field defaults to a
+        sibling method reference: the field's C type must match the
+        referenced method's C signature so meta_create can wire it
+        as a default."""
+        ret_ctype = _ctype(self.typing, method_ztype.return_type)
+        param_str = self._method_pointer_param_str(method_ztype, parent_ztype)
+        return f"{ret_ctype} (*{field_name})({param_str})"
 
     def _collect_field_params(self, name: str, items: dict, functions: dict) -> tuple:
         """Collect C parameter strings, field names, and field C types.
@@ -2748,6 +2841,16 @@ class CEmitter:
             field_type = self._node_ztype(fpath)
             if field_type is None and ztype is not None:
                 field_type = self.typing.child_of(ztype, fname)
+            # function-pointer field defaulted to a sibling method ref:
+            # match the struct slot's inline C signature so meta_create
+            # accepts the referenced method's address verbatim.
+            if field_type and field_type.typetype == ZTypeType.FUNCTION:
+                ret_ct = _ctype(self.typing, field_type.return_type)
+                param_inline = self._method_pointer_param_str(field_type, ztype)
+                params.append(f"{ret_ct} (*{fname})({param_inline})")
+                field_names.append(fname)
+                field_ctypes.append(f"{ret_ct} (*)({param_inline})")
+                continue
             fct = _ctype(self.typing, field_type)
             # .lock fields of stack-allocated class type: store as pointer
             if (
@@ -2762,11 +2865,27 @@ class CEmitter:
             params.append(f"{fct} {fname}")
             field_names.append(fname)
             field_ctypes.append(fct)
+        parent_ctype = f"z_{name}_t" if name else ""
+        parent_is_class = ztype is not None and ztype.typetype == ZTypeType.CLASS
         for mname, mfunc in functions.items():
             ret_ctype = self._return_ctype(mfunc)
             fp_params: List[str] = []
             for pname, ppath in mfunc.parameters.items():
-                fp_params.append(_ctype(self.typing, self._node_ztype(ppath)))
+                ptype = self._node_ztype(ppath)
+                if ztype is not None and ptype is ztype and parent_ctype:
+                    fp_params.append(
+                        f"{parent_ctype}*" if parent_is_class else parent_ctype
+                    )
+                    continue
+                ptype_str = _ctype(self.typing, ptype)
+                if (
+                    ptype is not None
+                    and ptype.typetype == ZTypeType.CLASS
+                    and not ptype.is_heap_allocated
+                    and not ptype_str.endswith("*")
+                ):
+                    ptype_str = f"{ptype_str}*"
+                fp_params.append(ptype_str)
             fp_param_str = ", ".join(fp_params) if fp_params else "void"
             fp_ctype = f"{ret_ctype} (*)({fp_param_str})"
             params.append(f"{ret_ctype} (*{mname})({fp_param_str})")
@@ -2824,6 +2943,16 @@ class CEmitter:
                 == ZTypeType.FUNCTION
             ):
                 field_defaults[fname] = _mangle_func(cast(zast.AtomId, fpath).name)
+            elif fpath.nodetype == NodeType.ATOMID:
+                # Sibling-method reference default:
+                # `instancemethod: method1` inside the enclosing
+                # class/record's `is` block resolves to the address
+                # of the qualified function. Mirrors the module-level
+                # function-ref branch above; checks the enclosing
+                # type's own `functions` dict before falling through.
+                ref_name = cast(zast.AtomId, fpath).name
+                if ref_name in functions and functions[ref_name].body is not None:
+                    field_defaults[fname] = _mangle_func(f"{name}.{ref_name}")
         for mname, mfunc in functions.items():
             if mfunc.body is not None:
                 field_defaults[mname] = _mangle_func(f"{name}.{mname}")
@@ -2906,6 +3035,38 @@ class CEmitter:
         if lines is None:
             self.struct_defs.append("".join(target))
 
+    def _class_needs_forward_typedef(
+        self, name: str, cls: zast.ObjectDef, ztype: "Optional[ZType]"
+    ) -> bool:
+        """A type needs a forward typedef whenever any of its struct
+        fields are function pointers whose signature references the
+        type's typedef name. Class methods reference the type as
+        `<parent>*` (true self-reference); record methods reference
+        the type by value -- still requires the typedef to be in
+        scope at field declaration time, otherwise the C parser
+        treats the bare typedef name as an unnamed parameter."""
+        if ztype is None:
+            return False
+        # case C: `instancemethod: method1` -- the field is FUNCTION-
+        # typed and the referenced method has a `this` receiver.
+        for fname, fpath in cls.is_paths().items():
+            field_ztype = self._node_ztype(fpath)
+            if (
+                field_ztype is not None
+                and field_ztype.typetype == ZTypeType.FUNCTION
+                and field_ztype.this_param_name is not None
+            ):
+                return True
+        # `is`-section methods with a `this` receiver -- the struct
+        # holds them as inline function pointers and they reference
+        # the parent type via the `this` param.
+        for mname, mfunc in cls.functions().items():
+            for pname, ppath in mfunc.parameters.items():
+                ptype = self._node_ztype(ppath)
+                if ptype is ztype:
+                    return True
+        return False
+
     def _emit_class(
         self, name: str, cls: zast.ObjectDef, skip_protocol_impls: bool = False
     ) -> None:
@@ -2932,17 +3093,38 @@ class CEmitter:
         self.needs_stdint = True
         self.needs_stdlib = True
         ztype = self._resolved_type(name)
+        # Function-pointer fields whose signature references the
+        # enclosing class (via a `this` receiver) need the typedef
+        # name to be in scope before the struct body. Emit a forward
+        # typedef and a tagged struct in that case; otherwise keep
+        # the anonymous-struct form to minimise churn.
+        needs_forward_typedef = self._class_needs_forward_typedef(name, cls, ztype)
+        struct_id = f"z_{name}_t"
         lines: List[str] = []
-        lines.append("typedef struct {\n")
+        if needs_forward_typedef:
+            lines.append(f"typedef struct {struct_id} {struct_id};\n")
+            lines.append(f"struct {struct_id} {{\n")
+        else:
+            lines.append("typedef struct {\n")
         for fname, fpath in cls.is_paths().items():
-            ftype = _ctype(self.typing, self._node_ztype(fpath))
+            field_ztype = self._node_ztype(fpath)
+            # function-pointer field defaulted to a sibling method ref:
+            # render inline so the slot's C type matches the referenced
+            # method's signature exactly.
+            if field_ztype and field_ztype.typetype == ZTypeType.FUNCTION:
+                decl = self._func_pointer_field_decl_from_ztype(
+                    fname, field_ztype, ztype
+                )
+                lines.append(f"    {decl};\n")
+                continue
+            ftype = _ctype(self.typing, field_ztype)
             # .lock fields of stack-allocated class type: store as pointer
             if (
                 ztype
                 and self.typing.is_child_lock_field(ztype, fname)
-                and self._node_ztype(fpath)
-                and cast(ZType, self._node_ztype(fpath)).typetype == ZTypeType.CLASS
-                and not cast(ZType, self._node_ztype(fpath)).is_heap_allocated
+                and field_ztype
+                and field_ztype.typetype == ZTypeType.CLASS
+                and not field_ztype.is_heap_allocated
                 and not ftype.endswith("*")
             ):
                 ftype = f"{ftype}*"
@@ -2951,7 +3133,10 @@ class CEmitter:
         for mname, mfunc in cls.functions().items():
             decl = self._func_pointer_field_decl(name, mname, mfunc)
             lines.append(f"    {decl};\n")
-        lines.append(f"}} z_{name}_t;\n\n")
+        if needs_forward_typedef:
+            lines.append("};\n\n")
+        else:
+            lines.append(f"}} {struct_id};\n\n")
 
         # emit destructor (only if class has fields needing cleanup)
         if ztype and ztype.needs_field_cleanup:
@@ -5612,7 +5797,10 @@ class CEmitter:
 
     def _emit_reassignment(self, reassign: zast.Reassignment) -> str:
         indent = self._indent()
+        prev_lhs = self._lhs_mode
+        self._lhs_mode = True
         lhs = self._emit_path_value(reassign.topath)
+        self._lhs_mode = prev_lhs
         rhs = self._emit_expression_value(reassign.value)
         result = ""
         # check if this is a reftype reassignment — free old value first
@@ -8351,6 +8539,24 @@ class CEmitter:
         # handled below via _effective_class_zero_arg_method.
         cls_name, method_fn = self._effective_class_zero_arg_method(path)
         if cls_name is not None and method_fn is not None:
+            # Discriminate: a real method `obj.method1` has the
+            # resolved method type named `<cls>.method1`. A
+            # function-pointer field defaulted to a sibling method
+            # (`instancemethod: method1`) resolves to the SAME
+            # method type — but accessed via a different path
+            # child name. In that case lower as an indirect call
+            # through the struct slot, not a direct call to a
+            # non-existent `z_<cls>_<field>` function.
+            if method_fn.name != f"{cls_name}.{child}":  # ztc-string-compare-ok: emit field vs method
+                parent = self._emit_path_value(path.parent)
+                is_ptr = self._is_class_pointer_path(path.parent)
+                acc = "->" if is_ptr else "."
+                field_expr = parent[1:] if parent[:1] == "&" else parent
+                if self._lhs_mode:
+                    # reassignment LHS — emit slot access only
+                    return f"{field_expr}{acc}{child}"
+                recv = parent if is_ptr else f"&{field_expr}"
+                return f"{field_expr}{acc}{child}({recv})"
             parent = self._emit_path_value(path.parent)
             if not self._is_class_pointer_path(path.parent) and not parent.startswith(
                 "&"
