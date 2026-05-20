@@ -413,6 +413,34 @@ pass-by-value so identity-based locking is meaningless. Generic type
 parameters are exempt because they may monomorphize to a reftype.
 
 
+#---: Numeric Literal Coercion
+
+Bare numeric literals (and constant expressions folded from them) coerce
+losslessly to a concrete numeric target at typed-location boundaries
+through the single helper #~"TypeChecker._coerce_literal" in
+#~"src/ztypecheck.py". The helper reads #~"node_const_value" for the
+candidate node, applies the rule appropriate to the source/target
+combination (int→int range check via #~"NUMERIC_RANGES"; int→float exact
+mantissa via #~"int_fits_float"; float→float round-trip via
+#~"float_fits_float"; float→int rejected outright), and on success
+rewrites #~"node_type" on the value node to the target. Callers gate the
+coercion attempt on the value having a #~"node_const_value" and the
+target being a numeric type; when present, an out-of-range value yields
+a literal-aware diagnostic and the caller suppresses its generic
+type-mismatch error.
+
+Wired sites: call arguments (#~"_check_call_arguments"), function
+implicit return (#~"_check_function_body_inner"), reassignment RHS
+(#~"_check_reassignment_inner"), and match-arm numeric patterns
+(#~"_check_case_inner"). The forward-looking #~"LITERAL_INT" /
+#~"LITERAL_FLOAT" singletons and the #~"node_literal_base" table on
+#~"ZTyping" are reserved for a later wave that lifts intermediate
+constant arithmetic into true arbitrary precision; today the existing
+folder still range-checks intermediate values against the natural
+result type, so a constant expression that exceeds the source type's
+range fails at the fold site rather than the coercion site.
+
+
 #---: Type Narrowing
 
 Type narrowing for union and variant types is tracked through scope-based

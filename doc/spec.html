@@ -456,6 +456,81 @@ losslessly be stored in the resulting format:</p>
 (1.0).f128
 (1.0e15).f128
 (1e15).f128</code></pre>
+<h4 id="numeric-defaults"><a href="#numeric-defaults">2.7.4. Numeric defaults</a></h4>
+<p>Bare numeric literals follow the default-type rule when their surrounding
+context does not pin a target type:</p>
+<table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Lexical form</th><th style="text-align: left">Default type</th></tr>
+</thead>
+<tbody>
+<tr><td>decimal integer (<code>100</code>, <code>-200</code>)</td><td><code>i64</code></td></tr>
+<tr><td>non-decimal integer (<code>0xff</code>, <code>0b101</code>)</td><td><code>u64</code></td></tr>
+<tr><td>literal with <code>.</code> or <code>e</code> (<code>3.14</code>, <code>1e5</code>)</td><td><code>f64</code></td></tr>
+</tbody>
+</table>
+<p>A bare literal in a context with no target type &#x2014; for example the RHS of a
+label binding (<code>x: 100</code>) &#x2014; resolves to its default. Explicit dotted-method
+suffixes (<code>100.u8</code>, <code>3.14.f32</code>) override the default and pin the type
+directly.</p>
+<h4 id="numeric-literal-coercion-at-typed-locations"><a href="#numeric-literal-coercion-at-typed-locations">2.7.5. Numeric literal coercion at typed locations</a></h4>
+<p>When a numeric literal &#x2014; or a compile-time constant expression built from
+numeric literals &#x2014; appears in a position whose surrounding declaration
+provides a target numeric type, the literal is coerced losslessly to that
+type. No explicit dotted-method suffix is required.</p>
+<p>Coercion sites currently include:</p>
+<table>
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr><th style="text-align: left">Site</th><th style="text-align: left">Example</th></tr>
+</thead>
+<tbody>
+<tr><td>call argument</td><td><code>f val: 100</code>  (parameter <code>val: u32</code>)</td></tr>
+<tr><td>function implicit return</td><td><code>f: function out u32 is { 100 }</code></td></tr>
+<tr><td>reassignment RHS</td><td><code>a: 10.u8 ; a = 200 + 100 - 250</code></td></tr>
+<tr><td>match-arm numeric pattern</td><td><code>match v case 100 then ...</code>  (subject <code>u8</code>)</td></tr>
+</tbody>
+</table>
+<p>The rules for "lossless" are:</p>
+<ul>
+<li><em><strong>integer literal &#x2192; integer target</strong></em>: the value must lie in the
+target's range (e.g. <code>u8</code> requires <code>0..255</code>). Constant arithmetic
+on integer literals is folded by the compiler, and the <em><strong>final</strong></em>
+value &#x2014; not any intermediate &#x2014; is range-checked at the boundary.
+So <code>200 + 100 - 250</code> coerces cleanly into <code>u8</code> (folded value
+50), even though the intermediate <code>300</code> would not fit on its own.</li>
+<li><em><strong>integer literal &#x2192; float target</strong></em>: the value must be exactly
+representable in the float's mantissa. <code>16777216</code> (<code>2^24</code>) fits
+<code>f32</code>; <code>16777217</code> does not.</li>
+<li><em><strong>float literal &#x2192; integer target</strong></em>: rejected. Float literals
+coerce only to float types. Use <code>.i32</code> / <code>.i64</code> / etc.
+explicitly when an integer conversion is intended.</li>
+<li><em><strong>float literal &#x2192; float target</strong></em>: the value must round-trip
+exactly through the target's precision (e.g. <code>0.1</code> does not fit
+<code>f32</code>).</li>
+</ul>
+<p>A literal that fails any of these checks produces a literal-aware
+diagnostic at compile time naming the value and the target's range &#x2014; no
+runtime overflow.</p>
+<p>Examples:</p>
+<pre><code class="language-zerolang">push_byte: function {b: u8} is { }
+small_value: function out u8 is { 200 + 100 - 250 }  # returns 50
+
+main: function is {
+    push_byte b: 100              # 100 coerces to u8
+    push_byte b: 50 + 25 + 25     # folded to 100, fits u8
+    push_byte b: 100.u8           # explicit suffix still works
+
+    a: 10.u8                       # a is u8
+    a = 100                        # bare 100 coerces to a's u8
+}</code></pre>
 <h3 id="labels"><a href="#labels">2.8. Labels</a></h3>
 <p>Labels are used when assigning names to definitions. They are
 <a href="#identifiers">identifiers</a> followed by a colon (<code>:</code>). The name assigned is
@@ -851,7 +926,9 @@ argument from a named variable:</p>
 <pre><code class="language-zerolang">result: parent.f from: MyRefType</code></pre>
 <p>When a function parameter has a default value (numeric constant or function
 reference), the caller may omit that argument. The default value is used in
-place of the missing argument. All bare numeric defaults are typed as i64.
+place of the missing argument. Bare numeric defaults follow the literal
+default rules described in <a href="#numeric-defaults">Numeric defaults</a> &#x2014;
+decimal integers default to i64, non-decimal to u64, floats to f64.
 Function references (functions with bodies) serve as both the type and the
 default value. Specs (functions without bodies) provide only the type, with no
 default.</p>

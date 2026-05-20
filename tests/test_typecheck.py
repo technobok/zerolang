@@ -12198,3 +12198,173 @@ class TestGeneratorDesugaring:
             field_name="c",
         )
         assert field_t is not None and field_t.name == "u32", f"got {field_t!r}"
+
+
+class TestLiteralCoercion:
+    """Lossless coercion of numeric literals (and constant expressions
+    built from them) at typed-location boundaries. See
+    `_coerce_literal` in `src/ztypecheck.py` and the design plan in
+    `for-zerolang-i-m-considering-harmonic-newell.md`.
+
+    Locked-in rules:
+      - int literal → int target: must fit `NUMERIC_RANGES[target]`.
+      - int literal → float target: exact mantissa representability.
+      - float literal → int target: REJECTED.
+      - float literal → float target: exact round-trip.
+    """
+
+    # ---- Call-arg coercion (site a) ----
+
+    def test_call_arg_int_literal_fits(self):
+        check_ok("f: function {val: u32} is {}\nmain: function is { f val: 100 }")
+
+    def test_call_arg_int_literal_out_of_range(self):
+        errors = check_errors(
+            "f: function {val: u8} is {}\nmain: function is { f val: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_call_arg_negative_into_unsigned(self):
+        errors = check_errors(
+            "f: function {val: u8} is {}\nmain: function is { f val: -1 }"
+        )
+        assert any("literal value -1 cannot be losslessly" in e.msg for e in errors)
+
+    def test_call_arg_constant_arithmetic_intermediate_no_overflow(self):
+        """Headline case: 200 + 100 - 250 fits u8 (final value 50)
+        even though the i64 intermediate 300 wouldn't fit u8."""
+        check_ok(
+            "f: function {val: u8} is {}\nmain: function is { f val: 200 + 100 - 250 }"
+        )
+
+    def test_call_arg_constant_arithmetic_final_overflow_caught(self):
+        errors = check_errors(
+            "f: function {val: u8} is {}\nmain: function is { f val: 100 + 200 }"
+        )
+        assert any(
+            "literal value 300 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        )
+
+    def test_call_arg_non_decimal_literal_fits(self):
+        """0xff (= 255) coerces cleanly into u8."""
+        check_ok("f: function {val: u8} is {}\nmain: function is { f val: 0xff }")
+
+    def test_call_arg_explicit_suffix_still_works(self):
+        """`.u32` suffix continues to function — explicit coercion."""
+        check_ok("f: function {val: u32} is {}\nmain: function is { f val: 100.u32 }")
+
+    def test_call_arg_literal_plus_explicit_typed_literal(self):
+        """`100.u8 + 1` — the 1 coerces to u8 to match the explicit
+        operand; result is u8, fits the u8 parameter."""
+        check_ok("f: function {val: u8} is {}\nmain: function is { f val: 100.u8 + 1 }")
+
+    # ---- Function return coercion (site b) ----
+
+    def test_return_int_literal_fits(self):
+        check_ok("getval: function out u32 is { 100 }")
+
+    def test_return_int_literal_out_of_range(self):
+        errors = check_errors("getval: function out u8 is { 1000 }")
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        )
+
+    def test_return_constant_arithmetic_intermediate_no_overflow(self):
+        check_ok("getval: function out u8 is { 200 + 100 - 250 }")
+
+    def test_return_constant_arithmetic_final_overflow_caught(self):
+        errors = check_errors("getval: function out u8 is { 100 + 200 }")
+        assert any(
+            "literal value 300 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        )
+
+    def test_return_float_literal_into_int_rejected(self):
+        """Locked-in rule: float literal cannot coerce to integer."""
+        errors = check_errors("getval: function out i32 is { 1.0 }")
+        assert any(
+            "float literal" in e.msg and "cannot coerce to integer" in e.msg
+            for e in errors
+        )
+
+    def test_return_int_literal_exactly_representable_in_f32(self):
+        """2^24 fits f32's mantissa exactly."""
+        check_ok("getval: function out f32 is { 16777216 }")
+
+    def test_return_int_literal_not_representable_in_f32(self):
+        """2^24+1 is NOT exactly representable in f32."""
+        errors = check_errors("getval: function out f32 is { 16777217 }")
+        assert any(
+            "16777217" in e.msg and "not exactly representable in f32" in e.msg
+            for e in errors
+        )
+
+    # ---- Reassignment coercion (site f) ----
+
+    def test_reassign_int_literal_fits(self):
+        check_ok("main: function is {\n  a: 10.u8\n  a = 100\n}")
+
+    def test_reassign_int_literal_out_of_range(self):
+        errors = check_errors("main: function is {\n  a: 10.u8\n  a = 1000\n}")
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        )
+
+    def test_reassign_constant_arithmetic_intermediate_no_overflow(self):
+        check_ok("main: function is {\n  a: 10.u8\n  a = 200 + 100 - 250\n}")
+
+    # ---- Match-arm coercion (site g) ----
+
+    def test_match_arm_constants_fit_subject_type(self):
+        check_ok(
+            "main: function is {\n"
+            "  v: 10.u8\n"
+            "  match v case 100 then v case 200 then v\n"
+            "}"
+        )
+
+    def test_match_arm_constant_out_of_range_for_subject(self):
+        errors = check_errors(
+            "main: function is {\n  v: 10.u8\n  match v case 1000 then v\n}"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        )
+
+    # ---- Defaults still apply when no typed location bounds the literal ----
+
+    def test_bare_literal_default_is_i64(self):
+        """Verify the existing default behaviour is preserved: a bare
+        binding `x: 100` gives `x` the type `i64` (no surrounding
+        target type)."""
+        program, typing = check_ok("main: function is {\n  x: 100\n}")
+        # Find the `x: 100` assignment and confirm its resolved type.
+        main_fn = program.units["test"].body["main"]
+        for sline in main_fn.body.statements:
+            inner = sline.statementline
+            if inner.nodetype == NodeType.ASSIGNMENT and inner.name == "x":
+                t = typing.node_type.get(inner.nodeid)
+                assert t is not None and t.name == "i64", f"got {t}"
+                break
+        else:
+            raise AssertionError("did not find x: 100 assignment")
+
+    def test_explicit_suffix_overrides_default(self):
+        """`x: 0.u8` still works as today."""
+        program, typing = check_ok("main: function is {\n  x: 0.u8\n}")
+        main_fn = program.units["test"].body["main"]
+        for sline in main_fn.body.statements:
+            inner = sline.statementline
+            if inner.nodetype == NodeType.ASSIGNMENT and inner.name == "x":
+                t = typing.node_type.get(inner.nodeid)
+                assert t is not None and t.name == "u8", f"got {t}"
+                break
+        else:
+            raise AssertionError("did not find x: 0.u8 assignment")

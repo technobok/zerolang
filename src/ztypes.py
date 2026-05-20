@@ -4,6 +4,7 @@ ZeroLang type checker
 Type definitions and type checking pass for the AST.
 """
 
+import struct as _struct
 from enum import IntEnum, unique
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
@@ -277,6 +278,14 @@ class ZType:
     is_typeof_placeholder: bool = field(default=False, init=False)
     typeof_source_nodeid: int = field(default=-1, init=False)
 
+    # compiler-internal "literal type" marker. True on the
+    # LITERAL_INT / LITERAL_FLOAT singletons: provisional types worn
+    # by bare numeric literals (and constant-folded results) until a
+    # surrounding typed location coerces them, or the
+    # default-resolution late pass folds them to i64/u64/f64. Never
+    # set on types reachable from user source.
+    is_literal: bool = field(default=False, init=False)
+
     # element type for DATA types. The DATA's children
     # are value-carrier RECORDs whose `name` is the literal value (e.g.
     # the children of `primes: data { 2 3 5 }` are RECORDs with names
@@ -466,6 +475,126 @@ class ZVariable:
     # provenance: None for variables declared in user source; pass-name string
     # for variables synthesised by a compiler pass. Surfaces in SQL dumps.
     synth_origin: Optional[str] = None
+
+
+# Numeric type suffix sets used both by `parse_number` (to peel an
+# inline suffix off the lexeme) and by `numeric_literal_form` (to
+# detect whether a literal carries an explicit suffix vs. is bare).
+_NUMERIC_SUFFIXES_4 = ("i128", "u128", "f128")
+_NUMERIC_SUFFIXES_3 = ("i16", "i32", "i64", "u16", "u32", "u64", "f32", "f64", "c32")
+_NUMERIC_SUFFIXES_2 = ("i8", "u8", "c8")
+
+
+def numeric_literal_form(numstr: str) -> Tuple[bool, str]:
+    """Classify a numeric literal lexeme.
+
+    Returns `(has_explicit_suffix, base_flavour)` where:
+    - `has_explicit_suffix` is True iff the lexeme ends in a known
+      numeric type suffix (e.g. `100u8`, `0xffu64`). The dotted form
+      `100.u8` is NOT inline — the lexer separates it into two atoms.
+    - `base_flavour` describes the LITERAL's lexical shape, ignoring
+      any suffix: `"dec"` for a plain decimal integer, `"nondec"` for
+      `0b`/`0o`/`0x`-prefixed integers, `"float"` for anything with a
+      `.` or `e`. Drives default-resolution: dec→i64, nondec→u64,
+      float→f64.
+    """
+    rest = numstr
+    has_suffix = False
+    if rest[-4:] in _NUMERIC_SUFFIXES_4:
+        has_suffix = True
+        rest = rest[:-4]
+    elif rest[-3:] in _NUMERIC_SUFFIXES_3:
+        has_suffix = True
+        rest = rest[:-3]
+    elif rest[-2:] in _NUMERIC_SUFFIXES_2:
+        has_suffix = True
+        rest = rest[:-2]
+    prefix = rest[:2].lower()
+    if "." in rest:
+        return has_suffix, "float"
+    if prefix in ("0b", "0o", "0x"):
+        return has_suffix, "nondec"
+    if "e" in rest or "E" in rest:
+        return has_suffix, "float"
+    return has_suffix, "dec"
+
+
+# Default concrete numeric type per literal base flavour. Used by the
+# default-resolution late pass when a literal escapes typecheck without
+# having been coerced by a typed location.
+LITERAL_DEFAULT_BY_BASE: Dict[str, str] = {
+    "dec": "i64",
+    "nondec": "u64",
+    "float": "f64",
+}
+
+
+def _make_literal_ztype(name: str) -> ZType:
+    """Construct one of the compiler-internal LITERAL_* singletons."""
+    t = ZType(name=name, typetype=ZTypeType.RECORD, parent=None)
+    t.is_literal = True
+    return t
+
+
+# Singleton literal types worn by bare numeric atoms (and folded
+# constant expressions) during typecheck. They never originate from
+# user source and never reach the emitter — the
+# default-resolution late pass rewrites them to a concrete numeric
+# type before typecheck returns.
+LITERAL_INT: ZType = _make_literal_ztype("literal_int")
+LITERAL_FLOAT: ZType = _make_literal_ztype("literal_float")
+
+
+# Mantissa width (significand bits, including the implicit bit) per
+# float type. Used by `int_fits_float` to test exact representability.
+# f128 here assumes IEEE 754 binary128 (113 explicit + 1 implicit);
+# platforms with 80-bit extended floats won't match this, but
+# zerolang's emitted C uses long double whose width is platform-
+# dependent — explicit suffixes remain the user's escape hatch.
+_FLOAT_MANTISSA_BITS: Dict[str, int] = {
+    "f32": 24,
+    "f64": 53,
+    "f128": 113,
+}
+
+
+def int_fits_float(value: int, float_type_name: str) -> bool:
+    """True iff `value` is exactly representable as a float of the
+    given type. An integer N is exactly representable in a float with
+    M mantissa bits iff `abs(N)` with all trailing power-of-two
+    factors stripped fits in M bits."""
+    mant = _FLOAT_MANTISSA_BITS.get(float_type_name)
+    if mant is None:
+        return False
+    if value == 0:
+        return True
+    abs_val = abs(value)
+    while abs_val % 2 == 0:
+        abs_val //= 2
+    return abs_val.bit_length() <= mant
+
+
+# Dispatch table for float→float round-trip exact-representability
+# checks. Keyed by spec type-name string (not a ZType.name), so dict
+# lookup keeps this off the bootstrap-lint's literal-name-compare
+# radar. f128 is intentionally absent — punt to explicit suffixes.
+_FLOAT_ROUNDTRIP_PACK: Dict[str, str] = {
+    "f64": "",  # always exact (Python float IS f64)
+    "f32": ">f",  # big-endian IEEE 754 single
+}
+
+
+def float_fits_float(value: float, float_type_name: str) -> bool:
+    """True iff `value` (a Python f64) is exactly representable as a
+    float of the given type. f64→f64 always succeeds. f64→f32 requires
+    that the round-trip through C's `float` (single precision)
+    preserves the value bit-for-bit."""
+    fmt = _FLOAT_ROUNDTRIP_PACK.get(float_type_name)
+    if fmt is None:
+        return False
+    if fmt == "":
+        return True
+    return _struct.unpack(fmt, _struct.pack(fmt, value))[0] == value
 
 
 NUMERIC_RANGES: Dict[str, Tuple[int, int]] = {

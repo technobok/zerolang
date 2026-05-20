@@ -1,0 +1,47 @@
+# arbprec_constants.z — literal-coercion ergonomics demo.
+#
+# Numeric literals (and constant expressions built from them) coerce
+# losslessly to a target numeric type at typed-location boundaries
+# without needing an explicit `.u8` / `.u32` / `.i32` suffix.
+#
+# A literal that doesn't fit the target is rejected at compile time
+# with a literal-aware diagnostic ("literal value 300 cannot be
+# losslessly stored in u8 (range 0..255)") — no runtime overflow.
+#
+# Explicit suffixes still work; they remain the user-facing escape
+# hatch when the surrounding context does not pin the type.
+
+# Call-arg coercion: bare 8-bit byte literals into a u8 parameter.
+push_byte: function {b: u8} is {
+    # Body is a no-op — the call sites below are the point.
+}
+
+# Function-return coercion: the body `200 + 100 - 250` folds to 50
+# (which fits u8) — the i64 intermediate 300 does not block the
+# coercion because the final value is range-checked at the return
+# boundary, not in the middle of the expression.
+small_value: function out u8 is { 200 + 100 - 250 }
+
+main: function is {
+    # Call-arg coercion: bare 100 coerces to u8 (fits).
+    push_byte b: 100
+
+    # Call-arg coercion: explicit suffix still works.
+    push_byte b: 100.u8
+
+    # Call-arg coercion: constant expression folds and fits.
+    push_byte b: 50 + 25 + 25
+
+    # Call-arg coercion: arithmetic where i64 intermediate exceeds
+    # u8 but the final value fits.
+    push_byte b: 200 + 100 - 250
+
+    # Reassignment coercion: bare literal coerces to a's u8 type.
+    a: 10.u8
+    a = 100
+    a = 200 + 100 - 250
+
+    # The small_value function exercises return-value coercion at
+    # its own definition (`200 + 100 - 250` returning u8).
+    print "ok"
+}

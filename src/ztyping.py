@@ -122,6 +122,13 @@ class ZTyping:
     node_const_value: Dict[int, "int | float | bool | str"] = field(
         default_factory=dict, init=False
     )
+    # Per-Node literal-base flavour ("dec"/"nondec"/"float"). Populated
+    # for every node whose `node_type` is LITERAL_INT or LITERAL_FLOAT
+    # — the default-resolution late pass reads it to pick the
+    # concrete fallback type (i64/u64/f64). For BinOp results, the
+    # base flavour propagates from the operands (see
+    # `_check_binop_inner`).
+    node_literal_base: Dict[int, str] = field(default_factory=dict, init=False)
     # Per-Call classification + resolved callable's type name.
     call_kind: Dict[int, CallKind] = field(default_factory=dict, init=False)
     call_callable_type_name: Dict[int, str] = field(default_factory=dict, init=False)

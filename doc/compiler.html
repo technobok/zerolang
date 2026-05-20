@@ -115,6 +115,8 @@ Table of Contents</div>
 </li>
 <li><a href="#lock-checking">Lock Checking</a>
 </li>
+<li><a href="#numeric-literal-coercion">Numeric Literal Coercion</a>
+</li>
 <li><a href="#type-narrowing">Type Narrowing</a>
 </li>
 <li><a href="#synthesis-toolkit">Synthesis Toolkit</a>
@@ -445,7 +447,31 @@ For reftypes, <code>.borrow</code> means a reference (source not invalidated).
 <code>.lock</code> on a known valtype is a compile error -- valtypes are
 pass-by-value so identity-based locking is meaningless. Generic type
 parameters are exempt because they may monomorphize to a reftype.</p>
-<h3 id="type-narrowing"><a href="#type-narrowing">7.6. Type Narrowing</a></h3>
+<h3 id="numeric-literal-coercion"><a href="#numeric-literal-coercion">7.6. Numeric Literal Coercion</a></h3>
+<p>Bare numeric literals (and constant expressions folded from them) coerce
+losslessly to a concrete numeric target at typed-location boundaries
+through the single helper <code>TypeChecker._coerce_literal</code> in
+<code>src/ztypecheck.py</code>. The helper reads <code>node_const_value</code> for the
+candidate node, applies the rule appropriate to the source/target
+combination (int&#x2192;int range check via <code>NUMERIC_RANGES</code>; int&#x2192;float exact
+mantissa via <code>int_fits_float</code>; float&#x2192;float round-trip via
+<code>float_fits_float</code>; float&#x2192;int rejected outright), and on success
+rewrites <code>node_type</code> on the value node to the target. Callers gate the
+coercion attempt on the value having a <code>node_const_value</code> and the
+target being a numeric type; when present, an out-of-range value yields
+a literal-aware diagnostic and the caller suppresses its generic
+type-mismatch error.</p>
+<p>Wired sites: call arguments (<code>_check_call_arguments</code>), function
+implicit return (<code>_check_function_body_inner</code>), reassignment RHS
+(<code>_check_reassignment_inner</code>), and match-arm numeric patterns
+(<code>_check_case_inner</code>). The forward-looking <code>LITERAL_INT</code> /
+<code>LITERAL_FLOAT</code> singletons and the <code>node_literal_base</code> table on
+<code>ZTyping</code> are reserved for a later wave that lifts intermediate
+constant arithmetic into true arbitrary precision; today the existing
+folder still range-checks intermediate values against the natural
+result type, so a constant expression that exceeds the source type's
+range fails at the fold site rather than the coercion site.</p>
+<h3 id="type-narrowing"><a href="#type-narrowing">7.7. Type Narrowing</a></h3>
 <p>Type narrowing for union and variant types is tracked through scope-based
 overlay entries. When a match arm narrows a variable to a specific subtype,
 a narrowing entry is placed in the arm's scope. When the arm scope is
@@ -458,7 +484,7 @@ excluded subtype produces a compile error.</p>
 narrowing entry in the current scope. Reassignment resets the narrowing.</p>
 <p>If all branches of an <code>if</code> or <code>match</code> diverge, the parent scope is
 marked unreachable and subsequent statements are reported as dead code.</p>
-<h3 id="synthesis-toolkit"><a href="#synthesis-toolkit">7.7. Synthesis Toolkit</a></h3>
+<h3 id="synthesis-toolkit"><a href="#synthesis-toolkit">7.8. Synthesis Toolkit</a></h3>
 <p>The type checker may need to introduce nodes that did not appear in
 the parsed source -- temporaries introduced by per-call argument
 hoisting, equality functions auto-generated from a type definition,

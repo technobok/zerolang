@@ -319,6 +319,79 @@ Examples:
   (1e15).f128
   """
 
+
+#----: Numeric defaults
+
+Bare numeric literals follow the default-type rule when their surrounding
+context does not pin a target type:
+
+#table cols="2 2":
+  Lexical form                                | Default type
+  decimal integer (#~"100", #~"-200")         | #~"i64"
+  non-decimal integer (#~"0xff", #~"0b101")   | #~"u64"
+  literal with #~"." or #~"e" (#~"3.14", #~"1e5") | #~"f64"
+
+A bare literal in a context with no target type — for example the RHS of a
+label binding (#~"x: 100") — resolves to its default. Explicit dotted-method
+suffixes (#~"100.u8", #~"3.14.f32") override the default and pin the type
+directly.
+
+
+#----: Numeric literal coercion at typed locations
+
+When a numeric literal — or a compile-time constant expression built from
+numeric literals — appears in a position whose surrounding declaration
+provides a target numeric type, the literal is coerced losslessly to that
+type. No explicit dotted-method suffix is required.
+
+Coercion sites currently include:
+
+#table cols="2 2":
+  Site                          | Example
+  call argument                 | #~"f val: 100"  (parameter #~"val: u32")
+  function implicit return      | #~"f: function out u32 is { 100 }"
+  reassignment RHS              | #~"a: 10.u8 ; a = 200 + 100 - 250"
+  match-arm numeric pattern     | #~"match v case 100 then ..."  (subject #~"u8")
+
+The rules for "lossless" are:
+
+#ul:
+  [#*: #_*"integer literal → integer target": the value must lie in the
+    target's range (e.g. #~"u8" requires #~"0..255"). Constant arithmetic
+    on integer literals is folded by the compiler, and the #_*"final"
+    value — not any intermediate — is range-checked at the boundary.
+    So #~"200 + 100 - 250" coerces cleanly into #~"u8" (folded value
+    50), even though the intermediate #~"300" would not fit on its own.]
+  [#*: #_*"integer literal → float target": the value must be exactly
+    representable in the float's mantissa. #~"16777216" (#~"2^24") fits
+    #~"f32"; #~"16777217" does not.]
+  [#*: #_*"float literal → integer target": rejected. Float literals
+    coerce only to float types. Use #~".i32" / #~".i64" / etc.
+    explicitly when an integer conversion is intended.]
+  [#*: #_*"float literal → float target": the value must round-trip
+    exactly through the target's precision (e.g. #~"0.1" does not fit
+    #~"f32").]
+
+A literal that fails any of these checks produces a literal-aware
+diagnostic at compile time naming the value and the target's range — no
+runtime overflow.
+
+Examples:
+
+#code language=zerolang: """
+  push_byte: function {b: u8} is { }
+  small_value: function out u8 is { 200 + 100 - 250 }  # returns 50
+
+  main: function is {
+      push_byte b: 100              # 100 coerces to u8
+      push_byte b: 50 + 25 + 25     # folded to 100, fits u8
+      push_byte b: 100.u8           # explicit suffix still works
+
+      a: 10.u8                       # a is u8
+      a = 100                        # bare 100 coerces to a's u8
+  }
+  """
+
 #---: Labels
 
 Labels are used when assigning names to definitions. They are
@@ -822,7 +895,9 @@ argument from a named variable:
 
 When a function parameter has a default value (numeric constant or function
 reference), the caller may omit that argument. The default value is used in
-place of the missing argument. All bare numeric defaults are typed as i64.
+place of the missing argument. Bare numeric defaults follow the literal
+default rules described in [#> to=numeric-defaults: Numeric defaults] —
+decimal integers default to i64, non-decimal to u64, floats to f64.
 Function references (functions with bodies) serve as both the type and the
 default value. Specs (functions without bodies) provide only the type, with no
 default.

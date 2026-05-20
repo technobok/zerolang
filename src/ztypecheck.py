@@ -31,6 +31,8 @@ from ztypes import (
     ZExprResult,
     NUMERIC_RANGES,
     parse_number,
+    int_fits_float,
+    float_fits_float,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -256,6 +258,24 @@ _RESOLVING = object()
 _PRIMITIVE_TYPE_NAMES: frozenset[str] = frozenset(NUMERIC_RANGES.keys()) | frozenset(
     {"bool", "null", "f32", "f64", "f128"}
 )
+
+# Concrete numeric type-name sets for literal coercion classification.
+# `_INTEGER_TYPE_NAMES` is exactly `NUMERIC_RANGES.keys()` (i*, u*, c*);
+# `_FLOAT_TYPE_NAMES` is the three IEEE 754 binary float types.
+_INTEGER_TYPE_NAMES: frozenset[str] = frozenset(NUMERIC_RANGES.keys())
+_FLOAT_TYPE_NAMES: frozenset[str] = frozenset({"f32", "f64", "f128"})
+
+
+def _is_integer_type(ztype: ZType) -> bool:
+    return ztype.name in _INTEGER_TYPE_NAMES
+
+
+def _is_float_type(ztype: ZType) -> bool:
+    return ztype.name in _FLOAT_TYPE_NAMES
+
+
+def _is_numeric_type(ztype: ZType) -> bool:
+    return ztype.name in _INTEGER_TYPE_NAMES or ztype.name in _FLOAT_TYPE_NAMES
 
 
 def _is_primitive_name(name: str) -> bool:
@@ -4313,6 +4333,96 @@ class TypeChecker:
             base = base.typedef_base
         return False
 
+    def _coerce_literal(
+        self,
+        value_node: zast.Node,
+        target_type: ZType,
+        loc: Optional[Token] = None,
+    ) -> bool:
+        """Attempt to losslessly coerce a constant-valued node to a
+        concrete numeric target type. Returns True iff coerced (and
+        rewrites `node_type[value_node.nodeid]` to `target_type`); False
+        otherwise. On out-of-range or rule violation, emits a
+        literal-aware diagnostic before returning False so the caller
+        does not need to add a generic type-mismatch error.
+
+        Wired into typed-location sites — call arguments, function
+        return, parameter defaults, field initialisers, collection
+        elements, reassignment RHS, match-arm constants. The caller
+        gates this on the source actually having a const_value
+        (`self.typing.node_const_value.get(nodeid) is not None`) and
+        on the target being a numeric type — when those preconditions
+        are not met, this helper returns False without emitting.
+
+        Rules (locked in by the design questions):
+        - int literal → int target: in `NUMERIC_RANGES[target.name]`.
+        - int literal → float target: exact mantissa representability
+          via `int_fits_float`.
+        - float literal → int target: REJECTED.
+        - float literal → float target: exact round-trip via
+          `float_fits_float`.
+        """
+        nodeid = value_node.nodeid
+        cv = self.typing.node_const_value.get(nodeid)
+        if cv is None:
+            return False
+        src_type = self.typing.node_type.get(nodeid)
+        if src_type is None:
+            return False
+        if not _is_numeric_type(target_type):
+            return False
+        if not _is_numeric_type(src_type):
+            return False
+        # Already the same type → nothing to do (caller's
+        # `_types_compatible` should have short-circuited; this is a
+        # safety net).
+        if src_type is target_type or src_type.type_id == target_type.type_id:
+            self.typing.node_type[nodeid] = target_type
+            return True
+
+        if type(cv) is int:
+            value = cv
+            if _is_integer_type(target_type):
+                lo, hi = NUMERIC_RANGES[target_type.name]
+                if not (lo <= value <= hi):
+                    self._error(
+                        f"literal value {value} cannot be losslessly stored "
+                        f"in {target_type.name} (range {lo}..{hi})",
+                        loc=loc,
+                    )
+                    return False
+            else:  # float target
+                if not int_fits_float(value, target_type.name):
+                    self._error(
+                        f"integer literal {value} is not exactly "
+                        f"representable in {target_type.name}",
+                        loc=loc,
+                    )
+                    return False
+        elif type(cv) is float:
+            value_f = cv
+            if _is_integer_type(target_type):
+                self._error(
+                    f"float literal {value_f} cannot coerce to integer "
+                    f"type {target_type.name}",
+                    loc=loc,
+                )
+                return False
+            # float target
+            if not float_fits_float(value_f, target_type.name):
+                self._error(
+                    f"float literal {value_f} is not exactly representable "
+                    f"in {target_type.name}",
+                    loc=loc,
+                )
+                return False
+        else:
+            # bool / str const_value — not a numeric literal.
+            return False
+
+        self.typing.node_type[nodeid] = target_type
+        return True
+
     def _find_conformance_label(
         self, impl_type: ZType, proto_type: ZType
     ) -> Optional[str]:
@@ -6215,12 +6325,26 @@ class TypeChecker:
             last_type = self.typing.node_type.get(last.nodeid)
             if last_type is not None and last_type.typetype != ZTypeType.NEVER:
                 if not self._types_compatible(last_type, self.func_ctx.return_type):
-                    self._error(
-                        f"implicit return type '{last_type.name}' does not match "
-                        f"declared return type '{self.func_ctx.return_type.name}'",
-                        loc=last.start,
-                        err=ERR.TYPEERROR,
+                    # Numeric-literal coercion at the return boundary:
+                    # if the last expression is a compile-time constant
+                    # (bare literal or folded constant expression), try
+                    # to losslessly coerce it to the declared return
+                    # type before treating it as a type mismatch.
+                    coerced = self.typing.node_const_value.get(
+                        last.nodeid
+                    ) is not None and self._coerce_literal(
+                        last, self.func_ctx.return_type, loc=last.start
                     )
+                    if (
+                        not coerced
+                        and self.typing.node_const_value.get(last.nodeid) is None
+                    ):
+                        self._error(
+                            f"implicit return type '{last_type.name}' does not match "
+                            f"declared return type '{self.func_ctx.return_type.name}'",
+                            loc=last.start,
+                            err=ERR.TYPEERROR,
+                        )
 
         self.func_ctx.return_type = prev_return_type
         self.func_ctx.func_ownership = prev_func_ownership
@@ -6295,6 +6419,12 @@ class TypeChecker:
         inner_t = self.typing.node_type.get(inner.nodeid)
         if inner_t is not None:
             self.typing.node_type[sline.nodeid] = inner_t
+        # propagate const_value too, so the implicit-return literal
+        # coercion at `_check_function_body_inner` can find it via the
+        # StatementLine's nodeid.
+        inner_cv = self.typing.node_const_value.get(inner.nodeid)
+        if inner_cv is not None:
+            self.typing.node_const_value[sline.nodeid] = inner_cv
 
     def _check_non_runtime_type(self, t: ZType, context: str, loc: Token) -> bool:
         """Check if a type is non-runtime (null/never/unit). Returns True if error emitted."""
@@ -6461,10 +6591,26 @@ class TypeChecker:
                 self.typing.node_type[reassign.topath.nodeid] = new_t
                 existing = new_t
         elif existing and new_t and not self._types_compatible(existing, new_t):
-            self._error(
-                f"Cannot assign {new_t.name} to variable of type {existing.name}",
-                loc=reassign.start,
+            # Numeric-literal coercion at the reassignment boundary:
+            # if the RHS is a compile-time constant (bare literal or
+            # folded constant expression), try a lossless coercion to
+            # the LHS's existing numeric type before treating it as a
+            # type mismatch.
+            value_op = reassign.value.expression
+            coerced = self.typing.node_const_value.get(
+                value_op.nodeid
+            ) is not None and self._coerce_literal(
+                value_op, existing, loc=reassign.start
             )
+            if coerced:
+                # Keep the Expression wrapper's type in sync so
+                # downstream readers see the coerced type.
+                self.typing.node_type[reassign.value.nodeid] = existing
+            elif self.typing.node_const_value.get(value_op.nodeid) is None:
+                self._error(
+                    f"Cannot assign {new_t.name} to variable of type {existing.name}",
+                    loc=reassign.start,
+                )
 
         # static constant check: cannot reassign 'as' section constants
         if existing and existing.const_value is not None:
@@ -8008,9 +8154,28 @@ class TypeChecker:
                         # expects a protocol/facet and the concrete arg
                         # type conforms, synthesise the wrapper.
                         own = self.typing.child_ownership(callee_type, arg.name)
-                        if self._try_protocol_coerce(arg, arg_type, matched, own):
+                        # Numeric-literal coercion: if the arg carries a
+                        # compile-time const value (bare literal or folded
+                        # constant expression), try a lossless coercion
+                        # to the parameter's numeric type before treating
+                        # it as a type-mismatch.
+                        coerced = self.typing.node_const_value.get(
+                            arg.valtype.nodeid
+                        ) is not None and self._coerce_literal(
+                            arg.valtype, matched, loc=arg.start
+                        )
+                        if coerced:
                             arg_type = matched
-                        else:
+                        elif self._try_protocol_coerce(arg, arg_type, matched, own):
+                            arg_type = matched
+                        elif (
+                            self.typing.node_const_value.get(arg.valtype.nodeid) is None
+                        ):
+                            # Const value absent — no literal coercion was
+                            # attempted. Emit the generic type-mismatch
+                            # diagnostic. (When const_value is present
+                            # `_coerce_literal` already emitted a
+                            # literal-aware diagnostic on failure.)
                             self._error(
                                 f"argument '{arg.name}' type mismatch: expected "
                                 f"{matched.name}, got {arg_type.name}",
@@ -8032,9 +8197,16 @@ class TypeChecker:
                 pname, ptype = params[i]
                 if not self._types_compatible(arg_type, ptype):
                     own = self.typing.child_ownership(callee_type, pname)
-                    if self._try_protocol_coerce(arg, arg_type, ptype, own):
+                    coerced = self.typing.node_const_value.get(
+                        arg.valtype.nodeid
+                    ) is not None and self._coerce_literal(
+                        arg.valtype, ptype, loc=arg.start
+                    )
+                    if coerced:
                         arg_type = ptype
-                    else:
+                    elif self._try_protocol_coerce(arg, arg_type, ptype, own):
+                        arg_type = ptype
+                    elif self.typing.node_const_value.get(arg.valtype.nodeid) is None:
                         self._error(
                             f"argument type mismatch: expected {ptype.name}, "
                             f"got {arg_type.name}",
@@ -8398,6 +8570,21 @@ class TypeChecker:
         # Replace the arg's value with an AtomId reference to the temp.
         atom = make_atom_id(temp_name, arg.valtype.start, origin="anf")
         self.typing.node_type[atom.nodeid] = arg_type
+        # Propagate const_value from the hoisted expression so
+        # downstream literal-coercion (`_coerce_literal`) at the
+        # call-site param-match still sees the constant — the
+        # symbol-lookup view of the synth temp would otherwise hide
+        # it. `make_assignment` wraps the value_op in a freshly
+        # synthesised Expression, so the const_value lives on the
+        # inner expression (e.g. the original BinOp), not on the
+        # wrapper. Peek through.
+        orig_cv = self.typing.node_const_value.get(temp_assn.value.nodeid)
+        if orig_cv is None:
+            orig_cv = self.typing.node_const_value.get(
+                temp_assn.value.expression.nodeid
+            )
+        if orig_cv is not None:
+            self.typing.node_const_value[atom.nodeid] = orig_cv
         # `NamedOperation` is frozen post-Step 7; this is the
         # last in-place mutation needed for atomic-call hoisting
         # (rebuilding the parent Call's arguments list with a fresh
@@ -10773,9 +10960,37 @@ class TypeChecker:
 
             # resolve match pattern const_value for scalar const folding
             suppress_arm = False
+            mname = clause.match.name
+            if _is_numeric_id(mname):
+                _, mval, merr = parse_number(mname)
+                if not merr and type(mval) is int:
+                    self.typing.node_const_value[clause.match.nodeid] = mval
+                    # Numeric-literal coercion at the match-arm
+                    # boundary: when the subject is a concrete
+                    # numeric, the pattern literal must fit the
+                    # subject's range to be reachable. Routes through
+                    # `_coerce_literal` so an out-of-range pattern
+                    # gets a literal-aware diagnostic.
+                    if subject_type is not None and _is_numeric_type(subject_type):
+                        # Seed the pattern's source type so
+                        # `_coerce_literal` can classify it; use the
+                        # default-resolved numeric to mirror today's
+                        # bare-literal default behaviour.
+                        pat_t = self.typing.node_type.get(clause.match.nodeid)
+                        if pat_t is None:
+                            pat_t = self._resolve_numeric(mname, loc=clause.match.start)
+                            if pat_t is not None:
+                                self.typing.node_type[clause.match.nodeid] = pat_t
+                        if pat_t is not None and not self._types_compatible(
+                            pat_t, subject_type
+                        ):
+                            self._coerce_literal(
+                                clause.match,
+                                subject_type,
+                                loc=clause.match.start,
+                            )
             if subject_const is not None:
                 match_cv = None
-                mname = clause.match.name
                 if _is_numeric_id(mname):
                     _, mval, merr = parse_number(mname)
                     if not merr and type(mval) is int:
