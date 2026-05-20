@@ -187,9 +187,9 @@ class TestOwnershipErrors:
             src = os.path.join(tmpdir, "errtest.z")
             with open(src, "w") as f:
                 f.write(
-                    "myclass: class { x: i64 }\n"
+                    "MyClass: class { x: i64 }\n"
                     "main: function is {\n"
-                    "  c: myclass x: 1\n"
+                    "  c: MyClass x: 1\n"
                     "  d: c.take\n"
                     "  print c\n"
                     "}\n"

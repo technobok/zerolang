@@ -3,7 +3,7 @@ Generator-function desugaring (Phase G3).
 
 Runs after parsing and before type resolution. Walks every parsed
 function looking for *generators* — functions whose `out` type is
-`iterator gives: T (takes: U)` AND whose body contains at least one
+`Iterator gives: T (takes: U)` AND whose body contains at least one
 `yield` expression. For each generator, this pass:
 
   1. Validates the parameter ownership annotations (bare `.borrow` is
@@ -79,7 +79,7 @@ def _desugar_unit(unit: zast.Unit, errors: List[zast.Error]) -> None:
     # so a generator that captures another generator's iterator into
     # a promoted local can refer to the callee's synth class by name
     # at field-type inference time (rather than seeing the structural
-    # `iterator gives: T` return type, which the typechecker won't
+    # `Iterator gives: T` return type, which the typechecker won't
     # unify with the concrete synth class).
     gen_synth_names: Dict[str, str] = {}
     for name, defn in unit.body.items():
@@ -175,7 +175,7 @@ def _desugar_object_def(
 
 def _is_generator_function(func: Function) -> bool:
     """A function is a generator iff:
-    (a) its declared return type is `iterator gives: T (takes: U)`,
+    (a) its declared return type is `Iterator gives: T (takes: U)`,
         recognised structurally on the parsed return-type AST, AND
     (b) its body contains at least one `yield` expression.
     """
@@ -187,12 +187,12 @@ def _is_generator_function(func: Function) -> bool:
 
 
 def _returntype_is_iterator(rt: Optional[Path]) -> bool:
-    """The return type AST is `iterator gives: ...` when the parsed
-    path is `Expression(Call(callable=AtomId("iterator"), args=...))`.
+    """The return type AST is `Iterator gives: ...` when the parsed
+    path is `Expression(Call(callable=AtomId("Iterator"), args=...))`.
 
     The check is intentionally syntactic — it must run *before* type
-    resolution, so `iterator` is recognised by the lexeme. Aliasing
-    `iterator` to some other name in a non-system unit would skip
+    resolution, so `Iterator` is recognised by the lexeme. Aliasing
+    `Iterator` to some other name in a non-system unit would skip
     this branch; that's deliberate — generator synthesis is a
     stdlib-coupled feature.
     """
@@ -206,7 +206,7 @@ def _returntype_is_iterator(rt: Optional[Path]) -> bool:
         return False
     return (
         cast(AtomId, call.callable).name
-        == "iterator"  # ztc-string-compare-ok: iterator marker
+        == "Iterator"  # ztc-string-compare-ok: iterator marker
     )
 
 

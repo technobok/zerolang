@@ -323,7 +323,7 @@ class TestEmitterBasic:
     def test_for_iterator_binding(self):
         """For-loop with iterator binding: callable returning optionval."""
         csource = emit_source(
-            "counter: class { i: i64 max: i64 } as {\n"
+            "Counter: class { i: i64 max: i64 } as {\n"
             "  call: function {c: this} out (optionval t: i64) is {\n"
             "    if c.i < c.max then {\n"
             "      result: optionval.some c.i\n"
@@ -335,7 +335,7 @@ class TestEmitterBasic:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  with iter: (counter i: 0 max: 3) do for x: iter loop {\n"
+            "  with iter: (Counter i: 0 max: 3) do for x: iter loop {\n"
             '    print "\\{x}"\n'
             "  }\n"
             "}"
@@ -1216,7 +1216,7 @@ class TestUserMethodStringTake:
         from zvfs import ZVfs, FSProvider, StringProvider, BindType
 
         src = (
-            "holder: class {\n"
+            "Holder: class {\n"
             "    n: i64\n"
             "} as {\n"
             "    greet: function {:this s: String.take} is {\n"
@@ -1224,7 +1224,7 @@ class TestUserMethodStringTake:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    h: holder n: 0\n"
+            "    h: Holder n: 0\n"
             '    h.greet s: "hello".string\n'
             "}\n"
         )
@@ -1260,19 +1260,19 @@ class TestPrintStackClassDispatch:
 
     def test_print_stack_class_passes_address(self):
         src = (
-            "mylabel: class { s: String } as {\n"
+            "Mylabel: class { s: String } as {\n"
             "    :Text\n"
             "    stringview: function {m: this} out StringView is {\n"
             "        return m.s.stringview\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            '    m: mylabel s: "hello".string\n'
+            '    m: Mylabel s: "hello".string\n'
             "    print m\n"
             "}\n"
         )
         csource = emit_source(src)
-        assert "z_mylabel_stringview(&m)" in csource
+        assert "z_Mylabel_stringview(&m)" in csource
         # end-to-end: compile + run
         stdout = compile_and_run(csource)
         assert stdout.strip() == "hello"
@@ -1281,8 +1281,8 @@ class TestPrintStackClassDispatch:
         """Control: records (valtypes) continue to receive `this` by
         value. The `&` prefix guard must only trigger for classes."""
         src = (
-            "tag: class { val: String } as {}\n"
-            "mypair: record { name: tag } as {\n"
+            "Tag: class { val: String } as {}\n"
+            "mypair: record { name: Tag } as {\n"
             "    :Text\n"
             "    stringview: function {p: this} out StringView is {\n"
             "        return p.name.val.stringview\n"
@@ -1574,12 +1574,12 @@ class TestEmitterStringOwnership:
         unconditional `z_String_free(&s)` and corrupted the source's
         heap data."""
         csource = emit_source(
-            "mybox: class { label: String }\n"
-            "peek: function {b: mybox.lock} out String.borrow is {\n"
+            "MyBox: class { label: String }\n"
+            "peek: function {b: MyBox.lock} out String.borrow is {\n"
             "  return b.label\n"
             "}\n"
             "main: function is {\n"
-            '  e: mybox label: "echo".string\n'
+            '  e: MyBox label: "echo".string\n'
             "  s: peek e\n"
             '  print "peeked: \\{s}"\n'
             "  s.release\n"
@@ -1820,12 +1820,12 @@ class TestMatchExpression:
     def test_match_expression_union(self):
         """Union match as expression, compile+run."""
         csource = emit_source(
-            "shape: union { circle: i64\n square: i64 }\n"
-            "area: function {s: shape} out i64 is {\n"
+            "Shape: union { circle: i64\n square: i64 }\n"
+            "area: function {s: Shape} out i64 is {\n"
             "  match s case circle then 314 case square then 100\n"
             "}\n"
             "main: function is {\n"
-            "  c: shape.circle 5\n"
+            "  c: Shape.circle 5\n"
             '  print "\\{area c}"\n'
             "}"
         )
@@ -2099,69 +2099,69 @@ class TestEmitterClasses:
     def test_class_struct_emitted(self):
         """Class should emit a typedef struct."""
         csource = emit_source(
-            "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0\n y: 0.0 }\nmain: function is { c: MyClass }"
         )
         assert "typedef struct {" in csource
-        assert "z_myclass_t" in csource
+        assert "z_MyClass_t" in csource
         assert "int64_t x;" in csource
         assert "double y;" in csource
 
     def test_class_construction_calls_create(self):
         """Class construction should call create instead of inline malloc."""
         csource = emit_source(
-            "myclass: class { x: i64 }\nmain: function is { c: myclass x: 5 }"
+            "MyClass: class { x: i64 }\nmain: function is { c: MyClass x: 5 }"
         )
-        assert "z_myclass_create(5)" in csource
+        assert "z_MyClass_create(5)" in csource
 
     def test_class_field_access_uses_arrow(self):
         """Class field access should use -> operator."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            'main: function is { c: myclass x: 5\n print "\\{c.x}" }'
+            "MyClass: class { x: i64 }\n"
+            'main: function is { c: MyClass x: 5\n print "\\{c.x}" }'
         )
         assert "c.x" in csource
 
     def test_class_scope_cleanup(self):
         """Class variables destroyed at function exit."""
         csource = emit_source(
-            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0 }\nmain: function is { c: MyClass }"
         )
         # valtype-only class: no destructor needed
-        assert "z_myclass_destroy" not in csource
+        assert "z_MyClass_destroy" not in csource
 
     def test_class_take_aliases_source(self):
         """Inline `d: c.take` on a class is emitted as a binding alias:
         no new local, no nullification, one destructor at scope end."""
         csource = emit_source(
-            "myclass: class { x: 0 }\nmain: function is { c: myclass\n d: c.take }"
+            "MyClass: class { x: 0 }\nmain: function is { c: MyClass\n d: c.take }"
         )
         # alias marker present
         assert "/* alias: d => c */" in csource
         # no separate d local declared
-        assert "z_myclass_t d =" not in csource
+        assert "z_MyClass_t d =" not in csource
 
     def test_class_method_uses_pointer(self):
         """Class methods should take pointer parameter."""
         csource = emit_source(
-            "myclass: class { x: 0 } as {\n"
+            "MyClass: class { x: 0 } as {\n"
             "  get: function {c: this} out i64 is { return c.x }\n"
             "}\n"
-            "main: function is { c: myclass }"
+            "main: function is { c: MyClass }"
         )
-        assert "z_myclass_t*" in csource
+        assert "z_MyClass_t*" in csource
         assert "c->x" in csource
 
     def test_class_swap_emits(self):
         """Swap of class pointers should emit correctly."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  a: myclass x: 1\n"
-            "  b: myclass x: 2\n"
+            "  a: MyClass x: 1\n"
+            "  b: MyClass x: 2\n"
             "  a swap b\n"
             "}"
         )
-        assert "z_myclass_t _tmp" in csource
+        assert "z_MyClass_t _tmp" in csource
 
 
 class TestEmitterClassIntegration:
@@ -2169,18 +2169,18 @@ class TestEmitterClassIntegration:
 
     def test_class_construction_and_field(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            'main: function is { c: myclass x: 42\n print "\\{c.x}" }'
+            "MyClass: class { x: i64 }\n"
+            'main: function is { c: MyClass x: 42\n print "\\{c.x}" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
 
     def test_class_method_call(self):
         csource = emit_source(
-            "counter: class { value: i64 } as {\n"
+            "Counter: class { value: i64 } as {\n"
             "  get: function {c: this} out i64 is { return c.value }\n"
             "}\n"
-            'main: function is { c: counter value: 7\n print "\\{counter.get c}" }'
+            'main: function is { c: Counter value: 7\n print "\\{Counter.get c}" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "7"
@@ -2192,12 +2192,12 @@ class TestEmitterClassIntegration:
         `z_method(arg)`. Before Commit D, the pattern was rejected at
         typecheck; the emitter's statement Path never handled it."""
         csource = emit_source(
-            "sink: class { total: i64 } as {\n"
+            "Sink: class { total: i64 } as {\n"
             "  add: function {:this n: i64} is {\n"
             "    this.total = this.total + n\n"
             "  }\n"
             "}\n"
-            "pipe: class { dst: sink } as {\n"
+            "Pipe: class { dst: Sink } as {\n"
             "  pump: function {:this n: i64} is {\n"
             "    this.dst.add n: n\n"
             "  }\n"
@@ -2206,7 +2206,7 @@ class TestEmitterClassIntegration:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  p: pipe dst: (sink total: 0)\n"
+            "  p: Pipe dst: (Sink total: 0)\n"
             "  p.pump n: 3\n"
             "  p.pump n: 4\n"
             '  print "\\{p.total}"\n'
@@ -2217,15 +2217,15 @@ class TestEmitterClassIntegration:
 
     def test_class_method_mutation(self):
         csource = emit_source(
-            "counter: class { value: i64 } as {\n"
+            "Counter: class { value: i64 } as {\n"
             "  inc: function {c: this} is { c.value = c.value + 1 }\n"
             "  get: function {c: this} out i64 is { return c.value }\n"
             "}\n"
             "main: function is {\n"
-            "  c: counter value: 0\n"
-            "  counter.inc c\n"
-            "  counter.inc c\n"
-            '  print "\\{counter.get c}"\n'
+            "  c: Counter value: 0\n"
+            "  Counter.inc c\n"
+            "  Counter.inc c\n"
+            '  print "\\{Counter.get c}"\n'
             "}"
         )
         output = compile_and_run(csource)
@@ -2233,8 +2233,8 @@ class TestEmitterClassIntegration:
 
     def test_class_function_return(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            "make: function {v: i64} out myclass is { return myclass x: v }\n"
+            "MyClass: class { x: i64 }\n"
+            "make: function {v: i64} out MyClass is { return MyClass x: v }\n"
             'main: function is { c: make 99\n print "\\{c.x}" }'
         )
         output = compile_and_run(csource)
@@ -2242,10 +2242,10 @@ class TestEmitterClassIntegration:
 
     def test_class_swap_runtime(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  a: myclass x: 1\n"
-            "  b: myclass x: 2\n"
+            "  a: MyClass x: 1\n"
+            "  b: MyClass x: 2\n"
             "  a swap b\n"
             '  print "\\{a.x} \\{b.x}"\n'
             "}"
@@ -2255,9 +2255,9 @@ class TestEmitterClassIntegration:
 
     def test_class_take_runtime(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  a: myclass x: 42\n"
+            "  a: MyClass x: 42\n"
             "  b: a.take\n"
             '  print "\\{b.x}"\n'
             "}"
@@ -2297,18 +2297,18 @@ class TestEmitterClassMemorySafety:
 
     def test_class_no_leak(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            'main: function is { c: myclass x: 42\n print "\\{c.x}" }'
+            "MyClass: class { x: i64 }\n"
+            'main: function is { c: MyClass x: 42\n print "\\{c.x}" }'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
     def test_class_swap_no_leak(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  a: myclass x: 1\n"
-            "  b: myclass x: 2\n"
+            "  a: MyClass x: 1\n"
+            "  b: MyClass x: 2\n"
             "  a swap b\n"
             '  print "\\{a.x}"\n'
             "}"
@@ -2318,9 +2318,9 @@ class TestEmitterClassMemorySafety:
 
     def test_class_take_no_double_free(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  a: myclass x: 42\n"
+            "  a: MyClass x: 42\n"
             "  b: a.take\n"
             '  print "\\{b.x}"\n'
             "}"
@@ -2330,8 +2330,8 @@ class TestEmitterClassMemorySafety:
 
     def test_class_function_return_no_leak(self):
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            "make: function {v: i64} out myclass is { return myclass x: v }\n"
+            "MyClass: class { x: i64 }\n"
+            "make: function {v: i64} out MyClass is { return MyClass x: v }\n"
             'main: function is { c: make 99\n print "\\{c.x}" }'
         )
         result = compile_and_run_asan(csource)
@@ -2370,74 +2370,74 @@ class TestEmitterClassDestructors:
     def test_class_destructor_with_string_field(self):
         """Class with String field: destructor frees String."""
         csource = emit_source(
-            'myclass: class { name: String\n x: 0 }\nmain: function is { c: myclass name: "" }'
+            'MyClass: class { name: String\n x: 0 }\nmain: function is { c: MyClass name: "" }'
         )
-        assert "z_myclass_destroy" in csource
+        assert "z_MyClass_destroy" in csource
         assert "z_String_free(&p->name);" in csource
 
     def test_class_destructor_with_class_field(self):
         """Class with class field: destructor recurses."""
         csource = emit_source(
-            "inner: class { x: 0 }\n"
-            "outer: class { child: inner }\n"
-            "main: function is { o: outer child: inner }"
+            "Inner: class { x: 0 }\n"
+            "Outer: class { child: Inner }\n"
+            "main: function is { o: Outer child: Inner }"
         )
-        # inner is valtype-only so no destructor; outer has no heap fields either
-        assert "z_inner_destroy" not in csource
-        assert "z_outer_destroy" not in csource
+        # Inner is valtype-only so no destructor; Outer has no heap fields either
+        assert "z_Inner_destroy" not in csource
+        assert "z_Outer_destroy" not in csource
 
     def test_class_destructor_with_union_field(self):
         """Class with union field: destructor calls union destroy."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "myclass: class { payload: myunion }\n"
-            "main: function is { c: myclass payload: myunion.b }"
+            "MyUnion: union { a: i64\n b: null }\n"
+            "MyClass: class { payload: MyUnion }\n"
+            "main: function is { c: MyClass payload: MyUnion.b }"
         )
-        assert "z_myunion_destroy(&p->payload);" in csource
+        assert "z_MyUnion_destroy(&p->payload);" in csource
 
     def test_class_destructor_valtype_only(self):
         """Class with only valtype fields: no destructor emitted."""
         csource = emit_source(
-            "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0\n y: 0.0 }\nmain: function is { c: MyClass }"
         )
-        assert "z_myclass_destroy" not in csource
+        assert "z_MyClass_destroy" not in csource
 
     def test_scope_exit_calls_destructor(self):
         """Scope-exit cleanup calls z_{name}_destroy."""
         csource = emit_source(
-            'myclass: class { name: String }\nmain: function is { c: myclass name: "" }'
+            'MyClass: class { name: String }\nmain: function is { c: MyClass name: "" }'
         )
         # should call destructor with address-of, not bare free
-        assert "z_myclass_destroy(&c);" in csource
+        assert "z_MyClass_destroy(&c);" in csource
         assert "if (c) free(c);" not in csource
 
     def test_reassignment_calls_destructor(self):
         """Reassignment calls destructor on old value."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  c: myclass x: 1\n"
-            "  c = myclass x: 2\n"
+            "  c: MyClass x: 1\n"
+            "  c = MyClass x: 2\n"
             "}"
         )
         # valtype-only class: no destructor needed
-        assert "z_myclass_destroy" not in csource
+        assert "z_MyClass_destroy" not in csource
 
     def test_with_block_calls_destructor(self):
         """With-block scope exit calls destructor."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            'main: function is { with c: (myclass x: 1) do print "ok" }'
+            "MyClass: class { x: i64 }\n"
+            'main: function is { with c: (MyClass x: 1) do print "ok" }'
         )
         # valtype-only class: no destructor needed
-        assert "z_myclass_destroy" not in csource
+        assert "z_MyClass_destroy" not in csource
 
     def test_union_class_subtype_destructor(self):
         """Union with class subtype calls class destructor in union destructor."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            "myunion: union { a: myclass\n b: null }\n"
-            "main: function is { u: myunion.b }"
+            "MyClass: class { x: i64 }\n"
+            "MyUnion: union { a: MyClass\n b: null }\n"
+            "main: function is { u: MyUnion.b }"
         )
         # valtype-only class: no class destructor, union just frees data
         assert "free(u->data);" in csource
@@ -2449,8 +2449,8 @@ class TestEmitterClassDestructorIntegration:
     def test_class_string_field_asan(self):
         """Class with String field: no leak under ASan."""
         csource = emit_source(
-            "myclass: class { name: String\n x: i64 }\n"
-            'main: function is {\n  c: myclass name: "hello".string x: 42\n  print "\\{c.name}"\n}'
+            "MyClass: class { name: String\n x: i64 }\n"
+            'main: function is {\n  c: MyClass name: "hello".string x: 42\n  print "\\{c.name}"\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -2459,11 +2459,11 @@ class TestEmitterClassDestructorIntegration:
     def test_class_nested_class_field_asan(self):
         """Nested class field: no leak under ASan."""
         csource = emit_source(
-            "inner: class { x: i64 }\n"
-            "outer: class { child: inner\n y: i64 }\n"
+            "Inner: class { x: i64 }\n"
+            "Outer: class { child: Inner\n y: i64 }\n"
             "main: function is {\n"
-            "  i: inner x: 10\n"
-            "  o: outer child: i.take y: 20\n"
+            "  i: Inner x: 10\n"
+            "  o: Outer child: i.take y: 20\n"
             '  print "\\{o.child.x} \\{o.y}"\n'
             "}"
         )
@@ -2474,11 +2474,11 @@ class TestEmitterClassDestructorIntegration:
     def test_class_union_field_asan(self):
         """Class with union field: no leak under ASan."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "myclass: class { payload: myunion\n x: i64 }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
+            "MyClass: class { payload: MyUnion\n x: i64 }\n"
             "main: function is {\n"
-            "  u: myunion.a 42\n"
-            "  c: myclass payload: u.take x: 1\n"
+            "  u: MyUnion.a 42\n"
+            "  c: MyClass payload: u.take x: 1\n"
             '  print "ok"\n'
             "}"
         )
@@ -2519,28 +2519,28 @@ class TestEmitterUnions:
     def test_union_struct_emitted(self):
         """Union should emit tag enum + struct."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
         assert "Z_MYUNION_TAG_A" in csource
         assert "Z_MYUNION_TAG_B" in csource
-        assert "z_myunion_tag_t" in csource
-        assert "z_myunion_t" in csource
+        assert "z_MyUnion_tag_t" in csource
+        assert "z_MyUnion_t" in csource
         assert "void* data;" in csource
 
     def test_union_construction_emits_malloc(self):
         """Union construction should emit stack struct init + tag + data."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 42 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 42 }"
         )
-        assert "z_xmalloc(sizeof(z_myunion_t))" not in csource
-        assert "z_myunion_t" in csource
+        assert "z_xmalloc(sizeof(z_MyUnion_t))" not in csource
+        assert "z_MyUnion_t" in csource
         assert "= {0}" in csource
         assert "Z_MYUNION_TAG_A" in csource
 
     def test_union_null_construction(self):
         """Null subtype construction emits tag + NULL data."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.b }"
         )
         assert "Z_MYUNION_TAG_B" in csource
         assert ".data = NULL" in csource
@@ -2548,9 +2548,9 @@ class TestEmitterUnions:
     def test_union_match_emits_switch(self):
         """Match on union emits switch on tag."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
@@ -2567,27 +2567,27 @@ class TestEmitterUnions:
     def test_union_scope_cleanup(self):
         """Union variables destroyed at function exit."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
-        assert "z_myunion_destroy(&x);" in csource
+        assert "z_MyUnion_destroy(&x);" in csource
 
     def test_union_take_aliases_source(self):
         """Inline `y: x.take` on a union is emitted as a binding alias:
         no new local, one destructor at scope end on the source."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            "main: function is { x: myunion.a 1\n y: x.take }"
+            "MyUnion: union { a: i64\n b: null }\n"
+            "main: function is { x: MyUnion.a 1\n y: x.take }"
         )
         assert "/* alias: y => x */" in csource
-        assert "z_myunion_t y =" not in csource
-        assert "z_myunion_destroy(&x);" in csource
+        assert "z_MyUnion_t y =" not in csource
+        assert "z_MyUnion_destroy(&x);" in csource
 
     def test_union_destructor_emitted(self):
         """Union destructor should be generated."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
-        assert "z_myunion_destroy" in csource
+        assert "z_MyUnion_destroy" in csource
         assert "switch (u->tag)" in csource
         assert "free(u);" not in csource
 
@@ -2599,8 +2599,8 @@ class TestEmitterUnionCustomTag:
         """Custom data tag values should appear as explicit enum values."""
         csource = emit_source(
             "pv: data { A: 10 B: 20 }\n"
-            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
         assert "Z_MYUNION_TAG_A = 10" in csource
         assert "Z_MYUNION_TAG_B = 20" in csource
@@ -2609,7 +2609,7 @@ class TestEmitterUnionCustomTag:
         """Sparse custom tag values should be emitted correctly."""
         csource = emit_source(
             "pv: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }\n"
-            "priority: union {\n"
+            "Priority: union {\n"
             "    LOW: null\n"
             "    MEDIUM: null\n"
             "    HIGH: null\n"
@@ -2617,7 +2617,7 @@ class TestEmitterUnionCustomTag:
             "} as {\n"
             "    tag: pv.tag\n"
             "}\n"
-            "main: function is { x: priority.LOW }"
+            "main: function is { x: Priority.LOW }"
         )
         assert "Z_PRIORITY_TAG_LOW = 0" in csource
         assert "Z_PRIORITY_TAG_CRITICAL = 10" in csource
@@ -2625,7 +2625,7 @@ class TestEmitterUnionCustomTag:
     def test_default_tag_uses_sequential_values(self):
         """Without custom tag, enum values should be sequential (auto-increment)."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
         # sequential values don't need explicit = N, just comma separation
         assert "Z_MYUNION_TAG_A," in csource
@@ -2635,18 +2635,18 @@ class TestEmitterUnionCustomTag:
     def test_numeric_tag_compiles(self):
         """Union with u16.tag compiles correctly."""
         csource = emit_source(
-            "myunion: union { A: null\n B: null } as { tag: u16.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: u16.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
-        assert "z_myunion_tag_t" in csource
+        assert "z_MyUnion_tag_t" in csource
 
     def test_data_tag_runtime(self):
         """Custom data tag still works at runtime after generic tag change."""
         csource = emit_source(
             "pv: data { A: 10 B: 20 }\n"
-            "myunion: union { A: i64\n B: null } as { tag: pv.tag }\n"
+            "MyUnion: union { A: i64\n B: null } as { tag: pv.tag }\n"
             "main: function is {\n"
-            "  x: myunion.A 42\n"
+            "  x: MyUnion.A 42\n"
             "  match (x) case A then {\n"
             '    print "a"\n'
             "  } case B then {\n"
@@ -2714,17 +2714,17 @@ class TestEmitterUnionIntegration:
 
     def test_union_basic(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            'main: function is { x: myunion.a 42\n print "ok" }'
+            "MyUnion: union { a: i64\n b: null }\n"
+            'main: function is { x: MyUnion.a 42\n print "ok" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
     def test_union_match(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
@@ -2739,9 +2739,9 @@ class TestEmitterUnionIntegration:
 
     def test_union_null_variant(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.b\n"
+            "  x: MyUnion.b\n"
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
@@ -2756,9 +2756,9 @@ class TestEmitterUnionIntegration:
 
     def test_union_string_variant(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: String\n c: null }\n"
+            "MyUnion: union { a: i64\n b: String\n c: null }\n"
             "main: function is {\n"
-            '  x: myunion.b "hello".string\n'
+            '  x: MyUnion.b "hello".string\n'
             '  print "ok"\n'
             "}"
         )
@@ -2767,9 +2767,9 @@ class TestEmitterUnionIntegration:
 
     def test_union_take(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 42\n"
+            "  x: MyUnion.a 42\n"
             "  y: x.take\n"
             '  print "ok"\n'
             "}"
@@ -2779,10 +2779,10 @@ class TestEmitterUnionIntegration:
 
     def test_union_swap(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
-            "  y: myunion.b\n"
+            "  x: MyUnion.a 1\n"
+            "  y: MyUnion.b\n"
             "  x swap y\n"
             "  match (\n"
             "    x\n"
@@ -2849,25 +2849,25 @@ class TestEmitterUnionMemorySafety:
 
     def test_union_no_leak(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
-            'main: function is { x: myunion.a 42\n print "ok" }'
+            "MyUnion: union { a: i64\n b: null }\n"
+            'main: function is { x: MyUnion.a 42\n print "ok" }'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
     def test_union_string_no_leak(self):
         csource = emit_source(
-            "myunion: union { a: String\n b: null }\n"
-            'main: function is { x: myunion.a "hello".string\n print "ok" }'
+            "MyUnion: union { a: String\n b: null }\n"
+            'main: function is { x: MyUnion.a "hello".string\n print "ok" }'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
 
     def test_union_take_no_double_free(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 42\n"
+            "  x: MyUnion.a 42\n"
             "  y: x.take\n"
             '  print "ok"\n'
             "}"
@@ -2877,10 +2877,10 @@ class TestEmitterUnionMemorySafety:
 
     def test_union_swap_no_leak(self):
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
-            "  y: myunion.b\n"
+            "  x: MyUnion.a 1\n"
+            "  y: MyUnion.b\n"
             "  x swap y\n"
             '  print "ok"\n'
             "}"
@@ -2918,26 +2918,26 @@ class TestStandaloneTake:
     def test_standalone_take_class(self):
         """x.take as statement on class → zero-init."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  c: myclass x: 42\n"
+            "  c: MyClass x: 42\n"
             "  c.take\n"
             "}"
         )
         # valtype-only class: no destructor, just zero-init
-        assert "c = (z_myclass_t){0};" in csource
+        assert "c = (z_MyClass_t){0};" in csource
 
     def test_standalone_take_union(self):
         """x.take as statement on union → destroy + NULL."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 42\n"
+            "  x: MyUnion.a 42\n"
             "  x.take\n"
             "}"
         )
-        assert "z_myunion_destroy(&x);" in csource
-        assert "x = (z_myunion_t){0};" in csource
+        assert "z_MyUnion_destroy(&x);" in csource
+        assert "x = (z_MyUnion_t){0};" in csource
 
     def test_standalone_take_string(self):
         """s.take as statement on String → free + zero-init."""
@@ -2948,9 +2948,9 @@ class TestStandaloneTake:
     def test_standalone_take_class_asan(self):
         """Standalone .take on class with String field → no leak, no double-free."""
         csource = emit_source(
-            "myclass: class { name: String }\n"
+            "MyClass: class { name: String }\n"
             "main: function is {\n"
-            '  c: myclass name: "hello".string\n'
+            '  c: MyClass name: "hello".string\n'
             "  c.take\n"
             '  print "ok"\n'
             "}"
@@ -2966,14 +2966,14 @@ class TestStandaloneRelease:
     def test_release_class(self):
         """x.release on class → zero-init."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  c: myclass x: 42\n"
+            "  c: MyClass x: 42\n"
             "  c.release\n"
             "}"
         )
         # valtype-only class: no destructor, just zero-init
-        assert "c = (z_myclass_t){0};" in csource
+        assert "c = (z_MyClass_t){0};" in csource
 
     def test_release_string(self):
         """s.release on String → free + zero-init."""
@@ -2991,9 +2991,9 @@ class TestStandaloneRelease:
     def test_release_class_asan(self):
         """Standalone .release on class → no leak, no double-free."""
         csource = emit_source(
-            "myclass: class { name: String }\n"
+            "MyClass: class { name: String }\n"
             "main: function is {\n"
-            '  c: myclass name: "hello".string\n'
+            '  c: MyClass name: "hello".string\n'
             "  c.release\n"
             '  print "ok"\n'
             "}"
@@ -3009,10 +3009,10 @@ class TestImplicitTake:
     def test_implicit_take_nullifies(self):
         """Function with .take param → caller's variable nullified after call."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            'consume: function {p: myclass.take} is { print "consumed" }\n'
+            "MyClass: class { x: i64 }\n"
+            'consume: function {p: MyClass.take} is { print "consumed" }\n'
             "main: function is {\n"
-            "  c: myclass x: 42\n"
+            "  c: MyClass x: 42\n"
             "  consume c\n"
             "}"
         )
@@ -3023,32 +3023,32 @@ class TestImplicitTake:
         for line in lines:
             if "z_consume(" in line and "c" in line and "&c" not in line:
                 found_call = True
-            elif found_call and "c = (z_myclass_t){0};" in line:
+            elif found_call and "c = (z_MyClass_t){0};" in line:
                 found_null = True
                 break
         assert found_call, "Expected call to z_consume(c) (by value)"
-        assert found_null, "Expected c = (z_myclass_t){0} after implicit take call"
+        assert found_null, "Expected c = (z_MyClass_t){0} after implicit take call"
 
     def test_implicit_take_no_double_null(self):
         """Explicit .take with implicit take param → only one zero-init."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            'consume: function {p: myclass.take} is { print "consumed" }\n'
+            "MyClass: class { x: i64 }\n"
+            'consume: function {p: MyClass.take} is { print "consumed" }\n'
             "main: function is {\n"
-            "  c: myclass x: 42\n"
+            "  c: MyClass x: 42\n"
             "  consume c.take\n"
             "}"
         )
         # should have exactly one zero-init (from explicit .take, not doubled)
-        assert csource.count("c = (z_myclass_t){0};") == 1
+        assert csource.count("c = (z_MyClass_t){0};") == 1
 
     def test_implicit_take_asan(self):
         """Implicit take with class → no double-free."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            "consume: function {p: myclass.take} is { p.take }\n"
+            "MyClass: class { x: i64 }\n"
+            "consume: function {p: MyClass.take} is { p.take }\n"
             "main: function is {\n"
-            "  c: myclass x: 42\n"
+            "  c: MyClass x: 42\n"
             "  consume c\n"
             '  print "ok"\n'
             "}"
@@ -3069,9 +3069,9 @@ class TestReturnPathTake:
         defaults reftype params to BORROW; the explicit `.take` opts out
         and gives the body owned access."""
         csource = emit_source(
-            "myclass: class { name: String }\n"
-            "wrap: function {s: String.take} out myclass is {\n"
-            "  return myclass name: s.take\n"
+            "MyClass: class { name: String }\n"
+            "wrap: function {s: String.take} out MyClass is {\n"
+            "  return MyClass name: s.take\n"
             "}\n"
             "main: function is {\n"
             '  c: wrap "hello".string\n'
@@ -3090,13 +3090,13 @@ class TestEmitterConstructors:
     def test_class_meta_create_emitted(self):
         """Class should emit both meta.create and create functions."""
         csource = emit_source(
-            "counter: class { value: 0 }\nmain: function is { c: counter }"
+            "Counter: class { value: 0 }\nmain: function is { c: Counter }"
         )
-        assert "z_counter_meta_create" in csource
-        assert "z_counter_create" in csource
-        assert "z_counter_t _this" in csource
-        # counter is stack-allocated; no z_counter_t* heap allocation
-        assert "(z_counter_t*)z_xmalloc" not in csource
+        assert "z_Counter_meta_create" in csource
+        assert "z_Counter_create" in csource
+        assert "z_Counter_t _this" in csource
+        # Counter is stack-allocated; no z_Counter_t* heap allocation
+        assert "(z_Counter_t*)z_xmalloc" not in csource
         assert "_this.value = value;" in csource
 
     def test_record_meta_create_emitted(self):
@@ -3114,10 +3114,10 @@ class TestEmitterConstructors:
     def test_class_construction_calls_create(self):
         """Class construction should call .create."""
         csource = emit_source(
-            "counter: class { value: i64 }\n"
-            'main: function is { c: counter value: 10\n print "\\{c.value}" }'
+            "Counter: class { value: i64 }\n"
+            'main: function is { c: Counter value: 10\n print "\\{c.value}" }'
         )
-        assert "z_counter_create(10)" in csource
+        assert "z_Counter_create(10)" in csource
 
     def test_record_construction_calls_create(self):
         """Record construction should call .create."""
@@ -3130,18 +3130,18 @@ class TestEmitterConstructors:
     def test_class_return_calls_create(self):
         """Return with class construction should call .create."""
         csource = emit_source(
-            "myclass: class { x: i64 }\n"
-            "make: function {v: i64} out myclass is { return myclass x: v }\n"
+            "MyClass: class { x: i64 }\n"
+            "make: function {v: i64} out MyClass is { return MyClass x: v }\n"
             "main: function is { c: make 99 }"
         )
-        assert "z_myclass_create(v)" in csource
+        assert "z_MyClass_create(v)" in csource
 
     def test_bare_class_calls_create(self):
         """Bare class name should call .create with zeros."""
         csource = emit_source(
-            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0 }\nmain: function is { c: MyClass }"
         )
-        assert "z_myclass_create(0)" in csource
+        assert "z_MyClass_create(0)" in csource
 
     def test_bare_record_calls_create(self):
         """Bare record name should call .create with zeros."""
@@ -3153,12 +3153,12 @@ class TestEmitterConstructors:
     def test_out_this_return_type(self):
         """Method with 'out this' return type should resolve correctly."""
         csource = emit_source(
-            "myclass: class { x: 0 } as {\n"
-            "  make: function {v: i64} out this is { return myclass x: v }\n"
+            "MyClass: class { x: 0 } as {\n"
+            "  make: function {v: i64} out this is { return MyClass x: v }\n"
             "}\n"
-            "main: function is { c: myclass }"
+            "main: function is { c: MyClass }"
         )
-        assert "z_myclass_t z_myclass_make" in csource
+        assert "z_MyClass_t z_MyClass_make" in csource
 
 
 class TestEmitterConstructorIntegration:
@@ -3167,8 +3167,8 @@ class TestEmitterConstructorIntegration:
     def test_class_meta_create_runtime(self):
         """Class meta.create: construct and access field."""
         csource = emit_source(
-            "counter: class { value: i64 }\n"
-            'main: function is { c: counter value: 42\n print "\\{c.value}" }'
+            "Counter: class { value: i64 }\n"
+            'main: function is { c: Counter value: 42\n print "\\{c.value}" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "42"
@@ -3185,8 +3185,8 @@ class TestEmitterConstructorIntegration:
     def test_class_string_field_take(self):
         """Class with String field: take semantics work via meta.create."""
         csource = emit_source(
-            "myclass: class { name: String }\n"
-            'main: function is {\n  c: myclass name: "hello".string\n  print "\\{c.name}"\n}'
+            "MyClass: class { name: String }\n"
+            'main: function is {\n  c: MyClass name: "hello".string\n  print "\\{c.name}"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "hello"
@@ -3198,8 +3198,8 @@ class TestEmitterConstructorMemorySafety:
     def test_class_meta_create_no_leak(self):
         """Class meta.create: no leak under ASan."""
         csource = emit_source(
-            "counter: class { value: i64 }\n"
-            'main: function is { c: counter value: 42\n print "\\{c.value}" }'
+            "Counter: class { value: i64 }\n"
+            'main: function is { c: Counter value: 42\n print "\\{c.value}" }'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -3207,8 +3207,8 @@ class TestEmitterConstructorMemorySafety:
     def test_class_string_field_no_leak(self):
         """Class with String field: no leak under ASan."""
         csource = emit_source(
-            "myclass: class { name: String }\n"
-            'main: function is {\n  c: myclass name: "hello".string\n  print "\\{c.name}"\n}'
+            "MyClass: class { name: String }\n"
+            'main: function is {\n  c: MyClass name: "hello".string\n  print "\\{c.name}"\n}'
         )
         result = compile_and_run_asan(csource)
         assert result.returncode == 0, f"ASan error:\n{result.stderr}"
@@ -3229,13 +3229,13 @@ class TestEmitterLabelValueShorthand:
     def test_union_with_label_value_subtypes(self):
         """Union with :x subtypes emits correct tag enum + struct."""
         csource = emit_source(
-            "myunion: union { :u8\n :u16\n :u32 }\n"
-            "main: function is { x: myunion.u8 42 }"
+            "MyUnion: union { :u8\n :u16\n :u32 }\n"
+            "main: function is { x: MyUnion.u8 42 }"
         )
         assert "Z_MYUNION_TAG_U8" in csource
         assert "Z_MYUNION_TAG_U16" in csource
         assert "Z_MYUNION_TAG_U32" in csource
-        assert "z_myunion_t" in csource
+        assert "z_MyUnion_t" in csource
 
     def test_call_with_label_value_arg(self):
         """Call with :x argument emits correctly."""
@@ -3251,8 +3251,8 @@ class TestEmitterLabelValueIntegration:
     def test_union_label_value_basic(self):
         """Compile and run union with :x subtypes."""
         csource = emit_source(
-            "myunion: union { :u8\n :String }\n"
-            'main: function is { x: myunion.u8 42\n print "ok" }'
+            "MyUnion: union { :u8\n :String }\n"
+            'main: function is { x: MyUnion.u8 42\n print "ok" }'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
@@ -3578,11 +3578,11 @@ class TestSpecs:
         csource = emit_source(
             "add: function {a: i64 b: i64} out i64 is { return a + b }\n"
             "mul: function {a: i64 b: i64} out i64 is { return a * b }\n"
-            "calc: class {\n"
+            "Calc: class {\n"
             "    op: function {a: i64 b: i64} out i64\n"
             "}\n"
             "main: function is {\n"
-            "  c: calc op: add.take\n"
+            "  c: Calc op: add.take\n"
             '  print "\\{c.op a: 5 b: 6}"\n'
             "  c.op = mul.take\n"
             '  print "\\{c.op a: 5 b: 6}"\n'
@@ -3957,15 +3957,15 @@ class TestDefaults:
         """Union default works on a class field (records reject union
         fields entirely for unrelated reftype reasons)."""
         csource = emit_source(
-            "event: union {\n"
+            "Event: union {\n"
             "    idle: null\n"
             "    busy: null\n"
             "}\n"
-            "machine: class {\n"
-            "    e: event.idle\n"
+            "Machine: class {\n"
+            "    e: Event.idle\n"
             "}\n"
             "main: function is {\n"
-            "    m: machine\n"
+            "    m: Machine\n"
             '    match (m.e) case idle then { print "idle" }'
             '    case busy then { print "busy" }\n'
             "}"
@@ -4158,7 +4158,7 @@ class TestProtocols:
         "Reader: protocol {\n"
         "    read: function {:this b: i64} out i64\n"
         "}\n"
-        "myfile: record {\n"
+        "MyFile: record {\n"
         "    fd: i64\n"
         "} as {\n"
         "    myreader: Reader\n"
@@ -4174,7 +4174,7 @@ class TestProtocols:
         "Reader: protocol {\n"
         "    read: function {:this b: i64} out i64\n"
         "}\n"
-        "myfile: class {\n"
+        "MyFile: class {\n"
         "    fd: i64\n"
         "} as {\n"
         "    myreader: Reader\n"
@@ -4187,7 +4187,7 @@ class TestProtocols:
     def test_protocol_vtable_struct(self):
         """C output contains vtable and instance struct."""
         csource = emit_source(
-            self.PROTO_SOURCE + "main: function is { f: myfile fd: 1 }"
+            self.PROTO_SOURCE + "main: function is { f: MyFile fd: 1 }"
         )
         assert "z_Reader_vtable_t" in csource
         assert "z_Reader_t" in csource
@@ -4198,11 +4198,11 @@ class TestProtocols:
     def test_protocol_impl_wrapper(self):
         """C output contains wrapper function and static vtable."""
         csource = emit_source(
-            self.PROTO_SOURCE + "main: function is { f: myfile fd: 1 }"
+            self.PROTO_SOURCE + "main: function is { f: MyFile fd: 1 }"
         )
-        assert "z_myfile_myreader_read_wrapper" in csource
-        assert "z_myfile_myreader_vtable" in csource
-        assert "z_myfile_myreader_create" in csource
+        assert "z_MyFile_myreader_read_wrapper" in csource
+        assert "z_MyFile_myreader_vtable" in csource
+        assert "z_MyFile_myreader_create" in csource
 
     def test_protocol_dispatch_runtime(self):
         """End-to-end: create record, create protocol instance, call method, verify output."""
@@ -4211,7 +4211,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
@@ -4225,7 +4225,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myobj: class {\n"
+            "MyObj: class {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -4237,7 +4237,7 @@ class TestProtocols:
             "    result: r.read b: 7\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    o: myobj fd: 20\n"
+            "    o: MyObj fd: 20\n"
             "    r: o.myreader\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
@@ -4252,7 +4252,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
@@ -4268,7 +4268,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             '    print "\\{use_reader f.myreader}"\n'
             "}\n"
         )
@@ -4288,7 +4288,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             '    print "\\{use_reader f.myreader}"\n'
             "}\n"
         )
@@ -4302,7 +4302,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             '    print "\\{use_reader f.myreader}"\n'
             "}\n"
         )
@@ -4317,19 +4317,19 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
         )
         # named var should still use create function (heap alloc)
-        assert "z_myfile_myreader_create" in csource
+        assert "z_MyFile_myreader_create" in csource
 
     def test_owned_protocol_create_record(self):
         """Owned protocol create from record compiles and runs."""
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create from: f.take\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
@@ -4343,7 +4343,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myobj: class {\n"
+            "MyObj: class {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -4352,7 +4352,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    o: myobj fd: 20\n"
+            "    o: MyObj fd: 20\n"
             "    r: Reader.create from: o.take\n"
             '    print "\\{r.read b: 7}"\n'
             "}\n"
@@ -4364,7 +4364,7 @@ class TestProtocols:
         """ASan-clean: no leaks or use-after-free with owned protocol."""
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create from: f.take\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
@@ -4380,7 +4380,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create from: f.take\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
@@ -4392,7 +4392,7 @@ class TestProtocols:
         """Owned create sets destroy function pointer (not NULL)."""
         csource = emit_source(
             self.PROTO_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create from: f.take\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
@@ -4404,7 +4404,7 @@ class TestProtocols:
         """Reader.borrow from: f.lock compiles and runs (class, since records are valtypes)."""
         csource = emit_source(
             self.PROTO_CLASS_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f.lock\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
@@ -4418,7 +4418,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myobj: class {\n"
+            "MyObj: class {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -4427,7 +4427,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    o: myobj fd: 20\n"
+            "    o: MyObj fd: 20\n"
             "    r: Reader.borrow from: o.lock\n"
             '    print "\\{r.read b: 7}"\n'
             "}\n"
@@ -4439,7 +4439,7 @@ class TestProtocols:
         """ASan clean for borrow, no use-after-free."""
         csource = emit_source(
             self.PROTO_CLASS_SOURCE + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f.lock\n"
             '    print "\\{r.read b: 5}"\n'
             "}\n"
@@ -4455,7 +4455,7 @@ class TestProtocols:
             "    result: r.read b: 5\n    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f.lock\n"
             '    print "\\{use_reader r}"\n'
             "}\n"
@@ -4470,31 +4470,31 @@ class TestGenericsEmission:
     def test_generic_union_template_not_emitted(self):
         """Generic union template should not produce C struct."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
         # template should NOT be emitted
-        assert "z_myopt_tag_t" not in csource
-        assert "z_myopt_t" not in csource
+        assert "z_MyOpt_tag_t" not in csource
+        assert "z_MyOpt_t" not in csource
 
     def test_monomorphized_union_emitted(self):
         """Monomorphized union emits tag enum + struct + destructor."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
-        assert "z_myopt_i64_tag_t" in csource
-        assert "z_myopt_i64_t" in csource
+        assert "z_MyOpt_i64_tag_t" in csource
+        assert "z_MyOpt_i64_t" in csource
         assert "Z_MYOPT_I64_TAG_SOME" in csource
         assert "Z_MYOPT_I64_TAG_NONE" in csource
-        assert "z_myopt_i64_destroy" in csource
+        assert "z_MyOpt_i64_destroy" in csource
 
     def test_monomorphized_union_construction_compiles(self):
         """Generic union construction compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some 42\n"
+            "    x: MyOpt.some 42\n"
             '    print "ok"\n'
             "}"
         )
@@ -4504,9 +4504,9 @@ class TestGenericsEmission:
     def test_monomorphized_union_match(self):
         """Match on monomorphized union works."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "  x: myopt.some 42\n"
+            "  x: MyOpt.some 42\n"
             "  match (\n"
             "    x\n"
             "  ) case some then {\n"
@@ -4522,24 +4522,24 @@ class TestGenericsEmission:
     def test_monomorphized_union_scope_cleanup(self):
         """Monomorphized union destroyed at function exit."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
-        assert "z_myopt_i64_destroy(&x);" in csource
+        assert "z_MyOpt_i64_destroy(&x);" in csource
 
     def test_two_different_instantiations(self):
         """Two different instantiations produce two distinct types."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some 42\n"
-            "    y: myopt.some 3.14\n"
+            "    x: MyOpt.some 42\n"
+            "    y: MyOpt.some 3.14\n"
             "}"
         )
-        assert "z_myopt_i64_t" in csource
-        assert "z_myopt_f64_t" in csource
-        assert "z_myopt_i64_destroy" in csource
-        assert "z_myopt_f64_destroy" in csource
+        assert "z_MyOpt_i64_t" in csource
+        assert "z_MyOpt_f64_t" in csource
+        assert "z_MyOpt_i64_destroy" in csource
+        assert "z_MyOpt_f64_destroy" in csource
 
     def test_system_option_compiles(self):
         """System optionval type compiles and runs."""
@@ -4552,10 +4552,10 @@ class TestGenericsEmission:
     def test_generic_union_asan(self):
         """Monomorphized union passes AddressSanitizer."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some 42\n"
-            "    y: myopt.none i32\n"
+            "    x: MyOpt.some 42\n"
+            "    y: MyOpt.none i32\n"
             "}"
         )
         result = compile_and_run_asan(csource)
@@ -4566,9 +4566,9 @@ class TestGenericsEmission:
     def test_generic_union_from_compiles(self):
         """Generic union construction with from: compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some from: 42\n"
+            "    x: MyOpt.some from: 42\n"
             '    print "ok"\n'
             "}"
         )
@@ -4578,9 +4578,9 @@ class TestGenericsEmission:
     def test_generic_union_explicit_type_and_from_compiles(self):
         """Generic union with explicit type param and from: compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some t: i64 from: 42\n"
+            "    x: MyOpt.some t: i64 from: 42\n"
             '    print "ok"\n'
             "}"
         )
@@ -4590,19 +4590,19 @@ class TestGenericsEmission:
     def test_generic_union_from_emits_correct_type(self):
         """from: syntax produces same monomorphized type as positional."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some from: 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some from: 42 }"
         )
-        assert "z_myopt_i64_t" in csource
+        assert "z_MyOpt_i64_t" in csource
         assert "Z_MYOPT_I64_TAG_SOME" in csource
 
     def test_generic_union_from_asan(self):
         """Generic union from: passes AddressSanitizer."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some from: 42\n"
-            "    y: myopt.none i32\n"
+            "    x: MyOpt.some from: 42\n"
+            "    y: MyOpt.none i32\n"
             "}"
         )
         result = compile_and_run_asan(csource)
@@ -4670,7 +4670,7 @@ class TestGenericsEmission:
     def test_optionval_iterator(self):
         """For-loop with optionval-returning callable iterator."""
         csource = emit_source(
-            "counter: class { i: i64 max: i64 } as {\n"
+            "Counter: class { i: i64 max: i64 } as {\n"
             "  call: function {c: this} out (optionval t: i64) is {\n"
             "    if c.i < c.max then {\n"
             "      result: optionval.some c.i\n"
@@ -4682,7 +4682,7 @@ class TestGenericsEmission:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  with iter: (counter i: 0 max: 3) do for x: iter loop {\n"
+            "  with iter: (Counter i: 0 max: 3) do for x: iter loop {\n"
             '    print "\\{x}"\n'
             "  }\n"
             "}"
@@ -4708,9 +4708,9 @@ class TestGenericsEmission:
     def test_nongeneric_union_from_compiles(self):
         """Non-generic union construction with from: compiles and runs."""
         csource = emit_source(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "    x: myunion.a from: 42\n"
+            "    x: MyUnion.a from: 42\n"
             '    print "ok"\n'
             "}"
         )
@@ -4773,8 +4773,8 @@ class TestGenericsEmission:
     def test_valtype_constraint_union_compiles(self):
         """Union with Any.valtype constraint compiles and runs."""
         csource = emit_source(
-            "myopt: union { some: t\n none: null } as { t: Any.valtype }\n"
-            'main: function is {\n    x: myopt.some 42\n    print "ok"\n}'
+            "MyOpt: union { some: t\n none: null } as { t: Any.valtype }\n"
+            'main: function is {\n    x: MyOpt.some 42\n    print "ok"\n}'
         )
         output = compile_and_run(csource)
         assert output.strip() == "ok"
@@ -4782,10 +4782,10 @@ class TestGenericsEmission:
     def test_reftype_constraint_class_compiles(self):
         """Record with Any.reftype constraint compiles and runs with class."""
         csource = emit_source(
-            "mycls: class { v: i64 }\n"
+            "MyCls: class { v: i64 }\n"
             "holder: record { ref: t } as { t: Any.reftype }\n"
             "main: function is {\n"
-            "    c: mycls v: 10\n"
+            "    c: MyCls v: 10\n"
             "    h: holder ref: c\n"
             '    print "ok"\n'
             "}"
@@ -4809,12 +4809,12 @@ class TestGenericsEmission:
     def test_class_with_public_method(self):
         """Class with public restriction: method accessible, field hidden."""
         csource = emit_source(
-            "myclass: class { x: i64 secret: i64 } as {\n"
+            "MyClass: class { x: i64 secret: i64 } as {\n"
             "  public: unit { :x :get_secret }\n"
             "  get_secret: function {:this} out i64 is { return this.secret }\n"
             "}\n"
             "main: function is {\n"
-            '  with c: (myclass x: 1 secret: 42) do print "\\{c.get_secret}"\n'
+            '  with c: (MyClass x: 1 secret: 42) do print "\\{c.get_secret}"\n'
             "}"
         )
         output = compile_and_run(csource)
@@ -4825,19 +4825,19 @@ class TestGenericsEmission:
     def test_generic_class_template_not_emitted(self):
         """Generic class template should not produce C struct."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls val: 42 }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls val: 42 }"
         )
-        assert "z_mycls_t " not in csource or "z_mycls_i64_t" in csource
+        assert "z_MyCls_t " not in csource or "z_MyCls_i64_t" in csource
         # template should not be emitted; only the monomorphized version
-        assert "z_mycls_i64_t" in csource
+        assert "z_MyCls_i64_t" in csource
 
     def test_generic_class_compiles(self):
         """Generic class construction compiles and runs."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: Any.generic }\n"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: mycls val: 42\n"
+            "    x: MyCls val: 42\n"
             '    print "ok"\n'
             "}"
         )
@@ -4847,9 +4847,9 @@ class TestGenericsEmission:
     def test_generic_class_asan(self):
         """Monomorphized class passes AddressSanitizer."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: Any.generic }\n"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: mycls val: 42\n"
+            "    x: MyCls val: 42\n"
             "}"
         )
         result = compile_and_run_asan(csource)
@@ -4858,12 +4858,12 @@ class TestGenericsEmission:
     def test_generic_class_methods(self):
         """Generic class with as-methods compiles."""
         csource = emit_source(
-            "mycls: class { val: t } as {\n"
+            "MyCls: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  getval: function {c: this} out i64 is { return c.val }\n"
             "}\n"
             "main: function is {\n"
-            "    x: mycls val: 42\n"
+            "    x: MyCls val: 42\n"
             '    print "ok"\n'
             "}"
         )
@@ -4873,26 +4873,26 @@ class TestGenericsEmission:
     def test_generic_class_destructor(self):
         """Monomorphized class with only valtype fields has no destructor."""
         csource = emit_source(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls val: 42 }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls val: 42 }"
         )
         # valtype-only class: no destructor emitted or called
-        assert "z_mycls_i64_destroy" not in csource
+        assert "z_MyCls_i64_destroy" not in csource
 
     # ---- Generic Protocols ----
 
     def test_generic_protocol_compiles(self):
         """Generic protocol definition compiles (template skipped)."""
         csource = emit_source(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\n"
             'main: function is { print "ok" }'
         )
         # generic template should NOT produce a struct
-        assert "z_myproto_vtable_t" not in csource
-        assert "z_myproto_t" not in csource
+        assert "z_MyProto_vtable_t" not in csource
+        assert "z_MyProto_t" not in csource
         output = compile_and_run(csource)
         assert output.strip() == "ok"
 
@@ -5166,49 +5166,49 @@ class TestCodeDeduplication:
     def test_dedup_identical_numeric_generic_methods(self):
         """Two numeric-generic instantiations with different this types both emit functions."""
         csource = emit_source(
-            "mycls: class { val: i64 } as {\n"
+            "MyCls: class { val: i64 } as {\n"
             "    n: u64.generic\n"
             "    getval: function {c: this} out i64 is { return c.val }\n"
             "}\n"
             "main: function is {\n"
-            "    a: (mycls n: 10) val: 1\n"
-            "    b: (mycls n: 20) val: 2\n"
+            "    a: (MyCls n: 10) val: 1\n"
+            "    b: (MyCls n: 20) val: 2\n"
             '    print "ok"\n'
             "}"
         )
         # both function names should be present (different this types)
-        assert "z_mycls_10_getval" in csource
-        assert "z_mycls_20_getval" in csource
+        assert "z_MyCls_10_getval" in csource
+        assert "z_MyCls_20_getval" in csource
 
     def test_no_dedup_different_types(self):
         """Structurally different instantiations are NOT deduped."""
         csource = emit_source(
-            "mycls: class { val: t } as {\n"
+            "MyCls: class { val: t } as {\n"
             "    t: Any.generic\n"
             "    getval: function {c: this} out i64 is { return 0 }\n"
             "}\n"
             "main: function is {\n"
-            "    a: (mycls t: i64) val: 1\n"
-            "    b: (mycls t: i32) val: 2i32\n"
+            "    a: (MyCls t: i64) val: 1\n"
+            "    b: (MyCls t: i32) val: 2i32\n"
             '    print "ok"\n'
             "}"
         )
         # both should have function definitions, no #define for these
-        assert "z_mycls_i64_getval" in csource
-        assert "z_mycls_i32_getval" in csource
+        assert "z_MyCls_i64_getval" in csource
+        assert "z_MyCls_i32_getval" in csource
         # structurally different this types → no dedup
-        assert "#define z_mycls_i32_getval" not in csource
+        assert "#define z_MyCls_i32_getval" not in csource
 
     def test_dedup_compiles_and_runs(self):
         """Deduped code compiles and produces correct output."""
         csource = emit_source(
-            "mycls: class { val: i64 } as {\n"
+            "MyCls: class { val: i64 } as {\n"
             "    n: u64.generic\n"
             '    greet: function {c: this} is { print "hello" }\n'
             "}\n"
             "main: function is {\n"
-            "    a: (mycls n: 10) val: 42\n"
-            "    b: (mycls n: 20) val: 99\n"
+            "    a: (MyCls n: 10) val: 42\n"
+            "    b: (MyCls n: 20) val: 99\n"
             '    print "ok"\n'
             "}"
         )
@@ -5218,19 +5218,19 @@ class TestCodeDeduplication:
     def test_dedup_forward_decls_preserved(self):
         """Both canonical and alias names get forward declarations."""
         csource = emit_source(
-            "mycls: class { val: i64 } as {\n"
+            "MyCls: class { val: i64 } as {\n"
             "    n: u64.generic\n"
             "    getval: function {c: this} out i64 is { return c.val }\n"
             "}\n"
             "main: function is {\n"
-            "    a: (mycls n: 10) val: 1\n"
-            "    b: (mycls n: 20) val: 2\n"
+            "    a: (MyCls n: 10) val: 1\n"
+            "    b: (MyCls n: 20) val: 2\n"
             '    print "ok"\n'
             "}"
         )
         # both names should appear in forward decls
-        assert "z_mycls_10_getval" in csource
-        assert "z_mycls_20_getval" in csource
+        assert "z_MyCls_10_getval" in csource
+        assert "z_MyCls_20_getval" in csource
 
 
 class TestArrayEmission:
@@ -6951,14 +6951,14 @@ class TestNativeEmitter:
     def test_generic_type_match_emits_correct_arm(self):
         """Generic type match emits only the matching arm in C."""
         csource = emit_source(
-            "mybox: class { val: t } as {\n"
+            "MyBox: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i32 then { print "32" }'
             ' case i64 then { print "64" } else { print "other" }\n'
             "  }\n"
             "}\n"
-            "main: function is { b: mybox val: 42 }"
+            "main: function is { b: MyBox val: 42 }"
         )
         # the i64 arm should be present, dead i32/other arms eliminated
         assert '"64"' in csource
@@ -7033,7 +7033,7 @@ class TestIteratorPattern:
         """Iterator class iterates over a container with private state."""
         output = compile_and_run(
             emit_source(
-                "bag: class { a: i64 b: i64 c: i64 count: i64 } as {\n"
+                "Bag: class { a: i64 b: i64 c: i64 count: i64 } as {\n"
                 "    public: unit { :count :at }\n"
                 "    at: function {self: this index: i64} out i64 is {\n"
                 "        if index == 0 then { return self.a }\n"
@@ -7041,10 +7041,10 @@ class TestIteratorPattern:
                 "        return self.c\n"
                 "    }\n"
                 "}\n"
-                "bagiter: class { pos: i64 max: i64 items: bag } as {\n"
+                "BagIter: class { pos: i64 max: i64 items: Bag } as {\n"
                 "    call: function {it: this} out (optionval t: i64) is {\n"
                 "        if it.pos < it.max then {\n"
-                "            val: (bag.at self: it.items index: it.pos)\n"
+                "            val: (Bag.at self: it.items index: it.pos)\n"
                 "            it.pos = it.pos + 1\n"
                 "            return (optionval.some val)\n"
                 "        }\n"
@@ -7052,8 +7052,8 @@ class TestIteratorPattern:
                 "    }\n"
                 "}\n"
                 "main: function is {\n"
-                "    b: bag a: 10 b: 20 c: 30 count: 3\n"
-                "    it: bagiter pos: 0 max: b.count items: b.take\n"
+                "    b: Bag a: 10 b: 20 c: 30 count: 3\n"
+                "    it: BagIter pos: 0 max: b.count items: b.take\n"
                 '    for x: it loop { print "\\{x}" }\n'
                 '    print "done"\n'
                 "}"
@@ -7071,7 +7071,7 @@ class TestIteratorPattern:
         registers the per-iteration z_String_free at end of iteration.
         Runs under ASan so the double-free / use-after-free surfaces."""
         csource = emit_source(
-            "stringiter: class { n: i64 } as {\n"
+            "Stringiter: class { n: i64 } as {\n"
             "  call: function {it: this} out (Option t: String) is {\n"
             "    if it.n > 0 then {\n"
             "      it.n = it.n - 1\n"
@@ -7081,7 +7081,7 @@ class TestIteratorPattern:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  si: stringiter n: 3\n"
+            "  si: Stringiter n: 3\n"
             "  for line: si loop { print line }\n"
             '  print "done"\n'
             "}"
@@ -7100,10 +7100,10 @@ class TestIteratorPattern:
         errors = []
         try:
             emit_source(
-                "bag: class { secret: i64 } as {\n"
+                "Bag: class { secret: i64 } as {\n"
                 "    public: unit {}\n"
                 "}\n"
-                'main: function is { b: bag secret: 1\n print "\\{b.secret}" }'
+                'main: function is { b: Bag secret: 1\n print "\\{b.secret}" }'
             )
         except AssertionError as e:
             errors = [str(e)]
@@ -7257,28 +7257,28 @@ class TestAutoGeneratedEquality:
     def test_variant_eq_c_output(self):
         """Small integer variant uses tag+payload comparison."""
         csource = emit_source(
-            "Result: variant { ok: i64  err: i64 }\n"
+            "result: variant { ok: i64  err: i64 }\n"
             "main: function is {\n"
-            "  a: Result.ok 1\n"
-            "  b: Result.ok 1\n"
+            "  a: result.ok 1\n"
+            "  b: result.ok 1\n"
             "  if a == b then return 0\n"
             "}"
         )
-        assert "z_Result_eq" in csource
+        assert "z_result_eq" in csource
         # 12 bytes (tag + i64 union): below threshold, uses tag+payload
         assert "a.tag != b.tag" in csource
 
     def test_variant_float_eq_c_output(self):
         """Variant with float payload uses tag+payload comparison."""
         csource = emit_source(
-            "Result: variant { ok: f64  none: null }\n"
+            "result: variant { ok: f64  none: null }\n"
             "main: function is {\n"
-            "  a: Result.ok 1.0\n"
-            "  b: Result.ok 1.0\n"
+            "  a: result.ok 1.0\n"
+            "  b: result.ok 1.0\n"
             "  if a == b then return 0\n"
             "}"
         )
-        assert "z_Result_eq" in csource
+        assert "z_result_eq" in csource
         assert "a.tag != b.tag" in csource
         assert "memcmp(&a, &b, sizeof(z_Result_t))" not in csource
 
@@ -7391,10 +7391,10 @@ class TestAutoGeneratedEquality:
     def test_simple_eq_small_variant_tag_compare(self):
         """Small integer variant uses tag+payload, not memcmp."""
         csource = emit_source(
-            "Result: variant { ok: i64  err: i64 }\n"
+            "result: variant { ok: i64  err: i64 }\n"
             "main: function is {\n"
-            "  a: Result.ok 1\n"
-            "  b: Result.ok 1\n"
+            "  a: result.ok 1\n"
+            "  b: result.ok 1\n"
             "  if a == b then return 0\n"
             "}"
         )
@@ -7712,18 +7712,18 @@ class TestBoxRefinements:
     def test_box_class_with_string_field(self):
         """Box a class with heap-backed fields chains destructor correctly."""
         csource = emit_source(
-            "named: class {\n"
+            "Named: class {\n"
             "    label: String\n"
             "    value: i64\n"
             "}\n"
             "main: function is {\n"
-            '    n: named label: "hello".string value: 42\n'
+            '    n: Named label: "hello".string value: 42\n'
             "    b: Box from: n.take\n"
             '    print "done"\n'
             "}"
         )
         # box destructor chains inner class destructor
-        assert "z_named_destroy(v);" in csource
+        assert "z_Named_destroy(v);" in csource
         # inner destructor frees heap fields like strings
         output = compile_and_run(csource)
         assert "done" in output
@@ -7791,31 +7791,31 @@ class TestClassLockFields:
     def test_class_lock_field_stored_as_pointer(self):
         """Class .lock field is stored as a pointer to the locked target."""
         csource = emit_source(
-            "bag: class { a: i64 }\n"
-            "bagview: class { target: bag.lock } as {\n"
-            "  create: function {target: bag.lock} out this is {\n"
+            "Bag: class { a: i64 }\n"
+            "BagView: class { target: Bag.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is {\n"
             "    return meta.create target: target\n"
             "  }\n"
             "}\n"
-            "main: function is { b: bag a: 1\nv: bagview target: b }"
+            "main: function is { b: Bag a: 1\nv: BagView target: b }"
         )
         # .lock field of stack-class type emits as pointer in struct
-        assert "z_bag_t* target;" in csource
+        assert "z_Bag_t* target;" in csource
 
     def test_class_lock_field_runtime(self):
-        """End-to-end: class with .lock accesses the locked target."""
+        """End-to-End: class with .lock accesses the locked target."""
         csource = emit_source(
-            "bag: class { a: i64 b: i64 }\n"
-            "bagview: class { target: bag.private.lock } as {\n"
-            "  create: function {target: bag.lock} out this is {\n"
+            "Bag: class { a: i64 b: i64 }\n"
+            "BagView: class { target: Bag.private.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is {\n"
             "    return meta.create target: target\n"
             "  }\n"
             "  getval: function {v: this} out i64 is { return v.target.a }\n"
             "}\n"
             "main: function is {\n"
-            "  b: bag a: 42 b: 99\n"
-            "  v: bagview target: b\n"
-            "  n: bagview.getval v\n"
+            "  b: Bag a: 42 b: 99\n"
+            "  v: BagView target: b\n"
+            "  n: BagView.getval v\n"
             '  print "\\{n}"\n'
             "}"
         )
@@ -7827,7 +7827,7 @@ class TestClassLockFields:
         type carries a destructor must have its destructor clean up
         the owned field while leaving the `.lock` field untouched.
         This is the exact shape a pure-Zerolang BufWriter would have
-        (`sink: Writer.lock` + an owned payload) — the native Phase
+        (`sink: Writer.lock` + an owned Payload) — the native Phase
         1b implementation skipped this Path in the test suite.
 
         Uses an inner user class with a String field to force
@@ -7835,42 +7835,42 @@ class TestClassLockFields:
         ordering (user classes with `Bytes` fields hit a separate
         pre-existing emitter ordering bug unrelated to lock semantics)."""
         csource = emit_source(
-            "bag: class { a: i64 }\n"
-            "payload: class { label: String }\n"
-            "mixed: class {\n"
-            "  target: bag.lock\n"
-            "  inner:  payload\n"
+            "Bag: class { a: i64 }\n"
+            "Payload: class { label: String }\n"
+            "Mixed: class {\n"
+            "  target: Bag.lock\n"
+            "  inner:  Payload\n"
             "}\n"
             "main: function is {\n"
-            "  b: bag a: 1\n"
+            "  b: Bag a: 1\n"
             '  s: String from: "hi"\n'
-            "  p: payload label: s\n"
-            "  m: mixed target: b inner: p\n"
+            "  p: Payload label: s\n"
+            "  m: Mixed target: b inner: p\n"
             '  print "done"\n'
             "}"
         )
         # Destructor must exist because the `inner` field's type
-        # (payload) carries its own destructor, so mixed needs to
+        # (Payload) carries its own destructor, so Mixed needs to
         # cascade cleanup — this is what forces needs_field_cleanup.
-        assert "static void z_mixed_destroy(z_mixed_t* p)" in csource
+        assert "static void z_Mixed_destroy(z_Mixed_t* p)" in csource
         # Extract the destructor body and verify only the owned field
         # is cleaned up.
-        body_start = csource.index("static void z_mixed_destroy(z_mixed_t* p) {")
+        body_start = csource.index("static void z_Mixed_destroy(z_Mixed_t* p) {")
         body_end = csource.index("}", body_start)
         destructor = csource[body_start:body_end]
-        assert "z_payload_destroy(&p->inner)" in destructor, (
-            f"destructor should cascade into z_payload_destroy on the "
+        assert "z_Payload_destroy(&p->inner)" in destructor, (
+            f"destructor should cascade into z_Payload_destroy on the "
             f"owned inner field; got:\n{destructor}"
         )
         assert "p->target" not in destructor, (
             f".lock field (target) must not be touched in destructor; "
             f"got:\n{destructor}"
         )
-        assert "z_bag_destroy" not in destructor, (
-            f"destructor must not destroy the locked bag; got:\n{destructor}"
+        assert "z_Bag_destroy" not in destructor, (
+            f"destructor must not destroy the locked Bag; got:\n{destructor}"
         )
         # End-to-end: compile + run. A double-free on the `.lock`
-        # field would surface here (z_bag_destroy on a stack local
+        # field would surface here (z_Bag_destroy on a stack local
         # would crash or ASan would flag).
         output = compile_and_run(csource)
         assert output.strip() == "done"
@@ -8025,14 +8025,14 @@ class TestAliasBinding:
     def test_with_call_rhs_not_aliased(self):
         """with a: ctor arg do ... still emits a real local."""
         csource = emit_source(
-            "bag: class { x: i64 } as {\n"
+            "Bag: class { x: i64 } as {\n"
             "  public: unit { :x }\n"
             "  create: function { x: i64 } out this is {\n"
             "    return meta.create x: x\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            '  with b: (bag x: 1) do print "\\{b.x}"\n'
+            '  with b: (Bag x: 1) do print "\\{b.x}"\n'
             "}"
         )
         assert "/* alias: b" not in csource
@@ -8066,10 +8066,10 @@ class TestAliasBinding:
     def test_inline_take_alias(self):
         """Inline `d: c.take` on a class is aliased (no separate local)."""
         csource = emit_source(
-            "myclass: class { x: 0 }\nmain: function is { c: myclass\n d: c.take }"
+            "MyClass: class { x: 0 }\nmain: function is { c: MyClass\n d: c.take }"
         )
         assert "/* alias: d => c */" in csource
-        assert "z_myclass_t d =" not in csource
+        assert "z_MyClass_t d =" not in csource
 
     def test_inline_plain_assign_not_aliased(self):
         """Plain `d: c` (no inline .take/.borrow) is NOT aliased —
@@ -8114,9 +8114,9 @@ class TestMatchArmAlias:
     def test_variant_arm_aliased(self):
         """Variant arm seeds an alias comment and substitutes at use sites."""
         csource = emit_source(
-            "Result: variant { ok: i64 err: i64 none: null }\n"
+            "result: variant { ok: i64 err: i64 none: null }\n"
             "main: function is {\n"
-            "  c: Result.ok 99\n"
+            "  c: result.ok 99\n"
             "  match ( c ) case ok then {\n"
             '    print "\\{c}"\n'
             "  } case err then {\n"
@@ -8135,9 +8135,9 @@ class TestMatchArmAlias:
         csource = emit_source(
             "pt: record { x: i64 y: i64 }\n"
             "circle: record { radius: i64 }\n"
-            "shape: union { :pt :circle }\n"
+            "Shape: union { :pt :circle }\n"
             "main: function is {\n"
-            "  s: shape.pt (pt x: 10 y: 20)\n"
+            "  s: Shape.pt (pt x: 10 y: 20)\n"
             "  match ( s ) case pt then {\n"
             '    print "\\{s.x}"\n'
             "  } case circle then {\n"
@@ -8152,9 +8152,9 @@ class TestMatchArmAlias:
     def test_null_payload_arm_not_aliased(self):
         """Null-payload arms have nothing to unwrap; no alias is emitted."""
         csource = emit_source(
-            "Result: variant { ok: i64 none: null }\n"
+            "result: variant { ok: i64 none: null }\n"
             "main: function is {\n"
-            "  r: Result.none\n"
+            "  r: result.none\n"
             "  match ( r ) case ok then {\n"
             '    print "ok"\n'
             "  } case none then {\n"
@@ -8171,9 +8171,9 @@ class TestMatchArmAlias:
     def test_arm_alias_end_to_end(self):
         """Multiple arms each seed their own alias; program runs under ASan."""
         csource = emit_source(
-            "Result: variant { ok: i64 err: i64 none: null }\n"
+            "result: variant { ok: i64 err: i64 none: null }\n"
             "main: function is {\n"
-            "  r: Result.ok 42\n"
+            "  r: result.ok 42\n"
             "  match ( r ) case ok then {\n"
             '    print "\\{r}"\n'
             "  } case err then {\n"
@@ -9841,9 +9841,9 @@ class TestPanic:
         memory")`. Grep the emitted C to verify the wiring (running
         it reliably requires `ulimit` which is brittle in CI)."""
         csource = emit_source(
-            "counter: class { value: i64 }\n"
+            "Counter: class { value: i64 }\n"
             "main: function is {\n"
-            "    c: counter value: 1\n"
+            "    c: Counter value: 1\n"
             '    print "ok"\n'
             "}"
         )
@@ -9866,7 +9866,7 @@ class TestGeneratorEmitter:
         exhaustion. The for-loop driver terminates when the synth
         class's `.call` returns OPT_NONE."""
         csource = emit_source(
-            "gen: function {n: i64} out (iterator gives: i64) is "
+            "gen: function {n: i64} out (Iterator gives: i64) is "
             "{ yield 1 yield 2 yield 3 }\n"
             "main: function is {\n"
             "    with g: (gen n: 0) do for x: g loop "
@@ -9880,7 +9880,7 @@ class TestGeneratorEmitter:
         produces the expected sequence. Validates that promoted
         locals (the loop counter) persist across suspensions."""
         csource = emit_source(
-            "gen: function {count: i64} out (iterator gives: i64) is {\n"
+            "gen: function {count: i64} out (Iterator gives: i64) is {\n"
             "    pos: 0\n"
             "    for while pos < count loop {\n"
             "        yield 100 + pos\n"
@@ -9898,7 +9898,7 @@ class TestGeneratorEmitter:
         """Mid-body `return` (no value) terminates the generator at
         that point. Values after the return are unreachable."""
         csource = emit_source(
-            "gen: function {n: i64} out (iterator gives: i64) is {\n"
+            "gen: function {n: i64} out (Iterator gives: i64) is {\n"
             "    yield 1\n"
             "    yield 2\n"
             "    return\n"
@@ -9915,7 +9915,7 @@ class TestGeneratorEmitter:
         `.call` that crosses into terminal state (i.e., the call
         following the consumption of the last value)."""
         csource = emit_source(
-            "gen: function {n: i64} out (iterator gives: i64) is {\n"
+            "gen: function {n: i64} out (Iterator gives: i64) is {\n"
             "    yield 1\n"
             "    yield 2\n"
             '    print "post"\n'
@@ -9932,7 +9932,7 @@ class TestGeneratorEmitter:
         run no body code. Driven manually via `with`/`do` over a
         block calling `.call` directly."""
         csource = emit_source(
-            "gen: function {n: i64} out (iterator gives: i64) is "
+            "gen: function {n: i64} out (Iterator gives: i64) is "
             "{ yield 7 }\n"
             "main: function is {\n"
             "    with g: (gen n: 0) do {\n"
@@ -9957,7 +9957,7 @@ class TestGeneratorEmitter:
         matches the bag's stored values."""
         csource = emit_source(
             "Bag: class { x: i64 y: i64 z: i64 } as {\n"
-            "    each: function {b: this.lock} out (iterator gives: i64) is {\n"
+            "    each: function {b: this.lock} out (Iterator gives: i64) is {\n"
             "        yield b.x\n"
             "        yield b.y\n"
             "        yield b.z\n"
@@ -9982,7 +9982,7 @@ class TestGeneratorEmitter:
             "Bag: class { x: i64 y: i64 z: i64 } as {\n"
             "    public: unit { :each }\n"
             "    each: function {b: this.private.lock} out "
-            "(iterator gives: i64) is {\n"
+            "(Iterator gives: i64) is {\n"
             "        yield b.x\n"
             "        yield b.y\n"
             "        yield b.z\n"
@@ -10012,7 +10012,7 @@ class TestGeneratorEmitter:
         gap and prescribes the explicit-binding form, which this
         test pins."""
         csource = emit_source(
-            "intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {\n"
+            "intrange: function {lo: i64 hi: i64} out (Iterator gives: i64) is {\n"
             "    i: lo\n"
             "    for while i < hi loop {\n"
             "        yield i\n"
@@ -10020,7 +10020,7 @@ class TestGeneratorEmitter:
             "    }\n"
             "}\n"
             "chained: function {a_lo: i64 a_hi: i64 b_lo: i64 b_hi: i64}\n"
-            "                  out (iterator gives: i64) is {\n"
+            "                  out (Iterator gives: i64) is {\n"
             "    inner1: (intrange lo: a_lo hi: a_hi)\n"
             "    for x: inner1 loop { yield x }\n"
             "    inner2: (intrange lo: b_lo hi: b_hi)\n"
@@ -10042,14 +10042,14 @@ class TestGeneratorEmitter:
         binding -- promoted to a synth-class field, struct-default
         initialised, retained across suspensions."""
         csource = emit_source(
-            "intrange: function {lo: i64 hi: i64} out (iterator gives: i64) is {\n"
+            "intrange: function {lo: i64 hi: i64} out (Iterator gives: i64) is {\n"
             "    i: lo\n"
             "    for while i < hi loop {\n"
             "        yield i\n"
             "        i = i + 1\n"
             "    }\n"
             "}\n"
-            "chained: function {a: i64 b: i64} out (iterator gives: i64) is {\n"
+            "chained: function {a: i64 b: i64} out (Iterator gives: i64) is {\n"
             "    for x: (intrange lo: a hi: b) loop { yield x }\n"
             "}\n"
             "main: function is {\n"
@@ -10068,7 +10068,7 @@ class TestGeneratorEmitter:
         TypeOfExpr replaced would have fallen back to i64 and the
         u32 -> i64 mismatch would have failed type-check."""
         csource = emit_source(
-            "gen: function {a: u32 b: u32} out (iterator gives: u32) is {\n"
+            "gen: function {a: u32 b: u32} out (Iterator gives: u32) is {\n"
             "    c: a + b\n"
             "    yield c\n"
             "    yield c\n"
@@ -10096,7 +10096,7 @@ class TestGeneratorEmitter:
         path (case 3) handles everything downstream including the
         emitter's standard CLASS_CREATE-of-return-type shape."""
         csource = emit_source(
-            "gen: function out (iterator gives: i64) is "
+            "gen: function out (Iterator gives: i64) is "
             "{ yield 1 yield 2 yield 3 }\n"
             "main: function is {\n"
             '    for x: gen loop { print "\\{x}" }\n'
@@ -10114,7 +10114,7 @@ class TestGeneratorEmitter:
         yield behind `x`."""
         csource = emit_source(
             "gen: function {n: i64} out "
-            "(iterator gives: i64 takes: bool) is {\n"
+            "(Iterator gives: i64 takes: bool) is {\n"
             "    yield 1\n"
             "    x: yield 2\n"
             "    if x then yield 99\n"
@@ -10161,7 +10161,7 @@ class TestGeneratorEmitter:
         out-of-scope C local."""
         csource = emit_source(
             "gen: function {n: i64} out "
-            "(iterator gives: i64 takes: String.take) is {\n"
+            "(Iterator gives: i64 takes: String.take) is {\n"
             "    yield 1\n"
             "    s: yield 2\n"
             "    yield 99\n"
@@ -10190,7 +10190,7 @@ class TestGeneratorEmitter:
 
         program = _mp(
             "gen: function {n: i64} out "
-            "(iterator gives: i64 takes: bool) is {\n"
+            "(Iterator gives: i64 takes: bool) is {\n"
             "    yield 1\n"
             "    x: yield 2\n"
             "}\n"
@@ -10215,7 +10215,7 @@ class TestGeneratorEmitter:
 
         program = _mp(
             "gen: function {n: i64} out "
-            "(iterator gives: i64 takes: bool) is {\n"
+            "(Iterator gives: i64 takes: bool) is {\n"
             "    x: yield 1\n"
             "}\n"
             "main: function is {}",

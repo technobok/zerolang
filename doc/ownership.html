@@ -617,7 +617,7 @@ sub-scope owns three things:</p>
 <li>A call identity string (<code>call:&lt;nodeid&gt;</code>). Locks taken
   while processing this call -- on the receiver, on argument source
   paths, or by recursion into nested calls -- carry this identity as
-  their holder. The conflict check treats locks with the current
+  their Holder. The conflict check treats locks with the current
   call's identity as non-blocking self-locks, so a method call
   whose argument also borrows the receiver (<code>f.poke side: f.a.borrow</code>)
   composes correctly: the receiver lock and the arg's prefix-overlapping
@@ -642,7 +642,7 @@ inner call opens its own sub-scope, hoists its own arguments, and
 pops on resolution. Lock effects propagate naturally through the
 parent-scope mechanism -- locks the inner call's return value
 carries become locks on the outer-scope binding (after rewriting
-the inner call's call-identity holder to the outer call's identity
+the inner call's call-identity Holder to the outer call's identity
 where applicable), exactly as they would for any nested expression.</p>
 <p>A method whose return is locked to its receiver or to a parameter
 declares the source as a <code>.lock</code>-annotated parameter -- e.g.
@@ -701,7 +701,7 @@ or vice versa; sibling paths do <em><strong>not</strong></em> overlap.</p>
 </ul>
 <p>Sibling-path accesses remain permitted: while <code>(p, f)</code> is exclusively
 locked, reading or writing <code>(p, g)</code> is fine. The only code that can
-access the locked sub-tree is the lock holder (the borrow or view
+access the locked sub-tree is the lock Holder (the borrow or view
 variable) through its own interface.</p>
 <p>This path-scoped approach prevents aliasing through field reads (which
 would create references that bypass the lock) while supporting
@@ -804,13 +804,13 @@ caller's heap data the same way:</p>
 <p>Same remediations as above. The exemption mirrors the
 borrowed_record / listiter pattern: a <code>.lock</code>-annotated
 parameter projected into a matching <code>.lock</code> field is the canonical
-borrow-holder pattern (see <em><strong>Classes with .lock Fields</strong></em> below) and is
+borrow-Holder pattern (see <em><strong>Classes with .lock Fields</strong></em> below) and is
 allowed.</p>
 <h2 id="classes-with-fields"><a href="#classes-with-fields">9. Classes with <code>.lock</code> Fields</a></h2>
 <p>Some classes need to hold a locked reference to another object -- most commonly
 iterators and views. A class field can be declared with a <code>.lock</code> type
 modifier to express this:</p>
-<pre><code class="language-zerolang">myiter: class {
+<pre><code class="language-zerolang">MyIter: class {
   state: i64
   target: container.private.lock
 } as {
@@ -833,17 +833,17 @@ separate mechanism is needed.</p>
 <code>.lock</code> field is a compile error -- records are pure valtypes and are
 freely copied, which would duplicate the lock.</li>
 <li>The <code>.lock</code> field type must match the corresponding constructor
-  parameter type. If the field is <code>myclass.private.lock</code>, the constructor
-  parameter must also be <code>myclass.private.lock</code>.</li>
+  parameter type. If the field is <code>MyClass.private.lock</code>, the constructor
+  parameter must also be <code>MyClass.private.lock</code>.</li>
 <li><code>.private</code> controls access level (friend access to private members).
 <code>.lock</code> controls ownership (the reference is locked). These are orthogonal
 and can be combined.</li>
 <li><code>.lock</code> is the only field-type modifier allowed. <code>.take</code> and
 <code>.borrow</code> on field types are rejected.</li>
 <li>A class that has any <code>.lock</code> field cannot appear as a field of
-  another user-defined type. A <code>.lock</code> is only valid when its holder's
+  another user-defined type. A <code>.lock</code> is only valid when its Holder's
   lifetime is scoped by the same block as the locked target; nesting inside
-  another object's field would allow the holder -- and its lock -- to outlive
+  another object's field would allow the Holder -- and its lock -- to outlive
   that scope.</li>
 </ul>
 <p><code>.lock</code> fields are set at construction time and cannot be reassigned. The
@@ -898,8 +898,8 @@ user-defined type. A protocol instance wraps its source either by borrow
 (consuming the source into the wrapper).</p>
 <h3 id="restrictions-with-generics"><a href="#restrictions-with-generics">9.5. Restrictions with Generics</a></h3>
 <p>A class cannot be stored as the element of a generic container that copies
-its elements, because classes cannot be copied. <code>List of: myiter</code> is a
-compile error if <code>myiter</code> is a class. This applies to every class, not
+its elements, because classes cannot be copied. <code>List of: MyIter</code> is a
+compile error if <code>MyIter</code> is a class. This applies to every class, not
 just classes with <code>.lock</code> fields; the <code>.lock</code> restriction merely adds
 the rule above (a class with a <code>.lock</code> field cannot be nested as a field
 of another type either).</p>
@@ -923,18 +923,18 @@ of the returned value.</p>
 inside a <code>.lock</code> parameter. The compiler traces the return expression back
 through field accesses to verify it originates from a locked parameter.</p>
 <pre><code class="language-zerolang"># OK -- return value is a field of the locked parameter
-get_child: function {t: myclass.lock} out child.borrow is {
+get_child: function {t: MyClass.lock} out child.borrow is {
   return t.child
 }
 
 # ERROR -- cannot return local variable as borrowed
-bad: function {t: myclass.lock} out child.borrow is {
+bad: function {t: MyClass.lock} out child.borrow is {
   c: child
   return c
 }
 
 # ERROR -- no .lock parameter
-bad2: function {t: myclass} out child.borrow is {
+bad2: function {t: MyClass} out child.borrow is {
   return t.child
 }</code></pre>
 <h3 id="classes-with-fields-2"><a href="#classes-with-fields-2">10.2. Classes with <code>.lock</code> Fields</a></h3>
@@ -943,13 +943,13 @@ an owned value must initialise the <code>.lock</code> field from a <code>.lock</
 parameter. The compiler verifies the construction arguments of the returned
 instance trace back to the locked parameter of the enclosing function.</p>
 <pre><code class="language-zerolang"># OK -- target field traces to b which is .lock
-iterate: function {b: this.lock} out myiter is {
-  return myiter target: b.private
+iterate: function {b: this.lock} out MyIter is {
+  return MyIter target: b.private
 }
 
 # ERROR -- b is not .lock
-bad_iterate: function {b: this} out myiter is {
-  return myiter target: b.private
+bad_iterate: function {b: this} out MyIter is {
+  return MyIter target: b.private
 }</code></pre>
 <p>The locks on the <code>.lock</code> parameter transfer to the returned instance: the
 caller receives an owned class whose <code>.lock</code> field keeps the source
@@ -959,11 +959,11 @@ locked for the returned instance's lifetime.</p>
 that value to another function, the lock chain must be maintained. The compiler
 verifies that each link in the chain connects to a <code>.lock</code> parameter.</p>
 <pre><code class="language-zerolang"># OK -- both functions lock their input and return a borrow
-inner: function {t: myclass.lock} out child.borrow is {
+inner: function {t: MyClass.lock} out child.borrow is {
   return t.child
 }
 
-outer: function {t: myclass.lock} out grandchild.borrow is {
+outer: function {t: MyClass.lock} out grandchild.borrow is {
   x: inner t         # x borrows from t, lock on t
   y: x.grandchild    # y borrows from x
   return y            # OK: lock chain traces to t which is .lock
@@ -985,7 +985,7 @@ print_point: function {pt: point} is {
 }
 print_point p        # p is copied into the function, p still valid</code></pre>
 <h3 id="owned-and-borrowed-reftypes"><a href="#owned-and-borrowed-reftypes">11.2. Owned and Borrowed Reftypes</a></h3>
-<pre><code class="language-zerolang">box: class { label: String value: i64 }
+<pre><code class="language-zerolang">Box: class { label: String value: i64 }
 
 a: Box label: "alpha" value: 1   # a is OWNED
 
@@ -1036,7 +1036,7 @@ scope-based lock lifecycle.</p>
 <p>The iterator's constructor uses <code>meta.create</code> (the internal raw
 allocator of the enclosing type) to allocate the instance. This is
 the only legal form of construction inside the constructor body --
-writing <code>return bagiter pos: 0 target: target</code> would recurse into the
+writing <code>return BagIter pos: 0 target: target</code> would recurse into the
 user-defined <code>create</code> and is a compile-time error. See the spec's
 "Implicit Construction" section for the full dispatch rule.</p>
 <h3 id="components"><a href="#components">12.1. Components</a></h3>
@@ -1058,7 +1058,7 @@ iterator).</li>
 <p>The canonical class-based iterator (also in
 <code>examples/ListIter.z</code>):</p>
 <pre><code class="language-zerolang"># --- Container ---
-bag: class {
+Bag: class {
   a: i64
   b: i64
   c: i64
@@ -1069,8 +1069,8 @@ bag: class {
   # Factory method: locks 'this', returns an owned iterator.
   # The lock on 'this' transfers to the returned iterator via its
   # .lock field.
-  iterate: function {b: this.lock} out bagiter is {
-    return bagiter target: b.private
+  iterate: function {b: this.lock} out BagIter is {
+    return BagIter target: b.private
   }
 }
 
@@ -1078,12 +1078,12 @@ bag: class {
 # The 'target' field is .private.lock: it holds a locked reference
 # to the container's private namespace for the iterator's lifetime.
 # The class is single-owner: nobody can copy it, so the lock is safe.
-bagiter: class {
+BagIter: class {
   pos: i64
   max: i64
-  target: bag.private.lock
+  target: Bag.private.lock
 } as {
-  create: function {target: bag.private.lock} out this is {
+  create: function {target: Bag.private.lock} out this is {
     return meta.create pos: 0 max: 3 target: target
   }
 
@@ -1107,11 +1107,11 @@ bagiter: class {
 
 # --- Usage ---
 main: function is {
-  b: bag a: 10 b: 20 c: 30 count: 3
+  b: Bag a: 10 b: 20 c: 30 count: 3
 
   # 'with' creates the iterator and scopes its lifetime.
   # The 'for' loop calls the iterator on each iteration.
-  with iter: bag.iterate b: b do for x: iter loop {
+  with iter: Bag.iterate b: b do for x: iter loop {
     print "iter: \{x}"
   }
 
@@ -1119,7 +1119,7 @@ main: function is {
   # - iter fell out of scope (class destroyed)
   # - lock on b released
   # - b is available again
-  print "bag count: \{b.count}"
+  print "Bag count: \{b.count}"
 }</code></pre>
 <h3 id="lock-lifecycle-in-the-for-loop"><a href="#lock-lifecycle-in-the-for-loop">12.3. Lock Lifecycle in the For-Loop</a></h3>
 <p>The iterator must be created explicitly using <code>with</code> before the <code>for</code> loop.
@@ -1129,7 +1129,7 @@ this, but for now the pattern is:</p>
 <pre><code class="language-zerolang">with iter: container.iterate c: c do for x: iter loop { ... }</code></pre>
 <p>The lock lifecycle step by step:</p>
 <pre><code class="language-zerolang">with iter: bag.iterate b: b do {
-  # iter: OWNED bagiter on caller's stack
+  # iter: OWNED BagIter on caller's stack
   # b: EXCLUSIVELY LOCKED by iter (via its .lock field)
   # b cannot be used directly while iter is alive
 

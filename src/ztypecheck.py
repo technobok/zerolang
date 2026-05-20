@@ -1317,7 +1317,7 @@ class TypeChecker:
             if ret_own is not None:
                 ftype.return_ownership = ret_own
             # Iterator-return-type validation: when the function declares
-            # `out (iterator gives: T (takes: U))`, the ownership form of
+            # `out (Iterator gives: T (takes: U))`, the ownership form of
             # the `gives:` argument must be one of bare / `.take` /
             # `.borrow` (mapping to optionval / Option / OptionView in
             # the synthesized `.call` return). `.lock` is parameter-only
@@ -1326,7 +1326,7 @@ class TypeChecker:
                 rt
                 and rt.generic_origin is not None
                 and rt.generic_origin.name
-                == "iterator"  # ztc-string-compare-ok: stdlib iterator protocol marker
+                == "Iterator"  # ztc-string-compare-ok: stdlib iterator protocol marker
             ):
                 self._validate_iterator_gives_form(func)
         for pname, ppath in func.parameters.items():

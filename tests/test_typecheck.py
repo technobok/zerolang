@@ -323,8 +323,8 @@ class TestNonRuntimeTypes:
     def test_null_in_union_is_ok(self):
         """Null as a union subtype (eg. Option.none) is fine."""
         check_ok(
-            "myopt: union { some: i64\n none: null }\n"
-            "main: function is { x: myopt.none }"
+            "MyOpt: union { some: i64\n none: null }\n"
+            "main: function is { x: MyOpt.none }"
         )
 
 
@@ -606,8 +606,8 @@ class TestMatchExpression:
     def test_match_as_expression_union(self):
         """Union match assigned to a variable."""
         check_ok(
-            "shape: union { circle: i64\n square: i64 }\n"
-            "area: function {s: shape} out i64 is {\n"
+            "Shape: union { circle: i64\n square: i64 }\n"
+            "area: function {s: Shape} out i64 is {\n"
             "  match s case circle then 314 case square then 100\n"
             "}\nmain: function is {}"
         )
@@ -827,8 +827,8 @@ class TestOwnershipParsing:
     def test_param_borrow(self):
         """Parameter with .borrow annotation should parse and type-check."""
         program, typing = check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.borrow} is {}\nmain: function is {}"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.borrow} is {}\nmain: function is {}"
         )
         ftype = typing.resolved["test.f"]
         assert typing.child_ownership(ftype, "a") == ZParamOwnership.BORROW
@@ -844,8 +844,8 @@ class TestOwnershipParsing:
     def test_param_lock(self):
         """Parameter with .lock annotation (requires return value)."""
         program, typing = check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.lock} out myclass is { return a }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.lock} out MyClass is { return a }\n"
             "main: function is {}"
         )
         ftype = typing.resolved["test.f"]
@@ -860,8 +860,8 @@ class TestOwnershipParsing:
     def test_mixed_params(self):
         """Mix of annotated and unannotated parameters."""
         program, typing = check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.take b: myclass c: myclass.borrow} is {}\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.take b: MyClass c: MyClass.borrow} is {}\n"
             "main: function is {}"
         )
         ftype = typing.resolved["test.f"]
@@ -872,8 +872,8 @@ class TestOwnershipParsing:
     def test_return_type_borrow(self):
         """Return type with .borrow annotation."""
         program, typing = check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.lock} out MyClass.borrow is { return a }\n"
             "main: function is {}"
         )
         ftype = typing.resolved["test.f"]
@@ -895,8 +895,8 @@ class TestOwnershipInZType:
     def test_param_ownership_on_ztype(self):
         """Ownership annotations should be on the ZType after type checking."""
         program, typing = check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.take b: myclass.borrow} out myclass is { return a }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.take b: MyClass.borrow} out MyClass is { return a }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -909,8 +909,8 @@ class TestOwnershipInZType:
     def test_return_ownership_on_ztype(self):
         """Return ownership should propagate to ZType."""
         program, typing = check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.lock} out MyClass.borrow is { return a }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
@@ -1002,8 +1002,8 @@ class TestOwnershipSignatureValidation:
     def test_borrow_return_with_lock_param_ok(self):
         """Returning borrow with a lock parameter is OK."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {t: myclass.lock} out myclass.borrow is { return t }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {t: MyClass.lock} out MyClass.borrow is { return t }\n"
             "main: function is {}"
         )
 
@@ -1017,8 +1017,8 @@ class TestOwnershipSignatureValidation:
     def test_lock_param_with_return_ok(self):
         """Lock parameter with a return value is OK."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {t: myclass.lock} out myclass is { return t }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {t: MyClass.lock} out MyClass is { return t }\n"
             "main: function is {}"
         )
 
@@ -1049,8 +1049,8 @@ class TestOwnershipReturnChecking:
     def test_return_lock_param_as_borrow_ok(self):
         """Returning a lock parameter as borrowed is OK."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {t: myclass.lock} out myclass.borrow is { return t }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {t: MyClass.lock} out MyClass.borrow is { return t }\n"
             "main: function is {}"
         )
 
@@ -1091,9 +1091,9 @@ class TestOwnershipReturnChecking:
         field access. The smoking gun is a Path like `s.copy` in a field
         slot — verify type resolution propagates to the Path's parent."""
         program, typing = check_ok(
-            "mybox: class { label: String }\n"
-            "mk: function {s: String.take} out mybox is {\n"
-            "  return mybox label: s.copy\n"
+            "MyBox: class { label: String }\n"
+            "mk: function {s: String.take} out MyBox is {\n"
+            "  return MyBox label: s.copy\n"
             "}\n"
             "main: function is {}"
         )
@@ -1121,9 +1121,9 @@ class TestOwnershipReturnChecking:
         field aliases the caller's storage. Reject; user must `.copy`,
         `.take` the param, or annotate the field as `.lock`."""
         errors = check_errors(
-            "mybox: class { label: String }\n"
-            "mk: function {s: String} out mybox is {\n"
-            "  return mybox label: s\n"
+            "MyBox: class { label: String }\n"
+            "mk: function {s: String} out MyBox is {\n"
+            "  return MyBox label: s\n"
             "}\n"
             "main: function is {}"
         )
@@ -1135,9 +1135,9 @@ class TestOwnershipReturnChecking:
         """`.copy` produces a fresh owned value — break the borrow
         chain, allow the store."""
         check_ok(
-            "mybox: class { label: String }\n"
-            "mk: function {s: String} out mybox is {\n"
-            "  return mybox label: s.copy\n"
+            "MyBox: class { label: String }\n"
+            "mk: function {s: String} out MyBox is {\n"
+            "  return MyBox label: s.copy\n"
             "}\n"
             "main: function is {}"
         )
@@ -1146,9 +1146,9 @@ class TestOwnershipReturnChecking:
         """`.take` on the param transfers ownership in — the body owns
         `s` and may move it into the Box."""
         check_ok(
-            "mybox: class { label: String }\n"
-            "mk: function {s: String.take} out mybox is {\n"
-            "  return mybox label: s\n"
+            "MyBox: class { label: String }\n"
+            "mk: function {s: String.take} out MyBox is {\n"
+            "  return MyBox label: s\n"
             "}\n"
             "main: function is {}"
         )
@@ -1159,15 +1159,15 @@ class TestOwnershipReturnChecking:
         (the borrowed_record / ListIter examples). The store-borrow
         check exempts `.lock`-annotated params."""
         check_ok(
-            "container: class { x: i64 } as { public: unit { :slice }\n"
-            "  slice: function {c: this.lock} out cview is {\n"
-            "    return cview source: c.private\n"
+            "Container: class { x: i64 } as { public: unit { :slice }\n"
+            "  slice: function {c: this.lock} out Cview is {\n"
+            "    return Cview source: c.private\n"
             "  }\n"
             "}\n"
-            "cview: class {\n"
-            "  source: container.private.lock\n"
+            "Cview: class {\n"
+            "  source: Container.private.lock\n"
             "} as {\n"
-            "  create: function {source: container.private.lock} out this is {\n"
+            "  create: function {source: Container.private.lock} out this is {\n"
             "    return meta.create source: source\n"
             "  }\n"
             "}\n"
@@ -1278,8 +1278,8 @@ class TestStoreOfBorrowedRejection:
         `_check_reassignment`'s borrowed-RHS rule — storing the borrow
         into the Box's owned-String slot would alias caller storage."""
         errors = check_errors(
-            "mybox: class { label: String }\n"
-            "f: function {b: mybox.lock s: String} is {\n"
+            "MyBox: class { label: String }\n"
+            "f: function {b: MyBox.lock s: String} is {\n"
             "  b.label = s\n"
             "}\n"
             "main: function is {}"
@@ -1304,14 +1304,14 @@ class TestReturnLockPropagation:
         for the borrow's lifetime.
         """
         errors = check_errors(
-            "holder: class {\n"
+            "Holder: class {\n"
             "  val: String\n"
             "} as {\n"
             "  pick: function {t: this.lock prefix: StringView}"
             " out String.borrow is { return t.val }\n"
             "}\n"
             "main: function is {\n"
-            '  src: holder val: "hi".string\n'
+            '  src: Holder val: "hi".string\n'
             '  v: src.pick prefix: ""\n'
             '  src.val = "bye".string\n'
             "}"
@@ -1344,14 +1344,14 @@ class TestReturnLockPropagation:
         the parameter name.
         """
         errors = check_errors(
-            "holder: class {\n"
+            "Holder: class {\n"
             "  val: String\n"
             "} as {\n"
             "  pick: function {h: this.lock prefix: StringView}"
             " out String.borrow is { return h.val }\n"
             "}\n"
             "main: function is {\n"
-            '  src: holder val: "hi".string\n'
+            '  src: Holder val: "hi".string\n'
             '  v: src.pick prefix: ""\n'
             '  src.val = "bye".string\n'
             "}"
@@ -1397,36 +1397,36 @@ class TestReturnLockPropagation:
         disambiguation lives where it has visibility into the call.
 
         Tests two forms must produce the same binding type:
-          (a) explicit-arg method call: `container.slice c: c`
+          (a) explicit-arg method call: `Container.slice c: c`
           (b) implicit-receiver value access: `c.slice`
-        Both must bind to `cview`.
+        Both must bind to `Cview`.
 
         Each binding retains the lock on `c` for its scope, so the
         two forms are exercised in sibling inner blocks rather than
         side-by-side in the outer scope -- two concurrent
-        `cview source: container.private.lock` borrows of the same
+        `Cview source: Container.private.lock` borrows of the same
         source `c` would themselves conflict (exclusive lock on
         `(c,)`).
         """
         program, typing = check_ok(
-            "container: class { x: i64 } as { public: unit { :slice }\n"
-            "  slice: function {c: this.lock} out cview is {\n"
-            "    return cview source: c.private\n"
+            "Container: class { x: i64 } as { public: unit { :slice }\n"
+            "  slice: function {c: this.lock} out Cview is {\n"
+            "    return Cview source: c.private\n"
             "  }\n"
             "}\n"
-            "cview: class {\n"
-            "  source: container.private.lock\n"
+            "Cview: class {\n"
+            "  source: Container.private.lock\n"
             "} as {\n"
-            "  create: function {source: container.private.lock} out this is {\n"
+            "  create: function {source: Container.private.lock} out this is {\n"
             "    return meta.create source: source\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  c: container x: 7\n"
-            "  v1: container.slice c: c\n"
+            "  c: Container x: 7\n"
+            "  v1: Container.slice c: c\n"
             "}\n"
             "other: function is {\n"
-            "  c: container x: 7\n"
+            "  c: Container x: 7\n"
             "  v2: c.slice\n"
             "}"
         )
@@ -1434,7 +1434,7 @@ class TestReturnLockPropagation:
         # exclusive lock on its `c` for the rest of the function scope,
         # so the two forms are exercised in sibling functions to avoid
         # the (legitimate) lock conflict that two side-by-side
-        # `cview source: ...` borrows of the same source would produce.
+        # `Cview source: ...` borrows of the same source would produce.
         bindings = {}
         for fn_name in ("main", "other"):
             fn = program.units[program.mainunitname].body[fn_name]
@@ -1449,8 +1449,8 @@ class TestReturnLockPropagation:
                     bindings[sline.name] = _node_ztype(typing, sline.value)
         assert "v1" in bindings, list(bindings.keys())
         assert "v2" in bindings, list(bindings.keys())
-        assert bindings["v1"].name == "cview", bindings["v1"].name
-        assert bindings["v2"].name == "cview", bindings["v2"].name
+        assert bindings["v1"].name == "Cview", bindings["v1"].name
+        assert bindings["v2"].name == "Cview", bindings["v2"].name
 
 
 class TestClassConstructionLockEscape:
@@ -1567,7 +1567,7 @@ class TestPhaseC3Pins:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -1587,7 +1587,7 @@ class TestPhaseC3Pins:
         check_ok(
             self._reader_and_myfile() + "use_reader: function {r: Reader} is {}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    use_reader r: f.myreader\n"
             "    use_reader r: f.myreader\n"
             "}"
@@ -1627,7 +1627,7 @@ class TestPhaseC3Pins:
         lock on its source which cannot transfer ownership.
         """
         errors = check_errors(
-            "holder: class {\n"
+            "Holder: class {\n"
             "    val: String\n"
             "} as {\n"
             "    pick: function {t: this.lock} out String.borrow is {\n"
@@ -1636,7 +1636,7 @@ class TestPhaseC3Pins:
             "}\n"
             "consume: function {s: String.take} is {}\n"
             "main: function is {\n"
-            '    h: holder val: "hi".string\n'
+            '    h: Holder val: "hi".string\n'
             "    consume s: h.pick\n"
             "}"
         )
@@ -1785,8 +1785,8 @@ class TestTakeBorrowCompilerMethods:
     def test_borrow_resolves(self):
         """x.borrow should resolve to x's type (reftype)."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n}"
         )
 
     def test_take_invalidates_name(self):
@@ -1804,13 +1804,13 @@ class TestTakeBorrowCompilerMethods:
         the user method shadowing, x stays a live variable.
         """
         check_ok(
-            "mybox: class {\n"
+            "MyBox: class {\n"
             "  value: 0u64\n"
             "} as {\n"
             "  take: function {:this} out u64 is { return 42u64 }\n"
             "}\n"
             "main: function is {\n"
-            "  x: mybox\n"
+            "  x: MyBox\n"
             "  y: x.take\n"
             "  z: x.value\n"
             "}"
@@ -1834,15 +1834,15 @@ class TestReleaseCompilerMethod:
     def test_release_borrowed_reftype(self):
         """Releasing a borrowed reftype ends the borrow."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  y.release\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  y.release\n}"
         )
 
     def test_source_unlocked_after_borrow_release(self):
         """After releasing a borrow, the source is unlocked and usable."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  y.release\n  z: x.take\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  y.release\n  z: x.take\n}"
         )
 
     def test_release_parameter_ok(self):
@@ -1852,8 +1852,8 @@ class TestReleaseCompilerMethod:
     def test_cannot_release_locked_variable(self):
         """Cannot release a variable that has a lock held by someone else."""
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  x.release\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  x.release\n}"
         )
         assert any(
             "release" in e.msg.lower() and "lock" in e.msg.lower() for e in errors
@@ -2082,14 +2082,14 @@ class TestBorrowedReftypeRestrictions:
 
     def test_borrowed_reftype_can_be_borrowed_again(self):
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  z: y.borrow\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  z: y.borrow\n}"
         )
 
     def test_borrowed_reftype_cannot_be_taken(self):
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  y.take\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  y.take\n}"
         )
         assert any(
             "borrowed" in e.msg.lower() and "take" in e.msg.lower() for e in errors
@@ -2097,9 +2097,9 @@ class TestBorrowedReftypeRestrictions:
 
     def test_borrowed_reftype_cannot_be_swapped(self):
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
+            "MyClass: class { value: 0 }\n"
             "main: function is {\n"
-            "  x: myclass\n  y: myclass\n  z: x.borrow\n  z swap y\n"
+            "  x: MyClass\n  y: MyClass\n  z: x.borrow\n  z swap y\n"
             "}"
         )
         assert any(
@@ -2108,8 +2108,8 @@ class TestBorrowedReftypeRestrictions:
 
     def test_borrowed_reftype_cannot_be_reassigned(self):
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  y = myclass\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  y = MyClass\n}"
         )
         assert any(
             "reassign" in e.msg.lower() and "borrowed" in e.msg.lower() for e in errors
@@ -2117,10 +2117,10 @@ class TestBorrowedReftypeRestrictions:
 
     def test_borrowed_reftype_cannot_be_passed_to_take_param(self):
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.take} is {}\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.take} is {}\n"
             "main: function is {\n"
-            "  x: myclass\n"
+            "  x: MyClass\n"
             "  y: x.borrow\n"
             "  f y\n"
             "}"
@@ -2129,10 +2129,10 @@ class TestBorrowedReftypeRestrictions:
 
     def test_borrowed_reftype_can_be_passed_to_borrow_param(self):
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.borrow} is {}\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.borrow} is {}\n"
             "main: function is {\n"
-            "  x: myclass\n"
+            "  x: MyClass\n"
             "  y: x.borrow\n"
             "  f y\n"
             "}"
@@ -2140,17 +2140,17 @@ class TestBorrowedReftypeRestrictions:
 
     def test_owned_reftype_passed_to_borrow_is_downgrade(self):
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.borrow} is {}\n"
-            "main: function is {\n  x: myclass\n  f x\n}"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.borrow} is {}\n"
+            "main: function is {\n  x: MyClass\n  f x\n}"
         )
 
     def test_lock_param_body_is_borrowed(self):
         # .lock parameters are also borrowed in the body. Returning the
         # original is fine; copying is not.
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "f: function {a: myclass.lock} out myclass.borrow is { return a }\n"
+            "MyClass: class { value: 0 }\n"
+            "f: function {a: MyClass.lock} out MyClass.borrow is { return a }\n"
             "main: function is {}"
         )
 
@@ -2163,13 +2163,13 @@ class TestLockFieldsAndBornBorrowedRemoved:
     def test_lock_field_on_record_error(self):
         # A .lock field on a record is no longer accepted.
         errors = check_errors(
-            "bag: class { a: i64 }\n"
-            "badrec: record { target: bag.private.lock } as {\n"
-            "  create: function {target: bag.private.lock} out this is {\n"
+            "Bag: class { a: i64 }\n"
+            "badrec: record { target: Bag.private.lock } as {\n"
+            "  create: function {target: Bag.private.lock} out this is {\n"
             "    return meta.create target: target\n"
             "  }\n"
             "}\n"
-            "main: function is { b: bag a: 1; r: badrec target: b.private }"
+            "main: function is { b: Bag a: 1; r: badrec target: b.private }"
         )
         assert any("'.lock'" in e.msg and "class" in e.msg.lower() for e in errors)
 
@@ -2187,13 +2187,13 @@ class TestLockFieldsAndBornBorrowedRemoved:
     def test_lock_field_on_class_allowed(self):
         # Phase 7: classes may have .lock fields (stack-allocated, single-owner)
         check_ok(
-            "bag: class { a: i64 }\n"
-            "bagview: class { target: bag.lock } as {\n"
-            "  create: function {target: bag.lock} out this is {\n"
+            "Bag: class { a: i64 }\n"
+            "BagView: class { target: Bag.lock } as {\n"
+            "  create: function {target: Bag.lock} out this is {\n"
             "    return meta.create target: target\n"
             "  }\n"
             "}\n"
-            "main: function is { b: bag a: 1\nv: bagview target: b }"
+            "main: function is { b: Bag a: 1\nv: BagView target: b }"
         )
 
     def test_take_field_modifier_on_record_error(self):
@@ -2249,18 +2249,18 @@ class TestImplicitConstruction:
     def test_bare_name_class_custom_create_signature(self):
         """Bare-name on a class also validates against custom create."""
         check_ok(
-            "thing: class { val: i64 } as {\n"
+            "Thing: class { val: i64 } as {\n"
             "  create: function {seed: i64} out this is {\n"
             "    return meta.create val: seed\n"
             "  }\n"
             "}\n"
-            "main: function is { t: thing seed: 5 }"
+            "main: function is { t: Thing seed: 5 }"
         )
 
     def test_union_bare_name_rejected(self):
         """Bare-name on a union type is rejected with a subtype hint."""
         errors = check_errors(
-            "myunion: union { A: i64 B: i64 }\nmain: function is { u: myunion 42 }"
+            "MyUnion: union { A: i64 B: i64 }\nmain: function is { u: MyUnion 42 }"
         )
         assert any(
             "union" in e.msg.lower() and "subtype" in e.msg.lower() for e in errors
@@ -2394,7 +2394,7 @@ class TestZSymbolTableLocking:
     @staticmethod
     def _h(n: int):
         """Make a synthetic ZLockHolder for tests. Distinct n → distinct
-        holder identity."""
+        Holder identity."""
         from ztypes import ZLockHolder, ZLockHolderKind
 
         return ZLockHolder(ZLockHolderKind.VAR, n)
@@ -2405,7 +2405,7 @@ class TestZSymbolTableLocking:
 
         st = ZSymbolTable()
         st.push("test")
-        t = ZType(name="myclass", typetype=ZTypeType.UNION, parent=None)
+        t = ZType(name="MyClass", typetype=ZTypeType.UNION, parent=None)
         t.is_valtype = False
         for name in names:
             var = ZVariable(ztype=t, ownership=ZOwnership.OWNED)
@@ -2526,22 +2526,22 @@ class TestLockCheckingBorrow:
     def test_borrow_ok(self):
         """y: x.borrow should work without errors (reftype)."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n}"
         )
 
     def test_chained_borrow_ok(self):
         """y: x.borrow, z: y.borrow should work (z locks y which locks x)."""
         check_ok(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  z: y.borrow\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  z: y.borrow\n}"
         )
 
     def test_double_borrow_same_var_error(self):
         """Cannot borrow x twice — second borrow conflicts with existing exclusive lock."""
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  z: x.borrow\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  z: x.borrow\n}"
         )
         assert any(
             "lock" in e.msg.lower() or "exclusive" in e.msg.lower() for e in errors
@@ -2587,8 +2587,8 @@ class TestLockEnforcement:
     def test_reassign_locked_reftype_var_rejected(self):
         """Same rule applies to borrowed reftype via .borrow."""
         errors = check_errors(
-            "myclass: class { value: 0 }\n"
-            "main: function is {\n  x: myclass\n  y: x.borrow\n  x = myclass\n}"
+            "MyClass: class { value: 0 }\n"
+            "main: function is {\n  x: MyClass\n  y: x.borrow\n  x = MyClass\n}"
         )
         assert any("exclusive lock" in e.msg.lower() for e in errors)
 
@@ -2596,9 +2596,9 @@ class TestLockEnforcement:
         """Reassigning the locked leaf field errors — the view installs an
         EXCLUSIVE Borrow-scoped Lock on the leaf Path `(p, name)`."""
         errors = check_errors(
-            "namepair: record { name: String other: String }\n"
+            "namePair: record { name: String other: String }\n"
             "main: function is {\n"
-            '  p: namepair name: "a".string other: "b".string\n'
+            '  p: namePair name: "a".string other: "b".string\n'
             "  v: p.name.stringview\n"
             '  p.name = "c".string\n'
             "}"
@@ -2609,9 +2609,9 @@ class TestLockEnforcement:
         """Path-scoped locks: reassigning a sibling field is permitted while
         another field is borrowed."""
         check_ok(
-            "namepair: class { name: String other: i64 }\n"
+            "NamePair: class { name: String other: i64 }\n"
             "main: function is {\n"
-            '  p: namepair name: "a".string other: 0\n'
+            '  p: NamePair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
             "  p.other = 3\n"
             "}"
@@ -2635,9 +2635,9 @@ class TestLockEnforcement:
     def test_swap_rejects_locked_leaf(self):
         """Swap on the locked leaf Path errors — sibling-field swaps are OK."""
         errors = check_errors(
-            "namepair: record { name: String other: String }\n"
+            "namePair: record { name: String other: String }\n"
             "main: function is {\n"
-            '  p: namepair name: "a".string other: "b".string\n'
+            '  p: namePair name: "a".string other: "b".string\n'
             '  a: "c".string\n'
             "  v: p.name.stringview\n"
             "  p.name swap a\n"
@@ -2651,9 +2651,9 @@ class TestLockEnforcement:
     def test_swap_sibling_field_permitted(self):
         """Sibling-field swap is permitted while another field is borrowed."""
         check_ok(
-            "namepair: class { name: String other: String }\n"
+            "NamePair: class { name: String other: String }\n"
             "main: function is {\n"
-            '  p: namepair name: "a".string other: "b".string\n'
+            '  p: NamePair name: "a".string other: "b".string\n'
             '  a: "c".string\n'
             "  v: p.name.stringview\n"
             "  p.other swap a\n"
@@ -2687,19 +2687,19 @@ class TestLockEnforcement:
         """Call-identity stack (Phase C step 1): a method call whose
         argument borrows from the same receiver Path should not
         self-block. Receiver lock and the arg's prefix-overlapping lock
-        carry the same call identity now, so try_lock's same-holder
+        carry the same call identity now, so try_lock's same-Holder
         predicate skips the conflict.
         """
         check_ok(
-            "inner: class { val: 0u64 }\n"
-            "pair: class {\n"
-            "  a: inner\n"
-            "  b: inner\n"
+            "Inner: class { val: 0u64 }\n"
+            "Pair: class {\n"
+            "  a: Inner\n"
+            "  b: Inner\n"
             "} as {\n"
-            "  poke: function {:this side: inner} is {}\n"
+            "  poke: function {:this side: Inner} is {}\n"
             "}\n"
             "main: function is {\n"
-            "  p: pair a: inner b: inner\n"
+            "  p: Pair a: Inner b: Inner\n"
             "  p.poke side: p.a.borrow\n"
             "}"
         )
@@ -2722,12 +2722,12 @@ class TestLockEnforcement:
         """.borrow on a field Path locks the leaf Path EXCLUSIVE; reassigning
         the locked field errors but sibling fields remain mutable."""
         errors = check_errors(
-            "inner: class { value: 0 }\n"
-            "point: record { a: inner b: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "point: record { a: Inner b: Inner }\n"
             "main: function is {\n"
-            "  p: point a: inner b: inner\n"
+            "  p: point a: Inner b: Inner\n"
             "  y: p.a.borrow\n"
-            "  p.a = inner\n"
+            "  p.a = Inner\n"
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
@@ -2735,36 +2735,36 @@ class TestLockEnforcement:
     def test_borrow_on_dotted_path_permits_sibling(self):
         """.borrow on `p.a` does not block reassignment of sibling `p.b`."""
         check_ok(
-            "inner: class { value: 0 }\n"
-            "point: class { a: inner b: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "Point: class { a: Inner b: Inner }\n"
             "main: function is {\n"
-            "  p: point a: inner b: inner\n"
+            "  p: Point a: Inner b: Inner\n"
             "  y: p.a.borrow\n"
-            "  p.b = inner\n"
+            "  p.b = Inner\n"
             "}"
         )
 
     def test_lock_inline_on_dotted_path_locks_leaf(self):
         """.lock on a field Path locks the leaf (alias for .borrow)."""
         errors = check_errors(
-            "inner: class { value: 0 }\n"
-            "point: record { a: inner b: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "point: record { a: Inner b: Inner }\n"
             "main: function is {\n"
-            "  p: point a: inner b: inner\n"
+            "  p: point a: Inner b: Inner\n"
             "  y: p.a.lock\n"
-            "  p.a = inner\n"
+            "  p.a = Inner\n"
             "}"
         )
         assert any("exclusive lock" in e.msg.lower() and "'p'" in e.msg for e in errors)
 
     def test_borrow_on_field_released_on_scope_exit(self):
-        """Borrow-scoped locks on dotted paths are released when the holder
+        """Borrow-scoped locks on dotted paths are released when the Holder
         goes out of scope. (Needs Fix A + Fix B.)"""
         check_ok(
-            "inner: class { value: 0 }\n"
-            "point: class { a: inner b: i64 }\n"
+            "Inner: class { value: 0 }\n"
+            "Point: class { a: Inner b: i64 }\n"
             "main: function is {\n"
-            "  p: point a: inner b: 0\n"
+            "  p: Point a: Inner b: 0\n"
             "  { y: p.a.borrow }\n"
             "  p.b = 3\n"
             "}"
@@ -2792,14 +2792,14 @@ class TestLockEnforcement:
         """A user-chosen receiver name ('me: this') triggers the root lock
         on the method parameter name."""
         errors = check_errors(
-            "thing: class { s: String } as {\n"
+            "Thing: class { s: String } as {\n"
             "  peek: function {me: this} is {\n"
             "    v: me.s.stringview\n"
             '    me.s = "new".string\n'
             "  }\n"
             "}\n"
             "main: function is {\n"
-            '  t: thing s: "x".string\n'
+            '  t: Thing s: "x".string\n'
             "  t.peek\n"
             "}"
         )
@@ -2813,7 +2813,7 @@ class TestLockEnforcement:
         """Explicit method call c.call on a locked variable errors —
         callable dispatch must check the receiver lock."""
         errors = check_errors(
-            "counter: class { i: i64 max: i64 } as {\n"
+            "Counter: class { i: i64 max: i64 } as {\n"
             "  call: function {:this} out (optionval t: i64) is {\n"
             "    if this.i < this.max then {\n"
             "      result: optionval.some this.i\n"
@@ -2824,7 +2824,7 @@ class TestLockEnforcement:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  c: counter i: 0 max: 5\n"
+            "  c: Counter i: 0 max: 5\n"
             "  v: c.borrow\n"
             "  x: c.call\n"
             "}"
@@ -2839,26 +2839,26 @@ class TestLockEnforcement:
         the Path-scoped lock model. Under the old name-scoped model this
         was rejected because both operations took a root lock on `this`.
 
-        The method body is only checked if `pipe` is instantiated and
+        The method body is only checked if `Pipe` is instantiated and
         `flush` reached, so `main` does the instantiation."""
         check_ok(
-            "src: class { x: i64 }\n"
-            "dst: class { count: i64 } as {\n"
+            "Src: class { x: i64 }\n"
+            "Dst: class { count: i64 } as {\n"
             "  write: function {:this n: i64} is {\n"
             "    this.count = this.count + n\n"
             "  }\n"
             "}\n"
-            "pipe: class {\n"
-            "  src: src\n"
-            "  dst: dst\n"
+            "Pipe: class {\n"
+            "  Src: Src\n"
+            "  Dst: Dst\n"
             "} as {\n"
             "  flush: function {:this} is {\n"
-            "    r: this.src.borrow\n"
-            "    this.dst.write n: r.x\n"
+            "    r: this.Src.borrow\n"
+            "    this.Dst.write n: r.x\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  p: pipe src: (src x: 7) dst: (dst count: 0)\n"
+            "  p: Pipe Src: (Src x: 7) Dst: (Dst count: 0)\n"
             "  p.flush\n"
             "}\n"
         )
@@ -2866,20 +2866,20 @@ class TestLockEnforcement:
     def test_self_field_mutation_of_locked_leaf_rejected(self):
         """Within a method, mutating the locked leaf field errors."""
         errors = check_errors(
-            "inner: class { val: i64 } as {\n"
+            "Inner: class { val: i64 } as {\n"
             "  peek: function {i: this} out i64 is { return i.val }\n"
             "}\n"
-            "wrap: class {\n"
-            "  a: inner\n"
-            "  b: inner\n"
+            "Wrap: class {\n"
+            "  a: Inner\n"
+            "  b: Inner\n"
             "} as {\n"
             "  go: function {w: this} is {\n"
             "    r: w.a.borrow\n"
-            "    w.a = inner val: 42\n"
+            "    w.a = Inner val: 42\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  w: wrap a: (inner val: 1) b: (inner val: 2)\n"
+            "  w: Wrap a: (Inner val: 1) b: (Inner val: 2)\n"
             "  w.go\n"
             "}\n"
         )
@@ -2901,12 +2901,12 @@ class TestLockEnforcement:
           length/capacity to the global u64 type restores arithmetic
           operators on List-length results."""
         check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "  write: function {:this from: ByteView}"
             " out (Result t: u64 e: IoError)\n"
             "}\n"
-            "holder: class {\n"
-            "  sink: myproto.lock\n"
+            "Holder: class {\n"
+            "  sink: MyProto.lock\n"
             "  buf:  Bytes\n"
             "  cap:  u64\n"
             "} as {\n"
@@ -2942,12 +2942,12 @@ class TestLockEnforcement:
         arms — the flush pattern covers decomposition; this covers
         the straight-through Path."""
         check_ok(
-            "mysink: protocol {\n"
+            "Mysink: protocol {\n"
             "  write: function {:this from: ByteView}"
             " out (Result t: u64 e: IoError)\n"
             "}\n"
-            "holder: class {\n"
-            "  sink: mysink.lock\n"
+            "Holder: class {\n"
+            "  sink: Mysink.lock\n"
             "} as {\n"
             "  write: function {:this from: ByteView}"
             " out (Result t: u64 e: IoError) is {\n"
@@ -2961,20 +2961,20 @@ class TestLockEnforcement:
         """Within a method, mutating a sibling field of the locked leaf is
         permitted under the Path-scoped lock model."""
         check_ok(
-            "inner: class { val: i64 } as {\n"
+            "Inner: class { val: i64 } as {\n"
             "  peek: function {i: this} out i64 is { return i.val }\n"
             "}\n"
-            "wrap: class {\n"
-            "  a: inner\n"
-            "  b: inner\n"
+            "Wrap: class {\n"
+            "  a: Inner\n"
+            "  b: Inner\n"
             "} as {\n"
             "  go: function {w: this} is {\n"
             "    r: w.a.borrow\n"
-            "    w.b = inner val: 42\n"
+            "    w.b = Inner val: 42\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  w: wrap a: (inner val: 1) b: (inner val: 2)\n"
+            "  w: Wrap a: (Inner val: 1) b: (Inner val: 2)\n"
             "  w.go\n"
             "}\n"
         )
@@ -2987,18 +2987,18 @@ class TestLockEnforcement:
         Result binding's scope — mutating the source while the wrapper is
         alive errors."""
         errors = check_errors(
-            "provider: protocol {\n"
+            "Provider: protocol {\n"
             "  get: function {:this seed: i64} out i64\n"
             "}\n"
-            "multiplier: class { factor: i64 } as {\n"
-            "  prov: provider\n"
+            "Multiplier: class { factor: i64 } as {\n"
+            "  prov: Provider\n"
             "  get: function {m: this seed: i64} out i64 is {\n"
             "    return m.factor * seed\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  m: multiplier factor: 5\n"
-            "  borrowed: provider.borrow from: m.lock\n"
+            "  m: Multiplier factor: 5\n"
+            "  borrowed: Provider.borrow from: m.lock\n"
             "  m.factor = 10\n"
             "}"
         )
@@ -3009,19 +3009,19 @@ class TestLockEnforcement:
         once the wrapper falls out of an inner block, the source is
         mutable again."""
         check_ok(
-            "provider: protocol {\n"
+            "Provider: protocol {\n"
             "  get: function {:this seed: i64} out i64\n"
             "}\n"
-            "multiplier: class { factor: i64 } as {\n"
-            "  prov: provider\n"
+            "Multiplier: class { factor: i64 } as {\n"
+            "  prov: Provider\n"
             "  get: function {m: this seed: i64} out i64 is {\n"
             "    return m.factor * seed\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  m: multiplier factor: 5\n"
+            "  m: Multiplier factor: 5\n"
             "  {\n"
-            "    borrowed: provider.borrow from: m.lock\n"
+            "    borrowed: Provider.borrow from: m.lock\n"
             "    r: borrowed.get seed: 3\n"
             "  }\n"
             "  m.factor = 10\n"
@@ -3034,13 +3034,13 @@ class TestLockEnforcement:
         is permitted — the call-scoped lock released when the call scope
         popped."""
         check_ok(
-            "counter: class { n: i64 } as {\n"
+            "Counter: class { n: i64 } as {\n"
             "  inc_by: function {:this by: i64} out i64 is {\n"
             "    return by + 1\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  c: counter n: 0\n"
+            "  c: Counter n: 0\n"
             "  x: c.inc_by by: 5\n"
             "  c.n = 42\n"
             "}"
@@ -3080,9 +3080,9 @@ class TestLockEnforcement:
         """Reading a sibling field of a locked-leaf class is permitted under
         the Path-scoped lock model."""
         check_ok(
-            "namepair: class { name: String other: i64 }\n"
+            "NamePair: class { name: String other: i64 }\n"
             "main: function is {\n"
-            '  p: namepair name: "a".string other: 0\n'
+            '  p: NamePair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
             "  x: p.other\n"
             "}"
@@ -3091,9 +3091,9 @@ class TestLockEnforcement:
     def test_read_locked_leaf_field_rejected(self):
         """Reading the locked leaf Path itself remains an error."""
         errors = check_errors(
-            "namepair: record { name: String other: i64 }\n"
+            "namePair: record { name: String other: i64 }\n"
             "main: function is {\n"
-            '  p: namepair name: "a".string other: 0\n'
+            '  p: namePair name: "a".string other: 0\n'
             "  v: p.name.stringview\n"
             "  m: p.name.length\n"
             "}"
@@ -3112,7 +3112,7 @@ class TestLockEnforcement:
         assert any("cannot access" in e.msg.lower() and "'s'" in e.msg for e in errors)
 
     def test_holder_read_ok(self):
-        """The lock holder itself is not locked — reads through it are fine."""
+        """The lock Holder itself is not locked — reads through it are fine."""
         check_ok(
             "main: function is {\n"
             '  s: "hello".string\n'
@@ -3128,12 +3128,12 @@ class TestLockEnforcement:
         the borrow carries an EXCLUSIVE lock on its source, and the
         constructed aggregate may outlive the lock's source."""
         errors = check_errors(
-            "inner: class { value: 0 }\n"
-            "outer: class { a: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "Outer: class { a: Inner }\n"
             "main: function is {\n"
-            "  i: inner\n"
+            "  i: Inner\n"
             "  b: i.borrow\n"
-            "  o: outer a: b\n"
+            "  o: Outer a: b\n"
             "}"
         )
         assert any(
@@ -3145,11 +3145,11 @@ class TestLockEnforcement:
         """Positive control: an unlocked owned value flows into a class
         field without error."""
         check_ok(
-            "inner: class { value: 0 }\n"
-            "outer: class { a: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "Outer: class { a: Inner }\n"
             "main: function is {\n"
-            "  i: inner\n"
-            "  o: outer a: i\n"
+            "  i: Inner\n"
+            "  o: Outer a: i\n"
             "}"
         )
 
@@ -3157,12 +3157,12 @@ class TestLockEnforcement:
         """Reassigning an aggregate field with a locked RHS Path is a storage
         transfer and must reject: the lock would escape into the field slot."""
         errors = check_errors(
-            "inner: class { value: 0 }\n"
-            "outer: class { a: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "Outer: class { a: Inner }\n"
             "main: function is {\n"
-            "  i1: inner\n"
-            "  i2: inner\n"
-            "  o: outer a: i1\n"
+            "  i1: Inner\n"
+            "  i2: Inner\n"
+            "  o: Outer a: i1\n"
             "  b: i2.borrow\n"
             "  o.a = b\n"
             "}"
@@ -3176,12 +3176,12 @@ class TestLockEnforcement:
         """Positive control: field reassignment with an unlocked owned RHS
         is permitted."""
         check_ok(
-            "inner: class { value: 0 }\n"
-            "outer: class { a: inner }\n"
+            "Inner: class { value: 0 }\n"
+            "Outer: class { a: Inner }\n"
             "main: function is {\n"
-            "  i1: inner\n"
-            "  i2: inner\n"
-            "  o: outer a: i1\n"
+            "  i1: Inner\n"
+            "  i2: Inner\n"
+            "  o: Outer a: i1\n"
             "  o.a = i2\n"
             "}"
         )
@@ -3220,14 +3220,14 @@ class TestLockEnforcement:
         """A method returning a view of its receiver's field is legal —
         `this` is borrowed from the caller and outlives the call."""
         check_ok(
-            "mylabel: class { s: String } as {\n"
+            "Mylabel: class { s: String } as {\n"
             "    :Text\n"
             "    stringview: function {m: this} out StringView is {\n"
             "        return m.s.stringview\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            '    m: mylabel s: "hi".string\n'
+            '    m: Mylabel s: "hi".string\n'
             "    print m\n"
             "}"
         )
@@ -3303,14 +3303,14 @@ class TestWithOwnership:
     def test_call_rhs_owns_result(self):
         """Call RHS produces a fresh value that the with-binding owns."""
         check_ok(
-            "bag: class { x: i64 } as {\n"
+            "Bag: class { x: i64 } as {\n"
             "  public: unit { :x }\n"
             "  create: function { x: i64 } out this is {\n"
             "    return meta.create x: x\n"
             "  }\n"
             "}\n"
             "main: function is {\n"
-            '  with b: (bag x: 1) do print "\\{b.x}"\n'
+            '  with b: (Bag x: 1) do print "\\{b.x}"\n'
             "}"
         )
 
@@ -3331,9 +3331,9 @@ class TestWithOwnership:
     def test_dotted_path_permits_sibling_in_with(self):
         """`with a: r.f do ...` permits mutation of sibling fields in the body."""
         check_ok(
-            "pair: class { first: String other: String }\n"
+            "Pair: class { first: String other: String }\n"
             "main: function is {\n"
-            '  p: pair first: "a".string other: "b".string\n'
+            '  p: Pair first: "a".string other: "b".string\n'
             "  with v: p.first do {\n"
             '    p.other = "c".string\n'
             "  }\n"
@@ -4232,13 +4232,13 @@ class TestValtypeReftypeEnforcement:
         its source.
         """
         errors = check_errors(
-            "src: class { val: 0u64 } as {\n"
+            "Src: class { val: 0u64 } as {\n"
             "  peek: function {t: this.lock} out u64.borrow is { return t.val }\n"
             "}\n"
-            "holder: class { x: u64 }\n"
+            "Holder: class { x: u64 }\n"
             "main: function is {\n"
-            "  s: src val: 5u64\n"
-            "  h: holder x: s.peek\n"
+            "  s: Src val: 5u64\n"
+            "  h: Holder x: s.peek\n"
             "}"
         )
         assert any("lock-carrying" in e.msg.lower() for e in errors)
@@ -4281,12 +4281,12 @@ class TestPureZerolangBufferedShapes:
         `BufWriter.write` would call `this.flush` when the buffer
         would overflow."""
         check_ok(
-            "mysink: protocol {\n"
+            "Mysink: protocol {\n"
             "  write: function {:this from: ByteView}"
             " out (Result t: u64 e: IoError)\n"
             "}\n"
-            "holder: class {\n"
-            "  sink: mysink.lock\n"
+            "Holder: class {\n"
+            "  sink: Mysink.lock\n"
             "  buf:  Bytes\n"
             "  cap:  u64\n"
             "} as {\n"
@@ -4323,7 +4323,7 @@ class TestPureZerolangBufferedShapes:
         simultaneously. A pure-Zerolang `BufWriter.write` fast-Path
         does exactly this to append incoming Bytes into the buffer."""
         check_ok(
-            "holder: class {\n"
+            "Holder: class {\n"
             "  buf: Bytes\n"
             "  cap: u64\n"
             "} as {\n"
@@ -4332,7 +4332,7 @@ class TestPureZerolangBufferedShapes:
             "  }\n"
             "}\n"
             "main: function is {\n"
-            "  h: holder buf: Bytes cap: 16.u64\n"
+            "  h: Holder buf: Bytes cap: 16.u64\n"
             "  src: Bytes\n"
             "  src.append from: 65.u8\n"
             "  bv: ByteView.borrow from: src.listview\n"
@@ -4355,12 +4355,12 @@ class TestPureZerolangBufferedShapes:
         with a re-lock of `this`. This is the shape of a
         pure-Zerolang `BufReader.read` pass-through."""
         check_ok(
-            "mysource: protocol {\n"
+            "Mysource: protocol {\n"
             "  read: function {:this into: Bytes max: u64}"
             " out (Result t: u64 e: IoError)\n"
             "}\n"
-            "holder: class {\n"
-            "  source: mysource.lock\n"
+            "Holder: class {\n"
+            "  source: Mysource.lock\n"
             "  cap:    u64\n"
             "} as {\n"
             "  read: function {:this into: Bytes max: u64}"
@@ -4445,33 +4445,33 @@ class TestClassTypeResolution:
     def test_class_resolves_as_class_type(self):
         """A class definition resolves to ZTypeType.CLASS."""
         program, typing = check_ok(
-            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0 }\nmain: function is { c: MyClass }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.myclass")
+        ct = tc._resolved.get("test.MyClass")
         assert ct is not None
         assert ct.typetype == ZTypeType.CLASS
 
     def test_class_is_reftype(self):
         """Classes should be tagged as reftype (is_valtype=False)."""
         program, typing = check_ok(
-            "myclass: class { x: 0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0 }\nmain: function is { c: MyClass }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.myclass")
+        ct = tc._resolved.get("test.MyClass")
         assert ct is not None
         assert ct.is_valtype is False
 
     def test_class_fields_resolved(self):
         """Class fields should be resolved as children of the class type."""
         program, typing = check_ok(
-            "myclass: class { x: 0\n y: 0.0 }\nmain: function is { c: myclass }"
+            "MyClass: class { x: 0\n y: 0.0 }\nmain: function is { c: MyClass }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.myclass")
+        ct = tc._resolved.get("test.MyClass")
         assert tc.typing.has_child(ct, "x")
         assert tc.typing.child_of(ct, "x").name == "i64"
         assert tc.typing.has_child(ct, "y")
@@ -4480,28 +4480,28 @@ class TestClassTypeResolution:
     def test_class_methods_resolved(self):
         """Class methods should be resolved as children."""
         program, typing = check_ok(
-            "myclass: class { x: 0 } as {\n"
+            "MyClass: class { x: 0 } as {\n"
             "  get: function {c: this} out i64 is { return c.x }\n"
             "}\n"
-            "main: function is { c: myclass }"
+            "main: function is { c: MyClass }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.myclass")
+        ct = tc._resolved.get("test.MyClass")
         assert tc.typing.has_child(ct, "get")
         assert tc.typing.child_of(ct, "get").typetype == ZTypeType.FUNCTION
 
     def test_class_this_resolves_to_class(self):
         """The `this` keyword in class methods resolves to the class type."""
         program, typing = check_ok(
-            "myclass: class { x: 0 } as {\n"
+            "MyClass: class { x: 0 } as {\n"
             "  get: function {c: this} out i64 is { return c.x }\n"
             "}\n"
-            "main: function is { c: myclass }"
+            "main: function is { c: MyClass }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.myclass")
+        ct = tc._resolved.get("test.MyClass")
         get_fn = tc.typing.child_of(ct, "get")
         param_c = tc.typing.child_of(get_fn, "c")
         assert param_c is ct
@@ -4509,14 +4509,14 @@ class TestClassTypeResolution:
     def test_class_type_keyword(self):
         """The `type` keyword in a class resolves to the class type."""
         program, typing = check_ok(
-            "myclass: class { x: 0 } as {\n"
+            "MyClass: class { x: 0 } as {\n"
             "  clone: function {c: this.take} out type is { return c }\n"
             "}\n"
-            "main: function is { c: myclass }"
+            "main: function is { c: MyClass }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ct = tc._resolved.get("test.myclass")
+        ct = tc._resolved.get("test.MyClass")
         clone_fn = tc.typing.child_of(ct, "clone")
         ret = clone_fn.return_type
         assert ret is ct
@@ -4527,11 +4527,11 @@ class TestClassConstruction:
 
     def test_class_construction_returns_class_type(self):
         """Calling a class type creates an instance of that type."""
-        check_ok("myclass: class { x: i64 }\nmain: function is { c: myclass x: 5 }")
+        check_ok("MyClass: class { x: i64 }\nmain: function is { c: MyClass x: 5 }")
 
     def test_class_bare_name_construction(self):
         """A bare class name creates a zero-initialized instance."""
-        check_ok("myclass: class { x: 0 }\nmain: function is { c: myclass }")
+        check_ok("MyClass: class { x: 0 }\nmain: function is { c: MyClass }")
 
 
 class TestClassOwnership:
@@ -4540,9 +4540,9 @@ class TestClassOwnership:
     def test_class_take_invalidates(self):
         """After .take on a class variable, the source is invalidated."""
         errors = check_errors(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  c: myclass\n"
+            "  c: MyClass\n"
             "  d: c.take\n"
             "  e: c\n"
             "}"
@@ -4554,9 +4554,9 @@ class TestClassOwnership:
     def test_class_borrow_locks(self):
         """Borrowing a class variable locks the source."""
         errors = check_errors(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  c: myclass\n"
+            "  c: MyClass\n"
             "  d: c.borrow\n"
             "  e: c.borrow\n"
             "}"
@@ -4568,10 +4568,10 @@ class TestClassOwnership:
     def test_class_swap_ok(self):
         """Swapping two class variables should work."""
         check_ok(
-            "myclass: class { x: 0 }\n"
+            "MyClass: class { x: 0 }\n"
             "main: function is {\n"
-            "  a: myclass\n"
-            "  b: myclass\n"
+            "  a: MyClass\n"
+            "  b: MyClass\n"
             "  a swap b\n"
             "}"
         )
@@ -4579,10 +4579,10 @@ class TestClassOwnership:
     def test_class_aliasing_error(self):
         """Passing the same class instance twice to a call is an aliasing error."""
         errors = check_errors(
-            "myclass: class { x: i64 }\n"
-            "f: function {a: myclass b: myclass} is {}\n"
+            "MyClass: class { x: i64 }\n"
+            "f: function {a: MyClass b: MyClass} is {}\n"
             "main: function is {\n"
-            "  c: myclass\n"
+            "  c: MyClass\n"
             "  f a: c b: c\n"
             "}"
         )
@@ -4655,35 +4655,35 @@ class TestUnionTypeResolution:
     def test_union_resolves_as_union_type(self):
         """A union definition resolves to ZTypeType.UNION."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: String\n c: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: String\n c: null }\n"
+            "main: function is { x: MyUnion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert ut is not None
         assert ut.typetype == ZTypeType.UNION
 
     def test_union_is_reftype(self):
         """Unions should be tagged as reftype (is_valtype=False)."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert ut is not None
         assert ut.is_valtype is False
 
     def test_union_subtypes_stored_as_children(self):
         """Union subtypes should be stored as children."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: String\n c: null }\n"
-            "main: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: String\n c: null }\n"
+            "main: function is { x: MyUnion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert tc.typing.has_child(ut, "a")
         assert tc.typing.has_child(ut, "b")
         assert tc.typing.has_child(ut, "c")
@@ -4694,11 +4694,11 @@ class TestUnionTypeResolution:
     def test_union_null_subtype(self):
         """Null subtypes get a sentinel NULL type."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.b }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert tc.typing.child_of(ut, "b").name == "null"
         assert tc.typing.child_of(ut, "b").is_valtype is True
 
@@ -4709,24 +4709,24 @@ class TestUnionConstruction:
     def test_union_subtype_construction_returns_union_type(self):
         """Calling union.subtype expr returns the union type."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert ut is not None
 
     def test_union_null_construction(self):
         """Calling union.nullsubtype (no args) creates a union instance."""
         check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.b }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.b }"
         )
 
     def test_union_string_construction(self):
         """Calling union.stringsubtype with String arg creates a union."""
         check_ok(
-            "myunion: union { a: String\n b: null }\n"
-            'main: function is { x: myunion.a "hello" }'
+            "MyUnion: union { a: String\n b: null }\n"
+            'main: function is { x: MyUnion.a "hello" }'
         )
 
 
@@ -4736,9 +4736,9 @@ class TestUnionOwnership:
     def test_union_take_invalidates(self):
         """After .take on a union variable, the source is invalidated."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  y: x.take\n"
             "  z: x\n"
             "}"
@@ -4750,9 +4750,9 @@ class TestUnionOwnership:
     def test_union_borrow_locks(self):
         """Borrowing a union variable locks the source."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  y: x.borrow\n"
             "  z: x.borrow\n"
             "}"
@@ -4764,10 +4764,10 @@ class TestUnionOwnership:
     def test_union_swap_ok(self):
         """Swapping two union variables should work."""
         check_ok(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
-            "  y: myunion.b\n"
+            "  x: MyUnion.a 1\n"
+            "  y: MyUnion.b\n"
             "  x swap y\n"
             "}"
         )
@@ -4775,10 +4775,10 @@ class TestUnionOwnership:
     def test_union_aliasing_error(self):
         """Passing the same union twice to a call is an aliasing error."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: null }\n"
-            "f: function {x: myunion y: myunion} is {}\n"
+            "MyUnion: union { a: i64\n b: null }\n"
+            "f: function {x: MyUnion y: MyUnion} is {}\n"
             "main: function is {\n"
-            "  u: myunion.a 1\n"
+            "  u: MyUnion.a 1\n"
             "  f x: u y: u\n"
             "}"
         )
@@ -4791,9 +4791,9 @@ class TestUnionMatchExhaustiveness:
     def test_exhaustive_match_ok(self):
         """All subtypes covered is ok."""
         check_ok(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
@@ -4807,9 +4807,9 @@ class TestUnionMatchExhaustiveness:
     def test_missing_case_error(self):
         """Missing case without else is an error."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: String\n c: null }\n"
+            "MyUnion: union { a: i64\n b: String\n c: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
@@ -4824,9 +4824,9 @@ class TestUnionMatchExhaustiveness:
     def test_else_covers_remaining(self):
         """Else clause covers remaining subtypes."""
         check_ok(
-            "myunion: union { a: i64\n b: String\n c: null }\n"
+            "MyUnion: union { a: i64\n b: String\n c: null }\n"
             "main: function is {\n"
-            "  x: myunion.a 1\n"
+            "  x: MyUnion.a 1\n"
             "  match (\n"
             "    x\n"
             "  ) case a then {\n"
@@ -4939,25 +4939,25 @@ class TestUnionCustomTag:
         """Union with custom data tag should resolve without errors."""
         check_ok(
             "pv: data { LOW: 0 HIGH: 1 }\n"
-            "priority: union {\n"
+            "Priority: union {\n"
             "    LOW: null\n"
             "    HIGH: null\n"
             "} as {\n"
             "    tag: pv.tag\n"
             "}\n"
-            "main: function is { x: priority.LOW }"
+            "main: function is { x: Priority.LOW }"
         )
 
     def test_custom_tag_values_in_tag_enum(self):
         """Custom data values should appear in the :tag enum."""
         program, typing = check_ok(
             "pv: data { A: 10 B: 20 }\n"
-            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         # check that the discriminator values match the data
@@ -4968,8 +4968,8 @@ class TestUnionCustomTag:
         """Data labels not matching union subtypes should error."""
         errors = check_errors(
             "pv: data { X: 0 Y: 1 }\n"
-            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
         assert any("do not match" in e.msg for e in errors)
 
@@ -4977,8 +4977,8 @@ class TestUnionCustomTag:
         """Data with duplicate values used as tag should error."""
         errors = check_errors(
             "pv: data { A: 5 B: 5 }\n"
-            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
         assert any("duplicate" in e.msg.lower() for e in errors)
 
@@ -4986,7 +4986,7 @@ class TestUnionCustomTag:
         """Custom tag with non-sequential values."""
         program, typing = check_ok(
             "pv: data { LOW: 0 MEDIUM: 1 HIGH: 2 CRITICAL: 10 }\n"
-            "priority: union {\n"
+            "Priority: union {\n"
             "    LOW: null\n"
             "    MEDIUM: null\n"
             "    HIGH: null\n"
@@ -4994,11 +4994,11 @@ class TestUnionCustomTag:
             "} as {\n"
             "    tag: pv.tag\n"
             "}\n"
-            "main: function is { x: priority.LOW }"
+            "main: function is { x: Priority.LOW }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.priority")
+        ut = tc._resolved.get("test.Priority")
         tag = tc.typing.child_of(ut, "tag")
         assert tc.typing.child_of(tag, "CRITICAL").name == "10"
 
@@ -5007,19 +5007,19 @@ class TestUnionCustomTag:
         errors = check_errors(
             "pv1: data { A: 0 B: 1 }\n"
             "pv2: data { A: 0 B: 1 }\n"
-            "myunion: union { A: null\n B: null } as { t1: pv1.tag\n t2: pv2.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { t1: pv1.tag\n t2: pv2.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
         assert any("multiple" in e.msg.lower() for e in errors)
 
     def test_default_auto_tag_u8(self):
         """Union without custom tag gets auto-generated u8 tag."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         tag = tc.typing.child_of(ut, "tag")
         assert tag is not None
         assert tc.typing.child_of(tag, "a").name == "0"
@@ -5028,11 +5028,11 @@ class TestUnionCustomTag:
     def test_union_has_tag_data_child(self):
         """Union should have a 'tag' child (data type) for MyUnion.tag access."""
         program, typing = check_ok(
-            "myunion: union { a: i64\n b: null }\nmain: function is { x: myunion.a 1 }"
+            "MyUnion: union { a: i64\n b: null }\nmain: function is { x: MyUnion.a 1 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert tc.typing.has_child(ut, "tag")
         assert tc.typing.child_of(ut, "tag").typetype == ZTypeType.DATA
 
@@ -5040,12 +5040,12 @@ class TestUnionCustomTag:
         """Union with custom tag should have the data instance as 'tag' child."""
         program, typing = check_ok(
             "pv: data { A: 0 B: 1 }\n"
-            "myunion: union { A: null\n B: null } as { tag: pv.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: pv.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert tc.typing.has_child(ut, "tag")
         tag_data = tc.typing.child_of(ut, "tag")
         assert tag_data.typetype == ZTypeType.DATA
@@ -5055,17 +5055,17 @@ class TestUnionCustomTag:
         """The as block label name can be anything, not just 'tag'."""
         check_ok(
             "pv: data { A: 0 B: 1 }\n"
-            "myunion: union { A: null\n B: null } as { discriminator: pv.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { discriminator: pv.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
 
     def test_union_match_with_custom_tag(self):
         """Match on union with custom tag should work."""
         check_ok(
             "pv: data { A: 0 B: 1 }\n"
-            "myunion: union { A: i64\n B: null } as { tag: pv.tag }\n"
+            "MyUnion: union { A: i64\n B: null } as { tag: pv.tag }\n"
             "main: function is {\n"
-            "  x: myunion.A 42\n"
+            "  x: MyUnion.A 42\n"
             "  match (\n"
             "    x\n"
             "  ) case A then {\n"
@@ -5079,8 +5079,8 @@ class TestUnionCustomTag:
     def test_numeric_type_tag(self):
         """Using u16.tag should auto-generate sequential values with u16 storage."""
         check_ok(
-            "myunion: union { A: null\n B: null } as { tag: u16.tag }\n"
-            "main: function is { x: myunion.A }"
+            "MyUnion: union { A: null\n B: null } as { tag: u16.tag }\n"
+            "main: function is { x: MyUnion.A }"
         )
 
     def test_tag_is_generic_record(self):
@@ -5110,9 +5110,9 @@ class TestUnionCustomTag:
     def test_u16_tag_resolves_for_union(self):
         """u16.tag resolves and works in union as block."""
         check_ok(
-            "myunion: union { X: i64\n Y: null } as { tag: u16.tag }\n"
+            "MyUnion: union { X: i64\n Y: null } as { tag: u16.tag }\n"
             "main: function is {\n"
-            "  v: myunion.X 10\n"
+            "  v: MyUnion.X 10\n"
             "  match (v) case X then {\n"
             '    print "x"\n'
             "  } case Y then {\n"
@@ -5153,12 +5153,12 @@ class TestLabelValueShorthand:
     def test_union_with_label_value_subtypes(self):
         """union { :u8 :u16 :u32 } type checks correctly."""
         program, typing = check_ok(
-            "myunion: union { :u8\n :u16\n :u32 }\n"
-            "main: function is { x: myunion.u8 42 }"
+            "MyUnion: union { :u8\n :u16\n :u32 }\n"
+            "main: function is { x: MyUnion.u8 42 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert ut is not None
         assert ut.typetype == ZTypeType.UNION
         assert tc.typing.has_child(ut, "u8")
@@ -5168,11 +5168,11 @@ class TestLabelValueShorthand:
     def test_union_label_value_subtype_names(self):
         """Label value union subtypes resolve to their payload types."""
         program, typing = check_ok(
-            "myunion: union { :u8\n :String }\nmain: function is { x: myunion.u8 42 }"
+            "MyUnion: union { :u8\n :String }\nmain: function is { x: MyUnion.u8 42 }"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myunion")
+        ut = tc._resolved.get("test.MyUnion")
         assert tc.typing.child_of(ut, "u8").name == "u8"
         assert tc.typing.child_of(ut, "String").name == "String"
 
@@ -5357,8 +5357,8 @@ class TestVariantTypeResolution:
     def test_variant_rejects_union(self):
         """Variant subtypes that are unions (reftype) should be rejected."""
         errors = check_errors(
-            "myunion: union { x: i64\n y: null }\n"
-            "myvar: variant { a: myunion\n b: null }\n"
+            "MyUnion: union { x: i64\n y: null }\n"
+            "myvar: variant { a: MyUnion\n b: null }\n"
             "main: function is { x: myvar.b }"
         )
         assert any("value type" in e.msg.lower() for e in errors)
@@ -5777,21 +5777,21 @@ class TestDefaults:
         """Union null-payload subtype works the same as variant. Classes
         can hold union fields; records cannot (separate reftype rule)."""
         program, typing = check_ok(
-            "event: union {\n"
+            "Event: union {\n"
             "    idle: null\n"
             "    busy: null\n"
             "}\n"
-            "machine: class {\n"
-            "    e: event.idle\n"
+            "Machine: class {\n"
+            "    e: Event.idle\n"
             "}\n"
-            "main: function is { m: machine }"
+            "main: function is { m: Machine }"
         )
         tc = TypeChecker(program)
         tc.check()
-        t = tc._resolve_unit_name("test", "machine")
+        t = tc._resolve_unit_name("test", "Machine")
         assert t is not None
         e_t = tc.typing.child_of(t, "e")
-        assert e_t is not None and e_t.name == "event"
+        assert e_t is not None and e_t.name == "Event"
         assert tc.typing.child_default(t, "e") == "#variant:idle"
 
     def test_variant_payload_arm_rejected_as_default(self):
@@ -5896,7 +5896,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -5904,7 +5904,7 @@ class TestProtocols:
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
-            "main: function is { f: myfile fd: 1 }"
+            "main: function is { f: MyFile fd: 1 }"
         )
 
     def test_protocol_conformance_missing(self):
@@ -5913,12 +5913,12 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
             "}\n"
-            "main: function is { f: myfile fd: 1 }"
+            "main: function is { f: MyFile fd: 1 }"
         )
         assert any("missing method 'read'" in e.msg for e in errors)
 
@@ -5941,7 +5941,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -5950,13 +5950,13 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             "}\n"
         )
         tc = TypeChecker(program)
         tc.check()
-        t = tc._resolve_unit_name("test", "myfile")
+        t = tc._resolve_unit_name("test", "MyFile")
         assert t is not None
         assert tc.typing.has_child(t, "myreader")
         assert tc.typing.child_of(t, "myreader").typetype == ZTypeType.PROTOCOL
@@ -5979,7 +5979,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -5987,7 +5987,7 @@ class TestProtocols:
             "        return f.fd + b\n"
             "    }\n"
             "}\n"
-            "main: function is { f: myfile fd: 1 }"
+            "main: function is { f: MyFile fd: 1 }"
         )
 
     def test_protocol_signature_param_count_mismatch(self):
@@ -5996,7 +5996,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6004,7 +6004,7 @@ class TestProtocols:
             "        return f.fd\n"
             "    }\n"
             "}\n"
-            "main: function is { f: myfile fd: 1 }"
+            "main: function is { f: MyFile fd: 1 }"
         )
         assert any("0 param" in e.msg and "expects 1" in e.msg for e in errors)
 
@@ -6014,7 +6014,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6022,7 +6022,7 @@ class TestProtocols:
             "        return f.fd\n"
             "    }\n"
             "}\n"
-            "main: function is { f: myfile fd: 1 }"
+            "main: function is { f: MyFile fd: 1 }"
         )
         assert any(
             "'b'" in e.msg and "'bool'" in e.msg and "'i64'" in e.msg for e in errors
@@ -6034,7 +6034,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6042,20 +6042,20 @@ class TestProtocols:
             "        return 0.bool\n"
             "    }\n"
             "}\n"
-            "main: function is { f: myfile fd: 1 }"
+            "main: function is { f: MyFile fd: 1 }"
         )
         assert any("returns 'bool'" in e.msg and "'i64'" in e.msg for e in errors)
 
     def test_protocol_signature_no_return_both_ok(self):
         """Both Spec and impl with no return type is fine."""
         check_ok(
-            "worker: protocol {\n"
+            "Worker: protocol {\n"
             "    work: function {:this}\n"
             "}\n"
             "myworker: record {\n"
             "    x: i64\n"
             "} as {\n"
-            "    w: worker\n"
+            "    w: Worker\n"
             "    work: function {w: this} is {}\n"
             "}\n"
             "main: function is { w: myworker x: 1 }"
@@ -6067,7 +6067,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6076,7 +6076,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             "    b: f.borrow\n"
             "}\n"
@@ -6091,7 +6091,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6100,7 +6100,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r1: f.myreader\n"
             "    r2: f.myreader\n"
             "}\n"
@@ -6115,7 +6115,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6128,7 +6128,7 @@ class TestProtocols:
             "    return result\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    x: use_reader r: f.myreader\n"
             "    y: use_reader r: f.myreader\n"
             "}\n"
@@ -6155,7 +6155,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6164,7 +6164,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create from: f.take\n"
             "}\n"
         )
@@ -6189,7 +6189,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6198,7 +6198,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create x: f.take\n"
             "}\n"
         )
@@ -6207,7 +6207,7 @@ class TestProtocols:
     def test_generic_protocol_no_create(self):
         """Generic (unmonomorphized) protocol has no `create`."""
         program, typing = check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "    t: Any.generic\n"
             "    get: function {:this} out t\n"
             "}\n"
@@ -6215,7 +6215,7 @@ class TestProtocols:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        t = tc._resolved.get("test.myproto")
+        t = tc._resolved.get("test.MyProto")
         assert t is not None
         assert t.isgeneric is True
         assert not tc.typing.has_child(t, "create")
@@ -6242,7 +6242,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6251,7 +6251,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.take from: f.take\n"
             "}\n"
         )
@@ -6283,7 +6283,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: class {\n"
+            "MyFile: class {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6292,7 +6292,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f.lock\n"
             "}\n"
         )
@@ -6317,7 +6317,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6326,7 +6326,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow x: f.lock\n"
             "}\n"
         )
@@ -6338,7 +6338,7 @@ class TestProtocols:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6347,7 +6347,7 @@ class TestProtocols:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f.lock\n"
             "    b: f.borrow\n"
             "}\n"
@@ -6359,7 +6359,7 @@ class TestProtocols:
     def test_generic_protocol_no_take(self):
         """Generic (unmonomorphized) protocol has no `take`."""
         program, typing = check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "    t: Any.generic\n"
             "    get: function {:this} out t\n"
             "}\n"
@@ -6367,7 +6367,7 @@ class TestProtocols:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        t = tc._resolved.get("test.myproto")
+        t = tc._resolved.get("test.MyProto")
         assert t is not None
         assert t.isgeneric is True
         assert not tc.typing.has_child(t, "take")
@@ -6375,7 +6375,7 @@ class TestProtocols:
     def test_generic_protocol_no_borrow(self):
         """Generic (unmonomorphized) protocol has no `borrow`."""
         program, typing = check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "    t: Any.generic\n"
             "    get: function {:this} out t\n"
             "}\n"
@@ -6383,7 +6383,7 @@ class TestProtocols:
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        t = tc._resolved.get("test.myproto")
+        t = tc._resolved.get("test.MyProto")
         assert t is not None
         assert t.isgeneric is True
         assert not tc.typing.has_child(t, "borrow")
@@ -6403,7 +6403,7 @@ class TestProtocolCreateInvalidatesSource:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6417,7 +6417,7 @@ class TestProtocolCreateInvalidatesSource:
         """proto.create from: rec — `rec` unreadable afterward (no .take)."""
         errors = check_errors(
             self._reader_and_myfile() + "main: function is {\n"
-            "    o: myfile fd: 20\n"
+            "    o: MyFile fd: 20\n"
             "    r: Reader.create from: o\n"
             '    print "\\{o.fd}"\n'
             "}"
@@ -6430,7 +6430,7 @@ class TestProtocolCreateInvalidatesSource:
         """Bare-name form `proto source` behaves the same as proto.create."""
         errors = check_errors(
             self._reader_and_myfile() + "main: function is {\n"
-            "    o: myfile fd: 20\n"
+            "    o: MyFile fd: 20\n"
             "    r: Reader o\n"
             '    print "\\{o.fd}"\n'
             "}"
@@ -6443,7 +6443,7 @@ class TestProtocolCreateInvalidatesSource:
         """`.take` at the call site is idempotent with the implicit rule."""
         check_ok(
             self._reader_and_myfile() + "main: function is {\n"
-            "    o: myfile fd: 20\n"
+            "    o: MyFile fd: 20\n"
             "    r: Reader.create from: o.take\n"
             "}"
         )
@@ -6474,7 +6474,7 @@ class TestProtocolCreateInvalidatesSource:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: class {\n"
+            "MyFile: class {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6483,7 +6483,7 @@ class TestProtocolCreateInvalidatesSource:
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    o: myfile fd: 20\n"
+            "    o: MyFile fd: 20\n"
             "    r: Reader.create from: o\n"
             '    print "\\{o.fd}"\n'
             "}"
@@ -6495,11 +6495,11 @@ class TestProtocolCreateInvalidatesSource:
     def test_create_rejects_borrowed_source(self):
         """Passing a borrowed local to .create yields the standard error."""
         errors = check_errors(
-            self._reader_and_myfile() + "use_borrow: function {b: myfile.borrow} is {\n"
+            self._reader_and_myfile() + "use_borrow: function {b: MyFile.borrow} is {\n"
             "    r: Reader.create from: b\n"
             "}\n"
             "main: function is {\n"
-            "    o: myfile fd: 20\n"
+            "    o: MyFile fd: 20\n"
             "    use_borrow b: o\n"
             "}"
         )
@@ -6521,7 +6521,7 @@ class TestProtocolBorrowLocksSource:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6535,7 +6535,7 @@ class TestProtocolBorrowLocksSource:
         """`r: f.myreader` leaves `f` readable (borrow, not take)."""
         check_ok(
             self._reader_and_myfile() + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             "    n: r.read b: 5\n"
             '    print "\\{n}"\n'
@@ -6546,7 +6546,7 @@ class TestProtocolBorrowLocksSource:
         """`Reader.borrow from: f` mirrors the label form."""
         check_ok(
             self._reader_and_myfile() + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f\n"
             "    n: r.read b: 5\n"
             '    print "\\{n}"\n'
@@ -6687,7 +6687,7 @@ class TestBorrowedProtocolEscape:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6701,7 +6701,7 @@ class TestBorrowedProtocolEscape:
         """`r: f.myreader; return r` — borrow cannot escape."""
         errors = check_errors(
             self._reader_and_myfile() + "make_reader: function out Reader is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             "    return r\n"
             "}\n"
@@ -6717,7 +6717,7 @@ class TestBorrowedProtocolEscape:
         """Same via `Reader.borrow from: f`."""
         errors = check_errors(
             self._reader_and_myfile() + "make_reader: function out Reader is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.borrow from: f\n"
             "    return r\n"
             "}\n"
@@ -6733,7 +6733,7 @@ class TestBorrowedProtocolEscape:
         """Owned protocol is escape-capable — legal to return."""
         check_ok(
             self._reader_and_myfile() + "make_reader: function out Reader is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: Reader.create from: f\n"
             "    return r\n"
             "}\n"
@@ -6747,7 +6747,7 @@ class TestBorrowedProtocolEscape:
         errors = check_errors(
             self._reader_and_myfile() + "wrapper: record { r: Reader }\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             "    w: wrapper r: r\n"
             "}"
@@ -6762,7 +6762,7 @@ class TestBorrowedProtocolEscape:
             self._reader_and_myfile() + "store: function {r: Reader.take} out i64 is "
             "{ return r.read b: 0 }\n"
             "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    r: f.myreader\n"
             "    n: store r: r\n"
             "}"
@@ -6787,7 +6787,7 @@ class TestBoxProtocolComposition:
             "Reader: protocol {\n"
             "    read: function {:this b: i64} out i64\n"
             "}\n"
-            "myfile: record {\n"
+            "MyFile: record {\n"
             "    fd: i64\n"
             "} as {\n"
             "    myreader: Reader\n"
@@ -6801,7 +6801,7 @@ class TestBoxProtocolComposition:
         """Boxing first and then protocol.create is rejected; hint steers user."""
         errors = check_errors(
             self._proto_and_myfile() + "main: function is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    b: Box from: f\n"
             "    p: Reader.create from: b\n"
             "}"
@@ -6817,7 +6817,7 @@ class TestBoxProtocolComposition:
         """`.create` already produces an escape-capable owned protocol."""
         check_ok(
             self._proto_and_myfile() + "make: function out Reader is {\n"
-            "    f: myfile fd: 10\n"
+            "    f: MyFile fd: 10\n"
             "    p: Reader.create from: f\n"
             "    return p\n"
             "}\n"
@@ -7418,14 +7418,14 @@ class TestIoNativeDispatch:
         `r: c.close` to typecheck cleanly without explicit call
         parens when the method has no non-this params."""
         check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "    tick: function {:this} out i64\n"
             "}\n"
             "mything: record { x: i64 } as {\n"
-            "    mp: myproto\n"
+            "    mp: MyProto\n"
             "    tick: function {:this} out i64 is { return this.x }\n"
             "}\n"
-            "use_proto: function {p: myproto} is {\n"
+            "use_proto: function {p: MyProto} is {\n"
             "    n: p.tick\n"
             '    print "\\{n}"\n'
             "}\n"
@@ -7544,30 +7544,30 @@ class TestGenerics:
     def test_generic_union_resolution(self):
         """Union with t: Any.generic detects generic params correctly."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myopt = tc._resolved.get("test.myopt")
-        assert myopt is not None
-        assert myopt.isgeneric is True
-        assert "t" in myopt.generic_params
-        assert tc.typing.has_child(myopt, "some")
-        assert tc.typing.has_child(myopt, "none")
-        assert not tc.typing.has_child(myopt, "t")
+        MyOpt = tc._resolved.get("test.MyOpt")
+        assert MyOpt is not None
+        assert MyOpt.isgeneric is True
+        assert "t" in MyOpt.generic_params
+        assert tc.typing.has_child(MyOpt, "some")
+        assert tc.typing.has_child(MyOpt, "none")
+        assert not tc.typing.has_child(MyOpt, "t")
 
     def test_generic_union_subtype_is_generic_param_ref(self):
         """Union subtype referencing generic param: some: t is GENERIC_PARAM."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myopt = tc._resolved.get("test.myopt")
-        assert myopt is not None
-        assert tc.typing.child_of(myopt, "some").typetype == ZTypeType.GENERIC_PARAM
+        MyOpt = tc._resolved.get("test.MyOpt")
+        assert MyOpt is not None
+        assert tc.typing.child_of(MyOpt, "some").typetype == ZTypeType.GENERIC_PARAM
 
     def test_multiple_generic_params(self):
         """Record with multiple generic params."""
@@ -7758,18 +7758,18 @@ class TestGenerics:
 
     def test_generic_function_stringlike_accepts_user_text_conformer(self):
         """Any user type declaring :Text and the Spec method satisfies StringLike.
-        `mytext` is a class holding an owned String because views cannot be
+        `Mytext` is a class holding an owned String because views cannot be
         aggregate fields (doc/strings.pdoc); the StringView is produced on
         demand by the protocol method."""
         check_ok(
-            "mytext: class { data_: String } as {\n"
+            "Mytext: class { data_: String } as {\n"
             "    :Text\n"
             "    stringview: function {t: this} out StringView is "
             "{ return t.data_.stringview }\n"
             "}\n"
             "show: function as { t: StringLike.generic } in { v: t } is "
             "{ print v }\n"
-            'main: function is { m: mytext data_: "hi".string\n show m }'
+            'main: function is { m: Mytext data_: "hi".string\n show m }'
         )
 
     def test_generic_function_stringlike_rejects_missing_text_conformance(self):
@@ -7965,10 +7965,10 @@ class TestGenerics:
     def test_option_some_infers_i64(self):
         """Option.some 42 infers t=i64."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
-        monos = find_user_monos(typing, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="MyOpt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -7977,10 +7977,10 @@ class TestGenerics:
     def test_option_none_explicit_type_arg(self):
         """Option.none i32 with explicit type argument."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.none i32 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.none i32 }"
         )
-        monos = find_user_monos(typing, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="MyOpt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i32" in mono.name
@@ -7988,10 +7988,10 @@ class TestGenerics:
     def test_same_generic_different_types(self):
         """Same generic instantiated with different types creates different monomorphizations."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some 42\n"
-            "    y: myopt.some 3.14\n"
+            "    x: MyOpt.some 42\n"
+            "    y: MyOpt.some 3.14\n"
             "}"
         )
         assert len(typing.mono_types) >= 2
@@ -8002,14 +8002,14 @@ class TestGenerics:
     def test_duplicate_instantiation_cached(self):
         """Duplicate instantiation with same type returns cached type."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some 1\n"
-            "    y: myopt.some 2\n"
+            "    x: MyOpt.some 1\n"
+            "    y: MyOpt.some 2\n"
             "}"
         )
-        # should produce only one monomorphization of `myopt` with t=i64
-        myopt_monos = find_user_monos(typing, origin_name="myopt")
+        # should produce only one monomorphization of `MyOpt` with t=i64
+        myopt_monos = find_user_monos(typing, origin_name="MyOpt")
         i64_monos = [m for m, _ in myopt_monos if "i64" in m.name]
         assert len(i64_monos) == 1
 
@@ -8023,8 +8023,8 @@ class TestGenerics:
     def test_monomorphized_union_has_tag(self):
         """Monomorphized union has a 'tag' child holding the discriminator."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
         mono, _ = typing.mono_types[0]
         assert typing.has_child(mono, "tag")
@@ -8036,10 +8036,10 @@ class TestGenerics:
     def test_monomorphized_union_concrete_subtypes(self):
         """Monomorphized union replaces generic param with concrete type."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
-        monos = find_user_monos(typing, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="MyOpt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         some_type = typing.child_of(mono, "some")
@@ -8050,26 +8050,26 @@ class TestGenerics:
     def test_error_generic_union_no_args(self):
         """Using generic union subtype with no inferrable args emits error."""
         errors = check_errors(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some }"
         )
         assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_error_generic_union_none_no_args(self):
         """Using generic union null subtype with no type arg emits error."""
         errors = check_errors(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.none }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.none }"
         )
         assert any("cannot infer type arguments" in e.msg for e in errors)
 
     def test_generic_union_from_infers_type(self):
         """Option.some from: 42 infers t=i64 via from: syntax."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some from: 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some from: 42 }"
         )
-        monos = find_user_monos(typing, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="MyOpt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -8078,10 +8078,10 @@ class TestGenerics:
     def test_generic_union_explicit_type_and_from(self):
         """Option.some t: i64 from: 42 with explicit generic param and from: value."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
-            "main: function is { x: myopt.some t: i64 from: 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "main: function is { x: MyOpt.some t: i64 from: 42 }"
         )
-        monos = find_user_monos(typing, origin_name="myopt")
+        monos = find_user_monos(typing, origin_name="MyOpt")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -8089,10 +8089,10 @@ class TestGenerics:
     def test_generic_union_from_with_different_types(self):
         """from: syntax with different types creates different monomorphizations."""
         program, typing = check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.generic }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.generic }\n"
             "main: function is {\n"
-            "    x: myopt.some from: 42\n"
-            "    y: myopt.some from: 3.14\n"
+            "    x: MyOpt.some from: 42\n"
+            "    y: MyOpt.some from: 3.14\n"
             "}"
         )
         assert len(typing.mono_types) >= 2
@@ -8321,37 +8321,37 @@ class TestGenerics:
     def test_generic_class_resolution(self):
         """Class with t: Any.generic puts t in generic_params, not children."""
         program, typing = check_ok(
-            "mycls: class { x: i64 } as { t: Any.generic }\nmain: function is {}"
+            "MyCls: class { x: i64 } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        mycls = tc._resolved.get("test.mycls")
-        assert mycls is not None
-        assert mycls.isgeneric is True
-        assert "t" in mycls.generic_params
-        assert not tc.typing.has_child(mycls, "t")
-        assert tc.typing.has_child(mycls, "x")
+        MyCls = tc._resolved.get("test.MyCls")
+        assert MyCls is not None
+        assert MyCls.isgeneric is True
+        assert "t" in MyCls.generic_params
+        assert not tc.typing.has_child(MyCls, "t")
+        assert tc.typing.has_child(MyCls, "x")
 
     def test_generic_class_field_uses_param(self):
         """Class field referencing generic param: val: t resolves to GENERIC_PARAM."""
         program, typing = check_ok(
-            "mycls: class { val: t } as { t: Any.generic }\nmain: function is {}"
+            "MyCls: class { val: t } as { t: Any.generic }\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        mycls = tc._resolved.get("test.mycls")
-        assert mycls is not None
-        assert mycls.isgeneric
-        assert tc.typing.has_child(mycls, "val")
-        assert tc.typing.child_of(mycls, "val").typetype == ZTypeType.GENERIC_PARAM
+        MyCls = tc._resolved.get("test.MyCls")
+        assert MyCls is not None
+        assert MyCls.isgeneric
+        assert tc.typing.has_child(MyCls, "val")
+        assert tc.typing.child_of(MyCls, "val").typetype == ZTypeType.GENERIC_PARAM
 
     def test_generic_class_construction_infers(self):
-        """mycls val: 42 infers t=i64 and produces monomorphized type."""
+        """MyCls val: 42 infers t=i64 and produces monomorphized type."""
         program, typing = check_ok(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls val: 42 }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls val: 42 }"
         )
-        monos = find_user_monos(typing, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="MyCls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -8361,12 +8361,12 @@ class TestGenerics:
         assert typing.child_of(mono, "val").name == "i64"
 
     def test_generic_class_explicit_type_arg(self):
-        """mycls t: i64 val: 42 with explicit type arg."""
+        """MyCls t: i64 val: 42 with explicit type arg."""
         program, typing = check_ok(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls t: i64 val: 42 }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls t: i64 val: 42 }"
         )
-        monos = find_user_monos(typing, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="MyCls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert "i64" in mono.name
@@ -8375,10 +8375,10 @@ class TestGenerics:
     def test_generic_class_is_reftype(self):
         """Monomorphized generic class is still a reference type."""
         program, typing = check_ok(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls val: 42 }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls val: 42 }"
         )
-        monos = find_user_monos(typing, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="MyCls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert mono.is_valtype is False
@@ -8386,10 +8386,10 @@ class TestGenerics:
     def test_generic_class_has_create(self):
         """Monomorphized class has :meta.create constructor."""
         program, typing = check_ok(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls val: 42 }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls val: 42 }"
         )
-        monos = find_user_monos(typing, origin_name="mycls")
+        monos = find_user_monos(typing, origin_name="MyCls")
         assert len(monos) >= 1
         mono, _ = monos[0]
         assert mono.meta_create is not None
@@ -8398,8 +8398,8 @@ class TestGenerics:
     def test_error_generic_class_no_args(self):
         """Bare generic class name in expression is an error."""
         errors = check_errors(
-            "mycls: class { val: t } as { t: Any.generic }\n"
-            "main: function is { x: mycls }"
+            "MyCls: class { val: t } as { t: Any.generic }\n"
+            "main: function is { x: MyCls }"
         )
         assert any("generic" in e.msg.lower() for e in errors)
 
@@ -8408,31 +8408,31 @@ class TestGenerics:
     def test_generic_protocol_resolution(self):
         """Protocol with t: Any.generic param is generic."""
         program, typing = check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myproto = tc._resolved.get("test.myproto")
-        assert myproto is not None
-        assert myproto.isgeneric is True
-        assert "t" in myproto.generic_params
+        MyProto = tc._resolved.get("test.MyProto")
+        assert MyProto is not None
+        assert MyProto.isgeneric is True
+        assert "t" in MyProto.generic_params
 
     def test_generic_protocol_spec_uses_param(self):
         """Spec function uses generic param type."""
         program, typing = check_ok(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\nmain: function is {}"
         )
         tc = TypeChecker(program)
         tc.check(full=True)
-        myproto = tc._resolved.get("test.myproto")
-        assert myproto is not None
-        get_fn = tc.typing.child_of(myproto, "get")
+        MyProto = tc._resolved.get("test.MyProto")
+        assert MyProto is not None
+        get_fn = tc.typing.child_of(MyProto, "get")
         assert get_fn is not None
         ret = get_fn.return_type
         assert ret is not None
@@ -8441,11 +8441,11 @@ class TestGenerics:
     def test_error_generic_protocol_no_args(self):
         """Bare generic protocol name in expression is an error."""
         errors = check_errors(
-            "myproto: protocol {\n"
+            "MyProto: protocol {\n"
             "  t: Any.generic\n"
             "  get: function {:this} out t\n"
             "}\n"
-            "myrec: record { x: i64 } as { p: myproto }\n"
+            "myrec: record { x: i64 } as { p: MyProto }\n"
             "main: function is { r: myrec x: 1\n v: r.p }"
         )
         assert any("generic" in e.msg.lower() for e in errors)
@@ -8470,10 +8470,10 @@ class TestGenerics:
     def test_valtype_constraint_class_error(self):
         """Record with t: Any.valtype rejects class types."""
         errors = check_errors(
-            "mycls: class { v: i64 }\n"
+            "MyCls: class { v: i64 }\n"
             "myrec: record { x: t } as { t: Any.valtype }\n"
             "main: function is {\n"
-            "    c: mycls v: 1\n"
+            "    c: MyCls v: 1\n"
             "    r: myrec x: c\n"
             "}"
         )
@@ -8482,10 +8482,10 @@ class TestGenerics:
     def test_valtype_constraint_union_error(self):
         """Record with t: Any.valtype rejects union types."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "myrec: record { x: t } as { t: Any.valtype }\n"
             "main: function is {\n"
-            "    u: myunion.a 1\n"
+            "    u: MyUnion.a 1\n"
             "    r: myrec x: u\n"
             "}"
         )
@@ -8494,10 +8494,10 @@ class TestGenerics:
     def test_reftype_constraint_class_ok(self):
         """Record with t: Any.reftype accepts class types."""
         check_ok(
-            "mycls: class { v: i64 }\n"
+            "MyCls: class { v: i64 }\n"
             "myrec: record { x: t } as { t: Any.reftype }\n"
             "main: function is {\n"
-            "    c: mycls v: 1\n"
+            "    c: MyCls v: 1\n"
             "    r: myrec x: c\n"
             "}"
         )
@@ -8505,10 +8505,10 @@ class TestGenerics:
     def test_reftype_constraint_union_ok(self):
         """Record with t: Any.reftype accepts union types."""
         check_ok(
-            "myunion: union { a: i64\n b: null }\n"
+            "MyUnion: union { a: i64\n b: null }\n"
             "myrec: record { x: t } as { t: Any.reftype }\n"
             "main: function is {\n"
-            "    u: myunion.a 1\n"
+            "    u: MyUnion.a 1\n"
             "    r: myrec x: u\n"
             "}"
         )
@@ -8559,18 +8559,18 @@ class TestGenerics:
     def test_valtype_union_subtype_ok(self):
         """Union with t: Any.valtype accepts valtypes for subtype construction."""
         check_ok(
-            "myopt: union { some: t\n none: null } as { t: Any.valtype }\n"
-            "main: function is { x: myopt.some 42 }"
+            "MyOpt: union { some: t\n none: null } as { t: Any.valtype }\n"
+            "main: function is { x: MyOpt.some 42 }"
         )
 
     def test_valtype_union_subtype_class_error(self):
         """Union with t: Any.valtype rejects class type in subtype construction."""
         errors = check_errors(
-            "mycls: class { v: i64 }\n"
-            "myopt: union { some: t\n none: null } as { t: Any.valtype }\n"
+            "MyCls: class { v: i64 }\n"
+            "MyOpt: union { some: t\n none: null } as { t: Any.valtype }\n"
             "main: function is {\n"
-            "    c: mycls v: 1\n"
-            "    x: myopt.some c\n"
+            "    c: MyCls v: 1\n"
+            "    x: MyOpt.some c\n"
             "}"
         )
         assert any("not a value type" in e.msg for e in errors)
@@ -8670,28 +8670,28 @@ class TestTypedefs:
     def test_typedef_kind_mismatch_error(self):
         """Record wrapping a class type gives an error."""
         errors = check_errors(
-            "mycls: class { v: i64 }\n"
-            "bad: record { base: mycls.typedef } as {}\n"
-            "main: function is { x: bad.create from: (mycls v: 1) }"
+            "MyCls: class { v: i64 }\n"
+            "bad: record { base: MyCls.typedef } as {}\n"
+            "main: function is { x: bad.create from: (MyCls v: 1) }"
         )
         assert any("record type" in e.msg.lower() for e in errors)
 
     def test_class_typedef_wrapping_protocol(self):
         """Class typedef wrapping a protocol type should pass."""
         check_ok(
-            "showable: protocol {\n"
+            "Showable: protocol {\n"
             "    show: function {:this b: i64} out i64\n"
             "}\n"
-            "myshow: class { base: showable.typedef } as {}\n"
+            "MyShow: class { base: Showable.typedef } as {}\n"
             "main: function is { }"
         )
 
     def test_class_typedef_wrapping_union_error(self):
         """Class typedef wrapping a union type should error (strict kind)."""
         errors = check_errors(
-            "myunion: union { a: i64\n b: f64 }\n"
-            "bad: class { base: myunion.typedef } as {}\n"
-            "main: function is { x: bad }"
+            "MyUnion: union { a: i64\n b: f64 }\n"
+            "Bad: class { base: MyUnion.typedef } as {}\n"
+            "main: function is { x: Bad }"
         )
         assert any("class or protocol" in e.msg.lower() for e in errors)
 
@@ -8804,13 +8804,13 @@ class TestFacets:
             "showable: facet {\n"
             "    show: function {:this} out i64\n"
             "}\n"
-            "myclass: class {\n"
+            "MyClass: class {\n"
             "    x: i64\n"
             "} as {\n"
             "    s: showable\n"
             "    show: function {c: this} out i64 is { return c.x }\n"
             "}\n"
-            "main: function is { c: myclass x: 5 }"
+            "main: function is { c: MyClass x: 5 }"
         )
         assert any("value type" in e.msg.lower() for e in errors)
 
@@ -9322,7 +9322,7 @@ class TestStrStringview:
         )
 
     def test_release_after_scope_exit(self):
-        """Inner block releases the view, source becomes accessible again."""
+        """inner block releases the view, source becomes accessible again."""
         check_ok(
             "main: function is {\n"
             '  s: "hi".str to: 32\n'
@@ -10117,23 +10117,23 @@ class TestVisibility:
     def test_this_accesses_all_members(self):
         """this.field always accesses all members (private)."""
         check_ok(
-            "myclass: class { x: i64 y: i64 } as {\n"
+            "MyClass: class { x: i64 y: i64 } as {\n"
             "  public: unit { :get_y }\n"
             "  get_y: function {:this} out i64 is { return this.y }\n"
             "}\n"
             "main: function is {\n"
-            '  with c: (myclass x: 1 y: 2) do print "\\{c.get_y}"\n'
+            '  with c: (MyClass x: 1 y: 2) do print "\\{c.get_y}"\n'
             "}"
         )
 
     def test_class_public_restricts_field(self):
         """Class with public restriction prevents external field access."""
         errors = check_errors(
-            "myclass: class { x: i64 secret: i64 } as {\n"
+            "MyClass: class { x: i64 secret: i64 } as {\n"
             "  public: unit { :x }\n"
             "}\n"
             "main: function is {\n"
-            '  with c: (myclass x: 1 secret: 42) do print "\\{c.secret}"\n'
+            '  with c: (MyClass x: 1 secret: 42) do print "\\{c.secret}"\n'
             "}"
         )
         assert any("not public" in e.msg for e in errors)
@@ -10438,66 +10438,66 @@ class TestGenericTypeMatch:
     def test_generic_type_match_basic(self):
         """match t in monomorphized method resolves to the correct arm."""
         check_ok(
-            "mybox: class { val: t } as {\n"
+            "MyBox: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  bits: function {b: this} out i64 is {\n"
             "    match t case i32 then { return 32 }"
             " case i64 then { return 64 } else { return 0 }\n"
             "  }\n"
             "}\n"
-            "main: function is { b: mybox val: 42\n  x: b.bits }"
+            "main: function is { b: MyBox val: 42\n  x: b.bits }"
         )
 
     def test_generic_type_match_error_suppressed(self):
         """error in non-matching generic arm is suppressed."""
         check_ok(
-            "mybox: class { val: t } as {\n"
+            "MyBox: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i32 then { error "i32 not supported" }'
             ' case i64 then { x: 1 } else { error "unsupported" }\n'
             "  }\n"
             "}\n"
-            "main: function is { b: mybox val: 42\n  b.check }"
+            "main: function is { b: MyBox val: 42\n  b.check }"
         )
 
     def test_generic_type_match_error_triggers(self):
         """error in matching generic arm triggers."""
         errors = check_errors(
-            "mybox: class { val: t } as {\n"
+            "MyBox: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i32 then { error "i32 not supported" }'
             " case i64 then { x: 1 }\n"
             "  }\n"
             "}\n"
-            "main: function is { b: mybox val: 42.i32\n  b.check }"
+            "main: function is { b: MyBox val: 42.i32\n  b.check }"
         )
         assert any("i32 not supported" in e.msg for e in errors)
 
     def test_generic_type_match_else_suppressed(self):
         """else suppressed when a generic type arm matches."""
         check_ok(
-            "mybox: class { val: t } as {\n"
+            "MyBox: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             '    match t case i64 then { x: 1 } else { error "unsupported" }\n'
             "  }\n"
             "}\n"
-            "main: function is { b: mybox val: 42\n  b.check }"
+            "main: function is { b: MyBox val: 42\n  b.check }"
         )
 
     def test_generic_type_match_else_triggers(self):
         """else triggers when no generic type arm matches."""
         errors = check_errors(
-            "mybox: class { val: t } as {\n"
+            "MyBox: class { val: t } as {\n"
             "  t: Any.generic\n"
             "  check: function {b: this} is {\n"
             "    match t case i32 then { x: 1 }"
             ' case i64 then { x: 2 } else { error "unsupported" }\n'
             "  }\n"
             "}\n"
-            "main: function is { b: mybox val: 3.14\n  b.check }"
+            "main: function is { b: MyBox val: 3.14\n  b.check }"
         )
         assert any("unsupported" in e.msg for e in errors)
 
@@ -10583,11 +10583,11 @@ class TestPrivateFriendAccess:
     def test_private_field_type_grants_access(self):
         """A field declared as mytype.private grants private access."""
         check_ok(
-            "bag: class { secret: i64 } as { public: unit {} }\n"
-            "Reader: class { src: bag.private } as {\n"
+            "Bag: class { secret: i64 } as { public: unit {} }\n"
+            "Reader: class { src: Bag.private } as {\n"
             "  read: function {r: this} out i64 is { return r.src.secret }\n"
             "}\n"
-            "main: function is { b: bag secret: 42\n"
+            "main: function is { b: Bag secret: 42\n"
             "  r: Reader src: b.take\n"
             '  print "\\{Reader.read r: r}" }'
         )
@@ -10595,8 +10595,8 @@ class TestPrivateFriendAccess:
     def test_external_private_access_blocked(self):
         """External code cannot use .private to bypass access control."""
         errors = check_errors(
-            "bag: class { secret: i64 } as { public: unit {} }\n"
-            "main: function is { b: bag secret: 42\n"
+            "Bag: class { secret: i64 } as { public: unit {} }\n"
+            "main: function is { b: Bag secret: 42\n"
             "  x: b.private }"
         )
         assert any("private" in e.msg.lower() for e in errors)
@@ -10604,8 +10604,8 @@ class TestPrivateFriendAccess:
     def test_external_private_access_has_hint(self):
         """Error for external .private includes a helpful hint."""
         errors = check_errors(
-            "bag: class { secret: i64 } as { public: unit {} }\n"
-            "main: function is { b: bag secret: 42\n"
+            "Bag: class { secret: i64 } as { public: unit {} }\n"
+            "main: function is { b: Bag secret: 42\n"
             "  x: b.private }"
         )
         priv_errors = [e for e in errors if "private" in e.msg.lower()]
@@ -10615,11 +10615,11 @@ class TestPrivateFriendAccess:
     def test_direct_field_access_still_blocked(self):
         """Without .private, external code still can't access private fields."""
         errors = check_errors(
-            "bag: class { secret: i64 } as { public: unit {} }\n"
-            "Reader: class { src: bag } as {\n"
+            "Bag: class { secret: i64 } as { public: unit {} }\n"
+            "Reader: class { src: Bag } as {\n"
             "  read: function {r: this} out i64 is { return r.src.secret }\n"
             "}\n"
-            "main: function is { b: bag secret: 42\n"
+            "main: function is { b: Bag secret: 42\n"
             "  r: Reader src: b.take\n"
             '  print "\\{Reader.read r: r}" }'
         )
@@ -10628,18 +10628,18 @@ class TestPrivateFriendAccess:
     def test_private_via_this_in_method(self):
         """this.private can be passed from inside the type's own method."""
         check_ok(
-            "bag: class { val: i64 } as {\n"
+            "Bag: class { val: i64 } as {\n"
             "  public: unit { :get }\n"
-            "  get: function {self: this} out holder is {\n"
-            "    return holder src: self.private\n"
+            "  get: function {self: this} out Holder is {\n"
+            "    return Holder src: self.private\n"
             "  }\n"
             "}\n"
-            "holder: class { src: bag.private } as {\n"
+            "Holder: class { src: Bag.private } as {\n"
             "  read: function {h: this} out i64 is { return h.src.val }\n"
             "}\n"
-            "main: function is { b: bag val: 42\n"
-            "  h: (bag.get self: b)\n"
-            '  print "\\{holder.read h: h}" }'
+            "main: function is { b: Bag val: 42\n"
+            "  h: (Bag.get self: b)\n"
+            '  print "\\{Holder.read h: h}" }'
         )
 
 
@@ -10870,7 +10870,7 @@ class TestTypeNarrowing:
     # -- Nested match --
 
     def test_narrow_nested_match(self):
-        """Inner match narrows independently of outer. `x` inside each
+        """inner match narrows independently of outer. `x` inside each
         arm is the narrowed payload (i64); bare `x` reads it."""
         check_ok(
             "r: variant { a: i64  b: i64  c: i64 }\n"
@@ -10976,9 +10976,9 @@ class TestIsAsNamespaceCollision:
         """Generic param in 'as' doesn't collide with field in 'is'."""
         # 'val' is in 'is', 't' is in 'as' — different names, no collision
         check_ok(
-            "Box: record { val: t } as { t: Any.generic }\n"
+            "box: record { val: t } as { t: Any.generic }\n"
             "main: function is {\n"
-            "  b: Box val: 42\n"
+            "  b: box val: 42\n"
             '  print "\\{b.val}"\n'
             "}"
         )
@@ -11235,10 +11235,10 @@ class TestAutoGeneratedEquality:
     def test_variant_auto_eq(self):
         """Variant with value subtypes gets ==."""
         check_ok(
-            "Result: variant { ok: i64  err: i64 }\n"
+            "result: variant { ok: i64  err: i64 }\n"
             "main: function is {\n"
-            "  a: Result.ok 1\n"
-            "  b: Result.ok 2\n"
+            "  a: result.ok 1\n"
+            "  b: result.ok 2\n"
             "  if a == b then return 0\n"
             "}"
         )
@@ -11378,27 +11378,27 @@ class TestAutoGeneratedEquality:
     def test_memcmp_eq_variant_with_int_payloads(self):
         """Variant with integer payloads is memcmp-safe."""
         program, typing = check_ok(
-            "Result: variant { ok: i64  err: u8 }\n"
+            "result: variant { ok: i64  err: u8 }\n"
             "main: function is {\n"
-            "  a: Result.ok 1\n"
-            "  b: Result.ok 1\n"
+            "  a: result.ok 1\n"
+            "  b: result.ok 1\n"
             "  if a == b then return 0\n"
             "}"
         )
-        result_type = typing.resolved.get("test.Result")
+        result_type = typing.resolved.get("test.result")
         assert typing.child_of(result_type, "==").is_simple_eq
 
     def test_memcmp_eq_variant_with_float_payload(self):
         """Variant with float payload is NOT memcmp-safe."""
         program, typing = check_ok(
-            "Result: variant { ok: f64  none: null }\n"
+            "result: variant { ok: f64  none: null }\n"
             "main: function is {\n"
-            "  a: Result.ok 1.0\n"
-            "  b: Result.ok 1.0\n"
+            "  a: result.ok 1.0\n"
+            "  b: result.ok 1.0\n"
             "  if a == b then return 0\n"
             "}"
         )
-        result_type = typing.resolved.get("test.Result")
+        result_type = typing.resolved.get("test.result")
         assert not typing.child_of(result_type, "==").is_simple_eq
 
 
@@ -11456,10 +11456,10 @@ class TestStringEquality:
     def test_class_no_default_eq(self):
         """== on a user class without defined == is a compile error."""
         errors = check_errors(
-            "myclass: class { x: i64 }\n"
+            "MyClass: class { x: i64 }\n"
             "main: function is {\n"
-            "  a: myclass\n"
-            "  b: myclass\n"
+            "  a: MyClass\n"
+            "  b: MyClass\n"
             "  if a == b then return 0\n"
             "}"
         )
@@ -11550,16 +11550,16 @@ class TestUnionLockedArm:
     def test_union_with_locked_arm_resolves(self):
         """A union may declare an arm as `name: type.lock`."""
         program, typing = check_ok(
-            "src: class { v: i64 }\n"
-            "myview: union { none: null\n some: src.lock }\n"
+            "Src: class { v: i64 }\n"
+            "Myview: union { none: null\n some: Src.lock }\n"
             "main: function is {\n"
-            "  s: src v: 7\n"
-            "  x: myview.none src\n"
+            "  s: Src v: 7\n"
+            "  x: Myview.none Src\n"
             "}"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myview")
+        ut = tc._resolved.get("test.Myview")
         assert ut is not None
         assert tc.typing.is_child_lock_arm(ut, "some")
         assert not tc.typing.is_child_lock_arm(ut, "none")
@@ -11567,35 +11567,35 @@ class TestUnionLockedArm:
     def test_union_all_null_or_locked_no_destructor(self):
         """A union whose every arm is `null` or `.lock` needs no destructor."""
         program, typing = check_ok(
-            "src: class { v: i64 }\n"
-            "myview: union { none: null\n some: src.lock }\n"
+            "Src: class { v: i64 }\n"
+            "Myview: union { none: null\n some: Src.lock }\n"
             "main: function is {\n"
-            "  s: src v: 7\n"
-            "  x: myview.none src\n"
+            "  s: Src v: 7\n"
+            "  x: Myview.none Src\n"
             "}"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.myview")
+        ut = tc._resolved.get("test.Myview")
         assert (ut.destructor_name is not None) is False
         assert ut.destructor_name is None
 
     def test_union_mixed_arms_keeps_destructor(self):
         """An owned arm anywhere in the union keeps the destructor live."""
         program, typing = check_ok(
-            "src: class { v: i64 }\n"
+            "Src: class { v: i64 }\n"
             "errkind: variant { e1: null\n e2: null }\n"
-            "mixed: union { err: errkind\n cached: src.lock\n fresh: src }\n"
+            "Mixed: union { err: errkind\n cached: Src.lock\n fresh: Src }\n"
             "main: function is {\n"
-            "  s: src v: 7\n"
-            "  x: mixed.err (errkind.e1)\n"
+            "  s: Src v: 7\n"
+            "  x: Mixed.err (errkind.e1)\n"
             "}"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.mixed")
+        ut = tc._resolved.get("test.Mixed")
         assert (ut.destructor_name is not None) is True
-        assert ut.destructor_name == "z_mixed_destroy"
+        assert ut.destructor_name == "z_Mixed_destroy"
         assert set(tc.typing.lock_arm_names_of(ut)) == {"cached"}
 
     def test_variant_locked_arm_rejected(self):
@@ -11612,11 +11612,11 @@ class TestUnionLockedArm:
         """`.borrow` modifier on union arms is rejected; only `.lock`
         is permitted."""
         errors = check_errors(
-            "src: class { v: i64 }\n"
-            "u: union { only: src.borrow }\n"
+            "Src: class { v: i64 }\n"
+            "u: union { only: Src.borrow }\n"
             "main: function is {\n"
-            "  s: src v: 7\n"
-            "  x: u.only src\n"
+            "  s: Src v: 7\n"
+            "  x: u.only Src\n"
             "}"
         )
         assert any("only '.lock' is permitted" in e.msg.lower() for e in errors)
@@ -11624,16 +11624,16 @@ class TestUnionLockedArm:
     def test_union_with_only_locked_arm(self):
         """Single-locked-arm union resolves and has no destructor."""
         program, typing = check_ok(
-            "src: class { v: i64 }\n"
-            "wrap: union { val: src.lock }\n"
+            "Src: class { v: i64 }\n"
+            "Wrap: union { val: Src.lock }\n"
             "main: function is {\n"
-            "  s: src v: 7\n"
-            "  x: wrap.val src\n"
+            "  s: Src v: 7\n"
+            "  x: Wrap.val Src\n"
             "}"
         )
         tc = TypeChecker(program)
         tc.check()
-        ut = tc._resolved.get("test.wrap")
+        ut = tc._resolved.get("test.Wrap")
         assert set(tc.typing.lock_arm_names_of(ut)) == {"val"}
         assert (ut.destructor_name is not None) is False
 
@@ -11665,9 +11665,9 @@ class TestOptionview:
     def test_optionview_some_from_class(self):
         """OptionView.some from: lvalue compiles for a reftype source."""
         check_ok(
-            "src: class { v: i64 }\n"
+            "Src: class { v: i64 }\n"
             "main: function is {\n"
-            "  s: src v: 42\n"
+            "  s: Src v: 42\n"
             "  ov: OptionView.some from: s\n"
             "}"
         )
@@ -11675,9 +11675,9 @@ class TestOptionview:
     def test_optionview_mono_no_destructor(self):
         """A monomorphized OptionView<T> needs no runtime cleanup."""
         program, typing = check_ok(
-            "src: class { v: i64 }\n"
+            "Src: class { v: i64 }\n"
             "main: function is {\n"
-            "  s: src v: 7\n"
+            "  s: Src v: 7\n"
             "  ov: OptionView.some from: s\n"
             "}"
         )
@@ -11698,11 +11698,11 @@ class TestOptionview:
         """The for-loop dispatch helper accepts Option, optionval, AND
         OptionView."""
         program, typing = check_ok(
-            "src: class { v: i64 }\n"
+            "Src: class { v: i64 }\n"
             "main: function is {\n"
             '  a: Option.some "x".string\n'
             "  b: optionval.some 1\n"
-            "  s: src v: 7\n"
+            "  s: Src v: 7\n"
             "  c: OptionView.some from: s\n"
             "}"
         )
@@ -11804,7 +11804,7 @@ class TestOptionviewBorrowEscape:
 
 
 class TestIteratorReturnType:
-    """Phase G2: `out (iterator gives: T (takes: U))` return type.
+    """Phase G2: `out (Iterator gives: T (takes: U))` return type.
 
     The body is left empty here — full generator-body handling (yield
     suspension points, terminal return, etc.) lands in G3. What G2
@@ -11813,40 +11813,40 @@ class TestIteratorReturnType:
     validated against the legal yield forms."""
 
     def test_iterator_return_type_parses_and_resolves(self):
-        """`out (iterator gives: i32)` resolves to a monomorphized
+        """`out (Iterator gives: i32)` resolves to a monomorphized
         iterator protocol with `gives=i32` and the defaulted
         `takes=null`."""
-        program, typing = check_ok("g: function out (iterator gives: i32) is { }")
+        program, typing = check_ok("g: function out (Iterator gives: i32) is { }")
         g = program.units["test"].body["g"]
         rt_zt = typing.node_type.get(g.returntype.nodeid)
         assert rt_zt is not None
         assert rt_zt.generic_origin is not None
-        assert rt_zt.generic_origin.name == "iterator"
+        assert rt_zt.generic_origin.name == "Iterator"
 
     def test_iterator_return_type_takes_parses(self):
-        """`out (iterator gives: i32 takes: bool)` — both generic
+        """`out (Iterator gives: i32 takes: bool)` — both generic
         params explicit — type-checks cleanly."""
         program, typing = check_ok(
-            "g: function out (iterator gives: i32 takes: bool) is { }"
+            "g: function out (Iterator gives: i32 takes: bool) is { }"
         )
         g = program.units["test"].body["g"]
         rt_zt = typing.node_type.get(g.returntype.nodeid)
         assert rt_zt is not None
         assert rt_zt.generic_origin is not None
-        assert rt_zt.generic_origin.name == "iterator"
+        assert rt_zt.generic_origin.name == "Iterator"
 
     def test_iterator_return_type_borrow_form(self):
         """`gives: T.borrow` is accepted (yields a borrowed view)."""
-        check_ok("g: function out (iterator gives: String.borrow) is { }")
+        check_ok("g: function out (Iterator gives: String.borrow) is { }")
 
     def test_iterator_return_type_take_form(self):
         """`gives: T.take` is accepted (yields an owned reftype)."""
-        check_ok("g: function out (iterator gives: String.take) is { }")
+        check_ok("g: function out (Iterator gives: String.take) is { }")
 
     def test_iterator_return_type_bad_gives_form_rejected(self):
         """`gives: T.lock` is rejected — `.lock` is parameter-only
         ownership and has no corresponding yield-wrapper form."""
-        errors = check_errors("g: function out (iterator gives: String.lock) is { }")
+        errors = check_errors("g: function out (Iterator gives: String.lock) is { }")
         assert any(".lock" in e.msg for e in errors), (
             f"Expected an error mentioning .lock, got: {[e.msg for e in errors]}"
         )
@@ -11857,7 +11857,7 @@ class TestGeneratorDesugaring:
     iterator class + factory pair.
 
     A *generator* is any function whose declared return type is
-    `iterator gives: T (takes: U)` AND whose body contains at least
+    `Iterator gives: T (takes: U)` AND whose body contains at least
     one `yield`. The pass walks the parsed program before type
     resolution; the resulting AST is ordinary class+function code
     that the rest of the typechecker validates with no further
@@ -11872,7 +11872,7 @@ class TestGeneratorDesugaring:
         class and whose body builds an instance via
         `<synth>.create`."""
         program, _typing = check_ok(
-            "gen: function out (iterator gives: i32) is { yield 1 }"
+            "gen: function out (Iterator gives: i32) is { yield 1 }"
         )
         body = program.units["test"].body
         assert "gen_iter" in body, f"Expected synth class 'gen_iter', got: {list(body)}"
@@ -11895,7 +11895,7 @@ class TestGeneratorDesugaring:
         factory's call site; the class itself stores the value
         directly)."""
         program, _typing = check_ok(
-            "gen: function {s: String.take} out (iterator gives: i32) is { yield 1 }"
+            "gen: function {s: String.take} out (Iterator gives: i32) is { yield 1 }"
         )
         synth = program.units["test"].body["gen_iter"]
         assert "s" in synth.is_items
@@ -11906,7 +11906,7 @@ class TestGeneratorDesugaring:
         """A `.lock` parameter becomes a lock field so the iterator
         holds the lock for its lifetime."""
         program, _typing = check_ok(
-            "holdgen: function {b: Bytes.lock} out (iterator gives: i32) "
+            "holdgen: function {b: Bytes.lock} out (Iterator gives: i32) "
             "is { yield 1 }\n"
             "main: function is { b: (Bytes) "
             "with g: (holdgen b: b.lock) do { } }"
@@ -11919,7 +11919,7 @@ class TestGeneratorDesugaring:
         """Bare `.borrow` on a generator parameter is rejected with
         a message pointing at the legal alternatives."""
         errors = check_errors(
-            "gen: function {s: String.borrow} out (iterator gives: i32) is { yield 1 }"
+            "gen: function {s: String.borrow} out (Iterator gives: i32) is { yield 1 }"
         )
         assert any(
             "borrow" in e.msg and (".lock" in e.msg or ".take" in e.msg) for e in errors
@@ -11930,7 +11930,7 @@ class TestGeneratorDesugaring:
         receiver-lock field on the synth class."""
         program, _typing = check_ok(
             "Bag: class { x: i64 } as {\n"
-            "    each: function {b: this.lock} out (iterator gives: i32) "
+            "    each: function {b: this.lock} out (Iterator gives: i32) "
             "is { yield b.x }\n"
             "}"
         )
@@ -11944,7 +11944,7 @@ class TestGeneratorDesugaring:
         an explicit lock."""
         errors = check_errors(
             "Bag: class { x: i64 } as {\n"
-            "    each: function {:this} out (iterator gives: i32) "
+            "    each: function {:this} out (Iterator gives: i32) "
             "is { yield 1 }\n"
             "}"
         )
@@ -11959,7 +11959,7 @@ class TestGeneratorDesugaring:
         program, _typing = check_ok(
             "Bag: class { x: i64 } as {\n"
             "    each: function {b: this.private.lock} out "
-            "(iterator gives: i32) is { yield b.x }\n"
+            "(Iterator gives: i32) is { yield b.x }\n"
             "}"
         )
         synth = program.units["test"].body["Bag_each_iter"]
@@ -11969,7 +11969,7 @@ class TestGeneratorDesugaring:
         """`return <value>` inside a generator body is a compile
         error — yielded values exit via `yield`."""
         errors = check_errors(
-            "gen: function out (iterator gives: i32) is {\n    yield 1\n    return 5\n}"
+            "gen: function out (Iterator gives: i32) is {\n    yield 1\n    return 5\n}"
         )
         assert any(
             "'return <value>'" in e.msg
@@ -11981,7 +11981,7 @@ class TestGeneratorDesugaring:
         """Open question A settled toward (i): an iterator-return
         function with no `yield` in its body is an ordinary
         factory; no synth class is generated."""
-        program, _typing = check_ok("gen: function out (iterator gives: i32) is { }")
+        program, _typing = check_ok("gen: function out (Iterator gives: i32) is { }")
         body = program.units["test"].body
         assert "gen_iter" not in body
         assert "gen" in body
@@ -11992,7 +11992,7 @@ class TestGeneratorDesugaring:
         too (the parser surfaces this as a parse error, before
         desugaring ever runs)."""
         result = make_parser(
-            "gen: function out (iterator gives: i32) is { yield 1 } "
+            "gen: function out (Iterator gives: i32) is { yield 1 } "
             "as { helper: function is { yield 9 } }",
             unitname="test",
             src_dir=LIB_DIR,
@@ -12009,7 +12009,7 @@ class TestGeneratorDesugaring:
         closed in commit 4e0123d.)"""
         errors = check_errors(
             "Bag: class { x: i64 } as {\n"
-            "    each: function {b: this.lock} out (iterator gives: i64) is "
+            "    each: function {b: this.lock} out (Iterator gives: i64) is "
             "{ yield b.x }\n"
             "}\n"
             "main: function is {\n"
@@ -12028,7 +12028,7 @@ class TestGeneratorDesugaring:
         case alongside the rejection above."""
         check_ok(
             "Bag: class { x: i64 } as {\n"
-            "    each: function {b: this.lock} out (iterator gives: i64) is "
+            "    each: function {b: this.lock} out (Iterator gives: i64) is "
             "{ yield b.x }\n"
             "}\n"
             "main: function is {\n"
@@ -12043,7 +12043,7 @@ class TestGeneratorDesugaring:
         end-to-end pipeline (parse → desugar → type-check) finishes
         without errors."""
         check_ok(
-            "gen: function out (iterator gives: i32) is "
+            "gen: function out (Iterator gives: i32) is "
             "{ yield 1 yield 2 yield 3 }\n"
             "main: function is { with it: gen do for x: it loop { } }"
         )
@@ -12061,7 +12061,7 @@ class TestGeneratorDesugaring:
                                                                 (yielding-loop rule)
         """
         program, _typing = check_ok(
-            "gen: function {n: i64} out (iterator gives: i64) is {\n"
+            "gen: function {n: i64} out (Iterator gives: i64) is {\n"
             "    crossing: 100\n"
             "    yield 1\n"
             "    yield crossing\n"
@@ -12095,30 +12095,30 @@ class TestGeneratorDesugaring:
         )
 
     def test_generator_local_field_infers_record_construction(self):
-        """`r: Bag x: 10 y: 20` as a yield-crossing local promotes to
-        a synth-class field of type `Bag`. The desugarer emits a
+        """`r: bag x: 10 y: 20` as a yield-crossing local promotes to
+        a synth-class field of type `bag`. The desugarer emits a
         `TypeOfExpr` field-type marker; the typechecker resolves
         the actual ZType from the RHS at the first `this.r = ...`
         reassignment in the synth `.call` body."""
         field_t = _resolve_synth_field_type(
-            "Bag: record { x: i64 y: i64 }\n"
-            "gen: function out (iterator gives: i64) is {\n"
-            "    r: Bag x: 10 y: 20\n"
+            "bag: record { x: i64 y: i64 }\n"
+            "gen: function out (Iterator gives: i64) is {\n"
+            "    r: bag x: 10 y: 20\n"
             "    yield 1\n"
             "    yield r.x\n"
             "}",
             synth_name="gen_iter",
             field_name="r",
         )
-        assert field_t is not None and field_t.name == "Bag", (
-            f"expected `r` resolved to Bag, got {field_t!r}"
+        assert field_t is not None and field_t.name == "bag", (
+            f"expected `r` resolved to bag, got {field_t!r}"
         )
 
     def test_generator_local_field_infers_string_literal(self):
         """Bare `sv: "hello"` -> StringView. The TypeOfExpr-resolution
         path types the string literal RHS as StringView."""
         field_t = _resolve_synth_field_type(
-            "gen: function out (iterator gives: i64) is {\n"
+            "gen: function out (Iterator gives: i64) is {\n"
             '    sv: "hello"\n'
             "    yield 1\n"
             "    yield sv.length\n"
@@ -12131,7 +12131,7 @@ class TestGeneratorDesugaring:
     def test_generator_local_field_infers_string_projection(self):
         """`s: "hello".string` -> field type String."""
         field_t = _resolve_synth_field_type(
-            "gen: function out (iterator gives: i64) is {\n"
+            "gen: function out (Iterator gives: i64) is {\n"
             '    s: "hello".string\n'
             "    yield 1\n"
             "    yield s.length\n"
@@ -12142,14 +12142,14 @@ class TestGeneratorDesugaring:
         assert field_t is not None and field_t.name == "String", f"got {field_t!r}"
 
     def test_generator_local_field_infers_method_on_local(self):
-        """`bag: Bag x: 10; d: bag.doubled` -> d's field type is the
+        """`bag: bag x: 10; d: bag.doubled` -> d's field type is the
         method's return type (i32 here), not the default i64."""
         field_t = _resolve_synth_field_type(
-            "Bag: record { x: i64 } as {\n"
+            "bag: record { x: i64 } as {\n"
             "    doubled: function {b: this} out i32 is { return 2.i32 }\n"
             "}\n"
-            "gen: function out (iterator gives: i32) is {\n"
-            "    bag: Bag x: 10\n"
+            "gen: function out (Iterator gives: i32) is {\n"
+            "    bag: bag x: 10\n"
             "    d: bag.doubled\n"
             "    yield 1.i32\n"
             "    yield d\n"
@@ -12162,20 +12162,20 @@ class TestGeneratorDesugaring:
     def test_generator_local_field_infers_field_method_via_receiver_param(self):
         """`<recv>.<field>.<method>` in a generator method: the
         typechecker resolves `o.inner.sized` (where `o: this.lock`
-        and `Outer.inner: Inner`) to Inner.sized's return type u32."""
+        and `Outer.inner: inner`) to inner.sized's return type u32."""
         field_t = _resolve_synth_field_type(
-            "Inner: record { v: i64 } as {\n"
+            "inner: record { v: i64 } as {\n"
             "    sized: function {i: this} out u32 is { return 4.u32 }\n"
             "}\n"
-            "Outer: class { inner: Inner } as {\n"
-            "    each: function {o: this.lock} out (iterator gives: u32) is {\n"
+            "Outer: class { inner: inner } as {\n"
+            "    each: function {o: this.lock} out (Iterator gives: u32) is {\n"
             "        sz: o.inner.sized\n"
             "        yield 0.u32\n"
             "        yield sz\n"
             "    }\n"
             "}\n"
             "main: function is {\n"
-            "    o: Outer inner: (Inner v: 1)\n"
+            "    o: Outer inner: (inner v: 1)\n"
             "    with it: (Outer.each o: o.lock) do for v: it loop { }\n"
             "}",
             synth_name="Outer_each_iter",
@@ -12189,7 +12189,7 @@ class TestGeneratorDesugaring:
         fell through to the i64 fallback; now resolves to the
         operands' resolved type (u32 here)."""
         field_t = _resolve_synth_field_type(
-            "gen: function {a: u32 b: u32} out (iterator gives: u32) is {\n"
+            "gen: function {a: u32 b: u32} out (Iterator gives: u32) is {\n"
             "    c: a + b\n"
             "    yield 0.u32\n"
             "    yield c\n"

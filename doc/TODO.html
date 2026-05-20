@@ -129,7 +129,7 @@ core.</p>
 user-facing surface; the desugaring pipeline and synth-class shape
 are documented inline in <code>src/zgenerator.py</code>.</p>
 <h2 id="iterators"><a href="#iterators">3. Iterators</a></h2>
-<pre><code class="language-zerolang">myiterabletype: class {
+<pre><code class="language-zerolang">MyIterableType: class {
   field: u32
   field2: u8
 } as {
@@ -140,15 +140,15 @@ are documented inline in <code>src/zgenerator.py</code>.</p>
     return t
   }
 
-  iterate: function { t: this.lock ivar: u8 } out mytypeiterator is {
+  iterate: function { t: this.lock ivar: u8 } out MyTypeIterator is {
     # 'this' in 'in' parameter MUST be locked to return the iterator below
     # (because it holds a lock over 'this' so must escape into an env that
     # also locks 'this')
-    # so mytypeiterator returned holds lock over 'this'
+    # so MyTypeIterator returned holds lock over 'this'
 
     # iterator being returned is owned, so must be a localvar/takenparam
     # 't' is locked after this line
-    i: mytypeiterator t.private ivar: ivar
+    i: MyTypeIterator t.private ivar: ivar
 
     return i
   }
@@ -160,13 +160,13 @@ are documented inline in <code>src/zgenerator.py</code>.</p>
   }
 }
 
-mytypeiterator: class {
+MyTypeIterator: class {
   # all iterators must be classes (reftypes) No, why?
-  # the iterator (likely) needs to hold a reference to the iterable, so 
-  #  this one needs to be a class to hold a reference to another class 
+  # the iterator (likely) needs to hold a reference to the iterable, so
+  #  this one needs to be a class to hold a reference to another class
   #  instance
   state: int  # fields to maintain state of iterator here
-  target: myiterabletype.private # do we need to specify private here?
+  target: MyIterableType.private # do we need to specify private here?
 } as {
 
   # lock on 'target' type is required so it can be stored as a field
@@ -178,7 +178,7 @@ mytypeiterator: class {
   call: function { t: this.lock } out itersubtype.borrow is {
     # ...
     # must retain the lock over 'this' if we return a 'borrow'
-    # return type could be 'taken' (if a new object is constructed - BUT 
+    # return type could be 'taken' (if a new object is constructed - BUT
     # then we don't need to lock 'this'!!!!) or borrowed
     # (if exposing an internal part of the parent object)
     i: t.target.index t.state # 'i' takes a lock over 't'
@@ -197,7 +197,7 @@ mytypeiterator: class {
 - ownership: the <code>for</code> exposes the correct ownership since the compiler will
   check the types in the 'call' method of the iterator. If a taken type is
   returned, it will be owned in the body of the <code>for</code>. If borrowed, it will be
-  borrowed in the body. 
+  borrowed in the body.
 - scoping in the body ends at the end of the loop or immediately after a break
   or continue. So a lock on the iterator held by the returned element will be
   released immediately before the start of the next loop so that the iterator
@@ -217,23 +217,23 @@ for x: (myfunc3 myarg name: mynamedarg) loop {
   # function can have arguments, named arguments must be in parens
 }
 
-myobject: make_an_object_with_a_call_method
-for x: myobject loop {
-  # x is set to myobject.call result before every iteration
+MyObject: make_an_object_with_a_call_method
+for x: MyObject loop {
+  # x is set to MyObject.call result before every iteration
 }
 
 myobject2: make_an_object_with_a_call_method_with_args
 for x: myobject2 myarg loop {
   # x is set to myobject2.call result before every iteration
-  # 'call' can have arguments, 
+  # 'call' can have arguments,
   # named arguments must be in parens (not shown)
 }</code></pre>
 <p>An iterable object:</p>
 <pre><code class="language-zerolang"># myiterable is an iterable object that has an 'iterate' method
 for x: myiterable loop {
-  # the myiterable.iterate method is called (with no arguments) to 
+  # the myiterable.iterate method is called (with no arguments) to
   #   retrieve the iterator
-  # x is set to the result of the iterator (called without args) 
+  # x is set to the result of the iterator (called without args)
   #   before every iteration
 }</code></pre>
 <p>Any other iterables where the above does not apply, needs to be handled
@@ -243,7 +243,7 @@ manually with a preceeding <code>with</code> statement. eg:</p>
 - the iterable's iterate method is not called 'iterate' (eg 'iterate2')
 - the iterable's iterate method needs to take arguments
 - the returned iterator needs to take arguments</p>
-<pre><code class="language-zerolang"># myiterable is an iterable object that has both a 'call' method 
+<pre><code class="language-zerolang"># myiterable is an iterable object that has both a 'call' method
 #  and an 'iterate' method
 for x: myiterable.call loop {
   # force the call on each loop (rather than calling 'iterate' to retrieve
@@ -328,8 +328,8 @@ membership 'methods' that 'return' bool? NO, just <code>match</code></p>
 <p>Types of vars at each scope may need to store their 'type' and also excluded
 'subtypes'. eg:</p>
 <pre><code class="language-zerolang">myenum: variant { :A :B :C }
-x = functhatreturns myenum  # note that if we set an explicit subtype here 
-                # (rather than a function call) then we would be able to narrow to 
+x = functhatreturns myenum  # note that if we set an explicit subtype here
+                # (rather than a function call) then we would be able to narrow to
                 # exactly that type...
 
 # outside, x 'type' is myenum, 'subtype' is not [] (empty list)
@@ -355,7 +355,7 @@ match f case err then {
     # f is accessible as error type here
     return # ...
 } # XXX: not exhaustive?
-# if there were an 'else' here, it would know f is a file 
+# if there were an 'else' here, it would know f is a file
 
 # for rest of function, f is accessible as file because err did early exit</code></pre>
 <p>TODO: how to refer back to the original result union if we wanted to? Can't.
@@ -371,8 +371,8 @@ function arguments - operate on arbitrary sizes? caller must pass size? How?</p>
 myarraytype: array u32 to: 4
 
 # CANNOT DO THIS, use data
-myarray: array { 4 5 6 }	# is a array i32 size 3??
-myarray: array { 4_u32 5 6 }	# is a array u32 size 3?? First element forces type?
+myarray: array { 4 5 6 }    # is a array i32 size 3??
+myarray: array { 4_u32 5 6 }    # is a array u32 size 3?? First element forces type?
 myarray: array { 4 5 6 } of u16   # is a array u16 size 4?? Explicit type?</code></pre>
 <ul>
 <li>array and list need syntax support for the array literal (Nope: use "data").
@@ -384,38 +384,38 @@ myarray: array { 4 5 6 } of u16   # is a array u16 size 4?? Explicit type?</code
     reftype lists would need to be done by hand</li>
 <li>can 'data' be used in-line directly after the 'from' argument?</li>
 </ul>
-<pre><code class="language-zerolang">myarray: array { 0: 4 1: 5 2: 6 }	# allow numbered elements? USE DATA
-myarray: array of: u32 to: 100		# 100 (0-99) element u32 array all initialised to 0?
-myarray: array of u32: to: 100 is { 99: 1 }	# 100 (0-99) element u32 array all initialised to 0 except for last element. Sparse initialisation. NO, USE DATA
-myarray: array of: u32 is { 99: 1 }		# can actually skip size since last element is specified. (s will be set to 100 (99 + 1)). NO, USE DATA
-myarray: array { 99: 1_u32 }		# and same again... NO, USE DATA</code></pre>
+<pre><code class="language-zerolang">myarray: array { 0: 4 1: 5 2: 6 }    # allow numbered elements? USE DATA
+myarray: array of: u32 to: 100        # 100 (0-99) element u32 array all initialised to 0?
+myarray: array of u32: to: 100 is { 99: 1 }    # 100 (0-99) element u32 array all initialised to 0 except for last element. Sparse initialisation. NO, USE DATA
+myarray: array of: u32 is { 99: 1 }        # can actually skip size since last element is specified. (s will be set to 100 (99 + 1)). NO, USE DATA
+myarray: array { 99: 1_u32 }        # and same again... NO, USE DATA</code></pre>
 <p>arrays are generic over type and size...</p>
-<pre><code class="language-zerolang">max: function { 
-    a: (array of: u32 to: l) 	# arbitrary sized u32 array
-    l: generic u32 		# should size be a special type?
+<pre><code class="language-zerolang">max: function {
+    a: (array of: u32 to: l)     # arbitrary sized u32 array
+    l: generic u32         # should size be a special type?
 } out u32 is {
     # is generic still because size has not been specified
     # size can be extracted (resolved) from a passed array at each call site
 }
 
-max: function { 
-    a: (array to: l of: u32) 	# arbitrary sized u32 array
-    l: generic u32 		# should size be a special type?
+max: function {
+    a: (array to: l of: u32)     # arbitrary sized u32 array
+    l: generic u32         # should size be a special type?
 } out u32 is {
     # is generic still because size has not been specified
     # size can be extracted (resolved) from a passed array at each call site
 }
 
 # NON-GENERIC function ????
-# this only works for generic values (numeric and enum) since they are the only 
-# ones that can be both a type (for the generic parameter) and a value, for the 
+# this only works for generic values (numeric and enum) since they are the only
+# ones that can be both a type (for the generic parameter) and a value, for the
 # non-generic parameter
-max: function { 
+max: function {
     # array size of 'len' extracted from the argument at the call site
-    a: (array to len of u32) 	
-    # note that this len param is NOT generic, but call site still passes it in 
+    a: (array to len of u32)
+    # note that this len param is NOT generic, but call site still passes it in
     # automatically (from array var)
-    len: u32 		
+    len: u32
 } out u32 is {
     # NOT generic (?)
     # size can be extracted (resolved) from a passed array at each call site ???

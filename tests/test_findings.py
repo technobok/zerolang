@@ -631,12 +631,12 @@ class TestFinding10TypeAnnotationAudit:
     def test_audit_clean_for_method_params(self):
         """Method parameters in class 'as' blocks should be annotated."""
         program, typing = parse_and_check(
-            "counter: class {\n"
+            "Counter: class {\n"
             "    value: i64\n"
             "} as {\n"
             "    get: function {c: this} out i64 is { return c.value }\n"
             "}\n"
-            'main: function is {\n    c: counter value: 0\n    print "\\{counter.get c}"\n}'
+            'main: function is {\n    c: Counter value: 0\n    print "\\{Counter.get c}"\n}'
         )
         missing = audit_type_annotations(typing)
         assert missing == [], f"Unexpected missing annotations: {missing}"
@@ -1109,17 +1109,17 @@ class TestCname:
     def test_class_gets_cname(self):
         """Class types should have cname set to z_{name}_t."""
         program, typing = parse_and_check(
-            "node: class is { val: i64 }\n"
+            "Node: class is { val: i64 }\n"
             "main: function is {\n"
-            "    n: node val: 1\n"
+            "    n: Node val: 1\n"
             '    print "\\{n.val}"\n'
             "}\n"
         )
         for ztype in typing.resolved.values():
-            if ztype.name == "node":
-                assert ztype.cname == "z_node_t"
+            if ztype.name == "Node":
+                assert ztype.cname == "z_Node_t"
                 return
-        assert False, "node type not found in resolved"
+        assert False, "Node type not found in resolved"
 
     def test_function_gets_cname(self):
         """Functions should have cname set to z_{name}."""
@@ -1136,29 +1136,29 @@ class TestCname:
     def test_union_gets_cname(self):
         """Union types should have cname set to z_{name}_t."""
         program, typing = parse_and_check(
-            "shape: union {\n"
+            "Shape: union {\n"
             "    circle: f64\n"
             "    square: f64\n"
             "}\n"
             "main: function is {\n"
-            "    s: shape.circle 1.0\n"
+            "    s: Shape.circle 1.0\n"
             '    print "ok"\n'
             "}\n"
         )
         for ztype in typing.resolved.values():
-            if ztype.name == "shape":
-                assert ztype.cname == "z_shape_t"
+            if ztype.name == "Shape":
+                assert ztype.cname == "z_Shape_t"
                 return
-        assert False, "shape type not found in resolved"
+        assert False, "Shape type not found in resolved"
 
     def test_collision_auto_resolves(self):
         """All assigned cnames should be unique across the program."""
         program, typing = parse_and_check(
             "point: record is { x: f64  y: f64 }\n"
-            "node: class is { val: i64 }\n"
+            "Node: class is { val: i64 }\n"
             "main: function is {\n"
             "    p: point x: 1.0 y: 2.0\n"
-            "    n: node val: 1\n"
+            "    n: Node val: 1\n"
             '    print "\\{p.x} \\{n.val}"\n'
             "}\n"
         )
@@ -1239,7 +1239,7 @@ class TestCname:
             '    print "\\{b.val}"\n'
             "}"
         )
-        # box[of i64] monomorphizes to name "box_i64" — same as the plain record
+        # Box[of i64] monomorphizes to name "Box_i64" — same as the plain record
         mono_cname = None
         plain_cname = None
         for ztype in typing.resolved.values():
