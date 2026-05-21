@@ -6,7 +6,7 @@ Includes ownership and lock checking.
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional, List, Tuple, cast
+from typing import Callable, Iterable, Optional, List, Tuple, cast
 
 import zast
 import ztyping
@@ -8277,6 +8277,7 @@ class TypeChecker:
                 self.typing.node_type[call.nodeid] = callee_type
                 self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
                 self._check_missing_create_args(callee_type, call)
+                self._check_construction_field_types(callee_type, call)
                 self._reject_borrow_escape_into_record(call)
                 return True, callee_type, callee_type
             self.typing.node_type[call.nodeid] = callee_type
@@ -8329,6 +8330,7 @@ class TypeChecker:
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
             self._check_missing_create_args(callee_type, call)
+            self._check_construction_field_types(callee_type, call)
             self._check_aggregate_lock_escape(call, callee_type)
             self._transfer_class_construction_locks(
                 call, callee_type, arg_borrow_paths=arg_borrow_paths
@@ -8755,6 +8757,83 @@ class TypeChecker:
                     loc=call.start,
                     err=ERR.CALLERROR,
                 )
+
+    def _check_construction_field_types(
+        self,
+        type_def: ZType,
+        call: zast.Call,
+        generic_param_names: Iterable[str] = (),
+    ) -> None:
+        """Validate that each argument in bare-name construction matches
+        the declared field type on the type's `create` child. Mirrors
+        the literal-coercion + protocol-projection chain used in
+        `_check_call_arguments` but operates standalone so the targeted-
+        patch construction branches (class, union-fallback, generic
+        record/class) can call into it without re-routing through the
+        full call pipeline.
+        """
+        if (
+            type_def.is_native
+            or _is_str_type(type_def)
+            or _is_array_type(type_def)
+            or _is_list_type(type_def)
+            or _is_map_type(type_def)
+            or _is_set_type(type_def)
+        ):
+            return
+        create_type = self.typing.child_of(type_def, "create")
+        if not create_type or create_type.typetype != ZTypeType.FUNCTION:
+            return
+        data_params = [
+            (pname, ptype)
+            for pname, ptype in self.typing.children_of(create_type)
+            if ptype.typetype != ZTypeType.FUNCTION
+        ]
+        if not data_params:
+            return
+        skip_names = set(generic_param_names)
+        positional_idx = 0
+        for arg in call.arguments:
+            if arg.name and arg.name in skip_names:
+                continue
+            arg_type = self.typing.node_type.get(arg.valtype.nodeid)
+            if arg_type is None:
+                continue
+            if arg.name:
+                matched: Optional[ZType] = None
+                for pname, ptype in data_params:
+                    if pname == arg.name:
+                        matched = ptype
+                        break
+                if matched is None:
+                    continue
+                target_name = arg.name
+            else:
+                while (
+                    positional_idx < len(data_params)
+                    and data_params[positional_idx][0] in skip_names
+                ):
+                    positional_idx += 1
+                if positional_idx >= len(data_params):
+                    continue
+                target_name, matched = data_params[positional_idx]
+                positional_idx += 1
+            if matched.typetype == ZTypeType.GENERIC_PARAM:
+                continue
+            if arg_type.is_literal and _is_numeric_type(matched):
+                self._coerce_literal(arg.valtype, matched, loc=arg.start)
+                continue
+            if self._types_compatible(arg_type, matched):
+                continue
+            own = self.typing.child_ownership(create_type, target_name)
+            if self._try_protocol_coerce(arg, arg_type, matched, own):
+                continue
+            self._error(
+                f"field '{target_name}' type mismatch: expected "
+                f"{matched.name}, got {arg_type.name}",
+                loc=arg.start,
+                err=ERR.CALLERROR,
+            )
 
     def _install_borrow_locks(
         self,

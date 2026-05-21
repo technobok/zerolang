@@ -208,7 +208,7 @@ class TestFinding3DestructorMetadata:
         # use the record field approach
         program2, typing2 = parse_and_check(
             "Box: class is { name: String }\n"
-            'main: function is {\n    b: Box name: "hi"\n    print b.name\n}'
+            'main: function is {\n    b: Box name: "hi".string\n    print b.name\n}'
         )
         mainunit = program2.units[program2.mainunitname]
         box = mainunit.body["Box"]

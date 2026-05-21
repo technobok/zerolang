@@ -12521,6 +12521,55 @@ class TestConstructionFieldCoercion:
             "main: function is { f: Foo.create count: 100 }"
         )
 
+    # ---- Class bare-name construction ----
+
+    def test_class_field_literal_fits(self):
+        check_ok("Foo: class { count: u8 }\nmain: function is { f: Foo count: 100 }")
+
+    def test_class_field_literal_out_of_range_errors(self):
+        errors = check_errors(
+            "Foo: class { count: u8 }\nmain: function is { f: Foo count: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_class_field_string_into_u8_errors(self):
+        errors = check_errors(
+            'Foo: class { count: u8 }\nmain: function is { f: Foo count: "hello" }'
+        )
+        assert any("field 'count' type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_class_user_defined_create_field_coerces(self):
+        check_ok(
+            "Foo: class { count: u8 } as {\n"
+            "  create: function {count: u8} out this is "
+            "{ return meta.create :count }\n"
+            "}\n"
+            "main: function is { f: Foo count: 100 }"
+        )
+
+    def test_class_user_defined_create_out_of_range_errors(self):
+        errors = check_errors(
+            "Foo: class { count: u8 } as {\n"
+            "  create: function {count: u8} out this is "
+            "{ return meta.create :count }\n"
+            "}\n"
+            "main: function is { f: Foo count: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_class_field_default_not_spuriously_flagged(self):
+        check_ok(
+            "Foo: class { count: 10.u8 b: u8 }\nmain: function is { f: Foo b: 20 }"
+        )
+
 
 class TestDataBlockElementTypeUnification:
     """Data-block elements must share a common type. The first
