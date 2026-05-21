@@ -613,6 +613,34 @@ NUMERIC_RANGES: Dict[str, Tuple[int, int]] = {
 }
 
 
+def parse_literal_value(numstr: str) -> "Optional[int | float]":
+    """Parse a numeric literal lexeme into its unbounded Python value
+    (int or float), ignoring any inline / dotted type suffix. Returns
+    None if the lexeme is malformed.
+
+    Used by the literal-type infrastructure during typecheck: the
+    `LITERAL_INT` / `LITERAL_FLOAT` atom carries this value as its
+    `node_const_value`, and range-checking happens later at the
+    coercion boundary (`_coerce_literal_by_id`). Bypassing
+    `parse_number`'s range check is the whole point — a literal like
+    `18446744073709551615` (u64::MAX) doesn't fit i64 but must still
+    be representable so it can flow into a u64-typed location."""
+    # Reuse `parse_number` for the heavy lifting: it returns the
+    # unbounded Python value in the 2nd tuple slot even when its
+    # 3rd-slot error is a "value out of range for {default_type}"
+    # complaint (which we want to ignore here — range-checking is the
+    # coercion boundary's job, not the atom's). Only when the value
+    # didn't parse at all (zero sentinel paired with an "Invalid
+    # numeric literal" error) do we return None.
+    _typename, value, err = parse_number(numstr)
+    if err is not None and value == 0 and "out of range" not in err:
+        # parse_number's sentinel for an unparseable lexeme.
+        return None
+    if type(value) is int or type(value) is float:
+        return value
+    return None
+
+
 def parse_number(numstr: str) -> Tuple[str, float, Optional[str]]:
     """
     Parse a number identifier returning (type_name, value, error).

@@ -129,16 +129,28 @@ class TestNumericLiterals:
         check_ok("main: function is { x: 3.14 }")
 
     def test_typed_integer(self):
-        check_ok("main: function is { x: 42i32 }")
+        check_ok("main: function is { x: 42.i32 }")
 
     def test_negative_integer(self):
         check_ok("main: function is { x: -5 }")
 
     def test_invalid_float_with_int_suffix(self):
-        errors = check_errors("main: function is { x: 3.14i32 }")
+        # `3.14.i32` — a float literal cannot take an integer suffix,
+        # regardless of whether inline or dotted.
+        errors = check_errors("main: function is { x: 3.14.i32 }")
         assert any(
             "float" in e.msg.lower() or "decimal" in e.msg.lower() for e in errors
         )
+
+    def test_inline_numeric_suffix_rejected(self):
+        # Inline numeric type suffix (`42i32`) was removed in favour
+        # of the dotted form (`42.i32`). Should error with a clear
+        # diagnostic pointing the user at the replacement.
+        errors = check_errors("main: function is { x: 42i32 }")
+        assert any(
+            "inline numeric type suffix removed" in e.msg and "42.i32" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
 
 
 class TestFunctionParameters:
@@ -1209,10 +1221,10 @@ class TestStoreOfBorrowedRejection:
         )
 
     def test_list_insert_borrowed_rejected(self):
-        """`lst.insert from: s at: 0u64` — same TAKE rejection on `from`."""
+        """`lst.insert from: s at: 0.u64` — same TAKE rejection on `from`."""
         errors = check_errors(
             "f: function {lst: (List of: String) s: String} is {\n"
-            "  lst.insert from: s at: 0u64\n"
+            "  lst.insert from: s at: 0.u64\n"
             "}\n"
             "main: function is {}"
         )
@@ -1222,10 +1234,10 @@ class TestStoreOfBorrowedRejection:
         ), [e.msg for e in errors]
 
     def test_list_set_borrowed_rejected(self):
-        """`lst.set i: 0u64 val: s` — TAKE annotation is on `val`."""
+        """`lst.set i: 0.u64 val: s` — TAKE annotation is on `val`."""
         errors = check_errors(
             "f: function {lst: (List of: String) s: String} is {\n"
-            "  lst.set i: 0u64 val: s\n"
+            "  lst.set i: 0.u64 val: s\n"
             "}\n"
             "main: function is {}"
         )
@@ -1805,9 +1817,9 @@ class TestTakeBorrowCompilerMethods:
         """
         check_ok(
             "MyBox: class {\n"
-            "  value: 0u64\n"
+            "  value: 0.u64\n"
             "} as {\n"
-            "  take: function {:this} out u64 is { return 42u64 }\n"
+            "  take: function {:this} out u64 is { return 42.u64 }\n"
             "}\n"
             "main: function is {\n"
             "  x: MyBox\n"
@@ -2691,7 +2703,7 @@ class TestLockEnforcement:
         predicate skips the conflict.
         """
         check_ok(
-            "Inner: class { val: 0u64 }\n"
+            "Inner: class { val: 0.u64 }\n"
             "Pair: class {\n"
             "  a: Inner\n"
             "  b: Inner\n"
@@ -4232,12 +4244,12 @@ class TestValtypeReftypeEnforcement:
         its source.
         """
         errors = check_errors(
-            "Src: class { val: 0u64 } as {\n"
+            "Src: class { val: 0.u64 } as {\n"
             "  peek: function {t: this.lock} out u64.borrow is { return t.val }\n"
             "}\n"
             "Holder: class { x: u64 }\n"
             "main: function is {\n"
-            "  s: Src val: 5u64\n"
+            "  s: Src val: 5.u64\n"
             "  h: Holder x: s.peek\n"
             "}"
         )
@@ -5832,17 +5844,25 @@ class TestNumericCasting:
     def test_range_error_i8(self):
         """2000.i8 produces error."""
         errors = check_errors("main: function is { x: 2000.i8 }")
-        assert any("out of range" in e.msg for e in errors)
+        assert any("cannot be losslessly stored in i8" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
 
     def test_concat_range_error(self):
-        """2000i8 (concatenated) also errors."""
-        errors = check_errors("main: function is { x: 2000i8 }")
-        assert any("out of range" in e.msg for e in errors)
+        """2000.i8 also errors via the dotted form (the only form
+        accepted post-Wave-2)."""
+        errors = check_errors("main: function is { x: 2000.i8 }")
+        assert any("cannot be losslessly stored in i8" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
 
     def test_overflow_decimal_i64(self):
-        """18446744073709551615 (no cast) errors: out of range for i64."""
+        """18446744073709551615 (no cast) errors: doesn't fit the i64
+        default the literal-coercion late pass picks."""
         errors = check_errors("main: function is { x: 18446744073709551615 }")
-        assert any("out of range" in e.msg for e in errors)
+        assert any("cannot be losslessly stored in i64" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
 
     def test_dotted_default_param(self):
         """a: 0.u32 as function default: type=u32, default='0'."""
@@ -9890,20 +9910,20 @@ class TestConstantFolding:
         assert self._const_value(typing, inner) == 3
 
     def test_const_value_overflow_error(self):
-        """255u8 + 1u8 should produce a compile-time overflow error."""
-        errors = check_errors("main: function is { x: 255u8 + 1u8 }")
+        """255.u8 + 1.u8 should produce a compile-time overflow error."""
+        errors = check_errors("main: function is { x: 255.u8 + 1.u8 }")
         assert any("overflow" in e.msg.lower() for e in errors)
 
     def test_const_value_f64_folded(self):
         """f64 operations should be folded."""
-        program, typing = check_ok("main: function is { x: 1.5f64 + 2.5f64 }")
+        program, typing = check_ok("main: function is { x: 1.5.f64 + 2.5.f64 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
         assert self._const_value(typing, inner) == 4.0
 
     def test_const_value_f32_not_folded(self):
         """f32 operations should not be folded (precision mismatch with host)."""
-        program, typing = check_ok("main: function is { x: 1.5f32 + 2.5f32 }")
+        program, typing = check_ok("main: function is { x: 1.5.f32 + 2.5.f32 }")
         inner = self._get_rhs_inner(program)
         assert isinstance(inner, zast.BinOp)
         assert self._const_value(typing, inner) is None
@@ -9934,7 +9954,7 @@ class TestConstantFolding:
 
     def test_const_division_by_zero_f64_error(self):
         """Float division by constant zero should be a compile-time error."""
-        errors = check_errors("main: function is { x: 10.0f64 / 0.0f64 }")
+        errors = check_errors("main: function is { x: 10.0.f64 / 0.0.f64 }")
         assert any("division by zero" in e.msg.lower() for e in errors)
 
     # -- Float (f64) folding ---
@@ -10072,7 +10092,7 @@ class TestUnitLevelIf:
     def test_unit_level_if_different_types(self):
         """Unit-level if arms can produce different types."""
         program, typing = check_ok(
-            'x: if 1 < 2 then { 42 } else { 99u8 }\nmain: function is { print "\\{x}" }'
+            'x: if 1 < 2 then { 42 } else { 99.u8 }\nmain: function is { print "\\{x}" }'
         )
         # x should have type i64 (the true branch type)
         resolved = typing.resolved
@@ -11352,7 +11372,7 @@ class TestAutoGeneratedEquality:
     def test_memcmp_eq_mixed_int_float(self):
         """Record with mixed int and float fields is NOT memcmp-safe."""
         program, typing = check_ok(
-            "rec: record { a: 0  b: 0.0f32 }\n"
+            "rec: record { a: 0  b: 0.0.f32 }\n"
             "main: function is {\n"
             "  x: rec\n"
             "  y: rec\n"
@@ -11486,7 +11506,7 @@ class TestStringHash:
             "main: function is {\n"
             '  sv: "abc"\n'
             "  h: sv.hash\n"
-            "  if h == 0u64 then return 0\n"
+            "  if h == 0.u64 then return 0\n"
             "}"
         )
 
@@ -12368,3 +12388,56 @@ class TestLiteralCoercion:
                 break
         else:
             raise AssertionError("did not find x: 0.u8 assignment")
+
+    # ---- Wave 2: arbitrary-precision intermediate arithmetic ----
+
+    def test_wave2_u64_max_plus_minus_one_into_u64_param(self):
+        """Headline Wave 2 case: an intermediate that exceeds i64 is
+        fine as long as the final value fits the target.
+        `0xffffffffffffffff + 1 - 1` folds at unbounded precision to
+        u64::MAX, then coerces into the u64 parameter."""
+        check_ok(
+            "f: function {x: u64} is {}\n"
+            "main: function is { f x: 0xffffffffffffffff + 1 - 1 }"
+        )
+
+    def test_wave2_intermediate_2_to_40_divided_fits_u32(self):
+        """`2**40 / 2**20 = 2**20` — the intermediate `2**40` exceeds
+        u32 (~4e9), but the result `2**20` (~1e6) fits cleanly."""
+        check_ok(
+            "f: function {x: u32} is {}\n"
+            "main: function is { f x: 1099511627776 / 1048576 }"
+        )
+
+    def test_wave2_final_value_still_range_checked(self):
+        """Even with unbounded intermediates, a final value that
+        exceeds the target's range fails at the coercion boundary."""
+        errors = check_errors(
+            "f: function {x: u8} is {}\nmain: function is { f x: 100 + 200 }"
+        )
+        assert any(
+            "literal value 300 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_wave2_method_dispatch_on_literal_receiver(self):
+        """Method dispatch on a bare numeric literal receiver works
+        via the LITERAL_INT.typedef_base = i64 chain — `5.iterate`
+        finds the iterator native declared on the integer record."""
+        check_ok("main: function is { for n: 5.iterate loop { } }")
+
+    def test_wave2_bare_literal_default_after_arithmetic(self):
+        """A pure constant expression with no typed location defaults
+        to i64 (the LITERAL_INT default)."""
+        program, typing = check_ok("main: function is {\n  x: 200 + 100 - 250\n}")
+        main_fn = program.units["test"].body["main"]
+        for sline in main_fn.body.statements:
+            inner = sline.statementline
+            if inner.nodetype == NodeType.ASSIGNMENT and inner.name == "x":
+                t = typing.node_type.get(inner.nodeid)
+                assert t is not None and t.name == "i64", f"got {t}"
+                cv = typing.node_const_value.get(inner.value.expression.nodeid)
+                assert cv == 50, f"expected folded value 50, got {cv}"
+                break
+        else:
+            raise AssertionError("did not find x assignment")

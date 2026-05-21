@@ -31,8 +31,12 @@ from ztypes import (
     ZExprResult,
     NUMERIC_RANGES,
     parse_number,
+    parse_literal_value,
     int_fits_float,
     float_fits_float,
+    LITERAL_INT,
+    LITERAL_FLOAT,
+    numeric_literal_form,
 )
 from ztypeutil import (
     is_numeric_id as _is_numeric_id,
@@ -266,6 +270,31 @@ _INTEGER_TYPE_NAMES: frozenset[str] = frozenset(NUMERIC_RANGES.keys())
 _FLOAT_TYPE_NAMES: frozenset[str] = frozenset({"f32", "f64", "f128"})
 
 
+def _numeric_suffix_len(name: str) -> int:
+    """Length of the trailing numeric type suffix on a literal lexeme.
+    Returns 0 if absent. Mirrors the suffix lists in
+    `ztypes.numeric_literal_form` — kept here to avoid leaking the
+    suffix tables across module boundaries."""
+    if name[-4:] in ("i128", "u128", "f128"):
+        return 4
+    if name[-3:] in ("i16", "i32", "i64", "u16", "u32", "u64", "f32", "f64", "c32"):
+        return 3
+    if name[-2:] in ("i8", "u8", "c8"):
+        return 2
+    return 0
+
+
+# Default concrete numeric type per literal base flavour. Used by
+# `_resolve_literal_defaults` to fold any LITERAL_INT/LITERAL_FLOAT
+# entry the late pass finds back to a concrete default before the
+# emitter runs.
+_LITERAL_DEFAULT_TYPENAME: dict[str, str] = {
+    "dec": "i64",
+    "nondec": "u64",
+    "float": "f64",
+}
+
+
 def _is_integer_type(ztype: ZType) -> bool:
     return ztype.name in _INTEGER_TYPE_NAMES
 
@@ -275,7 +304,11 @@ def _is_float_type(ztype: ZType) -> bool:
 
 
 def _is_numeric_type(ztype: ZType) -> bool:
-    return ztype.name in _INTEGER_TYPE_NAMES or ztype.name in _FLOAT_TYPE_NAMES
+    return (
+        ztype.name in _INTEGER_TYPE_NAMES
+        or ztype.name in _FLOAT_TYPE_NAMES
+        or ztype.is_literal
+    )
 
 
 def _is_primitive_name(name: str) -> bool:
@@ -753,6 +786,93 @@ class TypeChecker:
             self.mono.assigned_cnames.discard(ztype.cname)
             ztype.cname = ""
 
+    def _link_literal_typedefs(self) -> None:
+        """Point LITERAL_INT / LITERAL_FLOAT at this typechecker's
+        concrete default types via `typedef_base` so the existing
+        typedef-walk in `_types_compatible`,
+        `_check_binop_inner`'s operator lookup, and
+        `_check_dotted_path` method dispatch can resolve methods on
+        literal-typed receivers without any new `is_literal`
+        branching at the call sites.
+
+        Overwrites unconditionally: the LITERAL_* singletons persist
+        across TypeChecker instances (module-level constants), but
+        each instance creates its own concrete i64 / f64 ZTypes from
+        system.z. Re-linking on every `check()` ensures the singleton
+        points at the current instance's i64 / f64."""
+        i64 = self._resolve_name("i64")
+        if i64 is not None:
+            LITERAL_INT.typedef_base = i64
+        f64 = self._resolve_name("f64")
+        if f64 is not None:
+            LITERAL_FLOAT.typedef_base = f64
+
+    def _materialise_literal(
+        self, t: ZType, value_nodeid: Optional[int] = None
+    ) -> ZType:
+        """Freeze a literal pseudo-type to its concrete default (i64
+        for `LITERAL_INT`, f64 for `LITERAL_FLOAT`). Called at
+        binding sites — assignment, unit-level definition,
+        reassignment when the LHS lacks an existing type — so the
+        literal type does not escape into long-lived storage
+        (`ZVariable.ztype`, `TypeChecker._resolved`, etc.).
+
+        If `value_nodeid` is provided and carries a `node_const_value`,
+        the materialisation runs through `_coerce_literal_by_id` to
+        range-check the value against the default. Otherwise it
+        returns the default ZType unchanged. Returns the original
+        type if it's not a literal."""
+        if not t.is_literal:
+            return t
+        target_name = "i64" if t is LITERAL_INT else "f64"
+        target = self._resolve_name(target_name)
+        if target is None:
+            return t
+        if (
+            value_nodeid is not None
+            and self.typing.node_const_value.get(value_nodeid) is not None
+        ):
+            self._coerce_literal_by_id(value_nodeid, target, loc=None)
+            new_t = self.typing.node_type.get(value_nodeid)
+            if new_t is not None and not new_t.is_literal:
+                return new_t
+        return target
+
+    def _resolve_literal_defaults(self) -> None:
+        """Default-resolution late pass. Walks `Typing.node_type` and
+        blindly replaces every literal pseudo-type entry with its
+        concrete default — `i64` for `LITERAL_INT`, `f64` for
+        `LITERAL_FLOAT`. No range check fires here.
+
+        Range-checking is the *coercion boundary*'s job, not the late
+        pass's: a literal that escapes typecheck without ever being
+        coerced (e.g. a bare top-level binding `x: <too-big>`) gets
+        range-checked at the bind site by
+        `_materialise_literal` in `_check_assignment_inner`. A literal
+        whose outer expression was successfully coerced at a typed
+        location (`f x: 0xff... + 1 - 1` into a `u64` parameter) has
+        no surviving outer wrapper to range-check; its inner BinOps
+        and AtomIds carry the unbounded const_value purely so the
+        constant-folder can compute the result, and their node_type
+        only needs to be made non-literal so the emitter recognises
+        them. Re-range-checking here would spuriously fail those
+        intermediate nodes against the i64 default. So: replace,
+        don't check.
+
+        Matches today's bare-literal default behaviour (decimal AND
+        non-decimal integers default to i64; the spec's "nondec → u64"
+        is aspirational and not implemented today — `node_literal_base`
+        is populated for future use)."""
+        i64 = self._resolve_name("i64")
+        f64 = self._resolve_name("f64")
+        for nodeid in list(self.typing.node_type.keys()):
+            t = self.typing.node_type.get(nodeid)
+            if t is None or not t.is_literal:
+                continue
+            target = i64 if t is LITERAL_INT else f64
+            if target is not None:
+                self.typing.node_type[nodeid] = target
+
     def check(self, full: bool = False) -> List[zast.Error]:
         """Run the type checker starting from main.
 
@@ -762,6 +882,13 @@ class TypeChecker:
         mainunit = self.program.units.get(self.program.mainunitname)
         if not mainunit:
             return self.errors
+
+        # Wire the compiler-internal literal pseudo-types to their
+        # concrete defaults so method-dispatch chains (binop operator
+        # lookup, dotted-path method resolution, etc.) follow the
+        # standard `typedef_base` walk down to i64 / f64 without
+        # special-casing `is_literal` at every children-of site.
+        self._link_literal_typedefs()
 
         # type-check all definitions in the main unit that have bodies
         # (starting from main, but also covering other functions)
@@ -921,6 +1048,14 @@ class TypeChecker:
             return None
 
         t = self._type_of_definition(unitname, name, defn)
+        if t is not None and t.is_literal:
+            # Bind-site materialisation for unit-level definitions
+            # (`x: 100` at the top level): freeze the literal type to
+            # its concrete default so the cached `_resolved` entry,
+            # the unit_types child row, and any downstream readers see
+            # a concrete numeric. Mirrors the same materialisation in
+            # `_check_assignment_inner` for function-local bindings.
+            t = self._materialise_literal(t)
         if t:
             self._resolved[key] = t
             # also populate unit_types for dotted path access
@@ -4264,6 +4399,24 @@ class TypeChecker:
     def _resolve_numeric(
         self, name: str, loc: Optional[Token] = None
     ) -> Optional[ZType]:
+        # Reject the inline-suffix form (e.g. `100u8`) at the single
+        # resolution choke-point. User code should use the dotted form
+        # (`100.u8`) — the lexer already separates that into two
+        # atoms, so the dotted-form validation path doesn't pass
+        # through here. Internal validation paths (e.g.
+        # `_check_dotted_path_inner` concatenating
+        # `pname + child_name`) call `parse_number` directly to
+        # validate the *combined* string and stay unaffected.
+        has_suffix, _base = numeric_literal_form(name)
+        if has_suffix:
+            suffix_len = _numeric_suffix_len(name)
+            bare = name[:-suffix_len]
+            suffix = name[-suffix_len:]
+            self._error(
+                f"inline numeric type suffix removed; write '{bare}.{suffix}' instead",
+                loc=loc,
+            )
+            return None
         typename, _, err = parse_number(name)
         if err:
             self._error(f"Invalid numeric literal: {name}: {err}", loc=loc)
@@ -4313,6 +4466,28 @@ class TypeChecker:
             and b.typetype == ZTypeType.GENERIC_PARAM
         ):
             return a.name == b.name
+        # Literal pseudo-types are unification-compatible with any
+        # concrete numeric. The literal's actual value range-check
+        # happens at the coercion boundary
+        # (`_coerce_literal_by_id`), not here — this rule lets a
+        # bare literal `5` flow through positions that compare types
+        # structurally (typedef.create from:, generic param binding,
+        # etc.) without forcing each of those sites to call
+        # `_coerce_literal` defensively. Late pass folds any
+        # uncoerced literal to its concrete default before the
+        # emitter sees it.
+        if a.is_literal and (
+            b.name in _INTEGER_TYPE_NAMES or b.name in _FLOAT_TYPE_NAMES
+        ):
+            return True
+        if b.is_literal and (
+            a.name in _INTEGER_TYPE_NAMES or a.name in _FLOAT_TYPE_NAMES
+        ):
+            return True
+        # Two literals unify with each other (both default to the
+        # same concrete type at the late pass).
+        if a.is_literal and b.is_literal:
+            return True
         # Primitive types (numerics, bool, null) are conceptually global
         # singletons — the resolver may still hand out separate ZType
         # instances in different contexts, so name is the canonical
@@ -4339,17 +4514,28 @@ class TypeChecker:
         target_type: ZType,
         loc: Optional[Token] = None,
     ) -> bool:
+        """See `_coerce_literal_by_id`. Convenience wrapper that takes
+        an AST node and forwards its nodeid."""
+        return self._coerce_literal_by_id(value_node.nodeid, target_type, loc)
+
+    def _coerce_literal_by_id(
+        self,
+        nodeid: int,
+        target_type: ZType,
+        loc: Optional[Token] = None,
+    ) -> bool:
         """Attempt to losslessly coerce a constant-valued node to a
         concrete numeric target type. Returns True iff coerced (and
-        rewrites `node_type[value_node.nodeid]` to `target_type`); False
+        rewrites `node_type[nodeid]` to `target_type`); False
         otherwise. On out-of-range or rule violation, emits a
         literal-aware diagnostic before returning False so the caller
         does not need to add a generic type-mismatch error.
 
         Wired into typed-location sites — call arguments, function
         return, parameter defaults, field initialisers, collection
-        elements, reassignment RHS, match-arm constants. The caller
-        gates this on the source actually having a const_value
+        elements, reassignment RHS, match-arm constants — and into
+        the default-resolution late pass. The caller gates this on
+        the source actually having a const_value
         (`self.typing.node_const_value.get(nodeid) is not None`) and
         on the target being a numeric type — when those preconditions
         are not met, this helper returns False without emitting.
@@ -4362,7 +4548,6 @@ class TypeChecker:
         - float literal → float target: exact round-trip via
           `float_fits_float`.
         """
-        nodeid = value_node.nodeid
         cv = self.typing.node_const_value.get(nodeid)
         if cv is None:
             return False
@@ -5699,6 +5884,13 @@ class TypeChecker:
             # option.some 42 or option.some from: 42 — infer from argument type
             if value_arg:
                 arg_type = self._check_operation(value_arg.valtype).ztype
+                # Materialise literal-typed inferred arg before
+                # binding to the generic param (`option.some 42`
+                # should bind T to i64, not LITERAL_INT).
+                if arg_type is not None and arg_type.is_literal:
+                    arg_type = self._materialise_literal(
+                        arg_type, value_arg.valtype.nodeid
+                    )
                 if arg_type:
                     param_ref_name = subtype_child.name
                     if param_ref_name not in generic_args:
@@ -5811,6 +6003,11 @@ class TypeChecker:
                     field_name = None
 
             val_type = self._check_operation(arg.valtype).ztype
+            # Materialise literal-typed args before they bind to a
+            # generic param — see the same pattern in
+            # `_infer_generic_function_call`.
+            if val_type is not None and val_type.is_literal:
+                val_type = self._materialise_literal(val_type, arg.valtype.nodeid)
 
             # infer generic param from field type
             if field_name and field_name in field_to_gparam and val_type:
@@ -5905,6 +6102,15 @@ class TypeChecker:
                     param_name = None
 
             val_type = self._check_operation(arg.valtype).ztype
+            # Materialise literal-typed args before they feed
+            # monomorphization: an `id 5` call should bind T to i64,
+            # not LITERAL_INT, so the cached mono is `id_i64` rather
+            # than `id_literal_int`. Done here (before recording
+            # `val_type` in `checked_value_args`) so the same
+            # concrete type flows into the inference, the mono key,
+            # and the per-arg type check.
+            if val_type is not None and val_type.is_literal:
+                val_type = self._materialise_literal(val_type, arg.valtype.nodeid)
             checked_value_args.append((param_name, val_type, arg))
 
             if param_name and param_name in param_to_gparam and val_type:
@@ -6323,28 +6529,22 @@ class TypeChecker:
         ):
             last = func.body.statements[-1]
             last_type = self.typing.node_type.get(last.nodeid)
+            ret_type = self.func_ctx.return_type
             if last_type is not None and last_type.typetype != ZTypeType.NEVER:
-                if not self._types_compatible(last_type, self.func_ctx.return_type):
-                    # Numeric-literal coercion at the return boundary:
-                    # if the last expression is a compile-time constant
-                    # (bare literal or folded constant expression), try
-                    # to losslessly coerce it to the declared return
-                    # type before treating it as a type mismatch.
-                    coerced = self.typing.node_const_value.get(
-                        last.nodeid
-                    ) is not None and self._coerce_literal(
-                        last, self.func_ctx.return_type, loc=last.start
+                if last_type.is_literal and _is_numeric_type(ret_type):
+                    # Literal return value: route through
+                    # `_coerce_literal` for the range check (the
+                    # post-Wave-2 `_types_compatible` would treat
+                    # literal-vs-any-numeric as structurally
+                    # compatible and bypass the check).
+                    self._coerce_literal(last, ret_type, loc=last.start)
+                elif not self._types_compatible(last_type, ret_type):
+                    self._error(
+                        f"implicit return type '{last_type.name}' does not match "
+                        f"declared return type '{ret_type.name}'",
+                        loc=last.start,
+                        err=ERR.TYPEERROR,
                     )
-                    if (
-                        not coerced
-                        and self.typing.node_const_value.get(last.nodeid) is None
-                    ):
-                        self._error(
-                            f"implicit return type '{last_type.name}' does not match "
-                            f"declared return type '{self.func_ctx.return_type.name}'",
-                            loc=last.start,
-                            err=ERR.TYPEERROR,
-                        )
 
         self.func_ctx.return_type = prev_return_type
         self.func_ctx.func_ownership = prev_func_ownership
@@ -6459,6 +6659,16 @@ class TypeChecker:
     def _check_assignment_inner(self, assign: zast.Assignment) -> None:
         result = self._check_expression(assign.value)
         t = result.ztype
+        # Bind-site materialisation: a name binding (`x: 100`) freezes
+        # the literal type into its concrete default at the point of
+        # binding so the symbol-table variable, the cached unit-level
+        # type (`_resolved`), and the AST-side `node_type` all agree
+        # on a concrete numeric. Without this, a bare-literal RHS
+        # would propagate `LITERAL_INT`/`LITERAL_FLOAT` into long-
+        # lived storage where the post-check late pass cannot reach.
+        if t is not None and t.is_literal:
+            t = self._materialise_literal(t, assign.value.nodeid)
+            result = ZExprResult(t, result.borrow_target, result.private_access)
         self._check_exhaustive_if(assign.value)
         if t and self._check_non_runtime_type(t, "a value", assign.start):
             return
@@ -6590,23 +6800,15 @@ class TypeChecker:
                     self.typing.node_type[existing.typeof_source_nodeid] = new_t
                 self.typing.node_type[reassign.topath.nodeid] = new_t
                 existing = new_t
-        elif existing and new_t and not self._types_compatible(existing, new_t):
-            # Numeric-literal coercion at the reassignment boundary:
-            # if the RHS is a compile-time constant (bare literal or
-            # folded constant expression), try a lossless coercion to
-            # the LHS's existing numeric type before treating it as a
-            # type mismatch.
+        elif existing and new_t:
             value_op = reassign.value.expression
-            coerced = self.typing.node_const_value.get(
-                value_op.nodeid
-            ) is not None and self._coerce_literal(
-                value_op, existing, loc=reassign.start
-            )
-            if coerced:
-                # Keep the Expression wrapper's type in sync so
-                # downstream readers see the coerced type.
-                self.typing.node_type[reassign.value.nodeid] = existing
-            elif self.typing.node_const_value.get(value_op.nodeid) is None:
+            if new_t.is_literal and _is_numeric_type(existing):
+                # Literal RHS: route through `_coerce_literal` for
+                # the range check (`_types_compatible` would consider
+                # them structurally compatible).
+                if self._coerce_literal(value_op, existing, loc=reassign.start):
+                    self.typing.node_type[reassign.value.nodeid] = existing
+            elif not self._types_compatible(existing, new_t):
                 self._error(
                     f"Cannot assign {new_t.name} to variable of type {existing.name}",
                     loc=reassign.start,
@@ -7363,20 +7565,33 @@ class TypeChecker:
             cast(zast.AtomId, path.parent).name
         ):
             child_name = path.child.name
-            pname = cast(zast.AtomId, path.parent).name
+            parent_atom = cast(zast.AtomId, path.parent)
             resolved_child = self._resolve_name(child_name)
             if (
                 resolved_child is not None
                 and resolved_child.typetype != ZTypeType.FUNCTION
             ):
-                _, _, err = parse_number(pname + child_name)
-                if err:
-                    self._error(
-                        f"Invalid numeric cast {pname}.{child_name}: {err}",
-                        loc=path.start,
-                    )
+                # First type-check the parent atom so it carries a
+                # `node_type` (LITERAL_INT/FLOAT) and a
+                # `node_const_value`. Then route the suffix through
+                # `_coerce_literal` so the same diagnostic shape used
+                # at every other typed-location site applies — and
+                # `node_const_value` propagates onto the DottedPath
+                # so a wrapping binop's constant folder can consume
+                # it.
+                self._check_atomid(parent_atom)
+                if not self._coerce_literal(
+                    parent_atom, resolved_child, loc=path.start
+                ):
                     return None
                 self.typing.node_type[path.nodeid] = resolved_child
+                # Propagate const_value from the (now-coerced) parent
+                # atom up to the DottedPath, so e.g. `255.u8 + 1.u8`
+                # has both operands carry their constant for fold +
+                # range-check by `_check_binop_inner`.
+                pcv = self.typing.node_const_value.get(parent_atom.nodeid)
+                if pcv is not None:
+                    self.typing.node_const_value[path.nodeid] = pcv
                 return resolved_child
 
         # regular dotted path resolution
@@ -7564,15 +7779,28 @@ class TypeChecker:
     def _check_atomid(self, atom: zast.AtomId) -> Optional[ZType]:
         name = atom.name
         if _is_numeric_id(name):
-            t = self._resolve_numeric(name, loc=atom.start)
-            if t:
-                self.typing.node_type[atom.nodeid] = t
-                # constant folding: set const_value for integer and f64 literals
-                typename, value, err = parse_number(name)
-                if not err and type(value) is int:
-                    self.typing.node_const_value[atom.nodeid] = value
-                elif not err and type(value) is float and typename == "f64":
-                    self.typing.node_const_value[atom.nodeid] = value
+            has_suffix, base = numeric_literal_form(name)
+            if has_suffix:
+                # Inline-suffix form (`100u8`) was removed in favour
+                # of the dotted form (`100.u8`). Delegate to
+                # `_resolve_numeric` so the diagnostic comes from a
+                # single source — every other user-facing numeric
+                # resolution path also routes through there.
+                return self._resolve_numeric(name, loc=atom.start)
+            # Bare literal: provisional literal type until a typed
+            # location coerces it, or the default-resolution late
+            # pass folds it to its concrete default at end of check.
+            t: ZType = LITERAL_INT if base != "float" else LITERAL_FLOAT
+            self.typing.node_type[atom.nodeid] = t
+            self.typing.node_literal_base[atom.nodeid] = base
+            # Use `parse_literal_value` (not `parse_number`) so the
+            # unbounded Python value flows through even when it would
+            # exceed the default's range. The range check fires at
+            # the coercion boundary, not here — that's the whole
+            # point of literal-typed atoms.
+            value = parse_literal_value(name)
+            if value is not None:
+                self.typing.node_const_value[atom.nodeid] = value
             return t
 
         t = self._resolve_name(name)
@@ -8149,33 +8377,25 @@ class TypeChecker:
                         matched = ptype
                         break
                 if matched:
-                    if not self._types_compatible(arg_type, matched):
+                    # Literal-typed args go through `_coerce_literal`
+                    # FIRST — `_types_compatible` unifies literal-vs-
+                    # any-numeric structurally and would not
+                    # range-check the value. `_coerce_literal` does
+                    # the range check and rewrites node_type on
+                    # success; on failure it emits a literal-aware
+                    # diagnostic and the generic type-mismatch path is
+                    # skipped.
+                    if arg_type.is_literal and _is_numeric_type(matched):
+                        if self._coerce_literal(arg.valtype, matched, loc=arg.start):
+                            arg_type = matched
+                    elif not self._types_compatible(arg_type, matched):
                         # Try implicit protocol projection: if the parameter
                         # expects a protocol/facet and the concrete arg
                         # type conforms, synthesise the wrapper.
                         own = self.typing.child_ownership(callee_type, arg.name)
-                        # Numeric-literal coercion: if the arg carries a
-                        # compile-time const value (bare literal or folded
-                        # constant expression), try a lossless coercion
-                        # to the parameter's numeric type before treating
-                        # it as a type-mismatch.
-                        coerced = self.typing.node_const_value.get(
-                            arg.valtype.nodeid
-                        ) is not None and self._coerce_literal(
-                            arg.valtype, matched, loc=arg.start
-                        )
-                        if coerced:
+                        if self._try_protocol_coerce(arg, arg_type, matched, own):
                             arg_type = matched
-                        elif self._try_protocol_coerce(arg, arg_type, matched, own):
-                            arg_type = matched
-                        elif (
-                            self.typing.node_const_value.get(arg.valtype.nodeid) is None
-                        ):
-                            # Const value absent — no literal coercion was
-                            # attempted. Emit the generic type-mismatch
-                            # diagnostic. (When const_value is present
-                            # `_coerce_literal` already emitted a
-                            # literal-aware diagnostic on failure.)
+                        else:
                             self._error(
                                 f"argument '{arg.name}' type mismatch: expected "
                                 f"{matched.name}, got {arg_type.name}",
@@ -8195,18 +8415,14 @@ class TypeChecker:
             elif arg_type and not arg.name and i < len(params):
                 # positional argument
                 pname, ptype = params[i]
-                if not self._types_compatible(arg_type, ptype):
+                if arg_type.is_literal and _is_numeric_type(ptype):
+                    if self._coerce_literal(arg.valtype, ptype, loc=arg.start):
+                        arg_type = ptype
+                elif not self._types_compatible(arg_type, ptype):
                     own = self.typing.child_ownership(callee_type, pname)
-                    coerced = self.typing.node_const_value.get(
-                        arg.valtype.nodeid
-                    ) is not None and self._coerce_literal(
-                        arg.valtype, ptype, loc=arg.start
-                    )
-                    if coerced:
+                    if self._try_protocol_coerce(arg, arg_type, ptype, own):
                         arg_type = ptype
-                    elif self._try_protocol_coerce(arg, arg_type, ptype, own):
-                        arg_type = ptype
-                    elif self.typing.node_const_value.get(arg.valtype.nodeid) is None:
+                    else:
                         self._error(
                             f"argument type mismatch: expected {ptype.name}, "
                             f"got {arg_type.name}",
@@ -9792,8 +10008,37 @@ class TypeChecker:
         if not lhs_type or not rhs_type:
             return None
 
-        # look up operator as method on lhs type (fall through typedef base)
         op_name = binop.operator.name
+        lhs_lit = lhs_type.is_literal
+        rhs_lit = rhs_type.is_literal
+
+        # Three-case dispatch on operand literality.
+        #
+        # (1) Both operands literal: fold at unbounded Python-int
+        #     (or f64) precision, no range check; result stays
+        #     literal. Comparison ops collapse to bool const_value as
+        #     before. This is the arbitrary-precision arithmetic
+        #     case — `200 + 100 - 250` produces a LITERAL_INT carrying
+        #     `50`, and the coercion at the typed location
+        #     range-checks the final value.
+        # (2) One literal, one concrete numeric: coerce the literal
+        #     to the concrete side's type (range-checked via
+        #     `_coerce_literal`), then dispatch via the concrete-
+        #     concrete path below.
+        # (3) Both concrete: today's behaviour — operator-method
+        #     lookup + range-checked constant fold against the
+        #     result type.
+        if lhs_lit and rhs_lit:
+            return self._fold_two_literals(binop, lhs_type, rhs_type, op_name)
+
+        if lhs_lit and _is_numeric_type(rhs_type):
+            if self._coerce_literal(binop.lhs, rhs_type, loc=binop.start):
+                lhs_type = rhs_type
+        elif rhs_lit and _is_numeric_type(lhs_type):
+            if self._coerce_literal(binop.rhs, lhs_type, loc=binop.start):
+                rhs_type = lhs_type
+
+        # look up operator as method on lhs type (fall through typedef base)
         lookup_type = lhs_type
         if not self.typing.child_of(lookup_type, op_name) and lookup_type.typedef_base:
             lookup_type = lookup_type.typedef_base
@@ -9850,6 +10095,62 @@ class TypeChecker:
         )
         return None
 
+    def _fold_two_literals(
+        self,
+        binop: zast.BinOp,
+        lhs_type: ZType,
+        rhs_type: ZType,
+        op_name: str,
+    ) -> Optional[ZType]:
+        """Wave 2 binop path for two literal operands: fold at
+        unbounded Python-int (or f64) precision with no range check;
+        result stays literal. Comparison operators (`==`, `!=`, `<`,
+        `<=`, `>`, `>=`) collapse to a `bool` const_value typed as
+        the appropriate concrete `bool` ZType — they're not part of
+        the literal-typed pipeline because there is no `bool literal
+        pseudo-type."""
+        lhs_cv = self.typing.node_const_value.get(binop.lhs.nodeid)
+        rhs_cv = self.typing.node_const_value.get(binop.rhs.nodeid)
+        # Decide result kind: LITERAL_FLOAT if either operand is
+        # float-typed, else LITERAL_INT. Comparison ops produce a
+        # bool concrete type.
+        is_comparison = op_name in ("==", "!=", "<", "<=", ">", ">=")
+        if is_comparison:
+            result_t = self._resolve_name("bool") or self.t_null
+        elif lhs_type is LITERAL_FLOAT or rhs_type is LITERAL_FLOAT:
+            result_t = LITERAL_FLOAT
+        else:
+            result_t = LITERAL_INT
+        self.typing.node_type[binop.nodeid] = result_t
+
+        # Fold when both operand const_values are present and of a
+        # numeric type. Division by zero stays a compile-time error.
+        if (
+            lhs_cv is not None
+            and rhs_cv is not None
+            and type(lhs_cv) in (int, float)
+            and type(rhs_cv) in (int, float)
+        ):
+            if op_name == "/" and rhs_cv == 0:
+                self._error(
+                    "division by zero in constant expression",
+                    loc=binop.start,
+                )
+                return result_t
+            folded = self._fold_binop(op_name, lhs_cv, rhs_cv)  # type: ignore[arg-type]
+            if folded is not None and type(folded) in (int, float, bool):
+                self.typing.node_const_value[binop.nodeid] = cast(
+                    "int | float | bool", folded
+                )
+        # Propagate node_literal_base from the lhs (or fall back to
+        # `"dec"` if absent). The default-resolution late pass uses
+        # this when the result escapes typecheck without coercion.
+        if not is_comparison:
+            self.typing.node_literal_base[binop.nodeid] = (
+                self.typing.node_literal_base.get(binop.lhs.nodeid, "dec")
+            )
+        return result_t
+
     def _extract_error_message(self, node: zast.Node) -> str:
         """Extract the string literal from an error() call's first argument.
 
@@ -9902,6 +10203,65 @@ class TypeChecker:
         if last.nodetype == NodeType.ASSIGNMENT:
             return self.typing.node_type.get(cast(zast.Assignment, last).nodeid)
         return None
+
+    def _last_statement_value_nodeid(self, stmt: zast.Statement) -> Optional[int]:
+        """Companion to `_last_statement_type`: returns the nodeid of
+        the value-producing node (the inner expression of an
+        Expression wrapper, or the Assignment itself). Used by
+        branch-unification sites that need to coerce a literal-typed
+        branch's value to a concrete sibling's type."""
+        if not stmt.statements:
+            return None
+        last = stmt.statements[-1].statementline
+        if last.nodetype == NodeType.EXPRESSION:
+            inner = cast(zast.Expression, last).expression
+            if self.typing.node_type.get(inner.nodeid) is not None:
+                return inner.nodeid
+            return last.nodeid
+        if last.nodetype == NodeType.ASSIGNMENT:
+            return last.nodeid
+        return None
+
+    def _unify_literal_branches(
+        self,
+        types: List[Optional[ZType]],
+        value_nodeids: List[Optional[int]],
+        loc: Optional[Token],
+    ) -> List[Optional[ZType]]:
+        """Branch-unification helper: when a multi-arm construct
+        (if-expression, match-expression) has at least one concrete
+        numeric branch and at least one literal-typed sibling, coerce
+        each literal sibling to the concrete type via
+        `_coerce_literal_by_id`. Returns the updated branch types so
+        the caller can re-run its compatibility check uniformly.
+
+        If no concrete numeric branch exists, falls back to
+        materialising each literal to its concrete default (i64 / f64)
+        so all branches share a concrete type."""
+        concrete: List[ZType] = [
+            t
+            for t in types
+            if t is not None and not t.is_literal and _is_numeric_type(t)
+        ]
+        # Pick a coercion target: the first concrete numeric, or fall
+        # back to each literal's default if none.
+        target: Optional[ZType] = concrete[0] if concrete else None
+        out: List[Optional[ZType]] = []
+        for t, nid in zip(types, value_nodeids):
+            if t is None or not t.is_literal:
+                out.append(t)
+                continue
+            if target is not None and nid is not None:
+                if self._coerce_literal_by_id(nid, target, loc=loc):
+                    out.append(target)
+                    continue
+            # No concrete target available, or coercion failed:
+            # materialise to the literal's own default.
+            if nid is not None:
+                out.append(self._materialise_literal(t, nid))
+            else:
+                out.append(self._materialise_literal(t))
+        return out
 
     def _check_exhaustive_if(self, expr: zast.Expression) -> None:
         """Emit error if an if-expression is missing its else clause."""
@@ -9992,9 +10352,25 @@ class TypeChecker:
         # if-as-expression: compute branch types when else clause is present
         if ifnode.elseclause:
             branch_types = []
+            branch_value_nodeids: List[Optional[int]] = []
             for clause in ifnode.clauses:
                 branch_types.append(self._last_statement_type(clause.statement))
+                branch_value_nodeids.append(
+                    self._last_statement_value_nodeid(clause.statement)
+                )
             branch_types.append(self._last_statement_type(ifnode.elseclause))
+            branch_value_nodeids.append(
+                self._last_statement_value_nodeid(ifnode.elseclause)
+            )
+
+            # Literal-aware branch unification: coerce literal
+            # branches to a concrete sibling's type before the
+            # compatibility check below — `if n > 0 then n else 0`
+            # (n: i64) needs the `0` literal coerced to i64.
+            if any(t is not None and t.is_literal for t in branch_types):
+                branch_types = self._unify_literal_branches(
+                    branch_types, branch_value_nodeids, loc=ifnode.start
+                )
 
             # filter out non-completing branches (return/break/continue)
             completing = [
@@ -10179,6 +10555,11 @@ class TypeChecker:
         inner_type = inner_result.ztype
         if not inner_type:
             return None
+        # Box from a literal-typed value: materialise to the concrete
+        # default so the monomorphized box is keyed on `i64` / `f64`,
+        # not on `literal_int` / `literal_float`.
+        if inner_type.is_literal:
+            inner_type = self._materialise_literal(inner_type, from_arg.valtype.nodeid)
 
         # Boxing transfers ownership of the source into the box. The
         # box-construction dispatch bypasses the standard call-ownership
@@ -10770,8 +11151,22 @@ class TypeChecker:
         branch_types = [
             self._last_statement_type(clause.statement) for clause in casenode.clauses
         ]
+        branch_value_nodeids: List[Optional[int]] = [
+            self._last_statement_value_nodeid(clause.statement)
+            for clause in casenode.clauses
+        ]
         if casenode.elseclause:
             branch_types.append(self._last_statement_type(casenode.elseclause))
+            branch_value_nodeids.append(
+                self._last_statement_value_nodeid(casenode.elseclause)
+            )
+        # Literal-aware branch unification (same as if-expression):
+        # coerce literal-typed branches to a concrete sibling's type
+        # before the compatibility check below.
+        if any(t is not None and t.is_literal for t in branch_types):
+            branch_types = self._unify_literal_branches(
+                branch_types, branch_value_nodeids, loc=casenode.start
+            )
         completing = [
             t for t in branch_types if t is None or t.typetype != ZTypeType.NEVER
         ]
@@ -11157,6 +11552,12 @@ def typecheck(program: zast.Program, full: bool = False) -> ztyping.ZTyping:
     """
     tc = TypeChecker(program)
     errors = tc.check(full=full)
+    # Default-resolution late pass: fold any leftover LITERAL_INT /
+    # LITERAL_FLOAT entries in `node_type` to their concrete defaults
+    # (i64 / u64 / f64) before the emitter sees the typing. Runs
+    # after `check()` so any errors it raises join the post-check
+    # error list.
+    tc._resolve_literal_defaults()
     tc.typing.errors = errors
     tc.typing.is_error = bool(errors)
     tc.typing.mono_types = tc.mono.types

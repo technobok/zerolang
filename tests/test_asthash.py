@@ -79,7 +79,7 @@ class TestAstHash:
         program, typing = parse_and_check(
             "f1: function {x: i64} out i64 is { return x }\n"
             "f2: function {x: i32} out i32 is { return x }\n"
-            "main: function is { f1 1\n f2 1i32 }"
+            "main: function is { f1 1\n f2 1.i32 }"
         )
         unit = program.units["test"]
         h1 = zasthash.hash_function(unit.body["f1"], _node_types(typing))

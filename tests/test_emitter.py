@@ -5189,7 +5189,7 @@ class TestCodeDeduplication:
             "}\n"
             "main: function is {\n"
             "    a: (MyCls t: i64) val: 1\n"
-            "    b: (MyCls t: i32) val: 2i32\n"
+            "    b: (MyCls t: i32) val: 2.i32\n"
             '    print "ok"\n'
             "}"
         )

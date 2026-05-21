@@ -448,29 +448,62 @@ For reftypes, <code>.borrow</code> means a reference (source not invalidated).
 pass-by-value so identity-based locking is meaningless. Generic type
 parameters are exempt because they may monomorphize to a reftype.</p>
 <h3 id="numeric-literal-coercion"><a href="#numeric-literal-coercion">7.6. Numeric Literal Coercion</a></h3>
-<p>Bare numeric literals (and constant expressions folded from them) coerce
-losslessly to a concrete numeric target at typed-location boundaries
-through the single helper <code>TypeChecker._coerce_literal</code> in
-<code>src/ztypecheck.py</code>. The helper reads <code>node_const_value</code> for the
-candidate node, applies the rule appropriate to the source/target
-combination (int&#x2192;int range check via <code>NUMERIC_RANGES</code>; int&#x2192;float exact
-mantissa via <code>int_fits_float</code>; float&#x2192;float round-trip via
-<code>float_fits_float</code>; float&#x2192;int rejected outright), and on success
-rewrites <code>node_type</code> on the value node to the target. Callers gate the
-coercion attempt on the value having a <code>node_const_value</code> and the
-target being a numeric type; when present, an out-of-range value yields
-a literal-aware diagnostic and the caller suppresses its generic
-type-mismatch error.</p>
-<p>Wired sites: call arguments (<code>_check_call_arguments</code>), function
-implicit return (<code>_check_function_body_inner</code>), reassignment RHS
-(<code>_check_reassignment_inner</code>), and match-arm numeric patterns
-(<code>_check_case_inner</code>). The forward-looking <code>LITERAL_INT</code> /
-<code>LITERAL_FLOAT</code> singletons and the <code>node_literal_base</code> table on
-<code>ZTyping</code> are reserved for a later wave that lifts intermediate
-constant arithmetic into true arbitrary precision; today the existing
-folder still range-checks intermediate values against the natural
-result type, so a constant expression that exceeds the source type's
-range fails at the fold site rather than the coercion site.</p>
+<p>Bare numeric literals are typed as one of two compiler-internal
+singletons during typecheck: <code>LITERAL_INT</code> or <code>LITERAL_FLOAT</code>
+(both flagged <code>is_literal=True</code> on <code>ZType</code>). Constant expressions
+built from them stay literal-typed too &#x2014; the binop folder operates at
+unbounded Python-int precision when both operands are literal, with no
+intermediate range check. A LITERAL_INT only becomes a concrete numeric
+when one of the following fires:</p>
+<ul>
+<li><em><strong>Typed-location coercion</strong></em> via <code>_coerce_literal</code> /
+<code>_coerce_literal_by_id</code> in <code>src/ztypecheck.py</code>. The helper reads
+<code>node_const_value</code>, applies the rule appropriate to the
+source/target combination (int&#x2192;int range check via
+<code>NUMERIC_RANGES</code>; int&#x2192;float exact mantissa via
+<code>int_fits_float</code>; float&#x2192;float round-trip via
+<code>float_fits_float</code>; float&#x2192;int rejected outright), and on
+success rewrites <code>node_type</code> to the target. Wired sites: call
+arguments (<code>_check_call_arguments</code>), function implicit return
+(<code>_check_function_body_inner</code>), reassignment RHS
+(<code>_check_reassignment_inner</code>), match-arm numeric patterns
+(<code>_check_case_inner</code>), if-/match-expression branch unification
+via <code>_unify_literal_branches</code>.</li>
+<li><em><strong>Bind-site materialisation</strong></em> via <code>_materialise_literal</code>.
+Called from <code>_check_assignment_inner</code> and
+<code>_resolve_unit_name</code> so a literal-typed RHS never escapes into
+long-lived storage (<code>ZVariable.ztype</code>,
+<code>TypeChecker._resolved</code>). Also wired into generic-arg
+inference (<code>_infer_generic_function_call</code>,
+<code>_infer_generic_record_construction</code>,
+<code>_infer_generic_union_construction</code>,
+<code>_check_box_construction</code>) so the monomorphization key is keyed
+on the concrete default (e.g. <code>id_i64</code>, not
+<code>id_literal_int</code>).</li>
+<li><em><strong>Default-resolution late pass</strong></em> <code>_resolve_literal_defaults</code>,
+invoked from the module-level <code>typecheck()</code> entry point after
+<code>check()</code> returns. Walks <code>Typing.node_type</code> and blindly
+replaces any remaining literal-typed entry with its concrete
+default (<code>i64</code> for <code>LITERAL_INT</code>, <code>f64</code> for
+<code>LITERAL_FLOAT</code>). No range check fires here &#x2014; that is the
+coercion sites' job. Guarantees the emitter never sees a literal
+pseudo-type.</li>
+</ul>
+<p>Method dispatch on literal-typed receivers (e.g. <code>5.iterate</code>)
+follows the existing <code>typedef_base</code> walk. <code>_link_literal_typedefs</code>
+runs at the start of <code>check()</code> and points
+<code>LITERAL_INT.typedef_base = &lt;i64&gt;</code> and
+<code>LITERAL_FLOAT.typedef_base = &lt;f64&gt;</code>, so the operator-method lookup
+in <code>_check_binop_inner</code> and child-name lookups elsewhere resolve
+through the concrete type without per-site <code>is_literal</code> guards.</p>
+<p><code>_types_compatible</code> treats literal-vs-concrete-numeric as
+structurally compatible so multi-arm constructs unify cleanly; the
+range check happens at the typed-location coercion sites, not in the
+compat check.</p>
+<p>Three pre-existing typechecker gaps cover the remaining sites the
+original design called out &#x2014; record/class field-init type validation,
+data-block element type unification, and separable parameter defaults
+&#x2014; and are tracked separately from this work.</p>
 <h3 id="type-narrowing"><a href="#type-narrowing">7.7. Type Narrowing</a></h3>
 <p>Type narrowing for union and variant types is tracked through scope-based
 overlay entries. When a match arm narrows a variable to a specific subtype,

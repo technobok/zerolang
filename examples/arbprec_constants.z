@@ -8,6 +8,12 @@
 # with a literal-aware diagnostic ("literal value 300 cannot be
 # losslessly stored in u8 (range 0..255)") — no runtime overflow.
 #
+# Constant arithmetic folds at unbounded Python-int precision, so
+# intermediate values are NOT range-checked against any concrete
+# numeric type — only the final value is checked at the coercion
+# boundary. So an expression whose intermediate would overflow even
+# u64 still works if the final fits the destination.
+#
 # Explicit suffixes still work; they remain the user-facing escape
 # hatch when the surrounding context does not pin the type.
 
@@ -16,10 +22,14 @@ push_byte: function {b: u8} is {
     # Body is a no-op — the call sites below are the point.
 }
 
+# Call-arg coercion: u64 parameter accepts an arbitrarily wide
+# intermediate.
+push_u64: function {x: u64} is { }
+
 # Function-return coercion: the body `200 + 100 - 250` folds to 50
-# (which fits u8) — the i64 intermediate 300 does not block the
-# coercion because the final value is range-checked at the return
-# boundary, not in the middle of the expression.
+# (which fits u8) — the intermediate 300 does not block the coercion
+# because the final value is range-checked at the return boundary,
+# not in the middle of the expression.
 small_value: function out u8 is { 200 + 100 - 250 }
 
 main: function is {
@@ -32,9 +42,18 @@ main: function is {
     # Call-arg coercion: constant expression folds and fits.
     push_byte b: 50 + 25 + 25
 
-    # Call-arg coercion: arithmetic where i64 intermediate exceeds
+    # Call-arg coercion: arithmetic where the intermediate exceeds
     # u8 but the final value fits.
     push_byte b: 200 + 100 - 250
+
+    # Arbitrary-precision intermediate: `0xff...ff + 1` is `2^64`,
+    # which doesn't fit any concrete integer type — but the
+    # subsequent `- 1` brings it back to `u64::MAX`, which the call-
+    # arg coercion accepts as u64. With Wave 1 (concrete-typed
+    # operands) the binop folder would have rejected the
+    # intermediate; Wave 2 keeps the intermediate at unbounded
+    # precision.
+    push_u64 x: 0xffffffffffffffff + 1 - 1
 
     # Reassignment coercion: bare literal coerces to a's u8 type.
     a: 10.u8
