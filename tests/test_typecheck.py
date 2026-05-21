@@ -12441,3 +12441,113 @@ class TestLiteralCoercion:
                 break
         else:
             raise AssertionError("did not find x assignment")
+
+
+class TestConstructionFieldCoercion:
+    """Record / class field-init type validation. Wire-through tests
+    for the bare-name construction shape re-routed through
+    `<Type>.create`; see Phase A of the gap-closure plan."""
+
+    # ---- Record bare-name construction ----
+
+    def test_record_field_literal_fits(self):
+        check_ok("Foo: record { count: u8 }\nmain: function is { f: Foo count: 100 }")
+
+    def test_record_field_literal_arithmetic_fits(self):
+        check_ok(
+            "Foo: record { count: u8 }\n"
+            "main: function is { f: Foo count: 200 + 100 - 250 }"
+        )
+
+    def test_record_field_literal_out_of_range_errors(self):
+        errors = check_errors(
+            "Foo: record { count: u8 }\nmain: function is { f: Foo count: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_record_field_string_into_u8_errors(self):
+        """Wrong concrete type — `count: u8` cannot accept a String."""
+        errors = check_errors(
+            'Foo: record { count: u8 }\nmain: function is { f: Foo count: "hello" }'
+        )
+        assert any(
+            "type mismatch" in e.msg or "argument" in e.msg.lower() for e in errors
+        ), [e.msg for e in errors]
+
+    # ---- User-defined create — same dispatch path ----
+
+    def test_record_user_defined_create_field_coerces(self):
+        check_ok(
+            "Foo: record { count: u8 } as {\n"
+            "  create: function {count: u8} out this is "
+            "{ return meta.create :count }\n"
+            "}\n"
+            "main: function is { f: Foo count: 100 }"
+        )
+
+    def test_record_user_defined_create_out_of_range_errors(self):
+        errors = check_errors(
+            "Foo: record { count: u8 } as {\n"
+            "  create: function {count: u8} out this is "
+            "{ return meta.create :count }\n"
+            "}\n"
+            "main: function is { f: Foo count: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    # ---- Field default regression ----
+
+    def test_record_field_default_not_spuriously_flagged(self):
+        """A field with a default value still satisfies missing-args
+        and isn't spuriously flagged by the new field-type check."""
+        check_ok(
+            "Foo: record { count: 10.u8 b: u8 }\nmain: function is { f: Foo b: 20 }"
+        )
+
+    # ---- Dotted `.create` form still works ----
+
+    def test_record_dotted_create_still_works(self):
+        check_ok(
+            "Foo: record { count: u8 } as {\n"
+            "  create: function {count: u8} out this is "
+            "{ return meta.create :count }\n"
+            "}\n"
+            "main: function is { f: Foo.create count: 100 }"
+        )
+
+
+class TestDataBlockElementTypeUnification:
+    """Data-block elements must share a common type. The first
+    element sets the type; subsequent elements must match (or fit,
+    for numeric literals). Data definitions are resolved on demand,
+    so each fixture references its `data` from `main` to trigger
+    resolution."""
+
+    def test_data_all_bare_i64(self):
+        check_ok("primes: data { 2 3 5 7 11 }\nmain: function is { x: primes }")
+
+    def test_data_dotted_first_subsequent_bare_fit(self):
+        """`data { 1.u8 2 3 }` — first element is u8; subsequent
+        bare literals fit u8 and are accepted."""
+        check_ok("bytes: data { 1.u8 2 3 }\nmain: function is { x: bytes }")
+
+    def test_data_mixed_int_and_float_errors(self):
+        errors = check_errors("mixed: data { 1 2.5 3 }\nmain: function is { x: mixed }")
+        assert any("data element type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_data_subsequent_does_not_fit_first_errors(self):
+        """`data { 1.u8 1000 }` — `1000` doesn't fit u8."""
+        errors = check_errors(
+            "bytes: data { 1.u8 1000 }\nmain: function is { x: bytes }"
+        )
+        assert any("data element type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]

@@ -2545,6 +2545,13 @@ class TypeChecker:
         Children are keyed by element name (text label or ordinal identifier).
         Each child ZType's name stores the literal value (e.g. "10", "0")
         and its type is the resolved numeric type (stored as parent).
+
+        First-element-sets-type rule: subsequent elements must share
+        a type with the first. For numeric literals, a bare element
+        whose value fits the first element's concrete numeric type
+        is accepted (e.g. `data { 1.u8 2 3 }` — `2` and `3` fit
+        u8). Mismatches emit a diagnostic naming the expected vs.
+        actual element type.
         """
         key = f"{unitname}.{name}"
         dtype = _make_type(name, ZTypeType.DATA)
@@ -2569,10 +2576,34 @@ class TypeChecker:
                 NodeType.LABELVALUE,
             ) and _is_numeric_id(cast(zast.AtomId, item.valtype).name):
                 item_valtype_atom = cast(zast.AtomId, item.valtype)
+                item_type = self._resolve_numeric(
+                    item_valtype_atom.name, loc=item_valtype_atom.start
+                )
                 if element_type is None:
-                    element_type = self._resolve_numeric(
-                        item_valtype_atom.name, loc=item_valtype_atom.start
-                    )
+                    element_type = item_type
+                elif item_type is not None and not self._types_compatible(
+                    element_type, item_type
+                ):
+                    # Element-type unification: if both are numeric and
+                    # the literal value fits the first element's range,
+                    # accept it (e.g. `data { 1.u8 2 3 }` — `2`/`3`
+                    # default to i64 here but their values fit u8).
+                    # Otherwise emit a mismatch diagnostic.
+                    coerces = False
+                    if _is_numeric_type(element_type) and _is_numeric_type(item_type):
+                        _, val_check, err_check = parse_number(item_valtype_atom.name)
+                        if not err_check and type(val_check) is int:
+                            lo_hi = NUMERIC_RANGES.get(element_type.name)
+                            if lo_hi is not None:
+                                lo, hi = lo_hi
+                                if lo <= val_check <= hi:
+                                    coerces = True
+                    if not coerces:
+                        self._error(
+                            f"data element type mismatch: expected "
+                            f"'{element_type.name}', got '{item_type.name}'",
+                            loc=item_valtype_atom.start,
+                        )
                 # parse the actual numeric value for storage
                 _, val, err = parse_number(item_valtype_atom.name)
                 if not err:
@@ -2589,6 +2620,14 @@ class TypeChecker:
             ):
                 et = self._resolve_typeref(cast(zast.Path, item.valtype))
                 if et:
+                    if element_type is None:
+                        element_type = et
+                    elif not self._types_compatible(element_type, et):
+                        self._error(
+                            f"data element type mismatch: expected "
+                            f"'{element_type.name}', got '{et.name}'",
+                            loc=item.valtype.start,
+                        )
                     self._set_child(dtype, ename, et)
 
         # Store element type for later use
@@ -8155,6 +8194,11 @@ class TypeChecker:
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             if callee_type.isgeneric:
+                # TODO: re-route generic record construction through
+                # `.create` like the non-generic branch below. The
+                # explicit-generic-arg form (`MyList t: i64`) needs
+                # the args filtered before the standard call pipeline
+                # would accept them — handle in a follow-up.
                 mono_type = self._infer_generic_record_construction(callee_type, call)
                 if mono_type:
                     self.typing.node_type[call.nodeid] = mono_type
@@ -8170,13 +8214,76 @@ class TypeChecker:
                     self._reject_borrow_escape_into_record(call)
                     return True, mono_type, callee_type
                 return True, None, callee_type
-            for arg in call.arguments:
-                self._check_operation(arg.valtype)
+            # Non-generic record: re-route bare-name `Foo count: 5`
+            # through the standard call pipeline by swapping
+            # callee_type to the `create` function and falling
+            # through. The standard pipeline type-checks args /
+            # applies TAKE / installs locks via
+            # `_check_call_arguments`. Construction-specific checks
+            # (`_reject_borrow_escape_into_record`) run HERE,
+            # before the fall-through: they need the original un-
+            # hoisted arg shapes (the standard pipeline's per-arg
+            # hoist replaces a `.lock` projection with a synth
+            # temp that carries a `borrow_origin`, which the
+            # escape check would mis-interpret).
+            #
+            # Primitive numeric records (`u8`, `i64`, `f64`, etc.)
+            # and collection natives (`str`, `array`, `list`, `map`,
+            # `set`) are compiler-managed: their `create` children
+            # are operator method tables, not user-facing
+            # constructors. Routing through them produces nonsense
+            # args like "expected u8.+". Preserve today's bare-name
+            # behaviour for those — type-check each arg expression
+            # but skip the missing-args / type-match work.
+            if (
+                callee_type.is_native
+                or _is_primitive_name(callee_type.name)
+                or _is_str_type(callee_type)
+                or _is_array_type(callee_type)
+                or _is_list_type(callee_type)
+                or _is_map_type(callee_type)
+                or _is_set_type(callee_type)
+            ):
+                for arg in call.arguments:
+                    self._check_operation(arg.valtype)
+                self.typing.node_type[call.nodeid] = callee_type
+                self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
+                return True, callee_type, callee_type
+            create_type = self.typing.child_of(callee_type, "create")
+            # Fallback to the existing per-arg-loop path when:
+            # - no create function exists; OR
+            # - the create function still has generic-param-typed
+            #   params (the mono's `create` child today is shared
+            #   with the generic template, with params referencing
+            #   unresolved generic params); OR
+            # - this is a monomorphization (`generic_origin` set):
+            #   the shared create's `return_type` points at the
+            #   template, not the mono — the standard pipeline's
+            #   `_finalize_call` would then set node_type to the
+            #   template and the assignment would bind to the
+            #   wrong type.
+            create_has_generic_param = create_type is not None and any(
+                ptype.typetype == ZTypeType.GENERIC_PARAM
+                for _, ptype in self.typing.children_of(create_type)
+            )
+            if (
+                create_type is None
+                or create_type.typetype != ZTypeType.FUNCTION
+                or create_has_generic_param
+                or callee_type.generic_origin is not None
+            ):
+                for arg in call.arguments:
+                    self._check_operation(arg.valtype)
+                self.typing.node_type[call.nodeid] = callee_type
+                self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
+                self._check_missing_create_args(callee_type, call)
+                self._reject_borrow_escape_into_record(call)
+                return True, callee_type, callee_type
             self.typing.node_type[call.nodeid] = callee_type
+            self.typing.node_type[call.callable.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
-            self._check_missing_create_args(callee_type, call)
             self._reject_borrow_escape_into_record(call)
-            return True, callee_type, callee_type
+            return False, None, create_type
 
         # handle box construction: box from: val (system box only — empty class body)
         if (
@@ -8189,6 +8296,14 @@ class TypeChecker:
             return True, self._check_box_construction(call, callee_type), callee_type
 
         # handle class construction: calling a class type creates a new owned instance
+        # TODO: re-route bare-name class construction through
+        # `.create` like the non-generic record branch above, so the
+        # standard call pipeline type-checks args against field
+        # types. Class construction has tightly-coupled lock-transfer
+        # / aggregate-lock-escape concerns that need careful
+        # synth-temp-awareness in `_check_aggregate_lock_escape`
+        # before this can land cleanly. Until then, class field-init
+        # values are not type-checked at the bare-name shape.
         if callee_type.typetype == ZTypeType.CLASS:
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
@@ -8344,10 +8459,13 @@ class TypeChecker:
             # reftype aliasing check — runs against the ORIGINAL arg
             # expression so that two args derived from the same
             # reftype source are caught even after hoisting renames
-            # them.
+            # them. Skip when the arg's root name resolves to a type
+            # (not a variable) — `Pair a: Inner b: Inner` constructs
+            # two fresh Inner instances; the repeated `Inner` token
+            # is a type reference, not an aliased variable.
             if arg_type and not _is_valtype(arg_type):
                 arg_name = self._get_arg_root_name(arg.valtype)
-                if arg_name:
+                if arg_name and self.symtab.lookup_var(arg_name) is not None:
                     if arg_name in reftype_args:
                         self._error(
                             f"reftype aliasing: '{arg_name}' passed as multiple "
@@ -8487,9 +8605,22 @@ class TypeChecker:
     ) -> None:
         """Emit errors for required parameters (no default) that
         weren't provided. Receiver-bound params (when calling a method
-        via dotted-path) count as provided implicitly."""
+        via dotted-path) count as provided implicitly.
+
+        Construction calls (`call_kind` is one of the `*_CREATE`
+        flavours) skip FUNCTION-typed params: bodied-method fields
+        on a record/class are auto-bound by the compiler at
+        construction, not user-supplied. Mirrors the data-params
+        filter in `_check_missing_create_args` (the legacy
+        construction-specific check this path replaces)."""
         if not params:
             return
+        kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+        is_construction = kind in (
+            zast.CallKind.RECORD_CREATE,
+            zast.CallKind.CLASS_CREATE,
+            zast.CallKind.UNION_CREATE,
+        )
         provided: set = set()
         for i, arg in enumerate(call.arguments):
             if arg.name:
@@ -8505,6 +8636,8 @@ class TypeChecker:
         ):
             provided.add(callee_type.this_param_name)
         for pname, ptype in params:
+            if is_construction and ptype.typetype == ZTypeType.FUNCTION:
+                continue
             if pname not in provided and not self.typing.has_child_default(
                 callee_type, pname
             ):
