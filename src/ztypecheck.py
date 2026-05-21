@@ -6,7 +6,7 @@ Includes ownership and lock checking.
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional, List, Tuple, cast
+from typing import Callable, Optional, List, Tuple, cast
 
 import zast
 import ztyping
@@ -6065,10 +6065,9 @@ class TypeChecker:
             val_type = self._check_operation(arg.valtype).ztype
             # Materialise literal-typed args only when the field
             # binds a generic param — non-generic-bound fields are
-            # type-checked downstream by
-            # `_check_construction_field_types` against the
-            # declared field type, which can range-check the
-            # literal directly. Materialising every literal would
+            # type-checked downstream by `_check_call_arguments`
+            # against the declared field type, which can range-check
+            # the literal directly. Materialising every literal would
             # pin a `200` arg to `i64` even when the target field
             # is `u8`, defeating the field-side coercion.
             binds_gparam = field_name is not None and field_name in field_to_gparam
@@ -8245,15 +8244,10 @@ class TypeChecker:
                     # without value-arg processing.
                     return True, mono_type, callee_type
                 mono_create = self.typing.child_of(mono_type, "create")
-                if mono_create is None or mono_create.typetype != ZTypeType.FUNCTION:
-                    self._check_missing_create_args(mono_type, call)
-                    self._check_construction_field_types(
-                        mono_type,
-                        call,
-                        generic_param_names=callee_type.generic_params.keys(),
-                    )
-                    self._reject_borrow_escape_into_record(call)
-                    return True, mono_type, callee_type
+                assert (
+                    mono_create is not None
+                    and mono_create.typetype == ZTypeType.FUNCTION
+                ), f"record mono {mono_type.name} missing 'create' constructor"
                 self.typing.call_generic_param_names[call.nodeid] = set(
                     callee_type.generic_params.keys()
                 )
@@ -8295,29 +8289,21 @@ class TypeChecker:
                 self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
                 return True, callee_type, callee_type
             create_type = self.typing.child_of(callee_type, "create")
-            # Fallback to the existing per-arg-loop path when:
-            # - no create function exists; OR
-            # - the create function still has generic-param-typed
-            #   params (the per-mono create substitution covers the
-            #   typical generic-record case; this guard catches any
-            #   residual partially-monomorphised template state).
-            create_has_generic_param = create_type is not None and any(
+            if create_type is None or create_type.typetype != ZTypeType.FUNCTION:
+                self._error(
+                    f"record '{callee_type.name}' has no 'create' constructor",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+                return True, None, callee_type
+            # Per-mono `create` substitution (`bb5e670`) guarantees the
+            # mono's create children carry concrete types; a generic-
+            # param-typed param surviving here would indicate a
+            # broken intermediate state.
+            assert not any(
                 ptype.typetype == ZTypeType.GENERIC_PARAM
                 for _, ptype in self.typing.children_of(create_type)
-            )
-            if (
-                create_type is None
-                or create_type.typetype != ZTypeType.FUNCTION
-                or create_has_generic_param
-            ):
-                for arg in call.arguments:
-                    self._check_operation(arg.valtype)
-                self.typing.node_type[call.nodeid] = callee_type
-                self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
-                self._check_missing_create_args(callee_type, call)
-                self._check_construction_field_types(callee_type, call)
-                self._reject_borrow_escape_into_record(call)
-                return True, callee_type, callee_type
+            ), f"unexpected GENERIC_PARAM in {callee_type.name}.create"
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.node_type[call.callable.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
@@ -8355,20 +8341,10 @@ class TypeChecker:
                 if not has_value_args:
                     return True, mono_type, callee_type
                 mono_create = self.typing.child_of(mono_type, "create")
-                if mono_create is None or mono_create.typetype != ZTypeType.FUNCTION:
-                    # Defensive: a class mono without a create child
-                    # shouldn't happen post-`_setup_mono_meta_create`,
-                    # but if it does, fall back to bespoke handling
-                    # against the mono.
-                    self._check_missing_create_args(mono_type, call)
-                    self._check_construction_field_types(
-                        mono_type,
-                        call,
-                        generic_param_names=callee_type.generic_params.keys(),
-                    )
-                    self._check_aggregate_lock_escape(call, mono_type)
-                    self._transfer_class_construction_locks(call, mono_type)
-                    return True, mono_type, callee_type
+                assert (
+                    mono_create is not None
+                    and mono_create.typetype == ZTypeType.FUNCTION
+                ), f"class mono {mono_type.name} missing 'create' constructor"
                 # Stash generic-arg names so `_check_call_arguments`
                 # and `_check_missing_call_args` skip the type-arg
                 # specifiers when matching against the create
@@ -8383,39 +8359,48 @@ class TypeChecker:
             # through. The standard pipeline type-checks args /
             # applies TAKE / installs locks via
             # `_check_call_arguments`, and `_finalize_call` does the
-            # LOCK-param transfer that the legacy
-            # `_transfer_class_construction_locks` helper used to do.
-            # `_check_call_arguments` runs the construction-specific
-            # aggregate-lock-escape check inline per arg (for
-            # CLASS_CREATE call_kind) between `_check_operation` and
-            # `_hoist_arg`, so the check sees un-hoisted dotted-path
-            # structure (Case 1) and the original root variable's
-            # `borrow_origin` (Case 2).
+            # LOCK-param transfer.  `_check_call_arguments` runs the
+            # construction-specific aggregate-lock-escape check
+            # inline per arg (for CLASS_CREATE call_kind) between
+            # `_check_operation` and `_hoist_arg`, so the check sees
+            # un-hoisted dotted-path structure (Case 1) and the
+            # original root variable's `borrow_origin` (Case 2).
             #
             # Typedef-wrapper class `.borrow` shapes
             # (`ByteView.borrow from: src`) no longer reach this
             # branch — `_resolve_dotted_path` now returns the synth
             # `.borrow` FUNCTION child so the typedef-borrow branch
             # in `_dispatch_call_construction` picks them up.
-            create_type = self.typing.child_of(callee_type, "create")
-            create_has_generic_param = create_type is not None and any(
-                ptype.typetype == ZTypeType.GENERIC_PARAM
-                for _, ptype in self.typing.children_of(create_type)
-            )
+            #
+            # Native / compiler-managed collection class monos
+            # (`list`, `map`, `set` and their concrete monos like
+            # `List_i64`) don't have user-facing `create`
+            # constructors — their construction goes through paren-
+            # mono / collection-literal paths in the emitter. Type-
+            # check each arg expression but skip the re-route.
             if (
-                create_type is None
-                or create_type.typetype != ZTypeType.FUNCTION
-                or create_has_generic_param
+                callee_type.is_native
+                or _is_list_type(callee_type)
+                or _is_map_type(callee_type)
+                or _is_set_type(callee_type)
             ):
                 for arg in call.arguments:
                     self._check_operation(arg.valtype)
                 self.typing.node_type[call.nodeid] = callee_type
                 self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
-                self._check_missing_create_args(callee_type, call)
-                self._check_construction_field_types(callee_type, call)
-                self._check_aggregate_lock_escape(call, callee_type)
-                self._transfer_class_construction_locks(call, callee_type)
                 return True, callee_type, callee_type
+            create_type = self.typing.child_of(callee_type, "create")
+            if create_type is None or create_type.typetype != ZTypeType.FUNCTION:
+                self._error(
+                    f"class '{callee_type.name}' has no 'create' constructor",
+                    loc=call.start,
+                    err=ERR.CALLERROR,
+                )
+                return True, None, callee_type
+            assert not any(
+                ptype.typetype == ZTypeType.GENERIC_PARAM
+                for _, ptype in self.typing.children_of(create_type)
+            ), f"unexpected GENERIC_PARAM in {callee_type.name}.create"
             self.typing.node_type[call.nodeid] = callee_type
             self.typing.node_type[call.callable.nodeid] = callee_type
             self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
@@ -8895,96 +8880,6 @@ class TypeChecker:
                     loc=call.start,
                     err=ERR.CALLERROR,
                 )
-
-    def _check_construction_field_types(
-        self,
-        type_def: ZType,
-        call: zast.Call,
-        generic_param_names: Iterable[str] = (),
-    ) -> None:
-        """Validate that each argument in bare-name construction matches
-        the declared field type on the type's `create` child. Mirrors
-        the literal-coercion + protocol-projection chain used in
-        `_check_call_arguments` but operates standalone so the targeted-
-        patch construction branches (class, union-fallback, generic
-        record/class) can call into it without re-routing through the
-        full call pipeline.
-        """
-        if (
-            type_def.is_native
-            or _is_str_type(type_def)
-            or _is_array_type(type_def)
-            or _is_list_type(type_def)
-            or _is_map_type(type_def)
-            or _is_set_type(type_def)
-        ):
-            return
-        create_type = self.typing.child_of(type_def, "create")
-        if not create_type or create_type.typetype != ZTypeType.FUNCTION:
-            return
-        data_params = [
-            (pname, ptype)
-            for pname, ptype in self.typing.children_of(create_type)
-            if ptype.typetype != ZTypeType.FUNCTION
-        ]
-        if not data_params:
-            return
-        skip_names = set(generic_param_names)
-        positional_idx = 0
-        for arg in call.arguments:
-            if arg.name and arg.name in skip_names:
-                continue
-            arg_type = self.typing.node_type.get(arg.valtype.nodeid)
-            if arg_type is None:
-                continue
-            if arg.name:
-                matched: Optional[ZType] = None
-                for pname, ptype in data_params:
-                    if pname == arg.name:
-                        matched = ptype
-                        break
-                if matched is None:
-                    continue
-                target_name = arg.name
-            else:
-                while (
-                    positional_idx < len(data_params)
-                    and data_params[positional_idx][0] in skip_names
-                ):
-                    positional_idx += 1
-                if positional_idx >= len(data_params):
-                    continue
-                target_name, matched = data_params[positional_idx]
-                positional_idx += 1
-            if matched.typetype == ZTypeType.GENERIC_PARAM:
-                continue
-            if arg_type.is_literal and _is_numeric_type(matched):
-                self._coerce_literal(arg.valtype, matched, loc=arg.start)
-                continue
-            # Defensive: if the arg's literal type has already been
-            # materialised (the assignment-resolution late pass or a
-            # future caller that pre-pins concrete numeric types), the
-            # `is_literal` check above won't fire — but the AST node
-            # still carries a `node_const_value`, so re-running
-            # `_coerce_literal` for numeric targets still range-checks
-            # and re-pins to the field's declared type.
-            if (
-                _is_numeric_type(matched)
-                and self.typing.node_const_value.get(arg.valtype.nodeid) is not None
-                and self._coerce_literal(arg.valtype, matched, loc=arg.start)
-            ):
-                continue
-            if self._types_compatible(arg_type, matched):
-                continue
-            own = self.typing.child_ownership(create_type, target_name)
-            if self._try_protocol_coerce(arg, arg_type, matched, own):
-                continue
-            self._error(
-                f"field '{target_name}' type mismatch: expected "
-                f"{matched.name}, got {arg_type.name}",
-                loc=arg.start,
-                err=ERR.CALLERROR,
-            )
 
     def _check_union_subtype_payload_type(
         self,
@@ -9606,70 +9501,6 @@ class TypeChecker:
                     loc=arg.start,
                     err=ERR.OWNERERROR,
                 )
-
-    def _transfer_class_construction_locks(
-        self,
-        call: zast.Call,
-        class_type: ZType,
-        arg_borrow_paths: Optional[List[Optional[Tuple[str, ...]]]] = None,
-    ) -> None:
-        """Plain `Cls field: val` construction does not flow through
-        `_finalize_call`, so the lock-param transfer logic that
-        ordinary function calls use is missing. Mirror it here: for
-        each arg whose target field on the class's `create` is
-        `.lock`-annotated, set `_pending_borrow_lock` to the arg's
-        source path so the receiving binding's scope retains the
-        lock on the source.
-
-        Closes the soundness gap where a class instance holding a
-        `Bag.lock` field (e.g. `BagIter target: b.lock`) did not
-        block mutation of `b` while the iterator was alive.
-
-        `arg_borrow_paths`, when supplied, is the per-arg
-        `_check_operation(...).borrow_target` captured by the caller
-        (the non-generic class-construction path needs to evaluate
-        args itself). When omitted, the helper re-evaluates each
-        arg -- safe but redundant for callers that already did so.
-        """
-        if call.callable.nodetype == NodeType.DOTTEDPATH:
-            dp_call = cast(zast.DottedPath, call.callable)
-            if dp_call.child.name in ("borrow", "take", "lock"):
-                # Cls.borrow / Cls.take / Cls.lock route through
-                # ownership-transfer paths, not aggregate storage --
-                # the lock semantics there are handled separately.
-                return
-        create_type = self.typing.child_of(class_type, "create")
-        if create_type is None or create_type.typetype != ZTypeType.FUNCTION:
-            return
-        lock_param_names = {
-            k
-            for k, v in self.typing.child_ownerships_of(create_type).items()
-            if v == ZParamOwnership.LOCK
-        }
-        if not lock_param_names:
-            return
-        param_order = [
-            pname
-            for pname, ptype in self.typing.children_of(create_type)
-            if ptype.typetype != ZTypeType.FUNCTION
-        ]
-        for i, arg in enumerate(call.arguments):
-            if arg.name:
-                pname = arg.name
-            elif i < len(param_order):
-                pname = param_order[i]
-            else:
-                continue
-            if pname not in lock_param_names:
-                continue
-            if arg_borrow_paths is not None and i < len(arg_borrow_paths):
-                src_path = arg_borrow_paths[i]
-            else:
-                src_path = self._check_operation(arg.valtype).borrow_target
-            if src_path is None:
-                src_path = self._get_dotted_path_tuple(arg.valtype)
-            if src_path:
-                self._pending_borrow_lock = self._chain_through_synth_temp(src_path)
 
     def _check_aggregate_lock_escape(self, call: zast.Call, callee_type: ZType) -> None:
         """Reject arguments carrying outstanding locks from escaping into an
