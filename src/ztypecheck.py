@@ -4216,7 +4216,17 @@ class TypeChecker:
             ZTypeType.PROTOCOL,
             ZTypeType.FACET,
         ):
-            # .borrow returns the same type (borrowed reference)
+            # Typedef-wrapper classes have a real `.borrow` FUNCTION
+            # child synthesised by `_finalize_typedef`. Return it so
+            # the call dispatch routes through the typedef-borrow
+            # branch in `_dispatch_call_construction` (which gates on
+            # `callee_type.typetype == FUNCTION`).
+            borrow_child = self.typing.child_of(parent_type, child_name)
+            if borrow_child is not None and borrow_child.typetype == ZTypeType.FUNCTION:
+                self.typing.node_type[path.nodeid] = borrow_child
+                return borrow_child
+            # Otherwise: ownership-marker semantics (borrowed reference
+            # to the same type).
             self.typing.node_type[path.nodeid] = parent_type
             return parent_type
         if child_name == "lock":
@@ -8337,14 +8347,13 @@ class TypeChecker:
                     self._transfer_class_construction_locks(call, mono_type)
                     return True, mono_type, callee_type
                 return True, None, callee_type
-            # Non-generic class:
-            #
-            # Bare-name `Foo field: val` re-routes through the
-            # standard call pipeline by swapping callee_type to the
-            # `create` function and falling through. The standard
-            # pipeline type-checks args / applies TAKE / installs
-            # locks via `_check_call_arguments`, and `_finalize_call`
-            # does the LOCK-param transfer that the legacy
+            # Non-generic class: re-route bare-name `Foo field: val`
+            # through the standard call pipeline by swapping
+            # callee_type to the `create` function and falling
+            # through. The standard pipeline type-checks args /
+            # applies TAKE / installs locks via
+            # `_check_call_arguments`, and `_finalize_call` does the
+            # LOCK-param transfer that the legacy
             # `_transfer_class_construction_locks` helper used to do.
             # `_check_call_arguments` runs the construction-specific
             # aggregate-lock-escape check inline per arg (for
@@ -8353,26 +8362,18 @@ class TypeChecker:
             # structure (Case 1) and the original root variable's
             # `borrow_origin` (Case 2).
             #
-            # Dotted-callable forms (`Foo.borrow`/`Foo.take`/`Foo.lock`
-            # on a class whose ZType-children include a synthesised
-            # `borrow`/`take`/`lock` constructor) resolve to a
-            # callee_type of CLASS rather than FUNCTION because
-            # `_resolve_dotted_path` returns the parent for those
-            # ownership-marker suffixes. Re-routing those through
-            # the standard pipeline would bind args against `.create`
-            # (TAKE semantics) instead of the user-intended
-            # constructor — keep the legacy bespoke pipeline for
-            # them. `Foo.create` resolves to a FUNCTION and doesn't
-            # hit this branch.
-            is_bare_name = call.callable.nodetype == NodeType.ATOMID
+            # Typedef-wrapper class `.borrow` shapes
+            # (`ByteView.borrow from: src`) no longer reach this
+            # branch — `_resolve_dotted_path` now returns the synth
+            # `.borrow` FUNCTION child so the typedef-borrow branch
+            # in `_dispatch_call_construction` picks them up.
             create_type = self.typing.child_of(callee_type, "create")
             create_has_generic_param = create_type is not None and any(
                 ptype.typetype == ZTypeType.GENERIC_PARAM
                 for _, ptype in self.typing.children_of(create_type)
             )
             if (
-                not is_bare_name
-                or create_type is None
+                create_type is None
                 or create_type.typetype != ZTypeType.FUNCTION
                 or create_has_generic_param
             ):

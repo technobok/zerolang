@@ -1600,8 +1600,7 @@ class TestClassConstructionLockEscape:
             "}"
         )
         assert any(
-            "borrow" in e.msg.lower() or "ownership" in e.msg.lower()
-            for e in errors
+            "borrow" in e.msg.lower() or "ownership" in e.msg.lower() for e in errors
         ), [e.msg for e in errors]
 
 
@@ -3408,6 +3407,31 @@ class TestWithOwnership:
             '  with x: n do print "\\{x}"\n'
             '  print "\\{n}"\n'
             "}"
+        )
+
+    def test_typedef_class_borrow_dispatches_through_typedef_branch(self):
+        """`ByteView.borrow from: src` on a typedef-wrapper class
+        must route through `_check_typedef_borrow` (call_kind =
+        TYPEDEF_BORROW), not through the class-construction
+        fallback. Pin for the `_resolve_dotted_path` fix that
+        returns the synth `.borrow` FUNCTION child instead of the
+        parent CLASS type."""
+        program, typing = check_ok(
+            "main: function is {\n"
+            "  msg: Bytes\n"
+            "  msg.append from: 72.u8\n"
+            "  bv: ByteView.borrow from: msg.listview\n"
+            "}"
+        )
+        # Find the ByteView.borrow call and assert its call_kind.
+        borrow_kind = None
+        for nid, ck in typing.call_kind.items():
+            if ck == zast.CallKind.TYPEDEF_BORROW:
+                borrow_kind = ck
+                break
+        assert borrow_kind is not None, (
+            f"expected a TYPEDEF_BORROW call_kind in the typing; "
+            f"got: {set(typing.call_kind.values())}"
         )
 
 
