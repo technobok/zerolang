@@ -6053,14 +6053,20 @@ class TypeChecker:
                     field_name = None
 
             val_type = self._check_operation(arg.valtype).ztype
-            # Materialise literal-typed args before they bind to a
-            # generic param — see the same pattern in
-            # `_infer_generic_function_call`.
-            if val_type is not None and val_type.is_literal:
+            # Materialise literal-typed args only when the field
+            # binds a generic param — non-generic-bound fields are
+            # type-checked downstream by
+            # `_check_construction_field_types` against the
+            # declared field type, which can range-check the
+            # literal directly. Materialising every literal would
+            # pin a `200` arg to `i64` even when the target field
+            # is `u8`, defeating the field-side coercion.
+            binds_gparam = field_name is not None and field_name in field_to_gparam
+            if binds_gparam and val_type is not None and val_type.is_literal:
                 val_type = self._materialise_literal(val_type, arg.valtype.nodeid)
 
             # infer generic param from field type
-            if field_name and field_name in field_to_gparam and val_type:
+            if binds_gparam and field_name is not None and val_type:
                 gparam = field_to_gparam[field_name]
                 if gparam in generic_args:
                     # verify compatibility
@@ -8840,12 +8846,13 @@ class TypeChecker:
             if arg_type.is_literal and _is_numeric_type(matched):
                 self._coerce_literal(arg.valtype, matched, loc=arg.start)
                 continue
-            # Generic record/class construction (`_infer_generic_*`)
-            # eagerly materialises literal args to their default type
-            # before this check runs, so a `200` literal arrives as
-            # `i64` even when the target field is `u8`. Re-run the
-            # coercion via `const_value` for numeric targets to
-            # range-check / re-pin to the field's actual type.
+            # Defensive: if the arg's literal type has already been
+            # materialised (the assignment-resolution late pass or a
+            # future caller that pre-pins concrete numeric types), the
+            # `is_literal` check above won't fire — but the AST node
+            # still carries a `node_const_value`, so re-running
+            # `_coerce_literal` for numeric targets still range-checks
+            # and re-pins to the field's declared type.
             if (
                 _is_numeric_type(matched)
                 and self.typing.node_const_value.get(arg.valtype.nodeid) is not None

@@ -12638,6 +12638,16 @@ class TestRecordMonoCreateSubstitution:
             for e in errors
         ), [e.msg for e in errors]
 
+    def test_generic_record_non_generic_field_accepts_value_above_i64_default(self):
+        """A literal that doesn't fit i64 (the int-literal default) but
+        does fit the declared field type (`u64`) must not be pinned to
+        i64 by generic-arg inference before the field-coercion runs.
+        Regression pin for the literal-materialisation gating fix."""
+        check_ok(
+            "myrec: record { x: t y: u64 } as { t: Any.generic }\n"
+            "main: function is { a: myrec t: i64 x: 42 y: 0xffff_ffff_ffff_ffff }"
+        )
+
     def test_generic_class_direct_form_field_type_checked(self):
         check_ok(
             "MyBox: class { x: t y: u8 } as { t: Any.generic }\n"
