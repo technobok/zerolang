@@ -8314,15 +8314,6 @@ class TypeChecker:
             return True, self._check_box_construction(call, callee_type), callee_type
 
         # handle class construction: calling a class type creates a new owned instance
-        # TODO: re-route bare-name class construction through
-        # `.create` like the non-generic record branch above, so the
-        # standard call pipeline type-checks args against field
-        # types. Class construction has tightly-coupled lock-transfer
-        # / aggregate-lock-escape concerns that need careful
-        # synth-temp-awareness in `_check_aggregate_lock_escape`
-        # before this can land cleanly. Until then, class field-init
-        # values are not type-checked at the bare-name shape via the
-        # re-route — instead the targeted-patch helper covers them.
         if callee_type.typetype == ZTypeType.CLASS:
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
@@ -8346,19 +8337,58 @@ class TypeChecker:
                     self._transfer_class_construction_locks(call, mono_type)
                     return True, mono_type, callee_type
                 return True, None, callee_type
-            arg_borrow_paths: List[Optional[Tuple[str, ...]]] = []
-            for arg in call.arguments:
-                arg_result = self._check_operation(arg.valtype)
-                arg_borrow_paths.append(arg_result.borrow_target)
-            self.typing.node_type[call.nodeid] = callee_type
-            self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
-            self._check_missing_create_args(callee_type, call)
-            self._check_construction_field_types(callee_type, call)
-            self._check_aggregate_lock_escape(call, callee_type)
-            self._transfer_class_construction_locks(
-                call, callee_type, arg_borrow_paths=arg_borrow_paths
+            # Non-generic class:
+            #
+            # Bare-name `Foo field: val` re-routes through the
+            # standard call pipeline by swapping callee_type to the
+            # `create` function and falling through. The standard
+            # pipeline type-checks args / applies TAKE / installs
+            # locks via `_check_call_arguments`, and `_finalize_call`
+            # does the LOCK-param transfer that the legacy
+            # `_transfer_class_construction_locks` helper used to do.
+            # `_check_call_arguments` runs the construction-specific
+            # aggregate-lock-escape check inline per arg (for
+            # CLASS_CREATE call_kind) between `_check_operation` and
+            # `_hoist_arg`, so the check sees un-hoisted dotted-path
+            # structure (Case 1) and the original root variable's
+            # `borrow_origin` (Case 2).
+            #
+            # Dotted-callable forms (`Foo.borrow`/`Foo.take`/`Foo.lock`
+            # on a class whose ZType-children include a synthesised
+            # `borrow`/`take`/`lock` constructor) resolve to a
+            # callee_type of CLASS rather than FUNCTION because
+            # `_resolve_dotted_path` returns the parent for those
+            # ownership-marker suffixes. Re-routing those through
+            # the standard pipeline would bind args against `.create`
+            # (TAKE semantics) instead of the user-intended
+            # constructor — keep the legacy bespoke pipeline for
+            # them. `Foo.create` resolves to a FUNCTION and doesn't
+            # hit this branch.
+            is_bare_name = call.callable.nodetype == NodeType.ATOMID
+            create_type = self.typing.child_of(callee_type, "create")
+            create_has_generic_param = create_type is not None and any(
+                ptype.typetype == ZTypeType.GENERIC_PARAM
+                for _, ptype in self.typing.children_of(create_type)
             )
-            return True, callee_type, callee_type
+            if (
+                not is_bare_name
+                or create_type is None
+                or create_type.typetype != ZTypeType.FUNCTION
+                or create_has_generic_param
+            ):
+                for arg in call.arguments:
+                    self._check_operation(arg.valtype)
+                self.typing.node_type[call.nodeid] = callee_type
+                self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
+                self._check_missing_create_args(callee_type, call)
+                self._check_construction_field_types(callee_type, call)
+                self._check_aggregate_lock_escape(call, callee_type)
+                self._transfer_class_construction_locks(call, callee_type)
+                return True, callee_type, callee_type
+            self.typing.node_type[call.nodeid] = callee_type
+            self.typing.node_type[call.callable.nodeid] = callee_type
+            self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
+            return False, None, create_type
 
         # handle union construction: union.subtype expr
         if callee_type.typetype == ZTypeType.UNION:
@@ -8462,6 +8492,16 @@ class TypeChecker:
         `(leaf_path, param_name)` list that `_finalize_call` will
         transfer to the binding scope for LOCK params.
 
+        For class construction (call_kind == CLASS_CREATE), runs
+        the construction-specific aggregate-lock-escape check
+        (`_check_aggregate_lock_escape_arg`) inline per arg
+        between `_check_operation` and `_hoist_arg`. The check has
+        to see un-hoisted dotted-path arg structure (Case 1) and
+        the original root variable's `borrow_origin` (Case 2); the
+        synth-temp form `_hoist_arg` produces for `.lock`/`.borrow`
+        args would carry a `borrow_origin` of its own that
+        mis-triggers Case 2.
+
         Also enforces reftype-aliasing (same reftype passed as two
         arguments)."""
         # check for reftype aliasing: same reftype arg passed twice
@@ -8469,6 +8509,15 @@ class TypeChecker:
         # track which lock targets correspond to .lock parameters
         # (for transfer in `_finalize_call`).
         lock_param_targets: List[Tuple[Tuple[str, ...], Optional[str]]] = []
+        call_kind = self.typing.call_kind.get(call.nodeid, zast.CallKind.UNKNOWN)
+        is_class_create = call_kind == zast.CallKind.CLASS_CREATE
+        cls_lock_param_names: set[str] = set()
+        if is_class_create:
+            cls_lock_param_names = {
+                k
+                for k, v in self.typing.child_ownerships_of(callee_type).items()
+                if v == ZParamOwnership.LOCK
+            }
 
         for i, arg in enumerate(call.arguments):
             arg_result = self._check_operation(arg.valtype)
@@ -8480,6 +8529,13 @@ class TypeChecker:
             # is a wrapper marker, not a field access, so the
             # call-scoped lock must target the source.
             arg_borrow_path = arg_result.borrow_target
+
+            # Class-construction aggregate-lock-escape rejection runs
+            # BEFORE the per-arg hoist on un-hoisted arg structure.
+            if is_class_create:
+                self._check_aggregate_lock_escape_arg(
+                    call, arg, callee_type, cls_lock_param_names
+                )
 
             # reftype aliasing check — runs against the ORIGINAL arg
             # expression so that two args derived from the same
@@ -9568,6 +9624,40 @@ class TypeChecker:
         from: ...` share the CLASS_CREATE callkind but are ownership-
         transfer operations, not storage into a fresh aggregate; skip them.
 
+        Iterates `call.arguments` and dispatches each to
+        `_check_aggregate_lock_escape_arg`, which carries the
+        three-case body (see that helper for the case enumeration).
+        Used by the generic CLASS_CREATE branch and the non-generic
+        record fallback; the non-generic class branch runs the
+        per-arg helper inline in `_check_call_arguments` so the
+        check fires before the standard pipeline's hoist.
+        """
+        if call.callable.nodetype == NodeType.DOTTEDPATH:
+            dp_call = cast(zast.DottedPath, call.callable)
+            if dp_call.child.name in ("borrow", "take", "lock"):
+                return
+        lock_param_names = {
+            k
+            for k, v in self.typing.child_ownerships_of(callee_type).items()
+            if v == ZParamOwnership.LOCK
+        }
+        for arg in call.arguments:
+            self._check_aggregate_lock_escape_arg(
+                call, arg, callee_type, lock_param_names
+            )
+
+    def _check_aggregate_lock_escape_arg(
+        self,
+        call: zast.Call,
+        arg: zast.NamedOperation,
+        callee_type: ZType,
+        lock_param_names: set,
+    ) -> None:
+        """Per-arg body of the aggregate-lock-escape check. Splits out
+        so the per-arg loop in `_check_call_arguments` can call this
+        between `_check_operation` and `_hoist_arg` for non-generic
+        class construction.
+
         Three cases caught:
           1. Lock-bearing method projection in arg position
              (`b.byteview`, `s.stringview`, `xs.listview`, user methods
@@ -9583,125 +9673,119 @@ class TypeChecker:
             dp_call = cast(zast.DottedPath, call.callable)
             if dp_call.child.name in ("borrow", "take", "lock"):
                 return
-        lock_param_names = {
-            k
-            for k, v in self.typing.child_ownerships_of(callee_type).items()
-            if v == ZParamOwnership.LOCK
-        }
-        for arg in call.arguments:
-            if arg.name and arg.name in lock_param_names:
-                continue
-            # Case 1: lock-bearing method projection — a borrow-returning
-            # method (which by validation must have a `.lock` parameter)
-            # produces a value whose lock lives on its source path.
-            if arg.valtype.nodetype == NodeType.DOTTEDPATH:
-                dp = cast(zast.DottedPath, arg.valtype)
-                parent_type = self.typing.node_type.get(dp.parent.nodeid)
-                method_type = (
-                    self.typing.child_of(parent_type, dp.child.name)
-                    if parent_type is not None
-                    else None
-                )
-                has_metadata_lock = (
-                    method_type is not None
-                    and method_type.typetype == ZTypeType.FUNCTION
-                    and method_type.return_ownership == ZParamOwnership.BORROW
-                )
-                if has_metadata_lock:
-                    src_path = self._get_dotted_path_tuple(dp.parent)
-                    src_name = ".".join(src_path) if src_path else "<expr>"
-                    self._error(
-                        f"cannot store lock-carrying value in aggregate "
-                        f"field: '.{dp.child.name}' on '{src_name}' "
-                        f"produces a value locked to its source",
-                        loc=arg.start,
-                        err=ERR.OWNERERROR,
-                        hint=(
-                            "copy the borrowed value (e.g. `.string` / "
-                            "`.list` / `.bytes`) before storing, or release "
-                            "the lock first"
-                        ),
-                    )
-                    continue
-            arg_path = self._get_dotted_path_tuple(arg.valtype)
-            if not arg_path:
-                continue
-            # Case 2: borrow-holder variable (lock lives on source path)
-            arg_root_var = self.symtab.lookup_var(arg_path[0])
-            if arg_root_var is not None and arg_root_var.borrow_origin is not None:
-                self._error(
-                    f"cannot store lock-carrying value in aggregate field: "
-                    f"'{arg_path[0]}' borrows from "
-                    f"'{arg_root_var.borrow_origin}'",
-                    loc=arg.start,
-                    err=ERR.OWNERERROR,
-                    hint=(
-                        "copy the borrowed value (e.g. `.string` / `.list` "
-                        "/ `.bytes`) before storing, or release the lock first"
-                    ),
-                )
-                continue
-            # Case 2b: default-borrowed parameter (Phase A) being stored
-            # into an owned aggregate field. The param is pointer-passed
-            # so the field would alias the caller's storage; the caller
-            # still owns it. Reject; user picks `.copy` (clone), `.take`
-            # on the param (transfer ownership in), or `.lock` on the
-            # field (intentional borrow holder). Exemptions:
-            #   - `.copy` projection in arg position: produces a fresh
-            #     owned value, breaks the borrow chain.
-            #   - `.lock`-annotated params: user explicitly opted into
-            #     a lock-carrying value and may legitimately store
-            #     `.private` projections of it into matching `.lock`
-            #     fields (the borrowed_record / listiter pattern).
-            arg_breaks_borrow = (
-                arg.valtype.nodetype == NodeType.DOTTEDPATH
-                and cast(zast.DottedPath, arg.valtype).child.name == "copy"
+        if arg.name and arg.name in lock_param_names:
+            return
+        # Case 1: lock-bearing method projection — a borrow-returning
+        # method (which by validation must have a `.lock` parameter)
+        # produces a value whose lock lives on its source path.
+        if arg.valtype.nodetype == NodeType.DOTTEDPATH:
+            dp = cast(zast.DottedPath, arg.valtype)
+            parent_type = self.typing.node_type.get(dp.parent.nodeid)
+            method_type = (
+                self.typing.child_of(parent_type, dp.child.name)
+                if parent_type is not None
+                else None
             )
-            param_own = self.func_ctx.func_ownership.get(arg_path[0])
-            # Only fire when the source actually has heap-backed data that
-            # would be aliased: string itself, or a struct holding string /
-            # other heap-backed fields. A class with only valtype fields
-            # is safe to memcpy — no aliasing concern.
-            if (
-                arg_root_var is not None
-                and not arg_breaks_borrow
-                and param_own != ZParamOwnership.LOCK
-                and arg_root_var.ownership == ZOwnership.BORROWED
-                and arg_root_var.borrow_origin is None
-                and (
-                    arg_root_var.ztype.subtype == ZSubType.STRING
-                    or arg_root_var.ztype.needs_field_cleanup
-                )
-            ):
+            has_metadata_lock = (
+                method_type is not None
+                and method_type.typetype == ZTypeType.FUNCTION
+                and method_type.return_ownership == ZParamOwnership.BORROW
+            )
+            if has_metadata_lock:
+                src_path = self._get_dotted_path_tuple(dp.parent)
+                src_name = ".".join(src_path) if src_path else "<expr>"
                 self._error(
-                    f"cannot store borrowed value '{arg_path[0]}' in "
-                    f"aggregate field: the caller still owns it and "
-                    f"the field would alias the same heap data.",
+                    f"cannot store lock-carrying value in aggregate "
+                    f"field: '.{dp.child.name}' on '{src_name}' "
+                    f"produces a value locked to its source",
                     loc=arg.start,
                     err=ERR.OWNERERROR,
                     hint=(
-                        f"use `{arg_path[0]}.copy` to clone, declare the "
-                        f"parameter as `{arg_path[0]}: <T>.take` to "
-                        "transfer ownership in, or declare the field's "
-                        "constructor parameter as `.lock` to hold a borrow"
+                        "copy the borrowed value (e.g. `.string` / "
+                        "`.list` / `.bytes`) before storing, or release "
+                        "the lock first"
                     ),
                 )
-                continue
-            # Case 3: pre-locked source path
-            info = self.symtab.is_path_locked(arg_path)
-            if info is None:
-                continue
+                return
+        arg_path = self._get_dotted_path_tuple(arg.valtype)
+        if not arg_path:
+            return
+        # Case 2: borrow-holder variable (lock lives on source path)
+        arg_root_var = self.symtab.lookup_var(arg_path[0])
+        if arg_root_var is not None and arg_root_var.borrow_origin is not None:
             self._error(
                 f"cannot store lock-carrying value in aggregate field: "
-                f"'{arg_path[0]}' holds a lock on "
-                f"'{'.'.join(info.path)}' (held by '{info.holder}')",
+                f"'{arg_path[0]}' borrows from "
+                f"'{arg_root_var.borrow_origin}'",
                 loc=arg.start,
                 err=ERR.OWNERERROR,
                 hint=(
-                    "copy the borrowed value (e.g. `.string` / `.list` / "
-                    "`.bytes`) before storing, or release the lock first"
+                    "copy the borrowed value (e.g. `.string` / `.list` "
+                    "/ `.bytes`) before storing, or release the lock first"
                 ),
             )
+            return
+        # Case 2b: default-borrowed parameter (Phase A) being stored
+        # into an owned aggregate field. The param is pointer-passed
+        # so the field would alias the caller's storage; the caller
+        # still owns it. Reject; user picks `.copy` (clone), `.take`
+        # on the param (transfer ownership in), or `.lock` on the
+        # field (intentional borrow holder). Exemptions:
+        #   - `.copy` projection in arg position: produces a fresh
+        #     owned value, breaks the borrow chain.
+        #   - `.lock`-annotated params: user explicitly opted into
+        #     a lock-carrying value and may legitimately store
+        #     `.private` projections of it into matching `.lock`
+        #     fields (the borrowed_record / listiter pattern).
+        arg_breaks_borrow = (
+            arg.valtype.nodetype == NodeType.DOTTEDPATH
+            and cast(zast.DottedPath, arg.valtype).child.name == "copy"
+        )
+        param_own = self.func_ctx.func_ownership.get(arg_path[0])
+        # Only fire when the source actually has heap-backed data that
+        # would be aliased: string itself, or a struct holding string /
+        # other heap-backed fields. A class with only valtype fields
+        # is safe to memcpy — no aliasing concern.
+        if (
+            arg_root_var is not None
+            and not arg_breaks_borrow
+            and param_own != ZParamOwnership.LOCK
+            and arg_root_var.ownership == ZOwnership.BORROWED
+            and arg_root_var.borrow_origin is None
+            and (
+                arg_root_var.ztype.subtype == ZSubType.STRING
+                or arg_root_var.ztype.needs_field_cleanup
+            )
+        ):
+            self._error(
+                f"cannot store borrowed value '{arg_path[0]}' in "
+                f"aggregate field: the caller still owns it and "
+                f"the field would alias the same heap data.",
+                loc=arg.start,
+                err=ERR.OWNERERROR,
+                hint=(
+                    f"use `{arg_path[0]}.copy` to clone, declare the "
+                    f"parameter as `{arg_path[0]}: <T>.take` to "
+                    "transfer ownership in, or declare the field's "
+                    "constructor parameter as `.lock` to hold a borrow"
+                ),
+            )
+            return
+        # Case 3: pre-locked source path
+        info = self.symtab.is_path_locked(arg_path)
+        if info is None:
+            return
+        self._error(
+            f"cannot store lock-carrying value in aggregate field: "
+            f"'{arg_path[0]}' holds a lock on "
+            f"'{'.'.join(info.path)}' (held by '{info.holder}')",
+            loc=arg.start,
+            err=ERR.OWNERERROR,
+            hint=(
+                "copy the borrowed value (e.g. `.string` / `.list` / "
+                "`.bytes`) before storing, or release the lock first"
+            ),
+        )
 
     def _apply_take_to_arg(self, arg: zast.NamedOperation, pname: str) -> None:
         """Apply TAKE semantics to a call argument: reject a borrowed source,

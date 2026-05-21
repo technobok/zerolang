@@ -1563,6 +1563,47 @@ class TestClassConstructionLockEscape:
             "}"
         )
 
+    def test_class_factory_mixed_lock_and_valtype_fields(self):
+        """Mixed shapes: a class with one `.lock` field and one
+        plain valtype field — the standard pipeline's hoist for
+        the `.lock` arg coexists with literal-coercion for the
+        valtype arg in the same construction. Pin for the re-
+        route — the per-arg lock-escape check must not mis-fire
+        on the valtype arg, and the LOCK transfer must still
+        retain the source lock for the binding."""
+        errors = check_errors(
+            "Bag: class { x: i64 }\n"
+            "BagIter: class { target: Bag.lock count: u8 } as {\n"
+            "  create: function {target: Bag.lock count: u8} out this is "
+            "{ return meta.create :target :count }\n"
+            "}\n"
+            "main: function is {\n"
+            "  b: Bag x: 10\n"
+            "  it: BagIter target: b.lock count: 5\n"
+            "  b.x = 99\n"
+            "}"
+        )
+        assert any("exclusive lock" in e.msg.lower() and "'b'" in e.msg for e in errors)
+
+    def test_borrow_holder_rejected_at_class_construction(self):
+        """True borrow-escape: a variable bound to a borrow is
+        passed to an owned (non-`.lock`) class field. The lock-
+        escape Case 2 must reject — the hoist-temp-aware
+        re-route should not weaken this guarantee."""
+        errors = check_errors(
+            "Bag: class { x: i64 }\n"
+            "Holder: class { target: Bag }\n"
+            "main: function is {\n"
+            "  bag: Bag x: 10\n"
+            "  bb: bag.borrow\n"
+            "  h: Holder target: bb\n"
+            "}"
+        )
+        assert any(
+            "borrow" in e.msg.lower() or "ownership" in e.msg.lower()
+            for e in errors
+        ), [e.msg for e in errors]
+
 
 class TestPhaseC3Pins:
     """Phase C-3 pin tests: per-call sub-scope semantics.
@@ -12539,9 +12580,10 @@ class TestConstructionFieldCoercion:
         errors = check_errors(
             'Foo: class { count: u8 }\nmain: function is { f: Foo count: "hello" }'
         )
-        assert any("field 'count' type mismatch" in e.msg for e in errors), [
-            e.msg for e in errors
-        ]
+        assert any(
+            "type mismatch" in e.msg and "u8" in e.msg and "StringView" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
 
     def test_class_user_defined_create_field_coerces(self):
         check_ok(
