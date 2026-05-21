@@ -12611,6 +12611,58 @@ class TestRecordMonoCreateSubstitution:
             "type mismatch" in e.msg or "argument" in e.msg.lower() for e in errors
         ), [e.msg for e in errors]
 
+    # ---- Direct form (generic branch, targeted patch) ----
+
+    def test_generic_record_direct_form_field_type_checked(self):
+        check_ok(
+            "myrec: record { x: t y: u8 } as { t: Any.generic }\n"
+            "main: function is { a: myrec t: i64 x: 42 y: 200 }"
+        )
+
+    def test_generic_record_direct_form_non_generic_field_mismatch_errors(self):
+        errors = check_errors(
+            "myrec: record { x: t y: u8 } as { t: Any.generic }\n"
+            'main: function is { a: myrec t: i64 x: 42 y: "hello" }'
+        )
+        assert any("field 'y' type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_generic_record_direct_form_literal_out_of_range_errors(self):
+        errors = check_errors(
+            "myrec: record { x: t y: u8 } as { t: Any.generic }\n"
+            "main: function is { a: myrec t: i64 x: 42 y: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_generic_class_direct_form_field_type_checked(self):
+        check_ok(
+            "MyBox: class { x: t y: u8 } as { t: Any.generic }\n"
+            "main: function is { a: MyBox t: i64 x: 42 y: 200 }"
+        )
+
+    def test_generic_class_direct_form_non_generic_field_mismatch_errors(self):
+        errors = check_errors(
+            "MyBox: class { x: t y: u8 } as { t: Any.generic }\n"
+            'main: function is { a: MyBox t: i64 x: 42 y: "hello" }'
+        )
+        assert any("field 'y' type mismatch" in e.msg for e in errors), [
+            e.msg for e in errors
+        ]
+
+    def test_generic_class_direct_form_literal_out_of_range_errors(self):
+        errors = check_errors(
+            "MyBox: class { x: t y: u8 } as { t: Any.generic }\n"
+            "main: function is { a: MyBox t: i64 x: 42 y: 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
 
 class TestUnionSubtypePayloadCoercion:
     """Union/variant subtype construction must type-check the payload

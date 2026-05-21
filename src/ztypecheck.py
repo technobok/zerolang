@@ -8206,11 +8206,12 @@ class TypeChecker:
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             if callee_type.isgeneric:
-                # TODO: re-route generic record construction through
-                # `.create` like the non-generic branch below. The
-                # explicit-generic-arg form (`MyList t: i64`) needs
-                # the args filtered before the standard call pipeline
-                # would accept them — handle in a follow-up.
+                # The explicit-generic-arg direct form (`myrec t: i64
+                # x: 42`) routes through the generic branch and is
+                # type-checked here via the targeted-patch helper
+                # (filtering generic args by name); the paren-mono
+                # form (`(myrec t: i64) x: 42`) routes through the
+                # non-generic branch below once the mono is resolved.
                 mono_type = self._infer_generic_record_construction(callee_type, call)
                 if mono_type:
                     self.typing.node_type[call.nodeid] = mono_type
@@ -8223,6 +8224,11 @@ class TypeChecker:
                     ) or any(not arg.name for arg in call.arguments)
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
+                        self._check_construction_field_types(
+                            mono_type,
+                            call,
+                            generic_param_names=callee_type.generic_params.keys(),
+                        )
                     self._reject_borrow_escape_into_record(call)
                     return True, mono_type, callee_type
                 return True, None, callee_type
@@ -8309,7 +8315,8 @@ class TypeChecker:
         # / aggregate-lock-escape concerns that need careful
         # synth-temp-awareness in `_check_aggregate_lock_escape`
         # before this can land cleanly. Until then, class field-init
-        # values are not type-checked at the bare-name shape.
+        # values are not type-checked at the bare-name shape via the
+        # re-route — instead the targeted-patch helper covers them.
         if callee_type.typetype == ZTypeType.CLASS:
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
@@ -8324,6 +8331,11 @@ class TypeChecker:
                     ) or any(not arg.name for arg in call.arguments)
                     if has_value_args:
                         self._check_missing_create_args(mono_type, call)
+                        self._check_construction_field_types(
+                            mono_type,
+                            call,
+                            generic_param_names=callee_type.generic_params.keys(),
+                        )
                     self._check_aggregate_lock_escape(call, mono_type)
                     self._transfer_class_construction_locks(call, mono_type)
                     return True, mono_type, callee_type
@@ -8827,6 +8839,18 @@ class TypeChecker:
                 continue
             if arg_type.is_literal and _is_numeric_type(matched):
                 self._coerce_literal(arg.valtype, matched, loc=arg.start)
+                continue
+            # Generic record/class construction (`_infer_generic_*`)
+            # eagerly materialises literal args to their default type
+            # before this check runs, so a `200` literal arrives as
+            # `i64` even when the target field is `u8`. Re-run the
+            # coercion via `const_value` for numeric targets to
+            # range-check / re-pin to the field's actual type.
+            if (
+                _is_numeric_type(matched)
+                and self.typing.node_const_value.get(arg.valtype.nodeid) is not None
+                and self._coerce_literal(arg.valtype, matched, loc=arg.start)
+            ):
                 continue
             if self._types_compatible(arg_type, matched):
                 continue
