@@ -12690,9 +12690,10 @@ class TestRecordMonoCreateSubstitution:
             "myrec: record { x: t y: u8 } as { t: Any.generic }\n"
             'main: function is { a: myrec t: i64 x: 42 y: "hello" }'
         )
-        assert any("field 'y' type mismatch" in e.msg for e in errors), [
-            e.msg for e in errors
-        ]
+        assert any(
+            "type mismatch" in e.msg and "u8" in e.msg and "StringView" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
 
     def test_generic_record_direct_form_literal_out_of_range_errors(self):
         errors = check_errors(
@@ -12725,9 +12726,10 @@ class TestRecordMonoCreateSubstitution:
             "MyBox: class { x: t y: u8 } as { t: Any.generic }\n"
             'main: function is { a: MyBox t: i64 x: 42 y: "hello" }'
         )
-        assert any("field 'y' type mismatch" in e.msg for e in errors), [
-            e.msg for e in errors
-        ]
+        assert any(
+            "type mismatch" in e.msg and "u8" in e.msg and "StringView" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
 
     def test_generic_class_direct_form_literal_out_of_range_errors(self):
         errors = check_errors(
@@ -12737,6 +12739,26 @@ class TestRecordMonoCreateSubstitution:
         assert any(
             "literal value 1000 cannot be losslessly stored in u8" in e.msg
             for e in errors
+        ), [e.msg for e in errors]
+
+    def test_generic_class_take_field_invalidates_source(self):
+        """A generic class field with reftype-default-TAKE semantics
+        must invalidate the source after construction. Pre-re-route,
+        the generic class branch silently skipped TAKE-application —
+        the standard pipeline's `_apply_take_to_arg` now closes that
+        gap. Reftype fields default to TAKE; passing `it` (a class
+        instance) to `x:` consumes it."""
+        errors = check_errors(
+            "Item: class { v: i64 }\n"
+            "MyBox: class { x: t } as { t: Any.generic }\n"
+            "main: function is {\n"
+            "  it: Item v: 1\n"
+            "  b: MyBox t: Item x: it\n"
+            "  use: it\n"
+            "}"
+        )
+        assert any(
+            "after ownership transfer" in e.msg and "'it'" in e.msg for e in errors
         ), [e.msg for e in errors]
 
 

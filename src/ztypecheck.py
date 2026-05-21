@@ -8222,32 +8222,43 @@ class TypeChecker:
         # handle record construction: calling a record type creates an instance
         if callee_type.typetype == ZTypeType.RECORD:
             if callee_type.isgeneric:
-                # The explicit-generic-arg direct form (`myrec t: i64
-                # x: 42`) routes through the generic branch and is
-                # type-checked here via the targeted-patch helper
-                # (filtering generic args by name); the paren-mono
-                # form (`(myrec t: i64) x: 42`) routes through the
+                # Direct form (`myrec t: i64 x: 42`) re-routes through
+                # the mono's `.create` function — `_check_call_arguments`
+                # filters out the `t:` type-arg specifier (via
+                # `call_generic_param_names`) so the per-param loop
+                # only matches value args. The paren-mono form
+                # (`(myrec t: i64) x: 42`) routes through the
                 # non-generic branch below once the mono is resolved.
                 mono_type = self._infer_generic_record_construction(callee_type, call)
-                if mono_type:
-                    self.typing.node_type[call.nodeid] = mono_type
-                    self.typing.node_type[call.callable.nodeid] = mono_type
-                    self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
-                    has_value_args = any(
-                        arg.name not in callee_type.generic_params
-                        for arg in call.arguments
-                        if arg.name
-                    ) or any(not arg.name for arg in call.arguments)
-                    if has_value_args:
-                        self._check_missing_create_args(mono_type, call)
-                        self._check_construction_field_types(
-                            mono_type,
-                            call,
-                            generic_param_names=callee_type.generic_params.keys(),
-                        )
+                if mono_type is None:
+                    return True, None, callee_type
+                self.typing.node_type[call.nodeid] = mono_type
+                self.typing.node_type[call.callable.nodeid] = mono_type
+                self.typing.call_kind[call.nodeid] = zast.CallKind.RECORD_CREATE
+                has_value_args = any(
+                    arg.name not in callee_type.generic_params
+                    for arg in call.arguments
+                    if arg.name
+                ) or any(not arg.name for arg in call.arguments)
+                if not has_value_args:
+                    # Type-args-only invocation: return the mono type
+                    # without value-arg processing.
+                    return True, mono_type, callee_type
+                mono_create = self.typing.child_of(mono_type, "create")
+                if mono_create is None or mono_create.typetype != ZTypeType.FUNCTION:
+                    self._check_missing_create_args(mono_type, call)
+                    self._check_construction_field_types(
+                        mono_type,
+                        call,
+                        generic_param_names=callee_type.generic_params.keys(),
+                    )
                     self._reject_borrow_escape_into_record(call)
                     return True, mono_type, callee_type
-                return True, None, callee_type
+                self.typing.call_generic_param_names[call.nodeid] = set(
+                    callee_type.generic_params.keys()
+                )
+                self._reject_borrow_escape_into_record(call)
+                return False, None, mono_create
             # Non-generic record: re-route bare-name `Foo count: 5`
             # through the standard call pipeline by swapping
             # callee_type to the `create` function and falling
@@ -8327,26 +8338,45 @@ class TypeChecker:
         if callee_type.typetype == ZTypeType.CLASS:
             if callee_type.isgeneric:
                 mono_type = self._infer_generic_record_construction(callee_type, call)
-                if mono_type:
-                    self.typing.node_type[call.nodeid] = mono_type
-                    self.typing.node_type[call.callable.nodeid] = mono_type
-                    self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
-                    has_value_args = any(
-                        arg.name not in callee_type.generic_params
-                        for arg in call.arguments
-                        if arg.name
-                    ) or any(not arg.name for arg in call.arguments)
-                    if has_value_args:
-                        self._check_missing_create_args(mono_type, call)
-                        self._check_construction_field_types(
-                            mono_type,
-                            call,
-                            generic_param_names=callee_type.generic_params.keys(),
-                        )
+                if mono_type is None:
+                    return True, None, callee_type
+                self.typing.node_type[call.nodeid] = mono_type
+                self.typing.node_type[call.callable.nodeid] = mono_type
+                self.typing.call_kind[call.nodeid] = zast.CallKind.CLASS_CREATE
+                has_value_args = any(
+                    arg.name not in callee_type.generic_params
+                    for arg in call.arguments
+                    if arg.name
+                ) or any(not arg.name for arg in call.arguments)
+                # Type-args-only invocation (e.g. `(myrec t: i64)` as a
+                # partial-instantiation expression) returns the mono
+                # type as a value without going through value-arg
+                # processing. Skip the re-route in that case.
+                if not has_value_args:
+                    return True, mono_type, callee_type
+                mono_create = self.typing.child_of(mono_type, "create")
+                if mono_create is None or mono_create.typetype != ZTypeType.FUNCTION:
+                    # Defensive: a class mono without a create child
+                    # shouldn't happen post-`_setup_mono_meta_create`,
+                    # but if it does, fall back to bespoke handling
+                    # against the mono.
+                    self._check_missing_create_args(mono_type, call)
+                    self._check_construction_field_types(
+                        mono_type,
+                        call,
+                        generic_param_names=callee_type.generic_params.keys(),
+                    )
                     self._check_aggregate_lock_escape(call, mono_type)
                     self._transfer_class_construction_locks(call, mono_type)
                     return True, mono_type, callee_type
-                return True, None, callee_type
+                # Stash generic-arg names so `_check_call_arguments`
+                # and `_check_missing_call_args` skip the type-arg
+                # specifiers when matching against the create
+                # function's params.
+                self.typing.call_generic_param_names[call.nodeid] = set(
+                    callee_type.generic_params.keys()
+                )
+                return False, None, mono_create
             # Non-generic class: re-route bare-name `Foo field: val`
             # through the standard call pipeline by swapping
             # callee_type to the `create` function and falling
@@ -8519,8 +8549,24 @@ class TypeChecker:
                 for k, v in self.typing.child_ownerships_of(callee_type).items()
                 if v == ZParamOwnership.LOCK
             }
+        # Generic-arg name filter: dispatch may have stashed the names
+        # of the type-arg specifiers (e.g. `t` in `myrec t: i64 x: 5`)
+        # so the per-param matching loop below skips them — the value
+        # args are what we want to match against the create function's
+        # params. The filter is also honoured by
+        # `_check_missing_call_args` so a missing-value-arg diagnostic
+        # doesn't fire on type-arg-only call shapes during inference.
+        generic_arg_names = self.typing.call_generic_param_names.get(call.nodeid, set())
 
-        for i, arg in enumerate(call.arguments):
+        # `value_idx` tracks the positional index against `params`,
+        # advancing only on non-skipped (value) args. Generic-arg
+        # specifiers don't consume a positional slot.
+        value_idx = -1
+        for arg in call.arguments:
+            if arg.name and arg.name in generic_arg_names:
+                continue
+            value_idx += 1
+            i = value_idx
             arg_result = self._check_operation(arg.valtype)
             arg_type = arg_result.ztype
             # Capture the source path that `.lock` / `.borrow` /
@@ -8703,12 +8749,24 @@ class TypeChecker:
             zast.CallKind.CLASS_CREATE,
             zast.CallKind.UNION_CREATE,
         )
+        # Generic-arg name filter: dispatch may have stashed type-arg
+        # specifier names (e.g. `t` in `myrec t: i64 x: 5`). Those
+        # don't count as parameter satisfaction and don't shift the
+        # positional index — exclude them from `provided` and from
+        # the index counter.
+        generic_arg_names = self.typing.call_generic_param_names.get(call.nodeid, set())
         provided: set = set()
-        for i, arg in enumerate(call.arguments):
+        positional_idx = 0
+        for arg in call.arguments:
+            if arg.name and arg.name in generic_arg_names:
+                continue
             if arg.name:
                 provided.add(arg.name)
-            elif i < len(params):
-                provided.add(params[i][0])
+            elif positional_idx < len(params):
+                provided.add(params[positional_idx][0])
+                positional_idx += 1
+            else:
+                positional_idx += 1
         # Method-call receiver: the dispatch target consumes the
         # receiver as the `this_param_name` parameter implicitly.
         if (
