@@ -8087,6 +8087,7 @@ class TypeChecker:
                 return True, None, callee_type
             for arg in call.arguments:
                 self._check_operation(arg.valtype)
+            self._check_union_subtype_payload_type(call, parent_tagged, callable_dp)
             self.typing.node_type[call.nodeid] = parent_tagged
             self.typing.call_kind[call.nodeid] = zast.CallKind.UNION_CREATE
             self._lift_locked_arm_borrow(parent_tagged, callable_dp, call)
@@ -8834,6 +8835,53 @@ class TypeChecker:
                 loc=arg.start,
                 err=ERR.CALLERROR,
             )
+
+    def _check_union_subtype_payload_type(
+        self,
+        call: zast.Call,
+        parent_tagged: ZType,
+        callable_dp: zast.DottedPath,
+    ) -> None:
+        """Validate that the value argument to a union/variant subtype
+        constructor (`myunion.subtype <value>`) matches the subtype's
+        declared payload type. Null-payload subtypes (e.g. `option.none`)
+        accept no value and are skipped here.
+        """
+        subtype_name = callable_dp.child.name
+        payload_type = self.typing.child_of(parent_tagged, subtype_name)
+        if payload_type is None or payload_type.typetype == ZTypeType.NULL:
+            return
+        if payload_type.typetype == ZTypeType.FUNCTION:
+            return
+        value_arg: Optional[zast.NamedOperation] = None
+        for arg in call.arguments:
+            if arg.name == "from":  # ztc-string-compare-ok: payload arg label
+                value_arg = arg
+                break
+        if value_arg is None:
+            for arg in call.arguments:
+                if not arg.name:
+                    value_arg = arg
+                    break
+        if value_arg is None:
+            return
+        arg_type = self.typing.node_type.get(value_arg.valtype.nodeid)
+        if arg_type is None:
+            return
+        if arg_type.is_literal and _is_numeric_type(payload_type):
+            self._coerce_literal(value_arg.valtype, payload_type, loc=value_arg.start)
+            return
+        if self._types_compatible(arg_type, payload_type):
+            return
+        own = self.typing.child_ownership(parent_tagged, subtype_name)
+        if self._try_protocol_coerce(value_arg, arg_type, payload_type, own):
+            return
+        self._error(
+            f"subtype '{parent_tagged.name}.{subtype_name}' payload type "
+            f"mismatch: expected {payload_type.name}, got {arg_type.name}",
+            loc=value_arg.start,
+            err=ERR.CALLERROR,
+        )
 
     def _install_borrow_locks(
         self,

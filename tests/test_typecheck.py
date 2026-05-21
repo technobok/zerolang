@@ -4738,7 +4738,7 @@ class TestUnionConstruction:
         """Calling union.stringsubtype with String arg creates a union."""
         check_ok(
             "MyUnion: union { a: String\n b: null }\n"
-            'main: function is { x: MyUnion.a "hello" }'
+            'main: function is { x: MyUnion.a "hello".string }'
         )
 
 
@@ -6931,7 +6931,7 @@ class TestIoErrorVariant:
             "    a: IoError.notfound\n"
             "    b: IoError.permissiondenied\n"
             "    c: IoError.eof\n"
-            '    d: IoError.invalidpath "x"\n'
+            '    d: IoError.invalidpath "x".string\n'
             "}"
         )
 
@@ -12568,6 +12568,50 @@ class TestConstructionFieldCoercion:
     def test_class_field_default_not_spuriously_flagged(self):
         check_ok(
             "Foo: class { count: 10.u8 b: u8 }\nmain: function is { f: Foo b: 20 }"
+        )
+
+
+class TestUnionSubtypePayloadCoercion:
+    """Union/variant subtype construction must type-check the payload
+    value against the subtype's declared type. Mirrors
+    `TestConstructionFieldCoercion` shape — literal fits, literal
+    range error, type mismatch, null-payload subtypes accepted."""
+
+    def test_union_subtype_literal_fits(self):
+        check_ok(
+            "MyUnion: union { ok: i64\n err: String }\n"
+            "main: function is { x: MyUnion.ok 100 }"
+        )
+
+    def test_union_subtype_literal_coerces_to_u8(self):
+        check_ok(
+            "MyUnion: union { ok: u8\n err: i64 }\n"
+            "main: function is { x: MyUnion.ok 100 }"
+        )
+
+    def test_union_subtype_literal_out_of_range_errors(self):
+        errors = check_errors(
+            "MyUnion: union { ok: u8\n err: i64 }\n"
+            "main: function is { x: MyUnion.ok 1000 }"
+        )
+        assert any(
+            "literal value 1000 cannot be losslessly stored in u8" in e.msg
+            for e in errors
+        ), [e.msg for e in errors]
+
+    def test_union_subtype_wrong_concrete_type_errors(self):
+        errors = check_errors(
+            "MyUnion: union { ok: i64\n err: String }\n"
+            'main: function is { x: MyUnion.ok "hello" }'
+        )
+        assert any(
+            "subtype 'MyUnion.ok' payload type mismatch" in e.msg for e in errors
+        ), [e.msg for e in errors]
+
+    def test_union_null_payload_subtype_ok(self):
+        check_ok(
+            "MyUnion: union { ok: i64\n none: null }\n"
+            "main: function is { x: MyUnion.none }"
         )
 
 
