@@ -5390,10 +5390,14 @@ class TypeChecker:
         template_type: ZType,
         defn: zast.TypeDefinition,
     ) -> None:
-        """Set `mono.meta_create` for class/record monos. CLASS monos
+        """Set `mono.meta_create` (and replace the substituted `create`
+        child where appropriate) for class/record monos. CLASS monos
         (excluding `list`/`map`, which have their own create paths)
-        get a freshly synthesised `_make_meta_create_type`; RECORD
-        monos point at their existing `create` child."""
+        and RECORD monos both get a freshly synthesised
+        `_make_meta_create_type` built off the mono's already-
+        substituted children, so the per-mono create's parameter
+        types and return type are concrete instead of pointing back
+        at the generic template."""
         if (
             template_type.typetype == ZTypeType.CLASS
             and not _is_list_type(mono)
@@ -5411,9 +5415,16 @@ class TypeChecker:
             if not self.typing.has_child(mono, "create"):
                 self._set_child(mono, "create", create_type)
         if template_type.typetype == ZTypeType.RECORD:
-            create_child = self.typing.child_of(mono, "create")
-            if create_child and create_child.typetype == ZTypeType.FUNCTION:
-                mono.meta_create = create_child
+            is_func_names = set()
+            field_names = None
+            if defn.nodetype == NodeType.RECORD:
+                is_func_names = set(cast(zast.ObjectDef, defn).functions().keys())
+                field_names = set(cast(zast.ObjectDef, defn).is_items.keys())
+            create_type = self._make_meta_create_type(
+                mangled, mono, is_func_names, field_names
+            )
+            mono.meta_create = create_type
+            self._set_child(mono, "create", create_type)
 
     def _register_mono(
         self,
@@ -8254,15 +8265,9 @@ class TypeChecker:
             # Fallback to the existing per-arg-loop path when:
             # - no create function exists; OR
             # - the create function still has generic-param-typed
-            #   params (the mono's `create` child today is shared
-            #   with the generic template, with params referencing
-            #   unresolved generic params); OR
-            # - this is a monomorphization (`generic_origin` set):
-            #   the shared create's `return_type` points at the
-            #   template, not the mono — the standard pipeline's
-            #   `_finalize_call` would then set node_type to the
-            #   template and the assignment would bind to the
-            #   wrong type.
+            #   params (the per-mono create substitution covers the
+            #   typical generic-record case; this guard catches any
+            #   residual partially-monomorphised template state).
             create_has_generic_param = create_type is not None and any(
                 ptype.typetype == ZTypeType.GENERIC_PARAM
                 for _, ptype in self.typing.children_of(create_type)
@@ -8271,7 +8276,6 @@ class TypeChecker:
                 create_type is None
                 or create_type.typetype != ZTypeType.FUNCTION
                 or create_has_generic_param
-                or callee_type.generic_origin is not None
             ):
                 for arg in call.arguments:
                     self._check_operation(arg.valtype)

@@ -12571,6 +12571,47 @@ class TestConstructionFieldCoercion:
         )
 
 
+class TestRecordMonoCreateSubstitution:
+    """Per-mono `create` substitution for RECORD monos: the mono's
+    `create` child should carry concrete (substituted) param types
+    and a return type pointing at the mono — not the template."""
+
+    def test_record_mono_create_has_substituted_param_types(self):
+        program, typing = check_ok(
+            "myrec: record { x: t } as { t: Any.generic }\n"
+            "main: function is { a: (myrec x: 42) }"
+        )
+        monos = {m.name: m for m, _ in typing.mono_types}
+        assert "myrec_i64" in monos, list(monos)
+        mono = monos["myrec_i64"]
+        create = typing.child_of(mono, "create")
+        assert create is not None
+        assert create.typetype == ZTypeType.FUNCTION
+        assert create.return_type is mono
+        x_param = typing.child_of(create, "x")
+        assert x_param is not None
+        assert x_param.name == "i64"
+
+    def test_record_mono_paren_form_field_type_checked(self):
+        """`(myrec t: i64) x: 42` routes through the non-generic
+        record re-route (`generic_origin` is set on the mono, but
+        the create is now substituted, so the fallback condition no
+        longer fires)."""
+        check_ok(
+            "myrec: record { x: t } as { t: Any.generic }\n"
+            "main: function is { a: (myrec t: i64) x: 42 }"
+        )
+
+    def test_record_mono_paren_form_field_type_mismatch_errors(self):
+        errors = check_errors(
+            "myrec: record { x: t } as { t: Any.generic }\n"
+            'main: function is { a: (myrec t: i64) x: "hello" }'
+        )
+        assert any(
+            "type mismatch" in e.msg or "argument" in e.msg.lower() for e in errors
+        ), [e.msg for e in errors]
+
+
 class TestUnionSubtypePayloadCoercion:
     """Union/variant subtype construction must type-check the payload
     value against the subtype's declared type. Mirrors
