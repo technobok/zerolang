@@ -5550,6 +5550,28 @@ class CEmitter:
         ret_ctype = self._return_ctype(func)
         wrapper_name = ret_zt.name if ret_zt is not None else ""
         upper = wrapper_name.upper()
+        # Wrapper shape determines how `_emit_yield_fragment` lowers
+        # the per-yield store:
+        #   "variant"     -> optionval(T): inline `_ry.data.some = val`
+        #   "union_owned" -> Option(T): heap-allocate payload, store
+        #                    pointer in `_ry.data`; consumer owns &
+        #                    destroys the wrapper (which frees both
+        #                    the heap allocation and the inner value)
+        #   "union_view"  -> OptionView(T): take address of yielded
+        #                    expression, store pointer in `_ry.data`;
+        #                    consumer holds a lock on the iterator's
+        #                    source so the pointer stays valid
+        wrapper_kind = "variant"
+        wrapper_elem_ctype = ""
+        if ret_zt is not None:
+            if ret_zt.typetype == ZTypeType.UNION:
+                if self.typing.is_child_lock_arm(ret_zt, "some"):
+                    wrapper_kind = "union_view"
+                else:
+                    wrapper_kind = "union_owned"
+                some_child = self.typing.child_of(ret_zt, "some")
+                if some_child is not None:
+                    wrapper_elem_ctype = _ctype(self.typing, some_child)
         # Bidirectional discriminator: if the function has a `value`
         # parameter, this is a `takes != null` generator. The
         # prologue stores `value` into `this->_resume_input`; the
@@ -5597,6 +5619,8 @@ class CEmitter:
             "resume_destructor": resume_destructor,
             "value_is_borrow": value_is_borrow,
             "value_elem_ctype": value_elem_ctype,
+            "wrapper_kind": wrapper_kind,
+            "wrapper_elem_ctype": wrapper_elem_ctype,
         }
 
     def _emit_generator_prologue(self) -> str:
@@ -5653,14 +5677,29 @@ class CEmitter:
         return "".join(lines)
 
     def _emit_yield_fragment(self, yield_node: zast.Yield) -> str:
-        """Emit the suspension fragment for one `yield <expr>`:
+        """Emit the suspension fragment for one `yield <expr>`. The
+        per-yield store dispatches on `wrapper_kind`:
 
-            this->state = N;
-            <wrapper>_t _ry = {0};
-            _ry.tag = TAG_SOME;
-            _ry.data.some = <expr>;
-            return _ry;
-        L_resume_N:;
+        - variant (optionval(T)):
+              this->state = N;
+              <wrapper>_t _ry = {0};
+              _ry.tag = TAG_SOME;
+              _ry.data.some = <expr>;
+              return _ry;
+        - union_owned (Option(T)):
+              this->state = N;
+              <wrapper>_t _ry = {0};
+              _ry.tag = TAG_SOME;
+              <elem>_t* _payload = z_xmalloc(sizeof(<elem>_t));
+              *_payload = <expr>;
+              _ry.data = _payload;
+              return _ry;
+        - union_view (OptionView(T)):
+              this->state = N;
+              <wrapper>_t _ry = {0};
+              _ry.tag = TAG_SOME;
+              _ry.data = &(<expr>);
+              return _ry;
 
         The state number `N` was pre-assigned by `_setup_generator_ctx`
         (yield_states[yield_node.nodeid])."""
@@ -5669,6 +5708,8 @@ class CEmitter:
         yield_states = cast(Dict[int, int], ctx["yield_states"])
         wrapper_ctype = cast(str, ctx["wrapper_ctype"])
         some_tag = cast(str, ctx["some_tag"])
+        wrapper_kind = cast(str, ctx.get("wrapper_kind", "variant"))
+        wrapper_elem_ctype = cast(str, ctx.get("wrapper_elem_ctype", ""))
         state_num = yield_states.get(yield_node.nodeid, 0)
         indent = self._indent()
         # Evaluate the yielded expression. The yield's `.expr` is an
@@ -5683,13 +5724,24 @@ class CEmitter:
         lines: List[str] = []
         lines.append(decls)
         lines.append(f"{indent}this->state = {state_num};\n")
-        # Build the return wrapper inline. Free name `_ry_<state>` so
-        # multiple yields in one function don't collide if they end up
-        # in the same scope.
+        # Free name `_ry_<state>` so multiple yields in one function
+        # don't collide if they end up in the same scope.
         ry = f"_ry_{state_num}"
         lines.append(f"{indent}{wrapper_ctype} {ry} = {{0}};\n")
         lines.append(f"{indent}{ry}.tag = {some_tag};\n")
-        lines.append(f"{indent}{ry}.data.some = {val};\n")
+        if wrapper_kind == "union_owned":  # ztc-string-compare-ok: wrapper-kind tag
+            payload = f"_payload_{state_num}"
+            self.needs_stdlib = True
+            lines.append(
+                f"{indent}{wrapper_elem_ctype}* {payload} = "
+                f"z_xmalloc(sizeof({wrapper_elem_ctype}));\n"
+            )
+            lines.append(f"{indent}*{payload} = {val};\n")
+            lines.append(f"{indent}{ry}.data = {payload};\n")
+        elif wrapper_kind == "union_view":  # ztc-string-compare-ok: wrapper-kind tag
+            lines.append(f"{indent}{ry}.data = &({val});\n")
+        else:
+            lines.append(f"{indent}{ry}.data.some = {val};\n")
         lines.append(f"{indent}return {ry};\n")
         # Resume label sits at function scope (column 0) so C `goto`
         # from the switch can reach it across nested blocks. The

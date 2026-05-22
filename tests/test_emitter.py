@@ -10229,18 +10229,52 @@ class TestGeneratorEmitter:
             "first reachable yield" in m and "expression form" in m for m in msgs
         ), f"Expected a first-yield rejection message, got: {msgs}"
 
-    # Reftype `gives:` end-to-end emitter coverage is deferred:
-    # `_emit_yield_fragment` was written assuming the variant
-    # shape (`optionval(T).data` as an inline union with `.some`),
-    # whereas reftype wrappers (`Option(T)`, `OptionView(T)`) use
-    # the union shape (`.data` is `void*`). The typecheck-level
-    # routing this phase introduces is sound; the emitter
-    # extension to recognise union-shaped wrappers and emit the
-    # appropriate `.data = &payload` (or owned-pointer) assignment
-    # is a separate change that should land alongside a follow-up
-    # emitter phase. See plan
-    # `/home/pawe/.claude/plans/in-the-zerolang-project-linked-parasol.md`
-    # for context.
+    # ---- Phase 1b: reftype gives: end-to-end ------------------------
+
+    def test_gives_reftype_take_yields_owned_string(self):
+        """A reftype `gives: String.take` generator yields owned
+        strings via `Option(String)`. The emitter dispatches per
+        wrapper-kind: union_owned heap-allocates each payload, sets
+        `_ry.data = ptr`; consumer takes ownership and destroys both
+        the heap allocation and the inner String. ASan-clean (no
+        UAF, no leak)."""
+        csource = emit_source(
+            "gen: function out (Iterator gives: String.take) is {\n"
+            '    yield "alpha".string\n'
+            '    yield "beta".string\n'
+            "}\n"
+            "main: function is {\n"
+            "    with g: gen do for x: g loop "
+            '{ print "\\{x}" }\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout == "alpha\nbeta\n"
+
+    def test_gives_bare_reftype_yields_borrowed_view(self):
+        """A bare reftype `gives: String` (Phase 1's borrow default)
+        yields a borrowed view via `OptionView(String)`. The emitter
+        dispatches per wrapper-kind: union_view sets `_ry.data =
+        &<expr>`; the iterator's lock on the source keeps the
+        pointed-at storage alive. ASan-clean."""
+        csource = emit_source(
+            "Holder: class { a: String b: String } as {\n"
+            "    walk: function {h: this.private.lock} "
+            "out (Iterator gives: String) is {\n"
+            "        yield h.a\n"
+            "        yield h.b\n"
+            "    }\n"
+            "}\n"
+            "main: function is {\n"
+            '    box: Holder a: "foo".string b: "bar".string\n'
+            "    with g: (Holder.walk h: box.lock) do for x: g loop "
+            '{ print "\\{x}" }\n'
+            "}"
+        )
+        result = compile_and_run_asan(csource)
+        assert result.returncode == 0
+        assert result.stdout == "foo\nbar\n"
 
     # ---- Phase 3: borrowed `accepts:` ----------------------------
 
